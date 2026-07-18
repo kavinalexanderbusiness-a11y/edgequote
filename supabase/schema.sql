@@ -42,11 +42,17 @@ create table public.customers (
   name        text not null,
   email       text,
   phone       text,
+  -- LEGACY (Customer V2): the address of record lives on the customer's primary
+  -- PROPERTY; these columns survive as a read-fallback for pre-V2 rows and are
+  -- dropped at migration M4. Nothing owner-facing writes them any more.
   address     text,
   city        text,
   province    text default 'AB',
   postal_code text,
   notes       text,
+  -- Free-form relationship labels ("VIP", "landlord"). Existed in production
+  -- before it was recorded here — see RUN-2026-07-16-customer-v2-m1.sql.
+  tags        text[] not null default '{}',
 
   -- owner — ties rows to the authenticated user
   user_id     uuid not null references auth.users(id) on delete cascade
@@ -3822,3 +3828,212 @@ create index if not exists notification_log_provider_msg_idx
 create index if not exists messages_provider_msg_idx
   on public.messages(provider, provider_message_id)
   where provider_message_id is not null;
+
+-- ═══ 2026-07-15: Scheduled messages (Communications Center "send later" queue) ═══
+
+-- ── Scheduled messages: one-off "send later" queue for THE comms pipeline ─────
+-- The Communications Center's Scheduled tab + the Send-later mode in the shared
+-- SendMessageDialog write rows here; /api/cron/scheduled-messages claims due rows
+-- (CAS on status) and sends through the SAME engines every other sender uses
+-- (renderMessage/renderBody → dispatchToCustomer → logDispatch). No second
+-- pipeline: consent, threading and notification_log auditing all happen inside
+-- dispatch, exactly as they do for campaigns and manual sends.
+--
+-- body IS NULL      → the template renders per customer AT SEND TIME (fresh
+--                     name/portal link, plus any template edits made meanwhile).
+-- body IS NOT NULL  → the owner's edited text, sent as written ({{tokens}} still
+--                     interpolate per customer, same as bodyOverride on /api/comms/send).
+
+create table if not exists public.scheduled_messages (
+  id          uuid primary key default uuid_generate_v4(),
+  created_at  timestamptz not null default now(),
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  customer_id uuid not null references public.customers(id) on delete cascade,
+  job_id      uuid references public.jobs(id) on delete set null,
+  template    text not null,
+  channels    text[] not null default '{sms,email}',
+  body        text,
+  vars        jsonb,
+  send_at     timestamptz not null,
+  -- pending → sending (claimed by a cron run) → sent | skipped | failed.
+  -- 'canceled' is owner-set and only ever replaces 'pending' (CAS both ways, so
+  -- a cancel racing the cron has exactly one winner).
+  status      text not null default 'pending',
+  -- When the cron took the claim. Stale-claim detection keys on THIS, never on
+  -- send_at — a backlogged row (due long ago, claimed seconds ago) is not stale.
+  claimed_at  timestamptz,
+  sent_at     timestamptz,
+  detail      text,
+  message_id  uuid references public.messages(id) on delete set null
+);
+
+alter table public.scheduled_messages enable row level security;
+
+drop policy if exists "scheduled_messages_select_own" on public.scheduled_messages;
+create policy "scheduled_messages_select_own" on public.scheduled_messages
+  for select using (auth.uid() = user_id);
+drop policy if exists "scheduled_messages_insert_own" on public.scheduled_messages;
+create policy "scheduled_messages_insert_own" on public.scheduled_messages
+  for insert with check (auth.uid() = user_id);
+drop policy if exists "scheduled_messages_update_own" on public.scheduled_messages;
+create policy "scheduled_messages_update_own" on public.scheduled_messages
+  for update using (auth.uid() = user_id);
+drop policy if exists "scheduled_messages_delete_own" on public.scheduled_messages;
+create policy "scheduled_messages_delete_own" on public.scheduled_messages
+  for delete using (auth.uid() = user_id);
+
+-- The cron's due-scan (status = 'pending' and send_at <= now()) and the
+-- Scheduled tab's per-owner list.
+create index if not exists scheduled_messages_due_idx  on public.scheduled_messages (status, send_at);
+create index if not exists scheduled_messages_user_idx on public.scheduled_messages (user_id, send_at desc);
+
+-- ═══ 2026-07-16: Comms insights RPC + message-notification deep links ═══
+
+-- ── Communications Center round 2: deep links + insights ─────────────────────
+-- 1) Message notifications now carry ?c=<customer_id> so the bell / push tap
+--    opens THE conversation, not the bare inbox (the inbox consumes the param).
+--    Redefined FROM THE LIVE PROD FUNCTION (which is newer than schema.sql —
+--    it distinguishes portal requests from portal messages); only href changes.
+-- 2) comms_insights(p_days): one RPC for the Communications insights strip —
+--    send/delivery/failure counts from notification_log (THE send ledger),
+--    conversation + reply-latency stats from messages/conversations. SECURITY
+--    INVOKER (RLS applies) + explicit auth.uid() scoping.
+
+create or replace function public.notify_inbound_message()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+declare v_name text; v_muted boolean;
+begin
+  if new.direction <> 'inbound' then return new; end if;
+  select muted into v_muted from public.conversations where id = new.conversation_id;
+  if coalesce(v_muted, false) then return new; end if;
+  select name into v_name from public.customers where id = new.customer_id;
+  insert into public.notifications (user_id, type, title, body, customer_id, entity_type, entity_id, href)
+  values (
+    new.user_id,
+    case when new.channel = 'portal' and (new.meta ? 'service_request_id') then 'portal_request'
+         else 'new_message' end,
+    coalesce(nullif(v_name, ''), 'A customer')
+      || case when new.channel = 'portal' and (new.meta ? 'service_request_id') then ' sent a request from the portal'
+              when new.channel = 'portal' then ' sent you a message from the portal'
+              else ' replied by text' end,
+    left(new.body, 140),
+    new.customer_id, 'message', new.id, '/dashboard/messages?c=' || new.customer_id
+  );
+  return new;
+end; $function$;
+
+-- The insights engine: everything the strip shows comes from THIS one function,
+-- so any future surface (dashboard widget, weekly review) reuses it instead of
+-- re-deriving the maths. median_reply_minutes pairs each inbound message with
+-- the FIRST outbound after it (same customer); pairs answered >7d later count
+-- as unanswered rather than dragging the median into nonsense.
+create or replace function public.comms_insights(p_days int default 30)
+returns jsonb
+language sql
+stable
+as $$
+  select jsonb_build_object(
+    'sends', (select count(*) from public.notification_log
+              where user_id = auth.uid() and created_at > now() - make_interval(days => p_days)
+                and status in ('sent','delivered','opened','clicked')),
+    'delivered', (select count(*) from public.notification_log
+                  where user_id = auth.uid() and created_at > now() - make_interval(days => p_days)
+                    and status in ('delivered','opened','clicked')),
+    'failed', (select count(*) from public.notification_log
+               where user_id = auth.uid() and created_at > now() - make_interval(days => p_days)
+                 and status in ('error','failed','bounced','spam')),
+    'skipped', (select count(*) from public.notification_log
+                where user_id = auth.uid() and created_at > now() - make_interval(days => p_days)
+                  and status in ('skipped','disabled')),
+    'inbound', (select count(*) from public.messages
+                where user_id = auth.uid() and direction = 'inbound'
+                  and created_at > now() - make_interval(days => p_days)),
+    'needs_reply', (select count(*) from public.conversations
+                    where user_id = auth.uid() and archived_at is null and last_direction = 'inbound'),
+    'scheduled_pending', (select count(*) from public.scheduled_messages
+                          where user_id = auth.uid() and status = 'pending'),
+    'median_reply_minutes', (
+      with pairs as (
+        select m.created_at as in_at,
+               (select min(o.created_at) from public.messages o
+                 where o.user_id = m.user_id and o.customer_id = m.customer_id
+                   and o.direction = 'outbound' and o.created_at > m.created_at) as out_at
+        from public.messages m
+        where m.user_id = auth.uid() and m.direction = 'inbound'
+          and m.created_at > now() - make_interval(days => p_days)
+      )
+      select round((percentile_cont(0.5) within group (order by extract(epoch from (out_at - in_at)) / 60))::numeric, 1)
+      from pairs
+      where out_at is not null and out_at - in_at < interval '7 days'
+    )
+  );
+$$;
+
+grant execute on function public.comms_insights(int) to authenticated;
+
+-- ═══ 2026-07-16: Comms triage (labels/snooze/assign) + inbox_counts ═══
+
+-- ── Communications round 3: triage primitives + one-query inbox counts ────────
+-- Labels, snooze, and assignment live ON conversations (the one conversation
+-- system) — no side tables, no parallel state. inbox_counts() replaces the six
+-- per-filter COUNT round-trips the inbox fired on every realtime event.
+
+alter table public.conversations add column if not exists labels text[] not null default '{}';
+alter table public.conversations add column if not exists snoozed_until timestamptz;
+-- Assignment references THE crew system (dispatch module's technicians).
+alter table public.conversations add column if not exists assigned_to uuid references public.technicians(id) on delete set null;
+
+create index if not exists conversations_labels_idx  on public.conversations using gin (labels);
+create index if not exists conversations_snoozed_idx on public.conversations (user_id, snoozed_until) where snoozed_until is not null;
+
+-- Snooze = "hide until"; display-time only, no cron. A NEW INBOUND message wakes
+-- the conversation immediately (snoozed_until cleared here in the bump trigger) —
+-- snoozing must never eat a customer's reply. Redefined FROM THE LIVE PROD
+-- FUNCTION; the only change is the snoozed_until line.
+create or replace function public.bump_conversation()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+begin
+  update public.conversations set
+    last_message_at = new.created_at,
+    last_preview    = left(new.body, 140),
+    last_direction  = new.direction,
+    last_channel    = new.channel,
+    unread          = case when new.direction = 'inbound' then unread + 1 else unread end,
+    archived_at     = case when new.direction in ('inbound','outbound') then null else archived_at end,
+    snoozed_until   = case when new.direction = 'inbound' then null else snoozed_until end
+  where id = new.conversation_id;
+  return new;
+end; $function$;
+
+-- ONE round trip for every inbox pill + the unread badge sum. Snoozed rows leave
+-- the active filters and live under their own count; muted rows stay in the list
+-- counts but never in unread_sum (mute means "stop counting this at me").
+create or replace function public.inbox_counts()
+returns jsonb
+language sql
+stable
+as $$
+  with c as (select archived_at, snoozed_until, lead_status, last_channel, last_direction, unread, muted
+             from public.conversations where user_id = auth.uid()),
+       awake as (select * from c where archived_at is null and (snoozed_until is null or snoozed_until <= now()))
+  select jsonb_build_object(
+    'all',          (select count(*) from awake),
+    'needs_reply',  (select count(*) from awake where last_direction = 'inbound'),
+    'sms',          (select count(*) from awake where lead_status is null and (last_channel = 'sms' or last_channel is null)),
+    'portal',       (select count(*) from awake where lead_status is null and last_channel = 'portal'),
+    'website_lead', (select count(*) from awake where lead_status = 'new'),
+    'snoozed',      (select count(*) from c where archived_at is null and snoozed_until > now()),
+    'archived',     (select count(*) from c where archived_at is not null),
+    'unread_sum',   (select coalesce(sum(unread), 0) from c where archived_at is null and muted = false)
+  );
+$$;
+
+grant execute on function public.inbox_counts() to authenticated;

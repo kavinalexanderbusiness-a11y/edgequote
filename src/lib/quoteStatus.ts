@@ -55,3 +55,86 @@ export function defaultValidUntil(fromISO: string, days = DEFAULT_QUOTE_VALID_DA
   d.setDate(d.getDate() + days)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
+
+// ── THE "this quote went out" patch ──────────────────────────────────────────
+// Quote V2 Phase 0. "A quote was sent" is ONE event that sets three things: the
+// status, the chase anchor (sent_at) and the expiry clock (valid_until). It was
+// written FOUR times, and each copy did something different:
+//
+//   quotes/[id] (PDF path)   status + sent_at + valid_until   ← the only complete one
+//   QuoteStatusControl:52    sent_at only
+//   QuoteList:131-132        status + sent_at, in TWO updates
+//   SendMessageDialog:736    status + sent_at
+//
+// The cost of that, measured on the live book: 0 of 55 quotes have a `valid_until`,
+// so the expiry feature shipped 2026-07-15 has never once fired — the "Expired"
+// badge, the cron's expiry stop and the portal's lapse are all unreachable. And 33
+// of 54 non-draft quotes have no `sent_at`, so the timeline shows no "Quote sent"
+// event for any of them.
+//
+// This is the species the redesign exists to kill: one concept, four
+// implementations, and the incomplete copies were the ones most paths used.
+//
+// PURE, and it OMITS rather than overwrites. `sent_at` is when it FIRST went out —
+// the chase anchor — so re-sending must not reset it (the old writers expressed this
+// as `.is('sent_at', null)`; the same rule now lives in one testable place).
+// `valid_until` likewise stands from the first send; extending it deliberately is
+// what `extendValidity` is for.
+//
+// It does NOT dispatch anything. Marking sent and actually sending are two different
+// facts, and conflating them is exactly why 11 of 14 "sent" quotes have zero
+// messages against them. This patch is the record; the sender is the sender.
+export type SentPatchInput = Pick<Quote, 'sent_at'> & { valid_until?: string | null }
+
+export function markSentPatch(
+  q: SentPatchInput,
+  todayISO: string,
+  nowISO: string = new Date().toISOString(),
+): Record<string, unknown> {
+  return {
+    status: 'sent' as const,
+    ...(q.sent_at ? {} : { sent_at: nowISO }),
+    ...(q.valid_until ? {} : { valid_until: defaultValidUntil(todayISO) }),
+  }
+}
+
+// ── Can this quote go to a customer at all? ──────────────────────────────────
+// Quote V2 Phase 0. A quote with no price could be saved AND sent: `hours` defaults
+// to 0 (meaning "not estimated"), `initial_price` has no `required`, and the only
+// `total > 0` check in the app lived at INVOICING — long after the customer had seen
+// the document. The generated column used to paper over it by inventing
+// hours × crew_size × rate; now that it can't (RUN-2026-07-16e), an unpriced quote
+// has no total, and this is what stops that reaching anyone.
+//
+// SEND, not SAVE. A draft without a price is legitimate work-in-progress — the whole
+// point of a draft. A quote in a customer's hands without a price is not a quote.
+// The line belongs at the door, not at the desk.
+//
+// Pure and reason-bearing, the shape lib/comms/reach.ts established: it owns the
+// REASON, so every surface can explain the refusal identically instead of each
+// inventing its own message.
+export type SendableQuote = { total?: number | null; customer_id?: string | null }
+
+export type SendBlock = 'no_price' | 'no_customer'
+
+/** Why this quote cannot be sent — null when it can. */
+export function sendBlockedReason(q: SendableQuote): SendBlock | null {
+  // A customerless quote can't be delivered, chased or shown in a portal. Four such
+  // rows exist live, one with work already scheduled.
+  if (!q.customer_id) return 'no_customer'
+  // `null` (no price) and `0` are both blocked, and deliberately share a branch: to a
+  // customer receiving it, "$0.00" and "no price" are the same broken document.
+  if (q.total == null || Number(q.total) <= 0) return 'no_price'
+  return null
+}
+
+export function canSendQuote(q: SendableQuote): boolean {
+  return sendBlockedReason(q) === null
+}
+
+/** Plain words for the block — what to DO, not what went wrong. */
+export function sendBlockedLabel(r: SendBlock): string {
+  return r === 'no_price'
+    ? 'This quote has no price yet — add one before sending it.'
+    : 'This quote has no customer linked — add one so it can be sent and followed up.'
+}

@@ -31,23 +31,31 @@ check('every widget id is unique', new Set(ids).size === ids.length,
 check('every widget has a title and a blurb', WIDGETS.every(w => !!w.title && !!w.blurb))
 check('DEFAULT_LAYOUT covers the whole registry', DEFAULT_LAYOUT.order.length === WIDGETS.length)
 check('DEFAULT_LAYOUT hides nothing', DEFAULT_LAYOUT.hidden.length === 0)
-// The marketing widget is the reason this verifier exists: it was appended last so
-// that new users and users with a saved layout see it in the SAME place.
 check("'marketing' is registered", ids.includes('marketing' as WidgetId))
-check("'marketing' is LAST in the registry", ids[ids.length - 1] === 'marketing',
-  `last is '${ids[ids.length - 1]}' — normalizeLayout appends unseen ids to the end, so anything else puts marketing mid-page for new users and last for existing ones`)
+// NOTE: an earlier version of this file asserted `marketing` was LAST. That was a
+// snapshot, not an invariant — the comms widget was later appended after it, quite
+// correctly, and the assertion failed a CHANGE THAT WAS RIGHT. A test that cries
+// wolf on correct work is worse than no test, because the next person learns to
+// ignore it. The rule actually worth pinning is the one below: a widget appended
+// to the registry must reach existing users' saved layouts, whichever widget it is.
 
 console.log('\n── normalizeLayout: the forward-compatibility rules ──')
-// THE regression this guards: someone saved a layout before Marketing existed.
-const oldSaved: unknown = { order: ids.filter(i => i !== 'marketing'), hidden: [] }
+// THE regression this guards: someone saved a layout before a widget existed.
+// Parameterised over the NEWEST widget (last in the registry) rather than a
+// hardcoded id, so this keeps testing the rule as widgets are added.
+const newest = ids[ids.length - 1]
+const oldSaved: unknown = { order: ids.filter(i => i !== newest), hidden: [] }
 const migrated = normalizeLayout(oldSaved)
-check('a layout saved before a new widget shipped GAINS that widget',
-  migrated.order.includes('marketing' as WidgetId),
+check(`a layout saved before '${newest}' shipped GAINS it`,
+  migrated.order.includes(newest),
   'a widget missing from a saved order must be appended, or it is invisible forever')
 check('...and it lands at the end, not the start',
-  migrated.order[migrated.order.length - 1] === 'marketing')
+  migrated.order[migrated.order.length - 1] === newest)
 check('...and nothing else is reordered by the migration',
-  migrated.order.slice(0, -1).join() === ids.filter(i => i !== 'marketing').join())
+  migrated.order.slice(0, -1).join() === ids.filter(i => i !== newest).join())
+// Stronger form: EVERY widget must survive being absent from a saved layout.
+check('every widget is recoverable from a layout that predates it',
+  ids.every(id => normalizeLayout({ order: ids.filter(i => i !== id), hidden: [] }).order.includes(id)))
 
 check('unknown ids are dropped (renamed/removed widgets leave no ghost)',
   !normalizeLayout({ order: ['executive', 'a-widget-that-was-deleted'], hidden: [] }).order.includes('a-widget-that-was-deleted' as WidgetId))
@@ -69,7 +77,7 @@ check('a hidden widget disappears from visible',
 check('toggleHidden is its own inverse',
   visibleWidgets(toggleHidden(toggleHidden(base, 'sales'), 'sales')).length === WIDGETS.length)
 check('reorder moves a widget to the target position',
-  reorder(base.order, 'marketing', 'executive')[0] === 'marketing')
+  reorder(base.order, newest, 'executive')[0] === newest)
 check('reorder onto itself is a no-op', reorder(base.order, 'sales', 'sales').join() === base.order.join())
 check('reorder with an unknown id is a no-op',
   reorder(base.order, 'ghost' as WidgetId, 'sales').join() === base.order.join())
@@ -77,7 +85,7 @@ check('reorder with an unknown id is a no-op',
 console.log('\n── step: the keyboard/touch path (drag alone is unusable on a phone) ──')
 check('step down moves one place', step(base, 'executive', 1).order[1] === 'executive')
 check('step up at the top is a no-op', step(base, 'executive', -1).order.join() === base.order.join())
-check('step down at the bottom is a no-op', step(base, 'marketing', 1).order.join() === base.order.join())
+check('step down at the bottom is a no-op', step(base, newest, 1).order.join() === base.order.join())
 check('canStep agrees with step at the top', canStep(base, 'executive', -1) === false)
 check('canStep agrees with step in the middle', canStep(base, 'financial', -1) === true)
 // Stepping OVER a hidden widget must not look like nothing happened.

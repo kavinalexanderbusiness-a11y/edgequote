@@ -113,6 +113,52 @@ jobs:
       - name: Verify onboarding
         run: npm run verify:onboarding
 
+      # Customer → Property (Customer V2): pins the ONE display-address resolver's
+      # precedence, that the customer form carries no address (the guided property
+      # step owns it), that CSV import lands addresses on properties, and that
+      # job_recurrences never grows a property_id (plans derive through jobs).
+      - name: Verify customer v2
+        run: npm run verify:customer-v2
+
+      # ── Pricing ────────────────────────────────────────────────────────────
+      # These three existed and were never wired here, which made their promises
+      # honour-system. verify-pricing.ts opens by saying it pins the lawn engine so
+      # "anyone who changes lawn pricing has to break this file to do it" — that is
+      # only true if it RUNS. A wrong price is a wrong VALUE, not a type error:
+      # tsc and next build both pass while the number on the owner's screen is
+      # wrong, so these are the only gate that can catch it.
+      #   pricing    — margins never read unknown cost as $0; the lawn cadence
+      #                engine is byte-identical; one unit vocabulary.
+      #   guardrails — the guardrail agrees with the engine it guards. It shipped
+      #                holding a private copy of the engine's cadence multipliers,
+      #                so for graded customers it warned about the app's own
+      #                recommendation. Nothing but execution catches that.
+      #   labor      — the estimator never blends an invented constant into a
+      #                property's real timed history, and never counts a job twice.
+      - name: Verify pricing
+        run: npm run verify:pricing
+
+      - name: Verify price guardrails
+        run: npm run verify:guardrails
+
+      - name: Verify labour estimator
+        run: npm run verify:labor
+
+      #   density  — route density counts NEIGHBOURING PROPERTIES, not a property's
+      #              own visits. It was fed one row per JOB and neither deduped nor
+      #              excluded the target, so live counts averaged 38.1 against 2.0
+      #              real neighbours and 15 of 16 properties had travel fully waived
+      #              — including 3 with no neighbours at all. The thresholds were
+      #              never wrong; the denominator was.
+      #   learning — confidence measures whether the evidence AGREES, not how much
+      #              of it there is, and a model pinned against its clamp says so
+      #              instead of reporting the clamp as a confident answer.
+      - name: Verify route density
+        run: npm run verify:density
+
+      - name: Verify pricing learning
+        run: npm run verify:learning
+
       # This step is why the first 17 CI runs were red, and it's worth writing down.
       # ESLint had never been configured in this repo — no .eslintrc anywhere — so
       # `next lint` dropped into an INTERACTIVE setup prompt, which cannot be

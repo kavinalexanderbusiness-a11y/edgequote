@@ -18,6 +18,31 @@ export function normalizePhone(p?: string | null): string {
 export function normalizeEmail(e?: string | null): string {
   return (e || '').trim().toLowerCase()
 }
+
+// The fewest digits worth treating as "they're typing a phone number". Below this
+// a stray "40" in a name search would drag in every 403 number in the book.
+const PHONE_SEARCH_MIN_DIGITS = 3
+
+/**
+ * Digits to match against customers.phone_digits, or '' when the query isn't
+ * phone-shaped enough to bother.
+ *
+ * THE rule for turning something a person typed into a phone lookup. A number is
+ * read off a handset, a sticky note or a missed-call list, so it arrives in every
+ * shape there is — "(403) 681-9016", "403-681-9016", "4036819016", or just the
+ * last four. Matching that against however the number happens to be stored is
+ * what the generated column exists for (RUN-2026-07-16-phone-search.sql); this
+ * is the caller's half of the same rule.
+ *
+ * Letters disqualify the query outright: "Rose 403" is a name search that happens
+ * to contain digits, and stripping to "403" would answer a question nobody asked.
+ */
+export function phoneSearchDigits(query: string): string {
+  const q = (query || '').trim()
+  if (!q || /[a-z@]/i.test(q)) return ''
+  const digits = normalizePhone(q)
+  return digits.length >= PHONE_SEARCH_MIN_DIGITS ? digits : ''
+}
 // Canonical forms so "SW" == "Southwest" and "Crescent" == "Cres" — without
 // this, the same address written two ways looks like two places and we'd create
 // duplicate properties (real case: "Canso Crescent SW" vs "Canso Crescent Southwest").
@@ -55,6 +80,41 @@ export function addressMatches(a?: string | null, b?: string | null): boolean {
   const x = normalizeAddressKey(a), y = normalizeAddressKey(b)
   if (x.length < 5 || y.length < 5) return false
   return x === y || x.startsWith(y) || y.startsWith(x)
+}
+
+// ── Customer V2 dual-read: where a customer's display address comes from ─────
+// The address of record is the PRIMARY PROPERTY. customers.address is the
+// legacy copy (still written by the intake paths for back-compat, dropped at
+// migration M4) and is read here only as a FALLBACK — so customers created
+// after the form stopped writing it, and customers created before, both
+// display correctly from the same call. One resolver, so no list/picker/search
+// invents its own precedence.
+export interface AddressCarrier {
+  address?: string | null
+  city?: string | null
+  properties?: { address: string | null; city: string | null; is_primary: boolean | null }[] | null
+}
+export function displayAddress(c: AddressCarrier): { address: string; city: string } {
+  const props = c.properties || []
+  const best = props.find(p => p.is_primary) || props[0]
+  if (best?.address) return { address: best.address, city: best.city || '' }
+  return { address: c.address || '', city: c.city || '' }
+}
+
+/** Tags as stored: trimmed, deduped case-insensitively (first spelling wins),
+ *  empty strings dropped. Pure — the form and any importer share it. */
+export function normalizeTags(raw: Array<string | null | undefined>): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const t of raw) {
+    const v = (t || '').trim()
+    if (!v) continue
+    const k = v.toLowerCase()
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(v)
+  }
+  return out
 }
 
 export interface MatchInput {

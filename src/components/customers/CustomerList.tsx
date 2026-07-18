@@ -4,6 +4,7 @@ import { useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Customer } from '@/types'
+import { displayAddress } from '@/lib/customers'
 import { formatDate, cn } from '@/lib/utils'
 import { Avatar } from '@/components/ui/Avatar'
 import { createClient } from '@/lib/supabase/client'
@@ -65,6 +66,8 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
   // owner pick). Lets "Send introduction" / "Review request" be one-tap entries into
   // THE same dialog instead of separate UIs.
   const [msgTemplate, setMsgTemplate] = useState<'choose' | MsgType | null>(null)
+  // Per-row "Message" — texting ONE customer used to require checkbox + bulk bar.
+  const [msgOne, setMsgOne] = useState<Customer | null>(null)
   const [busyKey, setBusyKey] = useState<string | null>(null)
 
   function matchesConsent(c: Customer): boolean {
@@ -88,11 +91,16 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
     return customers.filter(c => {
       if (!matchesConsent(c)) return false
       if (!q) return true
+      // Address/city come from THE dual-read resolver (primary property first,
+      // legacy customer columns as fallback) — so a customer whose address only
+      // lives on their property row is still findable by it.
+      const loc = displayAddress(c)
       return (
         c.name.toLowerCase().includes(q) ||
         !!c.email?.toLowerCase().includes(q) ||
-        !!c.city?.toLowerCase().includes(q) ||
-        !!c.address?.toLowerCase().includes(q) ||
+        loc.city.toLowerCase().includes(q) ||
+        loc.address.toLowerCase().includes(q) ||
+        (c.tags || []).some(t => t.toLowerCase().includes(q)) ||
         (!!digits && !!c.phone && c.phone.replace(/\D/g, '').includes(digits))
       )
     })
@@ -165,9 +173,12 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
       { label: 'Name', value: c => c.name },
       { label: 'Email', value: c => c.email },
       { label: 'Phone', value: c => c.phone },
-      { label: 'Address', value: c => c.address },
-      { label: 'City', value: c => c.city },
+      // Resolved address (primary property, legacy fallback) — the same value
+      // the list displays, so the export never contradicts the screen.
+      { label: 'Address', value: c => displayAddress(c).address },
+      { label: 'City', value: c => displayAddress(c).city },
       { label: 'Province', value: c => c.province },
+      { label: 'Tags', value: c => (c.tags || []).join('; ') },
       { label: 'SMS opt-in', value: c => (c.sms_opt_in ? 'yes' : 'no') },
       { label: 'Email opt-in', value: c => (c.email_opt_in ? 'yes' : 'no') },
       { label: 'Source', value: c => c.acquisition_source },
@@ -274,18 +285,26 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
                   {c.sms_opt_in && <span className="text-[10px] uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5">SMS</span>}
                   {c.email_opt_in && <span className="text-[10px] uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5">Email</span>}
                 </div>
-                <div className="flex items-center gap-4 mt-1 flex-wrap">
+                {/* Calling from this list is the highest-value tap in the product, and
+                    it was a ~16px target sitting directly on top of `mailto:` once the
+                    row wrapped on a phone — miss by 8px and the mail composer takes
+                    over the screen. gap-y-2 is what stops the two ever being adjacent;
+                    py-2 doubles the target. Icon-only 40px hit areas (the
+                    WeekendOutlook pattern) don't transfer here because these links
+                    carry their text, and negative margins on a WRAPPING row would make
+                    the wrapped lines overlap — the same bug wearing a different hat. */}
+                <div className="flex items-center gap-x-4 gap-y-2 mt-1 flex-wrap">
                   {c.email && (
-                    <a href={`mailto:${c.email}`} className="flex items-center gap-1 text-xs text-ink-muted hover:text-ink hover:underline">
-                      <Mail className="w-3 h-3" /> {c.email}
+                    <a href={`mailto:${c.email}`} className="flex items-center gap-1.5 py-2 text-xs text-ink-muted hover:text-ink hover:underline touch-manipulation">
+                      <Mail className="w-3.5 h-3.5 shrink-0" /> {c.email}
                     </a>
                   )}
                   {c.phone && (
-                    <a href={`tel:${c.phone}`} className="flex items-center gap-1 text-xs text-accent-text hover:underline">
-                      <Phone className="w-3 h-3" /> {c.phone}
+                    <a href={`tel:${c.phone}`} className="flex items-center gap-1.5 py-2 text-xs font-medium text-accent-text hover:underline touch-manipulation">
+                      <Phone className="w-3.5 h-3.5 shrink-0" /> {c.phone}
                     </a>
                   )}
-                  {c.city && <span className="text-xs text-ink-faint">{c.city}{c.province ? `, ${c.province}` : ''}</span>}
+                  {displayAddress(c).city && <span className="text-xs text-ink-faint">{displayAddress(c).city}{c.province ? `, ${c.province}` : ''}</span>}
                   {c.acquisition_source && (
                     <span className="text-[10px] uppercase tracking-wide text-ink-muted border border-border rounded px-1.5 py-0.5">{c.acquisition_source}</span>
                   )}
@@ -300,6 +319,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
                   <FileText className="w-4 h-4" /> Quote
                 </Button>
                 <Menu align="end" width={220} items={[
+                  { key: 'message', label: 'Send a message', icon: MessageSquare, onSelect: () => setMsgOne(c) },
                   { key: 'portal', label: 'Copy portal link', icon: Link2, onSelect: () => copyPortal(c.id) },
                   { key: 'edit', label: 'Edit customer', icon: Edit2, onSelect: () => onEdit(c) },
                   // Archive, not delete — reversible (the undo toast restores it).
@@ -343,6 +363,9 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
           defaultTemplate={msgTemplate === 'choose' ? undefined : msgTemplate}
           onClose={sent => { setMsgTemplate(null); if (sent) sel.clear() }}
         />
+      )}
+      {msgOne && (
+        <SendMessageDialog open customerId={msgOne.id} customerName={msgOne.name} onClose={() => setMsgOne(null)} />
       )}
     </div>
   )

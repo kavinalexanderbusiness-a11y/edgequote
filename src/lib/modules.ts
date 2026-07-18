@@ -1,6 +1,7 @@
 import type { LucideIcon } from 'lucide-react'
 import {
   LayoutDashboard, CalendarDays, Users, Home, FileText, Receipt, Wallet, MessageSquare, Wrench, Bot, Sprout, Radio, Plug,
+  Calculator, HardHat,
 } from 'lucide-react'
 
 // ── Feature-module registry ───────────────────────────────────────────────────
@@ -72,6 +73,16 @@ export const FEATURE_MODULES: FeatureModule[] = [
     category: 'operations', version: 1, updatedAt: '2026-07-15', requires: ['schedule'],
     description: 'Crews, technicians and the day\'s routes on one board.',
     permissions: ['jobs:read', 'jobs:write', 'crews:read', 'crews:write', 'equipment:read', 'equipment:write'] },
+  // Payroll lived three-to-five clicks deep inside Dispatch and appeared in NO
+  // navigation and NO command palette — typing "payroll" into ⌘K returned nothing.
+  // The thing that pays people has to be findable on payday. Registering it here
+  // (rather than special-casing the sidebar) is what makes the sidebar, ⌘K and the
+  // Modules manager all agree — they every one read this registry.
+  { key: 'workforce',  label: 'Workforce',  href: '/dashboard/workforce',  icon: HardHat,
+    category: 'operations', version: 1, updatedAt: '2026-07-16', requires: ['dispatch'],
+    description: 'Your people: hours, pay, time off and what the crew costs.',
+    whatsNew: 'Payroll, timesheets and time off now have a home of their own.',
+    permissions: ['crews:read', 'crews:write', 'payroll:read', 'payroll:write'] },
   { key: 'customers',  label: 'Customers',  href: '/dashboard/customers',  icon: Users,
     category: 'customers', version: 1, updatedAt: '2026-07-15',
     description: 'Every customer, their history, and the conversation.',
@@ -92,6 +103,13 @@ export const FEATURE_MODULES: FeatureModule[] = [
     category: 'money', version: 1, updatedAt: '2026-07-15', requires: ['invoices'],
     description: 'The money ledger — every payment, refund and dispute.',
     permissions: ['payments:read', 'payments:write', 'invoices:read'] },
+  // The money-OUT half. `requires: payments` is a real dependency, not shelf-order:
+  // the P&L reads the payments ledger for its top line, so Accounting without
+  // Payments would report cost with no revenue to weigh it against.
+  { key: 'accounting', label: 'Accounting', href: '/dashboard/accounting', icon: Calculator,
+    category: 'money', version: 1, updatedAt: '2026-07-16', requires: ['payments'],
+    description: 'Expenses, vendors and what\'s actually left after the work.',
+    permissions: ['expenses:read', 'expenses:write', 'payments:read'] },
   { key: 'messages',   label: 'Messages',   href: '/dashboard/messages',   icon: MessageSquare,
     category: 'customers', version: 1, updatedAt: '2026-07-09', requires: ['customers'],
     description: 'Two-way SMS and email with every customer, in one inbox.',

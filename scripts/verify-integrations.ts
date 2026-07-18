@@ -70,6 +70,18 @@ for (const entity of ENTITIES) {
 }
 check('unknown fields default to null, not undefined', serializeEntity('customer', {}).name === null)
 
+// Multi-property compatibility (c260380): entity payloads and API responses
+// must carry the property linkage; requests must carry their portal kind.
+console.log('\nPost-merge compatibility (property / portal kind):')
+for (const key of ['quote.created', 'job.created', 'invoice.created', 'invoice.paid', 'job.completed']) {
+  check(`${key} payload carries property_id`, eventByKey(key)!.payloadKeys.includes('property_id'))
+}
+for (const entity of ['quote', 'job', 'invoice'] as const) {
+  check(`API ${entity} responses carry property_id`, SERIALIZED_FIELDS[entity].includes('property_id'))
+}
+check('customer payload has NO property_id (customers own many)', !eventByKey('customer.created')!.payloadKeys.includes('property_id'))
+check('request.created payload carries kind', eventByKey('request.created')!.payloadKeys.includes('kind'))
+
 // Envelope
 const body = deliveryBody({ id: 'e1', event: 'x.y', createdAt: 't', data: { a: 1 } })
 check('delivery envelope is {id, event, created_at, data}', JSON.stringify(Object.keys(body)) === JSON.stringify(['id', 'event', 'created_at', 'data']))
@@ -138,6 +150,8 @@ const n1 = normalizeInboundPayload({ full_name: 'A B', tel: '403-555-0000', comm
 check('aliases map (full_name/tel/comments/utm_source)', n1.name === 'A B' && n1.phone === '403-555-0000' && n1.message === 'hi' && n1.source === 'fb')
 const n2 = normalizeInboundPayload({ Name: 'C', Email: 'c@d.e', Phone: '1', Address: 'x', City: 'y', Message: 'z' })
 check('capitalized variants map', n2.name === 'C' && n2.email === 'c@d.e' && n2.address === 'x' && n2.city === 'y' && n2.message === 'z')
+const n3 = normalizeInboundPayload({ state: 'AB', zip: 'T2P 1J9' })
+check('province/postal aliases map (state, zip)', n3.province === 'AB' && n3.postal_code === 'T2P 1J9')
 check('canonical keys win over nothing', normalizeInboundPayload({ name: 'N' }).name === 'N')
 check('empty strings become null', normalizeInboundPayload({ name: '  ' }).name === null)
 check('non-string values ignored safely', normalizeInboundPayload({ name: { evil: true } as unknown }).name === null)

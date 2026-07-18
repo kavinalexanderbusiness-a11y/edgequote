@@ -746,7 +746,7 @@ function problems(ctx: SuggestionContext): Suggestion[] {
     const sqft = sqftFor(s.property)
     const actuals = s.customerId ? actualByCust[s.customerId] : undefined
     const onSite = actuals?.length ? Math.round(actuals.reduce((a, b) => a + b, 0) / actuals.length)
-      : sqft > 0 ? estimateVisitMinutes(sqft) : ONSITE_DEFAULT
+      : (estimateVisitMinutes(sqft) ?? ONSITE_DEFAULT)
     const hasGeo = s.property?.lat != null && s.property?.lng != null
     // Only flag when there's a real signal (geo or timed visits) — never on pure guesses.
     if (!hasGeo && !(actuals?.length ?? 0)) continue

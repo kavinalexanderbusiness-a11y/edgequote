@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
+import { displayAddress } from '@/lib/customers'
 import type { Customer } from '@/types'
 import { User, Plus, ChevronDown, X, Check } from 'lucide-react'
 
@@ -52,11 +53,13 @@ export function CustomerPicker({
 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase()
+    // displayAddress = primary property first, legacy customers.address fallback —
+    // callers that don't join properties keep exactly the old behaviour.
     const list = !q ? customers : customers.filter(c =>
       c.name?.toLowerCase().includes(q) ||
       c.phone?.toLowerCase().includes(q) ||
       c.email?.toLowerCase().includes(q) ||
-      c.address?.toLowerCase().includes(q))
+      displayAddress(c).address.toLowerCase().includes(q))
     return list.slice(0, 50)   // cap the DOM — the search narrows the rest
   }, [customers, query])
 
@@ -125,7 +128,7 @@ export function CustomerPicker({
                   <User className="w-3.5 h-3.5 text-ink-faint shrink-0" />
                   <span className="min-w-0 flex-1">
                     <span className="block text-ink truncate">{r.c.name}</span>
-                    {(r.c.phone || r.c.address) && <span className="block text-[11px] text-ink-faint truncate">{[r.c.phone, r.c.address].filter(Boolean).join(' · ')}</span>}
+                    {(r.c.phone || displayAddress(r.c).address) && <span className="block text-[11px] text-ink-faint truncate">{[r.c.phone, displayAddress(r.c).address].filter(Boolean).join(' · ')}</span>}
                   </span>
                   {value === r.c.id && <Check className="w-4 h-4 text-accent-text shrink-0" />}
                 </button>

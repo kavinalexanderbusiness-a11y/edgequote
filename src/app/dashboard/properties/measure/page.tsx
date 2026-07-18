@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Property } from '@/types'
 import { MeasureTool } from '@/components/properties/MeasureTool'
+import { MeasurePanel } from '@/components/measure/MeasurePanel'
 import { PropertyMeasurementHistory } from '@/components/properties/PropertyMeasurementHistory'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -18,6 +19,9 @@ export default function MeasurePage() {
   // (?context=quote). Opening the Measurements page on its own stays focused on
   // the measurement — no pricing.
   const [mode, setMode] = useState<'measure' | 'quote'>('measure')
+  const [uid, setUid] = useState<string | null>(null)
+  // Bumped when a measurement is saved, so the accuracy table below re-reads.
+  const [refreshKey, setRefreshKey] = useState(0)
 
   useEffect(() => {
     async function load() {
@@ -27,6 +31,7 @@ export default function MeasurePage() {
       setMode(ctx === 'quote' || ctx === 'pricing' ? 'quote' : 'measure')
       if (!id) { setLoading(false); return }
       const { data: { user } } = await supabase.auth.getUser()
+      setUid(user?.id ?? null)
       const { data } = await supabase
         .from('properties')
         .select('*')
@@ -58,8 +63,25 @@ export default function MeasurePage() {
           leave the app or bounce somewhere unhelpful. */}
       <PageHeader crumb={{ label: 'Properties', href: '/dashboard/properties' }}
         title="Measure Property" description={property.address} />
-      <MeasureTool property={property} context={mode} />
-      <PropertyMeasurementHistory propertyId={property.id} />
+
+      {/* THE measurement workflow — all nine kinds, one panel (lib/measure).
+          `?context=quote` still opens the Measure & Price tool below, because
+          that tool is a PRICING surface (PricingConfig, crew cost, tier picker)
+          and pricing is out of scope for this engine. When Quote V2 consumes
+          lib/measure's API, its map half collapses into this panel and MeasureTool
+          becomes pricing-only. */}
+      {uid && (
+        <MeasurePanel
+          supabase={supabase}
+          userId={uid}
+          propertyId={property.id}
+          center={property.lat != null && property.lng != null ? { lat: property.lat, lng: property.lng } : null}
+          onChanged={() => setRefreshKey(k => k + 1)}
+        />
+      )}
+
+      {mode === 'quote' && <MeasureTool property={property} context={mode} />}
+      <PropertyMeasurementHistory key={refreshKey} propertyId={property.id} />
     </div>
   )
 }

@@ -45,6 +45,7 @@ export const CATALOG_PACKS: TradePack[] = [
     ],
     seasons: {},
     seasonalCampaigns: [],
+    addons: [],
   },
   {
     key: "electrical",
@@ -76,6 +77,7 @@ export const CATALOG_PACKS: TradePack[] = [
     ],
     seasons: {},
     seasonalCampaigns: [],
+    addons: [],
   },
   {
     key: "handyman",
@@ -107,6 +109,7 @@ export const CATALOG_PACKS: TradePack[] = [
     ],
     seasons: {},
     seasonalCampaigns: [],
+    addons: [],
   },
   {
     key: "hvac",
@@ -140,6 +143,7 @@ export const CATALOG_PACKS: TradePack[] = [
     ],
     seasons: {},
     seasonalCampaigns: [],
+    addons: [],
   },
   {
     key: "junk_removal",
@@ -173,6 +177,7 @@ export const CATALOG_PACKS: TradePack[] = [
     ],
     seasons: {},
     seasonalCampaigns: [],
+    addons: [],
   },
   {
     key: "painting",
@@ -202,6 +207,7 @@ export const CATALOG_PACKS: TradePack[] = [
     ],
     seasons: {},
     seasonalCampaigns: [],
+    addons: [],
   },
   {
     key: "pest_control",
@@ -235,6 +241,7 @@ export const CATALOG_PACKS: TradePack[] = [
     ],
     seasons: {},
     seasonalCampaigns: [],
+    addons: [],
   },
   {
     key: "plumbing",
@@ -268,6 +275,7 @@ export const CATALOG_PACKS: TradePack[] = [
     ],
     seasons: {},
     seasonalCampaigns: [],
+    addons: [],
   },
   {
     key: "pool_service",
@@ -299,6 +307,7 @@ export const CATALOG_PACKS: TradePack[] = [
     ],
     seasons: {},
     seasonalCampaigns: [],
+    addons: [],
   },
   {
     key: "roofing",
@@ -332,5 +341,6 @@ export const CATALOG_PACKS: TradePack[] = [
     ],
     seasons: {},
     seasonalCampaigns: [],
+    addons: [],
   },
 ]

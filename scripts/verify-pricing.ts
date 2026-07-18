@@ -27,6 +27,8 @@ import { DEFAULT_PRICING, lawnBasePrice, pricingConfigFromSettings } from '../sr
 import { serviceLineTotals } from '../src/lib/quoteServices'
 import { serviceRecommendation, servicePricingKind } from '../src/lib/servicePricing'
 import { TRADE_PACKS, LAWN_PACK } from '../src/lib/trades'
+import { SYSTEM_UNITS, resolveUnit, formatQuantity, formatUnitRate, loadServiceUnits } from '../src/lib/units'
+import type { PricingDisplayType } from '../src/types'
 
 let failures = 0
 const ok = (name: string) => console.log(`  ✓ ${name}`)
@@ -283,6 +285,199 @@ console.log('\nThe lawn pack still routes and prices identically:')
   eq('5,500 ft² still prices at $110.50 (unchanged)', lawnBasePrice(5500, DEFAULT_PRICING), 110.5)
 }
 
-console.log('')
-if (failures) { console.log(`✗ ${failures} pricing check(s) failed\n`); process.exit(1) }
-console.log('✓ all pricing checks passed — margin/markup honest, lawn byte-identical, no invented prices\n')
+// ── 13. THE CADENCE ENGINE ONLY SPEAKS FOR SERVICES IT CAN PRICE ─────────────
+// §10 established that an UNNAMED service is not a lawn. This is the other half:
+// a service that IS named, and whose name mentions grass, still is not necessarily
+// priced by lawn area. "String Trimming" and "Lawn Edging" are real catalogue
+// services that routed to the cadence engine, so both were offered Weekly /
+// Bi-Weekly / Monthly at `base + (lawn_sqft/1000 × mow_rate)` — a mowing price, on
+// a mowing cadence, for trimming. The existing Lawn Edging quote is the tell: a
+// one-time price with every cadence field null.
+//
+// The routing predicate is deliberately NOT serviceKey()'s 'mowing' bucket, which
+// is wide on purpose (trim|string|edg|cut) so a trimming visit's minutes still
+// teach the mowing crew's labour model. Right for LEARNING, wrong for PRICING.
+console.log('\nThe cadence engine only speaks for services it can price:')
+{
+  const kind = (s: string | null | undefined, t?: PricingDisplayType) =>
+    servicePricingKind(s, t ? { pricing_display_type: t } : null)
+
+  // LAWN — byte-identical, including the ad-hoc names a free-text field collects.
+  for (const s of ['Weekly Mowing', 'Bi-Weekly Mowing', 'Lawn Mowing', 'Lawn mowing',
+                   'One-Time Mowing', 'mowing', 'mow', 'lawn mow', 'Grass Cut']) {
+    eq(`lawn cadence still owns "${s}"`, kind(s), 'lawn_recurring')
+  }
+  eq('a trailing space does not unroute mowing', kind('Weekly Mowing '), 'lawn_recurring')
+
+  // ORDERING IS LOAD-BEARING. SERVICE_DEFS is ordered, so a name carrying TWO
+  // services resolves to the EARLIER def: "mow + prune" is 'hedge', not mowing.
+  // Testing the cadence pattern BEFORE serviceKey() reads fine and would promote it
+  // to a lawn cadence, silently repricing it. This pins the ordering.
+  eq('"mow + prune" is still hedge/labour, not mowing', kind('mow + prune '), 'labour')
+
+  // THE FIX — 'mowing' to serviceKey(), but not priced by lawn area.
+  eq('String Trimming is one-time labour', kind('String Trimming'), 'labour')
+  eq('Lawn Edging is one-time labour', kind('Lawn Edging'), 'labour')
+  eq('Tree Trimming is one-time labour', kind('Tree Trimming'), 'labour')
+  eq('a plumber\'s "Cut and cap" is one-time labour', kind('Cut and cap'), 'labour')
+  eq('"String Lights" is one-time labour', kind('String Lights'), 'labour')
+
+  // Already correct before the change — pinned so they stay that way.
+  eq('Mulch Installation is area-priced', kind('Mulch Installation'), 'per_area')
+  eq('Gravel Installation is area-priced', kind('Gravel Installation'), 'per_area')
+  eq('Rock Installation is area-priced', kind('Rock Installation'), 'per_area')
+  eq('Landscape Bed Cleanup is one-time labour', kind('Landscape Bed Cleanup'), 'labour')
+  eq('Pressure Washing is one-time labour', kind('Pressure Washing'), 'labour')
+  eq('Hedge Trimming is one-time labour', kind('Hedge Trimming'), 'labour')
+  eq('Snow Removal is one-time labour', kind('Snow Removal'), 'labour')
+
+  // The owner's CONFIGURED display type still wins over any name guess.
+  eq('an hourly template beats the name', kind('Lawn Mowing', 'hourly'), 'labour')
+  eq('a per_sqft template beats the name', kind('Lawn Mowing', 'per_sqft'), 'per_area')
+  eq('per_linear_ft is labour', kind('Fence Staining', 'per_linear_ft'), 'labour')
+}
+
+// ── 14. EVERY SUPPORTED UNIT RESOLVES AND READS CORRECTLY ────────────────────
+// The fourteen system units are the vocabulary a non-lawn trade quotes in. They
+// are seeded in the DB (RUN-2026-07-15-service-units-vocabulary.sql, then
+// RUN-2026-07-16-quote-materials.sql added the five bulk-material units) and
+// mirrored by SYSTEM_UNITS for read failures. The mirror is the risk: a fallback
+// that disagrees with the table is a second vocabulary, which is exactly what the
+// old four-value SERVICE_UNITS list was.
+console.log('\nEvery supported unit resolves and reads correctly:')
+{
+  eq('there are fourteen system units', SYSTEM_UNITS.length, 14)
+  // The FULL fingerprint of the seeded rows, not just their codes — abbrev is the
+  // wording on a line, step/decimals are the quantity input's behaviour. Verified
+  // against live prod; re-check with:
+  //   select code,label,abbrev,step,decimals,sort_order from service_units
+  //   where user_id is null order by sort_order;
+  const fingerprint = SYSTEM_UNITS
+    .map(u => [u.code, u.label, u.abbrev, u.step, u.decimals, u.sort_order].join('|'))
+    .join(' ;; ')
+  eq('…and they mirror the seeded rows exactly', fingerprint,
+    'each|Each|each|1|0|10 ;; hour|Hours|hr|0.25|2|20 ;; flat|Flat rate|flat|1|0|30 ;; ' +
+    'sqft|Square feet|sq ft|1|0|40 ;; linear_ft|Linear feet|linear ft|1|0|50 ;; ' +
+    'fixture|Fixtures|fixture|1|0|60 ;; room|Rooms|room|1|0|70 ;; zone|Zones|zone|1|0|80 ;; ' +
+    'equipment|Equipment|unit|1|0|90 ;; ' +
+    // The five bulk-material units. Read back from live prod after the migration,
+    // not transcribed from the source file — the point of this test is to catch
+    // the mirror disagreeing with the table, which copying the file cannot do.
+    'cubic_yard|Cubic yards|yd³|0.5|1|100 ;; ton|Tons|ton|0.5|2|110 ;; ' +
+    'bag|Bags|bag|1|0|120 ;; pallet|Pallets|pallet|1|0|130 ;; tray|Trays|tray|1|0|140')
+
+  for (const u of SYSTEM_UNITS) {
+    eq(`"${u.code}" resolves to itself`, resolveUnit(SYSTEM_UNITS, u.code).code, u.code)
+  }
+
+  // The line maths is qty × unit_price for EVERY unit — serviceLineTotals takes no
+  // unit argument at all, which is the invariant this pins.
+  for (const u of SYSTEM_UNITS) {
+    eq(`"${u.code}" line: 6 × $25 is still $150`,
+       serviceLineTotals({ quantity: 6, unit_price: 25, discount_type: null, discount_value: null }).gross, 150)
+  }
+
+  // Rate + quantity wording per unit — what the owner actually reads on a line.
+  eq('hourly reads as a rate',        formatUnitRate(SYSTEM_UNITS, 'hour', 95), '$95/hr')
+  eq('per sq ft keeps its cents',     formatUnitRate(SYSTEM_UNITS, 'sqft', 3.5), '$3.50/sq ft')
+  eq('linear ft reads as a rate',     formatUnitRate(SYSTEM_UNITS, 'linear_ft', 8), '$8/linear ft')
+  eq('per fixture reads as a rate',   formatUnitRate(SYSTEM_UNITS, 'fixture', 150), '$150/fixture')
+  eq('per room reads as a rate',      formatUnitRate(SYSTEM_UNITS, 'room', 80), '$80/room')
+  eq('per zone reads as a rate',      formatUnitRate(SYSTEM_UNITS, 'zone', 45), '$45/zone')
+  eq('per equipment reads as a rate', formatUnitRate(SYSTEM_UNITS, 'equipment', 200), '$200/unit')
+  eq('each reads as a rate',          formatUnitRate(SYSTEM_UNITS, 'each', 20), '$20/each')
+  // 'flat' is a shape of deal, not a count — it must never read "1 flat".
+  eq('flat is a deal, not a count',   formatUnitRate(SYSTEM_UNITS, 'flat', 65), '$65 flat')
+  eq('…and its quantity says so too', formatQuantity(SYSTEM_UNITS, 'flat', 1), 'Flat rate')
+  eq('6 fixtures',                    formatQuantity(SYSTEM_UNITS, 'fixture', 6), '6 fixture')
+  eq('hours keep their decimals',     formatQuantity(SYSTEM_UNITS, 'hour', 2.5), '2.50 hr')
+  eq('sq ft are whole and grouped',   formatQuantity(SYSTEM_UNITS, 'sqft', 1200), '1,200 sq ft')
+
+  // A quote written before this vocabulary existed must never lose its word.
+  eq('an unknown legacy code renders as itself', resolveUnit(SYSTEM_UNITS, 'bags').code, 'bags')
+  eq('…and an empty code falls to the default', resolveUnit(SYSTEM_UNITS, '').code, 'each')
+}
+
+// (async: §15 exercises the loader itself. Top-level await is unavailable here —
+// tsx transforms these scripts to CJS — so the tail runs in an IIFE and reports
+// from inside it.)
+void (async () => {
+  // ── 15. A FAILED READ MUST NOT SHRINK THE VOCABULARY ───────────────────────
+  // loadServiceUnits() returned [] on error and the picker then fell back to four
+  // hardcoded units — so one failed read (offline, RLS hiccup, cold start) quietly
+  // took fixture/room/zone/equipment/flat off a plumber's quote form, with nothing
+  // on screen to say why. It degrades to "no custom units" now, never to a
+  // different vocabulary.
+  console.log('\nA failed read degrades to the full system vocabulary, never to fewer:')
+  const clientReturning = (res: { data: unknown; error: unknown }) => ({
+    from: () => ({ select: () => ({ eq: () => ({ order: async () => res }) }) }),
+  }) as unknown as Parameters<typeof loadServiceUnits>[0]
+
+  const onError = await loadServiceUnits(clientReturning({ data: null, error: { message: 'offline' } }))
+  eq('an errored read still yields all fourteen units', onError.length, 14)
+  check('…and fixture survives it', onError.some(u => u.code === 'fixture'),
+        'fixture was dropped — the picker just lost a plumber their unit')
+  check('…and cubic_yard survives it', onError.some(u => u.code === 'cubic_yard'),
+        'cubic_yard was dropped — the picker just lost a landscaper their mulch')
+
+  const onEmpty = await loadServiceUnits(clientReturning({ data: [], error: null }))
+  eq('an empty table also yields all fourteen', onEmpty.length, 14)
+
+  // A successful read is still authoritative — the fallback must not mask real rows.
+  // The custom code must be one NO system unit uses: this case originally used
+  // 'pallet', which RUN-2026-07-16-quote-materials.sql then made a system unit —
+  // so the example quietly stopped being an example of a custom unit at all.
+  const custom = [{ id: 'x', user_id: 'u1', code: 'skid', label: 'Skids', abbrev: 'skid', step: 1, decimals: 0, sort_order: 5, active: true }]
+  check('the custom test code is not a system code', !SYSTEM_UNITS.some(u => u.code === custom[0].code),
+        `"${custom[0].code}" is now a system unit — this case no longer tests a custom unit`)
+  const onOk = await loadServiceUnits(clientReturning({ data: custom, error: null }))
+  eq('a real read wins over the fallback', onOk.length, 1)
+  eq('…and it is the owner\'s own unit', onOk[0].code, 'skid')
+
+  // ── 16. ONLY LAWN MAY BE HANDED A SAVED LAWN RECOMMENDATION ────────────────
+  // §13 pins which services the cadence engine may PRICE. This is the next
+  // question: which services may READ a price it already produced.
+  // buildSavedRecommendation() wraps pricingPackage(), so a SavedRecommendation is
+  // a Weekly/Bi-Weekly GRASS price list — and it carries NO record of the service
+  // it was built for. latestSavedRecommendation() just returns the newest snapshot
+  // that has one, so every consumer must ask §13's question first, through the same
+  // seam.
+  //
+  // Four surfaces now depend on this gate: the quote builder's "Use measured
+  // prices", the MeasureTool→quote handoff, JobForm's cadence auto-fill, and the
+  // property card. A regression puts mowing prices on a furnace quote, and neither
+  // tsc nor next build can see a wrong VALUE.
+  console.log('\nOnly a lawn-cadence service may be handed a saved lawn recommendation:')
+  const mayReadLawnRec = (serviceName: string, tpl: { pricing_display_type: PricingDisplayType; default_rate: number; name: string } | null) =>
+    servicePricingKind(serviceName, tpl) === 'lawn_recurring'
+
+  for (const pack of TRADE_PACKS) {
+    const primary = pack.services[0]
+    const tpl = { pricing_display_type: primary.pricing_display_type as PricingDisplayType, default_rate: primary.default_rate, name: primary.name }
+    const allowed = mayReadLawnRec(primary.name, tpl)
+    // The MeasureTool→quote handoff defaults service_type to the owner's FIRST
+    // active template and used to seed the lawn engine's prices alongside it.
+    if (pack.key === 'lawn_landscaping') {
+      check(`${pack.key}: primary "${primary.name}" DOES take lawn prices (unchanged)`, allowed)
+    } else {
+      check(`${pack.key}: primary "${primary.name}" is refused lawn prices`, !allowed,
+        `${primary.name} routed to lawn_recurring — a ${pack.key} handoff would seed mowing prices`)
+    }
+  }
+
+  // JobForm has no template at all (service_type is free text), so the gate must
+  // hold on the name alone.
+  eq('JobForm (name only): "Snow Removal" is refused lawn prices', mayReadLawnRec('Snow Removal', null), false)
+  eq('JobForm (name only): "Furnace Tune-Up" is refused', mayReadLawnRec('Furnace Tune-Up', null), false)
+  eq('JobForm (name only): "Lawn Mowing" still allowed', mayReadLawnRec('Lawn Mowing', null), true)
+  // §13 narrowed the cadence engine; a saved lawn rec must follow it exactly —
+  // "String Trimming" is in serviceKey's mowing bucket but is NOT lawn-priced, so
+  // it must not inherit a mowing price list either.
+  eq('String Trimming is refused too (agrees with §13)', mayReadLawnRec('String Trimming', null), false)
+  // The empty form must never be treated as lawn — it is how every quote starts.
+  eq('no service yet → refused (not lawn)', mayReadLawnRec('', null), false)
+
+  console.log('')
+  if (failures) { console.log(`✗ ${failures} pricing check(s) failed\n`); process.exit(1) }
+  console.log('✓ all pricing checks passed — margin/markup honest, lawn byte-identical, no invented prices, one unit vocabulary, no borrowed lawn recs\n')
+})()

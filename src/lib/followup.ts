@@ -1,5 +1,7 @@
 import type { Quote } from '@/types'
 import { type ChasePolicy, resolveChasePolicy } from '@/lib/automation/policy'
+import { isReachable, blockedReason, type ReachCustomer } from '@/lib/comms/reach'
+import { SKIP_REASON, type SkipReason } from '@/lib/comms/skipReasons'
 
 // ── Follow-up — THE "has this quote gone quiet?" engine ──────────────────────
 // One home for the rule, the owner's policy, and the DB patches. The automatic
@@ -85,6 +87,52 @@ export function dueForAutoFollowUp(q: Quote, policy: FollowUpPolicy): boolean {
   return quoteIsQuiet(q, policy.delayDays) && !followUpsExhausted(q, policy)
 }
 
+// ── Can this follow-up actually happen? ──────────────────────────────────────
+// "Gone quiet" and "can be chased" are two different questions, and conflating
+// them is what made the queue lie. Measured on the live book: the follow-up queue
+// offered 9 quotes to chase; 6 of them ($445) belonged to customers with no phone
+// and no email. The owner cannot chase those, the cron cannot either — it spends
+// the attempt and records a skip (lib/automation/chase: "no contact on file … the
+// attempt is CORRECTLY spent") — and nothing ever said so.
+//
+// So staleness stays exactly what it was (quoteIsQuiet — a pure time rule that
+// knows nothing about channels), and reachability is asked separately, of the ONE
+// engine that already owns it. lib/comms/reach is pure and client-safe, so this
+// composes without either side learning the other's job, and predicts precisely
+// what the chaser would do: the same channels and the same template.
+//
+// Root cause of the unreachable book, for whoever reads this next: 19 of 25
+// Facebook-sourced customers arrive with a name and an address and no way to
+// contact them, because that conversation is happening in Messenger. The fix for
+// THAT is a phone number, which is why these helpers name what's missing.
+const CHASE_CHANNELS = ['sms', 'email']
+const CHASE_TEMPLATE = 'estimate_followup'
+
+/** Would a follow-up to this customer actually go out? A missing customer is not
+ *  reachable — an absent row is not permission to assume a channel. */
+export function canChaseCustomer(c: ReachCustomer | null | undefined): boolean {
+  return !!c && isReachable(c, CHASE_CHANNELS, CHASE_TEMPLATE)
+}
+
+/** Why a follow-up can't go out — null when it can. Returns the canonical
+ *  SkipReason, NOT a sentence: callers put it through describeSkip(), the same
+ *  labeller the campaign audience and the message thread already use, so one
+ *  block reads identically everywhere instead of a fourth hand-written copy. */
+export function chaseBlockedReason(c: ReachCustomer | null | undefined): SkipReason | null {
+  if (!c) return SKIP_REASON.NO_CONTACT
+  // "We have no way to contact this person" is the dominant, actionable truth, and
+  // reachCheck cannot say it: it is per-channel by design, so it reports whatever
+  // blocks the FIRST channel. That produced two bad sentences for the 27 customers
+  // in this state. With opt-ins on it said "no phone" — true, but it hides that the
+  // email is missing too, so adding a phone looks optional. With opt-ins off it said
+  // "no opt-in", which reads as "they refused" when nobody ever asked them: the
+  // record is simply empty. Both sent the owner looking for a consent problem that
+  // doesn't exist. NO_CONTACT is what dispatch already logs for exactly this case,
+  // so this reports the same reason the send path would, one step earlier.
+  if (!c.phone && !c.email) return SKIP_REASON.NO_CONTACT
+  return blockedReason(c, CHASE_CHANNELS, CHASE_TEMPLATE)
+}
+
 // Oldest first; ties broken by highest quote value (chase the stale money first).
 export function compareFollowUp(a: Quote, b: Quote): number {
   const aa = followUpAnchor(a) ? new Date(followUpAnchor(a)!).getTime() : 0
@@ -101,11 +149,37 @@ export function logFollowUpPatch(q: Quote) {
   }
 }
 
-// DB patch when a quote is won — captures whether follow-ups drove the win.
-export function markWonPatch(followUpCount: number) {
+/** What the customer actually agreed to. See RUN-2026-07-16c. */
+export interface WonSnapshot {
+  /** The price on the document at the moment they said yes. A COPY, never a
+   *  reference to `total` — editing the quote afterwards must not rewrite what was
+   *  agreed. */
+  acceptedPrice: number | null
+  /** The cadence they bought. `null` when nobody said so — see below. */
+  selectedCadence: 'one_time' | 'weekly' | 'biweekly' | 'monthly' | null
+}
+
+// DB patch when a quote is won — captures whether follow-ups drove the win, and
+// SNAPSHOTS what was bought.
+//
+// Pricing v2 Phase 0 (sensor). Until now nothing recorded the sale, so the learner
+// reconstructed it by guessing weekly-first off whichever price columns happened to
+// be filled: a paid $489.25 seeding job with a leftover weekly_price of 56.65 was
+// learned as "$56.65 weekly". This is the one place a quote becomes won, so it is
+// the one place the truth can be written down.
+//
+// `selectedCadence` is OMITTED, not defaulted, when the caller doesn't know. That is
+// the whole point: an absent cadence is a fact ("nobody said"), and Phase 5 can skip
+// it honestly. Inferring one from a populated price column is precisely the bug these
+// columns exist to kill — do not "improve" this by adding a fallback.
+export function markWonPatch(followUpCount: number, snap?: WonSnapshot) {
   return {
     status: 'accepted' as const,
     accepted_after_followup: (followUpCount ?? 0) > 0,
     follow_up_count_at_acceptance: followUpCount ?? 0,
+    // `?? null` on the price is safe — a quote going draft/sent → accepted has no
+    // prior snapshot to clobber, and a null price is honestly "we didn't capture it".
+    accepted_price: snap?.acceptedPrice ?? null,
+    ...(snap?.selectedCadence ? { selected_cadence: snap.selectedCadence } : {}),
   }
 }

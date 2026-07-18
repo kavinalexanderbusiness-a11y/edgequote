@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Quote, Customer, QuoteFormValues, QuoteService, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS } from '@/types'
+import { Quote, Customer, QuoteFormValues, QuoteService, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, STATUS_LABELS } from '@/types'
 import { sumServiceLines, serviceLineTotals, splitServices } from '@/lib/quoteServices'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { JobPhotos } from '@/components/photos/JobPhotos'
@@ -16,14 +16,17 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
+import { QuoteIntelligencePanel } from '@/components/quotes/QuoteIntelligencePanel'
 import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { nextInvoiceNumber } from '@/lib/invoicing'
-import { isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil, DEFAULT_QUOTE_VALID_DAYS } from '@/lib/quoteStatus'
+import { isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil, markSentPatch, sendBlockedReason, sendBlockedLabel, DEFAULT_QUOTE_VALID_DAYS } from '@/lib/quoteStatus'
 import { toast } from '@/lib/toast'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
 import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import { ensureCustomerAndProperty } from '@/lib/customers'
+import { servicePricingKind } from '@/lib/servicePricing'
+import { saveManual } from '@/lib/measure/data'
 import { Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Send, Camera, Globe, CalendarClock } from 'lucide-react'
 
 export default function QuoteDetailPage() {
@@ -86,7 +89,7 @@ export default function QuoteDetailPage() {
       const [qRes, svcRes, cRes, tRes, tierRes, sRes] = await Promise.all([
         supabase.from('quotes').select('*').eq('id', id).eq('user_id', user!.id).single(),
         supabase.from('quote_services').select('*').eq('quote_id', id).order('sort_order'),
-        supabase.from('customers').select('*').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
+        supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
         supabase.from('service_templates').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('travel_fee_tiers').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('business_settings').select('*').eq('user_id', user!.id).maybeSingle(),
@@ -184,6 +187,10 @@ export default function QuoteDetailPage() {
             discount_type: s.discount_type || null,
             discount_value: s.discount_type && Number(s.discount_value) > 0 ? Number(s.discount_value) : null,
             notes: s.notes?.trim() || null,
+            // The line KIND is what makes a material a material. This save path
+            // DELETEs every line and re-inserts, so omitting it here would demote
+            // every material to a service the first time a quote was edited.
+            kind: s.kind || 'service',
           })),
         ]).select('*')
         setServices((rows as QuoteService[]) || [])
@@ -195,17 +202,22 @@ export default function QuoteDetailPage() {
       // Keep the lawn size on the property in sync (it's a core attribute, not just
       // quote data). New/unchanged → silent; a CHANGED size replaces it non-blockingly
       // with a quick Undo (no up-front confirm).
+      // MEAS-1: only a LAWN service syncs the lawn area, and it goes through the ONE
+      // seam (lib/measure → property_measurements → mirror), never a direct lawn_sqft
+      // write the DB guard would reject.
       const measuredSqft = Number(values.measured_sqft) || 0
-      if (propertyId && measuredSqft > 0) {
+      const isLawn = servicePricingKind(values.service_type, templates.find(t => t.id === values.service_template_id) ?? null) === 'lawn_recurring'
+      if (propertyId && measuredSqft > 0 && isLawn) {
         const { data: prop } = await supabase.from('properties').select('lawn_sqft').eq('id', propertyId).maybeSingle()
         const prior = Number((prop as { lawn_sqft: number | null } | null)?.lawn_sqft) || 0
         const changed = Math.round(prior) !== Math.round(measuredSqft)
         if (changed) {
-          await supabase.from('properties').update({ lawn_sqft: measuredSqft }).eq('id', propertyId)
-          if (prior > 0) {
+          const saved = await saveManual(supabase, { userId: user!.id, propertyId, kind: 'lawn', value: measuredSqft })
+          if (!saved.ok) toast.error(`Saved the quote, but the lawn size didn’t sync: ${saved.error}`)
+          else if (prior > 0) {
             const priorLawn = (prop as { lawn_sqft: number | null } | null)?.lawn_sqft ?? null
             toast.undo(`Saved lawn size updated to ${measuredSqft.toLocaleString()} ft²`, async () => {
-              await supabase.from('properties').update({ lawn_sqft: priorLawn }).eq('id', propertyId)
+              if (priorLawn != null) await saveManual(supabase, { userId: user!.id, propertyId, kind: 'lawn', value: priorLawn })
             })
           }
         }
@@ -262,17 +274,28 @@ export default function QuoteDetailPage() {
   // (stamping sent_at arms the follow-up clock) — instead of two separate steps.
   async function handleSendQuote() {
     if (!quote) return
+    // A document with no price is broken whoever receives it — and until
+    // RUN-2026-07-16e the DB hid that by inventing hours × crew_size × rate. Blocked
+    // BEFORE the PDF renders: a $0.00 quote on your phone is one tap from a customer.
+    //
+    // Only the price blocks here, deliberately. This hands the PDF to YOUR device, so
+    // a quote with no customer linked is a real thing to do — a walk-up you price at
+    // the door. Delivery is where a customer becomes mandatory, and that's guarded at
+    // the composer below.
+    if (sendBlockedReason(quote) === 'no_price') {
+      toast.error(sendBlockedLabel('no_price'))
+      return
+    }
     const delivered = await handleOpenPdf()
     if (!delivered) return   // PDF failed → never claim (or record) that it was sent
     if (quote.status === 'draft') {
-      const nowIso = new Date().toISOString()
-      // Expiry starts the moment it goes out, and only if the owner hasn't already
-      // set a date — never silently overwrite a deliberate one.
-      const validUntil = quote.valid_until ?? defaultValidUntil(localTodayISO())
-      await supabase.from('quotes').update({ status: 'sent' }).eq('id', quote.id)
-      await supabase.from('quotes').update({ sent_at: nowIso }).eq('id', quote.id).is('sent_at', null)
-      await supabase.from('quotes').update({ valid_until: validUntil }).eq('id', quote.id).is('valid_until', null)
-      setQuote({ ...quote, status: 'sent', sent_at: quote.sent_at ?? nowIso, valid_until: validUntil })
+      // ONE patch, ONE write. This was three updates — and it was the only one of the
+      // app's four "mark sent" paths that wrote all three fields, which is why the
+      // other three left 0 of 55 quotes able to expire. markSentPatch omits rather
+      // than overwrites, so a deliberately-set expiry still survives.
+      const patch = markSentPatch(quote, localTodayISO())
+      await supabase.from('quotes').update(patch).eq('id', quote.id)
+      setQuote({ ...quote, ...patch } as typeof quote)
       // Be honest about what just happened: the PDF is on YOUR device, and the
       // customer still hasn't heard from you.
       toast(`${quote.quote_number} marked as sent — the PDF is on your device. The customer hasn’t been messaged yet.`, {
@@ -447,6 +470,9 @@ export default function QuoteDetailPage() {
             quantity: s.quantity, unit: s.unit, unit_price: s.unit_price,
             est_minutes: s.est_minutes, discount_type: s.discount_type,
             discount_value: s.discount_value, notes: s.notes,
+            // Without this the duplicate silently demotes every material back to
+            // a service — the copy would stop matching the quote it came from.
+            kind: s.kind ?? 'service',
           })))
         }
         try { window.sessionStorage.setItem('eq_quote_dup_from', quote.quote_number) } catch { /* ignore */ }
@@ -479,7 +505,16 @@ export default function QuoteDetailPage() {
     if (!quote || actionBusy) return
     setActionBusy(true)
     try {
-      const patch = markWonPatch(quote.follow_up_count)
+      // Snapshot what was bought (Pricing v2 Phase 0). `total` is the number on the
+      // document the customer said yes to — copying it here is what makes it
+      // survivable when the quote is later edited. The cadence is deliberately NOT
+      // passed: this button says "they said yes", not "they said yes to weekly", and
+      // the app must not invent a distinction the owner never made. It becomes known
+      // when the job is scheduled against a recurrence.
+      const patch = markWonPatch(quote.follow_up_count, {
+        acceptedPrice: Number(quote.total) || null,
+        selectedCadence: null,
+      })
       await supabase.from('quotes').update(patch).eq('id', quote.id)
       setQuote({ ...quote, ...patch })   // status → accepted; the persistent banner shows automatically
       toast.success('Marked as won — schedule the job to lock it in.')
@@ -508,6 +543,13 @@ export default function QuoteDetailPage() {
 
   const customerPhone = customers.find(c => c.id === quote.customer_id)?.phone || null
   const canInvoice = quote.status === 'accepted' || quote.status === 'scheduled' || quote.status === 'completed'
+
+  // Surface the quote's state in the header itself — a sent quote reads "Sent 3
+  // days ago" (the follow-up clock), everything else the plain status label.
+  const sentDays = quote.sent_at ? daysSince(quote.sent_at) : null
+  const statusPhrase = quote.status === 'sent' && sentDays != null
+    ? `Sent ${sentDays} day${sentDays !== 1 ? 's' : ''} ago`
+    : STATUS_LABELS[quote.status]
 
   // Measurement provenance + pricing analysis (suggested vs. actual).
   const measSections = [
@@ -550,6 +592,10 @@ export default function QuoteDetailPage() {
             unit: s.unit || 'each',
             unit_price: s.unit_price,
             est_minutes: s.est_minutes || 0,
+            // Carry the line's kind through the edit round-trip. Defaulting to
+            // 'service' here would silently turn a saved material back into a
+            // service the first time the quote was opened and re-saved.
+            kind: s.kind ?? 'service',
             discount_type: (s.discount_type || '') as '' | 'amount' | 'percent',
             discount_value: s.discount_value || 0,
             notes: s.notes || '',
@@ -579,12 +625,13 @@ export default function QuoteDetailPage() {
   )
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    // Match the edit view's width so toggling Edit never reflows the page.
+    <div className="max-w-5xl mx-auto space-y-6">
       {/* THE shared DetailHeader — back + truncating title + action toolbar,
           the same anatomy as every other detail page. */}
       <DetailHeader
         title={quote.quote_number}
-        description={`Created ${formatDate(quote.created_at)}`}
+        description={`${statusPhrase} · Created ${formatDate(quote.created_at)}`}
         action={
         <div className="flex flex-wrap items-center gap-2 lg:justify-end">
           {/* Owner-side PDF action. Honest label: this downloads the PDF to YOUR
@@ -592,7 +639,7 @@ export default function QuoteDetailPage() {
               Send card below does that, and is the primary action for drafts). */}
           {quote.status === 'draft' ? (
             <Button onClick={handleSendQuote} size="sm" variant={quote.customer_id ? 'secondary' : 'primary'} loading={pdfLoading}>
-              <FileDown className="w-3.5 h-3.5" /> Download PDF + mark sent
+              <FileDown className="w-3.5 h-3.5" /> Download PDF
             </Button>
           ) : (
             <Button onClick={handleOpenPdf} variant="secondary" size="sm" loading={pdfLoading}>
@@ -603,6 +650,14 @@ export default function QuoteDetailPage() {
             key={quote.status}
             quoteId={quote.id}
             status={quote.status}
+            // Without these the shared patches can't do their job: followUpCount was
+            // missing entirely (so flipping to Accepted here recorded no follow-up
+            // attribution), and the stamps let markSentPatch leave a deliberate expiry
+            // alone instead of overwriting it.
+            followUpCount={quote.follow_up_count}
+            sentAt={quote.sent_at}
+            validUntil={quote.valid_until}
+            total={quote.total}
             onChanged={(s) => {
               setQuote(prev => prev ? { ...prev, status: s } : prev)
             }}
@@ -624,7 +679,7 @@ export default function QuoteDetailPage() {
           <Button onClick={() => setEditing(true)} variant="ghost" size="sm">
             <Edit2 className="w-3.5 h-3.5" /> Edit
           </Button>
-          <Button onClick={handleDuplicate} variant="secondary" size="sm" loading={duplicating} aria-label="Duplicate quote" title="Duplicate quote">
+          <Button onClick={handleDuplicate} variant="ghost" size="sm" loading={duplicating} aria-label="Duplicate quote" title="Duplicate quote">
             <Copy className="w-4 h-4" />
           </Button>
         </div>
@@ -727,17 +782,24 @@ export default function QuoteDetailPage() {
               <MessageSquare className="w-4 h-4" /> {quote.status === 'draft' || quote.status === 'sent' ? 'Send quote' : 'Resend quote'}
             </Button>
           </CardBody>
+          {/* vars.address is the quote's OWN address — the same string QuotePDF prints,
+              so the message and the document it links to name the same place. Deliberately
+              NOT the customer's primary property: borrowing that is what made six of a
+              landlord's quotes indistinguishable in the portal. */}
           <SendMessageDialog open={showMessage} onClose={() => setShowMessage(false)}
             customerId={quote.customer_id} customerName={quote.customer_name}
-            defaultTemplate="quote" vars={{ amount: formatCurrency(quote.total) }}
+            defaultTemplate="quote" vars={{ amount: formatCurrency(quote.total), address: quote.address || undefined }}
             onSent={async () => {
-              // Actually delivering the quote IS sending it — flip Draft → Sent and
-              // arm the follow-up clock, exactly like the PDF path does.
+              // Actually delivering the quote IS sending it — and THIS is the path that
+              // truly reaches the customer, so it must record the same three facts as
+              // every other. Its previous comment claimed it behaved "exactly like the
+              // PDF path"; it didn't — it omitted valid_until, so a quote the customer
+              // genuinely received could never expire. Now they share one patch, which
+              // is the only way that claim can stay true.
               if (quote.status === 'draft') {
-                const nowIso = new Date().toISOString()
-                await supabase.from('quotes').update({ status: 'sent' }).eq('id', quote.id)
-                await supabase.from('quotes').update({ sent_at: nowIso }).eq('id', quote.id).is('sent_at', null)
-                setQuote(prev => prev ? { ...prev, status: 'sent', sent_at: prev.sent_at ?? nowIso } : prev)
+                const patch = markSentPatch(quote, localTodayISO())
+                await supabase.from('quotes').update(patch).eq('id', quote.id)
+                setQuote(prev => prev ? { ...prev, ...patch } as typeof prev : prev)
               }
             }} />
         </Card>
@@ -798,10 +860,12 @@ export default function QuoteDetailPage() {
               >
                 <Check className="w-4 h-4" /> Won
               </button>
+              {/* Lost is the discouraging path — kept quieter (ghost) so the eye
+                  lands on Won first. Handler unchanged. */}
               <button
                 onClick={markLost}
                 disabled={actionBusy}
-                className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-red-500/25 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors col-span-2 sm:col-span-1 disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-border bg-surface text-ink-muted hover:border-border-strong hover:text-ink transition-colors col-span-2 sm:col-span-1 disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               >
                 <X className="w-4 h-4" /> Lost
               </button>
@@ -859,19 +923,23 @@ export default function QuoteDetailPage() {
             {quote.custom_travel_required && (
               <div className="flex items-center gap-2 text-xs text-amber-400 mb-1">Custom travel fee applied (beyond standard tiers)</div>
             )}
+            {/* Section label — same treatment as "Measurements" / "Ongoing
+                maintenance options" so the breakdown reads as a peer section. */}
+            <p className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide">Services</p>
             {services.length > 0 ? (
               // Multi-service breakdown — one row per line (rows are the source of
-              // truth; quotes.initial_price is their summed net).
-              <div className="space-y-1.5">
+              // truth; quotes.initial_price is their summed net). Service NAME
+              // carries the weight; quantity/discount/notes read as muted sub-notes.
+              <div className="space-y-2.5">
                 {services.map(s => {
                   const t = serviceLineTotals(s)
                   return (
                     <div key={s.id} className="flex justify-between gap-3 text-sm">
-                      <span className="text-ink-muted min-w-0">
-                        {s.service_type}
+                      <span className="min-w-0">
+                        <span className="text-ink font-medium">{s.service_type}</span>
                         {Number(s.quantity) > 1 && <span className="text-ink-faint"> × {s.quantity}</span>}
                         {t.discountAmount > 0 && <span className="text-emerald-400 text-xs"> (−{formatCurrency(t.discountAmount)})</span>}
-                        {s.notes && <span className="block text-xs text-ink-faint truncate">{s.notes}</span>}
+                        {s.notes && <span className="block text-xs text-ink-muted truncate">{s.notes}</span>}
                       </span>
                       <span className="text-ink font-medium shrink-0 tabular-nums">{formatCurrency(t.net)}</span>
                     </div>
@@ -880,7 +948,7 @@ export default function QuoteDetailPage() {
               </div>
             ) : (
               <div className="flex justify-between text-sm">
-                <span className="text-ink-muted">First visit</span>
+                <span className="text-ink font-medium">First visit</span>
                 <span className="text-ink font-medium tabular-nums">{formatCurrency(quote.initial_price ?? quote.subtotal)}</span>
               </div>
             )}
@@ -894,6 +962,17 @@ export default function QuoteDetailPage() {
               <span className="text-sm font-semibold text-ink">{(quote.weekly_price || quote.biweekly_price || quote.monthly_price) ? 'First Visit Total' : 'Quote Total'}</span>
               <span className="text-3xl font-bold text-accent-text tabular-nums">{formatCurrency(quote.total)}</span>
             </div>
+            {/* Echo the estimate-confidence chip (same treatment as the pricing
+                analysis card) so the headline number carries its own credibility
+                cue. Absent confidence → nothing. */}
+            {quote.pricing_confidence && CONFIDENCE_LABELS[quote.pricing_confidence] && (
+              <div className="flex justify-end">
+                <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-ink-muted">
+                  <span className={`w-1.5 h-1.5 rounded-full ${quote.pricing_confidence === 'high' ? 'bg-emerald-400' : quote.pricing_confidence === 'medium' ? 'bg-amber-400' : 'bg-ink-faint'}`} />
+                  {CONFIDENCE_LABELS[quote.pricing_confidence]}
+                </span>
+              </div>
+            )}
             {(quote.weekly_price || quote.biweekly_price || quote.monthly_price) ? (
               <div className="pt-3 border-t border-border space-y-1.5">
                 <p className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide">Ongoing maintenance options</p>
@@ -911,6 +990,11 @@ export default function QuoteDetailPage() {
           </div>
         </CardBody>
       </Card>
+
+      {/* Quote Intelligence — the owner's AI second opinion, through THE assist
+          engine. Renders nothing when AI isn't configured; advisory only (the
+          pricing engine's persisted suggestion stays the authority on price). */}
+      <QuoteIntelligencePanel quoteId={quote.id} />
 
       {/* Measurements + pricing analysis — handy when reviewing pricing later */}
       {(hasMeasurement || suggestedPrice != null) && (

@@ -25,7 +25,7 @@ try {
   console.log('2) assessProspect…')
   const assessment = assessProspect(basePkg, prospect, {
     distanceKm: 4, travelFee: 6, neighborhoodName: 'Queensland',
-    estimatedMinutes: estimateVisitMinutes(total, prospect.observedMinPer1000), timedJobs: prospect.timedJobs,
+    estimatedMinutes: estimateVisitMinutes(total, prospect.observedMinPer1000) ?? undefined, timedJobs: prospect.timedJobs,
   })
   console.log('   score', assessment.score)
 

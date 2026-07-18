@@ -23,7 +23,9 @@ import { dispatchToCustomer, type DispatchAttempt, type DispatchResult } from '@
 import { logSend, logDispatch } from '@/lib/comms/log'
 import { sendSms, sendEmail } from '@/lib/comms/send'
 import { runChaseCron, type ChaseItem, type ChaseTally } from '@/lib/automation/chase'
-import { SKIP_REASON } from '@/lib/comms/skipReasons'
+import { SKIP_REASON, describeSkip } from '@/lib/comms/skipReasons'
+import { canChaseCustomer, chaseBlockedReason, markWonPatch } from '@/lib/followup'
+import { markSentPatch, canSendQuote, sendBlockedReason, sendBlockedLabel } from '@/lib/quoteStatus'
 import { cadenceDays, churnRisk, type CadenceRecLike } from '@/lib/signals'
 import {
   buildTimeline, filterTimeline, searchTimeline, timelineForProperty, timelineGroupCounts,
@@ -924,6 +926,136 @@ async function run() {
     }
   }
 
+  // ── 28c. "SENT" IS ONE EVENT — status + chase anchor + expiry clock ─────────
+  // Quote V2 Phase 0. This was written FOUR times and each copy did something
+  // different; the incomplete ones were what most paths used. Live cost: 0 of 55
+  // quotes had a valid_until, so the expiry feature shipped 2026-07-15 could never
+  // fire. One seam, one patch.
+  H('28c. Mark-sent — one event, three facts')
+  {
+    const TODAY = '2026-07-16'
+    const NOW = '2026-07-16T12:00:00.000Z'
+    const fresh = markSentPatch({ sent_at: null, valid_until: null }, TODAY, NOW)
+
+    check('sent', 'a first send sets the status', fresh.status, 'sent')
+    check('sent', '➜ arms the chase anchor', fresh.sent_at, NOW)
+    check('sent', '➜ and starts the expiry clock (30d) — the half every other copy dropped',
+      fresh.valid_until, '2026-08-15')
+
+    // OMIT, never overwrite. sent_at is when it FIRST went out — it is the follow-up
+    // anchor, and re-sending must not reset the clock. The old writers said this with
+    // `.is('sent_at', null)`; the rule now lives in one testable place.
+    const resent = markSentPatch({ sent_at: '2026-07-01T09:00:00.000Z', valid_until: null }, TODAY, NOW)
+    check('sent', 'a re-send does NOT re-stamp sent_at',
+      Object.prototype.hasOwnProperty.call(resent, 'sent_at'), false)
+    check('sent', '➜ but still repairs a missing expiry', resent.valid_until, '2026-08-15')
+
+    // A deliberately-set expiry is the owner's decision and outranks the default.
+    const deliberate = markSentPatch({ sent_at: null, valid_until: '2026-07-20' }, TODAY, NOW)
+    check('sent', 'a deliberate expiry is never overwritten',
+      Object.prototype.hasOwnProperty.call(deliberate, 'valid_until'), false)
+    check('sent', '➜ and the send is still recorded', deliberate.sent_at, NOW)
+
+    // Fully-stamped → status only. Nothing to repair, nothing to clobber.
+    const already = markSentPatch({ sent_at: NOW, valid_until: '2026-08-15' }, TODAY, NOW)
+    check('sent', 'an already-stamped quote patches status alone', Object.keys(already).join(','), 'status')
+
+    // The expiry the patch writes must be the one the overlay reads back — if these
+    // two disagreed, a quote would expire on a date nothing displayed.
+    check('sent', 'the written expiry is the one displayQuoteStatus honours',
+      isQuoteExpired({ status: 'sent', valid_until: String(fresh.valid_until) }, '2026-08-16'), true)
+    check('sent', '➜ and it is still live the day before', isQuoteExpired({ status: 'sent', valid_until: String(fresh.valid_until) }, '2026-08-14'), false)
+  }
+
+  // ── 28d. THE SEND GATE — a priceless document never reaches a customer ──────
+  // Quote V2 Phase 0. `hours` defaults to 0, `initial_price` has no `required`, and
+  // the app's only `total > 0` check lived at INVOICING — long after the customer saw
+  // the document. The generated column papered over it by inventing
+  // hours × crew_size × rate; now that it can't, this is what stops $0.00 going out.
+  H('28d. Send gate — no price, no customer, no send')
+  {
+    check('send', 'a priced quote with a customer can be sent', canSendQuote({ total: 65, customer_id: 'c1' }), true)
+    // null and 0 share a branch deliberately: to the customer receiving it, "$0.00"
+    // and "no price" are the same broken document.
+    check('send', 'a null total is blocked', sendBlockedReason({ total: null, customer_id: 'c1' }), 'no_price')
+    check('send', '➜ and so is $0 — same document to the person reading it', sendBlockedReason({ total: 0, customer_id: 'c1' }), 'no_price')
+    check('send', '➜ and a negative', sendBlockedReason({ total: -5, customer_id: 'c1' }), 'no_price')
+    // A customerless quote can't be delivered, chased, or shown in a portal. Four such
+    // rows exist live, one with work already scheduled.
+    check('send', 'a customerless quote is blocked', sendBlockedReason({ total: 65, customer_id: null }), 'no_customer')
+    check('send', 'a good quote reports no reason', sendBlockedReason({ total: 65, customer_id: 'c1' }), null)
+    // The blocks must say what to DO — a refusal the owner can't act on is a wall.
+    check('send', 'the price block names the fix', sendBlockedLabel('no_price').includes('add one'), true)
+    check('send', 'the customer block names the fix', sendBlockedLabel('no_customer').includes('add one'), true)
+  }
+
+  // ── 29a. THE ACCEPT SNAPSHOT — record what was bought, or record nothing ─────
+  // Pricing v2 Phase 0 (sensor). Nothing recorded the sale, so the learner
+  // reconstructed it by guessing weekly-first: a paid $489.25 seeding job carrying a
+  // leftover weekly_price of 56.65 was learned as "$56.65 weekly". These pin the two
+  // properties that make the record trustworthy — it snapshots, and it never guesses.
+  H('29a. Accept snapshot — the sensor records truth or nothing')
+  {
+    const won = (n: number, snap?: Parameters<typeof markWonPatch>[1]) => markWonPatch(n, snap) as Record<string, unknown>
+
+    check('accept', 'a won quote still records the follow-up facts', won(2).accepted_after_followup, true)
+    check('accept', 'the agreed price is snapshotted', won(0, { acceptedPrice: 489.25, selectedCadence: null }).accepted_price, 489.25)
+    // THE rule this whole migration exists for: an unknown cadence is a FACT, not a
+    // gap to fill. Inferring one from a populated price column is the bug.
+    check('accept', '➜ an unknown cadence is OMITTED, never guessed',
+      Object.prototype.hasOwnProperty.call(won(0, { acceptedPrice: 489.25, selectedCadence: null }), 'selected_cadence'), false)
+    check('accept', '➜ a known cadence IS recorded',
+      won(0, { acceptedPrice: 55, selectedCadence: 'weekly' }).selected_cadence, 'weekly')
+    // A caller with no snapshot at all must not fabricate a price.
+    check('accept', '➜ no snapshot → no price, and no cadence key', won(1).accepted_price, null)
+    check('accept', '➜ ➜ and still no invented cadence',
+      Object.prototype.hasOwnProperty.call(won(1), 'selected_cadence'), false)
+    // The cadence vocabulary must match the DB CHECK constraint exactly — a fifth
+    // value would be rejected by Postgres at write time.
+    check('accept', 'the cadence vocabulary matches the DB constraint',
+      (['one_time', 'weekly', 'biweekly', 'monthly'] as const).every(c =>
+        won(0, { acceptedPrice: 1, selectedCadence: c }).selected_cadence === c), true)
+  }
+
+  // ── 29b. CHASEABILITY — "gone quiet" and "can be chased" are different ───────
+  // The follow-up queue offered 9 quotes to chase; 6 of them ($445 on the live
+  // book) belonged to customers with no phone and no email. Staleness is a time
+  // rule and knows nothing about channels — so reachability is asked separately,
+  // of the engine that already owns it, and must predict exactly what the sender
+  // would do.
+  H('29b. Chaseability — a quiet quote you cannot reach is not a to-do')
+  {
+    const reachable = { phone: '4035551234', email: null, sms_opt_in: true, email_opt_in: false }
+    const noContact = { phone: null, email: null, sms_opt_in: true, email_opt_in: true }
+    const optedOut = { phone: '4035551234', email: null, sms_opt_in: false, email_opt_in: false }
+    const emailOnly = { phone: null, email: 'a@b.co', sms_opt_in: true, email_opt_in: true }
+
+    // No contact at all, with the opt-in flags in BOTH states. reachCheck is
+    // per-channel and would answer "no phone" for the first and "no opt-in" for the
+    // second — the second is the dangerous one: it reads as "they refused" when the
+    // record is merely empty. Both must report the one actionable truth.
+    const noContactNoOptIn = { phone: null, email: null, sms_opt_in: false, email_opt_in: false }
+    check('chase', 'a customer with a phone + SMS opt-in can be chased', canChaseCustomer(reachable), true)
+    check('chase', '➜ no phone and no email cannot', canChaseCustomer(noContact), false)
+    check('chase', '➜ ➜ and the reason is "no contact", not the first blocked channel', chaseBlockedReason(noContact), SKIP_REASON.NO_CONTACT)
+    check('chase', '➜ ➜ same when the opt-ins are off — never "no opt-in" for someone nobody asked',
+      chaseBlockedReason(noContactNoOptIn), SKIP_REASON.NO_CONTACT)
+    // Opting out is a real answer and must NOT be relabelled as missing data.
+    check('chase', '➜ a number they told us not to text cannot', canChaseCustomer(optedOut), false)
+    check('chase', '➜ ➜ and that still reports "no opt-in" — they did refuse', chaseBlockedReason(optedOut), SKIP_REASON.NO_OPT_IN)
+    check('chase', '➜ email alone is enough (the chaser tries both channels)', canChaseCustomer(emailOnly), true)
+    check('chase', '➜ a reachable customer reports no blocking reason', chaseBlockedReason(reachable), null)
+    // A missing customer row is not permission to assume a channel — the queue must
+    // not promise a chase it has no evidence it can make.
+    check('chase', '➜ a missing customer is not reachable', canChaseCustomer(null), false)
+    check('chase', '➜ ➜ and reports "no contact" rather than nothing', chaseBlockedReason(undefined), SKIP_REASON.NO_CONTACT)
+    // The block must read the same here as it does in the message thread and the
+    // campaign audience — one vocabulary, not a fourth hand-written copy.
+    check('chase', 'the block is labelled by THE shared describeSkip', describeSkip(chaseBlockedReason(noContact)).label, 'no phone or email on file')
+    // The worst case used to be the only one with no way out.
+    check('chase', '➜ and it offers the fix (it never used to)', describeSkip(chaseBlockedReason(noContact)).action, 'add_phone')
+  }
+
   // ── 30. Timeline engine ─────────────────────────────────────────────────────
   // The customer history used to be ~60 lines inline in customers/[id], where it
   // could not be tested at all. It's now lib/timeline.ts — pure, so its decisions
@@ -1065,6 +1197,57 @@ async function run() {
       })
       check('timeline', '➜ a job without an address gives its expense none either',
         noProp.find(e => e.kind === 'expense')?.propertyId ?? null, null)
+    }
+    // ONE OPERATOR ACTION IS ONE EVENT. Booking a recurring plan writes the whole
+    // series at once; a row-per-job timeline rendered that as 25 identical rows and
+    // buried everything else the customer ever did.
+    {
+      // Weekly from 2026-07-11 — the exact shape of the real series that exposed this
+      // (Peter Dunham: 25 jobs, one created_at, Jul 11 → Dec 26).
+      const weeklyFrom = (i: number) => {
+        const d = new Date('2026-07-11T00:00:00Z'); d.setUTCDate(d.getUTCDate() + i * 7)
+        return d.toISOString().slice(0, 10)
+      }
+      const series = (n: number) => Array.from({ length: n }, (_, i) => ({
+        ...base, id: `s${i}`, title: 'Weekly Mowing', status: 'scheduled',
+        scheduled_date: weeklyFrom(i),
+        created_at: '2026-07-08T20:18:01.580Z', recurrence_id: 'rec-1', property_id: 'prop-A',
+      }))
+      const evs = buildTimeline({ jobs: series(25) })
+      const sched = evs.filter(e => e.kind === 'job_scheduled')
+      check('timeline', 'a booked series is ONE event, not one per visit', sched.length, 1)
+      check('timeline', '➜ it says how many visits', sched[0].title, '25 visits scheduled — Weekly Mowing')
+      check('timeline', '➜ and the span they cover', sched[0].sub, 'Jul 11, 2026 → Dec 26, 2026')
+      check('timeline', '➜ dated when it was booked, not when the last visit lands', sched[0].at, '2026-07-08T20:18:01.580Z')
+      check('timeline', '➜ and it opens the series', sched[0].href, '/dashboard/schedule?focus=rec-1')
+
+      // A one-off job has no recurrence and must read exactly as it always did.
+      const oneOff = buildTimeline({ jobs: [{ ...base, id: 'j9', title: 'Cleanup', scheduled_date: '2026-03-02', status: 'scheduled' }] })
+      check('timeline', '➜ a one-off job is untouched', oneOff.find(e => e.kind === 'job_scheduled')?.title, 'Job scheduled — Cleanup')
+      check('timeline', '➜ ➜ and keeps its "for <date>" line', oneOff.find(e => e.kind === 'job_scheduled')?.sub, 'for Mar 2, 2026')
+
+      // A LATER top-up of the same series is a separate act — collapsing it into the
+      // first booking would hide that the owner extended the plan.
+      const topUp = buildTimeline({ jobs: [
+        ...series(3),
+        { ...base, id: 't1', title: 'Weekly Mowing', status: 'scheduled', scheduled_date: '2026-09-01', created_at: '2026-08-20T10:00:00.000Z', recurrence_id: 'rec-1', property_id: 'prop-A' },
+      ] })
+      check('timeline', '➜ a later top-up of the same series is its own event',
+        topUp.filter(e => e.kind === 'job_scheduled').length, 2)
+
+      // Completions are real, separate days — only the BOOKING is one act.
+      const done = buildTimeline({ jobs: series(4).map((j, i) => i < 2
+        ? { ...j, status: 'completed', completed_at: `2026-07-1${i + 1}T12:00:00.000Z` } : j) })
+      check('timeline', '➜ completions are never collapsed', done.filter(e => e.kind === 'job_completed').length, 2)
+
+      // A series split across two addresses must not collapse into one, or a
+      // property timeline would claim visits at the wrong house.
+      const split = buildTimeline({ jobs: [
+        { ...base, id: 'a1', title: 'Mow', status: 'scheduled', scheduled_date: '2026-07-11', created_at: '2026-07-08T20:18:01.580Z', recurrence_id: 'rec-1', property_id: 'prop-A' },
+        { ...base, id: 'b1', title: 'Mow', status: 'scheduled', scheduled_date: '2026-07-12', created_at: '2026-07-08T20:18:01.580Z', recurrence_id: 'rec-1', property_id: 'prop-B' },
+      ] })
+      check('timeline', '➜ a series across two properties stays two events', split.filter(e => e.kind === 'job_scheduled').length, 2)
+      check('timeline', '➜ ➜ each scoped to its own address', timelineForProperty(split, 'prop-A').filter(e => e.kind === 'job_scheduled').length, 1)
     }
     // Every kind must belong to exactly one filter group, or a chip's count lies
     // and a filtered view drops events with no chip to bring them back.

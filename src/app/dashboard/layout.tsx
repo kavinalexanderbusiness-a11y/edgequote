@@ -7,6 +7,7 @@ import { OfflineStatus } from '@/components/pwa/OfflineStatus'
 import { Toaster } from '@/components/ui/Toaster'
 import { ConfirmHost } from '@/components/ui/ConfirmHost'
 import { UploadQueueWidget } from '@/components/photos/UploadQueueWidget'
+import { InboundToast } from '@/components/messages/InboundToast'
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
@@ -41,6 +42,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       <InstallPrompt />
       <CommandPalette />
       <OfflineStatus />
+      <InboundToast />
       <Toaster />
       <ConfirmHost />
       <UploadQueueWidget />

@@ -79,6 +79,12 @@ function dateStr(s: string | null) {
   const d = s ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(s) ? s + 'T00:00:00' : s) : new Date()
   return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: 'long', day: 'numeric' }).format(d)
 }
+// Valid-until = issued date + N days, anchored the same way so the window reads honestly.
+function dateStrPlusDays(s: string | null, days: number) {
+  const d = s ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(s) ? s + 'T00:00:00' : s) : new Date()
+  d.setDate(d.getDate() + days)
+  return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: 'long', day: 'numeric' }).format(d)
+}
 
 interface QuotePDFProps {
   quote: Quote
@@ -113,7 +119,9 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
                 height: Math.min(105, 70 * (((settings.logo_scale && settings.logo_scale >= 50 ? settings.logo_scale : 100)) / 100)),
               }} />
             ) : (
-              <Text style={styles.companyName}>{company}</Text>
+              // No logo: the identity is carried once by the right companyBlock —
+              // don't reprint the name here or it prints twice.
+              null
             )}
           </View>
           <View style={styles.companyBlock}>
@@ -136,6 +144,10 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
           <View>
             <Text style={styles.quoteBarLabel}>Date Issued</Text>
             <Text style={styles.quoteBarValue}>{dateStr(quote.issued_date || quote.created_at)}</Text>
+          </View>
+          <View>
+            <Text style={styles.quoteBarLabel}>Valid Until</Text>
+            <Text style={styles.quoteBarValue}>{dateStrPlusDays(quote.issued_date || quote.created_at, 30)}</Text>
           </View>
           <View>
             <Text style={styles.quoteBarLabel}>Status</Text>
@@ -238,6 +250,9 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
               Plus GST ({Number(settings?.gst_percent)}%) — added on your invoice
             </Text>
           ) : null}
+          <Text style={[styles.muted, { textAlign: 'right', marginTop: 6 }]}>
+            To approve this quote, open the secure link in your email.
+          </Text>
         </View>
 
         {/* Ongoing maintenance options */}
@@ -245,6 +260,11 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
           <View style={{ marginTop: 20 }}>
             <Text style={styles.sectionTitle}>Ongoing Maintenance Options</Text>
             <View style={styles.table}>
+              <View style={styles.tableHead}>
+                <Text style={[styles.th, styles.cellDesc]}>Plan</Text>
+                <Text style={[styles.th, styles.cellQty]}>Frequency</Text>
+                <Text style={[styles.th, styles.cellAmt]}>Amount</Text>
+              </View>
               {quote.weekly_price ? (
                 <View style={styles.tableRow} wrap={false}>
                   <Text style={[styles.td, styles.cellDesc]}>Weekly visit</Text>

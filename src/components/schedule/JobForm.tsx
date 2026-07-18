@@ -5,12 +5,14 @@ import { useForm, Controller } from 'react-hook-form'
 import { createClient } from '@/lib/supabase/client'
 import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
+import { PropertySelect } from '@/components/ui/PropertySelect'
 import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
 import { Customer, Property, JobFormValues, JobStatus, RecurUnit } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { recurrenceLabel } from '@/lib/recurrence'
 import { latestSavedRecommendation, savedPriceFor, recommendationIsStale, CadenceKey } from '@/lib/pricing'
+import { servicePricingKind } from '@/lib/servicePricing'
 import {
   ServiceSeasons, DEFAULT_SEASONS, settingsToSeasons, serviceCategory, seasonForService,
   seasonEndDateFor, estimateSeasonVisits, seasonLabel,
@@ -287,7 +289,16 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     : interval.unit === 'month' || (interval.unit === 'week' && interval.count >= 4) ? 'monthly'
     : interval.unit === 'week' && interval.count === 1 ? 'weekly'
     : 'biweekly'
-  const measuredPrice = savedRec ? savedPriceFor(savedRec.rec, cadenceForInterval) : null
+  // A SavedRecommendation is a GRASS cadence price list — buildSavedRecommendation
+  // wraps pricingPackage — and carries no record of the service it was computed
+  // for. So on a property whose lawn was measured once, scheduling ANY recurring
+  // job (snow, an HVAC service plan, a window clean) offered "Use measured price"
+  // and silently auto-filled the MOWING price for that cadence. Gate on the same
+  // ONE seam the quote builder uses. There is no template object here — service_type
+  // is free text — so servicePricingKind falls back to its name normalizer, which
+  // is precisely what that fallback exists for.
+  const lawnService = servicePricingKind(watch('service_type'), null) === 'lawn_recurring'
+  const measuredPrice = savedRec && lawnService ? savedPriceFor(savedRec.rec, cadenceForInterval) : null
 
   function buildRecurrence(): Recurrence {
     if (!interval) return { unit: null, count: 1, endDate: null, endCount: null }
@@ -318,9 +329,12 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
       }
     }
     // Selecting Weekly/Bi-Weekly/Monthly auto-suggests the measured price for
-    // that cadence (only when the price hasn't been typed yet).
+    // that cadence (only when the price hasn't been typed yet, and only for a
+    // lawn-cadence service — see `lawnService`; the saved rec is a mowing price
+    // list, and this fill is silent, so an ungated one put grass prices on a snow
+    // route with nothing on screen to explain where the number came from).
     const rec = latestSavedRecommendation(selProp?.measurement_history)
-    if (rec && !(Number(watch('price')) > 0)) {
+    if (rec && lawnService && !(Number(watch('price')) > 0)) {
       setValue('price', savedPriceFor(rec.rec, kind))
     }
   }
@@ -415,11 +429,6 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   const customerOptions = [
     { value: '', label: 'Select a customer...' },
     ...customers.map(c => ({ value: c.id, label: c.name })),
-  ]
-
-  const propertyOptions = [
-    { value: '', label: properties.length ? 'Select a property...' : 'No properties found' },
-    ...properties.map(p => ({ value: p.id, label: p.address + (p.is_primary ? ' (primary)' : '') })),
   ]
 
   const endSummary =
@@ -539,15 +548,29 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         </button>
       )}
 
+      {/* WHERE the work happens. Hidden under "+ More options" on a new job, while
+          the loader silently pre-selected the customer's primary — so a customer with
+          two addresses got one chosen for them, out of sight, and the only symptom is
+          a crew at the wrong house. Whenever there's an actual choice to make
+          (2+ addresses) it's shown up front; a one-property customer has nothing to
+          decide, so it stays collapsed exactly as before. */}
+      {(adv || properties.length > 1) && (
+        <Controller name="property_id" control={control}
+          render={({ field }) => (
+            <PropertySelect
+              label={properties.length > 1 ? 'Property *' : 'Property'}
+              properties={properties}
+              value={field.value || ''}
+              onChange={field.onChange}
+              customerId={customerId || null}
+              onCreated={(p: Property) => setProperties(prev => [...prev, p])}
+              hint={properties.length > 1 ? 'This customer has more than one address — pick the one this visit is for.' : undefined}
+            />
+          )} />
+      )}
+
       {adv && (
       <div className="space-y-4">
-      {/* The real edit workflow: WHERE (property) → what STATE it's in → NOTES.
-          Time/crew details and recurrence are rarer — they collapse below. */}
-      <Controller name="property_id" control={control}
-        render={({ field }) => (
-          <Select label="Property" options={propertyOptions} {...field} />
-        )} />
-
       <Controller name="status" control={control}
         render={({ field }) => (
           <Select label="Status" options={STATUS_OPTIONS} {...field} />

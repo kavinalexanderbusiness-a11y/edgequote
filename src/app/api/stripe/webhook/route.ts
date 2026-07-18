@@ -201,6 +201,33 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // ── Saved card changed at the network (Stripe Account Updater) ───────────────
+  // Card brand/last4/expiry were written ONCE, at setup, and then trusted forever.
+  // But Stripe's Account Updater silently refreshes saved cards when the issuer
+  // reissues them — so our copy rots while the card keeps working. That made the
+  // expiry warning on the customer card LIE in the most damaging direction: it told
+  // the owner "this card expired, AutoPay will decline" about a card Stripe had
+  // already updated and would charge without complaint. A stale row is not a
+  // cosmetic problem when the UI draws conclusions from it.
+  //
+  // Keyed on stripe_payment_method_id (the id is stable across an auto-update), so
+  // this only ever refreshes a card we already store — it can't invent one.
+  if (event.type === 'payment_method.automatically_updated' || event.type === 'payment_method.updated') {
+    const pm = event.data.object as { id: string; card?: { brand?: string; last4?: string; exp_month?: number; exp_year?: number } | null }
+    if (pm.id && pm.card) {
+      const upd = await sb.from('payment_methods').update({
+        brand: pm.card.brand ?? null, last4: pm.card.last4 ?? null,
+        exp_month: pm.card.exp_month ?? null, exp_year: pm.card.exp_year ?? null,
+      }).eq('stripe_payment_method_id', pm.id)
+      // Let Stripe retry rather than 200 a write we didn't make — the whole point is
+      // that our copy must not silently drift out of date.
+      if (upd.error) {
+        console.error('[stripe] payment_method refresh failed:', upd.error.message)
+        return NextResponse.json({ error: 'db write failed' }, { status: 500 })
+      }
+    }
+  }
+
   // ── AutoPay charge succeeded (off-session PaymentIntent) ──────────────────────
   // Gate strictly on source=autopay so the one-time Checkout's OWN payment_intent
   // .succeeded (which also carries invoice_id) is never double-recorded.

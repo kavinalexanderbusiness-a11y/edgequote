@@ -8,12 +8,11 @@ import type { QuoteService, QuoteServiceInput } from '@/types'
 // The quote's stored initial_price = Σ line nets, so the generated quotes.total
 // (initial_price + travel_fee) and every downstream consumer stay correct.
 
-export const SERVICE_UNITS = [
-  { value: 'each', label: 'each' },
-  { value: 'hour', label: 'per hour' },
-  { value: 'sqft', label: 'per sq ft' },
-  { value: 'linear_ft', label: 'per linear ft' },
-] as const
+// The unit vocabulary lives in lib/units (SYSTEM_UNITS + the service_units table).
+// A four-value SERVICE_UNITS list used to sit here and was still wired as the
+// picker's fallback, so a failed read silently swapped nine units for four and
+// dropped fixture/room/zone/equipment/flat. Deleted rather than widened: this file
+// owns the ARITHMETIC, which never sees a unit at all.
 
 // Accepts both the builder's input shape ('' = no discount) and loaded DB rows
 // (nulls) — the math already coalesces both to "no discount" / 0.
@@ -53,9 +52,11 @@ export function splitServices(rows: QuoteService[]): { primary: QuoteService | n
   return { primary: sorted[0] ?? null, extras: sorted.slice(1) }
 }
 
-// A blank additional-service line for the builder.
+// A blank additional-service line for the builder. `kind` is explicit rather than
+// defaulted so a caller can never create an untyped line — lib/quoteMaterials
+// owns the material equivalent, and the arithmetic above is identical for both.
 export function emptyServiceLine(): QuoteServiceInput {
-  return { service_type: '', service_template_id: '', quantity: 1, unit: 'each', unit_price: 0, est_minutes: 0, discount_type: '', discount_value: 0, notes: '' }
+  return { service_type: '', service_template_id: '', quantity: 1, unit: 'each', unit_price: 0, est_minutes: 0, discount_type: '', discount_value: 0, notes: '', kind: 'service' }
 }
 
 function round2(n: number): number { return Math.round((Number(n) || 0) * 100) / 100 }

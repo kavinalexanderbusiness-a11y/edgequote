@@ -320,7 +320,16 @@ export interface UncompleteResult {
 
 export async function uncompleteJob(
   supabase: Supa,
-  opts: { jobId: string; patch: Record<string, unknown> },
+  opts: {
+    jobId: string
+    patch: Record<string, unknown>
+    /** How to write the job row. Defaults to a plain update (the online path).
+     *  The offline replay injects the outbox's guardedPatch instead, so the
+     *  revert inherits the same optimistic-concurrency check every other queued
+     *  patch uses — without a second copy of the ordering rules above. It may
+     *  throw (a ConflictError); that propagates, keeping the op queued. */
+    applyPatch?: (patch: Record<string, unknown>) => Promise<void>
+  },
 ): Promise<UncompleteResult> {
   const out: UncompleteResult = { reverted: false, draftDeleted: false, invoiceLocked: false }
 
@@ -347,8 +356,12 @@ export async function uncompleteJob(
   }
 
   // 2. Only now revert the visit itself.
-  const { error: jobErr } = await supabase.from('jobs').update(opts.patch).eq('id', opts.jobId)
-  if (jobErr) return { ...out, error: jobErr.message }
+  if (opts.applyPatch) {
+    await opts.applyPatch(opts.patch)   // may throw (conflict) — the caller decides
+  } else {
+    const { error: jobErr } = await supabase.from('jobs').update(opts.patch).eq('id', opts.jobId)
+    if (jobErr) return { ...out, error: jobErr.message }
+  }
   out.reverted = true
   return out
 }

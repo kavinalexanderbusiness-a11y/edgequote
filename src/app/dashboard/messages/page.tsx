@@ -25,7 +25,7 @@ import { cn } from '@/lib/utils'
 import {
   Loader2, Inbox, User, ArrowLeft, MessageSquare, FileText, X, Plus,
   Archive, ArchiveRestore, Pin, PinOff, BellOff, Bell, MailOpen, Trash2, MoreVertical, Reply,
-  MapPin, Wrench, Receipt, Globe, Sparkles, Mail,
+  MapPin, Wrench, Receipt, Globe, Sparkles, Mail, AlarmClock, Tag, CalendarClock, UserCheck, Keyboard,
 } from 'lucide-react'
 
 // Apple-Messages-style inbox that stays a CRM. Archive is a FLAG — nothing is
@@ -37,23 +37,50 @@ interface Convo {
   last_direction: string | null; unread: number
   archived_at: string | null; pinned_at: string | null; muted: boolean
   lead_status: string | null; last_channel: string | null
+  labels: string[]; snoozed_until: string | null; assigned_to: string | null
   customers?: { id: string; name: string; phone: string | null } | null
   customer_name?: string; customer_phone?: string | null   // search-result shape
   message_snippet?: string | null; match_type?: string     // search-result extras
 }
 
-// Type axis (one hub): All / SMS / Portal / Website Leads / Archived. Per-row
-// affordances (unread badge, Needs-reply pill, pin/mute) and the action menu carry
-// the status dimension.
-type Filter = 'all' | 'sms' | 'portal' | 'website_lead' | 'archived'
+// Preset labels — a fixed, meaningful set instead of freeform taxonomy sprawl.
+// 'urgent' doubles as the priority flag; pin controls placement, labels carry meaning.
+const LABELS: { key: string; label: string; chip: string; cls: string }[] = [
+  { key: 'urgent',  label: 'Urgent',              chip: 'Urgent',  cls: 'text-red-400 border-red-500/30 bg-red-500/10' },
+  { key: 'vip',     label: 'VIP',                 chip: 'VIP',     cls: 'text-purple-300 border-purple-500/30 bg-purple-500/10' },
+  { key: 'waiting', label: 'Waiting on customer', chip: 'Waiting', cls: 'text-sky-400 border-sky-500/30 bg-sky-500/10' },
+]
+const labelMeta = (k: string) => LABELS.find(l => l.key === k)
+
+// A conversation counts as snoozed only while the clock is in the future —
+// expiry needs no cron, the next render simply stops treating it as snoozed.
+const isSnoozed = (c: Convo) => !!c.snoozed_until && c.snoozed_until > new Date().toISOString()
+
+function snoozeDate(k: 'tomorrow' | 'threedays' | 'nextweek'): Date {
+  const d = new Date()
+  d.setHours(9, 0, 0, 0)
+  if (k === 'tomorrow') d.setDate(d.getDate() + 1)
+  else if (k === 'threedays') d.setDate(d.getDate() + 3)
+  else d.setDate(d.getDate() + (((8 - d.getDay()) % 7) || 7))   // next Monday
+  return d
+}
+
+// Type axis (one hub): All / Needs reply / SMS / Portal / Website Leads /
+// Archived. Needs-reply is the triage view — every conversation whose last word
+// was the customer's — so "who's waiting on me?" is one tap, not a scan.
+type Filter = 'all' | 'needs_reply' | 'sms' | 'portal' | 'website_lead' | 'snoozed' | 'archived'
 const FILTERS: { key: Filter; label: string; icon: typeof Inbox }[] = [
   { key: 'all', label: 'All', icon: Inbox },
+  { key: 'needs_reply', label: 'Needs reply', icon: Reply },
   { key: 'sms', label: 'SMS', icon: MessageSquare },
   { key: 'portal', label: 'Portal', icon: Globe },
   { key: 'website_lead', label: 'Website leads', icon: Sparkles },
+  // Snoozed renders only while something IS snoozed (see the pill row) — an
+  // empty state pill would be noise the other 95% of the time.
+  { key: 'snoozed', label: 'Snoozed', icon: AlarmClock },
   { key: 'archived', label: 'Archived', icon: Archive },
 ]
-const SELECT_COLS = 'id, customer_id, last_message_at, last_preview, last_direction, unread, archived_at, pinned_at, muted, lead_status, last_channel, customers(id, name, phone)'
+const SELECT_COLS = 'id, customer_id, last_message_at, last_preview, last_direction, unread, archived_at, pinned_at, muted, lead_status, last_channel, labels, snoozed_until, assigned_to, customers(id, name, phone)'
 const PAGE = 40
 const ROW_H = 76
 
@@ -76,7 +103,10 @@ const phoneOf = (c: Convo) => c.customers?.phone ?? c.customer_phone ?? null
 function inFilter(c: Convo, f: Filter): boolean {
   if (f === 'archived') return !!c.archived_at
   if (c.archived_at) return false
+  if (f === 'snoozed') return isSnoozed(c)
+  if (isSnoozed(c)) return false   // snoozed rows leave every active view until they wake
   if (f === 'all') return true
+  if (f === 'needs_reply') return c.last_direction === 'inbound'   // matches the row's amber pill exactly
   if (f === 'website_lead') return c.lead_status === 'new'
   if (c.lead_status === 'new') return false   // open leads live only under their own chip
   if (f === 'sms') return c.last_channel === 'sms' || c.last_channel == null
@@ -109,7 +139,7 @@ export default function MessagesPage() {
   const [hasMore, setHasMore] = useState(true)
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
-  const [counts, setCounts] = useState<Record<Filter, number>>({ all: 0, sms: 0, portal: 0, website_lead: 0, archived: 0 })
+  const [counts, setCounts] = useState<Record<Filter, number>>({ all: 0, needs_reply: 0, sms: 0, portal: 0, website_lead: 0, snoozed: 0, archived: 0 })
   const [filter, setFilter] = useState<Filter>('all')
   const [sel, setSel] = useState<Convo | null>(null)
   const [query, setQuery] = useState('')
@@ -130,19 +160,16 @@ export default function MessagesPage() {
   const filterRef = useRef(filter); filterRef.current = filter
   const uidRef = useRef<string | null>(null)
 
-  async function loadCounts(u: string) {
-    async function countFor(f: Filter): Promise<number> {
-      let qb = supabase.from('conversations').select('id', { count: 'exact', head: true }).eq('user_id', u)
-      if (f === 'all') qb = qb.is('archived_at', null)
-      else if (f === 'sms') qb = qb.is('archived_at', null).is('lead_status', null).or('last_channel.eq.sms,last_channel.is.null')
-      else if (f === 'portal') qb = qb.is('archived_at', null).is('lead_status', null).eq('last_channel', 'portal')
-      else if (f === 'website_lead') qb = qb.is('archived_at', null).eq('lead_status', 'new')
-      else qb = qb.not('archived_at', 'is', null)
-      const { count } = await qb
-      return count || 0
-    }
-    const [a, b, c, d, e] = await Promise.all([countFor('all'), countFor('sms'), countFor('portal'), countFor('website_lead'), countFor('archived')])
-    setCounts({ all: a, sms: b, portal: c, website_lead: d, archived: e })
+  // ONE round trip (inbox_counts RPC) for every pill — this used to be six COUNT
+  // queries fired on every realtime event and every optimistic mutation.
+  async function loadCounts(_u: string) {
+    const { data } = await supabase.rpc('inbox_counts')
+    const j = (data as Record<string, number> | null) || {}
+    setCounts({
+      all: j.all || 0, needs_reply: j.needs_reply || 0, sms: j.sms || 0,
+      portal: j.portal || 0, website_lead: j.website_lead || 0,
+      snoozed: j.snoozed || 0, archived: j.archived || 0,
+    })
   }
 
   async function loadPage(u: string, f: Filter, reset: boolean) {
@@ -153,11 +180,17 @@ export default function MessagesPage() {
     const mySeq = ++loadSeq.current
     if (reset) setLoading(true); else setLoadingMore(true)
     const from = reset ? 0 : rows.length
+    // Active views exclude snoozed rows (they live under the Snoozed pill until
+    // they wake — or an inbound message wakes them via the bump trigger).
+    const nowIso = new Date().toISOString()
+    const awake = `snoozed_until.is.null,snoozed_until.lte.${nowIso}`
     let qb = supabase.from('conversations').select(SELECT_COLS).eq('user_id', u)
-    if (f === 'all') qb = qb.is('archived_at', null)
-    else if (f === 'sms') qb = qb.is('archived_at', null).is('lead_status', null).or('last_channel.eq.sms,last_channel.is.null')
-    else if (f === 'portal') qb = qb.is('archived_at', null).is('lead_status', null).eq('last_channel', 'portal')
-    else if (f === 'website_lead') qb = qb.is('archived_at', null).eq('lead_status', 'new')
+    if (f === 'all') qb = qb.is('archived_at', null).or(awake)
+    else if (f === 'needs_reply') qb = qb.is('archived_at', null).or(awake).eq('last_direction', 'inbound')
+    else if (f === 'sms') qb = qb.is('archived_at', null).or(awake).is('lead_status', null).or('last_channel.eq.sms,last_channel.is.null')
+    else if (f === 'portal') qb = qb.is('archived_at', null).or(awake).is('lead_status', null).eq('last_channel', 'portal')
+    else if (f === 'website_lead') qb = qb.is('archived_at', null).or(awake).eq('lead_status', 'new')
+    else if (f === 'snoozed') qb = qb.is('archived_at', null).gt('snoozed_until', nowIso)
     else qb = qb.not('archived_at', 'is', null)
     const { data } = await qb
       .order('pinned_at', { ascending: false, nullsFirst: false }).order('last_message_at', { ascending: false })
@@ -203,8 +236,8 @@ export default function MessagesPage() {
           const f = filterRef.current
           loadCounts(u)
           if (payload.eventType === 'UPDATE') {
-            const r = payload.new as Pick<Convo, 'id' | 'unread' | 'last_preview' | 'last_direction' | 'last_message_at' | 'archived_at' | 'pinned_at' | 'muted' | 'lead_status' | 'last_channel'>
-            const fields = { unread: r.unread, last_preview: r.last_preview, last_direction: r.last_direction, last_message_at: r.last_message_at, archived_at: r.archived_at, pinned_at: r.pinned_at, muted: r.muted, lead_status: r.lead_status, last_channel: r.last_channel }
+            const r = payload.new as Pick<Convo, 'id' | 'unread' | 'last_preview' | 'last_direction' | 'last_message_at' | 'archived_at' | 'pinned_at' | 'muted' | 'lead_status' | 'last_channel' | 'labels' | 'snoozed_until' | 'assigned_to'>
+            const fields = { unread: r.unread, last_preview: r.last_preview, last_direction: r.last_direction, last_message_at: r.last_message_at, archived_at: r.archived_at, pinned_at: r.pinned_at, muted: r.muted, lead_status: r.lead_status, last_channel: r.last_channel, labels: r.labels, snoozed_until: r.snoozed_until, assigned_to: r.assigned_to }
             setRows(cs => cs.some(x => x.id === r.id)
               ? sortConvos(cs.map(x => x.id === r.id ? { ...x, ...fields } : x).filter(x => x.id !== r.id || inFilter({ ...x, ...fields }, f)))
               : cs)
@@ -304,7 +337,90 @@ export default function MessagesPage() {
       removeLocal(c.id)
     },
     select: (c: Convo) => { setSel(c); if (c.unread > 0) { patch(c.id, { unread: 0 }); if (uid) loadCounts(uid) } },
+    // Snooze = "come back to this later" without losing it: hidden from active
+    // views until the time passes — and any inbound message wakes it instantly
+    // (the bump trigger clears snoozed_until), so a customer can't be snoozed away.
+    snooze: async (c: Convo, until: Date) => {
+      const iso = until.toISOString()
+      mutate(c, { snoozed_until: iso })
+      const { error } = await supabase.from('conversations').update({ snoozed_until: iso }).eq('id', c.id)
+      if (error) { mutate(c, { snoozed_until: c.snoozed_until }); toast.error('Could not snooze this conversation.'); return }
+      toast.undo(`Snoozed until ${until.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}, 9 AM`, async () => {
+        await supabase.from('conversations').update({ snoozed_until: null }).eq('id', c.id)
+        if (uid) loadPage(uid, filterRef.current, true)
+      })
+    },
+    unsnooze: async (c: Convo) => { mutate(c, { snoozed_until: null }); await supabase.from('conversations').update({ snoozed_until: null }).eq('id', c.id) },
+    toggleLabel: async (c: Convo, key: string) => {
+      const next = c.labels?.includes(key) ? (c.labels || []).filter(l => l !== key) : [...(c.labels || []), key]
+      mutate(c, { labels: next })
+      const { error } = await supabase.from('conversations').update({ labels: next }).eq('id', c.id)
+      if (error) { mutate(c, { labels: c.labels }); toast.error('Could not update labels.') }
+    },
+    assign: async (c: Convo, techId: string | null) => {
+      mutate(c, { assigned_to: techId })
+      const { error } = await supabase.from('conversations').update({ assigned_to: techId }).eq('id', c.id)
+      if (error) { mutate(c, { assigned_to: c.assigned_to }); toast.error('Could not update the assignment.') }
+    },
+    // Reminder through THE scheduling engine (schedule_items) — the same shape the
+    // ConversationInfo "Follow up" menu writes; no separate reminder system.
+    remind: async (c: Convo) => {
+      if (!uid) return
+      const d = new Date(); d.setDate(d.getDate() + 1)
+      const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      const { error } = await supabase.from('schedule_items').insert({
+        user_id: uid, type: 'reminder', title: `Follow up with ${nameOf(c)}`, customer_id: c.customer_id,
+        scheduled_date: date, status: 'scheduled', due_at: new Date(date + 'T09:00:00').toISOString(),
+      })
+      if (error) toast.error('Could not create the reminder.')
+      else toast.success('Reminder set for tomorrow, 9 AM — it’s on your schedule.')
+    },
   }
+
+  // Technicians for conversation assignment — loaded once, only if the crew
+  // module has any. Solo operators never see the Assign menu at all.
+  const [techs, setTechs] = useState<{ id: string; name: string }[]>([])
+  useEffect(() => {
+    if (!uid) return
+    let active = true
+    supabase.from('technicians').select('id, name').eq('user_id', uid).eq('is_active', true).order('name')
+      .then(({ data }) => { if (active) setTechs((data as { id: string; name: string }[]) || []) })
+    return () => { active = false }
+  }, [uid, supabase])
+  const techName = (id: string | null) => techs.find(t => t.id === id)?.name || null
+
+  // One tap to a clean slate — the bell has mark-all-read; the inbox deserves the
+  // same. Server-wide (not just loaded rows), optimistic, verified by the write.
+  async function markAllRead() {
+    if (!uid) return
+    const prevRows = rows
+    setRows(cs => cs.map(c => ({ ...c, unread: 0 })))
+    setSearchResults(rs => rs ? rs.map(c => ({ ...c, unread: 0 })) : rs)
+    const { error } = await supabase.from('conversations').update({ unread: 0 }).eq('user_id', uid).gt('unread', 0)
+    if (error) { setRows(prevRows); toast.error('Could not mark everything read.'); return }
+    loadCounts(uid)
+  }
+
+  // Deep links: ?c=<customerId> opens that conversation directly — this is where
+  // the bell and push notifications land, so a tap on "Dana replied" opens Dana,
+  // not a list. ?f=<filter> lands on a filter (insight tiles use ?f=needs_reply).
+  // Params are consumed then stripped (back/refresh clean).
+  useEffect(() => {
+    if (!uid) return
+    const params = new URLSearchParams(window.location.search)
+    const cparam = params.get('c')
+    const fparam = params.get('f')
+    if (!cparam && !fparam) return
+    window.history.replaceState(null, '', '/dashboard/messages')
+    if (fparam && FILTERS.some(f => f.key === fparam)) setFilter(fparam as Filter)
+    if (cparam) {
+      ;(async () => {
+        const { data } = await supabase.from('conversations').select(SELECT_COLS)
+          .eq('user_id', uid).eq('customer_id', cparam).maybeSingle()
+        if (data) actions.select(data as unknown as Convo)
+      })()
+    }
+  }, [uid]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── New message (compose without leaving the inbox) ──
   const [composeOpen, setComposeOpen] = useState(false)
@@ -313,7 +429,7 @@ export default function MessagesPage() {
   async function openCompose() {
     setComposeOpen(true)
     if (composeCustomers.length === 0) {
-      const { data } = await supabase.from('customers').select('*').is('archived_at', null).order('name')
+      const { data } = await supabase.from('customers').select('*, properties(address, city, is_primary)').is('archived_at', null).order('name')
       setComposeCustomers((data as Customer[]) || [])
     }
   }
@@ -374,27 +490,48 @@ export default function MessagesPage() {
     return () => window.removeEventListener('resize', measure)
   }, [loading, sel])
 
-  // Keyboard: "/" focuses search, Esc clears search / closes the thread / exits
-  // select mode, and ↑/↓ move through the list (opening as you go) — Spotlight feel.
+  // Keyboard: "/" search, Esc back out, ↑/↓ or j/k move through the list (opening
+  // as you go), e archive, u unread, p pin, s snooze — Gmail's grammar, because
+  // every triage muscle-memory an owner has already works here. "?" shows the map.
+  const [helpOpen, setHelpOpen] = useState(false)
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const el = e.target as HTMLElement | null
       const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
-      if (e.key === '/' && !typing) { e.preventDefault(); searchRef.current?.focus() }
+      if (typing && e.key !== 'Escape') return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (e.key === '/') { e.preventDefault(); searchRef.current?.focus() }
+      else if (e.key === '?') { e.preventDefault(); setHelpOpen(o => !o) }
       else if (e.key === 'Escape') {
-        if (query) { setQuery(''); searchRef.current?.blur() }
+        if (helpOpen) setHelpOpen(false)
+        else if (query) { setQuery(''); searchRef.current?.blur() }
         else if (selectMode) exitSelect()
         else if (sel) setSel(null)
-      } else if (!typing && (e.key === 'ArrowDown' || e.key === 'ArrowUp') && list.length) {
+      } else if (sel && e.key === 'e') { e.preventDefault(); sel.archived_at ? actions.unarchive(sel) : actions.archive(sel) }
+      else if (sel && e.key === 'u') { e.preventDefault(); actions.markUnread(sel); setSel(null) }
+      else if (sel && e.key === 'p') { e.preventDefault(); sel.pinned_at ? actions.unpin(sel) : actions.pin(sel) }
+      else if (sel && e.key === 's') { e.preventDefault(); actions.snooze(sel, snoozeDate('tomorrow')) }
+      else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'j' || e.key === 'k') && list.length) {
         e.preventDefault()
+        const down = e.key === 'ArrowDown' || e.key === 'j'
         const cur = sel ? list.findIndex(c => c.id === sel.id) : -1
-        const idx = e.key === 'ArrowDown' ? Math.min(list.length - 1, cur + 1) : Math.max(0, cur <= 0 ? 0 : cur - 1)
-        if (list[idx]) actions.select(list[idx])
+        const idx = down ? Math.min(list.length - 1, cur + 1) : Math.max(0, cur <= 0 ? 0 : cur - 1)
+        if (list[idx]) {
+          actions.select(list[idx])
+          // Keep the selection on-screen — the list is virtualized, so without this
+          // the highlight walks right out of the rendered window.
+          const el = scrollRef.current
+          if (el) {
+            const top = idx * ROW_H
+            if (top < el.scrollTop) el.scrollTop = top
+            else if (top + ROW_H > el.scrollTop + el.clientHeight) el.scrollTop = top + ROW_H - el.clientHeight
+          }
+        }
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [query, selectMode, sel, list]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [query, selectMode, sel, list, helpOpen]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -424,6 +561,28 @@ export default function MessagesPage() {
           customerId={composeTo.id} customerName={composeTo.name} />
       )}
 
+      {/* The shortcut map — discoverable via "?" like everywhere else that has one. */}
+      <Modal open={helpOpen} onClose={() => setHelpOpen(false)} title="Keyboard shortcuts" icon={Keyboard} size="sm">
+        <div className="space-y-1.5 text-sm">
+          {([
+            ['/', 'Search conversations'],
+            ['↑ ↓ or j k', 'Move through the list'],
+            ['e', 'Archive / unarchive'],
+            ['u', 'Mark unread'],
+            ['p', 'Pin / unpin'],
+            ['s', 'Snooze until tomorrow'],
+            ['Esc', 'Back out (search → selection → thread)'],
+            ['⌘/Ctrl + Enter', 'Send the reply'],
+            ['?', 'This map'],
+          ] as [string, string][]).map(([k, what]) => (
+            <div key={k} className="flex items-center justify-between gap-3">
+              <kbd className="text-[11px] font-semibold text-ink border border-border rounded px-1.5 py-0.5 bg-bg-tertiary whitespace-nowrap">{k}</kbd>
+              <span className="text-ink-muted text-xs text-right">{what}</span>
+            </div>
+          ))}
+        </div>
+      </Modal>
+
       {/* Spotlight search */}
       <div className="relative">
         <SearchInput ref={searchRef} fieldSize="sm" value={query} onChange={e => setQuery(e.target.value)} aria-label="Search conversations"
@@ -437,16 +596,28 @@ export default function MessagesPage() {
       {!searchResults && (
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="flex flex-wrap gap-1.5">
-            {FILTERS.map(f => (
-              <FilterPill key={f.key} active={filter === f.key} onClick={() => { setFilter(f.key); setSel(null) }}>
-                <f.icon className="w-3.5 h-3.5" /> {f.label}
-                {counts[f.key] > 0 && <span className={cn('text-[10px] font-bold tabular-nums', filter === f.key ? 'text-black/70' : 'text-ink-faint')}>{counts[f.key]}</span>}
-              </FilterPill>
-            ))}
+            {FILTERS.map(f => {
+              // Snoozed earns its pill only while something IS snoozed — an empty
+              // "Snoozed 0" would be permanent noise for the common case.
+              if (f.key === 'snoozed' && counts.snoozed === 0 && filter !== 'snoozed') return null
+              return (
+                <FilterPill key={f.key} active={filter === f.key} onClick={() => { setFilter(f.key); setSel(null) }}>
+                  <f.icon className="w-3.5 h-3.5" /> {f.label}
+                  {counts[f.key] > 0 && <span className={cn('text-[10px] font-bold tabular-nums', filter === f.key ? 'text-black/70' : 'text-ink-faint')}>{counts[f.key]}</span>}
+                </FilterPill>
+              )
+            })}
           </div>
-          <Button variant="ghost" size="sm" className="shrink-0" onClick={() => selectMode ? exitSelect() : setSelectMode(true)}>
-            {selectMode ? 'Cancel' : 'Select'}
-          </Button>
+          <div className="flex items-center gap-1 shrink-0">
+            {rows.some(c => c.unread > 0) && (
+              <Button variant="ghost" size="sm" onClick={markAllRead} title="Mark every conversation read">
+                <MailOpen className="w-3.5 h-3.5" /> All read
+              </Button>
+            )}
+            <Button variant="ghost" size="sm" onClick={() => selectMode ? exitSelect() : setSelectMode(true)}>
+              {selectMode ? 'Cancel' : 'Select'}
+            </Button>
+          </div>
         </div>
       )}
 
@@ -506,7 +677,7 @@ export default function MessagesPage() {
                 <div style={{ transform: `translateY(${start * ROW_H}px)` }}>
                   {visible.map(c => (
                     <ConversationRow key={c.id} c={c} selected={sel?.id === c.id} actions={actions} query={searchResults ? query.trim() : ''}
-                      selectMode={selectMode} checked={selectedIds.has(c.id)} onToggleSelect={() => toggleSelect(c.id)} />
+                      selectMode={selectMode} checked={selectedIds.has(c.id)} onToggleSelect={() => toggleSelect(c.id)} techs={techs} />
                   ))}
                 </div>
               </div>
@@ -527,6 +698,7 @@ export default function MessagesPage() {
                       {sel.pinned_at && <Pin className="w-3 h-3 text-accent-text shrink-0" />}{nameOf(sel)}
                       {sel.lead_status === 'new' && <span className="text-[10px] font-bold uppercase tracking-wide text-accent-text border border-accent/30 bg-accent/10 rounded-full px-2 py-0.5 flex items-center gap-0.5"><Globe className="w-2.5 h-2.5" /> Website lead</span>}
                       {sel.archived_at && <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint border border-border rounded-full px-2 py-0.5">Archived</span>}
+                      {isSnoozed(sel) && <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint border border-border rounded-full px-2 py-0.5 flex items-center gap-0.5"><AlarmClock className="w-2.5 h-2.5" /> Snoozed</span>}
                       {sel.muted && <BellOff className="w-3 h-3 text-ink-faint shrink-0" />}
                     </p>
                     {phoneOf(sel) && <p className="text-[11px] text-ink-faint">{phoneOf(sel)}</p>}
@@ -553,7 +725,7 @@ export default function MessagesPage() {
               {sel.lead_status === 'new' && <LeadCard customerId={sel.customer_id} />}
               <ConversationInfo customerId={sel.customer_id} />
               <div className="flex-1 min-h-0">
-                <ConversationThread customerId={sel.customer_id} onRead={() => uid && loadCounts(uid)} />
+                <ConversationThread customerId={sel.customer_id} onRead={() => uid && loadCounts(uid)} autoFocus />
               </div>
             </>
           ) : (
@@ -597,9 +769,13 @@ interface RowActions {
   pin: (c: Convo) => void; unpin: (c: Convo) => void
   markUnread: (c: Convo) => void; toggleMute: (c: Convo) => void
   del: (c: Convo) => void; select: (c: Convo) => void
+  snooze: (c: Convo, until: Date) => void; unsnooze: (c: Convo) => void
+  toggleLabel: (c: Convo, key: string) => void
+  assign: (c: Convo, techId: string | null) => void
+  remind: (c: Convo) => void
 }
 
-function ConversationRow({ c, selected, actions, query, selectMode, checked, onToggleSelect }: { c: Convo; selected: boolean; actions: RowActions; query: string; selectMode: boolean; checked: boolean; onToggleSelect: () => void }) {
+function ConversationRow({ c, selected, actions, query, selectMode, checked, onToggleSelect, techs }: { c: Convo; selected: boolean; actions: RowActions; query: string; selectMode: boolean; checked: boolean; onToggleSelect: () => void; techs: { id: string; name: string }[] }) {
   const router = useRouter()
   // Long-press / right-click open the SAME shared menu as the ⋮ trigger; the render
   // prop below keeps this ref pointed at the current open function.
@@ -629,6 +805,7 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
   const needsReply = !c.archived_at && c.last_direction === 'inbound'
   // Same items in the same order as before, rendered by the shared ui/Menu (portals
   // to body so the row's overflow-hidden can never clip it; keyboard nav for free).
+  const snoozed = isSnoozed(c)
   const menuItems: MenuItem[] = [
     c.archived_at
       ? { key: 'unarchive', label: 'Unarchive', icon: ArchiveRestore, onSelect: () => actions.unarchive(c) }
@@ -638,6 +815,24 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
       : { key: 'pin', label: 'Pin to top', icon: Pin, onSelect: () => actions.pin(c) },
     { key: 'unread', label: 'Mark unread', icon: MailOpen, onSelect: () => actions.markUnread(c) },
     { key: 'mute', label: c.muted ? 'Unmute' : 'Mute notifications', icon: c.muted ? Bell : BellOff, onSelect: () => actions.toggleMute(c) },
+    // Snooze (not while archived — unarchive first). An inbound message always wakes it.
+    ...(!c.archived_at ? (snoozed
+      ? [{ key: 'unsnooze', label: 'Unsnooze', icon: AlarmClock, onSelect: () => actions.unsnooze(c) }]
+      : [
+          { key: 'snz1', label: 'Snooze · tomorrow 9 AM', icon: AlarmClock, onSelect: () => actions.snooze(c, snoozeDate('tomorrow')) },
+          { key: 'snz2', label: 'Snooze · next Monday', icon: AlarmClock, onSelect: () => actions.snooze(c, snoozeDate('nextweek')) },
+        ]) : []),
+    // Label toggles — ✓ shows current state before you click.
+    ...LABELS.map(l => ({
+      key: `lbl-${l.key}`, label: `${c.labels?.includes(l.key) ? '✓ ' : ''}${l.label}`, icon: Tag,
+      onSelect: () => actions.toggleLabel(c, l.key),
+    })),
+    // Assignment via THE crew system — hidden entirely for solo operators.
+    ...techs.map(t => ({
+      key: `asg-${t.id}`, label: `${c.assigned_to === t.id ? '✓ ' : ''}Assign to ${t.name}`, icon: UserCheck,
+      onSelect: () => actions.assign(c, c.assigned_to === t.id ? null : t.id),
+    })),
+    { key: 'remind', label: 'Remind me tomorrow', icon: CalendarClock, onSelect: () => actions.remind(c) },
     { key: 'customer', label: 'View customer', icon: User, onSelect: () => router.push(`/dashboard/customers/${c.customer_id}`) },
   ]
   // Permanent delete only for ARCHIVED conversations — archive is the safe default.
@@ -669,6 +864,19 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
             {c.pinned_at && <Pin className="w-3 h-3 text-accent-text shrink-0" />}
             <p className={cn('text-sm truncate flex-1', c.unread > 0 ? 'font-bold text-ink' : 'font-semibold text-ink')}><Highlight text={nameOf(c)} q={query} /></p>
             {c.lead_status === 'new' && <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide text-accent-text border border-accent/30 bg-accent/10 rounded-full px-1.5 leading-4">Lead</span>}
+            {(c.labels || []).slice(0, 2).map(k => {
+              const m = labelMeta(k)
+              return m ? <span key={k} className={cn('shrink-0 text-[10px] font-bold rounded-full border px-1.5 leading-4', m.cls)}>{m.chip}</span> : null
+            })}
+            {snoozed && <AlarmClock className="w-3 h-3 text-ink-faint shrink-0" aria-label="Snoozed" />}
+            {c.assigned_to && techs.length > 0 && (() => {
+              const t = techs.find(x => x.id === c.assigned_to)
+              return t ? (
+                <span title={`Assigned to ${t.name}`} className="shrink-0 w-4 h-4 rounded-full bg-surface-raised border border-border text-[8px] font-bold text-ink-muted flex items-center justify-center">
+                  {t.name.slice(0, 1).toUpperCase()}
+                </span>
+              ) : null
+            })()}
             {c.muted && <BellOff className="w-3 h-3 text-ink-faint shrink-0" />}
             {c.archived_at && <Archive className="w-3 h-3 text-ink-faint shrink-0" />}
             {c.unread > 0 && <span className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-black text-[10px] font-bold tabular-nums flex items-center justify-center">{c.unread > 9 ? '9+' : c.unread}</span>}

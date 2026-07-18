@@ -14,7 +14,7 @@
 export type WidgetId =
   | 'executive' | 'financial' | 'yearly' | 'profitability' | 'customers'
   | 'sales' | 'operations' | 'weekday' | 'cancellations' | 'labor' | 'forecasting'
-  | 'marketing'
+  | 'marketing' | 'communications'
 
 export interface WidgetMeta {
   id: WidgetId
@@ -49,6 +49,8 @@ export const WIDGETS: WidgetMeta[] = [
   // and last for everyone else — the same widget in two places depending on when
   // you first opened the page. Last for everyone is the only consistent choice.
   { id: 'marketing',     title: 'Marketing',      blurb: 'What each campaign sent, and what got delivered and opened' },
+  // Appended last for the same forward-compat reason as marketing above.
+  { id: 'communications', title: 'Communications', blurb: 'Messages sent and received, delivery health, and how fast you reply' },
 ]
 
 const ALL_IDS = WIDGETS.map(w => w.id)

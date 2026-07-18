@@ -10,7 +10,8 @@ import { neighborhoodKey } from '@/lib/profitability'
 // a precise provider simply returns `lawnSqft` directly (confidence 'high').
 
 export type MeasureConfidence = 'high' | 'medium' | 'low'
-const M2_TO_SQFT = 10.7639
+// THE conversion now lives in lib/measure (one definition, verified by execution).
+import { M2_TO_SQFT } from '@/lib/measure'
 const SQFT_TO_M2 = 1 / M2_TO_SQFT
 const EARTH_R = 6378137 // metres
 
@@ -58,30 +59,78 @@ function geometryAreaM2(geom: { type: string; coordinates: unknown }): number {
 }
 
 // ── Free provider: City of Calgary open building footprints ──
+// Dataset uc4c-6kbd "Buildings" — 511,586 rows of roof outlines and garages.
+//
+// THIS PROVIDER HAD NEVER RETURNED A SINGLE RESULT. Three separate faults, each
+// hidden by the next, and all of them silent (see the audit, 2026-07-16):
+//
+//   1. The SoQL column is `multipolygon`. We asked for `geometry`, which does not
+//      exist on this dataset → HTTP 400 on EVERY call since the file was written.
+//   2. The `.geojson` endpoint answers 200 with an EMPTY BODY for this dataset, so
+//      even the corrected column returns nothing through it. `.json` is the one
+//      that works — it embeds the geometry in the row as `multipolygon`.
+//   3. Both failures were swallowed (`if (!res.ok) return []`, then `catch { return
+//      null }`), so the caller could not tell "no building here" from "we have been
+//      broken for our entire existence". 31 of 31 measurements were manual.
+//
+// Verified live before this change (real customer property, 50.9382678/-114.0897189):
+//   .json    + within_circle(multipolygon,…)  → 200, 4 roof outlines   ✅
+//   .geojson + within_circle(multipolygon,…)  → 200, empty body
+//   either   + within_circle(geometry,…)      → 400 no-such-column
+//
+// Verified live AFTER, against three real customer properties — the provider returns
+// a footprint for all three, and `intersects` hits the roof on two of them:
+//   12804 Canso Cres SW  → 3,737 ft²  hitOnPoint=false (fell back to within_circle)
+//   121 Riverside Bay SE → 1,779 ft²  hitOnPoint=true
+//   303 Hawthorn Dr NW   → 1,194 ft²  hitOnPoint=true
+// So both paths earn their place: a false `hitOnPoint` means the geocode landed off
+// the roof, NOT that the provider failed.
 export const calgaryBuildingsProvider: MeasureProvider = {
   name: 'calgary-buildings',
   async measure(lat, lng) {
-    const base = 'https://data.calgary.ca/resource/uc4c-6kbd.geojson'
+    const base = 'https://data.calgary.ca/resource/uc4c-6kbd.json'
     try {
       // 1) the building footprint the point falls inside (the home).
-      let feats = await fetchFeatures(`${base}?$where=intersects(geometry,'POINT(${lng} ${lat})')&$limit=5`)
-      let hitOnPoint = feats.length > 0
+      let rows = await fetchBuildings(`${base}?$where=intersects(multipolygon,'POINT(${lng} ${lat})')&$limit=5`)
+      const hitOnPoint = rows.length > 0
       // 2) fallback: nearest footprints within ~45 m (geocode landed off the roof).
-      if (!feats.length) feats = await fetchFeatures(`${base}?$where=within_circle(geometry,${lat},${lng},45)&$limit=12`)
-      if (!feats.length) return null
-      const areas = feats.map(f => geometryAreaM2(f.geometry)).filter(a => a > 10)
+      if (!rows.length) rows = await fetchBuildings(`${base}?$where=within_circle(multipolygon,${lat},${lng},45)&$limit=12`)
+      if (!rows.length) return null
+      const areas = rows.map(r => geometryAreaM2(r.multipolygon)).filter(a => a > 10)
       if (!areas.length) return null
       // Containing → sum them (a home can be multipolygon); nearby → take largest.
+      // Largest matters here: a 45 m circle also catches the garage (bldg_code_desc
+      // 'Residential Garage') and a neighbour's roof.
       const buildingM2 = hitOnPoint ? areas.reduce((s, a) => s + a, 0) : Math.max(...areas)
       return { buildingSqft: Math.round(buildingM2 * M2_TO_SQFT), hitOnPoint }
-    } catch { return null }
+    } catch (e) {
+      reportProviderFailure('calgary-buildings threw', e)
+      return null
+    }
   },
 }
-async function fetchFeatures(url: string): Promise<{ geometry: { type: string; coordinates: unknown } }[]> {
+
+/** Rows carry the geometry inline as `multipolygon` — this is the `.json` shape, NOT
+ *  GeoJSON's `feature.geometry`. Using the wrong one is fault #2 above. */
+async function fetchBuildings(url: string): Promise<{ multipolygon: { type: string; coordinates: unknown } }[]> {
   const res = await fetch(url)
-  if (!res.ok) return []
-  const gj = await res.json()
-  return (gj?.features || []) as { geometry: { type: string; coordinates: unknown } }[]
+  if (!res.ok) {
+    // A provider that has been down since birth must SAY so once. This is the line
+    // whose absence cost the product its entire measurement-calibration story.
+    reportProviderFailure(`calgary-buildings HTTP ${res.status}`, await res.text().catch(() => ''))
+    return []
+  }
+  const rows = await res.json()
+  return (Array.isArray(rows) ? rows : []) as { multipolygon: { type: string; coordinates: unknown } }[]
+}
+
+// Once per session, not per call: a broken provider is hit on every measurement and
+// a per-call log would bury the console it is trying to warn.
+let providerFailureReported = false
+function reportProviderFailure(what: string, detail: unknown) {
+  if (providerFailureReported) return
+  providerFailureReported = true
+  console.error(`[autoMeasure] building-footprint provider is failing — auto-measure is OFF and every measurement will fall back to manual. ${what}:`, detail)
 }
 
 // The active provider — swap this (or branch on config) to use a paid provider.

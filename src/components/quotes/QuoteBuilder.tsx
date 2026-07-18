@@ -21,8 +21,9 @@ import { Modal } from '@/components/ui/Modal'
 import { AssistButton, AiStop, AiUndo, AiError, AiNote, AI_CHECK_FIRST } from '@/components/ai/ui'
 import { useAiAssist } from '@/hooks/useAiAssist'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
-import { sumServiceLines, serviceLineTotals, emptyServiceLine, SERVICE_UNITS } from '@/lib/quoteServices'
-import { loadServiceUnits, type ServiceUnit } from '@/lib/units'
+import { sumServiceLines, serviceLineTotals, emptyServiceLine } from '@/lib/quoteServices'
+import { MATERIAL_SUGGESTIONS, emptyMaterialLine } from '@/lib/quoteMaterials'
+import { loadServiceUnits, SYSTEM_UNITS, type ServiceUnit } from '@/lib/units'
 import { formatCurrency, formatDate, suggestTravelFee, cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { formatServicePrice, servicePricingKind, serviceRecommendation } from '@/lib/servicePricing'
@@ -35,7 +36,7 @@ import type { MeasurementSnapshot, SavedRecommendation } from '@/types'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { PriceIntelligence } from '@/components/pricing/PriceIntelligence'
-import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp } from 'lucide-react'
+import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp, Package } from 'lucide-react'
 
 interface QuoteBuilderProps {
   customers: Customer[]
@@ -117,8 +118,25 @@ export function QuoteBuilder({
       },
     })
 
-  // Additional service lines beyond the primary one (multi-service quotes).
+  // Additional lines beyond the primary one. ONE field array holds both services
+  // and materials — they are the same species of line (qty × unit_price through
+  // the one quote-services engine) and a second array would mean a second sum.
+  // The two sections below are a VIEW over it, split by `kind`; the real index is
+  // carried through so register() still addresses the right row.
   const serviceLines = useFieldArray({ control, name: 'services' })
+  const indexedLines = serviceLines.fields.map((f, i) => ({ f, i }))
+  const kindAt = (i: number) => watchedServices?.[i]?.kind ?? 'service'
+  const serviceIdx = indexedLines.filter(({ i }) => kindAt(i) !== 'material')
+  const materialIdx = indexedLines.filter(({ i }) => kindAt(i) === 'material')
+  // Per-section subtotals are DISPLAY ONLY — `extras` remains the ONE figure that
+  // feeds the quote total, and it already sums every line regardless of kind.
+  // Both go through sumServiceLines rather than a hand-rolled reduce: a second
+  // adder here is how two totals start disagreeing.
+  const linesAt = (idx: { i: number }[]) =>
+    idx.map(({ i }) => watchedServices?.[i]).filter(Boolean) as NonNullable<typeof watchedServices>
+  const serviceExtras = sumServiceLines(linesAt(serviceIdx))
+  const materialsSum = sumServiceLines(linesAt(materialIdx))
+  const serviceExtrasNet = serviceExtras.net
 
   // Autosave the whole quote — survives refresh / crash / accidental close (shared engine).
   const formValues = watch()
@@ -446,19 +464,19 @@ export function QuoteBuilder({
   // The unit vocabulary (service_units): the nine system units plus this owner's
   // custom ones. It replaces a hardcoded four-value list, which is the whole
   // reason a plumber can now quote 6 fixtures and a painter 3 rooms — the line
-  // maths was always qty × unit_price and never needed to change. Falls back to
-  // the old constant if the read fails, so the picker can never come up empty.
-  const [units, setUnits] = useState<ServiceUnit[]>([])
+  // maths was always qty × unit_price and never needed to change.
+  //
+  // Seeded with the system nine so the picker is never empty and never SHRINKS on
+  // a failed read — loadServiceUnits() falls back to the same nine, so the only
+  // thing a failure costs is this owner's custom units. It used to fall back to a
+  // four-value constant, which silently dropped fixture/room/zone/equipment/flat.
+  const [units, setUnits] = useState<ServiceUnit[]>(SYSTEM_UNITS)
   useEffect(() => {
     let alive = true
     loadServiceUnits(createClient()).then(u => { if (alive) setUnits(u) })
     return () => { alive = false }
   }, [])
-  const unitOptions = useMemo(() => (
-    units.length
-      ? units.map(u => ({ value: u.code, label: u.label }))
-      : SERVICE_UNITS.map(u => ({ value: u.value, label: u.label }))
-  ), [units])
+  const unitOptions = useMemo(() => units.map(u => ({ value: u.code, label: u.label })), [units])
 
   // Favourites first, then the business's own sort_order within each group.
   // THIS is what a favourite is for: the settings toggle promises "shown first in
@@ -640,13 +658,24 @@ export function QuoteBuilder({
                 error={errors.service_type?.message}
                 {...register('service_type', { required: 'Service is required' })} />
 
-              {/* Lawn size — a CORE property attribute (powers pricing, labour & future
-                  analytics). Auto-filled from a website/satellite measurement or the
-                  property's saved size; always editable, and synced back to the property
-                  on save. */}
-              <Input label="Lawn Size (ft²)" type="number" step="1" min="0"
+              {/* A measured AREA — a core property attribute (powers pricing, labour
+                  & future analytics). Auto-filled from a website/satellite measurement
+                  or the property's saved size; always editable, and synced back to the
+                  property on save.
+                  The label said "Lawn Size (ft²)" for every trade, so a plumber pricing
+                  a drain clean was asked for a lawn. Same de-lawning rule already
+                  applied in Settings and the customer Portal: the stored column stays
+                  `measured_sqft` / `lawn_sqft` (read in ~74 places — renaming it is a
+                  migration, not a label fix), only the words change. The hint states
+                  what the area actually does for THIS service, which for a labour job
+                  is: nothing to the price, but it still feeds the labour estimate. */}
+              <Input label="Measured Area (ft²)" type="number" step="1" min="0"
                 placeholder="e.g. 5,000"
-                hint="Powers pricing & labour. Auto-filled from a measurement or the saved property size — edit to correct."
+                hint={pricingKind === 'lawn_recurring'
+                  ? 'Powers pricing & labour. Auto-filled from a measurement or the saved property size — edit to correct.'
+                  : pricingKind === 'per_area'
+                    ? 'Multiplied by your per-unit rate to price this service. Auto-filled from a measurement or the saved property size.'
+                    : 'Optional for this service — it feeds the labour estimate, not the price. Auto-filled from a measurement or the saved property size.'}
                 {...register('measured_sqft', { min: 0 })} />
 
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
@@ -657,7 +686,9 @@ export function QuoteBuilder({
                     if (!address) { toast.error('Enter a service address first.'); return }
                     setShowMeasure(true)
                   }}>
-                  <Ruler className="w-3.5 h-3.5" /> Measure &amp; price from satellite
+                  {/* Only the lawn cadence engine prices FROM the satellite trace, so
+                      only it may promise a price on the button that opens the map. */}
+                  <Ruler className="w-3.5 h-3.5" /> {pricingKind === 'lawn_recurring' ? 'Measure & price from satellite' : 'Measure from satellite'}
                 </Button>
                 {measuredSqft > 0 && (
                   <span className="inline-flex items-center gap-1 text-xs text-emerald-400">
@@ -810,8 +841,17 @@ export function QuoteBuilder({
           <Collapsible title="Advanced Pricing" icon={SlidersHorizontal} summary="Exact price · labour · recurring · travel — full control">
           {/* Saved measurement — the pricing source of truth for this property.
               Shown ONLY when there's no LIVE suggestion (same numbers, same
-              engine — never two copies of the price list on screen). */}
-          {savedRec && !suggested && (
+              engine — never two copies of the price list on screen).
+              …and ONLY for a lawn-cadence service. A SavedRecommendation is built by
+              buildSavedRecommendation(pricingPackage(...)) — it is a grass cadence
+              price list and carries no record of the service it was computed for. So
+              a customer whose lawn was measured last spring would, on a "Furnace
+              Repair" quote, be shown "Measured property · 5,000 ft² · $73/visit
+              recommended · Weekly $55…" plus a one-tap "Use measured prices" that
+              filled MOWING cadence prices into a furnace quote. P0 stopped WRITING
+              lawn recs onto non-lawn measurements; this is the read side of the same
+              bug, and every property measured before that fix still carries one. */}
+          {savedRec && !suggested && pricingKind === 'lawn_recurring' && (
             <div className="rounded-xl border border-accent/30 bg-accent/5 p-3 space-y-2">
               <p className="text-[11px] font-semibold text-accent-text uppercase tracking-wide">
                 Measured property · {savedRec.sqft.toLocaleString()} ft² · {formatCurrency(savedRec.rec[savedRec.rec.cadence === 'one_time' ? 'one_time' : savedRec.rec.cadence])}/{savedRec.rec.cadence === 'one_time' ? 'visit' : savedRec.rec.cadence} recommended
@@ -963,15 +1003,18 @@ export function QuoteBuilder({
               has qty × unit price − discount; totals sum via the one
               quote-services engine. The primary service above stays untouched. ── */}
           <Collapsible title="Additional services" icon={Layers}
-            summary={serviceLines.fields.length ? `${serviceLines.fields.length} line${serviceLines.fields.length !== 1 ? 's' : ''} · ${formatCurrency(extras.net)}` : 'One-service quote — add mulch, cleanup, hedges…'}>
+            summary={serviceIdx.length ? `${serviceIdx.length} line${serviceIdx.length !== 1 ? 's' : ''} · ${formatCurrency(serviceExtrasNet)}` : 'One-service quote — add cleanup, hedges…'}>
             <div className="space-y-3">
-              {serviceLines.fields.map((f, i) => {
+              {serviceIdx.map(({ f, i }, n) => {
                 const line = watchedServices?.[i]
                 const net = line ? serviceLineTotals(line).net : 0
                 return (
                   <div key={f.id} className="rounded-xl border border-border bg-bg-secondary p-3 space-y-3">
+                    {/* kind is form state, not a visible field — register it so it
+                        survives submit rather than being dropped as unregistered. */}
+                    <input type="hidden" {...register(`services.${i}.kind` as const)} />
                     <div className="flex items-center justify-between gap-2">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Service {i + 2}</p>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Service {n + 2}</p>
                       <div className="flex items-center gap-3">
                         <span className="text-sm font-semibold text-ink tabular-nums">{formatCurrency(net)}</span>
                         <button type="button" onClick={() => serviceLines.remove(i)} aria-label="Remove service"
@@ -1025,11 +1068,103 @@ export function QuoteBuilder({
               <Button type="button" variant="secondary" size="sm" onClick={() => serviceLines.append(emptyServiceLine())}>
                 <Plus className="w-3.5 h-3.5" /> Add service
               </Button>
-              {extras.net > 0 && (
+              {materialIdx.length > 0 && (
+                <p className="text-xs text-ink-faint">
+                  Materials are listed separately below.
+                </p>
+              )}
+              {/* Service-only figures: `extras` sums materials too, so using it
+                  here would file mulch under "Additional services total". */}
+              {serviceExtras.net > 0 && (
                 <p className="text-xs text-ink-muted">
-                  Additional services total <span className="font-semibold text-ink">{formatCurrency(extras.net)}</span>
-                  {extras.discountAmount > 0 && <> (after {formatCurrency(extras.discountAmount)} discounts)</>}
-                  {extras.minutes > 0 && <> · ≈{extras.minutes} min</>}
+                  Additional services total <span className="font-semibold text-ink">{formatCurrency(serviceExtras.net)}</span>
+                  {serviceExtras.discountAmount > 0 && <> (after {formatCurrency(serviceExtras.discountAmount)} discounts)</>}
+                  {serviceExtras.minutes > 0 && <> · ≈{serviceExtras.minutes} min</>}
+                </p>
+              )}
+            </div>
+          </Collapsible>
+
+          {/* ── Materials — goods you SUPPLY, priced like any other line.
+              This section knows what you CHARGE and deliberately nothing about
+              what you PAY: no cost, no margin, no stock, no reservation. What a
+              material costs the business is the one canonical cost model's
+              question (Pricing V2 Phase 1 / Inventory D1), and a cost field here
+              would pre-empt it. Lines live in the SAME array as services and sum
+              through the SAME engine — this is a view, not a second system. ── */}
+          <Collapsible title="Materials" icon={Package}
+            summary={materialIdx.length
+              ? `${materialIdx.length} material${materialIdx.length !== 1 ? 's' : ''} · ${formatCurrency(materialsSum.net)}`
+              : 'Mulch, gravel, sod, plants…'}>
+            <div className="space-y-3">
+              {materialIdx.map(({ f, i }, n) => {
+                const line = watchedServices?.[i]
+                const net = line ? serviceLineTotals(line).net : 0
+                return (
+                  <div key={f.id} className="rounded-xl border border-border bg-bg-secondary p-3 space-y-3">
+                    <input type="hidden" {...register(`services.${i}.kind` as const)} />
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Material {n + 1}</p>
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-semibold text-ink tabular-nums">{formatCurrency(net)}</span>
+                        <button type="button" onClick={() => serviceLines.remove(i)} aria-label="Remove material"
+                          className="text-ink-faint hover:text-red-400 transition-colors">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                    <Input label="Material *" placeholder="e.g. Mulch" list="eq-material-suggestions"
+                      error={errors.services?.[i]?.service_type ? 'Material is required' : undefined}
+                      hint="Pick a suggestion or type your own."
+                      {...register(`services.${i}.service_type` as const, { required: true })} />
+                    {/* Suggestions prefill the unit too — the point is that mulch
+                        arrives already measured in cubic yards, not 'each'. */}
+                    <div className="flex flex-wrap gap-1.5">
+                      {MATERIAL_SUGGESTIONS.map(s => (
+                        <button key={s.label} type="button"
+                          onClick={() => {
+                            setValue(`services.${i}.service_type`, s.label, { shouldDirty: true })
+                            setValue(`services.${i}.unit`, s.unit, { shouldDirty: true })
+                          }}
+                          title={s.hint}
+                          className="text-[11px] rounded-full border border-border px-2 py-0.5 text-ink-muted hover:text-ink hover:border-accent transition-colors">
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
+                    {/* No Duration field: spreading the mulch is the SERVICE line's
+                        minutes. Minutes here would inflate the scheduled job twice. */}
+                    <div className="grid grid-cols-3 gap-3">
+                      <Input label="Qty" type="number" step="0.5" min="0"
+                        {...register(`services.${i}.quantity` as const, { min: 0 })} />
+                      <Select label="Unit" options={unitOptions}
+                        {...register(`services.${i}.unit` as const)} />
+                      <Input label="Price per unit ($)" type="number" step="1" min="0"
+                        {...register(`services.${i}.unit_price` as const, { min: 0 })} />
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-[auto_auto_1fr] gap-3 items-end">
+                      <Select label="Discount" placeholder="None"
+                        options={[{ value: 'amount', label: '$ off' }, { value: 'percent', label: '% off' }]}
+                        {...register(`services.${i}.discount_type` as const)} />
+                      <Input label="Value" type="number" step="1" min="0"
+                        {...register(`services.${i}.discount_value` as const, { min: 0 })} />
+                      <Input label="Notes" placeholder="Optional"
+                        {...register(`services.${i}.notes` as const)} />
+                    </div>
+                  </div>
+                )
+              })}
+              <datalist id="eq-material-suggestions">
+                {MATERIAL_SUGGESTIONS.map(s => <option key={s.label} value={s.label} />)}
+              </datalist>
+              <Button type="button" variant="secondary" size="sm" onClick={() => serviceLines.append(emptyMaterialLine())}>
+                <Plus className="w-3.5 h-3.5" /> Add material
+              </Button>
+              {materialsSum.net > 0 && (
+                <p className="text-xs text-ink-muted">
+                  Materials total <span className="font-semibold text-ink">{formatCurrency(materialsSum.net)}</span>
+                  {materialsSum.discountAmount > 0 && <> (after {formatCurrency(materialsSum.discountAmount)} discounts)</>}
+                  {' '}— included in the quote total.
                 </p>
               )}
             </div>
@@ -1155,8 +1290,19 @@ export function QuoteBuilder({
           pricingKind={pricingKind}
           propertyId={defaultPropertyId}
           customerId={customerId && customerId !== '__manual' ? customerId : undefined}
-          services={templates.map(t => t.name).filter((n): n is string => !!n)}
-          onServiceChange={(n) => setValue('service_type', n)}
+          services={activeTemplates.map(t => t.name).filter((n): n is string => !!n)}
+          // Setting the NAME alone left service_template_id stale, so svcTemplate
+          // stayed null and pricingKind fell back to matching the name — which is a
+          // guess about the trade, not the owner's answer. A "Lawn Mowing" template
+          // the owner configured as hourly still name-matched to lawn_recurring and
+          // re-opened the cadence gate two lines below. Set the id and let the
+          // template effect above derive name/rate/notes: the picker's one path,
+          // not a second one. Free text (no template) clears the id for the same reason.
+          onServiceChange={(n) => {
+            const t = activeTemplates.find(s => s.name === n)
+            if (t) setValue('service_template_id', t.id)
+            else { setValue('service_template_id', ''); setValue('service_type', n) }
+          }}
           onClose={() => setShowMeasure(false)}
           onApply={(sel) => {
             // The measured AREA is a fact about the property and applies to every

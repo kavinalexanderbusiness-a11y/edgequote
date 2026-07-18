@@ -1,14 +1,16 @@
 'use client'
 
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useListShortcuts } from '@/hooks/useListShortcuts'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { hoverIntent } from '@/lib/prefetch'
 import { Quote, QuoteStatus } from '@/types'
 import { formatCurrency, formatDate, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
-import { needsFollowUp, daysSince, compareFollowUp } from '@/lib/followup'
-import { isQuoteExpired } from '@/lib/quoteStatus'
+import { needsFollowUp, daysSince, compareFollowUp, chaseBlockedReason } from '@/lib/followup'
+import type { ReachCustomer } from '@/lib/comms/reach'
+import { describeSkip } from '@/lib/comms/skipReasons'
+import { isQuoteExpired, markSentPatch, canSendQuote, sendBlockedReason, sendBlockedLabel } from '@/lib/quoteStatus'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -26,6 +28,11 @@ import { Trash2, Bell, Send, FileText, Copy, Download } from 'lucide-react'
 interface QuoteListProps {
   quotes: Quote[]
   onDelete: (id: string) => Promise<void>
+  /** Reach fields per customer id, so the follow-up queue can tell "chase this"
+   *  apart from "you have no way to chase this". Optional: absent (or a customer
+   *  missing from it) means the row behaves exactly as it did before — the queue
+   *  must never invent a block it isn't sure about. */
+  reachById?: Record<string, ReachCustomer>
 }
 
 const STATUS_FILTERS: { value: '' | QuoteStatus; label: string }[] = [
@@ -39,7 +46,7 @@ const STATUS_FILTERS: { value: '' | QuoteStatus; label: string }[] = [
   { value: 'declined', label: 'Declined' },
 ]
 
-export function QuoteList({ quotes, onDelete }: QuoteListProps) {
+export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
   const router = useRouter()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'' | QuoteStatus>('')
@@ -49,8 +56,20 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
   // '/' focuses search, 'n' starts a new quote — the shared list idiom.
   useListShortcuts({ search: searchRef, onNew: () => router.push('/dashboard/quotes/new') })
 
+  // Why a quote's follow-up can't go out — null when it can, or when we simply
+  // don't know the customer (never invent a block). Same engine the sender uses.
+  const blockedFor = useCallback((q: Quote) => {
+    const c = q.customer_id ? reachById?.[q.customer_id] : undefined
+    return c ? chaseBlockedReason(c) : null
+  }, [reachById])
+
   // Date math over every quote — memoized so it doesn't re-run on each search keystroke.
-  const followUpCount = useMemo(() => quotes.filter(needsFollowUp).length, [quotes])
+  // Counts only the follow-ups the owner can actually DO, so the pill agrees with the
+  // dashboard queue rather than promising work that has no channel to happen on.
+  const followUpCount = useMemo(
+    () => quotes.filter(q => needsFollowUp(q) && !blockedFor(q)).length,
+    [quotes, blockedFor],
+  )
 
   // Deep-link from the Weekly Review (and elsewhere): ?followup=1 opens straight to
   // the follow-up queue, ?status=sent to a status — one tap, no re-filtering. Read
@@ -95,8 +114,18 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
   // pipeline) and arms the follow-up clock (draft → sent + sent_at).
   async function bulkSend() {
     const supabase = createClient()
-    const targets = sel.selectedItems.filter(q => q.customer_id)
-    if (!targets.length) { toast.error('None of the selected quotes have a linked customer.'); return }
+    // THE shared gate (lib/quoteStatus) rather than a local `.filter(q => q.customer_id)`
+    // — it also catches the priceless ones, which this used to send happily. Now that
+    // the DB no longer fabricates a total (RUN-2026-07-16e), an unpriced quote reads
+    // $0.00, and $0.00 is not a document you send to a customer.
+    const targets = sel.selectedItems.filter(canSendQuote)
+    const blocked = sel.selectedItems.length - targets.length
+    if (!targets.length) {
+      toast.error(sel.selectedItems.length === 1
+        ? sendBlockedLabel(sendBlockedReason(sel.selectedItems[0])!)
+        : 'None of the selected quotes can be sent — they need a price and a linked customer.')
+      return
+    }
     setBusyKey('send')
     let sent = 0, skipped = 0
     for (const q of targets) {
@@ -108,15 +137,27 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
         const d = (await res.json().catch(() => ({}))) as { results?: Record<string, { sent?: boolean }> }
         if (Object.values(d.results || {}).some(r => r?.sent)) {
           sent++
+          // ONE patch, ONE write — this was two updates that between them never wrote
+          // valid_until, which is why the expiry feature has never fired. The
+          // draft-only guard is unchanged: re-sending an already-sent quote must not
+          // re-stamp it, and the owner's no-backfill decision means legacy sent quotes
+          // keep their absent expiry.
           if (q.status === 'draft') {
-            await supabase.from('quotes').update({ status: 'sent' }).eq('id', q.id)
-            await supabase.from('quotes').update({ sent_at: new Date().toISOString() }).eq('id', q.id).is('sent_at', null)
+            await supabase.from('quotes')
+              .update(markSentPatch({ sent_at: q.sent_at, valid_until: q.valid_until }, localTodayISO()))
+              .eq('id', q.id)
           }
         } else skipped++
       } catch { skipped++ }
     }
     setBusyKey(null); sel.clear(); router.refresh()
-    toast.success(`Quote sent to ${sent} customer${sent !== 1 ? 's' : ''}${skipped ? ` · ${skipped} skipped (no opt-in/contact)` : ''}.`)
+    // Report what happened to ALL of them, including the ones the gate refused — a
+    // count that quietly omits the blocked ones reads as success.
+    const parts = [
+      skipped ? `${skipped} skipped (no opt-in/contact)` : '',
+      blocked ? `${blocked} not sendable (no price or customer)` : '',
+    ].filter(Boolean)
+    toast.success(`Quote sent to ${sent} customer${sent !== 1 ? 's' : ''}${parts.length ? ` · ${parts.join(' · ')}` : ''}.`)
   }
 
   // Convert to invoice: eligible (accepted/scheduled/completed) + not already
@@ -305,8 +346,14 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                         {/* An expired quote is NOT a follow-up: the automatic chaser
                             has stopped on it, so the dot would promise work the app
                             has already abandoned. Show why instead. */}
+                        {/* The dot means "there is work here for you". A quote whose
+                            customer can't be messaged fails that test the same way an
+                            expired one does — the chaser has no way to act on it — so
+                            it goes grey and says why rather than amber and beckoning. */}
                         {needsFollowUp(q) && !isQuoteExpired(q, localTodayISO()) && (
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Needs follow-up" />
+                          blockedFor(q)
+                            ? <span className="w-1.5 h-1.5 rounded-full bg-ink-faint/50 shrink-0" title={describeSkip(blockedFor(q)).label} />
+                            : <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Needs follow-up" />
                         )}
                         {q.quote_number}
                         {isQuoteExpired(q, localTodayISO()) && (
@@ -321,13 +368,33 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                         className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 hover:text-accent-text transition-colors">
                         {q.customer_name}
                       </Link>
-                      {needsFollowUp(q) && q.sent_at && (
-                        <span className="block text-[10px] font-semibold text-amber-400 mt-0.5">Sent {daysSince(q.sent_at)}d ago · follow up</span>
-                      )}
+                      {/* "Sent 12d ago · follow up" is a promise the app can only keep
+                          if a message can actually go out. When it can't, say so and
+                          point at the fix instead — chasing a customer with no phone
+                          and no email is not work the owner can do, and on the live
+                          book that was 6 of 9 rows in this very queue. */}
+                      {needsFollowUp(q) && q.sent_at && (() => {
+                        const blocked = blockedFor(q)
+                        if (!blocked) return (
+                          <span className="block text-[10px] font-semibold text-amber-400 mt-0.5">Sent {daysSince(q.sent_at)}d ago · follow up</span>
+                        )
+                        return (
+                          <Link href={`/dashboard/customers/${q.customer_id}`} onClick={e => e.stopPropagation()}
+                            className="block text-[10px] font-semibold text-ink-muted hover:text-ink mt-0.5 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                            Sent {daysSince(q.sent_at)}d ago · {describeSkip(blocked).label} →
+                          </Link>
+                        )
+                      })()}
                     </td>
                     <td className="px-3 sm:px-5 py-3.5 text-ink-muted hidden md:table-cell">{q.service_type}</td>
                     <td className="px-3 sm:px-5 py-3.5 font-semibold text-ink tabular-nums">{formatCurrency(q.total)}</td>
-                    <td className="px-3 sm:px-5 py-3.5" onClick={e => e.stopPropagation()}><QuoteStatusControl quoteId={q.id} status={q.status} followUpCount={q.follow_up_count} /></td>
+                    {/* The send/expiry stamps go with the row so the shared patch can
+                        leave an existing one alone, and the total so a status flip to
+                        Accepted snapshots what was bought rather than nothing. */}
+                    <td className="px-3 sm:px-5 py-3.5" onClick={e => e.stopPropagation()}>
+                      <QuoteStatusControl quoteId={q.id} status={q.status} followUpCount={q.follow_up_count}
+                        sentAt={q.sent_at} validUntil={q.valid_until} total={q.total} />
+                    </td>
                     <td className="px-3 sm:px-5 py-3.5 text-ink-faint hidden lg:table-cell">{formatDate(q.created_at)}</td>
                     <td className="px-3 sm:px-5 py-3.5" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center gap-1 justify-end">

@@ -33,6 +33,39 @@ export const UNIT_SELECT = 'id, user_id, code, label, abbrev, step, decimals, so
 // The code every pre-existing line already carries, so it must always resolve.
 export const DEFAULT_UNIT_CODE = 'each'
 
+// The nine SYSTEM units, mirroring the `user_id is null` rows seeded by
+// RUN-2026-07-15-service-units-vocabulary.sql. This is a read-failure fallback,
+// never a write: the table stays the source of truth, and an owner's custom units
+// can only come from it.
+//
+// It exists because the alternative is worse than a stale copy. loadServiceUnits()
+// returned [] on any error, and the caller then fell back to a FOUR-value list that
+// predates this vocabulary — so one failed read silently dropped fixture, room,
+// zone, equipment and flat, and a plumber's quote lost "fixture" with nothing on
+// screen to say why. A fallback that disagrees with the table is a second
+// vocabulary; this one agrees with it. Pinned field-by-field in verify-pricing §14.
+export const SYSTEM_UNITS: ServiceUnit[] = [
+  { id: 'system:each',      user_id: null, code: 'each',      label: 'Each',        abbrev: 'each',      step: 1,    decimals: 0, sort_order: 10, active: true },
+  { id: 'system:hour',      user_id: null, code: 'hour',      label: 'Hours',       abbrev: 'hr',        step: 0.25, decimals: 2, sort_order: 20, active: true },
+  { id: 'system:flat',      user_id: null, code: 'flat',      label: 'Flat rate',   abbrev: 'flat',      step: 1,    decimals: 0, sort_order: 30, active: true },
+  { id: 'system:sqft',      user_id: null, code: 'sqft',      label: 'Square feet', abbrev: 'sq ft',     step: 1,    decimals: 0, sort_order: 40, active: true },
+  { id: 'system:linear_ft', user_id: null, code: 'linear_ft', label: 'Linear feet', abbrev: 'linear ft', step: 1,    decimals: 0, sort_order: 50, active: true },
+  { id: 'system:fixture',   user_id: null, code: 'fixture',   label: 'Fixtures',    abbrev: 'fixture',   step: 1,    decimals: 0, sort_order: 60, active: true },
+  { id: 'system:room',      user_id: null, code: 'room',      label: 'Rooms',       abbrev: 'room',      step: 1,    decimals: 0, sort_order: 70, active: true },
+  { id: 'system:zone',      user_id: null, code: 'zone',      label: 'Zones',       abbrev: 'zone',      step: 1,    decimals: 0, sort_order: 80, active: true },
+  { id: 'system:equipment', user_id: null, code: 'equipment', label: 'Equipment',   abbrev: 'unit',      step: 1,    decimals: 0, sort_order: 90, active: true },
+  // Bulk-material units (RUN-2026-07-16-quote-materials.sql). Peers of the nine,
+  // NOT a materials-only list — a second vocabulary is the exact failure this
+  // fallback exists to prevent. `step` is 0.5 where the trade genuinely sells in
+  // halves (half a yard of mulch, half a ton of gravel); `decimals` follows how
+  // the ticket from the yard reads.
+  { id: 'system:cubic_yard', user_id: null, code: 'cubic_yard', label: 'Cubic yards', abbrev: 'yd³',    step: 0.5, decimals: 1, sort_order: 100, active: true },
+  { id: 'system:ton',        user_id: null, code: 'ton',        label: 'Tons',        abbrev: 'ton',    step: 0.5, decimals: 2, sort_order: 110, active: true },
+  { id: 'system:bag',        user_id: null, code: 'bag',        label: 'Bags',        abbrev: 'bag',    step: 1,   decimals: 0, sort_order: 120, active: true },
+  { id: 'system:pallet',     user_id: null, code: 'pallet',     label: 'Pallets',     abbrev: 'pallet', step: 1,   decimals: 0, sort_order: 130, active: true },
+  { id: 'system:tray',       user_id: null, code: 'tray',       label: 'Trays',       abbrev: 'tray',   step: 1,   decimals: 0, sort_order: 140, active: true },
+]
+
 // A last-resort unit for a code we can't find. Never written — it only keeps a
 // legacy or deleted code rendering as itself instead of vanishing from a quote.
 function syntheticUnit(code: string): ServiceUnit {
@@ -44,14 +77,17 @@ function syntheticUnit(code: string): ServiceUnit {
 
 // The owner's vocabulary: system units + their own customs, in display order.
 // RLS does the filtering — a select returns exactly (system ∪ mine).
+// A read failure falls back to the system nine rather than to nothing, so the
+// vocabulary degrades to "no custom units" instead of to a different, smaller one.
 export async function loadServiceUnits(sb: SupabaseClient): Promise<ServiceUnit[]> {
   const { data, error } = await sb
     .from('service_units')
     .select(UNIT_SELECT)
     .eq('active', true)
     .order('sort_order', { ascending: true })
-  if (error) return []
-  return (data as ServiceUnit[]) || []
+  if (error) return SYSTEM_UNITS
+  const rows = (data as ServiceUnit[]) || []
+  return rows.length ? rows : SYSTEM_UNITS
 }
 
 // Resolve a stored code against the vocabulary. Lines written before units

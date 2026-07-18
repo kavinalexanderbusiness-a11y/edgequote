@@ -16,7 +16,9 @@ import { DEFAULT_CREW_COST, crewCostPerHour as resolveCrewCost } from '@/lib/eco
 import { Button } from '@/components/ui/Button'
 import { X, Undo2, Trash2, Plus, Ruler, Loader2 } from 'lucide-react'
 
-const M2_TO_SQFT = 10.7639
+// THE conversion now lives in lib/measure — this file had its own copy, as did
+// three others, and four constants can drift apart silently.
+import { M2_TO_SQFT } from '@/lib/measure'
 const SNAP_PX = 24 // "click near the starting point to finish" threshold (generous for touch)
 
 // A serialized in-progress trace, persisted per property so an accidental
@@ -410,7 +412,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
   const graded = totalSqft > 0 && prospect
     ? gradedProspectPricing(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName }, prospect, {
         distanceKm: null, travelFee: Number(travelFee) || 0, neighborhoodName: hoodName,
-        estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000),
+        estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000) ?? undefined,
         timedJobs: prospect.timedJobs, crewCostPerHour: crewCost,
       })
     : null
@@ -419,12 +421,21 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
     ?? (totalSqft > 0 ? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName }) : null)
 
   // Record auto vs accepted so the estimate self-calibrates (best-effort).
+  //
+  // propertyId/customerId are forwarded because a measurement is a fact about an
+  // ADDRESS, not about a quote. They were already props, already destructured and
+  // already used a few lines above (draftKey) — they just weren't passed here, so
+  // every measurement taken inside the quote builder wrote property_id = null.
+  // Measured: 30 of 31 rows. It stayed invisible because recordMeasurement's
+  // propertyId is optional and defaults to null, so tsc had nothing to object to.
+  // This is what made "Property measured" almost absent from property timelines.
   function recordMeasure() {
     ;(async () => {
       const { data: { user } } = await supabase.auth.getUser()
       if (user) recordMeasurement(supabase, {
         userId: user.id, context: 'quote', lat: center?.lat ?? null, lng: center?.lng ?? null,
         neighborhood: neighborhoodOf(null, null, hoodName), auto: autoRef.current, acceptedSqft: totalSqft,
+        propertyId: propertyId ?? null, customerId: customerId ?? null,
       }).catch(() => {})
     })()
   }
@@ -481,7 +492,16 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
               </span>
             </div>
           )}
-          {center && (
+          {/* Auto-measure is a LAWN estimator, not a generic one: autoMeasureLawn()
+              is building footprint × DEFAULT_LAWN_RATIO (2.3) calibrated per
+              neighbourhood — a number that means nothing for a roof (ratio ≈1) or a
+              driveway (unrelated to footprint). Offering it on a roofing quote would
+              put an invented figure in the measured-area field under the word
+              "measured". Note its copy is deliberately NOT de-lawned: the estimate
+              really is of a lawn, so the honest fix is to show it only where that's
+              true, not to rename it "area" and let a lawn-ratio guess pass for a
+              measurement of something else. Tracing still works for every trade. */}
+          {center && lawnPricing && (
             <AutoMeasureBanner lat={center.lat} lng={center.lng}
               neighborhood={neighborhoodOf(null, null, hoodName)}
               onAuto={r => { autoRef.current = r }}
@@ -530,7 +550,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
                 {ready && (
                   <div className="absolute top-3 left-3 max-w-[75%] px-3 py-1.5 rounded-lg bg-bg-secondary/90 border border-border-strong text-xs font-medium text-ink pointer-events-none">
                     {points === 0
-                      ? (shapes > 0 ? 'Click around the edge of the next area.' : 'Click around the edge of the lawn.')
+                      ? (shapes > 0 ? 'Click around the edge of the next area.' : 'Click around the edge of the area.')
                       : points < 3
                         ? 'Continue clicking to outline the property.'
                         : 'Click near the starting point to finish.'}
@@ -559,8 +579,16 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
                     <span className="text-lg font-bold text-ink tabular-nums">{totalSqft.toLocaleString()} sq ft</span>
                     {shapes > 0 && <span className="text-xs text-ink-faint">({shapes} + current)</span>}
                   </div>
-                  {/* Same field order + hint as the Measure page — the two surfaces read identically. */}
-                  <label className="flex items-center gap-1.5 text-xs text-ink-muted" title="Lawn condition multiplier — 0.75 easy, 1.0 standard, 1.25 overgrown">
+                  {/* Same field order + hint as the Measure page — the two surfaces read identically.
+                      Lawn only, because this control feeds NOTHING else: `overgrowth` is
+                      an input to pricingPackage() and is not carried on
+                      MeasureApplyPayload. With the cadence prices withheld for a
+                      non-lawn service, it was a dead input whose own label promised
+                      "×1.25 applied to prices" against prices that aren't on screen.
+                      (The de-lawned tooltip title below arrived independently from the
+                      trades session — same conclusion, kept as theirs.) */}
+                  {lawnPricing && (
+                  <label className="flex items-center gap-1.5 text-xs text-ink-muted" title="Condition multiplier — 0.75 easy, 1.0 standard, 1.25 overgrown">
                     <span>
                       Condition<span className="block text-[10px] text-ink-faint">1.0 standard · 1.25 overgrown</span>
                       {overgrowth !== 1 && <span className="block text-[10px] font-semibold text-accent-text">×{overgrowth} applied to prices</span>}
@@ -572,6 +600,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
                       className="w-16 bg-bg border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink tabular-nums outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
                     />
                   </label>
+                  )}
                 </div>
 
                 {/* No cadence engine for this service → show the measurement, and
@@ -608,7 +637,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
                   </div>
                 ) : (
                   <div className="border-t border-border pt-3 text-xs text-ink-faint">
-                    Trace the lawn to see the full pricing recommendation (set rates in Settings).
+                    Trace the area to see the full pricing recommendation (set rates in Settings).
                   </div>
                 )}
               </div>

@@ -96,26 +96,38 @@ export default function ImportCustomersPage() {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { setImporting(false); return }
+      // Customer V2: the CSV's address column lands on the PROPERTY, and only
+      // there — the customer row carries the relationship. (customers.address
+      // survives as a legacy column until migration M4, but nothing new writes it.)
+      //
+      // Ids are generated CLIENT-SIDE so the row→property pairing never depends
+      // on RETURNING order — Postgres doesn't guarantee it, and a reordering
+      // here would silently attach every address to the wrong customer (found
+      // in review; the pre-V2 code was order-independent for the same reason).
       const insertRows = rows.map(r => ({
-        user_id: user.id, name: r.name, email: r.email, phone: r.phone, address: r.address,
-        city: r.city, province: r.province || 'AB', postal_code: r.postal_code, notes: r.notes,
+        id: crypto.randomUUID(),
+        user_id: user.id, name: r.name, email: r.email, phone: r.phone,
+        province: r.province || 'AB', notes: r.notes,
         sms_opt_in: r.sms_opt_in, email_opt_in: r.email_opt_in,
       }))
-      const { data: inserted, error } = await supabase.from('customers').insert(insertRows).select('id, address, city, province, postal_code')
-      if (error || !inserted) { setParseError('Import failed: ' + (error?.message || 'unknown error')); setImporting(false); return }
+      const { error } = await supabase.from('customers').insert(insertRows)
+      if (error) { setParseError('Import failed: ' + (error?.message || 'unknown error')); setImporting(false); return }
 
-      // Primary property per row that has an address (mirrors single-add).
-      const props = (inserted as { id: string; address: string | null; city: string | null; province: string | null; postal_code: string | null }[])
-        .filter(c => c.address)
-        .map(c => ({ customer_id: c.id, user_id: user.id, address: c.address, city: c.city, province: c.province || 'AB', postal_code: c.postal_code, is_primary: true }))
+      // Primary property per row that has an address — paired by the id we minted.
+      const props = rows
+        .map((r, i) => ({ r, id: insertRows[i].id }))
+        .filter(x => x.r.address)
+        .map(x => ({ customer_id: x.id, user_id: user.id, address: x.r.address, city: x.r.city, province: x.r.province || 'AB', postal_code: x.r.postal_code, is_primary: true }))
       if (props.length) await supabase.from('properties').insert(props)
 
-      // Audit every imported opt-in.
+      // Audit every imported opt-in — paired by the SAME minted ids, so the
+      // consent trail can't drift onto the wrong customer either (the old
+      // RETURNING-order pairing had that exact latent bug).
       await recordImportConsent(supabase, {
         userId: user.id, changedBy: user.email || user.id,
-        rows: (inserted as { id: string }[]).map((c, i) => ({ customerId: c.id, sms: rows[i]?.sms_opt_in ?? false, email: rows[i]?.email_opt_in ?? false })),
+        rows: insertRows.map((c, i) => ({ customerId: c.id, sms: rows[i]?.sms_opt_in ?? false, email: rows[i]?.email_opt_in ?? false })),
       })
-      setDone(inserted.length)
+      setDone(insertRows.length)
     } finally { setImporting(false) }
   }
 

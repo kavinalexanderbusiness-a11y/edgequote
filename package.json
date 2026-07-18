@@ -19,9 +19,16 @@
     "verify:seasons": "tsx scripts/verify-seasons.ts",
     "verify:modules": "tsx scripts/verify-modules.ts",
     "verify:pricing": "tsx scripts/verify-pricing.ts",
+    "verify:guardrails": "tsx scripts/verify-guardrails.ts",
+    "verify:labor": "tsx scripts/verify-labor.ts",
+    "verify:density": "tsx scripts/verify-density.ts",
+    "verify:learning": "tsx scripts/verify-learning.ts",
     "verify:analytics": "tsx scripts/verify-analytics.ts",
     "verify:integrations": "tsx scripts/verify-integrations.ts",
-    "verify:inventory": "tsx scripts/verify-inventory.ts"
+    "verify:inventory": "tsx scripts/verify-inventory.ts",
+    "verify:accounting": "tsx scripts/verify-accounting.ts",
+    "verify:reports": "tsx scripts/verify-reports.ts",
+    "verify:customer-v2": "tsx scripts/verify-customer-v2.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

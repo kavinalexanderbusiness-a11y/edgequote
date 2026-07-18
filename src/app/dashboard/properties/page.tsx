@@ -218,6 +218,16 @@ export default function PropertiesPage() {
   // Re-run the pricing engine on the saved measurement with TODAY's rates and
   // route context — appends a new snapshot (history preserved, never overwritten).
   async function recalculate(p: Property) {
+    // This reruns the GRASS cadence engine (pricingPackage) over whatever number is
+    // sitting on the property and appends the result as "the" recommendation. On a
+    // business that does no lawn work that number could be a traced roof or a
+    // driveway, and the output would be mowing prices — written to history, where
+    // every later quote and job reads them back as authoritative. This page already
+    // loads the account's BusinessShape; it is the only signal available here,
+    // because a property-level action has no service to ask about. It fails OPEN
+    // (showLawnFields defaults true until there's evidence), which keeps today's
+    // behaviour for the lawn business and for any account we can't yet classify.
+    if (!shape.showLawnFields) return
     const latest = latestSavedRecommendation(p.measurement_history)
     const sqft = latest?.sqft || Number(p.lawn_sqft) || 0
     if (sqft <= 0) return
@@ -226,7 +236,7 @@ export default function PropertiesPage() {
       const cfg = pricingConfigFromSettings(settings)
       const nearby = p.lat != null && p.lng != null ? nearbyJobCount({ lat: p.lat, lng: p.lng }, locatedJobs).count : 0
       const pkg = pricingPackage(sqft, cfg, { overgrowth: 1, nearbyCount: nearby, neighborhoodName: p.neighborhood })
-      const rec = buildSavedRecommendation(pkg, estimateVisitMinutes(sqft), { hood: p.neighborhood })
+      const rec = buildSavedRecommendation(pkg, estimateVisitMinutes(sqft) ?? 0, { hood: p.neighborhood })
       const hist = Array.isArray(p.measurement_history) ? p.measurement_history : []
       const snapshot = { date: new Date().toISOString(), total_sqft: sqft, recommendation: rec }
       const nextHistory = [...hist, snapshot]
@@ -545,8 +555,15 @@ export default function PropertiesPage() {
                   </div>
                 )}
 
-                {/* Latest measurement — the saved pricing source of truth */}
-                {saved && (
+                {/* Latest measurement — the saved pricing source of truth.
+                    Gated on the account's shape for the same reason recalculate()
+                    is: saved.rec is a One-Time/Weekly/Bi-Weekly/Monthly MOWING
+                    price list with no record of the service it was built for, and
+                    a business that does no lawn work should not be shown grass
+                    prices for its properties — nor a one-tap "Quote this" that
+                    carries them onto a quote. The measured AREA is a fact and keeps
+                    showing above regardless; only the price list is gated. */}
+                {saved && shape.showLawnFields && (
                   <div className="mt-3 rounded-xl border border-accent/20 bg-accent/5 px-3 py-2.5">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-accent-text">

@@ -149,4 +149,20 @@ Wishing you and your family a wonderful holiday.
 — {{business_name}}`,
     },
   ],
+
+  // The quick-add chips the field add-on editor showed EVERY business until
+  // 2026-07-16 (they lived in types/index.ts as ADDON_TEMPLATES). Verbatim —
+  // keys are stable BI identifiers and a lawn business's editor must not change.
+  addons: [
+    { key: 'fertilizer', label: 'Fertilizer', recurringByDefault: true },
+    { key: 'weed_control', label: 'Weed Control', recurringByDefault: true },
+    { key: 'mulch', label: 'Mulch' },
+    { key: 'spring_cleanup', label: 'Spring Cleanup' },
+    { key: 'fall_cleanup', label: 'Fall Cleanup' },
+    { key: 'shrub_trimming', label: 'Shrub Trimming' },
+    { key: 'aeration', label: 'Aeration' },
+    { key: 'overseeding', label: 'Overseeding' },
+    { key: 'hauling', label: 'Hauling' },
+    { key: 'custom', label: 'Custom' },
+  ],
 }

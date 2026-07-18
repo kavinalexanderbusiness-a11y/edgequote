@@ -15,6 +15,8 @@ import { WebsiteLead } from '@/lib/leads'
 import { LeadSummary } from '@/components/leads/LeadSummary'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { bookingPhotosFromQuotes } from '@/lib/bookingPhotos'
+import { normalizeTags } from '@/lib/customers'
+import { PropertySelect } from '@/components/ui/PropertySelect'
 import { buildTimeline } from '@/lib/timeline'
 import {
   loadCustomerTimelineSources, loadJobTimelineSources,
@@ -52,7 +54,7 @@ import {
   Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
   FileText, Send, RotateCw, Receipt, DollarSign, Sparkles, Users,
   Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet, Timer, CalendarClock,
-  Link2, Check, Cake, PartyPopper, Camera, History, Globe,
+  Link2, Check, Cake, PartyPopper, Camera, History, Globe, Plus, Home, Tag,
 } from 'lucide-react'
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
@@ -113,6 +115,7 @@ export default function CustomerDetailPage() {
   // Edit core details in place — the profile could show a customer but not fix a
   // typo in their email without leaving for the list. Same shared form, in a modal.
   const [editing, setEditing] = useState(false)
+  const [addingProperty, setAddingProperty] = useState(false)
   const [allCustomers, setAllCustomers] = useState<Customer[]>([])
 
   async function copyPortalLink() {
@@ -139,35 +142,28 @@ export default function CustomerDetailPage() {
     setEditing(true)
   }
 
-  // Mirrors the list's edit: update the customer, and keep the primary property's
-  // address in sync when it changes. reload() re-runs the page's own load().
+  // Customer V2: this form edits the RELATIONSHIP only. The two-table address
+  // sync that used to live here (and once half-applied, sending a crew to the
+  // wrong house) is gone with its cause — addresses are edited on the property
+  // itself, in its own section below, one table, one write.
   async function handleSaveEdit(values: CustomerFormValues) {
-    // Strip consent from the raw update — it's audited through the shared engine
-    // and owned by the profile's Communication card. Editing a name must never
-    // silently flip SMS/email opt-in. (The form hides these in edit mode anyway.)
-    const rest = { ...values }
-    delete rest.sms_opt_in
-    delete rest.email_opt_in
+    // Explicit WHITELIST (found in review): reset() keeps unregistered keys, so a
+    // pre-V2 autosave draft can still carry address fields — a spread would write
+    // them back invisibly. Consent stays out too: it's audited through the shared
+    // engine and owned by the profile's Communication card.
     const patch = {
-      ...rest,
+      name: values.name,
+      email: values.email,
+      phone: values.phone,
+      notes: values.notes,
       acquisition_source: values.acquisition_source || null,
       referred_by_customer_id: values.referred_by_customer_id || null,
       birthday: values.birthday || null,
       anniversary: values.anniversary || null,
+      tags: normalizeTags(values.tags || []),
     }
     const { error } = await supabase.from('customers').update(patch).eq('id', id)
     if (error) { toast.error('Could not save the customer: ' + error.message); return }   // keep the form open to retry
-    if (values.address) {
-      // The address half was unchecked: contact details saved, the address silently
-      // didn't, the modal closed as if all was well, and reload() snapped the old
-      // address back. Address drives routing/travel/measurement — a silent revert
-      // sends a crew to the wrong house.
-      const { error: addrErr } = await supabase.from('properties').update({
-        address: values.address, city: values.city || null,
-        province: values.province || 'AB', postal_code: values.postal_code || null,
-      }).eq('customer_id', id).eq('is_primary', true)
-      if (addrErr) { toast.error('Saved the contact details, but the address couldn’t be updated — please try again.'); return }
-    }
     setEditing(false)
     reload()
   }
@@ -302,7 +298,7 @@ export default function CustomerDetailPage() {
     const patch = { notes: notesValue || null }
     try {
       const outcome = await queueOrRun(
-        { kind: 'customer.update', payload: { id: customer.id, patch }, label: `Note · ${customer.name}` },
+        { kind: 'customer.update', payload: { id: customer.id, patch, baseUpdatedAt: customer.updated_at }, label: `Note · ${customer.name}` },
         async () => { const { error } = await supabase.from('customers').update(patch).eq('id', customer.id); if (error) throw new Error(error.message) },
       )
       setCustomer({ ...customer, notes: patch.notes })
@@ -323,7 +319,7 @@ export default function CustomerDetailPage() {
     const row = draftToRow(prefsDraft)
     try {
       const outcome = await queueOrRun(
-        { kind: 'customer.update', payload: { id: customer.id, patch: row }, label: `Edit · ${customer.name}` },
+        { kind: 'customer.update', payload: { id: customer.id, patch: row, baseUpdatedAt: customer.updated_at }, label: `Edit · ${customer.name}` },
         async () => { const { error } = await supabase.from('customers').update(row).eq('id', customer.id); if (error) throw new Error(error.message) },
       )
       setCustomer({ ...customer, ...row })
@@ -393,6 +389,62 @@ export default function CustomerDetailPage() {
     }
     return buildServicePlans(recurrences, jobs, seasons, t, planValueOf)
   }, [quotes, recurrences, jobs, seasons])
+
+  // ── Per-property roll-up ───────────────────────────────────────────────────
+  // What's happening at each address, from the rows this page ALREADY loaded — no
+  // extra query, no second source of truth. A customer with one property gets the
+  // same answer they always had; a landlord with forty can see which of them is
+  // actually earning without opening forty pages.
+  //
+  // Service plans come from buildServicePlans (THE recurrence engine), whose
+  // propertyId is itself inferred from the series' child jobs — job_recurrences has
+  // no property_id column. That works precisely because jobs are 100% property-
+  // populated; it is the reason JobForm's hidden auto-select above is a real bug and
+  // not a cosmetic one.
+  const propRollup = useMemo(() => {
+    const t = localTodayISO()
+    const gstMult = 1 + (Number(gstPercent) || 0) / 100
+    const byProp: Record<string, {
+      plans: ServicePlan[]; upcoming: Job[]; openQuotes: Quote[]; outstanding: number; lastServiceDate: string | null
+    }> = {}
+    const ensure = (pid: string) => (byProp[pid] ||= { plans: [], upcoming: [], openQuotes: [], outstanding: 0, lastServiceDate: null })
+    for (const p of properties) ensure(p.id)
+    for (const plan of servicePlans) if (plan.propertyId && byProp[plan.propertyId] && !plan.paused) byProp[plan.propertyId].plans.push(plan)
+    for (const j of jobs) {
+      if (!j.property_id || !byProp[j.property_id]) continue
+      const e = byProp[j.property_id]
+      if (j.scheduled_date >= t && (j.status === 'scheduled' || j.status === 'in_progress')) e.upcoming.push(j)
+      if (j.status === 'completed' && (!e.lastServiceDate || j.scheduled_date > e.lastServiceDate)) e.lastServiceDate = j.scheduled_date
+    }
+    // "Open" = still awaiting an answer. Same terminal rule lib/followup leans on:
+    // anything that left 'sent'/'draft' has been decided.
+    for (const q of quotes) {
+      if (!q.property_id || !byProp[q.property_id]) continue
+      if (q.status === 'sent' || q.status === 'draft') byProp[q.property_id].openQuotes.push(q)
+    }
+    // GST-inclusive balance, cancelled/draft excluded — the same basis as the
+    // Outstanding figure above, so a property's share can never exceed the total.
+    for (const inv of invoices) {
+      if (!inv.property_id || !byProp[inv.property_id]) continue
+      if (inv.status === 'draft' || inv.status === 'cancelled') continue
+      const bal = Number(inv.amount || 0) * gstMult - (Number(inv.amount_paid) || 0)
+      if (bal > 0.01) byProp[inv.property_id].outstanding += bal
+    }
+    return byProp
+  }, [properties, servicePlans, jobs, quotes, invoices, gstPercent])
+
+  // The customer-level totals, summed from the same per-property figures so the
+  // header and the rows can never disagree.
+  const rollupTotals = useMemo(() => {
+    const vals = Object.values(propRollup)
+    return {
+      properties: properties.length,
+      activeServices: vals.reduce((s, v) => s + v.plans.length, 0),
+      upcoming: vals.reduce((s, v) => s + v.upcoming.length, 0),
+      openQuotes: vals.reduce((s, v) => s + v.openQuotes.length, 0),
+      outstanding: vals.reduce((s, v) => s + v.outstanding, 0),
+    }
+  }, [propRollup, properties])
 
   // ONE engine builds the history — see lib/timeline.ts. The page only supplies rows;
   // TimelineCard does the filtering, searching and grouping over what comes back.
@@ -529,7 +581,7 @@ export default function CustomerDetailPage() {
             <div className="min-w-0 flex-1">
               {/* Name lives in the DetailHeader above — here we lead with status +
                   contact so the same name isn't stacked twice. */}
-              {(isHighValue || recurringStatus) && (
+              {(isHighValue || recurringStatus || (customer.tags?.length ?? 0) > 0) && (
                 <div className="flex items-center gap-2 flex-wrap">
                   {isHighValue && (
                     <span className="text-[10px] uppercase tracking-wide text-accent-text border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5 font-semibold flex items-center gap-1">
@@ -541,6 +593,14 @@ export default function CustomerDetailPage() {
                       <Repeat className="w-3 h-3" /> {recurringStatus}
                     </span>
                   )}
+                  {/* Owner-defined tags — edited via the customer form. Derived
+                      badges above keep their colours; tags stay neutral so the
+                      two vocabularies never blur. */}
+                  {(customer.tags || []).map(t => (
+                    <span key={t} className="text-[10px] uppercase tracking-wide text-ink-muted border border-border-strong bg-bg-tertiary rounded px-1.5 py-0.5 font-semibold flex items-center gap-1">
+                      <Tag className="w-3 h-3" /> {t}
+                    </span>
+                  ))}
                 </div>
               )}
               <div className="flex items-center gap-x-4 gap-y-1 mt-1 flex-wrap text-sm">
@@ -850,10 +910,63 @@ export default function CustomerDetailPage() {
           <CardHeader className="flex items-center gap-2">
             <MapPin className="w-4 h-4 text-accent-text" />
             <h2 className="text-sm font-semibold text-ink">Properties</h2>
+            {properties.length > 0 && <span className="text-xs text-ink-faint tabular-nums">{properties.length}</span>}
+            {/* A customer could own a second house and there was no way to say so from
+                their profile — every properties.insert in the app was first-property-
+                only (new customer, CSV import, or implied by a quote's address). The
+                second address was reachable only by typing it into a quote. */}
+            <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setAddingProperty(true)}>
+              <Plus className="w-3.5 h-3.5" /> Add
+            </Button>
           </CardHeader>
           <CardBody className="space-y-3">
-            {properties.length === 0 ? (
-              <InlineEmpty className="py-6">No properties on file.</InlineEmpty>
+            {/* The roll-up: what this customer's whole portfolio is doing, before the
+                per-address detail. Summed from the rows already on the page, so it
+                cannot disagree with the figures elsewhere on this profile. Hidden for
+                a one-property customer — "1 property · 1 active service" is just their
+                only property, restated. */}
+            {properties.length > 1 && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <RollupStat icon={Home} label="Properties" value={String(rollupTotals.properties)} />
+                <RollupStat icon={Repeat} label="Active services" value={String(rollupTotals.activeServices)} />
+                <RollupStat icon={CalendarClock} label="Upcoming visits" value={String(rollupTotals.upcoming)} />
+                <RollupStat icon={FileText} label="Open quotes" value={String(rollupTotals.openQuotes)} />
+                {rollupTotals.outstanding > 0.01 && (
+                  <RollupStat icon={DollarSign} label="Outstanding" value={formatCurrency(rollupTotals.outstanding)} tone="text-amber-400" />
+                )}
+              </div>
+            )}
+            {addingProperty && (
+              <div className="rounded-xl border border-accent/30 bg-accent/[0.04] p-3">
+                {/* THE shared picker's inline-create, reused rather than a second address
+                    form: it calls ensurePropertyForCustomer, so an address added here and
+                    the same address typed into a quote resolve to ONE property. */}
+                <PropertySelect
+                  properties={properties}
+                  value=""
+                  onChange={() => {}}
+                  customerId={id}
+                  onCreated={p => { setProperties(prev => [...prev, p]); setAddingProperty(false); toast.success(`${p.address} added.`) }}
+                  label="Add a property"
+                  hint="Search to check it isn’t already here, or add a new address."
+                  autoFocus
+                />
+                <div className="flex justify-end pt-2">
+                  <Button variant="ghost" size="sm" onClick={() => setAddingProperty(false)}>Done</Button>
+                </div>
+              </div>
+            )}
+            {properties.length === 0 && !addingProperty ? (
+              // Properties are created from the customer's address, so "none" almost
+              // always means "this customer has no address" — which is why they can't
+              // be scheduled, measured or priced. Say that, and offer the fix.
+              <InlineEmpty className="py-6">
+                No properties on file — so there’s no address to schedule, measure or price.
+                <button type="button" onClick={() => setAddingProperty(true)}
+                  className="block mx-auto mt-1.5 text-xs font-medium text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                  Add their address →
+                </button>
+              </InlineEmpty>
             ) : properties.map(p => {
               const jobCount = jobs.filter(j => j.property_id === p.id).length
               // Lawn is the one measurement here that doesn't apply to every trade, so
@@ -893,6 +1006,31 @@ export default function CustomerDetailPage() {
                     </Link>
                     <span className="text-xs text-ink-muted shrink-0">{jobCount} job{jobCount !== 1 ? 's' : ''}</span>
                   </div>
+                  {/* What this ADDRESS is doing — the roll-up's per-property half. A job
+                      count alone says how busy it's been, never whether it's earning,
+                      booked, or owing. Each figure is omitted when it's zero: a quiet
+                      property should read as quiet, not as a row of noughts. */}
+                  {(() => {
+                    const r = propRollup[p.id]
+                    if (!r) return null
+                    const facts = [
+                      r.plans.length > 0 && { icon: Repeat, text: r.plans.map(pl => pl.cadenceLabel).join(', '), tone: 'text-accent-text' },
+                      r.upcoming.length > 0 && { icon: CalendarClock, text: `Next ${formatDate(r.upcoming[0].scheduled_date)}${r.upcoming.length > 1 ? ` · ${r.upcoming.length} booked` : ''}`, tone: 'text-ink-muted' },
+                      r.openQuotes.length > 0 && { icon: FileText, text: `${r.openQuotes.length} open quote${r.openQuotes.length !== 1 ? 's' : ''}`, tone: 'text-ink-muted' },
+                      r.outstanding > 0.01 && { icon: DollarSign, text: `${formatCurrency(r.outstanding)} outstanding`, tone: 'text-amber-400' },
+                      !r.plans.length && !r.upcoming.length && r.lastServiceDate && { icon: History, text: `Last serviced ${formatDate(r.lastServiceDate)}`, tone: 'text-ink-faint' },
+                    ].filter(Boolean) as { icon: typeof Repeat; text: string; tone: string }[]
+                    if (!facts.length) return null
+                    return (
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
+                        {facts.map(f => (
+                          <span key={f.text} className={`text-[11px] inline-flex items-center gap-1 ${f.tone}`}>
+                            <f.icon className="w-3 h-3 shrink-0" /> {f.text}
+                          </span>
+                        ))}
+                      </div>
+                    )
+                  })()}
                   {measures.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-2">
                       {measures.map(m => <span key={m} className="text-[11px] text-ink-muted bg-surface border border-border rounded px-1.5 py-0.5">{m}</span>)}
@@ -973,20 +1111,32 @@ export default function CustomerDetailPage() {
             name: customer.name || '',
             email: customer.email || '',
             phone: customer.phone || '',
-            address: customer.address || '',
-            city: customer.city || '',
-            province: customer.province || '',
-            postal_code: customer.postal_code || '',
             notes: customer.notes || '',
             acquisition_source: customer.acquisition_source || '',
             referred_by_customer_id: customer.referred_by_customer_id || '',
             birthday: customer.birthday || '',
             anniversary: customer.anniversary || '',
+            tags: customer.tags || [],
           }}
           onSubmit={handleSaveEdit}
           onCancel={() => setEditing(false)}
         />
       </Modal>
+    </div>
+  )
+}
+
+// One figure in the portfolio roll-up. Deliberately a plain fact with a label and
+// no trend, sparkline or delta: the question it answers is "how many, right now".
+function RollupStat({ icon: Icon, label, value, tone = 'text-ink' }: {
+  icon: typeof Home; label: string; value: string; tone?: string
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-bg-tertiary px-2.5 py-2">
+      <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1">
+        <Icon className="w-3 h-3 shrink-0" /> {label}
+      </p>
+      <p className={`text-sm font-bold tabular-nums ${tone}`}>{value}</p>
     </div>
   )
 }

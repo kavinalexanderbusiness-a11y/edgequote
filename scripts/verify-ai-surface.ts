@@ -210,9 +210,13 @@ check('marketing still scores and re-polishes its own drafts',
 // happen is a marketing GENERATION task appearing in the assist registry.
 const TASKS = read(join(SRC, 'app/api/ai/assist/route.ts')).match(/const TASKS[^=]*=\s*\[([^\]]*)\]/)?.[1] || ''
 const taskList = TASKS.split(',').map(s => s.trim().replace(/['"]/g, '')).filter(Boolean)
-check('the assist registry still holds exactly its five writing tasks',
-  taskList.length === 5 && taskList.every(t =>
-    ['draft_message', 'customer_summary', 'review_response', 'quote_scope', 'job_notes'].includes(t)),
+// NOT a fixed count — new in-app assist tasks are exactly what this registry is
+// for, and asserting "five forever" made a correctly-placed addition
+// (quote_intelligence) look like an architecture violation. The invariant is
+// narrower and permanent: marketing GENERATION must not move in here, because
+// that engine owns its own prompts, scoring and persistence.
+check('the assist registry holds only in-app assist tasks',
+  taskList.length > 0 && !taskList.some(t => /caption|hashtag|post|campaign|marketing|channel/i.test(t)),
   `registry is now: ${taskList.join(', ')} — marketing generation must not move in here`)
 
 console.log(`\n  (${aiFiles.length} files touch AI)`)

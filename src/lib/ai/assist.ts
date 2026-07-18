@@ -3,6 +3,8 @@ import { modelForTier, type AiTier } from '@/lib/ai/anthropic'
 import { getPropertyContext, propertyContextBlock } from '@/lib/ai/propertyContext'
 import { loadBusinessContext, contextLine, type BusinessContext } from '@/lib/marketing/businessContext'
 import { MSG_VARIABLES } from '@/lib/comms/templates'
+import { serviceKey, serviceLabel } from '@/lib/labor'
+import { isQuoteExpired } from '@/lib/quoteStatus'
 
 // ── The AI assist engine ──────────────────────────────────────────────────────
 // Server-only. ONE task registry for every in-app writing/summarizing assist:
@@ -31,6 +33,7 @@ export type AssistTask =
   | 'review_response'    // public reply to a received review
   | 'quote_scope'        // scope-of-work notes for a quote
   | 'job_notes'          // clean up crew jottings into professional notes
+  | 'quote_intelligence' // owner-facing analysis of one quote (advisory; never prices)
 
 export interface AssistPayload {
   task: AssistTask
@@ -54,6 +57,9 @@ export interface AssistPayload {
   address?: string
   // job_notes / quote_scope free text
   draft?: string
+  // quote_intelligence
+  quoteId?: string
+  focus?: 'full' | 'pricing' | 'upsells' | 'gaps' | 'time' | 'risk'
 }
 
 export interface AssistInput {
@@ -348,6 +354,122 @@ async function jobLine(supabase: SupabaseClient, userId: string, jobId: string |
   return `This message is about a specific visit: ${j.service_type || j.title} on ${j.scheduled_date}${j.start_time ? ` at ${j.start_time}` : ''} (status: ${j.status}).`
 }
 
+// ── Quote intelligence context ────────────────────────────────────────────────
+// Everything the quote analyst may talk about, computed HERE from the owner's own
+// book. The model explains these numbers; it never derives one, and it never gets
+// to price anything — the persisted suggested_price/pricing_confidence columns are
+// the pricing engine's opinion, carried through verbatim (the engine is the single
+// source of truth for price; this task is read-only over it by design).
+//
+// Three decisions mirror owner rulings (2026-07-16, confirmed on this feature):
+// • Won = positive learning, explicit decline = negative learning:
+//   acceptance = accepted ÷ (accepted + declined). Nothing else has weight.
+// • Ghost/unanswered quotes (still 'sent', no decision) are NEUTRAL and tracked
+//   SEPARATELY — counted and shown, never folded into acceptance either way.
+// • EXPIRED quotes follow the recorded Pricing V2 ruling verbatim — an expiry is
+//   silence, not a "no" — and are NOT reinterpreted here.
+// Plus: thin data is said out loud — every rate carries its sample size, and
+// below 4 decided quotes the prompt orders the model to call the history thin.
+async function quoteIntelContext(supabase: SupabaseClient, userId: string, quoteId: string) {
+  const { data: qData } = await supabase.from('quotes')
+    .select('id, quote_number, customer_id, property_id, service_type, status, total, suggested_price, pricing_confidence, created_at, sent_at, valid_until, notes')
+    .eq('user_id', userId).eq('id', quoteId).maybeSingle()
+  const q = qData as {
+    id: string; quote_number: string | null; customer_id: string | null; property_id: string | null
+    service_type: string | null; status: string; total: number | null
+    suggested_price: number | null; pricing_confidence: string | null
+    created_at: string; sent_at: string | null; valid_until: string | null; notes: string | null
+  } | null
+  if (!q) return null
+
+  const [linesRes, ctx, biz, histRes, laborRes, propCtx] = await Promise.all([
+    supabase.from('quote_services').select('service_type, quantity, unit, unit_price, est_minutes, discount_type, discount_value, notes')
+      .eq('quote_id', quoteId).order('sort_order'),
+    q.customer_id ? customerContext(supabase, userId, q.customer_id, { deep: true }) : Promise.resolve(null),
+    loadBusinessContext(supabase, userId),
+    // History for THIS service across the whole book — bounded, newest first.
+    // 'sent' rides along so the neutral buckets can be COUNTED, never learned from.
+    // There is NO 'expired' status in this schema — expiry is display-only,
+    // derived from valid_until on a still-'sent' quote (lib/quoteStatus is THE rule).
+    supabase.from('quotes').select('service_type, status, total, customer_id, created_at, valid_until')
+      .eq('user_id', userId).neq('id', quoteId).in('status', ['accepted', 'scheduled', 'completed', 'paid', 'declined', 'sent'])
+      .order('created_at', { ascending: false }).limit(400),
+    supabase.from('labor_observations').select('service_type, estimated_minutes, actual_minutes')
+      .eq('user_id', userId).order('service_date', { ascending: false }).limit(500),
+    q.property_id ? getPropertyContext(supabase, q.property_id) : Promise.resolve(null),
+  ])
+
+  const lines = (linesRes.data as Array<{ service_type: string | null; quantity: number | null; unit: string | null; unit_price: number | null; est_minutes: number | null; discount_type: string | null; discount_value: number | null; notes: string | null }> | null) || []
+  const primaryType = lines[0]?.service_type || q.service_type || ''
+  const key = serviceKey(primaryType)
+  const label = serviceLabel(key) || primaryType || 'this service'
+
+  // ── Win/loss for this service (whole book) — code-computed facts ────────────
+  // Won = the house WON set (accepted/scheduled/completed/paid — a quote that
+  // progressed IS a win, same rule as lib/timeline). Lost = explicit decline.
+  // Neutral, tracked separately per the owner's ruling: still-'sent' quotes,
+  // split into expired (valid_until passed — silence, not a no) and awaiting.
+  const WON_STATUSES = new Set(['accepted', 'scheduled', 'completed', 'paid'])
+  const hist = ((histRes.data as Array<{ service_type: string | null; status: string; total: number | null; customer_id: string | null; created_at: string; valid_until: string | null }> | null) || [])
+  const same = hist.filter(h => serviceKey(h.service_type || '') === key)
+  const accepted = same.filter(h => WON_STATUSES.has(h.status))
+  const declined = same.filter(h => h.status === 'declined')
+  // Expiry via THE rule (lib/quoteStatus), never re-derived here.
+  const expired = same.filter(h => isQuoteExpired({ status: h.status as never, valid_until: h.valid_until }, todayISO()))
+  const ghosts = same.filter(h => h.status === 'sent' && !isQuoteExpired({ status: h.status as never, valid_until: h.valid_until }, todayISO()))
+  const decided = accepted.length + declined.length
+  const median = (arr: number[]) => { const s = arr.filter(n => n > 0).sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : null }
+  const medWon = median(accepted.map(h => Number(h.total) || 0))
+  const medLost = median(declined.map(h => Number(h.total) || 0))
+  // This customer's own record with us, service-agnostic.
+  const custDecided = q.customer_id ? hist.filter(h => h.customer_id === q.customer_id) : []
+  const custAccepted = custDecided.filter(h => WON_STATUSES.has(h.status)).length
+  const custDeclined = custDecided.filter(h => h.status === 'declined').length
+
+  // ── Time: the builder's own estimate + how estimates have actually landed ───
+  const estMinutes = lines.reduce((s, l) => s + (Number(l.est_minutes) || 0), 0)
+  const obs = ((laborRes.data as Array<{ service_type: string | null; estimated_minutes: number | null; actual_minutes: number | null }> | null) || [])
+    .filter(o => serviceKey(o.service_type || '') === key && Number(o.actual_minutes) > 0)
+  const obsWithEst = obs.filter(o => Number(o.estimated_minutes) > 0)
+  const medActual = median(obs.map(o => Number(o.actual_minutes) || 0))
+  const avgErrPct = obsWithEst.length
+    ? Math.round(obsWithEst.reduce((s, o) => s + ((Number(o.actual_minutes) - Number(o.estimated_minutes)) / Number(o.estimated_minutes)), 0) / obsWithEst.length * 100)
+    : null
+
+  const today = todayISO()
+  const facts: string[] = []
+  facts.push(`Today's date: ${today}.`)
+  facts.push(`THE QUOTE — #${q.quote_number || q.id.slice(0, 6)}: status ${q.status}, total ${q.total != null ? money(Number(q.total)) : 'not set'}, primary service "${label}".`)
+  if (lines.length) {
+    facts.push('Line items, in order:')
+    for (const l of lines) facts.push(`  - ${trunc(l.service_type, 60) || '(unnamed)'}${l.quantity && l.quantity !== 1 ? ` × ${l.quantity}${l.unit ? ` ${l.unit}` : ''}` : ''}${l.unit_price != null ? ` @ ${money(Number(l.unit_price))}` : ''}${l.discount_value ? ` (discount: ${l.discount_type === 'percent' ? `${l.discount_value}%` : money(Number(l.discount_value))})` : ''}${l.est_minutes ? ` · est ${l.est_minutes} min` : ''}${l.notes ? ` · ${trunc(l.notes, 80)}` : ''}`)
+  }
+  if (q.suggested_price != null) {
+    facts.push(`THE PRICING ENGINE'S OPINION (persisted with this quote — the single source of truth on price): suggested ${money(Number(q.suggested_price))}${q.pricing_confidence ? `, stated confidence "${q.pricing_confidence}"` : ''}. The quoted total is ${q.total != null && Number(q.suggested_price) > 0 ? `${Math.round((Number(q.total) / Number(q.suggested_price)) * 100)}% of the suggestion` : 'not comparable'}.`)
+  } else {
+    facts.push('The pricing engine recorded no suggested price for this quote (no basis at the time).')
+  }
+  if (q.sent_at) facts.push(`Sent ${String(q.sent_at).slice(0, 10)} (${daysBetween(String(q.sent_at).slice(0, 10), today)} days ago).${q.valid_until ? ` Valid until ${String(q.valid_until).slice(0, 10)}.` : ''}`)
+  facts.push(`WIN/LOSS HISTORY for "${label}" across the whole book (computed — only won and explicitly declined quotes carry learning weight; won = accepted, scheduled, completed or paid): ${accepted.length} won, ${declined.length} declined${decided ? `; acceptance ${Math.round((accepted.length / decided) * 100)}% of ${decided} decided` : ''}${medWon != null ? `; median won total ${money(medWon)}` : ''}${medLost != null ? `; median declined total ${money(medLost)}` : ''}. Tracked separately, NEUTRAL, no learning weight either way: ${ghosts.length} still awaiting an answer${expired.length ? `, ${expired.length} expired (expiry is silence, not a no)` : ''}.`)
+  if (decided < 4) facts.push(`SAMPLE WARNING: only ${decided} decided quote${decided !== 1 ? 's' : ''} for this service — history is too thin to lean on; say so plainly wherever it matters.`)
+  if (q.customer_id) facts.push(`THIS CUSTOMER'S quote record with us (all services): ${custAccepted} won, ${custDeclined} declined.`)
+  if (estMinutes > 0) facts.push(`TIME: the builder estimated ${estMinutes} minutes across the line items.`)
+  if (obs.length) facts.push(`TIME HISTORY for "${label}": ${obs.length} completed observation${obs.length !== 1 ? 's' : ''}${medActual != null ? `, median actual ${medActual} min` : ''}${avgErrPct != null ? `; past estimates ran on average ${Math.abs(avgErrPct)}% ${avgErrPct >= 0 ? 'UNDER actual (jobs take longer than estimated)' : 'OVER actual (jobs finish faster than estimated)'} across ${obsWithEst.length} estimated jobs` : ''}.`)
+  else facts.push(`TIME HISTORY: no completed time observations for "${label}" yet.`)
+  const catalog = (biz.services || []).map(s => trunc(s, 50)).filter(Boolean)
+  if (catalog.length) facts.push(`THE OWNER'S SERVICE CATALOG (the ONLY universe for upsell or missing-service suggestions): ${catalog.join('; ')}.`)
+  else facts.push('The owner has no service catalog on file — DO NOT suggest any upsell or missing service.')
+  const visionLine = propertyContextBlock(propCtx)
+  if (visionLine) facts.push(visionLine)
+  if (ctx) {
+    facts.push('THE CUSTOMER (full relationship dossier, owner-private):')
+    facts.push(ctx.block)
+  } else {
+    facts.push('No customer is attached to this quote yet.')
+  }
+  return { q, facts: facts.join('\n'), label, thin: decided < 4, company: ctx?.company, biz }
+}
+
 const tiered = (tier: AiTier) => modelForTier(tier)
 
 // Build the full generation input for a task. Throws Error(message) on bad
@@ -530,6 +652,36 @@ ${GUARDRAILS}`
         `Rough notes:\n---\n${trunc(p.draft, 2000)}\n---\nRewrite them.`,
       ].filter(Boolean).join('\n')
       return { system, prompt, maxTokens: 400, model: tiered('fast') }
+    }
+
+    case 'quote_intelligence': {
+      if (!p.quoteId) throw new Error('quoteId required')
+      const intel = await quoteIntelContext(supabase, userId, p.quoteId)
+      if (!intel) throw new Error('quote not found')
+      const focus = p.focus && ['pricing', 'upsells', 'gaps', 'time', 'risk'].includes(p.focus) ? p.focus : 'full'
+      // Owner-facing sections. Each instruction says what the section may draw on,
+      // so a lens never wanders into another lens's facts.
+      const SECTIONS: Record<string, string> = {
+        pricing: `Price: how this quote's total sits against the pricing engine's suggestion and the accepted/declined medians for this service — and what the engine's stated confidence means given the sample sizes in the context. Explain; NEVER propose a different number. If the engine gave no suggestion, say what that means (no basis yet) rather than filling the gap.`,
+        upsells: `Upsells: at most TWO services from THE OWNER'S SERVICE CATALOG (nowhere else) that genuinely fit this job, this property, and this customer's history — with the one-line reason each. "Nothing worth adding" is a good answer and better than a stretch.`,
+        gaps: `Missing services: anything this customer buys regularly (their visit history) that is NOT on this quote — name it and the last time they had it. If nothing is missing, say the quote covers their usual work.`,
+        time: `Time: what the line-item estimate is, and how estimates for this service have actually landed (the TIME HISTORY line — median actual, average error, sample size). If there is no history, say the estimate is unproven rather than judging it.`,
+        risk: `Risk: what could stall this — drawn ONLY from the context (past-due balances, this customer's declines, quote age/expiry, no way to reach them, thin history). One line per real risk, most serious first; "low risk" is a legitimate answer.`,
+      }
+      const ask = focus === 'full'
+        ? `Write the brief as exactly five short sections, in this order, each 1–3 plain sentences prefixed with its label on its own line:\n${['pricing', 'upsells', 'gaps', 'time', 'risk'].map(k => `${SECTIONS[k]}`).join('\n')}`
+        : `Write ONLY this one section, 2–5 plain sentences, no label needed:\n${SECTIONS[focus]}`
+      const system = `You are the estimator's second opinion at ${intel.company || 'a small local services business'}, briefing the owner on ONE quote before they send or chase it. You explain what their own numbers say; you never replace them.
+Hard boundaries for this task:
+- The pricing engine's suggested price and confidence are the authority on price. You may explain them and compare the quoted total to history, but NEVER recommend a different price, a discount, or a rounding.
+- Every number you state must appear in the context verbatim — sample sizes included. Where the context flags thin history, lead with that caveat in the affected section.
+- Upsell/missing-service suggestions may come ONLY from the owner's service catalog and the customer's own history.
+- This brief is PRIVATE to the owner — relationship and money facts may be used freely, but write nothing here that you'd need to warn them not to paste to a customer: no snark about the customer, plain professional judgement.
+${tradeBlock(intel.biz)}
+${STYLE}
+${GUARDRAILS}`
+      const prompt = `Everything on file for this quote:\n${intel.facts}\n\n${ask}`
+      return { system, prompt, maxTokens: focus === 'full' ? 700 : 400, model: tiered('smart') }
     }
   }
 }

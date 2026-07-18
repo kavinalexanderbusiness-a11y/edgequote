@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Customer, QuoteFormValues, ServiceTemplate, TravelFeeTier, BusinessSettings, LawnSections, PricingConfidence, SavedRecommendation } from '@/types'
@@ -12,6 +12,7 @@ import { applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix, 
 import { Globe } from 'lucide-react'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes } from '@/lib/pricing'
 import { servicePricingKind } from '@/lib/servicePricing'
+import { saveManual } from '@/lib/measure/data'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { applyFeeRecovery } from '@/lib/invoiceTotals'
 import { sumServiceLines } from '@/lib/quoteServices'
@@ -78,7 +79,7 @@ export default function NewQuotePage() {
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
       const [customersRes, templatesRes, tiersRes, settingsRes] = await Promise.all([
-        supabase.from('customers').select('*').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
+        supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
         supabase.from('service_templates').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('travel_fee_tiers').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('business_settings').select('*').eq('user_id', user!.id).maybeSingle(),
@@ -121,8 +122,22 @@ export default function NewQuotePage() {
       createdCustomer = ensured.createdCustomer
       matchedBy = ensured.matchedBy
     } catch {
-      const c = customers.find(c => c.id === values.customer_id)
-      if (c) customerName = c.name
+      // This catch used to swallow the failure: it recovered the display NAME, left
+      // customerId null, and let the insert proceed — manufacturing a quote that can
+      // never reach anyone. An orphan can't be sent (the Send card is gated on
+      // customer_id), can't be chased (the cron filters on it), and has no portal. The
+      // comment four lines up promises "no orphans"; this is what broke that promise.
+      //
+      // FOUR live rows came from here, one ("Danika bray", $66.95) with work already
+      // scheduled against a quote that has no customer — and one whose customer NAME is
+      // a phone number, which is what a half-recovered save looks like from the outside.
+      //
+      // So: stop. Returning leaves the builder's own form state intact with everything
+      // the owner typed — the same choice handleSaveEdit makes on a failed write —
+      // because a lost draft is recoverable in ten seconds and a silent orphan is not
+      // recoverable at all.
+      toast.error('Could not link this quote to a customer — nothing was saved. Check your connection and press Save again.')
+      return
     }
 
     const mult = Number(values.overgrowth_multiplier) || 1
@@ -198,6 +213,10 @@ export default function NewQuotePage() {
             discount_type: s.discount_type || null,
             discount_value: s.discount_type && Number(s.discount_value) > 0 ? Number(s.discount_value) : null,
             notes: s.notes?.trim() || null,
+            // The line KIND is what makes a material a material. Omit it and
+            // every material saves as a service — silently, and the quote
+            // reads correctly right up until someone reopens it.
+            kind: s.kind || 'service',
           })),
         ])
       }
@@ -224,38 +243,55 @@ export default function NewQuotePage() {
           // service gets a lawn recommendation; everything else saves the
           // measurement alone, and `recommendation` stays undefined (which
           // latestSavedRecommendation already skips).
-          const kind = servicePricingKind(values.service_type, templates.find(t => t.id === values.service_template_id) ?? null)
-          let rec: SavedRecommendation | undefined
-          if (kind === 'lawn_recurring') {
-            const cfg = pricingConfigFromSettings(settings)
-            const pkg = pricingPackage(measuredSqft, cfg, { overgrowth: Number(values.overgrowth_multiplier) || 1, nearbyCount: 0 })
-            rec = buildSavedRecommendation(pkg, estimateVisitMinutes(measuredSqft))
-            if (measurement?.cadence && measurement.cadence !== 'one_time') rec.cadence = measurement.cadence
-          }
+          // (`?? 0` — estimateVisitMinutes is null when unmeasured; this branch is
+          // guarded by measuredSqft > 0, so 0 is a type-level fallback, never data.)
+          const isLawn = servicePricingKind(values.service_type, templates.find(t => t.id === values.service_template_id) ?? null) === 'lawn_recurring'
           const hist = Array.isArray((prop as { measurement_history: unknown } | null)?.measurement_history)
             ? (prop as { measurement_history: unknown[] }).measurement_history : []
-          const patch: Record<string, unknown> = {
-            lawn_sqft: measuredSqft,
-            measurement_history: [...hist, { date: new Date().toISOString(), total_sqft: measuredSqft, sections: measurement?.sections ?? lead?.sections ?? undefined, recommendation: rec }],
+
+          // MEAS-1: lawn AREA is owned by the typed ledger (property_measurements).
+          // The mirror trigger derives properties.lawn_sqft and a DB guard now
+          // rejects any direct lawn_sqft write that disagrees with it, so persist
+          // through the ONE seam (lib/measure) and never write lawn_sqft here. Only
+          // a LAWN service touches lawn area — a pressure-washing or furnace area is
+          // not a lawn, and V2 exists precisely to stop that cross-contamination
+          // (the old code wrote every measured area into lawn_sqft).
+          if (isLawn) {
+            const saved = await saveManual(supabase, { userId: user!.id, propertyId, kind: 'lawn', value: measuredSqft })
+            if (!saved.ok) toast.error(`Saved the quote, but the lawn size didn’t sync: ${saved.error}`)
+
+            // The pricing RECOMMENDATION is a lawn-only cache in measurement_history
+            // that the property list and JobForm read back; append it alongside the
+            // lawn save so the flagship measure flow keeps feeding those surfaces.
+            const cfg = pricingConfigFromSettings(settings)
+            const pkg = pricingPackage(measuredSqft, cfg, { overgrowth: Number(values.overgrowth_multiplier) || 1, nearbyCount: 0 })
+            const rec = buildSavedRecommendation(pkg, estimateVisitMinutes(measuredSqft) ?? 0)
+            if (measurement?.cadence && measurement.cadence !== 'one_time') rec.cadence = measurement.cadence
+            await supabase.from('properties').update({
+              measurement_history: [...hist, { date: new Date().toISOString(), total_sqft: measuredSqft, sections: measurement?.sections ?? lead?.sections ?? undefined, recommendation: rec }],
+            }).eq('id', propertyId)
+
+            if (prior > 0) {
+              const priorLawn = (prop as { lawn_sqft: number | null } | null)?.lawn_sqft ?? null
+              toast.undo(`Saved lawn size updated to ${measuredSqft.toLocaleString()} ft²`, async () => {
+                if (priorLawn != null) await saveManual(supabase, { userId: user!.id, propertyId, kind: 'lawn', value: priorLawn })
+                await supabase.from('properties').update({ measurement_history: hist }).eq('id', propertyId)
+              })
+            }
           }
-          // From a website lead → permanently persist the boundary/place/travel the
-          // website measured.
+
+          // A website lead measured the boundary/place/travel once — persist them
+          // for any service. These aren't lawn_sqft, so the guard doesn't touch them.
           if (lead) {
-            if (lead.lawnPolygon) patch.lawn_polygon = lead.lawnPolygon
-            if (lead.placeId) patch.google_place_id = lead.placeId
-            if (lead.mapsUrl) patch.maps_url = lead.mapsUrl
-            if (lead.lat != null) patch.lat = lead.lat
-            if (lead.lng != null) patch.lng = lead.lng
-            if (lead.travelDistanceKm != null) patch.property_travel_distance_km = lead.travelDistanceKm
-            if (lead.travelFee != null) patch.property_travel_fee = lead.travelFee
-          }
-          await supabase.from('properties').update(patch).eq('id', propertyId)
-          // Replaced an EXISTING saved size → let the owner undo without a blocking prompt.
-          if (prior > 0) {
-            const priorLawn = (prop as { lawn_sqft: number | null } | null)?.lawn_sqft ?? null
-            toast.undo(`Saved lawn size updated to ${measuredSqft.toLocaleString()} ft²`, async () => {
-              await supabase.from('properties').update({ lawn_sqft: priorLawn, measurement_history: hist }).eq('id', propertyId)
-            })
+            const geo: Record<string, unknown> = {}
+            if (lead.lawnPolygon) geo.lawn_polygon = lead.lawnPolygon
+            if (lead.placeId) geo.google_place_id = lead.placeId
+            if (lead.mapsUrl) geo.maps_url = lead.mapsUrl
+            if (lead.lat != null) geo.lat = lead.lat
+            if (lead.lng != null) geo.lng = lead.lng
+            if (lead.travelDistanceKm != null) geo.property_travel_distance_km = lead.travelDistanceKm
+            if (lead.travelFee != null) geo.property_travel_fee = lead.travelFee
+            if (Object.keys(geo).length) await supabase.from('properties').update(geo).eq('id', propertyId)
           }
         }
       }
@@ -275,6 +311,51 @@ export default function NewQuotePage() {
       toast.error('Could not save quote: ' + error.message)
     }
   }
+
+  // ── The MeasureTool → quote handoff (sessionStorage 'eq_measurement') ────────
+  // MeasureTool measures a PROPERTY and has no concept of a service, so every
+  // price it hands over (jobPrice/weekly/biweekly/monthly) comes from
+  // pricingPackage() — the grass cadence engine — whatever the trace was of. This
+  // form then defaulted service_type to the owner's first active template, so for
+  // any non-lawn trade the pair was: THEIR service name + OUR lawn prices. Worse,
+  // QuoteBuilder seeds priceOrigin='manual' whenever a non-zero initial_price
+  // arrives in defaultValues (correct for editing a real saved quote — that price
+  // IS the owner's past decision), which locks the reconciliation effect off, so
+  // the wrong number could never be corrected and read as hand-typed.
+  //
+  // Gate the PRICES on the same seam as everywhere else. The area, address and
+  // customer are facts and always carry over. For the lawn business — first active
+  // template "Lawn Mowing" → lawn_recurring — every field is seeded exactly as
+  // before, byte-identical.
+  const measurementDefaults = useMemo(() => {
+    if (!measurement) return undefined
+    const primary = templates.find(t => t.is_active) ?? null
+    const lawn = servicePricingKind(primary?.name ?? '', primary) === 'lawn_recurring'
+    return {
+      customer_id: measurement.customerId || '',
+      address: measurement.address || '',
+      // The measured area flows straight into the editable field, every trade.
+      measured_sqft: measurement.sqft || 0,
+      // Default to the owner's PRIMARY service (their first template) so a
+      // measured property is saveable in one tap — learned, not assumed.
+      service_type: primary?.name || '',
+      travel_fee: measurement.travelFee || 0,
+      distance_km: measurement.travelDistanceKm || 0,
+      custom_travel_required: measurement.travelIsCustom || false,
+      // Lawn-engine output — only for a lawn-cadence service. The overgrowth
+      // multiplier rides with them: it is a grass-growth adjustment and multiplies
+      // nothing else.
+      ...(lawn ? {
+        initial_price: measurement.jobPrice || 0,
+        // Selected cadence from the pricing package — the full structure
+        // arrives pre-filled, no manual entry.
+        weekly_price: measurement.weekly || 0,
+        biweekly_price: measurement.biweekly || 0,
+        monthly_price: measurement.monthly || 0,
+        overgrowth_multiplier: measurement.overgrowth || 1,
+      } : {}),
+    }
+  }, [measurement, templates])
 
   if (loading) return <div className="max-w-5xl mx-auto space-y-6"><SkeletonRows count={6} /></div>
 
@@ -323,25 +404,7 @@ export default function NewQuotePage() {
           distance_km: lead.travelDistanceKm || 0,
           overgrowth_multiplier: lead.overgrowth || 1,
           notes: lead.notes || '',
-        } : measurement ? {
-          customer_id: measurement.customerId || '',
-          address: measurement.address || '',
-          // Lawn size measured on the website flows straight into the editable field.
-          measured_sqft: measurement.sqft || 0,
-          // Default to the owner's PRIMARY service (their first template) so a
-          // measured property is saveable in one tap — learned, not assumed.
-          service_type: templates.find(t => t.is_active)?.name || '',
-          initial_price: measurement.jobPrice || 0,
-          // Selected cadence from the pricing package — the full structure
-          // arrives pre-filled, no manual entry.
-          weekly_price: measurement.weekly || 0,
-          biweekly_price: measurement.biweekly || 0,
-          monthly_price: measurement.monthly || 0,
-          travel_fee: measurement.travelFee || 0,
-          distance_km: measurement.travelDistanceKm || 0,
-          custom_travel_required: measurement.travelIsCustom || false,
-          overgrowth_multiplier: measurement.overgrowth || 1,
-        } : undefined}
+        } : measurement ? measurementDefaults : undefined}
         onSubmit={handleSubmit}
       />
     </div>

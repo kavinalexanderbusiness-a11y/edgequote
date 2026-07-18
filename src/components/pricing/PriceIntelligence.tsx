@@ -137,6 +137,26 @@ export function PriceIntelligence({
           : <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 shrink-0 animate-fade"><Check className="w-3.5 h-3.5" /> Applied</span>}
       </div>
 
+      {/* CALIBRATION — above the Because list, because it is not a "because": it
+          reframes every line under it. When the owner's real closing prices sit
+          outside the band the learner may move in, this number IS the clamp, and
+          the honest thing to show is the gap rather than a confident-looking price
+          built on top of it. The engine already declines to guess when it has no
+          data; this is the same discipline for when it has data it cannot use. */}
+      {rec.calibration && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/[0.07] p-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-400 mb-0.5">
+            Your base rate looks {rec.calibration.pinned === 'below' ? 'high' : 'low'}
+          </p>
+          <p className="text-[11px] text-ink-muted">
+            Across {rec.calibration.sampleSize} accepted {rec.serviceLabel.toLowerCase()} quote{rec.calibration.sampleSize !== 1 ? 's' : ''} you close at{' '}
+            <span className="font-semibold text-ink tabular-nums">{Math.round(rec.calibration.medianWinRatio * 100)}%</span> of your standard price
+            {' '}— {rec.calibration.pinned === 'below' ? 'consistently under' : 'consistently over'} it. This recommendation is held at its{' '}
+            {rec.calibration.pinned === 'below' ? 'floor' : 'cap'}, so it can’t follow you that far. Adjusting your base rate in Settings fixes the cause; nudging one quote doesn’t.
+          </p>
+        </div>
+      )}
+
       {/* The WHY (req: explain every recommendation as a clear "Because" list). */}
       <div className="border-t border-border pt-2">
         <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint mb-1">Because</p>
