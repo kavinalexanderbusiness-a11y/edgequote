@@ -60,7 +60,9 @@ export default function TimeOffPage() {
       if (!user) { setLoadError('Session expired — sign in again.'); return }
       setUid(user.id)
       const [t, pRes, hRes] = await Promise.all([
-        loadTechnicians(supabase, user.id),
+        // includeArchived: PTO already taken by someone who has since left is a
+        // paid-leave record and must still resolve to a name (see PAY-1).
+        loadTechnicians(supabase, user.id, { includeArchived: true }),
         supabase.from('pto_entries').select('*').eq('user_id', user.id).order('date', { ascending: false }),
         supabase.from('holidays').select('*').eq('user_id', user.id).order('date'),
       ])

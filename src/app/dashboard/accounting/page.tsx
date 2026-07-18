@@ -6,7 +6,7 @@ import type {
   ExpenseWithRelations, Vendor, ExpenseCategory, Payment, BusinessSettings,
 } from '@/types'
 import { expensePaymentMethodLabel, EXPENSE_PAYMENT_METHODS } from '@/types'
-import { fetchAllRows } from '@/lib/fetchAll'
+import { pageAll } from '@/lib/supabase/pageAll'
 import { listExpenses, archiveExpense, restoreExpense, isUnpaid } from '@/lib/accounting/expenses'
 import { accountsPayable } from '@/lib/accounting/balanceSheet'
 import { listVendors } from '@/lib/accounting/vendors'
@@ -110,16 +110,11 @@ export default function AccountingPage() {
 
     // Money IN comes from the ledger untouched — read every row, because a P&L
     // missing payment 1001 is wrong in the direction nobody checks.
-    const { rows: pays, error: payErr } = await fetchAllRows<Payment>(async (from, to) => {
-      const { data, error } = await supabase
-        .from('payments')
-        .select('id, amount, method, provider, paid_at, kind, status, invoice_id, customer_id, currency, created_at, user_id, notes')
-        .eq('user_id', uid)
-        .order('paid_at', { ascending: false })
-        .order('id', { ascending: true })
-        .range(from, to)
-      return { data: (data as unknown as Payment[]) || [], error }
-    })
+    const { rows: pays, error: payErr } = await pageAll<Payment>(() => supabase
+      .from('payments')
+      .select('id, amount, method, provider, paid_at, kind, status, invoice_id, customer_id, currency, created_at, user_id, notes')
+      .eq('user_id', uid)
+      .order('paid_at', { ascending: false }))
     if (payErr) setLoadError(payErr)
     setPayments(pays)
 

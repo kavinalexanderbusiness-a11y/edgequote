@@ -333,6 +333,12 @@ export interface Technician {
   /** Annual PTO allowance in hours. null = no allowance configured, so usage is
    *  tracked but no balance is claimed — never guess someone's entitlement. */
   pto_annual_hours: number | null
+  /** Soft-archive: set when they leave the roster; NULL = active. Removing a
+   *  technician ARCHIVES — it must never delete. Their time_entries, wage_history
+   *  and pto_entries are statutory records (~3yr), and until PAY-1 a delete
+   *  CASCADED all three away. Distinct from `is_active`, which is a temporary
+   *  "not working right now" toggle; archiving is "no longer employed here". */
+  archived_at?: string | null
 }
 
 // ── Paid time ────────────────────────────────────────────────────────────────
