@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Expense, ExpenseFormValues, ExpenseWithRelations } from '@/types'
-import { fetchAllRows } from '@/lib/fetchAll'
+import { pageAll } from '@/lib/supabase/pageAll'
 
 // ── Expenses — money OUT ─────────────────────────────────────────────────────
 // The write and read side of the expense ledger, plus THE amount convention every
@@ -262,7 +262,9 @@ export async function listExpenses(
   userId: string,
   filters: ExpenseFilters = {},
 ): Promise<{ rows: ExpenseWithRelations[]; error: string | null }> {
-  return fetchAllRows<ExpenseWithRelations>(async (from, to) => {
+  // Must build a FRESH query per page — a PostgrestFilterBuilder is a one-shot
+  // thenable, so a reused one re-sends page 1 forever.
+  return pageAll<ExpenseWithRelations>(() => {
     let q = sb
       .from('expenses')
       .select(EXPENSE_SELECT)
@@ -270,11 +272,9 @@ export async function listExpenses(
       .is('archived_at', null)
       // bill_date, not spent_at: it's NOT NULL, so every row sorts — including
       // unpaid bills, which have no cash date and would otherwise clump wherever
-      // Postgres puts NULLs. A total order also keeps pagination stable, and an
-      // unstable sort across .range() calls silently drops and duplicates rows.
+      // Postgres puts NULLs. pageAll appends the `id` tiebreak that makes the
+      // total order stable across pages.
       .order('bill_date', { ascending: false })
-      .order('id', { ascending: true })
-      .range(from, to)
 
     if (filters.from) q = q.gte('spent_at', filters.from)
     if (filters.to) q = q.lte('spent_at', filters.to)
@@ -286,8 +286,7 @@ export async function listExpenses(
     const term = orSafe(filters.search)
     if (term) q = q.or(`description.ilike.*${term}*,reference.ilike.*${term}*,notes.ilike.*${term}*`)
 
-    const { data, error } = await q
-    return { data: (data as unknown as ExpenseWithRelations[]) || [], error }
+    return q
   })
 }
 
