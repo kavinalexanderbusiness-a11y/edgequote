@@ -289,6 +289,70 @@ export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job
   return { created: true, invoiceNumber }
 }
 
+// ── Un-completing a job — the exact inverse, as ONE operation ─────────────────
+// Completing a job is never just a status: it drafts an invoice, and that draft
+// fires AutoPay. So UN-completing can never be just a status either. It used to
+// be: the undo enqueued a plain `job.update` carrying only the reverted fields,
+// and the draft was deleted by a line inside the online closure. Offline, that
+// closure never ran — so on reconnect the queue replayed "complete" (draft
+// created → AutoPay charged) and then "revert status", leaving a live invoice
+// for a visit the contractor had explicitly un-done. The customer gets charged
+// for work the schedule says didn't happen.
+//
+// ORDER IS THE SAFETY PROPERTY. The draft goes FIRST, the status second:
+//  • delete → revert, interrupted: no invoice, job still reads completed. The
+//    un-invoiced queue surfaces it. Nobody is charged for un-done work.
+//  • revert → delete, interrupted: job reads scheduled and a live invoice bills
+//    for it. That is precisely the defect above.
+// Both halves are idempotent, so a retried replay is safe: the delete no-ops
+// once the draft is gone, and the patch is the same fixed set of fields.
+export interface UncompleteResult {
+  reverted: boolean
+  /** A draft invoice existed and was removed. */
+  draftDeleted: boolean
+  /** The invoice is no longer a draft (sent, or AutoPay already charged it), so
+   *  it was LEFT ALONE — deleting it would destroy real billing history. The
+   *  caller must tell the owner: there is money owing on an un-done visit. */
+  invoiceLocked: boolean
+  invoiceNumber?: string
+  error?: string
+}
+
+export async function uncompleteJob(
+  supabase: Supa,
+  opts: { jobId: string; patch: Record<string, unknown> },
+): Promise<UncompleteResult> {
+  const out: UncompleteResult = { reverted: false, draftDeleted: false, invoiceLocked: false }
+
+  // 1. The invoice this completion created, if it still exists.
+  const { data: invRows, error: readErr } = await supabase
+    .from('invoices').select('id, invoice_number, status').eq('job_id', opts.jobId).limit(1)
+  if (readErr) return { ...out, error: readErr.message }
+
+  const inv = (invRows as { id: string; invoice_number: string; status: string }[] | null)?.[0]
+  if (inv) {
+    if (inv.status === 'draft') {
+      // Scoped to draft in the DELETE too, not just the read above: between the
+      // two, AutoPay may have settled it. A status filter that matches nothing
+      // is a no-op, which is the correct outcome — never a deleted payment.
+      const { error: delErr } = await supabase
+        .from('invoices').delete().eq('id', inv.id).eq('status', 'draft')
+      if (delErr) return { ...out, error: delErr.message, invoiceNumber: inv.invoice_number }
+      out.draftDeleted = true
+    } else {
+      // Sent, or already charged. Leave it standing and say so.
+      out.invoiceLocked = true
+    }
+    out.invoiceNumber = inv.invoice_number
+  }
+
+  // 2. Only now revert the visit itself.
+  const { error: jobErr } = await supabase.from('jobs').update(opts.patch).eq('id', opts.jobId)
+  if (jobErr) return { ...out, error: jobErr.message }
+  out.reverted = true
+  return out
+}
+
 // Fire-and-forget AutoPay trigger (browser only — uses the owner's session cookie).
 // Swallows every error: a failed/uncharged invoice simply stays a draft to collect
 // manually, exactly as before AutoPay existed.

@@ -15,6 +15,7 @@
     "verify:ai-context": "tsx scripts/verify-ai-context.ts",
     "verify:ai-assist": "tsx scripts/verify-ai-assist.ts",
     "verify:ai-surface": "tsx scripts/verify-ai-surface.ts",
+    "verify:offline-uncomplete": "tsx scripts/verify-offline-uncomplete.ts",
     "verify:seasons": "tsx scripts/verify-seasons.ts",
     "verify:modules": "tsx scripts/verify-modules.ts",
     "verify:pricing": "tsx scripts/verify-pricing.ts",

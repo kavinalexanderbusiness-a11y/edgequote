@@ -8,8 +8,9 @@
 // Register once on the client (from the mounted OfflineStatus). Idempotent.
 
 import { createClient } from '@/lib/supabase/client'
-import { createDraftInvoiceForCompletedJob, syncDraftInvoiceAmounts } from '@/lib/invoicing'
+import { createDraftInvoiceForCompletedJob, syncDraftInvoiceAmounts, uncompleteJob } from '@/lib/invoicing'
 import { recordPriceChange, addLineItems } from '@/lib/jobPricing'
+import { toast } from '@/lib/toast'
 import type { Job } from '@/types'
 import { registerHandler } from './outbox'
 
@@ -94,6 +95,33 @@ export function registerOfflineHandlers(): void {
       }).catch(() => {})   // a failed courtesy text must not re-run the invoice
     }
   })
+  // P6b — Un-completing. The exact inverse of P6, and for the same reason it has
+  // to be one op: completing drafts an invoice and that draft fires AutoPay, so a
+  // revert that carries only the status leaves a live invoice behind it.
+  //
+  // This is the case the outbox makes unavoidable. Complete a visit in a
+  // driveway with no signal, undo it thirty seconds later, drive home: the queue
+  // replays FIFO, so `job.complete` runs FIRST — drafting the invoice and firing
+  // the charge — and only then does the revert land. Unless the revert also
+  // removes the draft, the customer is billed for a visit the schedule says
+  // never happened. Both halves live in uncompleteJob so the replay and the
+  // online path cannot drift.
+  registerHandler('job.uncomplete', async (payload) => {
+    const p = payload as { id: string; patch: Record<string, unknown> }
+    const supabase = createClient()
+    const res = await uncompleteJob(supabase, { jobId: p.id, patch: p.patch })
+    // Throw = keep the op queued and retry (it is idempotent). A locked invoice
+    // is NOT a failure to retry — retrying can never unlock it — but the owner
+    // has to hear about it, because there is real money owing on an un-done visit.
+    if (res.error || !res.reverted) throw new Error(res.error || 'uncomplete replay failed')
+    if (res.invoiceLocked) {
+      toast(
+        `Undid a completed visit, but invoice ${res.invoiceNumber} had already gone out — cancel or credit it if the work wasn’t done.`,
+        { tone: 'error', duration: 12000 },
+      )
+    }
+  })
+
   // P7 — Visit add-ons. Extra services sold ON SITE ("do the mulch while you're
   // here") are money, and this used to no-op silently with no signal: the call
   // opened with a network getUser() and bailed on !user, so the contractor typed a

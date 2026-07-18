@@ -12,7 +12,7 @@ import { JobForm, Recurrence, SuggestionMeta } from '@/components/schedule/JobFo
 import { ScopeDialog } from '@/components/schedule/ScopeDialog'
 import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel } from '@/lib/recurrence'
 import type { JobRecurrence } from '@/types'
-import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts } from '@/lib/invoicing'
+import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts, uncompleteJob } from '@/lib/invoicing'
 import { queueOrRun } from '@/lib/offline/outbox'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 
@@ -1041,6 +1041,16 @@ export default function SchedulePage() {
       status: values.status,
       actual_minutes: values.actual_minutes ? Number(values.actual_minutes) : null,
     }
+    // The third door onto un-completing (undo toast, quick-edit dropdown, and this
+    // full form). It runs BEFORE the status write for the same reason uncomplete()
+    // deletes first: a reopened visit carrying a live invoice bills for work the
+    // schedule says didn't happen. Status is per-visit, so only this job is affected.
+    if (job.status === 'completed' && values.status !== 'completed') {
+      const res = await uncompleteJob(supabase, { jobId: job.id, patch: { completed_at: null } })
+      if (res.error) { setBanner('Could not reopen the visit: ' + res.error); return }
+      if (res.invoiceLocked) setBanner(`Visit reopened, but invoice ${res.invoiceNumber} had already been sent — cancel or credit it if the work wasn’t done.`)
+    }
+
     const targets = jobsInScope(job, jobs, scope)
     const delta = dayDelta(job.scheduled_date, values.scheduled_date)
     const results = await Promise.all(targets.map(t => supabase.from('jobs').update({
@@ -1334,7 +1344,6 @@ export default function SchedulePage() {
     const patch = { status: 'completed' as const, completed_at: now, actual_minutes: actual }
     const completed = { ...job, ...patch }
     const notify = !!(automations.job_complete && job.customer_id)
-    let invoiceCreated = false
 
     // Completing is patch + draft invoice + courtesy text. Offline, all three
     // queue together as ONE op (kind 'job.complete') so reconnecting can never
@@ -1347,7 +1356,7 @@ export default function SchedulePage() {
           const { error } = await supabase.from('jobs').update(patch).eq('id', job.id)
           if (error) throw new Error(error.message)
           const res = await createDraftInvoiceForCompletedJob(supabase, completed)
-          if (res.created) { invoiceCreated = true; draftInvoiceToast(res.invoiceNumber, `Draft invoice ${res.invoiceNumber} created.`) }
+          if (res.created) draftInvoiceToast(res.invoiceNumber, `Draft invoice ${res.invoiceNumber} created.`)
           else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
           // A failed draft used to say NOTHING, which is indistinguishable from the success
           // banner you scrolled past — the visit leaves the un-invoiced queue and the money
@@ -1367,16 +1376,46 @@ export default function SchedulePage() {
     setJobs(prev2 => prev2.map(j => (j.id === job.id ? { ...j, ...patch } : j)))
     if (outcome === 'queued') setBanner('Completed offline — it’ll sync and draft the invoice when you’re back in signal.')
     if (outcome === 'ran') await fetchJobs()
-    offerUndo(outcome === 'queued' ? 'Job completed — will sync' : 'Job completed', async () => {
-      setJobs(prev2 => prev2.map(j => (j.id === job.id ? { ...j, ...prev } : j)))
+    offerUndo(outcome === 'queued' ? 'Job completed — will sync' : 'Job completed', () => uncomplete(job, prev))
+  }
+
+  // ── THE un-complete ─────────────────────────────────────────────────────────
+  // Every way of un-doing a completion comes through here: the undo toast above,
+  // and the quick-edit dropdown moving a visit back off "completed". There used
+  // to be two paths and only one of them removed the draft invoice — and that
+  // one only online, from inside the closure, so the offline queue reverted the
+  // status and left the invoice (and its AutoPay charge) standing.
+  //
+  // `invoiceCreated` is deliberately NOT a parameter. The old undo gated the
+  // delete on a closure flag set by the online run, which is false for exactly
+  // the case that matters: a completion that was QUEUED, whose invoice gets
+  // drafted later by the replay. uncompleteJob asks the database instead.
+  async function uncomplete(job: Job, prev: Partial<Job>) {
+    setJobs(prev2 => prev2.map(j => (j.id === job.id ? { ...j, ...prev } : j)))
+    try {
       await queueOrRun(
-        { kind: 'job.update', payload: { id: job.id, patch: prev }, label: `Undo complete ${job.title || 'job'}` },
+        { kind: 'job.uncomplete', payload: { id: job.id, patch: prev }, label: `Undo complete ${job.title || 'job'}` },
         async () => {
-          await supabase.from('jobs').update(prev).eq('id', job.id)
-          if (invoiceCreated) await supabase.from('invoices').delete().eq('job_id', job.id).eq('status', 'draft')
+          const res = await uncompleteJob(supabase, { jobId: job.id, patch: prev })
+          if (res.error || !res.reverted) throw new Error(res.error || 'could not revert the visit')
+          // An invoice that already went out is not something to fix silently:
+          // the visit is now un-done and the customer still owes for it.
+          if (res.invoiceLocked) {
+            setBanner(`Visit reopened, but invoice ${res.invoiceNumber} had already been sent — cancel or credit it if the work wasn’t done.`)
+          }
         },
       )
-    })
+    } catch (e) {
+      // The revert did NOT happen — the visit is still completed server-side. Ask
+      // the server rather than guessing locally: this function is reached from two
+      // doors whose "previous" states differ (the undo toast holds the pre-complete
+      // row; the dropdown holds the completed one), and restoring the wrong one
+      // shows "scheduled" over a still-completed job — how it gets completed twice.
+      // Reaching here means we were online (offline queues instead of throwing),
+      // so the re-fetch reflects the true state.
+      await fetchJobs()
+      setBanner('Could not undo the completion: ' + (e instanceof Error ? e.message : 'please try again.'))
+    }
   }
 
   // Inline quick-edit from the day panel — small per-visit changes, no full form.
@@ -1394,8 +1433,19 @@ export default function SchedulePage() {
       price: patch.price,
     }
     const completing = patch.status === 'completed' && job.status !== 'completed'
+    // The other door onto un-completing: the dropdown moving a finished visit back
+    // to scheduled/in-progress. Same money consequence as the undo toast, so it
+    // takes the same path rather than a plain patch that would strand the invoice.
+    const uncompleting = job.status === 'completed' && !!patch.status && patch.status !== 'completed'
     const repriced = Number(patch.price) !== Number(job.price)
     const completed = { ...job, ...fields }
+
+    // Un-completing carries an invoice with it, so it goes through the one engine
+    // that removes the draft too — never the plain patch below. `completed_at` is
+    // cleared explicitly: `fields` doesn't carry it, and a visit that reads
+    // "scheduled" while still stamped complete is invisible to the un-invoiced
+    // queue — un-billable and un-findable at the same time.
+    if (uncompleting) { await uncomplete(job, { ...fields, completed_at: null }); return }
 
     let outcome: 'ran' | 'queued'
     try {
