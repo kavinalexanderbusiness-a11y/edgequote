@@ -8,6 +8,17 @@
 -- Verified at capture: 6026 chars · 12 top-level keys · SECURITY DEFINER ·
 -- search_path pinned to 'public'.
 --
+-- ✅ PROVEN IDENTICAL TO LIVE, without touching the live function. The body below
+-- was created under a throwaway name and its pg_get_functiondef diffed against the
+-- real one:
+--   create function get_portal_data__inf2_check(...) <body below>;
+--   select replace(pg_get_functiondef(<check>), '__inf2_check', '')
+--        = pg_get_functiondef(<live>);            -- → TRUE
+--   drop function get_portal_data__inf2_check(text);
+-- (6038 vs 6026 chars = exactly the 12 characters of the throwaway name.)
+-- Re-run that recipe after editing this file. It is the only check that proves the
+-- text is right, and it risks nothing: reading a definition back is not deploying it.
+--
 -- ══ WHY THIS FILE EXISTS (INF-2) ═════════════════════════════════════════════
 -- get_portal_data was `create or replace`d by NINE separate RUN-*.sql migrations
 -- plus ten stacked copies inside schema.sql. Every one of them is a complete,
