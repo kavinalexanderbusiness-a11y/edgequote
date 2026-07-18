@@ -209,6 +209,10 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
         customer_id: q.customer_id, customer_name: q.customer_name, address: q.address,
         service_type: q.service_type, service_template_id: q.service_template_id,
         initial_price: q.initial_price, weekly_price: q.weekly_price, biweekly_price: q.biweekly_price, monthly_price: q.monthly_price,
+        // ADR-002: prices are copied verbatim, so the provenance explaining them is too.
+        // Re-stamping today's config would claim a rate card that never priced this.
+        price_source: q.price_source, pricing_config_version_id: q.pricing_config_version_id,
+        value_grade: q.value_grade, nearby_count: q.nearby_count,
         overgrowth_multiplier: q.overgrowth_multiplier, custom_travel_required: q.custom_travel_required,
         show_travel_separately: q.show_travel_separately, notes: q.notes, hours: q.hours, crew_size: q.crew_size,
         rate: q.rate, travel_fee: q.travel_fee, property_id: q.property_id,

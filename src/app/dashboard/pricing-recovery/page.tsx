@@ -1,5 +1,6 @@
 'use client'
 import { toast } from '@/lib/toast'
+import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
 
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -212,6 +213,18 @@ export default function PricingRecoveryPage() {
       issued_date: localTodayISO(),
     }
     if (field) insert[field] = price
+    // ADR-002: unlike a duplicate, this mints a NEW engine-derived price, so it must
+    // state the configuration that produced it. Fail-closed for the same reason as the
+    // quote builder — and doubly so here, because this writes status:'accepted' quotes
+    // that feed revenue reports.
+    const ver = await ensureCurrentPricingConfigVersion(supabase, user!.id)
+    if (!ver.ok) {
+      setWorking(null)
+      toast.error('Could not record which pricing settings this price used — nothing was saved. Try again.')
+      return
+    }
+    insert.price_source = 'engine'
+    insert.pricing_config_version_id = ver.versionId
     const { data: q, error } = await supabase.from('quotes').insert(insert).select('id').single()
     if (error || !q) { setWorking(null); toast.error('Could not create quote: ' + (error?.message ?? '')); return }
     const ids = jobs.filter(j => j.recurrence_id === recId).map(j => j.id)

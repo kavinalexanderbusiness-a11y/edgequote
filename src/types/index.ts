@@ -1022,6 +1022,14 @@ export interface Quote {
   weekly_price: number | null
   biweekly_price: number | null
   monthly_price: number | null
+  // ── ADR-002 · pricing provenance ───────────────────────────────────────────
+  // "What priced this quote?" — read via resolveQuoteProvenance(), never by falling
+  // back to the live config (that fallback IS the bug ADR-002 removes).
+  // All four are null on the 55 pre-ADR quotes and stay that way: unknown is a fact.
+  price_source: string | null                 // 'engine' | 'template_rate' | null
+  pricing_config_version_id: string | null    // required whenever price_source='engine'
+  value_grade: string | null                  // derived state, unreconstructable later
+  nearby_count: number | null
   // Measurement provenance — lets us later compare suggested vs. actual vs. outcome.
   measured_sqft: number | null
   suggested_price: number | null
