@@ -9,7 +9,7 @@ import { gstReturn } from '@/lib/accounting/gst'
 import { quarterRange, yearRange, type Period as AcctPeriod } from '@/lib/accounting/period'
 import { ledgerRowType, cashAmountOf } from '@/lib/payments/analytics'
 import { exportRowsToCsv } from '@/lib/csv'
-import { fetchAllRows } from '@/lib/fetchAll'
+import { pageAll } from '@/lib/supabase/pageAll'
 import { downloadBlob } from '@/lib/portalPdf'
 import type { RevenueGstReport, RevenueGstRow } from '@/components/reports/RevenueGstPDF'
 import Link from 'next/link'
@@ -90,26 +90,17 @@ export default function ReportsPage() {
       const user = session?.user
       if (!user) { setLoadError('Session expired — sign in again.'); return }
       const [iRes, pRes, sRes] = await Promise.all([
-        fetchAllRows<ReportInvoice>(async (from, to) => {
-          const { data, error } = await supabase
-            .from('invoices')
-            .select('id, invoice_number, amount, amount_paid, status, issued_date, due_date, discount_type, discount_value, customer_id, customer_name, service_type, customers(id, name)')
-            .eq('user_id', user.id)
-            .order('issued_date', { ascending: true, nullsFirst: true })
-            .order('id')
-            .range(from, to)
-          return { data: data as unknown as ReportInvoice[] | null, error }
-        }),
-        fetchAllRows<ReportPayment>(async (from, to) => {
-          const { data, error } = await supabase
-            .from('payments')
-            .select('id, amount, method, provider, paid_at, kind, status, invoice_id, customer_id, customers(id, name)')
-            .eq('user_id', user.id)
-            .order('paid_at', { ascending: true, nullsFirst: true })
-            .order('id')
-            .range(from, to)
-          return { data: data as unknown as ReportPayment[] | null, error }
-        }),
+        // pageAll appends the `id` tiebreak — the business order stays here.
+        pageAll<ReportInvoice>(() => supabase
+          .from('invoices')
+          .select('id, invoice_number, amount, amount_paid, status, issued_date, due_date, discount_type, discount_value, customer_id, customer_name, service_type, customers(id, name)')
+          .eq('user_id', user.id)
+          .order('issued_date', { ascending: true, nullsFirst: true })),
+        pageAll<ReportPayment>(() => supabase
+          .from('payments')
+          .select('id, amount, method, provider, paid_at, kind, status, invoice_id, customer_id, customers(id, name)')
+          .eq('user_id', user.id)
+          .order('paid_at', { ascending: true, nullsFirst: true })),
         supabase.from('business_settings').select('*').eq('user_id', user.id).maybeSingle(),
       ])
       // A failed fetch must NOT render as "$0.00 this quarter" on the page someone

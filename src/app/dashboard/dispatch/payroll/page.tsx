@@ -64,7 +64,10 @@ export default function PayrollPage() {
       setUid(user.id)
       const [sRes, t] = await Promise.all([
         supabase.from('business_settings').select('*').eq('user_id', user.id).maybeSingle(),
-        loadTechnicians(supabase, user.id),
+        // includeArchived: someone archived MID-PERIOD still worked hours in that
+        // period and is still owed them. buildDraftPayRun computes the draft FROM
+        // this list, so filtering them out silently underpays a real person.
+        loadTechnicians(supabase, user.id, { includeArchived: true }),
       ])
       const s = sRes.data as BusinessSettings | null
       setSettings(s)

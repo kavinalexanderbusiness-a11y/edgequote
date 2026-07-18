@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Crew, Technician, TECHNICIAN_STATUS_LABELS } from '@/types'
-import { CREW_PALETTE, crewPalette, nextCrewColor, TECH_STATUS_META } from '@/lib/crews'
+import { CREW_PALETTE, crewPalette, nextCrewColor, TECH_STATUS_META, archiveTechnician } from '@/lib/crews'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
@@ -15,7 +15,7 @@ import { History } from 'lucide-react'
 import { toast as notify } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { cn } from '@/lib/utils'
-import { Users, Plus, Trash2, Truck, HardHat } from 'lucide-react'
+import { Users, Plus, Trash2, Truck, HardHat, UserMinus } from 'lucide-react'
 
 // Slim equipment view for vehicle assignment — vehicles ARE equipment rows
 // (one fleet system); dispatch only sets equipment.crew_id.
@@ -93,14 +93,26 @@ export function CrewManager({ open, onClose, crews, technicians, equipment, onCh
     await run(`del-${crew.id}`, () => supabase.from('crews').delete().eq('id', crew.id).then(r => ({ error: r.error })), `${crew.name} deleted.`)
   }
 
-  async function deleteTech(t: Technician) {
+  // Removing someone ARCHIVES them — it never deletes. This replaced a hard
+  // `.delete()`, which CASCADE-removed their time_entries, wage_history and
+  // pto_entries: the hours they worked and the wage they were paid, records with
+  // a statutory retention period (~3yr). The old dialog promised "Job history is
+  // untouched" while the database was erasing exactly that.
+  // Goes through lib/crews' archiveTechnician — the same engine every other
+  // technician mutation uses, not a second write path.
+  async function archiveTech(t: Technician) {
     const ok = await confirmDialog({
-      title: `Remove ${t.name}?`,
-      message: 'Removes them from the roster. Job history is untouched.',
-      destructive: true, confirmLabel: 'Remove', icon: HardHat,
+      title: `Remove ${t.name} from the roster?`,
+      message: 'They stop appearing on the board, in pickers and on new pay runs. Their timesheets, wage history and time off are kept — payroll records have to be.',
+      confirmLabel: 'Remove from roster', icon: HardHat,
     })
     if (!ok) return
-    await run(`del-${t.id}`, () => supabase.from('technicians').delete().eq('id', t.id).then(r => ({ error: r.error })), `${t.name} removed.`)
+    // archiveTechnician returns a message string; `run` speaks Supabase's error
+    // shape. Adapt here rather than widening the engine's return type.
+    await run(`arch-${t.id}`, async () => {
+      const msg = await archiveTechnician(supabase, t.id)
+      return { error: msg ? { message: msg } : null }
+    }, `${t.name} removed from the roster.`)
   }
 
   const vehicles = [...equipment].sort((a, b) =>
@@ -207,9 +219,11 @@ export function CrewManager({ open, onClose, crews, technicians, equipment, onCh
                     title={`${t.name}'s wage history`} aria-label={`${t.name}'s wage history`}>
                     <History className="w-3.5 h-3.5" />
                   </Button>
-                  <Button variant="ghost" size="sm" type="button" onClick={() => deleteTech(t)}
-                    loading={busy === `del-${t.id}`} className="hover:text-red-400" title="Remove technician">
-                    <Trash2 className="w-3.5 h-3.5" />
+                  {/* Archive, not delete — so this is no longer a destructive
+                      action and must not wear the destructive affordance. */}
+                  <Button variant="ghost" size="sm" type="button" onClick={() => archiveTech(t)}
+                    loading={busy === `arch-${t.id}`} title="Remove from roster" aria-label={`Remove ${t.name} from the roster`}>
+                    <UserMinus className="w-3.5 h-3.5" />
                   </Button>
                 </div>
               </div>

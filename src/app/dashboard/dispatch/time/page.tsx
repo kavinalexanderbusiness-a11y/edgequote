@@ -65,7 +65,10 @@ export default function TimesheetPage() {
       if (!user) { setLoadError('Session expired — sign in again.'); return }
       setUid(user.id)
       const [t, e] = await Promise.all([
-        loadTechnicians(supabase, user.id),
+        // includeArchived: this is the paid-time LEDGER. Shifts worked by someone
+        // who has since left still have to render with their name and wage —
+        // that is the payroll record PAY-1 exists to preserve.
+        loadTechnicians(supabase, user.id, { includeArchived: true }),
         loadTimeEntries(supabase, user.id, { fromISO: range.from.toISOString(), toISO: range.to.toISOString() }),
       ])
       // An open shift started before this window still needs its Clock out
