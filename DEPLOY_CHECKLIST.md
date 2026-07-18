@@ -34,7 +34,21 @@ supabase/schema.sql
 
 # 2. THEN every RUN file dated after it, in filename (date) order — they are idempotent
 ls supabase/RUN-*.sql | sort        # apply each in this order
+
+# 3. THEN the canonical objects — LAST, and not optional
+ls supabase/CANONICAL-*.sql | sort  # currently: get_portal_data
 ```
+
+**Why step 3 exists.** Some objects were `create or replace`d by many migrations at
+once. `get_portal_data` was the worst: nine `RUN-*.sql` files plus eleven copies
+inside `schema.sql`, each one a complete runnable body — so applying an older file
+silently replaced the live function with an earlier version and the customer portal
+started returning less (no `services`, no `properties`). It never errored. Those are
+now all tombstones, and the single body lives in `supabase/CANONICAL-get_portal_data.sql`.
+
+Running it **last** is what makes the order safe: whatever the dated files did on the
+way past, the canonical body wins. **Skip step 3 and `get_portal_data` will not exist
+at all** — the portal RPC 404s and every customer portal page comes back empty.
 
 `schema.sql` creates the 7 base tables (`business_settings, service_templates,
 travel_fee_tiers, properties, job_recurrences, jobs, invoices`) + RLS policies +

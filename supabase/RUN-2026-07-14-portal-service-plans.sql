@@ -18,42 +18,18 @@
 -- 2026-07-09 definition otherwise). Idempotent — safe to run more than once.
 -- ════════════════════════════════════════════════════════════
 
-create or replace function public.get_portal_data(p_token text)
-returns json language plpgsql security definer set search_path = public as $$
-declare v_customer uuid; v_user uuid; result json;
-begin
-  select customer_id, user_id into v_customer, v_user
-    from public.customer_portal_tokens where token = p_token and not revoked;
-  if v_customer is null then return null; end if;
-  select json_build_object(
-    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in, reviewed_at, autopay_enabled from public.customers where id = v_customer) c),
-    -- + service_seasons: buildServicePlans needs the owner's REAL season window to
-    --   say "Apr 15 → Oct 31". Without it we'd have to assume defaults, i.e. claim
-    --   a window the owner never configured.
-    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, review_url, coalesce(gst_percent,0) as gst_percent, etransfer_email, service_seasons from public.business_settings where user_id = v_user) b),
-    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
-    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (
-      select qt.id, qt.quote_number, qt.service_type, qt.address, qt.total, qt.initial_price, qt.subtotal,
-             qt.weekly_price, qt.biweekly_price, qt.monthly_price, qt.notes, qt.status, qt.created_at,
-             qt.issued_date, qt.crew_size, qt.hours, qt.travel_fee,
-             coalesce((select json_agg(s order by s.sort_order) from (
-               select qs.service_type, qs.quantity, qs.unit, qs.unit_price, qs.est_minutes,
-                      qs.discount_type, qs.discount_value, qs.notes, qs.sort_order
-               from public.quote_services qs where qs.quote_id = qt.id
-             ) s), '[]'::json) as services
-      from public.quotes qt where qt.customer_id = v_customer and qt.status <> 'draft') q), '[]'::json),
-    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, amount_paid, status, issued_date, due_date, notes, address, line_items, job_id, created_at, discount_type, discount_value from public.invoices where customer_id = v_customer) i), '[]'::json),
-    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, kind, invoice_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
-    -- + property_id, quote_id, price, is_initial_visit: buildServicePlans groups by
-    --   property and uses jobVisitValue (THE per-visit valuation) to separate the
-    --   initial visit's price from the recurring one.
-    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, property_id, quote_id, price, is_initial_visit, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
-    -- + start_date, end_count: the series' own window and count limit — what makes
-    --   "Apr 15 → Oct 31" vs an open-ended plan decidable.
-    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, start_date, end_date, end_count from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
-    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json),
-    'payment_method', (select to_json(pm) from (select brand, last4, exp_month, exp_year from public.payment_methods where customer_id = v_customer and is_default order by created_at desc limit 1) pm)
-  ) into result;
-  return result;
-end; $$;
+-- ══════════════════════════════════════════════════════════════════════════
+-- ⚠️  SUPERSEDED — DO NOT RESTORE THIS BODY.  (INF-2, 2026-07-17)
+--
+--   get_portal_data now has exactly ONE definition:
+--       supabase/CANONICAL-get_portal_data.sql
+--
+--   A complete, runnable OLDER copy stood here. Running this file replaced the
+--   live function with it — silently, with no error — dropping
+--   the `services` and `properties` keys.
+--   Nothing failed; the portal just started returning less. That is why the
+--   body is gone rather than merely commented "outdated".
+--
+--   Everything else in this file is UNCHANGED and still safe to run.
+-- ══════════════════════════════════════════════════════════════════════════
 grant execute on function public.get_portal_data(text) to anon, authenticated;
