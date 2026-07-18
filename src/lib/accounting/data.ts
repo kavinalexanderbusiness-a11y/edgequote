@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   Payment, BusinessSettings, ExpenseWithRelations, FixedAsset, Liability,
 } from '@/types'
-import { fetchAllRows } from '@/lib/fetchAll'
+import { pageAll } from '@/lib/supabase/pageAll'
 import { listExpenses } from '@/lib/accounting/expenses'
 import type { GstInput } from '@/lib/accounting/gst'
 
@@ -29,17 +29,28 @@ export interface AccountingData {
   liabilities: Liability[]
   /** Parts on hand at cost — a CURRENT snapshot (see balanceSheet's caveat). */
   inventoryValue: number
-  jobs: { id: string; title: string | null; price: number | null; scheduled_date: string | null; service_type: string | null }[]
+  jobs: AccountingJob[]
   /** Anything that failed to load. Non-empty = the figures are incomplete, and say so. */
   errors: string[]
+}
+
+/** A job as the financial surfaces read it. Named (it was inline) so the columns
+ *  job costing values a visit from can't drift from the columns this select asks
+ *  for — the two must move together or a job silently values at $0. */
+export interface AccountingJob {
+  id: string
+  title: string | null
+  price: number | null
+  scheduled_date: string | null
+  service_type: string | null
 }
 
 /**
  * Load everything the accounting surfaces need.
  *
- * `fetchAllRows` on the money tables, deliberately: a P&L missing payment 1001
- * because of a default 1000-row cap is wrong in the direction nobody checks — it
- * looks like a quiet year, not a bug.
+ * `pageAll` on the money tables, deliberately: a P&L missing payment 1001 because
+ * of a default 1000-row cap is wrong in the direction nobody checks — it looks
+ * like a quiet year, not a bug.
  *
  * Errors are COLLECTED, never swallowed. A page that renders $0 because a query
  * failed is indistinguishable from a business that earned nothing, so every caller
@@ -70,16 +81,12 @@ export async function loadAccountingData(
 }
 
 async function loadPayments(sb: SupabaseClient, userId: string, errors: string[]): Promise<Payment[]> {
-  const { rows, error } = await fetchAllRows<Payment>(async (from, to) => {
-    const { data, error } = await sb
-      .from('payments')
-      .select('id, amount, method, provider, paid_at, kind, status, invoice_id, customer_id, currency, created_at, user_id, notes')
-      .eq('user_id', userId)
-      .order('paid_at', { ascending: false })
-      .order('id', { ascending: true })
-      .range(from, to)
-    return { data: (data as unknown as Payment[]) || [], error }
-  })
+  // pageAll appends the `id` tiebreak itself — the business order stays here.
+  const { rows, error } = await pageAll<Payment>(() => sb
+    .from('payments')
+    .select('id, amount, method, provider, paid_at, kind, status, invoice_id, customer_id, currency, created_at, user_id, notes')
+    .eq('user_id', userId)
+    .order('paid_at', { ascending: false }))
   if (error) errors.push(`payments: ${error}`)
   return rows
 }
@@ -91,16 +98,11 @@ async function loadExpenses(sb: SupabaseClient, userId: string, errors: string[]
 }
 
 async function loadInvoices(sb: SupabaseClient, userId: string, errors: string[]): Promise<GstInput['invoices']> {
-  const { rows, error } = await fetchAllRows<GstInput['invoices'][number]>(async (from, to) => {
-    const { data, error } = await sb
-      .from('invoices')
-      .select('id, invoice_number, amount, amount_paid, status, issued_date, discount_type, discount_value, customers(name)')
-      .eq('user_id', userId)
-      .order('issued_date', { ascending: false })
-      .order('id', { ascending: true })
-      .range(from, to)
-    return { data: (data as unknown as GstInput['invoices']) || [], error }
-  })
+  const { rows, error } = await pageAll<GstInput['invoices'][number]>(() => sb
+    .from('invoices')
+    .select('id, invoice_number, amount, amount_paid, status, issued_date, discount_type, discount_value, customers(name)')
+    .eq('user_id', userId)
+    .order('issued_date', { ascending: false }))
   if (error) errors.push(`invoices: ${error}`)
   return rows
 }
@@ -154,18 +156,11 @@ async function loadInventoryValue(sb: SupabaseClient, userId: string, errors: st
 }
 
 async function loadJobs(sb: SupabaseClient, userId: string, errors: string[]) {
-  const { rows, error } = await fetchAllRows<{ id: string; title: string | null; price: number | null; scheduled_date: string | null; service_type: string | null }>(
-    async (from, to) => {
-      const { data, error } = await sb
-        .from('jobs')
-        .select('id, title, price, scheduled_date, service_type')
-        .eq('user_id', userId)
-        .order('scheduled_date', { ascending: false })
-        .order('id', { ascending: true })
-        .range(from, to)
-      return { data: (data as never) || [], error }
-    },
-  )
+  const { rows, error } = await pageAll<AccountingJob>(() => sb
+    .from('jobs')
+    .select('id, title, price, scheduled_date, service_type')
+    .eq('user_id', userId)
+    .order('scheduled_date', { ascending: false }))
   if (error) errors.push(`jobs: ${error}`)
   return rows
 }
