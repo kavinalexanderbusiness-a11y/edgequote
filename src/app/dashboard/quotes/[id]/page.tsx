@@ -108,21 +108,36 @@ export default function QuoteDetailPage() {
   async function handleUpdate(values: QuoteFormValues) {
     const { data: { user } } = await supabase.auth.getUser()
 
-    // Keep the quote attached to a real customer + property (create or match).
+    // QL-2: quotes.address is a DOCUMENT SNAPSHOT, never a match key. The old code
+    // re-ran find-or-create on every edit using the snapshot — so after a property
+    // address correction, editing the quote's PRICE re-matched the stale snapshot,
+    // minted a duplicate property at the old address, and re-pointed the quote at
+    // it. On edit, trust the ids the quote already has; resolution runs ONLY when
+    // the owner actually changed the address or the customer — a deliberate
+    // re-pointing, which is exactly what find-or-create is for.
     let customerId: string | null = values.customer_id && values.customer_id !== '__manual' ? values.customer_id : null
     let propertyId: string | null = quote?.property_id ?? null
     let customerName = values.customer_name
-    try {
-      const ensured = await ensureCustomerAndProperty(
-        supabase, user!.id,
-        { customerId: values.customer_id, name: values.customer_name, address: values.address, phone: values.customer_phone, email: values.customer_email },
-        customers,
-      )
-      customerId = ensured.customerId
-      customerName = ensured.customerName
-      propertyId = ensured.propertyId ?? propertyId
-    } catch {
-      const c = customers.find(c => c.id === values.customer_id)
+    const addressChanged = (values.address || '').trim() !== (quote?.address || '').trim()
+    const customerChanged = (values.customer_id || '') !== (quote?.customer_id || '') || values.customer_id === '__manual'
+    if (addressChanged || customerChanged || !customerId) {
+      try {
+        const ensured = await ensureCustomerAndProperty(
+          supabase, user!.id,
+          { customerId: values.customer_id, name: values.customer_name, address: values.address, phone: values.customer_phone, email: values.customer_email },
+          customers,
+        )
+        customerId = ensured.customerId
+        customerName = ensured.customerName
+        propertyId = ensured.propertyId ?? propertyId
+      } catch {
+        const c = customers.find(c => c.id === values.customer_id)
+        if (c) customerName = c.name
+      }
+    } else {
+      // Nothing identity-bearing changed → keep the existing linkage untouched.
+      customerId = quote?.customer_id ?? customerId
+      const c = customers.find(c => c.id === customerId)
       if (c) customerName = c.name
     }
 
