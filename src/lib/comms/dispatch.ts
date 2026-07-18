@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { sendSms, sendEmail } from './send'
 import { getOrCreateConversation } from './conversation'
 import { reachCheck } from './reach'
+import { governCheck } from './governor'
 import { type MessagePrefs } from './templates'
 
 // ── Shared customer dispatch ─────────────────────────────────────────────────
@@ -88,6 +89,19 @@ export async function dispatchToCustomer(sb: SupabaseClient, inp: DispatchInput)
   if (gate.length && gate.every(g => g.blocked === 'unsubscribed')) {
     for (const g of gate) attempts.push(skip(g.channel, g.blocked!))
     return { attempts, messageId: null, sentChannels: [] }
+  }
+
+  // The governor: WHEN and AGAIN, after consent decides WHETHER. Runs here so
+  // every sender inherits it structurally — quiet hours, the cross-sender
+  // frequency cap, and the owner's runaway daily cap (lib/comms/governor).
+  // Only consulted when something could actually go out, so a fully-blocked
+  // customer still reports their consent reason, not a governor verdict.
+  if (gate.some(g => !g.blocked)) {
+    const gov = await governCheck(sb, { userId: inp.userId, customerId: c.id, template: inp.template })
+    if (!gov.allowed) {
+      for (const g of gate) attempts.push(skip(g.channel, g.blocked ?? gov.reason!))
+      return { attempts, messageId: null, sentChannels: [] }
+    }
   }
 
   if (inp.channels.includes('sms')) {
