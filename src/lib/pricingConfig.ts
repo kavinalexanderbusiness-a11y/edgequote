@@ -66,8 +66,11 @@ export interface VersionableSettings {
   payment_fee_strategy?: string | null
 }
 
-/** The versioned columns, minus identity. What we compare and what we insert. */
-export type VersionedInputs = Omit<PricingConfigVersionRow, 'id' | 'source'>
+// ⛔ There is deliberately NO TypeScript copy of "are these the same rate card?" here.
+// That comparison lives once, in `public.ensure_pricing_config_version`. An earlier
+// draft of this file had one, and a second implementation of one concept is precisely
+// what this ADR exists to stop — the same shape that let a fix land on the canonical
+// copy twice while the running copy went untouched.
 
 // `numeric` can arrive as a string over the wire; every read goes through this.
 function num(v: unknown, fallback: number): number {
@@ -75,34 +78,12 @@ function num(v: unknown, fallback: number): number {
   return Number.isFinite(n) ? n : fallback
 }
 
-// Mirrors lib/pricing's `pos()`: a null or non-positive setting falls back to the code
-// default, so a version records what the engine WOULD ACTUALLY HAVE USED rather than
-// what the column literally held. Recording the raw column here would make the version
-// disagree with the price it is supposed to explain.
-function pos(v: unknown, fallback: number): number {
-  const n = Number(v)
-  return Number.isFinite(n) && n > 0 ? n : fallback
-}
-
-/** The config as the engine would build it, from a settings row. */
-export function versionedInputsFromSettings(s?: VersionableSettings | null): VersionedInputs {
-  return {
-    engine_version: PRICING_ENGINE_VERSION,
-    base_charge: pos(s?.pricing_base_charge, DEFAULT_PRICING.baseCharge),
-    mow_rate_per_1000: pos(s?.pricing_mow_rate, DEFAULT_PRICING.mowRatePer1000),
-    // budgetMult/marketMult are NOT settings-backed — they are code constants. That is
-    // exactly why they are versioned: a code change moves them silently, and the row
-    // records what was in force when the price was struck.
-    budget_mult: DEFAULT_PRICING.budgetMult,
-    market_mult: DEFAULT_PRICING.marketMult,
-    recommended_mult: pos(s?.pricing_recommended_mult, DEFAULT_PRICING.recommendedMult),
-    premium_mult: pos(s?.pricing_premium_mult, DEFAULT_PRICING.premiumMult),
-    travel_rate_per_km: pos(s?.pricing_travel_rate, DEFAULT_PRICING.travelRatePerKm),
-    crew_cost_per_hour: num(s?.crew_cost_per_hour, 40),
-    fee_recovery_percent: num(s?.fee_recovery_percent, 3),
-    payment_fee_strategy: s?.payment_fee_strategy || 'global_price_increase',
-  }
-}
+// NOTE: the "a null or non-positive setting falls back to the CODE default" rule
+// (lib/pricing's `pos()`) now lives in `ensure_pricing_config_version`, so a version
+// records what the engine WOULD ACTUALLY HAVE USED rather than what the column
+// literally held. ⚠️ If DEFAULT_PRICING's budgetMult/marketMult ever change, that SQL
+// function must change with them and PRICING_ENGINE_VERSION must be bumped — otherwise
+// it records a config the engine did not use.
 
 /** A version row, read back as the engine's own config object. */
 export function pricingConfigFromVersion(v: PricingConfigVersionRow): PricingConfig {
@@ -117,22 +98,8 @@ export function pricingConfigFromVersion(v: PricingConfigVersionRow): PricingCon
   }
 }
 
-const NUMERIC_FIELDS = [
-  'base_charge', 'mow_rate_per_1000', 'budget_mult', 'market_mult',
-  'recommended_mult', 'premium_mult', 'travel_rate_per_km',
-  'crew_cost_per_hour', 'fee_recovery_percent',
-] as const
-
-/** Do these describe the same rate card? Numeric-aware, so `45` and `"45.00"` — which
- *  is the same money arriving by two routes — never mint a spurious version. */
-export function sameVersionedInputs(a: VersionedInputs, b: VersionedInputs): boolean {
-  if (a.engine_version !== b.engine_version) return false
-  if (a.payment_fee_strategy !== b.payment_fee_strategy) return false
-  return NUMERIC_FIELDS.every(f => Number(a[f]) === Number(b[f]))
-}
-
 export type EnsureResult =
-  | { ok: true; versionId: string; config: PricingConfig; created: boolean }
+  | { ok: true; versionId: string; config: PricingConfig }
   | { ok: false; reason: string }
 
 /**
@@ -157,63 +124,33 @@ export async function ensureCurrentPricingConfigVersion(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<EnsureResult> {
-  const { data: settings, error: sErr } = await supabase
-    .from('business_settings')
-    .select('pricing_base_charge, pricing_mow_rate, pricing_recommended_mult, pricing_premium_mult, pricing_travel_rate, crew_cost_per_hour, fee_recovery_percent, payment_fee_strategy')
-    .eq('user_id', userId)
-    .maybeSingle()
-  if (sErr) return { ok: false, reason: sErr.message }
+  // ⭐ ONE ENGINE. The comparison lives in `public.ensure_pricing_config_version`
+  // (plpgsql), NOT here. This function used to re-implement it in TypeScript, which
+  // would have been a second implementation of one concept — the exact species this
+  // codebase keeps re-manufacturing, and the reason a "fix" to one copy has twice left
+  // the running copy untouched.
+  //
+  // It had to move to SQL rather than the reverse: `submit_booking` runs for an
+  // ANONYMOUS caller that cannot read `pricing_config_versions` under RLS, so it cannot
+  // resolve a version from TypeScript at all. The alternatives were to duplicate the
+  // comparison in plpgsql, or to have booking blindly grab the newest version — which
+  // would silently record a STALE config as if it had priced the quote, in the one path
+  // nobody is watching. One engine, reachable from both callers, is the honest option.
+  const { data: versionId, error: rErr } = await supabase.rpc('ensure_pricing_config_version', { p_user: userId })
+  if (rErr) return { ok: false, reason: rErr.message }
+  // null = no settings row, so no configuration can be stated. Not an error, but the
+  // caller must not claim an engine price.
+  if (!versionId) return { ok: false, reason: 'no pricing settings recorded for this account' }
 
-  const want = versionedInputsFromSettings(settings as VersionableSettings | null)
-
-  const { data: latest, error: vErr } = await supabase
+  const { data: row, error: vErr } = await supabase
     .from('pricing_config_versions')
     .select('*')
-    .eq('user_id', userId)
-    .order('valid_from', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  if (vErr) return { ok: false, reason: vErr.message }
-
-  if (latest) {
-    const row = latest as PricingConfigVersionRow
-    const have = versionedInputsFromRow(row)
-    if (sameVersionedInputs(have, want)) {
-      return { ok: true, versionId: row.id, config: pricingConfigFromVersion(row), created: false }
-    }
-  }
-
-  const { data: created, error: cErr } = await supabase
-    .from('pricing_config_versions')
-    .insert({
-      user_id: userId,
-      valid_from: new Date().toISOString(),
-      source: 'recorded',
-      note: latest ? 'Recorded on a settings change detected at write time.' : 'First version recorded for this account.',
-      ...want,
-    })
-    .select('*')
+    .eq('id', versionId as string)
     .single()
-  if (cErr || !created) return { ok: false, reason: cErr?.message ?? 'could not record a pricing config version' }
+  if (vErr || !row) return { ok: false, reason: vErr?.message ?? 'could not read the recorded pricing config version' }
 
-  const row = created as PricingConfigVersionRow
-  return { ok: true, versionId: row.id, config: pricingConfigFromVersion(row), created: true }
-}
-
-function versionedInputsFromRow(v: PricingConfigVersionRow): VersionedInputs {
-  return {
-    engine_version: v.engine_version,
-    base_charge: Number(v.base_charge),
-    mow_rate_per_1000: Number(v.mow_rate_per_1000),
-    budget_mult: Number(v.budget_mult),
-    market_mult: Number(v.market_mult),
-    recommended_mult: Number(v.recommended_mult),
-    premium_mult: Number(v.premium_mult),
-    travel_rate_per_km: Number(v.travel_rate_per_km),
-    crew_cost_per_hour: Number(v.crew_cost_per_hour),
-    fee_recovery_percent: Number(v.fee_recovery_percent),
-    payment_fee_strategy: v.payment_fee_strategy,
-  }
+  const v = row as PricingConfigVersionRow
+  return { ok: true, versionId: v.id, config: pricingConfigFromVersion(v) }
 }
 
 // ── Reading provenance back ──────────────────────────────────────────────────
