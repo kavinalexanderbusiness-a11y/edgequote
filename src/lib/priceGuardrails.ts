@@ -65,15 +65,16 @@ export function evaluatePrice(input: {
   crewCost: number
   densityTier?: DensityTier | null
   driveMin?: number            // attributed one-way drive, when known (for rev/hr)
-  /** The customer's strategic grade, when known. MUST match what priced the
-   *  quote — pricingPackage() prices a graded customer on the value curve, and a
-   *  guardrail judging that price on the neutral curve warns about the engine's
-   *  own recommendation. */
-  valueGrade?: string | null
-  /** Condition multiplier, when known. MUST match what priced the quote — the
-   *  engine folds it into the base, so omitting it here judges an overgrown job
-   *  against a normal-condition price. */
-  overgrowth?: number
+  /** The customer's strategic grade — pricingPackage() prices a graded customer
+   *  on the value curve, and a guardrail judging that price on the neutral curve
+   *  warns about the engine's own recommendation. REQUIRED (pass null when the
+   *  caller prices neutrally) so the compiler forces every caller to state it —
+   *  optional-and-defaulted is how this silently judged on the wrong curve. */
+  valueGrade: string | null
+  /** Condition multiplier — the engine folds it into the base, so omitting it
+   *  judges an overgrown job against a normal-condition price. REQUIRED (pass 1
+   *  when unknown) for the same reason. */
+  overgrowth: number
 }): PriceGuardrail {
   const { cadence, price, sqft, cfg, crewCost } = input
   const recommended = recommendedForCadence(sqft, cadence, cfg, {

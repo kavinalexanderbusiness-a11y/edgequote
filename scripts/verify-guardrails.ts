@@ -75,7 +75,7 @@ console.log('\nThe engine\'s own recommendation never trips the guardrail:')
       for (const c of CADENCES) {
         const enginePrice = pkg.options.find(o => o.cadence === c)!.price
         const g = evaluatePrice({
-          cadence: c, price: enginePrice, sqft, cfg, crewCost: 0, valueGrade: grade,
+          cadence: c, price: enginePrice, sqft, cfg, crewCost: 0, valueGrade: grade, overgrowth: 1,
         })
         // crewCost 0 disables the rev/hr check, isolating the cadence comparison.
         const belowRec = g.reasons.some(r => /Below the recommended/i.test(r))
@@ -97,7 +97,7 @@ console.log('\nThe owner\'s best customer is not warned about their own price:')
   const sqft = 1000
   const pkg = pricingPackage(sqft, cfg, { overgrowth: 1, nearbyCount: 0, valueGrade: 'A+' })
   const weekly = pkg.options.find(o => o.cadence === 'weekly')!.price
-  const g = evaluatePrice({ cadence: 'weekly', price: weekly, sqft, cfg, crewCost: 0, valueGrade: 'A+' })
+  const g = evaluatePrice({ cadence: 'weekly', price: weekly, sqft, cfg, crewCost: 0, valueGrade: 'A+', overgrowth: 1 })
   eq('the guardrail recommends exactly what the engine priced', g.recommended, weekly)
   eq('…so the level is ok, not warn', g.level, 'ok')
   check('…and it does not claim the engine\'s price is below recommended',
@@ -116,13 +116,13 @@ console.log('\nAn overgrown job is judged against the overgrown price:')
         `og=2 → $${engineOneTime}, og=1 → $${normalOneTime}`)
 
   // The engine's own one-time price for the overgrown job must not warn.
-  const good = evaluatePrice({ cadence: 'one_time', price: engineOneTime, sqft, cfg, crewCost: 0, overgrowth: og })
+  const good = evaluatePrice({ cadence: 'one_time', price: engineOneTime, sqft, cfg, crewCost: 0, overgrowth: og, valueGrade: null })
   eq('the engine\'s overgrown price passes', good.level, 'ok')
   eq('…and the guardrail recommends the overgrown number', good.recommended, engineOneTime)
 
   // The normal-condition price on an overgrown job is a REAL underprice, and the
   // guardrail must now catch it — this is what the blindness was hiding.
-  const bad = evaluatePrice({ cadence: 'one_time', price: normalOneTime, sqft, cfg, crewCost: 0, overgrowth: og })
+  const bad = evaluatePrice({ cadence: 'one_time', price: normalOneTime, sqft, cfg, crewCost: 0, overgrowth: og, valueGrade: null })
   eq('quoting the normal price for a ×2 overgrown job now warns', bad.level, 'warn')
   check('…and says why', bad.reasons.some(r => /Below the recommended/i.test(r)),
         `reasons: ${JSON.stringify(bad.reasons)}`)
@@ -153,13 +153,13 @@ console.log('\nCallers that pass no grade and no overgrowth see exactly what the
 // Loosening the comparison must not make the guardrail toothless.
 console.log('\nA genuine underprice still warns:')
 {
-  const g = evaluatePrice({ cadence: 'weekly', price: 20, sqft: 3000, cfg, crewCost: 0 })
+  const g = evaluatePrice({ cadence: 'weekly', price: 20, sqft: 3000, cfg, crewCost: 0, valueGrade: null, overgrowth: 1 })
   eq('$20 weekly on a 3,000 ft² lawn warns', g.level, 'warn')
   check('…and quantifies the loss', g.reasons.some(r => /left on the table/i.test(r)),
         `reasons: ${JSON.stringify(g.reasons)}`)
 
   // The crew-cost floor is independent of all of this and must still fire.
-  const thin = evaluatePrice({ cadence: 'weekly', price: 30, sqft: 3000, cfg, crewCost: 65 })
+  const thin = evaluatePrice({ cadence: 'weekly', price: 30, sqft: 3000, cfg, crewCost: 65, valueGrade: null, overgrowth: 1 })
   check('a price thin against crew cost still warns', thin.level === 'warn',
         `reasons: ${JSON.stringify(thin.reasons)}`)
 }

@@ -208,11 +208,15 @@ export function QuoteBuilder({
     const crewCost = settings?.crew_cost_per_hour && settings.crew_cost_per_hour > 0 ? settings.crew_cost_per_hour : 40
     const out: PriceGuardrail[] = []
     const add = (cadence: 'one_time' | 'weekly' | 'biweekly' | 'monthly', price: number) => {
-      if (price > 0) out.push(evaluatePrice({ cadence, price, sqft: measuredSqft, cfg, crewCost }))
+      // PR-1: pass the real overgrowth so an overgrown job is judged against ITS
+      // own (higher) recommended price, not a normal-condition one. valueGrade is
+      // null because the builder prices neutrally — the grade curve is applied in
+      // the measure tool, not here. Both are now REQUIRED by evaluatePrice.
+      if (price > 0) out.push(evaluatePrice({ cadence, price, sqft: measuredSqft, cfg, crewCost, valueGrade: null, overgrowth }))
     }
     add('one_time', initialPrice); add('weekly', weeklyPrice); add('biweekly', biweeklyPrice); add('monthly', monthlyPrice)
     return out
-  }, [settings, measuredSqft, initialPrice, weeklyPrice, biweeklyPrice, monthlyPrice])
+  }, [settings, measuredSqft, initialPrice, weeklyPrice, biweeklyPrice, monthlyPrice, overgrowth])
 
   // Live duplicate detection — when entering a brand-new lead, surface a likely
   // existing customer so we link instead of creating a duplicate. Reuses the
