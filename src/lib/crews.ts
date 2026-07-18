@@ -243,16 +243,49 @@ export const CREW_SELECT = 'id, created_at, updated_at, user_id, name, color, da
 // Explicit list, so it MUST be extended when the Technician type grows — a
 // missing column here reads as undefined at runtime while TypeScript still
 // believes the field exists (e.g. every wage silently becoming "not set").
-export const TECHNICIAN_SELECT = 'id, created_at, updated_at, user_id, crew_id, name, phone, email, role, status, status_changed_at, is_active, hourly_wage, hired_on, ended_on, pto_annual_hours'
+export const TECHNICIAN_SELECT = 'id, created_at, updated_at, user_id, crew_id, name, phone, email, role, status, status_changed_at, is_active, hourly_wage, hired_on, ended_on, pto_annual_hours, archived_at'
 
 export async function loadCrews(supabase: SupabaseClient, userId: string): Promise<Crew[]> {
   const { data } = await supabase.from('crews').select(CREW_SELECT).eq('user_id', userId).order('sort_order').order('created_at')
   return (data as Crew[] | null) ?? []
 }
 
-export async function loadTechnicians(supabase: SupabaseClient, userId: string): Promise<Technician[]> {
-  const { data } = await supabase.from('technicians').select(TECHNICIAN_SELECT).eq('user_id', userId).order('created_at')
+// THE technician reader. Active roster by default — archiving means "off the
+// roster", so dispatch, the board and the pickers stop showing them.
+//
+// ⚠️ `includeArchived` is NOT a convenience flag; leaving it off is a MONEY bug on
+// the wrong surface. Anything that computes or replays PAY must pass it:
+//   • a pay run for a period someone worked before leaving still owes them wages —
+//     omit them and the draft silently underpays;
+//   • detectDrift() rebuilds a historical run from this list and compares gross,
+//     so an omitted archived tech reports false "drift" on a settled pay run —
+//     the payroll maths reading as changed when only the roster did.
+// Rule of thumb: showing people → default. Counting money or replaying history →
+// includeArchived.
+export async function loadTechnicians(
+  supabase: SupabaseClient, userId: string,
+  opts: { includeArchived?: boolean } = {},
+): Promise<Technician[]> {
+  let q = supabase.from('technicians').select(TECHNICIAN_SELECT).eq('user_id', userId)
+  if (!opts.includeArchived) q = q.is('archived_at', null)
+  const { data } = await q.order('created_at')
   return (data as Technician[] | null) ?? []
+}
+
+// Removing someone from the roster. This REPLACES the delete that used to be
+// here: deleting a technician CASCADE-removed their time_entries, wage_history
+// and pto_entries — statutory payroll records. PAY-1 made that survivable at the
+// FK level (ON DELETE SET NULL (technician_id), matching pay_run_lines); this
+// makes it unnecessary at the app level, which is the real fix.
+// `is_active` is deliberately also cleared: someone off the roster must not keep
+// counting as available crew anywhere that reads the flag.
+export async function archiveTechnician(
+  supabase: SupabaseClient, technicianId: string,
+): Promise<string | null> {
+  const { error } = await supabase.from('technicians')
+    .update({ archived_at: new Date().toISOString(), is_active: false })
+    .eq('id', technicianId)
+  return error?.message ?? null
 }
 
 export async function loadDispatchNotes(supabase: SupabaseClient, userId: string, dateISO: string): Promise<DispatchNote[]> {

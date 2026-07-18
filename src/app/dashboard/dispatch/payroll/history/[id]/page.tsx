@@ -63,7 +63,10 @@ export default function PayRunDetailPage() {
       const from = new Date(`${r.period_start.slice(0, 10)}T00:00:00`)
       const to = addDays(new Date(`${r.period_end.slice(0, 10)}T00:00:00`), 1)
       const [techs, entries, ptoRes] = await Promise.all([
-        loadTechnicians(supabase, user.id),
+        // includeArchived: detectDrift() REBUILDS this settled run from the roster
+        // and compares gross. Omit someone who has since left and the rebuild comes
+        // up short — the page reports "drift" on a pay run that never changed.
+        loadTechnicians(supabase, user.id, { includeArchived: true }),
         loadTimeEntries(supabase, user.id, { fromISO: from.toISOString(), toISO: to.toISOString() }),
         supabase.from('pto_entries').select('*').eq('user_id', user.id)
           .gte('date', r.period_start.slice(0, 10)).lte('date', r.period_end.slice(0, 10)),
