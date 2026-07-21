@@ -63,6 +63,6 @@ half-way.
 ## What's wired and verified this pass
 
 `message.send`, `customer.update` (notes + profile), `quote.update`, `job.update`
-(handler ready; call sites are Session C's — see `docs/OFFLINE_FOR_SESSION_C.md`), and
+(handler ready; call sites are the scheduling surfaces' `jobs` mutations), and
 `photo.upload` (idempotent, blob-persisted, same pipeline). Engine hardening: cross-tab
 lock, FIFO, single-flight. Not committed.

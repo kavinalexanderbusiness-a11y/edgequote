@@ -1,7 +1,7 @@
 # Quote Presentation V2 — the Phase 6 specification
 
 **Status:** SPEC ONLY. No code written, none to be written yet.
-**Place:** this is **Phase 6 ("The document")** of [Pricing V2](../memory/pricing-v2-roadmap-2026-07-16.md).
+**Place:** this is **Phase 6 ("The document")** of the Pricing V2 roadmap (tracked in project memory, not in this repo).
 The roadmap defines Phase 6 in one line — *`quotes.viewed_at`, PDF accept link, good/better/best,
 revisions fork*. This document is that line, specified.
 **Gate:** the owner's standing order is **do not skip phases**. *(Status corrected
