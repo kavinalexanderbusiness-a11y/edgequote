@@ -28,7 +28,9 @@ export interface ServiceUnit {
   active: boolean
 }
 
-export const UNIT_SELECT = 'id, user_id, code, label, abbrev, step, decimals, sort_order, active'
+// The column list every service_units read uses. Module-internal plumbing — a query
+// shape, not vocabulary — so it is not part of this module's public surface.
+const UNIT_SELECT = 'id, user_id, code, label, abbrev, step, decimals, sort_order, active'
 
 // The code every pre-existing line already carries, so it must always resolve.
 export const DEFAULT_UNIT_CODE = 'each'
