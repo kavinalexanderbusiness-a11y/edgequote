@@ -82,9 +82,20 @@ export function summarize(r: ScheduledReport): ReportSummary {
     })
   }
 
-  const warning = r.complete
-    ? null
-    : 'Some figures could not be loaded, so the numbers below are a floor, not a total.'
+  // ONE warning line, and the order matters. An incomplete load wins: when a query
+  // failed, expenseCount can read 0 because the EXPENSES didn't load, not because
+  // the books are empty — so claiming "the books are empty" there would be a
+  // fabrication. Only once we know the data is whole is expenseCount === 0 the real
+  // thing, and then the report must say what /dashboard/accounting already says for
+  // the same period: a 100% margin with no costs is arithmetic, not a business fact.
+  // Without this, the P&L PAGE showed "the books are empty" while the emailed PDF
+  // stated "margin 100%" as fact for the identical period — two surfaces disagreeing
+  // about one period, which is the exact drift this feature exists to prevent.
+  const warning = !r.complete
+    ? 'Some figures could not be loaded, so the numbers below are a floor, not a total.'
+    : pnl.expenseCount === 0
+      ? 'The books are empty — with no expenses recorded, the margin reads 100% only because nothing has been logged as spent. Log your costs and these figures start meaning something.'
+      : null
 
   const subject = `${title}: ${period.label}`
   const text = [

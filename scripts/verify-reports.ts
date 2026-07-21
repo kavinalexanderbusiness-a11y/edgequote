@@ -210,6 +210,44 @@ console.log('\nIncomplete data is declared, never presented as a total:')
   check('the warning is in the email text', summarize(r).text.includes('⚠️'))
 }
 
+console.log('\nAn empty-books period warns in the report, exactly as the P&L page does:')
+{
+  // THE prod scenario and the drift this pins: money came in, zero expenses logged,
+  // so margin arithmetically reads 100%. /dashboard/accounting shows "the books are
+  // empty"; the emailed report used to state "margin 100%" as fact for the same
+  // period. This is NOT the "no money moved" case above (that one has no revenue and
+  // says so) — here there IS revenue and a real-looking 100% margin, which is the
+  // dangerous one.
+  const r = composeReport('daily', TODAY, {
+    payments: [pay({ amount: 1855, paid_at: '2026-07-15' })], expenses: [], settings: NOT_REGISTERED,
+  }, { closed: true })
+  const s = summarize(r)
+  eq('there is revenue (not the no-money case)', r.pnl.cashCollected, 1855)
+  eq('margin reads 100% arithmetically', r.pnl.margin, 100)
+  check('the report WARNS the books are empty', s.warning !== null && /books are empty/i.test(s.warning))
+  check('...and names the 100% margin as the reason', s.warning !== null && s.warning.includes('100%'))
+  check('...so the emailed text carries the ⚠️', s.text.includes('⚠️') && /books are empty/i.test(s.text))
+
+  // Precedence: a FAILED load can leave expenseCount at 0 without the books being
+  // empty. Claiming "the books are empty" there would be a fabrication — the
+  // incomplete-load warning must win, and the report must NOT assert emptiness.
+  const partial = composeReport('daily', TODAY, {
+    payments: [pay({ amount: 1855, paid_at: '2026-07-15' })], expenses: [], settings: NOT_REGISTERED,
+    errors: ['expenses query failed'],
+  }, { closed: true })
+  const ps = summarize(partial)
+  check('a failed load does NOT claim the books are empty', ps.warning !== null && !/books are empty/i.test(ps.warning))
+  check('...it shows the incomplete-load warning instead', ps.warning !== null && /floor, not a total/i.test(ps.warning))
+
+  // Books WITH an expense, fully loaded → nothing to warn about.
+  const ok = composeReport('daily', TODAY, {
+    payments: [pay({ amount: 1855, paid_at: '2026-07-15' })],
+    expenses: [exp({ amount: 200, bill_date: '2026-07-15', spent_at: '2026-07-15' })],
+    settings: NOT_REGISTERED,
+  }, { closed: true })
+  check('a period with real costs carries no warning', summarize(ok).warning === null)
+}
+
 console.log('\nUndated cash is surfaced, not silently dropped:')
 {
   const r = composeReport('daily', TODAY, {
