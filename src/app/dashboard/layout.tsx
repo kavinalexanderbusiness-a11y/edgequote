@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { BottomNav } from '@/components/layout/BottomNav'
+import { RouteFocusManager } from '@/components/layout/RouteFocusManager'
 import { InstallPrompt } from '@/components/pwa/InstallPrompt'
 import { CommandPalette } from '@/components/command/CommandPalette'
 import { OfflineStatus } from '@/components/pwa/OfflineStatus'
@@ -43,6 +44,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
         {children}
       </main>
       <BottomNav />
+      {/* Moves focus to <main> on client-side navigation — the skip-link target
+          above was built for this but nothing wired the focus move. */}
+      <RouteFocusManager />
       <InstallPrompt />
       <CommandPalette />
       <OfflineStatus />
