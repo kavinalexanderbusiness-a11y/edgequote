@@ -36,6 +36,7 @@ import {
   profitAndLossLines, balanceSheetLines, journalRows, EXPENSE_COLUMNS, STATEMENT_COLUMNS,
 } from '../src/lib/accounting/exports'
 import { costJob, costJobs, rollupJobCosting } from '../src/lib/accounting/jobCosting'
+import { jobVisitValue } from '../src/lib/invoicing'
 import { resolvePeriod, monthRange, quarterRange, yearRange, monthsBetween, inPeriod, daysInMonth } from '../src/lib/accounting/period'
 import { DEFAULT_EXPENSE_CATEGORIES } from '../src/lib/accounting/categories'
 import { summarizeTransactions } from '../src/lib/payments/analytics'
@@ -232,6 +233,53 @@ console.log('\nJob costing — a job with no receipts has an UNKNOWN cost, never
   eq('rollup revenue excludes the uncosted job', roll.revenue, 100)
   eq('rollup margin is not inflated to 96%', roll.marginPercent, 60)
   eq('spend tagged to no job is surfaced as overhead', roll.untaggedCost, 25)
+
+  // ── The visit-value seam (RPT-1) ──
+  // Costing valued a job by `jobs.price` alone. That column is only the manual
+  // OVERRIDE: measured on the live book, 148 of 231 jobs (64%) carry none, so
+  // costing valued two thirds of the business at $0 and every margin derived from
+  // it was computed against revenue that had plainly been earned. The number lives
+  // on the quote, at the cadence the recurrence says — which is exactly what
+  // lib/invoicing jobVisitValue() answers, and what loadJobs() now resolves into
+  // `value` before costing ever sees the row.
+  // First the seam itself, on the shape the loader actually feeds it: a weekly
+  // recurring job whose quote bills $65/visit.
+  const weeklyQuote = { weekly_price: 65, initial_price: 150, total: 800 }
+  eq('the seam values an unpriced weekly visit from its quote',
+     jobVisitValue(null, weeklyQuote, 'weekly'), 65)
+  eq('...and the ANCHOR visit bills the initial price instead',
+     jobVisitValue(null, weeklyQuote, 'weekly', true), 150)
+  eq('...while a manual job price overrides the quote entirely',
+     jobVisitValue(120, weeklyQuote, 'weekly'), 120)
+
+  // Then costing over what the loader produces. `value` is the seam's answer and
+  // already accounts for the override, so costing reads it and does not re-derive.
+  const seam = costJobs({
+    jobs: [
+      // No manual price. Before: $0 revenue and a 100% margin on a $40 cost.
+      { id: 'j3', price: null, value: jobVisitValue(null, weeklyQuote, 'weekly') },
+      { id: 'j4', price: 120, value: jobVisitValue(120, weeklyQuote, 'weekly') },
+    ],
+    expenses: [exp({ amount: 40, job_id: 'j3' }), exp({ amount: 40, job_id: 'j4' })],
+    registrant: false,
+  })
+  eq('a job with no manual price is valued from its quote, not $0', seam[0].revenue, 65)
+  check('...so its margin is real, not 100% against $0',
+    seam[0].marginPercent !== null && Math.abs(seam[0].marginPercent - 38.5) < 0.1,
+    `got ${seam[0].marginPercent}`)
+  eq('the overridden job costs against its manual price', seam[1].revenue, 120)
+
+  // UNKNOWN STAYS UNKNOWN. The seam returns 0 when it has nothing to derive from;
+  // that must reach costing as null, never as a $0 revenue — a 0 would report a
+  // real -100% margin on a job we simply know nothing about, which is the exact
+  // trap the honesty rule at the top of jobCosting.ts exists to prevent.
+  const blind = costJobs({
+    jobs: [{ id: 'j5', price: null, value: null }],
+    expenses: [exp({ amount: 40, job_id: 'j5' })],
+    registrant: false,
+  })
+  eq('no price and no quote = revenue UNKNOWN, not $0', blind[0].revenue, null)
+  eq('...so margin is unknown too, not -100%', blind[0].marginPercent, null)
 }
 
 // ── 7. BLANK vs ZERO (the form) ──────────────────────────────────────────────

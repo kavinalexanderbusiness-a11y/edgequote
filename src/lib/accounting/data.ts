@@ -3,6 +3,7 @@ import type {
   Payment, BusinessSettings, ExpenseWithRelations, FixedAsset, Liability,
 } from '@/types'
 import { pageAll } from '@/lib/supabase/pageAll'
+import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import { listExpenses } from '@/lib/accounting/expenses'
 import type { GstInput } from '@/lib/accounting/gst'
 
@@ -40,9 +41,21 @@ export interface AccountingData {
 export interface AccountingJob {
   id: string
   title: string | null
+  /** The job-level manual price. May be null — most jobs carry no override. */
   price: number | null
   scheduled_date: string | null
   service_type: string | null
+  /**
+   * What this visit is worth, through THE valuation seam (lib/invoicing
+   * jobVisitValue): the job's own price when set, otherwise the price its quote
+   * actually bills at this cadence.
+   *
+   * NULL means genuinely unknown — no price AND no quote to derive one from. It
+   * is never 0-for-unknown: a $0 revenue turns an uncosted job into a 0% margin,
+   * which reads as a real business fact instead of a missing one (the honesty
+   * rule lib/margin.ts and jobCosting.ts already hold to).
+   */
+  value: number | null
 }
 
 /**
@@ -156,14 +169,61 @@ async function loadInventoryValue(sb: SupabaseClient, userId: string, errors: st
 }
 
 async function loadJobs(sb: SupabaseClient, userId: string, errors: string[]) {
-  const { rows, error } = await pageAll<AccountingJob>(() => sb
-    .from('jobs')
-    .select('id, title, price, scheduled_date, service_type')
-    .eq('user_id', userId)
-    .order('scheduled_date', { ascending: false }))
-  if (error) errors.push(`jobs: ${error}`)
-  return rows
+  // Three reads, because a visit's value is not one column. `jobs.price` is only
+  // the manual OVERRIDE — most jobs don't carry one, so costing by price alone
+  // valued the majority of the book at $0 and reported margins against revenue
+  // the business plainly did earn. The quote holds the real number, and which of
+  // its prices applies depends on the recurrence's cadence.
+  const [jobRes, quoteRes, recRes] = await Promise.all([
+    pageAll<JobRow>(() => sb
+      .from('jobs')
+      .select('id, title, price, scheduled_date, service_type, quote_id, recurrence_id, is_initial_visit')
+      .eq('user_id', userId)
+      .order('scheduled_date', { ascending: false })),
+    pageAll<QuoteRow>(() => sb
+      .from('quotes')
+      .select('id, initial_price, weekly_price, biweekly_price, monthly_price, total')
+      .eq('user_id', userId)),
+    pageAll<RecurrenceRow>(() => sb
+      .from('job_recurrences')
+      .select('id, freq, interval_unit, interval_count')
+      .eq('user_id', userId)),
+  ])
+  if (jobRes.error) errors.push(`jobs: ${jobRes.error}`)
+  // A failed quote/recurrence read must NOT silently fall back to price-only
+  // costing — that is the exact bug this loader exists to fix, and it would look
+  // like a business with no revenue rather than a query that failed.
+  if (quoteRes.error) errors.push(`job quotes: ${quoteRes.error}`)
+  if (recRes.error) errors.push(`job recurrences: ${recRes.error}`)
+
+  const quoteById = new Map(quoteRes.rows.map(q => [q.id, q]))
+  const recById = new Map(recRes.rows.map(r => [r.id, r]))
+
+  return jobRes.rows.map(j => {
+    const quote = j.quote_id ? quoteById.get(j.quote_id) ?? null : null
+    const rec = j.recurrence_id ? recById.get(j.recurrence_id) ?? null : null
+    const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
+    // THE seam. `is_initial_visit` matters: the anchor visit of a series bills the
+    // quote's INITIAL price, not its cadence price — a first cut can be $150 while
+    // every visit after it is $65.
+    const value = jobVisitValue(j.price, quote, freq, !!j.is_initial_visit)
+    return {
+      id: j.id, title: j.title, price: j.price,
+      scheduled_date: j.scheduled_date, service_type: j.service_type,
+      // > 0, not >= 0: the seam returns 0 when it has nothing to go on, and that
+      // is "unknown", not "free".
+      value: value > 0 ? value : null,
+    }
+  })
 }
+
+type JobRow = {
+  id: string; title: string | null; price: number | null
+  scheduled_date: string | null; service_type: string | null
+  quote_id: string | null; recurrence_id: string | null; is_initial_visit: boolean | null
+}
+type QuoteRow = { id: string } & Record<string, unknown>
+type RecurrenceRow = { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null }
 
 async function loadSettings(sb: SupabaseClient, userId: string, errors: string[]): Promise<BusinessSettings | null> {
   const { data, error } = await sb.from('business_settings').select('*').eq('user_id', userId).maybeSingle()

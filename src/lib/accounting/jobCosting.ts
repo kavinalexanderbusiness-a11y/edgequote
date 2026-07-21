@@ -90,6 +90,17 @@ export function costJob(
 
 export interface JobLike {
   id: string
+  /**
+   * What the visit is worth, from THE valuation seam (lib/invoicing
+   * jobVisitValue, applied in lib/accounting/data.ts). NULL = genuinely unknown.
+   *
+   * Costing used to read `price` directly, which is only the manual OVERRIDE —
+   * most jobs carry none, so most of the book valued at $0 and every margin
+   * derived from it was computed against revenue the business had actually
+   * earned. `price` is still accepted below as a fallback for callers that
+   * haven't been through the loader, but it is not the answer.
+   */
+  value?: number | null
   price?: number | null
 }
 
@@ -111,7 +122,13 @@ export function costJobs(
     else byJob.set(e.job_id, [e])
   }
   return p.jobs.map(j =>
-    costJob({ jobId: j.id, revenue: j.price ?? null, expenses: byJob.get(j.id) || [], registrant: p.registrant }),
+    costJob({
+      jobId: j.id,
+      // The seam's answer first; `price` only for callers that bypassed the loader.
+      revenue: j.value ?? j.price ?? null,
+      expenses: byJob.get(j.id) || [],
+      registrant: p.registrant,
+    }),
   )
 }
 
