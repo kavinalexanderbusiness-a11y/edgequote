@@ -9,8 +9,9 @@ import { loadDashboard } from '@/lib/dashboard/data'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { PageContainer } from '@/components/layout/PageContainer'
 import { formatCurrency } from '@/lib/utils'
+import { Card } from '@/components/ui/Card'
 import Link from 'next/link'
-import { Plus } from 'lucide-react'
+import { Plus, CalendarCheck, ArrowRight } from 'lucide-react'
 
 // ── The owner dashboard — the whole business in ten seconds ─────────────────
 // One screen, four moves of the eye, in this order:
@@ -98,6 +99,29 @@ export default async function DashboardPage() {
           own last-month baseline; the all-time total is gone (a lifetime
           cumulative never changes what the owner does this morning). */}
       <div className="animate-rise stagger-6"><MonthStrip {...d.month} /></div>
+
+      {/* THE WEEK IN REVIEW — the retrospective drill-down, sitting with the
+          month tiles it deepens. The Sunday screen (last week's results + next
+          week's moves) previously had no path from home: the only door was a
+          detour through the Grow hub, so the owner's weekly reflection lived two
+          hubs from where they start the day. A slim navigational card, not a
+          second hero — one aurora per page stays with the priorities queue. No
+          data is fetched here; the review page loads its own, exactly as before.
+          Matches the Grow FeatureCard hover language (card floats, arrow leans). */}
+      <Link href="/dashboard/review" className="group block animate-rise">
+        <Card className="p-4 sm:p-5 card-lift hover:border-accent/40 flex items-center gap-3.5">
+          <span className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
+            <CalendarCheck aria-hidden className="w-5 h-5 text-accent-text" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-bold tracking-tight text-ink flex items-center gap-1.5">
+              Weekly review
+              <ArrowRight aria-hidden className="w-3.5 h-3.5 text-accent-text transition-transform group-hover:translate-x-0.5" />
+            </span>
+            <span className="block text-xs text-ink-muted mt-0.5">Last week&rsquo;s results and next week&rsquo;s moves, on one screen.</span>
+          </span>
+        </Card>
+      </Link>
     </PageContainer>
   )
 }

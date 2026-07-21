@@ -115,6 +115,16 @@ export default function DashboardLoading() {
           </Card>
         ))}
       </div>
+
+      {/* Weekly-review card — renders unconditionally on the real page, so its
+          placeholder keeps the page from growing when the card lands. */}
+      <Card className="p-4 sm:p-5 flex items-center gap-3.5">
+        <Skeleton className="h-10 w-10 rounded-xl shrink-0" />
+        <div className="flex-1 min-w-0">
+          <Skeleton className="h-3.5 w-32" />
+          <Skeleton className="h-3 w-64 max-w-full mt-1.5" />
+        </div>
+      </Card>
       </div>
     </PageContainer>
   )
