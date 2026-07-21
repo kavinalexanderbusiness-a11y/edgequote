@@ -41,16 +41,25 @@ export default async function DashboardPage() {
   const { data: { user } } = await supabase.auth.getUser()
   const d = await loadDashboard(supabase, user!.id)
 
-  // The header carries the FORWARD half of the morning (the money band below is
-  // the backward half): how many stops today, and what's on the books over the
-  // day-plan window. Both figures already exist in the day plan — this is
-  // presentation of numbers the page computed anyway, not new math.
+  // The header states TODAY's shape — stops and the revenue booked for them —
+  // matching the approved Today board ("Today · N stops · $today"). Both come
+  // from the day plan already loaded; nothing new is computed.
+  //
+  // The revenue used to be day-plan TOTAL (a multi-day figure) sitting next to a
+  // today-scoped count — one line where the number read as today's but wasn't.
+  // A number that reads as one thing and means another is the honesty rule's
+  // whole target, so both facts are now today-scoped. The booked-ahead total
+  // still lives, clearly labelled, in the day-plan card ("Your next work days").
+  //
+  // "booked today" ≠ MoneyBand's "Money in today": this is the value scheduled
+  // for today's work; that is cash actually received. Distinct words on purpose.
   const todayGroup = d.dayPlan.groups.find(g => g.isToday)
   const stopsToday = todayGroup?.jobs.length ?? 0
+  const revenueToday = todayGroup?.revenue ?? 0
   const headerFacts = [
     d.dateLine,
     stopsToday > 0 ? `${stopsToday} stop${stopsToday !== 1 ? 's' : ''} today` : 'no stops today',
-    d.dayPlan.totalRevenue > 0 ? `${formatCurrency(d.dayPlan.totalRevenue)} on the books` : null,
+    revenueToday > 0 ? `${formatCurrency(revenueToday)} booked today` : null,
   ].filter(Boolean).join(' · ')
 
   return (
