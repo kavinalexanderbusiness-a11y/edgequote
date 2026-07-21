@@ -36,7 +36,7 @@ import type { MeasurementSnapshot, SavedRecommendation } from '@/types'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { PriceIntelligence } from '@/components/pricing/PriceIntelligence'
-import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp, Package } from 'lucide-react'
+import { Clock, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp, Package } from 'lucide-react'
 
 interface QuoteBuilderProps {
   customers: Customer[]
@@ -464,11 +464,6 @@ export function QuoteBuilder({
   // Memoized: the builder re-renders on every keystroke (many watch() subscriptions),
   // so without this these O(n) arrays would be rebuilt — and handed as fresh refs to the
   // Select children — on each character typed. Recompute only when the source lists change.
-  const customerOptions = useMemo(() => [
-    { value: '', label: 'Select a customer...' },
-    ...customers.map(c => ({ value: c.id, label: c.name })),
-    { value: '__manual', label: '+ Enter manually' },
-  ], [customers])
   // The unit vocabulary (service_units): the nine system units plus this owner's
   // custom ones. It replaces a hardcoded four-value list, which is the whole
   // reason a plumber can now quote 6 fixtures and a painter 3 rooms — the line
