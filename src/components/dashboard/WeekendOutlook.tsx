@@ -44,10 +44,15 @@ export function WeekendOutlook({ plan }: { plan: DayPlan }) {
                 {g.jobs.length > 0 ? (
                   <span className="text-xs text-ink-muted flex items-center gap-1.5 flex-wrap justify-end tabular-nums">
                     <span>{g.jobs.length} job{g.jobs.length !== 1 ? 's' : ''} · {g.hours}h · done ~{g.finish} · <span className="text-accent-text font-semibold">{formatCurrency(g.revenue)}</span></span>
-                    {g.loadState !== 'full' && (
-                      <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border',
-                        g.loadState === 'overloaded' ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>
-                        {g.loadState === 'overloaded' ? 'Overloaded' : 'Room'}
+                    {/* Only Overloaded earns a chip. 'Room' rendered on every
+                        not-full day, so on a typical light book nearly every row
+                        wore a green badge — a chip on almost everything is
+                        wallpaper, and it spent the emerald voice saying nothing.
+                        Empty days already carry the actionable version of
+                        "room" ("Open — add a job"). */}
+                    {g.loadState === 'overloaded' && (
+                      <span className="text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border text-red-400 border-red-500/30 bg-red-500/10">
+                        Overloaded
                       </span>
                     )}
                   </span>

@@ -32,6 +32,15 @@ export interface Priority {
   detail: string
   href: string
   score: number
+  /**
+   * The row's dollar figure, when the row IS a pile of money (owed, accepted,
+   * drafts, chaseable, blocked). Exposed so the component can set it in
+   * full-size type instead of burying the number that justified the ranking in
+   * a muted detail line. Qualified figures ($/visit, "recoverable") stay in
+   * `detail` — a column of unlike numbers would invite summing them.
+   * This is the SAME total the score adder already used; nothing new is computed.
+   */
+  value?: number
 }
 
 // Matches what the ledger's invoiceBalance needs, with the optional fields left
@@ -81,7 +90,8 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
   if (owed.length > 0) {
     next.push({
       kind: 'unpaid', label: 'Collect unpaid invoices',
-      detail: `${owed.length} · ${formatCurrency(owedTotal)}`,
+      detail: `${owed.length} invoice${owed.length !== 1 ? 's' : ''} outstanding`,
+      value: owedTotal,
       href: '/dashboard/invoices', score: 100_000 + adder(owedTotal),
     })
   }
@@ -114,7 +124,8 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
   if (acceptedUnscheduled.length > 0) {
     next.push({
       kind: 'unscheduled', label: 'Schedule accepted jobs',
-      detail: `${acceptedUnscheduled.length} · ${formatCurrency(acceptedTotal)}`,
+      detail: `${acceptedUnscheduled.length} accepted quote${acceptedUnscheduled.length !== 1 ? 's' : ''} with no date`,
+      value: acceptedTotal,
       href: '/dashboard/schedule', score: 80_000 + adder(acceptedTotal),
     })
   }
@@ -135,7 +146,8 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
   if (drafts.length > 0) {
     next.push({
       kind: 'drafts', label: 'Send draft invoices',
-      detail: `${drafts.length} · ${formatCurrency(draftTotal)}`,
+      detail: `${drafts.length} draft${drafts.length !== 1 ? 's' : ''} ready to go`,
+      value: draftTotal,
       href: '/dashboard/invoices', score: 60_000 + adder(draftTotal),
     })
   }
@@ -162,14 +174,16 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
   if (chaseable.length > 0) {
     next.push({
       kind: 'followups', label: 'Follow up on quotes',
-      detail: `${chaseable.length} · ${formatCurrency(chaseableTotal)}`,
+      detail: `${chaseable.length} quote${chaseable.length !== 1 ? 's' : ''} gone quiet`,
+      value: chaseableTotal,
       href: '/dashboard/quotes', score: 50_000 + adder(chaseableTotal),
     })
   }
   if (blocked.length > 0) {
     next.push({
       kind: 'followups_blocked', label: 'Quotes you can’t chase yet',
-      detail: `${blocked.length} · ${formatCurrency(blockedTotal)}`,
+      detail: `${blocked.length} missing a phone or email`,
+      value: blockedTotal,
       // Data-quality, not the quote list: the job here is to find a phone number,
       // not to write a message.
       href: '/dashboard/data-quality', score: 45_000 + adder(blockedTotal),

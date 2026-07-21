@@ -1,14 +1,21 @@
 import Link from 'next/link'
-import { Wallet, CalendarRange, AlertCircle } from 'lucide-react'
+import { Wallet, CalendarRange, AlertCircle, Send, TrendingUp, TrendingDown } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { Card } from '@/components/ui/Card'
 import { cn } from '@/lib/utils'
 
 // ── The money answer, above everything else ──────────────────────────────────
-// Three figures the owner needs before the first coffee: what landed today, what
-// the week has produced, and what's owed (with the overdue slice called out,
-// because that's the part that needs a phone call). Every number is computed
-// server-side in dashboard/page.tsx from THE ledger — this is presentation only.
+// Four figures, one glance: what landed today, what the week produced (against
+// the week before it), what's owed (with the overdue slice called out), and
+// what's sitting in quotes waiting for an answer. Past → present → due → maybe:
+// the whole money story left to right. Every number is computed server-side in
+// lib/dashboard/data from THE ledger — this is presentation only.
+//
+// THE DELTA IS ABSOLUTE, NOT A PERCENT. "vs $850 the week before" reads honestly
+// at every size of business; "+340%" on a $120 week is technically true and
+// practically noise. The arrow carries direction (the canonical emerald/red
+// TrendingUp/Down vocabulary from the intelligence page); the text stays muted —
+// direction is information, alarm is not.
 //
 // Overdue is the only tile that changes tone: money owed is normal, money owed
 // PAST ITS DUE DATE is a problem. Today/this-week stay calm even at $0 — a slow
@@ -18,28 +25,44 @@ export interface MoneyBandValues {
   today: number
   todayCount: number
   week: number
-  weekLabel: string
+  /** The 7 days before the current window — the delta's baseline. */
+  weekPrev: number
   owed: number
   owedCount: number
   overdue: number
   overdueCount: number
+  /** Sent quotes awaiting an answer — the pipeline, from rows already loaded. */
+  quotesOut: number
+  quotesOutCount: number
 }
 
-export function MoneyBand({ today, todayCount, week, weekLabel, owed, owedCount, overdue, overdueCount }: MoneyBandValues) {
+export function MoneyBand({ today, todayCount, week, weekPrev, owed, owedCount, overdue, overdueCount, quotesOut, quotesOutCount }: MoneyBandValues) {
   // A refund-heavy day nets negative. "-$300 · Nothing received yet" reads as a
   // bug, so the sub explains the sign instead of contradicting it.
   const todaySub = today < 0 ? 'Net of refunds'
     : todayCount > 0 ? `${todayCount} payment${todayCount !== 1 ? 's' : ''} received`
     : 'Nothing received yet'
 
+  // Only claim a comparison when the baseline exists. A brand-new business's
+  // second week "up from $0" is not an insight, it's an artifact.
+  const weekDelta = weekPrev > 0 ? (
+    <span className="inline-flex items-center gap-1">
+      {week >= weekPrev
+        ? <TrendingUp aria-hidden className="w-3 h-3 text-emerald-400 shrink-0" />
+        : <TrendingDown aria-hidden className="w-3 h-3 text-red-400 shrink-0" />}
+      <span>vs {formatCurrency(weekPrev)} week before</span>
+    </span>
+  ) : null
+
   const tiles = [
     {
       key: 'today',
-      // Short label on phones: at a third of a 390px screen the full label
-      // truncates to noise. Under three money tiles "Today" is unambiguous.
+      // Short label on phones: at a quarter of a 390px screen the full label
+      // truncates to noise. Under four money tiles "Today" is unambiguous.
       label: 'Money in today', short: 'Today',
       value: formatCurrency(today),
-      sub: todaySub, subShort: today < 0 ? 'Net of refunds' : todayCount > 0 ? `${todayCount} received` : 'None yet',
+      sub: todaySub,
+      subShort: today < 0 ? 'Refunds' : todayCount > 0 ? `${todayCount} received` : 'None yet',
       icon: Wallet,
       href: '/dashboard/invoices',
       tone: today > 0 ? 'text-emerald-400' : today < 0 ? 'text-amber-400' : 'text-ink',
@@ -48,9 +71,10 @@ export function MoneyBand({ today, todayCount, week, weekLabel, owed, owedCount,
     },
     {
       key: 'week',
-      label: 'Money in this week', short: 'This week',
+      label: 'Money in this week', short: 'Week',
       value: formatCurrency(week),
-      sub: weekLabel, subShort: '7 days',
+      sub: weekDelta ?? 'Last 7 days',
+      subShort: weekDelta ? (week >= weekPrev ? '↑ on last week' : '↓ on last week') : '7 days',
       icon: CalendarRange,
       href: '/dashboard/invoices',
       tone: 'text-ink',
@@ -71,21 +95,35 @@ export function MoneyBand({ today, todayCount, week, weekLabel, owed, owedCount,
         : owedCount > 0 ? 'None overdue' : 'All settled',
       icon: AlertCircle,
       // Plain /dashboard/invoices: the invoices page only parses ?invoice and
-      // ?job, so ?status=overdue was silently ignored and the tile landed on the
-      // unfiltered All list — a destination that contradicted the number clicked.
-      // Better to promise nothing than to promise a filter that never applies.
+      // ?job, so a status filter param would be silently ignored. Better to
+      // promise nothing than a filter that never applies.
       href: '/dashboard/invoices',
       tone: overdue > 0 ? 'text-amber-400' : 'text-ink',
       chip: overdue > 0 ? 'bg-amber-500/10 border-amber-500/20 text-amber-400' : 'bg-surface border-border text-ink-faint',
       surface: overdue > 0 ? 'border-amber-500/30' : 'border-border',
     },
+    {
+      key: 'quotesOut',
+      label: 'Quotes out', short: 'Quoted',
+      value: formatCurrency(quotesOut),
+      sub: quotesOutCount > 0
+        ? `${quotesOutCount} awaiting an answer`
+        : 'Nothing out for decision',
+      subShort: quotesOutCount > 0 ? `${quotesOutCount} waiting` : 'None out',
+      icon: Send,
+      href: '/dashboard/quotes',
+      tone: 'text-ink',
+      chip: 'bg-sky-500/10 border-sky-500/20 text-sky-400',
+      surface: 'border-border',
+    },
   ]
 
   return (
-    // 3-across at EVERY width, matching the KPI strip. Stacking the page's most
-    // important band cost ~200px and pushed the ranked queue off a phone's first
-    // screen — while the least important band fitted three across just fine.
-    <div className="grid grid-cols-3 gap-2 sm:gap-3">
+    // 2×2 on phones, 4-across from sm. Four tiles at grid-cols-4 on a 390px
+    // screen leaves ~90px per money figure — the numbers this band exists for
+    // would truncate. 2×2 keeps every figure legible and the band above the
+    // queue either way.
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
       {tiles.map(t => {
         const Icon = t.icon
         return (
@@ -99,10 +137,10 @@ export function MoneyBand({ today, todayCount, week, weekLabel, owed, owedCount,
                 </p>
                 {/* Decorative: the label already names the tile, so the icon
                     would just repeat it to a screen reader. Dropped on phones —
-                    at a third of the width the number needs the room, and the
-                    tile's tone already carries the signal. (`sm:` — this codebase
-                    defines no `xs` breakpoint, and an undefined variant compiles
-                    to nothing, silently hiding the icon at every size.) */}
+                    the number needs the room, and the tile's tone already
+                    carries the signal. (`sm:` — this codebase defines no `xs`
+                    breakpoint, and an undefined variant compiles to nothing,
+                    silently hiding the icon at every size.) */}
                 <span aria-hidden className={cn('w-7 h-7 rounded-lg border hidden sm:flex items-center justify-center shrink-0', t.chip)}>
                   <Icon className="w-3.5 h-3.5" />
                 </span>

@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { cn } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import type { Priority, PriorityKind } from '@/lib/dashboard/priorities'
 import {
   ListChecks, CheckCircle2, ArrowRight,
@@ -70,6 +70,19 @@ export function TodaysPriorities({ items }: { items: Priority[] }) {
                     <span className="block text-sm font-semibold tracking-tight text-ink truncate">{p.label}</span>
                     <span className="block text-xs text-ink-muted truncate mt-0.5 tabular-nums">{p.detail}</span>
                   </span>
+                  {/* The dollars that JUSTIFIED this row's rank, in full-size
+                      type. The queue orders by urgency × value, yet the value
+                      used to be the least legible text in the band — buried in
+                      the muted detail line. The engine sets `value` only for
+                      unqualified piles of money, so this column never mixes
+                      unlike figures (per-visit and "recoverable" stay in the
+                      detail text where their qualifiers live). */}
+                  {p.value != null && p.value > 0 && (
+                    <span className={cn('shrink-0 text-sm font-bold tabular-nums tracking-tight',
+                      p.kind === 'followups_blocked' ? 'text-ink-muted' : 'text-ink')}>
+                      {formatCurrency(p.value)}
+                    </span>
+                  )}
                   <ArrowRight className="w-4 h-4 text-ink-faint shrink-0 transition-transform group-hover:translate-x-0.5" />
                 </Link>
               </li>

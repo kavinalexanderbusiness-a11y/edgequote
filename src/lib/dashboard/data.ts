@@ -41,9 +41,22 @@ export interface DashboardData {
   money: MoneyBandValues
   priorities: Priority[]
   dayPlan: DayPlan
-  // conversionRate is null with NO decided quotes — "0%" would be a claim we
+  // The month view. Every figure carries its own comparison baseline, because an
+  // absolute number alone can't be judged in the 10 seconds this page gets —
+  // $2,480 collected means nothing until you know last month had $1,900 by now.
+  // conversionRate stays null with NO decided quotes — "0%" would be a claim we
   // haven't earned the data to make.
-  kpis: { collected: number; jobsThisMonth: number; conversionRate: number | null }
+  month: {
+    collected: number
+    // Collected by THIS point of last month (same day-of-month, capped to last
+    // month's length), so a mid-month read compares like with like — a partial
+    // month against a FULL last month would always read as "down".
+    collectedLastMonthToDate: number
+    jobsDone: number
+    /** Completed by the SAME point of last month — like-for-like, as above. */
+    jobsDoneLastMonth: number
+    conversionRate: number | null
+  }
   weather: WeatherImpactReport | null
   greeting: string
   dateLine: string
@@ -68,16 +81,29 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
 
   // Rolling 7 days INCLUDING today, not a calendar week: on a Monday a calendar
   // week would read $0 and look broken.
-  const weekStart = new Date(`${today}T00:00:00`)
-  weekStart.setDate(weekStart.getDate() - 6)
-  const weekStartISO = `${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, '0')}-${String(weekStart.getDate()).padStart(2, '0')}`
+  const weekStartISO = isoPlusDays(today, -6)
   const dayB = dayBoundsIso(today)
   const weekB = dayBoundsIso(weekStartISO)
+  // The 7 days BEFORE those — [today-13, today-7], abutting the current window
+  // exactly (both half-open on the same engine bounds), for the week comparison.
+  const prevWeekB = dayBoundsIso(isoPlusDays(today, -13))
+  // Month-to-date vs the SAME span of last month. The end bound caps the
+  // day-of-month to last month's length so Jul 31 compares against all of June
+  // instead of overflowing into July 1 (new Date(y, m, 31) silently rolls over).
+  const now0 = new Date(`${today}T00:00:00`)
+  const monthStartISO = `${now0.getFullYear()}-${String(now0.getMonth() + 1).padStart(2, '0')}-01`
+  const lastMonth = new Date(now0.getFullYear(), now0.getMonth() - 1, 1)
+  const lastMonthStartISO = `${lastMonth.getFullYear()}-${String(lastMonth.getMonth() + 1).padStart(2, '0')}-01`
+  const daysInLastMonth = new Date(now0.getFullYear(), now0.getMonth(), 0).getDate()
+  const lastMonthSameDayISO = `${lastMonth.getFullYear()}-${String(lastMonth.getMonth() + 1).padStart(2, '0')}-${String(Math.min(now0.getDate(), daysInLastMonth)).padStart(2, '0')}`
+  const monthB = dayBoundsIso(monthStartISO)
+  const lastMonthB = dayBoundsIso(lastMonthStartISO)
+  const lastMonthSameDayB = dayBoundsIso(lastMonthSameDayISO)
 
   // ── Phase 1: read every table ONCE, all in parallel ──
   const [
     invRes, jobRes, planJobRes, quoteRes, recRes, convRes, custRes, setRes,
-    todayCash, weekCash,
+    todayCash, weekCash, prevWeekCash, monthCash, lastMonthCash,
   ] = await Promise.all([
     // The three full-history reads are PAGED. An unbounded select silently stops
     // at 1000 rows, which would understate Owed/Collected and — via
@@ -119,6 +145,12 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     sb.from('business_settings').select('gst_percent, service_seasons, preferred_work_days, work_start_time, daily_capacity_hours, base_lat, base_lng, base_address').eq('user_id', userId).maybeSingle(),
     collectedBetween(sb, { userId, startIso: dayB.start, endIso: dayB.end }),
     collectedBetween(sb, { userId, startIso: weekB.start, endIso: dayB.end }),
+    // The comparison windows, through THE same ledger engine — so the
+    // credit-exclusion and signed-refund semantics are identical on both sides
+    // of every delta by construction, not by two implementations agreeing.
+    collectedBetween(sb, { userId, startIso: prevWeekB.start, endIso: weekB.start }),
+    collectedBetween(sb, { userId, startIso: monthB.start, endIso: dayB.end }),
+    collectedBetween(sb, { userId, startIso: lastMonthB.start, endIso: lastMonthSameDayB.end }),
   ])
 
   // Never render a number we didn't actually read. Supabase RESOLVES on failure
@@ -137,6 +169,12 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     : setRes.error ? `settings: ${setRes.error.message}`
     : todayCash.error ? `today's payments: ${todayCash.error}`
     : weekCash.error ? `this week's payments: ${weekCash.error}`
+    // The comparison windows join the same all-or-throw rule: a delta computed
+    // against a silently-failed baseline would render "up from $0" — the exact
+    // confident-lie failure mode the trust audit exists to prevent.
+    : prevWeekCash.error ? `last week's payments: ${prevWeekCash.error}`
+    : monthCash.error ? `this month's payments: ${monthCash.error}`
+    : lastMonthCash.error ? `last month's payments: ${lastMonthCash.error}`
     : null
   if (failure) throw new Error(`Dashboard could not load — ${failure}`)
 
@@ -186,6 +224,10 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     seasons: settingsToSeasons(settings?.service_seasons),
     feeSettings: settings,
     today,
+    // 8, up from the default 6: the queue now owns a tall desktop column, and at
+    // 6 the two lowest tiers (messages, lapsed) vanished with no trace whenever
+    // more than six kinds fired — rows silently cut with nothing saying so.
+    limit: 8,
   })
 
   // ── Day plan (THE day-plan engine) ──
@@ -200,26 +242,45 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     today,
   })
 
-  // ── KPIs ──
+  // ── The month view + pipeline ──
   const now = new Date()
-  const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
   const allJobsForKpi = jobs as unknown as { status: string; scheduled_date: string }[]
   const accepted = quotes.filter(q => q.status === 'accepted').length
   const decided = quotes.filter(q => q.status !== 'draft').length
+  // Quotes out for a decision — sent, no answer yet. The forward half of the
+  // money story, from rows already in hand: zero extra queries. `sent` is the
+  // same status the conversion figure treats as decided-pending, so the two
+  // can't drift apart.
+  const quotesOut = quotes.filter(q => q.status === 'sent')
+  const quotesOutTotal = quotesOut.reduce((s, q) => s + Number(q.total || 0), 0)
+  // Both sides of the comparison are the SAME to-date window, one month apart:
+  // [monthStart, today] vs [lastMonthStart, same day of last month]. Review
+  // caught the first cut comparing month-to-date against the FULL last month —
+  // which puts a red "down" arrow on a perfectly on-pace morning until roughly
+  // the 25th of every month, forever. The upper bound on the current side also
+  // matters on its own: without it, a completed job carrying a future
+  // scheduled_date counts in this month's figure today and again next month.
+  const jobsDone = allJobsForKpi.filter(j =>
+    j.status === 'completed' && j.scheduled_date >= monthStartISO && j.scheduled_date <= today).length
+  const jobsDoneLastMonth = allJobsForKpi.filter(j =>
+    j.status === 'completed' && j.scheduled_date >= lastMonthStartISO && j.scheduled_date <= lastMonthSameDayISO).length
   const hour = now.getHours()
 
   return {
     money: {
       today: todayCash.total, todayCount: todayCash.count,
-      week: weekCash.total, weekLabel: 'Last 7 days',
+      week: weekCash.total, weekPrev: prevWeekCash.total,
       owed: outstanding, owedCount: owing.length,
       overdue, overdueCount: overdueInv.length,
+      quotesOut: quotesOutTotal, quotesOutCount: quotesOut.length,
     },
     priorities,
     dayPlan,
-    kpis: {
-      collected: invoices.reduce((s, i) => s + (Number(i.amount_paid) || 0), 0),
-      jobsThisMonth: allJobsForKpi.filter(j => j.status === 'completed' && j.scheduled_date >= monthStart).length,
+    month: {
+      collected: monthCash.total,
+      collectedLastMonthToDate: lastMonthCash.total,
+      jobsDone,
+      jobsDoneLastMonth,
       conversionRate: decided > 0 ? Math.round((accepted / decided) * 100) : null,
     },
     weather,
