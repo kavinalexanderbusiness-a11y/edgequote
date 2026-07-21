@@ -22,11 +22,15 @@ fresh database completely; `tsc` + `next build` pass.
 
 > ⚠️ **This section used to say "run ONE file — nothing else is required."** That was
 > true when it was written (2026-06-25) and has been wrong since 2026-06-27. As of
-> 2026-07-15 there are **27** `RUN-*.sql` files dated after that snapshot. Running
-> `schema.sql` alone rebuilds a database ~3 weeks behind production, missing the
-> payment ledger, quote_services, granular consent, invoice lifecycle, message
-> idempotency, quote expiry, delivery tracking, equipment/parts and campaign studio.
-> It does not error — it just quietly produces a schema the app fails against.
+> **2026-07-21 there are 89 `RUN-*.sql` files** (was 27 at the 2026-07-15 revision
+> of this note — the count rots fast; trust `ls supabase/RUN-*.sql`, not this
+> sentence). Running `schema.sql` alone rebuilds a database weeks behind
+> production. It does not error — it just quietly produces a schema the app fails
+> against. Two further cautions from the migration audit: production's schema is
+> NOT a subset of main (unmerged branches have been applied by hand — the live
+> catalog is the only authority), and several functions (`get_portal_data`,
+> `submit_website_lead`) are `create or replace`d by MULTIPLE files — only the
+> newest in each chain may ever run, or the portal silently rolls backward.
 
 ```
 # 1. the snapshot (complete as of 2026-06-25)

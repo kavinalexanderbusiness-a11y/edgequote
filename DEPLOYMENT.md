@@ -2,6 +2,24 @@
 
 _Verified against the live database while writing this. "✅ applied" = confirmed present; "⛳ run now" = pending._
 
+> **⚠️ Corrected 2026-07-21 (Product HQ review against PRODUCT-VISION.md).** This
+> document is a point-in-time snapshot (≈2026-06/07) and several of its claims
+> rotted as features shipped. Corrections are applied inline below and marked
+> **[2026-07-21]**. Division of labour between the two deploy docs: **this file
+> is the env-var + external-services + smoke-test reference; `DEPLOY_CHECKLIST.md`
+> owns the migration/process story.** The migration authority is never a document:
+> it is the live DB catalog + `supabase/RUN-*.sql` on main (89 files as of
+> 2026-07-21) — there is no migration ledger, so verify against the catalog.
+>
+> **Vercel project (learned the hard way, 2026-07):** the ONE canonical project is
+> **`kavinalexanderbusiness-a11y-edgequote`** (owns `app.edgepropertyservicesyyc.ca`,
+> holds all env vars). A duplicate project named `edgequote` was accidentally
+> created 2026-07-13 with ZERO env vars — its builds fail at `/setup` prerender and
+> it double-builds every push. It should be deleted; **never re-import the repo
+> into a second Vercel project and never sync env vars into one** — duplicated
+> projects would run every cron twice against the production DB (double AutoPay
+> retries, double customer messages).
+
 ---
 
 ## 1. SQL migrations (run in this order)
@@ -9,6 +27,13 @@ _Verified against the live database while writing this. "✅ applied" = confirme
 The base schema and most feature migrations are **already applied** (verified): `customers/quotes/jobs/invoices/properties/payments/conversations/messages`, `notifications` + triggers, `push_subscriptions` + `push_config`, `labor_observations`, `day_statuses`, `customers.archived_at` + `reviewed_at`, `business_settings.notif_prefs` + `sms_pricing`, `notification_log.message_id`, `pg_net`, the realtime publication (notifications, messages, conversations, quotes, invoices, jobs, day_statuses), and the FK covering indexes.
 
 **Still pending — run these before launch, in order:**
+
+> **[2026-07-21]** The "pending" statuses below are from the original snapshot and
+> most have since shipped (e.g. B exists as
+> `supabase/RUN-2026-07-15-revoke-trigger-fn-execute.sql`; day-settings columns
+> landed with the dispatch/crew work). Do not run anything from this section
+> without first checking the live catalog — re-running an older definition can
+> roll a newer one back (the `get_portal_data` chain is the canonical example).
 
 ### ⛳ A. Day Settings (REQUIRED — the per-day crew/hours override fails to save without it)
 ```sql
@@ -66,6 +91,8 @@ create index if not exists invoices_inum_trgm   on public.invoices using gin (in
 | `CRON_SECRET` | ✅ Required (reminders) | Vercel sends it as a Bearer token; the cron route validates it |
 | `NEXT_PUBLIC_VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | ⬜ For push | `npx web-push generate-vapid-keys`; no Firebase/APNs needed |
 | `PUSH_SEND_SECRET` | ⬜ For push | Must equal `public.push_config.secret` |
+| `ANTHROPIC_API_KEY` | ⬜ For AI assist | **[2026-07-21]** Powers the one-assistant drafting/explaining kit (`lib/ai/assist`). AI never produces a price regardless (see `PRODUCT-VISION.md` §10). |
+| `INTEGRATIONS_DELIVER_SECRET` | ⬜ For integrations | **[2026-07-21]** Signs outbound webhook deliveries (integrations outbox → `/api/integrations/deliver`). Delivery stays inert until set. |
 
 ---
 
@@ -77,7 +104,13 @@ create index if not exists invoices_inum_trgm   on public.invoices using gin (in
 - **Resend** — verify the sending domain; set `RESEND_FROM`.
 - **Web Push (VAPID)** — generate keys, set the 4 vars, run the `push_config` UPDATE (below). Works on Chrome/Edge/Firefox/Android and iOS 16.4+ **when installed to the Home Screen**.
 - **Google Maps** — enable Geocoding + Places APIs; restrict the browser key by referrer and the server key by API.
-- **Vercel** — hosting + Cron (already configured in `vercel.json`: daily `0 14 * * *` → `/api/cron/notifications`).
+- **Vercel** — hosting + Cron. **[2026-07-21]** `vercel.json` now defines
+  **12 daily crons** (signals, reports, engine, notifications, campaigns,
+  quote-followup, invoice-reminders, autopay, publish, marketing-draft,
+  scheduled-messages, integrations) — `vercel.json` is the source of truth, not
+  this list. ⚠️ **Hobby plan: any sub-daily cron fails the ENTIRE deployment**
+  (this silently broke ~6 deploys once). Always confirm a deploy via the GitHub
+  commit status, and keep every cron daily-or-coarser.
 
 ---
 
@@ -132,9 +165,22 @@ create index if not exists invoices_inum_trgm   on public.invoices using gin (in
 
 ## 7. Known limitations (not worth blocking launch)
 
-- **Refunds/expiries:** the Stripe webhook handles successful payments only. A refund or expired session won't auto-revert the invoice — handle manually for now (add `charge.refunded`/`checkout.session.expired` handlers before high payment volume).
-- **Partial payments:** an invoice is paid-or-not; no partial-balance tracking.
-- **Recurring autopay / card-on-file:** not built. A non-disruptive design is documented (add `customers.stripe_customer_id` + a `payment_methods` table + a `portal_setup_autopay` SetupIntent flow, reusing the existing webhook) — additive, no retroactive migration.
+- ~~Refunds/expiries: the Stripe webhook handles successful payments only~~ —
+  **[2026-07-21] NO LONGER TRUE, and following the old advice causes real damage.**
+  The `charge.refunded` webhook is now THE ONE writer for card money-out.
+  ⛔ **Never hand-record a card refund** — the webhook's dedupe only matches its
+  own rows, so a manual entry double-books the refund. Manual refund recording is
+  for cash/e-transfer/cheque only. Disputes are notify-only ON PURPOSE (see the
+  payments trust decisions — a lost dispute deliberately leaves the invoice
+  reading paid so dunning never chases a chargeback winner).
+- ~~Partial payments: an invoice is paid-or-not~~ — **[2026-07-21] NO LONGER
+  TRUE.** Partial balances are tracked (`amount_paid`, `partial` status); the
+  portal charges the remaining balance only.
+- ~~Recurring autopay / card-on-file: not built~~ — **[2026-07-21] BUILT and
+  live since 2026-06-25** (SetupIntents card-on-file, off-session AutoPay with
+  variance guard, portal self-serve enrolment/removal). See the payments trust
+  decisions before touching any of it: four things that look unfinished are
+  deliberate owner choices.
 - **Multi-tab exact-simultaneous actions:** completing the *same* job in two tabs at the same instant can race the draft-invoice creation. Single-user double-clicks are guarded; the two-tabs case wants a partial unique index (a small follow-up migration).
 - **Analytics at scale:** the dashboard + intelligence loaders fetch all rows; fine for hundreds, move to SQL aggregates when you reach thousands. Same for the `auth.uid()`-per-row RLS optimization.
 - **SMS cost is an estimate** (configurable in Settings → Messaging); actual carrier charges vary. MMS shows "Estimate unavailable."

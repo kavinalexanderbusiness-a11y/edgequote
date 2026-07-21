@@ -4,7 +4,10 @@
 **Place:** this is **Phase 6 ("The document")** of [Pricing V2](../memory/pricing-v2-roadmap-2026-07-16.md).
 The roadmap defines Phase 6 in one line — *`quotes.viewed_at`, PDF accept link, good/better/best,
 revisions fork*. This document is that line, specified.
-**Gate:** the owner's standing order is **Phase 0 only — do not skip phases**. Phase 0 is ~2 of 7.
+**Gate:** the owner's standing order is **do not skip phases**. *(Status corrected
+2026-07-21: Phase 0 is **CLOSED** — `5bcfdcf`, 3 migrations live. Phase 1 has
+**not** been opened by the owner; that gate is separate and still shut. The
+build-after-Phases-1–5 rule below is unchanged.)*
 **This spec is redesign input. It is not a licence to build.** Build it when Phases 1–5 have landed.
 **Date:** 2026-07-16, revised + APPROVED 2026-07-17 · **Code state:** `main` @ `f9014e1` ·
 **Prod verified live.**
