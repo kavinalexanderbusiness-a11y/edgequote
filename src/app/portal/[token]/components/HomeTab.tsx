@@ -24,10 +24,10 @@ import { Button } from '@/components/ui/Button'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
 import {
-  daysAwayLabel, liveStatusOf, visitDay,
+  daysAwayLabel, liveStatusOf, visitToCalendarEvent, visitDay,
   type Derived, type PortalJob, type PortalView, type SubmitRequestFn,
 } from '../model'
-import { PortalSection, StatusPill, StatusStepper, Thumb, type TabProps } from './shared'
+import { AddToCalendar, PortalSection, StatusPill, StatusStepper, Thumb, type TabProps } from './shared'
 
 // ── Home ────────────────────────────────────────────────────────────────────
 // `suppressApproved` is the one prop beyond the tab contract: PortalClient
@@ -128,7 +128,20 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
             {/* Rescheduling used to mean composing a free-text message from scratch.
                 Only offered while the visit is still merely scheduled — once someone
                 is on their way, a date-change form is the wrong tool. */}
-            {liveStatusOf(next) === 'scheduled' && <RescheduleRequest key={next.id} job={next} todayISO={todayISO} submitRequest={actions.submitRequest} />}
+            {liveStatusOf(next) === 'scheduled' && (
+              <>
+                <RescheduleRequest key={next.id} job={next} todayISO={todayISO} submitRequest={actions.submitRequest} />
+                {/* Put the visit in their own calendar — one tap, no account, no
+                    backend. All-day on the scheduled date (we have a date, not a
+                    time, and won't invent one). */}
+                <AddToCalendar
+                  visits={[visitToCalendarEvent(next, biz, view.propsById)]}
+                  filename={`${(next.service_type || 'visit').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'visit'}.ics`}
+                  calName={biz?.company_name ? `${biz.company_name} visits` : 'Service visits'}
+                  className="mt-2"
+                />
+              </>
+            )}
           </>
         ) : approvedPending ? (
           <div>

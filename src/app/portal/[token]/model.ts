@@ -138,6 +138,82 @@ export function tabNavTarget(key: string, current: number, count: number): numbe
   }
 }
 
+// ── Add to calendar (client-side .ics) ──────────────────────────────────────
+// A homeowner wants their service visit in their phone's calendar so they can
+// plan around it. Everything needed is already in the payload — this generates
+// a standard iCalendar file in the browser, no backend and no engine. Pure so
+// verify can pin the format (a malformed .ics silently fails to import).
+export interface CalendarVisit {
+  uid: string          // stable per visit → re-adding UPDATES, never duplicates
+  dateISO: string      // 'YYYY-MM-DD'
+  title: string
+  description?: string | null
+  location?: string | null
+}
+
+// RFC 5545 §3.3.11 text escaping: backslash, semicolon, comma, newline.
+function icsEscape(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n')
+}
+// Fold content lines to ≤75 octets (§3.1) — Google Calendar is strict; a
+// continuation line begins with a single space.
+function icsFold(line: string): string {
+  if (line.length <= 74) return line
+  const out = [line.slice(0, 74)]
+  let rest = line.slice(74)
+  while (rest.length) { out.push(' ' + rest.slice(0, 73)); rest = rest.slice(73) }
+  return out.join('\r\n')
+}
+// 'YYYY-MM-DD' → basic 'YYYYMMDD', with an optional day offset for the all-day
+// exclusive DTEND. UTC arithmetic, so it never drifts a day across a timezone.
+function icsDate(dateISO: string, addDays = 0): string {
+  const d = new Date(Date.parse(dateISO + 'T00:00:00Z') + addDays * 86_400_000)
+  return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`
+}
+// ISO instant → basic 'YYYYMMDDTHHMMSSZ' for DTSTAMP.
+function icsStamp(iso: string): string {
+  return iso.replace(/[-:]/g, '').replace(/\.\d+/, '').replace(/Z?$/, 'Z')
+}
+
+// Booked visits → one downloadable .ics. All-day events on the scheduled date:
+// the payload carries a DATE, not a time, so an all-day block is the HONEST
+// representation — we never invent an appointment hour. `stampISO` is injected
+// (kept pure) so verify is deterministic.
+export function buildVisitICS(visits: CalendarVisit[], opts: { stampISO: string; calName?: string }): string {
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//EdgeQuote//Customer Portal//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH']
+  if (opts.calName) lines.push(icsFold(`X-WR-CALNAME:${icsEscape(opts.calName)}`))
+  const stamp = icsStamp(opts.stampISO)
+  for (const v of visits) {
+    lines.push('BEGIN:VEVENT')
+    lines.push(icsFold(`UID:${v.uid}`))
+    lines.push(`DTSTAMP:${stamp}`)
+    lines.push(`DTSTART;VALUE=DATE:${icsDate(v.dateISO)}`)
+    lines.push(`DTEND;VALUE=DATE:${icsDate(v.dateISO, 1)}`)
+    lines.push(icsFold(`SUMMARY:${icsEscape(v.title)}`))
+    if (v.description) lines.push(icsFold(`DESCRIPTION:${icsEscape(v.description)}`))
+    if (v.location) lines.push(icsFold(`LOCATION:${icsEscape(v.location)}`))
+    lines.push('END:VEVENT')
+  }
+  lines.push('END:VCALENDAR')
+  return lines.join('\r\n') + '\r\n'
+}
+
+// One booked job → a calendar event. ASCII separator on purpose (max calendar
+// compatibility); location is the visit's OWN property (resolved through its
+// property_id, same rule as everywhere — never the primary as a stand-in).
+export function visitToCalendarEvent(job: PortalJob, business: PortalData['business'], propsById: Map<string, PortalProperty>): CalendarVisit {
+  const svc = job.service_type || job.title || 'Service visit'
+  const company = business?.company_name?.trim() || null
+  const address = (job.property_id ? propsById.get(job.property_id)?.address : null)?.trim() || null
+  return {
+    uid: `visit-${job.id}@edgequote`,
+    dateISO: job.scheduled_date,
+    title: company ? `${svc} - ${company}` : svc,
+    description: company ? `Your scheduled visit with ${company}.` : 'Your scheduled visit.',
+    location: address,
+  }
+}
+
 // ── Normalize ───────────────────────────────────────────────────────────────
 // Defensive: an OLDER get_portal_data — or a customer with no rows in a section —
 // can return null for a collection (Postgres json_agg is null, not []). Coerce

@@ -15,11 +15,11 @@ import { Camera, CheckCircle2, Clock, History, MapPin, Receipt } from 'lucide-re
 import { Button } from '@/components/ui/Button'
 import { cn, parseLocalDate } from '@/lib/utils'
 import {
-  daysAwayLabel, liveStatusOf, resolveDocAddress, visitDay,
+  daysAwayLabel, liveStatusOf, resolveDocAddress, visitToCalendarEvent, visitDay,
   type PortalInvoice, type PortalJob, type PortalPhoto, type PortalView,
 } from '../model'
 import {
-  Empty, InvoiceStatusPill, PortalSection, StatusPill, Thumb, fmtMoney,
+  AddToCalendar, Empty, InvoiceStatusPill, PortalSection, StatusPill, Thumb, fmtMoney,
   type PortalActions, type TabProps,
 } from './shared'
 
@@ -44,7 +44,18 @@ export function VisitsTab({ view, actions }: TabProps) {
     <div className="space-y-6">
       {upcoming.length > 0 && (
         <div className="animate-rise">
-          <PortalSection title="Upcoming visits" sub={upcoming.length === 1 ? 'Your next scheduled visit' : `${upcoming.length} visits on the calendar`}>
+          <PortalSection
+            title="Upcoming visits"
+            sub={upcoming.length === 1 ? 'Your next scheduled visit' : `${upcoming.length} visits on the calendar`}
+            action={
+              <AddToCalendar
+                visits={upcoming.map(j => visitToCalendarEvent(j, view.data.business, view.propsById))}
+                filename={upcoming.length === 1 ? 'visit.ics' : 'upcoming-visits.ics'}
+                calName={view.data.business?.company_name ? `${view.data.business.company_name} visits` : 'Service visits'}
+                label={upcoming.length === 1 ? 'Add to calendar' : 'Add all'}
+              />
+            }
+          >
             <div className="space-y-2">
               {upcoming.map(j => <UpcomingRow key={j.id} j={j} view={view} />)}
             </div>

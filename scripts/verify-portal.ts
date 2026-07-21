@@ -11,7 +11,8 @@ import {
   normalizePortal, buildDerived, buildDocItems, buildPortalView,
   quoteJourney, moneySummary, buildPropertyModels, customerSinceYear,
   requestPresetsOf, resolveDocAddress, groupPhotos, orphanPhotos, liveStatusOf, visitDay,
-  daysAwayLabel, parsePortalDeepLink, tabNavTarget, NO_PROPERTY, MAX_REQUEST_PRESETS,
+  daysAwayLabel, parsePortalDeepLink, tabNavTarget, buildVisitICS, visitToCalendarEvent,
+  NO_PROPERTY, MAX_REQUEST_PRESETS,
   type PortalData, type PortalJob, type PortalProperty, type DocBlobRenderers,
 } from '../src/app/portal/[token]/model'
 
@@ -244,6 +245,37 @@ console.log('\ntabNavTarget (arrow-key tab navigation — the ring must not trap
   check('single-tab bar: arrows stay put (no wrap glitch)', tabNavTarget('ArrowRight', 0, 1) === 0 && tabNavTarget('ArrowLeft', 0, 1) === 0)
   check('empty bar → null (no crash)', tabNavTarget('ArrowRight', 0, 0) === null)
   check('never returns an out-of-range index', [0, 1, 5].every(c => ['ArrowRight', 'ArrowLeft', 'Home', 'End'].every(k => { const r = tabNavTarget(k, c, N); return r === null || (r >= 0 && r < N) })))
+}
+
+// ── Add to calendar (.ics generation) ───────────────────────────────────────
+console.log('\nbuildVisitICS / visitToCalendarEvent (a malformed .ics silently fails to import):')
+{
+  const STAMP = '2026-07-18T15:04:05.000Z'
+  const ics = buildVisitICS([{ uid: 'visit-j1@edgequote', dateISO: '2026-07-20', title: 'Lawn Mowing - Edge Co', description: 'Your scheduled visit with Edge Co.', location: '12 Main St SW' }], { stampISO: STAMP, calName: 'Edge Co visits' })
+  check('wrapped in VCALENDAR', ics.startsWith('BEGIN:VCALENDAR') && ics.trimEnd().endsWith('END:VCALENDAR'))
+  check('declares VERSION 2.0 + a PRODID', ics.includes('VERSION:2.0') && ics.includes('PRODID:'))
+  check('one VEVENT with a stable UID', (ics.match(/BEGIN:VEVENT/g) || []).length === 1 && ics.includes('UID:visit-j1@edgequote'))
+  check('all-day DTSTART on the scheduled date', ics.includes('DTSTART;VALUE=DATE:20260720'))
+  check('all-day DTEND is the NEXT day (exclusive end)', ics.includes('DTEND;VALUE=DATE:20260721'))
+  check('DTSTAMP is basic-UTC from the injected instant', ics.includes('DTSTAMP:20260718T150405Z'))
+  check('SUMMARY / LOCATION carried', ics.includes('SUMMARY:Lawn Mowing - Edge Co') && ics.includes('LOCATION:12 Main St SW'))
+  check('CRLF line endings (RFC 5545)', ics.includes('\r\n') && !/[^\r]\n/.test(ics))
+  check('X-WR-CALNAME set from calName', ics.includes('X-WR-CALNAME:Edge Co visits'))
+  // Escaping — a comma/semicolon/backslash in a title must not break the parser.
+  const esc = buildVisitICS([{ uid: 'u', dateISO: '2026-01-01', title: 'Mow, trim; edge \\ blow' }], { stampISO: STAMP })
+  check('text escaping per RFC 5545 (, ; \\)', esc.includes('SUMMARY:Mow\\, trim\\; edge \\\\ blow'))
+  check('year boundary: Dec 31 → DTEND Jan 1 next year', buildVisitICS([{ uid: 'u', dateISO: '2026-12-31', title: 'x' }], { stampISO: STAMP }).includes('DTEND;VALUE=DATE:20270101'))
+  const multi = buildVisitICS([{ uid: 'a', dateISO: '2026-07-20', title: 'A' }, { uid: 'b', dateISO: '2026-07-27', title: 'B' }], { stampISO: STAMP })
+  check('multiple visits → multiple VEVENTs', (multi.match(/BEGIN:VEVENT/g) || []).length === 2)
+  check('no visits → valid but empty VCALENDAR', (() => { const e = buildVisitICS([], { stampISO: STAMP }); return e.includes('BEGIN:VCALENDAR') && !e.includes('BEGIN:VEVENT') })())
+
+  // Mapper: honest title + the visit's OWN property, stable uid.
+  const propsById = new Map([[PROP_A.id, PROP_A]])
+  const ev = visitToCalendarEvent(job({ id: 'jz', service_type: 'Aeration', property_id: PROP_A.id, scheduled_date: '2026-08-01' }), FULL.business, propsById)
+  check('mapper: title includes the business', ev.title === 'Aeration - Edge Co')
+  check('mapper: location is the visit’s OWN property address', ev.location === PROP_A.address)
+  check('mapper: uid is stable per job', ev.uid === 'visit-jz@edgequote')
+  check('mapper: unknown property → no location (never the primary as a stand-in)', visitToCalendarEvent(job({ id: 'jn', property_id: 'ghost' }), FULL.business, propsById).location === null)
 }
 
 console.log(`\n${fail === 0 ? '✓' : '✗'} portal checks: ${pass} passed, ${fail} failed`)

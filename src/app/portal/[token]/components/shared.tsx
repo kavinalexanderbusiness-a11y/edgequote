@@ -7,12 +7,12 @@
 
 import { useState } from 'react'
 import {
-  CalendarClock, CheckCircle2, Download, Eye, Home, Navigation, Play, Printer, Sparkles,
+  CalendarClock, CalendarPlus, CheckCircle2, Download, Eye, Home, Navigation, Play, Printer, Sparkles,
 } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import { downloadBlob, printBlob, viewBlob } from '@/lib/portalPdf'
-import type { JourneyStep, LiveStatus, PortalView, SubmitRequestFn, TabKey } from '../model'
+import { buildVisitICS, type CalendarVisit, type JourneyStep, type LiveStatus, type PortalView, type SubmitRequestFn, type TabKey } from '../model'
 
 // ── The contract every tab implements ───────────────────────────────────────
 
@@ -219,4 +219,25 @@ export function PortalSection({ title, sub, action, children }: { title: string;
 
 export function fmtMoney(n: number): string {
   return formatCurrency(Number(n) || 0)
+}
+
+// ── Add to calendar ─────────────────────────────────────────────────────────
+// Builds a standard .ics from booked visits and downloads it — on a phone this
+// opens the calendar's "add event" sheet. Client-side only (buildVisitICS is
+// pure; downloadBlob is the same anchor-download the PDF actions use). The
+// DTSTAMP is stamped at click time, the one non-pure moment, kept out of the
+// builder so its output stays deterministic for verify.
+export function AddToCalendar({ visits, filename, calName, label = 'Add to calendar', className }: {
+  visits: CalendarVisit[]; filename: string; calName?: string; label?: string; className?: string
+}) {
+  if (visits.length === 0) return null
+  const add = () => {
+    const ics = buildVisitICS(visits, { stampISO: new Date().toISOString(), calName })
+    downloadBlob(new Blob([ics], { type: 'text/calendar;charset=utf-8' }), filename)
+  }
+  return (
+    <Button variant="ghost" size="sm" onClick={add} className={className}>
+      <CalendarPlus className="w-4 h-4" /> {label}
+    </Button>
+  )
 }
