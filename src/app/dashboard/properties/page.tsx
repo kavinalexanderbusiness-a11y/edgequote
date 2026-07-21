@@ -15,6 +15,7 @@ import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Button } from '@/components/ui/Button'
 import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { SearchInput } from '@/components/ui/SearchInput'
+import { Select } from '@/components/ui/Select'
 import { formatDate, formatCurrency, localTodayISO } from '@/lib/utils'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes, latestSavedRecommendation, recommendationIsStale, pricingConfidence } from '@/lib/pricing'
 import { resolvePrefs, prefSummary, type PrefSource } from '@/lib/preferences'
@@ -92,6 +93,7 @@ export default function PropertiesPage() {
   const router = useRouter()
   const [properties, setProperties] = useState<Property[]>([])
   const [query, setQuery] = useState('')
+  const [sortBy, setSortBy] = useState<'attention' | 'recent' | 'value' | 'az'>('attention')
   const [loading, setLoading] = useState(true)
   const [settings, setSettings] = useState<BusinessSettings | null>(null)
   const [locatedJobs, setLocatedJobs] = useState<LocatedJob[]>([])
@@ -278,12 +280,27 @@ export default function PropertiesPage() {
         />
       ) : (
         <div className="space-y-3">
-          <SearchInput
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            placeholder="Search by address, city or customer"
-            aria-label="Search properties"
-          />
+          <div className="flex flex-col sm:flex-row gap-2">
+            <SearchInput
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Search by address, city or customer"
+              aria-label="Search properties"
+              className="flex-1"
+            />
+            <Select
+              value={sortBy}
+              onChange={e => setSortBy(e.target.value as typeof sortBy)}
+              aria-label="Sort properties"
+              className="sm:w-52"
+              options={[
+                { value: 'attention', label: 'Needs attention' },
+                { value: 'recent', label: 'Recently serviced' },
+                { value: 'value', label: 'Highest value' },
+                { value: 'az', label: 'Address A–Z' },
+              ]}
+            />
+          </div>
           {filtered.length === 0 ? (
             <InlineEmpty icon={SearchX}>
               No property matches &ldquo;{query.trim()}&rdquo;.
@@ -353,10 +370,23 @@ export default function PropertiesPage() {
               : measureHref
             return { property, hist, last, saved, stale, perf, hasPerf, lastQuote, lastInvoice, plans, prefText, nextVisit, qp, confidence, estMin, estFromActual, activePlan, estDur, durDelta, recOneTime, drift, driftBig, health, measureHref, actionHref }
           })
-          // Attention first: warn-tone cards float to the top (worst health first);
-          // everything else keeps recency order. Display sort only — same data,
-          // so "which property needs me" is answered without scroll-hunting.
+          // Display sort only — same data, never a re-fetch or a write. 'Needs
+          // attention' is the default and is byte-for-byte the prior behaviour
+          // (warn-tone floats to the top, worst health first, everything else in
+          // recency order). The other three read off perf/address already in hand,
+          // so a 40+ property book can be pointed at value or freshness instead of
+          // scroll-hunted.
           .sort((a, b) => {
+            if (sortBy === 'recent') {
+              // Most recently serviced first; never-serviced (null) sinks to the end.
+              return (b.perf?.lastServiceDate ?? '').localeCompare(a.perf?.lastServiceDate ?? '')
+            }
+            if (sortBy === 'value') {
+              return (b.perf?.lifetimeRevenue ?? 0) - (a.perf?.lifetimeRevenue ?? 0)
+            }
+            if (sortBy === 'az') {
+              return (a.property.address ?? '').localeCompare(b.property.address ?? '')
+            }
             const aw = a.health.tone === 'warn' ? 0 : 1
             const bw = b.health.tone === 'warn' ? 0 : 1
             if (aw !== bw) return aw - bw
