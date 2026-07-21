@@ -5,6 +5,8 @@ import Link from 'next/link'
 import { format, parseISO, addDays, nextFriday } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency, cn, localTodayISO } from '@/lib/utils'
+import { cashAmountOf } from '@/lib/payments/analytics'
+import type { Payment } from '@/types'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { Menu } from '@/components/ui/Menu'
 import { toast } from '@/lib/toast'
@@ -23,7 +25,11 @@ interface Props { customerId: string }
 interface Qte { id: string; quote_number: string | null; status: string; total: number | null; created_at: string; issued_date: string | null; service_type: string | null }
 interface Jb { id: string; status: string; scheduled_date: string; service_type: string | null; title: string | null; completed_at: string | null }
 interface Inv { id: string; invoice_number: string | null; status: string; amount: number | null; created_at: string; issued_date: string | null; paid_at: string | null }
-interface Pay { amount: number | null; paid_at: string | null }
+// Exactly the ledger fields cashAmountOf reads, typed from the canonical Payment
+// so this row can't drift from what the seam expects. kind/provider/status are
+// what tell a real cash row apart from a credit-ledger entry or a credit
+// settlement; without them a raw sum(amount) double-counts.
+type Pay = Pick<Payment, 'amount' | 'paid_at' | 'kind' | 'provider' | 'status'>
 interface Info {
   customer: { id: string; name: string; phone: string | null; email: string | null; sms_opt_in: boolean; email_opt_in: boolean } | null
   property: { address: string | null; city: string | null } | null
@@ -63,7 +69,7 @@ export function ConversationInfo({ customerId }: Props) {
         supabase.from('quotes').select('id, quote_number, status, total, created_at, issued_date, service_type').eq('customer_id', customerId).order('created_at', { ascending: false }),
         supabase.from('jobs').select('id, status, scheduled_date, service_type, title, completed_at').eq('customer_id', customerId).neq('status', 'cancelled').order('scheduled_date', { ascending: false }),
         supabase.from('invoices').select('id, invoice_number, status, amount, created_at, issued_date, paid_at').eq('customer_id', customerId).order('created_at', { ascending: false }),
-        supabase.from('payments').select('amount, paid_at').eq('customer_id', customerId).eq('status', 'paid'),
+        supabase.from('payments').select('amount, paid_at, kind, provider, status').eq('customer_id', customerId).eq('status', 'paid'),
       ])
       if (!active) return
       setInfo({
@@ -98,7 +104,14 @@ export function ConversationInfo({ customerId }: Props) {
     const upcoming = info.jobs.filter(j => j.scheduled_date >= today && j.status !== 'completed').sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date))
     const completed = info.jobs.filter(j => j.completed_at || j.status === 'completed').sort((a, b) => (b.completed_at || b.scheduled_date).localeCompare(a.completed_at || a.scheduled_date))
     const unpaid = info.invoices.filter(i => i.status === 'unpaid' || i.status === 'sent')
-    const lifetime = info.payments.reduce((s, p) => s + Number(p.amount || 0), 0)
+    // Net cash this customer has actually paid us, through THE ledger seam:
+    // cashAmountOf excludes credit-ledger rows (kind='credit') and settlements FROM
+    // credit (provider='credit'), and nets refunds as negative cash. A raw
+    // sum(amount) counted a $200 credit application as $200 of new revenue — the
+    // exact double-count lib/payments/analytics exists to prevent — so a customer
+    // who paid $200, was refunded, then settled a later invoice from that credit
+    // could read as $600 of lifetime value.
+    const lifetime = info.payments.reduce((s, p) => s + cashAmountOf(p), 0)
     return {
       timeline, activeQuotes, nextVisit: upcoming[0] || null, lastService: completed[0] || null,
       unpaid, unpaidTotal: unpaid.reduce((s, i) => s + Number(i.amount || 0), 0), lifetime,
