@@ -18,7 +18,8 @@
 
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { displayAddress, normalizeTags } from '../src/lib/customers'
+import { displayAddress, normalizeTags, findCustomerMatch, phoneMatches } from '../src/lib/customers'
+import type { Customer } from '../src/types'
 
 let pass = 0
 let fail = 0
@@ -86,6 +87,42 @@ const schema = readFileSync(join(__dirname, '..', 'supabase', 'schema.sql'), 'ut
 const recBlock = schema.slice(schema.indexOf('create table if not exists public.job_recurrences'), schema.indexOf(');', schema.indexOf('create table if not exists public.job_recurrences')))
 check('job_recurrences has NO property_id column (plans derive from jobs.property_id — buildServicePlans)',
   recBlock.includes('property_id'), false)
+
+// ═══════════════════════════════════════════════════════════════════════════
+H('5. IDENTITY MATCHER — the app door agrees with the SQL intake seam (BK-1)')
+// phoneMatches is the app-side half of resolve_intake_customer's `right(digits,10)`
+// rule. If these two ever disagree, one person books once and quotes once and becomes
+// two customers — the exact fork BK-1 closed on the SQL side.
+check('same number, different formatting → match (unchanged)',
+  phoneMatches('(403) 555-0100', '403-555-0100'), true)
+check('country-code variant → match (the fix: "+1 403…" == "403…")',
+  phoneMatches('+1 403 555 0100', '4035550100'), true)
+check('leading 1 on BOTH lengths still resolves to one national number',
+  phoneMatches('14035550100', '4035550100'), true)
+check('different national numbers never collide (last ten differ)',
+  phoneMatches('4035550100', '4035559999'), false)
+check('same last 7 but different area code → NOT the same number',
+  phoneMatches('4035550100', '5875550100'), false)
+check('a partial/too-short number is never a confident match',
+  phoneMatches('555', '5551234'), false)
+check('two blanks do not match (a missing number links nobody)',
+  phoneMatches('', ''), false)
+
+// End-to-end through findCustomerMatch: a returning caller whose stored number carries
+// a country code must resolve to the SAME customer, by phone, confidently.
+const C = (o: Partial<Customer>) => o as Customer
+const book: Customer[] = [
+  C({ id: 'c1', name: 'Pat Lang', phone: '+1 (403) 555-0100', email: 'pat@example.com', address: '84 17 St NW' }),
+  C({ id: 'c2', name: 'Sam Ng', phone: '(587) 555-0199', email: 'sam@example.com', address: '7 Parkdale Cres NW' }),
+]
+check('country-code-variant phone resolves to the existing customer, reason=phone',
+  findCustomerMatch(book, { phone: '4035550100' }), { customer: book[0], reason: 'phone', confident: true })
+check('exact-format phone still resolves (no regression)',
+  findCustomerMatch(book, { phone: '403-555-0100' }), { customer: book[0], reason: 'phone', confident: true })
+check('an unknown phone does NOT phone-match; falls through to email',
+  findCustomerMatch(book, { phone: '4035551234', email: 'SAM@example.com' })?.reason, 'email')
+check('a genuinely new contact matches nobody',
+  findCustomerMatch(book, { phone: '4035551234', email: 'new@example.com', name: 'Nobody Here' }), null)
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)
