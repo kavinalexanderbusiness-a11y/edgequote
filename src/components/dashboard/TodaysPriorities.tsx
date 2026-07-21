@@ -57,7 +57,13 @@ export function TodaysPriorities({ items }: { items: Priority[] }) {
                   // -outline-offset pulls the ring INSIDE the row: these rows sit
                   // flush against the card's rounded border, so an outset ring
                   // would clip against it on the first and last item.
-                  className="group flex items-center gap-3 px-4 sm:px-5 py-3.5 hover:bg-surface/40 active:bg-surface/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50"
+                  // The top row carries a faint accent wash — the SAME "this is
+                  // the one that matters" treatment WeekendOutlook gives today's
+                  // row. A ranked queue whose #1 looks identical to its #8 isn't
+                  // opening on "the one next action"; this makes where-to-start
+                  // unmistakable without inventing a new pattern.
+                  className={cn('group flex items-center gap-3 px-4 sm:px-5 py-3.5 hover:bg-surface/40 active:bg-surface/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50',
+                    i === 0 && 'bg-accent/[0.04]')}
                 >
                   {/* Both decorative: this is an <ol>, so assistive tech already
                       conveys the rank, and the icon just restates the label. */}
@@ -67,6 +73,11 @@ export function TodaysPriorities({ items }: { items: Priority[] }) {
                     <Icon className="w-4 h-4" />
                   </span>
                   <span className="min-w-0 flex-1">
+                    {/* Real text, not decorative: it names the action to take
+                        first, so a screen reader benefits from hearing it. */}
+                    {i === 0 && (
+                      <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-accent-text mb-0.5">Do first</span>
+                    )}
                     <span className="block text-sm font-semibold tracking-tight text-ink truncate">{p.label}</span>
                     <span className="block text-xs text-ink-muted truncate mt-0.5 tabular-nums">{p.detail}</span>
                   </span>
