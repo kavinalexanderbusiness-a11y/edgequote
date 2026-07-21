@@ -4,7 +4,7 @@ import { useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Customer } from '@/types'
-import { displayAddress } from '@/lib/customers'
+import { displayAddress, normalizePhone, phoneSearchDigits } from '@/lib/customers'
 import { formatDate, cn } from '@/lib/utils'
 import { Avatar } from '@/components/ui/Avatar'
 import { createClient } from '@/lib/supabase/client'
@@ -85,9 +85,12 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
   // changes unrelated state) doesn't re-run these O(n) passes over every customer.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    // Digits-only pass so a phone search matches regardless of formatting —
-    // "4035550100", "403 555" and "(403) 555-0100" all find the same person.
-    const digits = q.replace(/\D/g, '')
+    // Phone lookup uses phoneSearchDigits — THE canonical "is this a phone query?"
+    // rule the command palette already uses, so the two customer-search surfaces
+    // reduce a typed number identically. It also declines a query that carries
+    // letters ("Rose 403" is a name search, not a hunt for phones containing 403)
+    // and needs ≥3 digits, so a stray "40" no longer drags in every 403 number.
+    const phoneQuery = phoneSearchDigits(search)
     return customers.filter(c => {
       if (!matchesConsent(c)) return false
       if (!q) return true
@@ -101,7 +104,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
         loc.city.toLowerCase().includes(q) ||
         loc.address.toLowerCase().includes(q) ||
         (c.tags || []).some(t => t.toLowerCase().includes(q)) ||
-        (!!digits && !!c.phone && c.phone.replace(/\D/g, '').includes(digits))
+        (!!phoneQuery && !!c.phone && normalizePhone(c.phone).includes(phoneQuery))
       )
     })
   }, [customers, search, consentFilter]) // eslint-disable-line react-hooks/exhaustive-deps

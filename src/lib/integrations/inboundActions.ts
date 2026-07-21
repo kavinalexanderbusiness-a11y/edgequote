@@ -12,7 +12,7 @@
 // runInboundAction takes the service-role client from the route.
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { ensurePropertyForCustomer } from '@/lib/customers'
+import { ensurePropertyForCustomer, normalizePhone } from '@/lib/customers'
 
 export interface InboundLeadInput {
   name: string | null
@@ -77,7 +77,10 @@ export async function findOrCreateCustomer(
 
   // Suffix match on the generated customers.phone_digits column (trigram-
   // indexed) — the same canonical digits the rest of the app searches on.
-  const phoneDigits = (input.phone ?? '').replace(/\D/g, '').slice(-10)
+  // The last ten digits are the identity the SQL intake seam keys on too
+  // (resolve_intake_customer's `right(digits,10)`); normalizePhone is the ONE
+  // digit-normalizer, so this door reduces a number exactly as the others do.
+  const phoneDigits = normalizePhone(input.phone).slice(-10)
   if (phoneDigits.length === 10) {
     const { data } = await sb.from('customers').select('id')
       .eq('user_id', userId).like('phone_digits', `%${phoneDigits}`)
