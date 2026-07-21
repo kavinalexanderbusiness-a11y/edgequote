@@ -149,6 +149,15 @@ jobs:
       - name: Verify labour estimator
         run: npm run verify:labor
 
+      #   invoice-totals — the money math on the customer-facing invoice: GST rides
+      #                the NET (post-discount) amount, the percent discount inverts
+      #                exactly to reconstruct the gross for display, and the $ cap
+      #                keeps a discount from driving the net negative. Consumed by
+      #                the two live charge paths and every invoice/receipt PDF, and
+      #                previously exercised by nothing.
+      - name: Verify invoice totals
+        run: npm run verify:invoice-totals
+
       #   density  — route density counts NEIGHBOURING PROPERTIES, not a property's
       #              own visits. It was fed one row per JOB and neither deduped nor
       #              excluded the target, so live counts averaged 38.1 against 2.0

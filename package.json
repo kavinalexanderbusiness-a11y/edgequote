@@ -29,6 +29,7 @@
     "verify:inventory": "tsx scripts/verify-inventory.ts",
     "verify:accounting": "tsx scripts/verify-accounting.ts",
     "verify:reports": "tsx scripts/verify-reports.ts",
+    "verify:invoice-totals": "tsx scripts/verify-invoice-totals.ts",
     "verify:customer-v2": "tsx scripts/verify-customer-v2.ts",
     "verify:portal": "tsx scripts/verify-portal.ts"
   },
