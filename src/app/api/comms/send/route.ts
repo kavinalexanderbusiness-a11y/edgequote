@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { renderMessage, renderBody, MsgType, MSG_LABELS, type MessagePrefs } from '@/lib/comms/templates'
 import { sendSms, sendEmail, commsEnabled } from '@/lib/comms/send'
 import { reachCheck } from '@/lib/comms/reach'
+import { governCheck } from '@/lib/comms/governor'
 import { getOrCreateConversation } from '@/lib/comms/conversation'
 import { SKIP_REASON } from '@/lib/comms/skipReasons'
 import { SENT_STATES } from '@/lib/comms/delivery'
@@ -130,6 +131,25 @@ export async function POST(req: NextRequest) {
     if (!g.blocked) continue
     results[g.channel] = { sent: false, reason: reasonFor(g.blocked) }
     attempts.push({ channel: g.channel, status: 'skipped', detail: g.blocked, sent: false })
+  }
+
+  // The governor: WHEN and AGAIN, after consent decides WHETHER — the same
+  // brain dispatchToCustomer consults (lib/comms/governor), called here because
+  // this route deliberately owns its own send. A manual send and an automated
+  // one must never reach different verdicts about timing or frequency. Only
+  // consulted when a channel could actually go out.
+  if (gate.some(g => !g.blocked)) {
+    const gov = await governCheck(supabase, { userId: user.id, customerId, template })
+    if (!gov.allowed) {
+      for (const g of gate) {
+        if (g.blocked) continue
+        blocked.set(g.channel, gov.reason!)
+        // 'governed' extends the public reason contract; `detail` carries the
+        // specific verdict for summarizeSendOutcome's honest one-liner.
+        results[g.channel] = { sent: false, reason: 'governed', detail: gov.reason }
+        attempts.push({ channel: g.channel, status: 'skipped', detail: gov.reason!, sent: false })
+      }
+    }
   }
 
   if (channels.includes('sms') && !blocked.get('sms')) {

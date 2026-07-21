@@ -191,7 +191,11 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
     { key: 'message', label: 'Message', icon: Send, tone: 'primary', onClick: () => setMsgTemplate('choose') },
     // One-tap entries into THE same dialog, preselected — not separate UIs.
     { key: 'introduction', label: 'Send introduction', icon: MessageSquare, onClick: () => setMsgTemplate('introduction') },
-    { key: 'review', label: 'Send review request', icon: Star, onClick: () => setMsgTemplate('review_request') },
+    // review_chase, NOT review_request: a list-segmented ask with no visit
+    // attached is a CEM, so it must ride the marketing opt-out (msgCategory).
+    // review_request stays the single-customer, visit-attached path
+    // (ReviewLifecycle) — same words, different consent.
+    { key: 'review', label: 'Send review request', icon: Star, onClick: () => setMsgTemplate('review_chase') },
     { key: 'archive', label: 'Archive', icon: Archive, onClick: bulkArchive },
     { key: 'export', label: 'Export', icon: Download, onClick: exportSelected },
     { key: 'email-on', label: 'Enable email', icon: Mail, onClick: () => requestBulk('email', true) },
@@ -354,7 +358,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
       </div>
 
       {/* THE shared multi-recipient Send-Message dialog — 'choose' opens on the default
-          template list; a specific value ("introduction"/"review_request") preselects it. */}
+          template list; a specific value ("introduction"/"review_chase") preselects it. */}
       {msgTemplate && (
         <SendMessageDialog
           open

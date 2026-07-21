@@ -15,6 +15,10 @@ export const SKIP_REASON = {
   NO_PHONE: 'no phone',            // opted in but no phone number on file
   NO_CONTACT: 'no contact',        // neither email nor phone available
   UNSUBSCRIBED: 'unsubscribed',    // (future) inbound STOP / unsubscribe
+  // The send governor (lib/comms/governor) — WHEN, not WHETHER:
+  QUIET_HOURS: 'quiet hours',      // commercial send outside the owner-local window
+  FREQUENCY_CAP: 'frequency cap',  // customer already had a commercial send too recently
+  DAILY_CAP: 'daily cap',          // owner's runaway guard tripped for the day
 } as const
 export type SkipReason = typeof SKIP_REASON[keyof typeof SKIP_REASON]
 
@@ -29,6 +33,11 @@ export function describeSkip(detail: string | null | undefined): SkipInfo {
   if (!d) return { label: 'skipped', action: null }
   if (d.includes('opt')) return { label: 'no opt-in', action: null }                 // "no opt-in", "opted out"
   if (d.includes('unsub')) return { label: 'customer unsubscribed', action: null }
+  // Governor verdicts — checked before the generic matches so e.g. "quiet hours"
+  // can never fall through to the free-text fallback with no explanation.
+  if (d.includes('quiet')) return { label: 'held for quiet hours', action: null }
+  if (d.includes('frequen')) return { label: 'messaged too recently', action: null }
+  if (d.includes('daily cap')) return { label: 'daily send limit reached', action: null }
   if (d.includes('email')) return { label: 'no email on file', action: 'add_email' } // "no email", "missing email"
   if (d.includes('phone')) return { label: 'no phone on file', action: 'add_phone' } // "no phone", "no phone number"
   // No contact AT ALL — the worst case, and the one that used to offer no way out

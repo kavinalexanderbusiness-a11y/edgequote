@@ -81,6 +81,11 @@ jobs:
       - name: Verify automations
         run: npm run verify:automations
 
+      # MSG-1: the send governor's rules AND its wiring (both send paths must
+      # consult it; the bulk review action must ride the marketing opt-out).
+      - name: Verify comms governor
+        run: npm run verify:comms-governor
+
       # The business-shape derivation decides whether a lawn field renders at all.
       # Its failure mode is silent and asymmetric: too much evidence only shows a
       # plumber a field he ignores, but too little HIDES the measure tool from a lawn

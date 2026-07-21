@@ -6,7 +6,7 @@
 export interface SendOutcome { ok: boolean; text: string }
 
 export function summarizeSendOutcome(data: {
-  results?: Record<string, { sent?: boolean; reason?: string; error?: string }>
+  results?: Record<string, { sent?: boolean; reason?: string; error?: string; detail?: string }>
   deduped?: boolean
   skipped?: string
 }): SendOutcome {
@@ -20,6 +20,15 @@ export function summarizeSendOutcome(data: {
   // them. Answer from the flags before the results are interpreted.
   if (data.deduped || data.skipped === 'duplicate') return { ok: true, text: 'Already sent — not sending this one twice.' }
   const reasons = Object.values(r).map(v => v.reason)
+  // The governor held the send (quiet hours / frequency cap / daily cap). Say
+  // WHICH — "no phone/email on file" here would be a lie about a customer we
+  // deliberately chose not to message right now.
+  if (reasons.includes('governed')) {
+    const detail = Object.values(r).find(v => v.reason === 'governed')?.detail || ''
+    if (detail.includes('quiet')) return { ok: false, text: 'Held — outside this customer’s daytime window. It can go out tomorrow.' }
+    if (detail.includes('frequen')) return { ok: false, text: 'Held — this customer was messaged commercially in the last few days.' }
+    return { ok: false, text: 'Held — today’s send limit was reached.' }
+  }
   if (reasons.includes('no-optin')) return { ok: false, text: 'This customer hasn’t opted in — turn on SMS/email on their profile.' }
   if (reasons.includes('disabled')) return { ok: false, text: 'Messaging isn’t set up yet — finish setup in Settings → Messaging.' }
   const err = Object.values(r).find(v => v.error)?.error

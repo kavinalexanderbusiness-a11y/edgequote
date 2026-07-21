@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "verify:automations": "tsx scripts/verify-automations.ts",
+    "verify:comms-governor": "tsx scripts/verify-comms-governor.ts",
     "verify:business-shape": "tsx scripts/verify-business-shape.ts",
     "verify:trades": "tsx scripts/verify-trades.ts",
     "verify:onboarding": "tsx scripts/verify-onboarding.ts",
