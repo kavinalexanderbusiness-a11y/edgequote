@@ -21,6 +21,7 @@ import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, local
 import { nextInvoiceNumber } from '@/lib/invoicing'
 import { isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil, markSentPatch, sendBlockedReason, sendBlockedLabel, DEFAULT_QUOTE_VALID_DAYS } from '@/lib/quoteStatus'
 import { toast } from '@/lib/toast'
+import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
 import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
@@ -151,9 +152,47 @@ export default function QuoteDetailPage() {
     const extrasNet = sumServiceLines(extraLines).net
     const initialWithExtras = (Number(values.initial_price) > 0 ? Number(values.initial_price) : 0) + extrasNet
 
+    // ADR-002: provenance moves WITH the price. Editing a quote re-uses the engine
+    // surface (QuoteBuilder), so a re-applied recommendation — or a hand override —
+    // strikes a NEW number under TODAY's config. When any price actually moves, record
+    // which config produced it and the grade that priced it, exactly as the create path
+    // does. When nothing moved, leave all four provenance columns untouched: the price
+    // still belongs to its original config, and re-stamping an unmoved price is the same
+    // lie this ADR forbids on a plain duplicate. This closes the gap ADR-002 named and
+    // deferred — the one path that could re-price under a newer config yet keep the old
+    // version id, silently making the row unreproducible.
+    const priceMoved =
+      Number(initialWithExtras || 0)     !== Number(quote?.initial_price || 0) ||
+      Number(values.weekly_price || 0)   !== Number(quote?.weekly_price || 0) ||
+      Number(values.biweekly_price || 0) !== Number(quote?.biweekly_price || 0) ||
+      Number(values.monthly_price || 0)  !== Number(quote?.monthly_price || 0)
+
+    let provenance: Record<string, unknown> = {}
+    if (priceMoved) {
+      // Fail-closed, exactly like the create path: a changed engine price we cannot
+      // attribute to a config is the row quotes_engine_price_needs_config rejects — so
+      // stop here with the edit still on screen rather than attempt a write the DB will
+      // bounce or, worse, a misattributed one.
+      const ver = await ensureCurrentPricingConfigVersion(supabase, user!.id)
+      if (!ver.ok) {
+        toast.error('Could not record which pricing settings this change used — nothing was saved. Check your connection and press Save again.')
+        return
+      }
+      provenance = {
+        price_source: 'engine',
+        pricing_config_version_id: ver.versionId,
+        // The form carries a fresh grade only if a recommendation was re-applied in this
+        // edit; a hand price-change leaves it null, so fall back to the grade the
+        // customer already had. Never invent one — null only if none was ever computed.
+        value_grade: values.value_grade ?? quote?.value_grade ?? null,
+        nearby_count: values.nearby_count ?? quote?.nearby_count ?? null,
+      }
+    }
+
     const { data, error } = await supabase
       .from('quotes')
       .update({
+        ...provenance,
         customer_id: customerId,
         customer_name: customerName,
         property_id: propertyId,
