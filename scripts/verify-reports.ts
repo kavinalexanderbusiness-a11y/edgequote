@@ -25,6 +25,7 @@ import { profitAndLoss, cashFlow } from '../src/lib/accounting/report'
 import { summarizeTransactions } from '../src/lib/payments/analytics'
 import { composeReport, periodForReport, REPORT_KINDS, type ReportKind } from '../src/lib/reports/schedule'
 import { summarize } from '../src/lib/reports/summary'
+import { formatCurrency } from '../src/lib/utils'
 import { summaryRows, PAYMENT_COLUMNS, reportFilename } from '../src/lib/reports/exports'
 
 let failures = 0
@@ -186,6 +187,42 @@ console.log('\nThe summary/email/PDF/CSV all read the same engine values:')
   // A non-registrant holds no sales tax, so the tax lines must not appear — showing
   // "Sales tax: $0.00" invites the owner to think they're collecting it.
   check('no sales-tax line for a non-registrant', !s.lines.some(l => l.label.includes('Sales tax')))
+}
+
+console.log('\nThe report explains the cost BASIS exactly as /dashboard/accounting/pnl does:')
+{
+  // Rule 1: a non-registrant can't reclaim the GST it pays suppliers, so its cost
+  // is GROSS; a registrant's is shown net of that reclaimable tax. The P&L PAGE
+  // carries this note on `pl.cost`; the emailed report showed the same figure bare.
+  // These literals ARE the page's strings (pnl/page.tsx) — a drift on either side
+  // breaks this. No calculation is asserted here; verify:accounting owns the maths.
+  const REGISTERED = { gst_percent: 5 } as unknown as BusinessSettings
+  const costNote = (r: ReturnType<typeof composeReport>) =>
+    summarize(r).lines.find(l => l.label === 'Costs')?.note
+
+  const nonReg = composeReport('daily', TODAY, {
+    payments: [pay({ amount: 500, paid_at: '2026-07-15' })],
+    expenses: [exp({ amount: 105, tax_amount: 5, spent_at: '2026-07-15' })],
+    settings: NOT_REGISTERED,
+  }, { closed: true })
+  eq('non-registrant cost is labelled GROSS, verbatim as the page',
+     costNote(nonReg), 'gross — tax is not reclaimable for you')
+
+  const reg = composeReport('daily', TODAY, {
+    payments: [pay({ amount: 500, paid_at: '2026-07-15' })],
+    expenses: [exp({ amount: 105, tax_amount: 5, spent_at: '2026-07-15' })],
+    settings: REGISTERED,
+  }, { closed: true })
+  // Ties the note to the engine's own taxPaid, and to the page's exact template.
+  eq('registrant cost is labelled NET of reclaimable tax, from the engine value',
+     costNote(reg), `net of ${formatCurrency(reg.pnl.taxPaid)} reclaimable tax`)
+  check('...and taxPaid is a real reclaimable amount, not 0', reg.pnl.taxPaid > 0)
+
+  // Empty books keep the friendlier note — a basis line on $0 of cost is noise.
+  const empty = composeReport('daily', TODAY, {
+    payments: [pay({ amount: 500, paid_at: '2026-07-15' })], expenses: [], settings: NOT_REGISTERED,
+  }, { closed: true })
+  eq('no costs → "nothing logged", not a basis note', costNote(empty), 'nothing logged this period')
 }
 
 console.log('\nEmpty periods are honest, not blank:')

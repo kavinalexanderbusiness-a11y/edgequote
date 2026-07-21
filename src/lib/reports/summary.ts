@@ -62,7 +62,20 @@ export function summarize(r: ScheduledReport): ReportSummary {
           { label: 'Revenue', value: formatCurrency(pnl.revenue), note: 'money in, less the tax you hold' },
         ]
       : []),
-    { label: 'Costs', value: formatCurrency(pnl.cost), note: pnl.expenseCount === 0 ? 'nothing logged this period' : undefined },
+    {
+      label: 'Costs',
+      value: formatCurrency(pnl.cost),
+      // The same cost-basis note /dashboard/accounting/pnl carries — rule 1: a
+      // non-registrant can't reclaim the GST it pays suppliers, so its cost is
+      // GROSS (tax-inclusive); a registrant's is shown net of that reclaimable tax.
+      // The interactive P&L stated this on the identical `cost` figure; the emailed
+      // report showed the number bare, so an owner couldn't tell which basis it was.
+      note: pnl.expenseCount === 0
+        ? 'nothing logged this period'
+        : pnl.registrant
+          ? `net of ${formatCurrency(pnl.taxPaid)} reclaimable tax`
+          : 'gross — tax is not reclaimable for you',
+    },
     { label: 'Profit', value: formatCurrency(pnl.profit), note: `margin ${marginText(pnl.margin)}` },
     {
       label: 'Bank movement',
