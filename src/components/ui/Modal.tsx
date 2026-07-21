@@ -50,6 +50,41 @@ export function Modal({ open, onClose, title, icon: Icon, children, footer, size
   // refocuses the panel, and the keystroke in between lands nowhere.
   const onCloseRef = useRef(onClose); onCloseRef.current = onClose
   const onSubmitRef = useRef(onSubmit); onSubmitRef.current = onSubmit
+
+  // Swipe-down-to-dismiss for the mobile bottom sheet. Driven ONLY from the grab
+  // handle (a mobile-only strip, `sm:hidden`), never the scrollable body — so it
+  // can't be confused with scrolling the content, the failure mode that makes
+  // most sheet-drag implementations feel broken. The transform is applied
+  // imperatively during the drag so a finger move doesn't cost a React render.
+  const dragStart = useRef<number | null>(null)
+  const dragDelta = useRef(0)
+
+  function beginDrag(e: React.TouchEvent) {
+    if (!dismissable || e.touches.length !== 1) return
+    dragStart.current = e.touches[0].clientY
+    dragDelta.current = 0
+    if (panelRef.current) panelRef.current.style.transition = 'none'
+  }
+  function moveDrag(e: React.TouchEvent) {
+    if (dragStart.current == null) return
+    // Down only — clamp up-drags to 0 so the sheet can't be flung off the top.
+    const dy = Math.max(0, e.touches[0].clientY - dragStart.current)
+    dragDelta.current = dy
+    if (panelRef.current) panelRef.current.style.transform = dy ? `translateY(${dy}px)` : ''
+  }
+  function endDrag() {
+    if (dragStart.current == null) return
+    const dy = dragDelta.current
+    dragStart.current = null
+    const panel = panelRef.current
+    if (!panel) return
+    // Past the threshold it's a dismiss; short of it, snap back to place.
+    if (dy > 90) { onClose(); return }
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    panel.style.transition = reduce ? 'none' : 'transform 0.2s ease'
+    panel.style.transform = ''
+  }
+
   useEffect(() => {
     if (!open) return
     restoreRef.current = document.activeElement as HTMLElement | null
@@ -102,6 +137,21 @@ export function Modal({ open, onClose, title, icon: Icon, children, footer, size
           className
         )}
       >
+        {/* Grab handle: the affordance AND the drag target, mobile-sheet only.
+            `touch-none` stops the browser scrolling the page from a drag that
+            starts here. Rendered whenever the sheet can be dismissed, even when
+            there's no header. */}
+        {dismissable && (
+          <div
+            className="sm:hidden flex justify-center pt-2.5 pb-1 shrink-0 touch-none cursor-grab active:cursor-grabbing"
+            onTouchStart={beginDrag}
+            onTouchMove={moveDrag}
+            onTouchEnd={endDrag}
+            aria-hidden="true"
+          >
+            <span className="h-1 w-9 rounded-full bg-border-strong" />
+          </div>
+        )}
         {(title || dismissable) && (
           <div className="flex items-center gap-2 px-5 py-4 border-b border-border shrink-0">
             {Icon && <Icon className="w-4 h-4 text-accent-text shrink-0" aria-hidden="true" />}
