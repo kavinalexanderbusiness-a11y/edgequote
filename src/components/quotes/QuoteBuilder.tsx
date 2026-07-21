@@ -212,11 +212,15 @@ export function QuoteBuilder({
     const crewCost = settings?.crew_cost_per_hour && settings.crew_cost_per_hour > 0 ? settings.crew_cost_per_hour : 40
     const out: PriceGuardrail[] = []
     const add = (cadence: 'one_time' | 'weekly' | 'biweekly' | 'monthly', price: number) => {
-      if (price > 0) out.push(evaluatePrice({ cadence, price, sqft: measuredSqft, cfg, crewCost }))
+      // PR-1: pass the real overgrowth so an overgrown job is judged against ITS
+      // own (higher) recommended price, not a normal-condition one. valueGrade is
+      // null because the builder prices neutrally — the grade curve is applied in
+      // the measure tool, not here. Both are now REQUIRED by evaluatePrice.
+      if (price > 0) out.push(evaluatePrice({ cadence, price, sqft: measuredSqft, cfg, crewCost, valueGrade: null, overgrowth }))
     }
     add('one_time', initialPrice); add('weekly', weeklyPrice); add('biweekly', biweeklyPrice); add('monthly', monthlyPrice)
     return out
-  }, [settings, measuredSqft, initialPrice, weeklyPrice, biweeklyPrice, monthlyPrice])
+  }, [settings, measuredSqft, initialPrice, weeklyPrice, biweeklyPrice, monthlyPrice, overgrowth])
 
   // Live duplicate detection — when entering a brand-new lead, surface a likely
   // existing customer so we link instead of creating a duplicate. Reuses the
@@ -503,12 +507,13 @@ export function QuoteBuilder({
       label: `${t.is_favorite ? '★ ' : ''}${t.name} — ${formatServicePrice(t)}`,
     })),
   ], [activeTemplates])
-  const statusOptions = [
-    { value: 'draft', label: 'Draft' }, { value: 'sent', label: 'Sent' },
-    { value: 'accepted', label: 'Accepted' }, { value: 'scheduled', label: 'Scheduled' },
-    { value: 'completed', label: 'Completed' }, { value: 'paid', label: 'Paid' },
-    { value: 'declined', label: 'Declined' },
-  ]
+  // QL-1: there is no status dropdown here, on purpose. QuoteStatusControl (on the
+  // quote detail page) is the ONE status writer — it routes sent→markSentPatch and
+  // accepted→markWonPatch, so sent_at/valid_until and the acceptance snapshot are
+  // always set. A raw status write from this form was a second, incomplete writer:
+  // setting 'Sent' here left sent_at/valid_until null, so the quote could never
+  // expire (the 0-of-55 bug) and entered the follow-up queue as a lie. The builder
+  // edits quote CONTENT only; status transitions happen through the control.
   const showManualName = !customerId || customerId === '__manual'
 
   // ── The price breakdown, defined ONCE ────────────────────────────────────────
@@ -1222,9 +1227,7 @@ export function QuoteBuilder({
             )}
           </Collapsible>
 
-          <Collapsible title="Scheduling & status" icon={SlidersHorizontal}>
-            <Controller name="status" control={control}
-              render={({ field }) => (<Select label="Quote Status" options={statusOptions} {...field} />)} />
+          <Collapsible title="Scheduling" icon={SlidersHorizontal}>
             <div className="pt-1">
               <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide flex items-center gap-2 mb-2">
                 <Sparkles className="w-3.5 h-3.5 text-accent-text" /> Best days to schedule

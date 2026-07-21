@@ -7,7 +7,8 @@ import { resolvePrefs } from '@/lib/preferences'
 import { analyzeWinLoss, WLQuote, QuoteOutcomeRow, LOSS_REASON_LABEL } from '@/lib/winLoss'
 import { effectiveFreq, jobVisitValue, quoteVisitAmount, syncDraftInvoiceAmounts } from '@/lib/invoicing'
 import { recordPriceChange, isRecurringProgramService, normalizeServiceKey } from '@/lib/jobPricing'
-import { PricingConfig, recommendedJobPrice, estimateVisitMinutes, SEASON_VISITS } from '@/lib/pricing'
+import { PricingConfig, estimateVisitMinutes, SEASON_VISITS } from '@/lib/pricing'
+import { recommendedForCadence, type Cadence } from '@/lib/priceGuardrails'
 import { visitEconomics } from '@/lib/economics'
 import { learnDurations, learnedDurationFor, DurationModel } from '@/lib/duration'
 import { ProfitJob, ProfitContext, neighborhoodProfitability, neighborhoodKey } from '@/lib/profitability'
@@ -165,6 +166,14 @@ function seriesVisitsPerYear(s: Series): number {
 }
 function cadenceField(cadence: string | null): PriceApplyPayload['cadenceField'] {
   return cadence === 'weekly' ? 'weekly_price' : cadence === 'biweekly' ? 'biweekly_price' : cadence === 'monthly' ? 'monthly_price' : null
+}
+// PR-1: the recommended price for a RECURRING series is the per-visit CADENCE
+// price (weekly is 0.68-0.95x the one-time price), not the one-time price. Every
+// series suggestion below compares s.perVisit against this — through the same
+// recommendedForCadence seam the guardrail uses, so the advisor and the guardrail
+// can never disagree about "the recommended price" again.
+function seriesCadence(cadence: string | null): Cadence {
+  return cadence === 'weekly' ? 'weekly' : cadence === 'biweekly' ? 'biweekly' : cadence === 'monthly' ? 'monthly' : 'one_time'
 }
 function round5(n: number): number { return Math.round(n / 5) * 5 }
 
@@ -426,7 +435,8 @@ function raiseAction(s: Series, newPrice: number, ctx: SuggestionContext): Sugge
 
 // ── 💰 PROFIT: underpriced recurring raises ─────────────────────────────────────
 // Only fires on a MEASURED lawn with a proven (≥1 completed visit) series, so the
-// target traces to recommendedJobPrice — not the service-mixed neighbourhood
+// target traces to recommendedForCadence (the series' per-visit cadence price) —
+// not the service-mixed neighbourhood
 // average (which conflated mowing with one-off cleanups and produced phantom
 // raises). Unmeasured underpricing is left to the "below minimum" roadmap item.
 function priceRaises(ctx: SuggestionContext): Suggestion[] {
@@ -438,7 +448,7 @@ function priceRaises(ctx: SuggestionContext): Suggestion[] {
     if (sqft <= 0) continue                                   // need a real measurement to trust the target
     const completedVisits = s.jobs.filter(j => j.status === 'completed').length
     if (completedVisits < 1) continue                          // don't raise an unproven brand-new series
-    const recommended = recommendedJobPrice(sqft, ctx.pricingConfig)
+    const recommended = recommendedForCadence(sqft, seriesCadence(s.cadence), ctx.pricingConfig)
     if (recommended <= 0) continue
     const newPrice = round5(Math.min(recommended, s.perVisit * 1.4)) // never propose an absurd jump
     if (newPrice < s.perVisit + 5) continue
@@ -505,7 +515,7 @@ function belowMedianPricing(ctx: SuggestionContext): Suggestion[] {
       // priceRaises owns the measured case anyway.
       const sqft = sqftFor(s.property)
       if (sqft > 0) {
-        const rec = recommendedJobPrice(sqft, ctx.pricingConfig)
+        const rec = recommendedForCadence(sqft, seriesCadence(s.cadence), ctx.pricingConfig)
         if (rec > 0 && perVisit >= rec) continue
       }
       const target = round5(Math.min(median, perVisit * 1.4))
@@ -757,7 +767,7 @@ function problems(ctx: SuggestionContext): Suggestion[] {
     const hoursPerVisit = (onSite + driveMin) / 60
     const annualGap = Math.round(Math.max(0, Math.round(target * hoursPerVisit) - s.perVisit) * vpy)
 
-    const recommended = sqft > 0 ? recommendedJobPrice(sqft, ctx.pricingConfig) : 0
+    const recommended = sqft > 0 ? recommendedForCadence(sqft, seriesCadence(s.cadence), ctx.pricingConfig) : 0
     // Route Density Score decides the "isolated → improve density" path.
     const density = hasGeo ? densityFor({ lat: s.property!.lat as number, lng: s.property!.lng as number }, located) : null
     const isolated = !density || density.tier === 'isolated'
