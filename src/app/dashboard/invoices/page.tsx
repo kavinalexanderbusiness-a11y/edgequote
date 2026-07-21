@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { pageAll } from '@/lib/supabase/pageAll'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { usePaymentsStatus } from '@/hooks/usePaymentsStatus'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
@@ -104,37 +105,45 @@ export default function InvoicesPage() {
       if (!user) { setLoadError('Session expired — sign in again.'); return }
       setUid(user.id)
       const [iRes, sRes, pmRes, crRes, payRes] = await Promise.all([
-        supabase
+        // PAGED. An unbounded select silently stops at 1000 rows, so on a busy book
+        // the invoice list (and its Owed total) truncated to the newest 1000 while
+        // the dashboard's Owed — already paged — counted them all. Two money figures
+        // for the same question. pageAll appends the `id` tiebreak to created_at.
+        pageAll<Invoice>(() => supabase
           .from('invoices')
           .select('*, customers(id, name, email, phone)')
           .eq('user_id', user.id)
-          .order('created_at', { ascending: false }),
+          .order('created_at', { ascending: false })),
         supabase.from('business_settings').select('*').eq('user_id', user.id).maybeSingle(),
         // Which customers have a saved card → enables the "Charge saved card" action.
         supabase.from('payment_methods').select('customer_id').eq('user_id', user.id),
-        // Customer credit ledger (kind='credit') → available credit per customer.
-        supabase.from('payments').select('customer_id, amount').eq('user_id', user.id).eq('kind', 'credit'),
+        // Customer credit ledger (kind='credit') → available credit per customer. Paged:
+        // a truncated credit read understates the balance the owner may apply.
+        pageAll<{ customer_id: string | null; amount: number }>(() => supabase
+          .from('payments').select('customer_id, amount').eq('user_id', user.id).eq('kind', 'credit')),
         // Every invoice-linked ledger row → permanent per-invoice receipts + revert.
-        supabase.from('payments').select('*').eq('user_id', user.id).eq('kind', 'payment').not('invoice_id', 'is', null).order('paid_at', { ascending: true }),
+        // Paged: past 1000 payments, an invoice would silently lose its receipts.
+        pageAll<Payment>(() => supabase
+          .from('payments').select('*').eq('user_id', user.id).eq('kind', 'payment').not('invoice_id', 'is', null).order('paid_at', { ascending: true })),
       ])
       // A failed fetch must NOT render as "No invoices yet" on billing day.
-      if (iRes.error) { setLoadError('Could not load invoices: ' + iRes.error.message); return }
+      if (iRes.error) { setLoadError('Could not load invoices: ' + iRes.error); return }
       setLoadError(null)
-      setInvoices((iRes.data as Invoice[]) || [])
+      setInvoices(iRes.rows)
       // Cache only the first screenful — invoices carry a line_items jsonb + a customer
       // join, so serializing all 15k on every fetch (incl. each realtime tick) would blow
       // the sessionStorage quota and block the main thread. First screen paints instantly;
       // the full list follows from the query above.
-      writeCache('invoices-list', ((iRes.data as Invoice[]) || []).slice(0, 60))
+      writeCache('invoices-list', iRes.rows.slice(0, 60))
       setSettings(sRes.data as BusinessSettings | null)
       setCardCustomers(new Set(((pmRes.data as { customer_id: string }[] | null) || []).map(r => r.customer_id)))
       const credit: Record<string, number> = {}
-      for (const r of (crRes.data as { customer_id: string | null; amount: number }[] | null) || []) {
+      for (const r of crRes.rows) {
         if (r.customer_id) credit[r.customer_id] = Math.round(((credit[r.customer_id] || 0) + Number(r.amount || 0)) * 100) / 100
       }
       setCreditByCustomer(credit)
       const byInv: Record<string, Payment[]> = {}
-      for (const p of (payRes.data as Payment[] | null) || []) { if (p.invoice_id) (byInv[p.invoice_id] ||= []).push(p) }
+      for (const p of payRes.rows) { if (p.invoice_id) (byInv[p.invoice_id] ||= []).push(p) }
       setPaymentsByInvoice(byInv)
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Could not load invoices.')
