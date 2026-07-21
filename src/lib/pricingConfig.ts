@@ -52,20 +52,6 @@ export interface PricingConfigVersionRow {
   payment_fee_strategy: string
 }
 
-/** The settings columns that move a stored price. Wider than `PricingSettingsInput`:
- *  fee recovery is baked into `initial_price` at insert, and crew cost drives the
- *  margin the owner is shown while choosing the number. */
-export interface VersionableSettings {
-  pricing_base_charge?: number | null
-  pricing_mow_rate?: number | null
-  pricing_recommended_mult?: number | null
-  pricing_premium_mult?: number | null
-  pricing_travel_rate?: number | null
-  crew_cost_per_hour?: number | null
-  fee_recovery_percent?: number | null
-  payment_fee_strategy?: string | null
-}
-
 // ⛔ There is deliberately NO TypeScript copy of "are these the same rate card?" here.
 // That comparison lives once, in `public.ensure_pricing_config_version`. An earlier
 // draft of this file had one, and a second implementation of one concept is precisely

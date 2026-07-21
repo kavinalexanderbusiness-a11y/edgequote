@@ -28,7 +28,7 @@ import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { servicePricingKind } from '@/lib/servicePricing'
 import { saveManual } from '@/lib/measure/data'
-import { Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Send, Camera, Globe, CalendarClock } from 'lucide-react'
+import { Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Camera, Globe, CalendarClock } from 'lucide-react'
 
 export default function QuoteDetailPage() {
   const { id } = useParams<{ id: string }>()
