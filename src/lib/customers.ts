@@ -19,6 +19,28 @@ export function normalizeEmail(e?: string | null): string {
   return (e || '').trim().toLowerCase()
 }
 
+// Are these two phone numbers the same person? THE canonical identity rule, and it
+// must agree with the intake seam in SQL (resolve_intake_customer, BK-1), which keys
+// on `right(digits, 10)` — the last ten digits, i.e. the North-American national
+// number. Two doors deciding "same customer?" differently is how one person becomes
+// two records; this is the app-side half of that one rule.
+//
+// - Both must carry at least 7 digits, or it isn't a confident phone match (a stray
+//   partial number must not link two people).
+// - Full digit-strings equal → same (covers 7–9 digit local numbers, unchanged).
+// - Both ≥ 10 digits and the LAST TEN agree → same. This is the case the old
+//   digit-equality rule missed: a stored "+1 403 555 0100" (11 digits) and a typed
+//   "403 555 0100" (10) are one customer, not two. Purely additive — it never
+//   *unlinks* a pair the old rule matched, only links country-code/prefix variants
+//   of the identical national number. Different national numbers never collide,
+//   because their last ten digits differ.
+export function phoneMatches(a?: string | null, b?: string | null): boolean {
+  const da = normalizePhone(a), db = normalizePhone(b)
+  if (da.length < 7 || db.length < 7) return false
+  if (da === db) return true
+  return da.length >= 10 && db.length >= 10 && da.slice(-10) === db.slice(-10)
+}
+
 // The fewest digits worth treating as "they're typing a phone number". Below this
 // a stray "40" in a name search would drag in every 403 number in the book.
 const PHONE_SEARCH_MIN_DIGITS = 3
@@ -129,9 +151,9 @@ export interface CustomerMatch { customer: Customer; reason: MatchReason; confid
 // "confident" (safe to auto-link); a name-only match is returned but flagged
 // not-confident, so the save flow never silently merges two different people.
 export function findCustomerMatch(customers: Customer[], input: MatchInput): CustomerMatch | null {
-  const phone = normalizePhone(input.phone)
-  if (phone.length >= 7) {
-    const c = customers.find(c => { const p = normalizePhone(c.phone); return p.length >= 7 && p === phone })
+  if (normalizePhone(input.phone).length >= 7) {
+    // phoneMatches is the ONE rule, shared with the SQL intake seam — see its comment.
+    const c = customers.find(c => phoneMatches(c.phone, input.phone))
     if (c) return { customer: c, reason: 'phone', confident: true }
   }
   const email = normalizeEmail(input.email)
