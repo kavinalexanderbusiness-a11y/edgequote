@@ -22,6 +22,11 @@ Three permanent rules (from the vision, owner-directed): **real customer
 feedback outranks assumptions · AI never produces a price · frozen lanes open
 only by explicit owner approval.**
 
+**Launch status:** [`LAUNCH-ROADMAP.md`](LAUNCH-ROADMAP.md) — the living
+launch-blocker tracker, reconciled against the merge log. 11 of 13 engineering
+blockers are merged; the remaining gate is two owner actions (set `CRON_SECRET`,
+decide self-serve signup).
+
 **Audits are history, not truth.** Point-in-time reports — `PRODUCTION_READINESS_REPORT.md`,
 `MEASURE-AND-QUOTE-AUDIT.md`, `OFFLINE_ENGINE_AUDIT.md`, `PUBLISHING_AUDIT.md`,
 `AUTOMATION_DEDUP_STATUS.md` — and the `docs/HARDENING-BACKLOG.md` are dated snapshots.
