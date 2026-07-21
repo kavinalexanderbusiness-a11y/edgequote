@@ -71,7 +71,17 @@ export function WeekendOutlook({ plan }: { plan: DayPlan }) {
                         {j.service_type && <span className="text-ink-faint truncate hidden sm:inline">· {j.service_type}</span>}
                       </span>
                       <span className="flex items-center gap-1 shrink-0">
-                        <span className={cn('tabular-nums', j.value > 0 ? 'text-ink-muted' : 'text-amber-400')}>{j.value > 0 ? formatCurrency(j.value) : '$?'}</span>
+                        {/* A booked job with no price is an UNKNOWN value, and the
+                          honesty rule is explicit: unknown renders as "—", never
+                          0 (and never an alarm). It used to show amber "$?" — but
+                          amber means risk on this page (overdue money, an
+                          overloaded day), and an unpriced job is a data gap, not
+                          a risk. Spending the alarm colour on it both mis-signals
+                          severity and reads as an anxiety-prompt with no fix here
+                          (pricing lives on the quote). Quiet "—" tells the truth
+                          without crying wolf, matching the "—" the month strip
+                          already uses for an unknown rate. */}
+                      <span className={cn('tabular-nums', j.value > 0 ? 'text-ink-muted' : 'text-ink-faint')}>{j.value > 0 ? formatCurrency(j.value) : '—'}</span>
                         {/* 40px hit areas — these get tapped with gloves on.
                             aria-label names the CUSTOMER, not the verb: `title`
                             alone is a last-resort accessible name, and a column
