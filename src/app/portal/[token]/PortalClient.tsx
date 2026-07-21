@@ -1,14 +1,14 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, Clock, History, Home, Leaf, Loader2, MapPin, MessageSquare, MessageSquarePlus, Receipt, X } from 'lucide-react'
+import { CheckCircle2, ChevronRight, Clock, FileText, History, Home, Leaf, Loader2, MapPin, MessageSquare, MessageSquarePlus, Receipt, Wallet, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { ConfirmHost } from '@/components/ui/ConfirmHost'
 import { cn, formatCurrency, localTodayISO } from '@/lib/utils'
 import { renderPortalInvoiceBlob, renderPortalQuoteBlob } from '@/lib/portalPdf'
 import {
-  buildPortalView, normalizePortal, parsePortalDeepLink, tabNavTarget,
+  buildPortalView, normalizePortal, parsePortalDeepLink, primaryPortalAction, tabNavTarget,
   type PortalData, type SubmitRequestFn, type TabKey,
 } from './model'
 import type { PortalActions } from './components/shared'
@@ -50,6 +50,10 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   // A one-shot seed for the Messages composer — set by "ask about this <doc>",
   // consumed by MessagesTab on open, then cleared so a later visit starts blank.
   const [composerPrefill, setComposerPrefill] = useState<string | null>(null)
+  // The next-action banner the customer dismissed (by its stable key) — stays
+  // gone until the situation changes (they pay, a new quote arrives), which
+  // mints a new key and lets it return for the genuinely new thing.
+  const [dismissedAction, setDismissedAction] = useState<string | null>(null)
   // One inline error surface for portal actions — fixed, friendly copy near the
   // top of the content, never a browser alert.
   const [actionError, setActionError] = useState<string | null>(null)
@@ -290,6 +294,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     submitRequest, photoUrl, markInvoiceViewed, refresh: load,
     navigate: (t, opts) => {
       goTab(t, opts?.docsCat)
+      if (opts?.focusDocId) { setFocusDocId(opts.focusDocId); setTimeout(() => setFocusDocId(null), 4000) }
       if (typeof window !== 'undefined') window.scrollTo({ top: 0 })
     },
     askAbout: (prefill) => {
@@ -410,6 +415,30 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
               <button onClick={() => setActionError(null)} aria-label="Dismiss" className="shrink-0 opacity-70 hover:opacity-100"><X className="w-4 h-4" /></button>
             </div>
           )}
+
+          {/* Your next action, from anywhere. Only on tabs where it isn't already
+              in front of you (Home has the full attention section; Billing is
+              where you'd act), only when something genuinely needs you, and
+              dismissible so it's a convenience, never a nag. One tap lands on the
+              exact document via the same scroll a deep link uses. */}
+          {(() => {
+            if (tab === 'home' || tab === 'billing') return null
+            const a = primaryPortalAction(view.docItems, view.money)
+            if (!a || a.key === dismissedAction) return null
+            return (
+              <div className={cn('mb-3 rounded-card border flex items-center gap-1 pr-1',
+                a.kind === 'pay' ? 'border-amber-500/30 bg-amber-500/[0.08]' : 'border-accent/25 bg-accent/[0.08]')}>
+                <button type="button"
+                  onClick={() => actions.navigate('billing', { docsCat: a.docsCat, focusDocId: a.focusDocId })}
+                  className="flex-1 flex items-center gap-2.5 px-4 py-3 text-left rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                  {a.kind === 'pay' ? <Wallet className="w-4 h-4 shrink-0 text-amber-400" /> : <FileText className="w-4 h-4 shrink-0 text-accent-text" />}
+                  <span className="text-sm font-medium text-ink">{a.headline}</span>
+                  <ChevronRight className="w-4 h-4 text-ink-faint ml-auto shrink-0" />
+                </button>
+                <button type="button" onClick={() => setDismissedAction(a.key)} aria-label="Dismiss" className="shrink-0 p-2 text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
+              </div>
+            )
+          })()}
 
           {/* The single live panel, labelled by the active tab — completes the
               tablist/tab/tabpanel relationship for assistive tech. Global status

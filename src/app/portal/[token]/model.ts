@@ -523,6 +523,43 @@ export function moneySummary(invoices: PortalInvoice[], business: PortalData['bu
   return { invoiced: r(invoiced), paid: r(paid), due: r(due), owingCount }
 }
 
+// ── The one thing that needs the customer (a cross-tab convenience) ──────────
+// Surfaced from any tab so someone deep in Photos or Messages doesn't have to
+// go hunting in Billing for the bill they owe or the quote waiting on them.
+// Priority is honest and time-ordered: an OVERDUE bill first, then a balance
+// merely due, then a quote awaiting their decision. Returns null when nothing
+// needs them — the banner just doesn't render. `focusDocId` is set only when a
+// single row is the target, so one tap lands ON it (reusing the deep-link
+// scroll); with several it lands on the filtered list. `key` is a stable
+// identity so a dismissal sticks until the situation actually changes.
+export interface PortalNextAction {
+  key: string
+  kind: 'pay' | 'approve'
+  headline: string
+  docsCat: 'invoice' | 'quote'
+  focusDocId: string | null
+}
+
+export function primaryPortalAction(docItems: DocItem[], money: MoneySummary): PortalNextAction | null {
+  const owing = docItems.filter(d => d.kind === 'invoice' && d.balance > 0 && d.status !== 'cancelled' && d.status !== 'draft')
+  const oneOwing = owing.length === 1 ? owing[0].rawId : null
+  if (owing.some(d => d.status === 'overdue')) {
+    return { key: `overdue:${money.due}:${owing.length}`, kind: 'pay', headline: `Past due: ${formatCurrency(money.due)}`, docsCat: 'invoice', focusDocId: oneOwing }
+  }
+  if (money.due > 0 && owing.length > 0) {
+    return { key: `due:${money.due}:${owing.length}`, kind: 'pay', headline: `Balance due: ${formatCurrency(money.due)}`, docsCat: 'invoice', focusDocId: oneOwing }
+  }
+  const quotes = docItems.filter(d => d.kind === 'quote' && d.status === 'sent')
+  if (quotes.length > 0) {
+    return {
+      key: `quote:${quotes.length}`, kind: 'approve',
+      headline: quotes.length === 1 ? 'A quote is waiting for your approval' : `${quotes.length} quotes are waiting for you`,
+      docsCat: 'quote', focusDocId: quotes.length === 1 ? quotes[0].rawId : null,
+    }
+  }
+  return null
+}
+
 // ── Per-property view (the "every property" surface) ────────────────────────
 // Grouping rule (from the property-identity work): a single-property customer
 // sees ONE unified story — splitting their history over property_id nulls would
