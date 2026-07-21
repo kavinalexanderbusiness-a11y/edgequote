@@ -225,6 +225,47 @@ console.log('\nThe report explains the cost BASIS exactly as /dashboard/accounti
   eq('no costs → "nothing logged", not a basis note', costNote(empty), 'nothing logged this period')
 }
 
+console.log('\nMoney that left but is not a cost (rule 4) is surfaced, as the P&L page does:')
+{
+  // Capital and owner draws leave the bank but are NOT costs: profit excludes both,
+  // bank movement includes them, and the emailed report used to leave that gap
+  // unexplained. The report now names them with the P&L page's exact notes. No
+  // figure is asserted here beyond that profit/cost already exclude them.
+  const DRAW_CAT = { id: 'c-draw', name: 'Owner draw', kind: 'owner_draw', tax_deductible: false, external_account: null }
+  const r = composeReport('daily', TODAY, {
+    payments: [pay({ amount: 2000, paid_at: '2026-07-15' })],
+    expenses: [
+      exp({ amount: 100, spent_at: '2026-07-15' }),                               // a real cost
+      exp({ amount: 5000, spent_at: '2026-07-15', is_capital: true }),            // capital, not a cost
+      exp({ amount: 800, spent_at: '2026-07-15', category_id: 'c-draw',
+            expense_categories: DRAW_CAT as never }),                             // owner draw, not a cost
+    ],
+    settings: NOT_REGISTERED,
+  }, { closed: true })
+  const s = summarize(r)
+  const line = (label: string) => s.lines.find(l => l.label === label)
+
+  // The engine already excludes both from cost/profit — the report just explains it.
+  eq('cost is the real cost only (capital + draw excluded)', r.pnl.cost, 100)
+  eq('profit = revenue − cost, untouched by capital/draws', r.pnl.profit, 1900)
+
+  eq('capital is surfaced with the page\'s exact note', line('Capital purchases')?.note,
+     'cash became an asset — it wears out over years, not at once')
+  eq('...at the engine\'s capitalSpend value', line('Capital purchases')?.value, formatCurrency(r.pnl.capitalSpend))
+  eq('owner draws are surfaced with the page\'s exact note', line('Owner draws')?.note,
+     'profit taken out, not a cost of earning it')
+  eq('...at the engine\'s ownerDraws value', line('Owner draws')?.value, formatCurrency(r.pnl.ownerDraws))
+
+  // No noise when there is nothing of the kind.
+  const plain = composeReport('daily', TODAY, {
+    payments: [pay({ amount: 2000, paid_at: '2026-07-15' })],
+    expenses: [exp({ amount: 100, spent_at: '2026-07-15' })], settings: NOT_REGISTERED,
+  }, { closed: true })
+  const ps = summarize(plain)
+  check('no Capital line when there is no capital', !ps.lines.some(l => l.label === 'Capital purchases'))
+  check('no Owner-draws line when there are none', !ps.lines.some(l => l.label === 'Owner draws'))
+}
+
 console.log('\nEmpty periods are honest, not blank:')
 {
   const r = composeReport('daily', TODAY, { payments: [], expenses: [], settings: NOT_REGISTERED }, { closed: true })

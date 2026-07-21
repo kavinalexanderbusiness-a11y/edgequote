@@ -84,6 +84,28 @@ export function summarize(r: ScheduledReport): ReportSummary {
     },
   ]
 
+  // Money that LEFT the bank but is NOT a cost (rule 4) — capital and owner draws.
+  // The P&L page surfaces these in its own "money that left but isn't a cost" card,
+  // "because it's real cash and its absence from the figures above is exactly what
+  // an owner would query". In the emailed report the same query is sharper: Profit
+  // excludes both (correctly), Bank movement includes them as outflow, so the bank
+  // moved LESS than the profit and nothing explained the gap. Same labels + notes as
+  // the page (pnl/page.tsx). No figure is altered — these values are read off `pnl`.
+  if (pnl.capitalSpend > 0) {
+    lines.push({
+      label: 'Capital purchases',
+      value: formatCurrency(pnl.capitalSpend),
+      note: 'cash became an asset — it wears out over years, not at once',
+    })
+  }
+  if (pnl.ownerDraws > 0) {
+    lines.push({
+      label: 'Owner draws',
+      value: formatCurrency(pnl.ownerDraws),
+      note: 'profit taken out, not a cost of earning it',
+    })
+  }
+
   // Money that is real but belongs to no period: a paid row with no paid_at date.
   // It is excluded from every figure above by inPeriod, so saying nothing would
   // make the report quietly lower than the bank.
