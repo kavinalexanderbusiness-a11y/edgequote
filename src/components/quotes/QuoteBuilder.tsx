@@ -226,6 +226,10 @@ export function QuoteBuilder({
   // existing customer so we link instead of creating a duplicate. Reuses the
   // single matching engine (phone/email/address confident, name not).
   const isManualEntry = !customerId || customerId === '__manual'
+  // The linked customer's id, or undefined during manual entry — the pricing panels
+  // below take an optional customerId and the '__manual' sentinel must never reach
+  // them as a real id. Derived once from isManualEntry so the two call sites can't drift.
+  const activeCustomerId = isManualEntry ? undefined : customerId
   const likelyMatch = useMemo(
     () => (isManualEntry ? findCustomerMatch(customers, { name: manualName, phone: manualPhone, email: manualEmail, address }) : null),
     [isManualEntry, customers, manualName, manualPhone, manualEmail, address],
@@ -511,6 +515,24 @@ export function QuoteBuilder({
   // edits quote CONTENT only; status transitions happen through the control.
   const showManualName = !customerId || customerId === '__manual'
 
+  // ── The discount / value / notes row, defined ONCE ───────────────────────────
+  // A service line and a material line end in the identical trio — same fields,
+  // same registers, same layout — because both are the same species of line (one
+  // `services` array, one totals engine). Rendered from both editors below so the
+  // two can't drift, the same reason `previewBreakdown` exists. `i` is the real
+  // field-array index the row registers against.
+  const lineDiscountRow = (i: number) => (
+    <div className="grid grid-cols-2 sm:grid-cols-[auto_auto_1fr] gap-3 items-end">
+      <Select label="Discount" placeholder="None"
+        options={[{ value: 'amount', label: '$ off' }, { value: 'percent', label: '% off' }]}
+        {...register(`services.${i}.discount_type` as const)} />
+      <Input label="Value" type="number" step="1" min="0"
+        {...register(`services.${i}.discount_value` as const, { min: 0 })} />
+      <Input label="Notes" placeholder="Optional"
+        {...register(`services.${i}.notes` as const)} />
+    </div>
+  )
+
   // ── The price breakdown, defined ONCE ────────────────────────────────────────
   // Rendered by the desktop preview card AND the mobile sheet below. It used to
   // live only inside `hidden lg:block`, so a contractor quoting from a phone in
@@ -716,7 +738,7 @@ export function QuoteBuilder({
                   cadence={suggested?.recommended ?? 'one_time'}
                   overgrowth={overgrowth}
                   propertyId={defaultPropertyId}
-                  customerId={customerId && customerId !== '__manual' ? customerId : undefined}
+                  customerId={activeCustomerId}
                   currentPrice={(suggested?.recommended ?? 'one_time') === 'one_time' ? initialPrice
                     : (suggested?.recommended === 'weekly' ? weeklyPrice
                       : suggested?.recommended === 'biweekly' ? biweeklyPrice : monthlyPrice)}
@@ -1057,15 +1079,7 @@ export function QuoteBuilder({
                       <Input label="Duration (min)" type="number" step="5" min="0"
                         {...register(`services.${i}.est_minutes` as const, { min: 0 })} />
                     </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-[auto_auto_1fr] gap-3 items-end">
-                      <Select label="Discount" placeholder="None"
-                        options={[{ value: 'amount', label: '$ off' }, { value: 'percent', label: '% off' }]}
-                        {...register(`services.${i}.discount_type` as const)} />
-                      <Input label="Value" type="number" step="1" min="0"
-                        {...register(`services.${i}.discount_value` as const, { min: 0 })} />
-                      <Input label="Notes" placeholder="Optional"
-                        {...register(`services.${i}.notes` as const)} />
-                    </div>
+                    {lineDiscountRow(i)}
                   </div>
                 )
               })}
@@ -1146,15 +1160,7 @@ export function QuoteBuilder({
                       <Input label="Price per unit ($)" type="number" step="1" min="0"
                         {...register(`services.${i}.unit_price` as const, { min: 0 })} />
                     </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-[auto_auto_1fr] gap-3 items-end">
-                      <Select label="Discount" placeholder="None"
-                        options={[{ value: 'amount', label: '$ off' }, { value: 'percent', label: '% off' }]}
-                        {...register(`services.${i}.discount_type` as const)} />
-                      <Input label="Value" type="number" step="1" min="0"
-                        {...register(`services.${i}.discount_value` as const, { min: 0 })} />
-                      <Input label="Notes" placeholder="Optional"
-                        {...register(`services.${i}.notes` as const)} />
-                    </div>
+                    {lineDiscountRow(i)}
                   </div>
                 )
               })}
@@ -1291,7 +1297,7 @@ export function QuoteBuilder({
           serviceType={watch('service_type')}
           pricingKind={pricingKind}
           propertyId={defaultPropertyId}
-          customerId={customerId && customerId !== '__manual' ? customerId : undefined}
+          customerId={activeCustomerId}
           services={activeTemplates.map(t => t.name).filter((n): n is string => !!n)}
           // Setting the NAME alone left service_template_id stale, so svcTemplate
           // stayed null and pricingKind fell back to matching the name — which is a
