@@ -1,6 +1,6 @@
 'use client'
 
-import { useSyncExternalStore, useCallback } from 'react'
+import { useSyncExternalStore, useCallback, useRef } from 'react'
 import { subscribeToasts, getToasts, dismissToast, type ToastItem } from '@/lib/toast'
 import { CheckCircle2, AlertTriangle, Info, X, Undo2, Loader2 } from 'lucide-react'
 
@@ -41,8 +41,59 @@ function ToastRow({ t }: { t: ToastItem }) {
   }, [t])
   // Errors/warnings interrupt (assertive); everything else is polite.
   const alert = t.tone === 'error' || t.tone === 'warning'
+
+  // Flick a toast sideways to dismiss it — the whole row is the target, so you
+  // don't have to hit the 3.5×3.5 X one-handed. This ADDS to the X + aria-live,
+  // it doesn't replace them, so keyboard and screen-reader users lose nothing.
+  //
+  // Two swipe surfaces exist now (this + Modal's sheet). That's below the rule of
+  // three, so the ~15 lines stay inline rather than becoming a premature shared
+  // hook — extract when a third surface wants it, not before. Transform is
+  // imperative so a finger-move doesn't re-render the toast stack.
+  const rowRef = useRef<HTMLDivElement>(null)
+  const startX = useRef<number | null>(null)
+  const dx = useRef(0)
+
+  function begin(e: React.TouchEvent) {
+    // A touch that starts on a control is a tap for that control, never a drag.
+    if (e.touches.length !== 1 || (e.target as HTMLElement).closest('button')) return
+    startX.current = e.touches[0].clientX
+    dx.current = 0
+    if (rowRef.current) rowRef.current.style.transition = 'none'
+  }
+  function move(e: React.TouchEvent) {
+    if (startX.current == null) return
+    const d = e.touches[0].clientX - startX.current
+    dx.current = d
+    const row = rowRef.current
+    if (!row) return
+    row.style.transform = `translateX(${d}px)`
+    // Fade with distance so it reads as "leaving", and previews the dismiss.
+    row.style.opacity = String(Math.max(0, 1 - Math.abs(d) / 220))
+  }
+  function end() {
+    if (startX.current == null) return
+    const d = dx.current
+    startX.current = null
+    const row = rowRef.current
+    if (!row) return
+    if (Math.abs(d) > 80) { dismissToast(t.id); return }
+    // Snap back — instant under reduced-motion, which the global net also honours.
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    row.style.transition = reduce ? 'none' : 'transform 0.2s ease, opacity 0.2s ease'
+    row.style.transform = ''
+    row.style.opacity = ''
+  }
+
   return (
-    <div role={alert ? 'alert' : 'status'} className={`pointer-events-auto flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 shadow-lg text-sm animate-toast ${meta.cls}`}>
+    <div
+      ref={rowRef}
+      role={alert ? 'alert' : 'status'}
+      onTouchStart={begin}
+      onTouchMove={move}
+      onTouchEnd={end}
+      // pan-y lets a vertical page scroll pass through; horizontal is the swipe.
+      className={`pointer-events-auto touch-pan-y flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 shadow-lg text-sm animate-toast ${meta.cls}`}>
       <Icon aria-hidden="true" className={`w-4 h-4 shrink-0 ${t.tone === 'loading' ? 'animate-spin' : ''}`} />
       <span className="flex-1 min-w-0">{t.message}</span>
       {t.undo && (
