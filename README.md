@@ -15,12 +15,19 @@ login, and learn true costs from every completed visit.
 | [`DETECTION_ENGINE_ADR.md`](DETECTION_ENGINE_ADR.md) | The one detection engine (`lib/signals/*`). |
 | [`QUOTE-PRESENTATION-V2.md`](QUOTE-PRESENTATION-V2.md) | Pricing V2 Phase 6 spec (build gated on Phases 1–5). |
 | [`ONBOARDING-FIRST-RUN.md`](ONBOARDING-FIRST-RUN.md) | First-run onboarding design (design only; lane not opened). |
-| [`DEPLOYMENT.md`](DEPLOYMENT.md) | Env vars, external services, smoke tests. |
-| [`DEPLOY_CHECKLIST.md`](DEPLOY_CHECKLIST.md) | Migration/deploy process. The live DB catalog is the migration authority — there is no ledger. |
+| [`MULTI_INDUSTRY_ARCHITECTURE.md`](MULTI_INDUSTRY_ARCHITECTURE.md) | Multi-industry architecture — a trade is configuration, never a fork. |
+| [`DEPLOY_CHECKLIST.md`](DEPLOY_CHECKLIST.md) | **Deployment — the single source of truth:** migrations, env vars, external services, smoke tests, monitoring, and rollback. The live DB catalog is the migration authority — there is no ledger. |
 
 Three permanent rules (from the vision, owner-directed): **real customer
 feedback outranks assumptions · AI never produces a price · frozen lanes open
 only by explicit owner approval.**
+
+**Audits are history, not truth.** Point-in-time reports — `PRODUCTION_READINESS_REPORT.md`,
+`MEASURE-AND-QUOTE-AUDIT.md`, `OFFLINE_ENGINE_AUDIT.md`, `PUBLISHING_AUDIT.md`,
+`AUTOMATION_DEDUP_STATUS.md` — and the `docs/HARDENING-BACKLOG.md` are dated snapshots.
+Read the date and verify against current code before acting; when one disagrees with a
+canonical document above, the canonical document wins. New design work amends the relevant
+canonical document deliberately — it never forks a second, competing one.
 
 ## Development
 
