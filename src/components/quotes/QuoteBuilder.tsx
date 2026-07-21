@@ -66,6 +66,12 @@ interface QuoteBuilderProps {
 //   manual    → the owner typed their own number (or we loaded a saved quote).
 type PriceOrigin = 'empty' | 'suggested' | 'applied' | 'manual'
 
+// The cadences the owner can lead a quote with — the plan tiles and the "which one
+// did you pitch" highlight. Monthly is deliberately absent: it's off the standard
+// lawn menu (a month of growth is a rough cut) and never a picked lead, so it isn't
+// one of these. The full four-cadence set (incl. monthly) is priceGuardrails' Cadence.
+type PitchCadence = 'one_time' | 'weekly' | 'biweekly'
+
 export function QuoteBuilder({
   customers, templates, tiers, settings, defaultCustomerId, defaultPropertyId, defaultValues, onSubmit, isEdit,
   autosaveKey, autosaveBaselineUpdatedAt,
@@ -174,7 +180,7 @@ export function QuoteBuilder({
   const [savedRec, setSavedRec] = useState<{ rec: SavedRecommendation; sqft: number; date: string } | null>(null)
   // Which suggested price the owner tapped — drives the compact "Suggested Pricing"
   // highlight. Cleared the moment a price is edited (manual override).
-  const [pickedCadence, setPickedCadence] = useState<'one_time' | 'weekly' | 'biweekly' | null>(null)
+  const [pickedCadence, setPickedCadence] = useState<PitchCadence | null>(null)
 
   const hours = watch('hours') || 0
   const crewSize = watch('crew_size') || 1
@@ -309,7 +315,7 @@ export function QuoteBuilder({
   // Tap a suggestion → fill One-Time + Weekly + Bi-Weekly TOGETHER (the customer
   // sees every option, no re-typing); the tapped cadence is just the one you'd
   // pitch. Monthly fills only when enabled. All fields stay editable after.
-  function applySuggested(c: 'one_time' | 'weekly' | 'biweekly') {
+  function applySuggested(c: PitchCadence) {
     if (!suggested) return
     setValue('initial_price', suggested.one_time)
     setValue('weekly_price', suggested.weekly)
