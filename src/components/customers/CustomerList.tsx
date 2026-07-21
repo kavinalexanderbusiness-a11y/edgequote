@@ -280,15 +280,25 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
       ) : (
         <div className="grid gap-3">
           {filtered.slice(0, RENDER_CAP).map((c, i) => (
+            // STRETCHED-LINK ROW: the whole card opens the profile, not just the
+            // ~14px name text — a glove-sized target on the app's busiest list.
+            // The name Link below carries an `after:absolute after:inset-0` overlay
+            // that fills this `relative` card; every genuinely-interactive child
+            // (checkbox, mailto, tel, and the actions cluster) is lifted with
+            // `relative z-10` so it sits ABOVE the overlay and still receives its
+            // own tap. ⚠️ ANY new interactive control added to this row MUST get
+            // `relative z-10`, or the overlay silently swallows it into a profile
+            // navigation. Passive content (avatar, badges, city, date) stays under
+            // the overlay on purpose — tapping it opens the profile.
             <Card key={c.id} {...hoverIntent(() => prefetchCustomer(c.id))}
-              className={cn('flex items-center gap-3 px-5 py-4 transition-colors card-lift animate-rise', i < 6 && `stagger-${i + 1}`, sel.isSelected(c.id) ? 'border-accent/50' : 'hover:border-border-strong')}>
-              <SelectCheckbox checked={sel.isSelected(c.id)} onToggle={shift => sel.toggle(c.id, shift)} />
+              className={cn('relative flex items-center gap-3 px-5 py-4 transition-colors card-lift animate-rise', i < 6 && `stagger-${i + 1}`, sel.isSelected(c.id) ? 'border-accent/50' : 'hover:border-border-strong')}>
+              <SelectCheckbox className="relative z-10" checked={sel.isSelected(c.id)} onToggle={shift => sel.toggle(c.id, shift)} />
               {/* Avatar — deterministic colour per customer (scannable identity) */}
               <Avatar name={c.name} seed={c.id} />
               {/* Info */}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <Link href={`/dashboard/customers/${c.id}`} className="text-sm font-semibold text-ink hover:text-accent-text transition-colors">{c.name}</Link>
+                  <Link href={`/dashboard/customers/${c.id}`} aria-label={`Open ${c.name}'s profile`} className="text-sm font-semibold text-ink hover:text-accent-text transition-colors after:absolute after:inset-0 after:content-['']">{c.name}</Link>
                   {c.sms_opt_in && <span className="text-[10px] uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5">SMS</span>}
                   {c.email_opt_in && <span className="text-[10px] uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5">Email</span>}
                 </div>
@@ -302,12 +312,12 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
                     the wrapped lines overlap — the same bug wearing a different hat. */}
                 <div className="flex items-center gap-x-4 gap-y-2 mt-1 flex-wrap">
                   {c.email && (
-                    <a href={`mailto:${c.email}`} className="flex items-center gap-1.5 py-2 text-xs text-ink-muted hover:text-ink hover:underline touch-manipulation">
+                    <a href={`mailto:${c.email}`} className="relative z-10 flex items-center gap-1.5 py-2 text-xs text-ink-muted hover:text-ink hover:underline touch-manipulation">
                       <Mail className="w-3.5 h-3.5 shrink-0" /> {c.email}
                     </a>
                   )}
                   {c.phone && (
-                    <a href={`tel:${c.phone}`} className="flex items-center gap-1.5 py-2 text-xs font-medium text-accent-text hover:underline touch-manipulation">
+                    <a href={`tel:${c.phone}`} className="relative z-10 flex items-center gap-1.5 py-2 text-xs font-medium text-accent-text hover:underline touch-manipulation">
                       <Phone className="w-3.5 h-3.5 shrink-0" /> {c.phone}
                     </a>
                   )}
@@ -320,8 +330,10 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
               {/* Added */}
               <p className="text-xs text-ink-faint hidden md:block">{formatDate(c.created_at)}</p>
               {/* Actions — the quoting workflow's entry point stays labeled and first;
-                  the secondary actions live in one shared overflow menu. */}
-              <div className="flex items-center gap-1">
+                  the secondary actions live in one shared overflow menu.
+                  `relative z-10` keeps this whole cluster above the row's stretched
+                  profile-link overlay (see the row comment above). */}
+              <div className="relative z-10 flex items-center gap-1">
                 <Button variant="secondary" size="sm" onClick={() => router.push(`/dashboard/quotes/new?customer=${c.id}`)} title="Start a new quote for this customer">
                   <FileText className="w-4 h-4" /> Quote
                 </Button>
