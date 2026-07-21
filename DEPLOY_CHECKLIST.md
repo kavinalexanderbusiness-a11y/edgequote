@@ -107,6 +107,12 @@ VAPID_PRIVATE_KEY
 VAPID_SUBJECT                        # mailto: or https: contact
 PUSH_SEND_SECRET                     # must equal public.push_config.secret
 ```
+**Optional (outbound integrations):**
+```
+INTEGRATIONS_DELIVER_SECRET          # [2026-07-21] signs outbound webhook deliveries
+                                     # (integrations outbox → /api/integrations/deliver);
+                                     # delivery stays inert until set
+```
 No Stripe **publishable** key is needed (card capture uses hosted Checkout in setup mode).
 
 ## Stripe configuration
@@ -213,6 +219,39 @@ Vercel reads `vercel.json` (crons) and your env vars automatically.
 7. **Review request test** — Trigger `GET /api/cron/notifications` (Bearer `CRON_SECRET`); a customer with a completed visit yesterday + a Google review URL set receives the review request (and isn't re-sent on a second run).
 8. **Website import dedup test** — Submit a second website lead with the **same phone/email** → it attaches to the **existing** customer (no duplicate); exceed the hourly cap → `429`.
 9. **Notifications test** — Each event above produces the right in-app notification (bell + `/dashboard/notifications`) live; a failed fetch shows an error + Retry, not "empty."
+
+---
+
+# External Services — setup notes
+
+Env vars and per-service config are above; these are the human steps that gate them:
+
+- **Twilio** — set `TWILIO_FROM` to a real number and complete **A2P 10DLC registration**
+  (required for US/CA business texting, can take **days** — start early).
+- **Resend** — **verify the sending domain**, then set `RESEND_FROM`.
+- **Google Maps** — enable the **Geocoding + Places** APIs; restrict the browser key by
+  HTTP referrer and the server key by API.
+- **Supabase** — enable **Auth → Leaked Password Protection**; the four storage buckets
+  are created by SQL (never the dashboard — see above), and you may tighten their public
+  `SELECT` policy so clients can't list all files.
+
+---
+
+# Monitor After Launch
+
+- **Health endpoint** — point your uptime monitor at `GET /api/health` and alert on the
+  **status code** (`ok` and `degraded` both return `200` on purpose; `503` = DB unreachable).
+- **Stripe webhook** — watch for `500`s / retries in the Stripe dashboard. The webhook
+  returns `500` on a DB write failure so Stripe retries — a spike means DB trouble.
+- **Cron** — confirm both daily runs (`/api/cron/notifications`, `/api/cron/autopay`)
+  succeed; watch the `sent` count and error logs. A `403` means `CRON_SECRET` is unset.
+- **Push delivery** — `select status_code, content, created from net._http_response order by created desc limit 20;`
+  (pg_net auto-expires rows ~6h; `sent:N` = delivered, non-200 = a problem).
+- **Comms failures** — `notification_log` rows with `status <> 'sent'` indicate Twilio/Resend issues.
+- **Supabase advisors** — re-run security + performance advisors periodically; watch slow-query logs as data grows.
+- **DB growth** — `messages`, `notification_log`, `road_distance_cache`, `jobs` grow over
+  time; revisit indexes/pagination if any get large (see `docs/HARDENING-BACKLOG.md`).
+- **App errors** — wire Vercel logs (or Sentry) to catch unhandled errors.
 
 ---
 

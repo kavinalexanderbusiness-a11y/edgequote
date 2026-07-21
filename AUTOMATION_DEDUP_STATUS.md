@@ -3,6 +3,11 @@
 Companion to `AUTOMATION_ARCHITECTURE.md` / `AUTOMATION_REMEDIATION_PLAN.md`.
 Branch `guardian-2`. Behaviour-preserving unless noted. No new automations.
 
+> **Snapshot (historical).** This is a point-in-time status from the `guardian-2` work,
+> not a living source of truth. The two companion documents named above live on that
+> unmerged branch and are not present on `main` — treat their references as pointers into
+> `guardian-2`, and verify any claim here against current code before acting.
+
 ---
 
 ## DONE — one rule, one home
