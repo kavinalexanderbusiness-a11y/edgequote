@@ -2,7 +2,7 @@
 
 **Status:** APPROVED (owner, 2026-07-21) as the canonical UX direction for all future UI work.
 **Nature:** Design guidance. NOT an implementation licence. No lane is opened by this document.
-**Interactive gallery:** `docs/ux-direction/edgequote-next.html` (self-contained, open in any browser) — also published as a private artifact at https://claude.ai/code/artifact/7df68f1c-4c00-4997-bc44-c3d9d29c4151
+**Interactive gallery:** `docs/ux-direction/edgequote-next.html` (self-contained, open in any browser).
 
 > This document is the *territory sketch*, not a build order. It sets the direction future
 > UI work is measured against. It does not authorize touching any frozen lane, does not

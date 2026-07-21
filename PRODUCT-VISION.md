@@ -208,8 +208,9 @@ feels automatic."
 ## 11. Top 25 features ranked by impact
 
 *Frozen lanes and the AI-pricing boundary are respected; items inside an approved
-roadmap cite it. "Blocker" = on the master launch-blocker list. Tier tags map to
-the loop (§1).*
+roadmap cite it. "Blocker" = on the master launch-blocker list. Live merge status is
+tracked in `LAUNCH-ROADMAP.md` (the repo-of-record); this list states priority, not
+status. Tier tags map to the loop (§1).*
 
 **Launch-critical foundation**
 
@@ -228,6 +229,9 @@ the loop (§1).*
 10. Bounded reads, one paging helper — *PERF-1, blocker*
 
 **Pricing V2 (the deliberate repricing — land as one event, Tier 1 loop)**
+
+*The full phased Pricing V2 roadmap is tracked in project memory; §11–§13 here are its
+in-repo summary, and `QUOTE-PRESENTATION-V2.md` is the in-repo home for Phase 6.*
 
 11. Canonical `priceQuote()` engine — pure, `sum(terms) === price` — *Phase 2*
 12. Real travel & drive-time model — *Phase 2*
@@ -266,8 +270,8 @@ the loop (§1).*
   landmine.
 - **Wave 1 — Launch blockers (parallel, disjoint sessions).** PAY-1, SCH-1, BK-1,
   MSG-1, RPT-1 + PERF-1. The quote critical path (MEAS-1 → PR-1 → QL-1 → QL-2)
-  runs as **one serialized session** (all touch QuoteBuilder). *(MEAS-1 merged;
-  PR-1/QL-1/QL-2 pushed, awaiting merge.)*
+  runs as **one serialized session** (all touch QuoteBuilder). *(Live merge status:
+  see `LAUNCH-ROADMAP.md`.)*
 - **Wave 2 — Pricing V2, sensors before brain.** Phase 0 (closed) → Phase 1 cost
   truth ($25 = wage, components not scalar) → Phase 2 canonical engine + real
   travel, validated by the differential harness (every price diff must map to a
