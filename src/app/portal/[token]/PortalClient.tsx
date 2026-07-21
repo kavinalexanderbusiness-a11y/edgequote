@@ -8,7 +8,7 @@ import { ConfirmHost } from '@/components/ui/ConfirmHost'
 import { cn, formatCurrency, localTodayISO } from '@/lib/utils'
 import { renderPortalInvoiceBlob, renderPortalQuoteBlob } from '@/lib/portalPdf'
 import {
-  buildPortalView, normalizePortal, parsePortalDeepLink,
+  buildPortalView, normalizePortal, parsePortalDeepLink, tabNavTarget,
   type PortalData, type SubmitRequestFn, type TabKey,
 } from './model'
 import type { PortalActions } from './components/shared'
@@ -145,6 +145,15 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       }
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep the active tab pill scrolled into view when the row overflows on a
+  // phone — a deep link (or a later tab) can otherwise land selected but
+  // off-screen, so the customer can't see where they are. inline:'nearest'
+  // scrolls only the pill row horizontally; block:'nearest' avoids a page jump.
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    document.getElementById(`porttab-${tab}`)?.scrollIntoView({ inline: 'nearest', block: 'nearest' })
+  }, [tab])
 
   // ONE place a tab change happens — keeps state and the URL in step so a refresh
   // or a bookmark lands on the same tab instead of bouncing to Home. Billing's
@@ -287,14 +296,16 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   // five dead ends) — each appears as soon as it has content. Messages and
   // Requests are always visible: their empty state IS the invitation.
   const docCount = data.quotes.length + data.invoices.filter(i => i.status !== 'draft').length
-  const TABS: { key: TabKey; label: string; icon: typeof Home; n?: number }[] = ([
+  // `unit` names the count for a screen reader — "Billing, 3 documents", not a
+  // bare "Billing 3" that reads as an unlabelled number.
+  const TABS: { key: TabKey; label: string; icon: typeof Home; n?: number; unit?: string }[] = ([
     { key: 'home', label: 'Home', icon: Home },
-    { key: 'billing', label: 'Billing', icon: Receipt, n: docCount },
-    { key: 'visits', label: 'Visits', icon: History, n: view.derived.completed.length + view.derived.upcoming.length },
-    { key: 'property', label: view.multiProperty ? 'Properties' : 'Property', icon: MapPin, n: view.multiProperty ? view.properties.length : undefined },
+    { key: 'billing', label: 'Billing', icon: Receipt, n: docCount, unit: 'documents' },
+    { key: 'visits', label: 'Visits', icon: History, n: view.derived.completed.length + view.derived.upcoming.length, unit: 'visits' },
+    { key: 'property', label: view.multiProperty ? 'Properties' : 'Property', icon: MapPin, n: view.multiProperty ? view.properties.length : undefined, unit: 'properties' },
     { key: 'messages', label: 'Messages', icon: MessageSquare },
     { key: 'requests', label: 'Requests', icon: MessageSquarePlus },
-  ] as { key: TabKey; label: string; icon: typeof Home; n?: number }[]).filter(t =>
+  ] as { key: TabKey; label: string; icon: typeof Home; n?: number; unit?: string }[]).filter(t =>
     t.key === 'billing' ? (docCount > 0 || data.payments.length > 0) :
     t.key === 'visits' ? (data.jobs.length > 0 || data.photos.length > 0) :
     t.key === 'property' ? view.hasProperty :
@@ -314,16 +325,39 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
           </div>
         </div>
 
-        {/* Sticky tab bar */}
+        {/* Sticky tab bar — a real WAI-ARIA tablist: arrow keys move between tabs
+            (roving tabindex), each pill meets the 44px gloved-thumb target on
+            touch (.tap-target-y, pointer-coarse gated), and the active tab is
+            kept scrolled into view so a deep link never lands it off-screen. */}
         <div className="sticky top-0 z-10 -mx-4 px-4 py-2 bg-bg/90 backdrop-blur border-b border-border">
-          <div className="flex gap-1.5 overflow-x-auto">
-            {TABS.map(t => (
-              <button key={t.key} onClick={() => goTab(t.key)}
-                className={cn('shrink-0 flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-2 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
-                  tab === t.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
-                <t.icon className="w-3.5 h-3.5" /> {t.label}{t.n != null && t.n > 0 && <span className="opacity-70 tabular-nums">{t.n}</span>}
-              </button>
-            ))}
+          <div role="tablist" aria-label="Your account sections" aria-orientation="horizontal" className="flex gap-1.5 overflow-x-auto">
+            {TABS.map((t, i) => {
+              const active = tab === t.key
+              return (
+                <button
+                  key={t.key}
+                  id={`porttab-${t.key}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  aria-controls="portal-panel"
+                  aria-label={t.n != null && t.n > 0 ? `${t.label}, ${t.n} ${t.unit ?? 'items'}` : t.label}
+                  tabIndex={active ? 0 : -1}
+                  onClick={() => goTab(t.key)}
+                  onKeyDown={e => {
+                    const target = tabNavTarget(e.key, i, TABS.length)
+                    if (target === null) return
+                    e.preventDefault()
+                    const nextKey = TABS[target].key
+                    goTab(nextKey)
+                    document.getElementById(`porttab-${nextKey}`)?.focus()
+                  }}
+                  className={cn('tap-target-y shrink-0 flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-2 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
+                    active ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
+                  <t.icon className="w-3.5 h-3.5" aria-hidden="true" /> {t.label}{t.n != null && t.n > 0 && <span className="opacity-70 tabular-nums" aria-hidden="true">{t.n}</span>}
+                </button>
+              )
+            })}
           </div>
         </div>
 
@@ -369,16 +403,21 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
             </div>
           )}
 
-          {tab === 'home' && <HomeTab view={view} actions={actions} suppressApproved={justAccepted} />}
-          {tab === 'home' && biz?.review_url && view.derived.lastCompleted && !data.customer.reviewed_at && !reviewDeclined && (
-            <ReviewCard reviewUrl={biz.review_url} businessName={biz.company_name} reviewed={markedReviewed} onReviewed={markReviewed} onDecline={declineReview} />
-          )}
-          {tab === 'home' && consent && <ConsentCard token={token} consent={consent} onSave={saveConsent} />}
-          {tab === 'property' && <PropertyTab view={view} actions={actions} />}
-          {tab === 'visits' && <VisitsTab view={view} actions={actions} />}
-          {tab === 'billing' && <BillingTab view={view} actions={actions} initialCat={docsCat} focusDocId={focusDocId} />}
-          {tab === 'messages' && <MessagesTab view={view} actions={actions} />}
-          {tab === 'requests' && <RequestsTab view={view} actions={actions} />}
+          {/* The single live panel, labelled by the active tab — completes the
+              tablist/tab/tabpanel relationship for assistive tech. Global status
+              banners above stay outside it (they aren't tab content). */}
+          <div id="portal-panel" role="tabpanel" aria-labelledby={`porttab-${tab}`} tabIndex={-1} className="focus-visible:outline-none">
+            {tab === 'home' && <HomeTab view={view} actions={actions} suppressApproved={justAccepted} />}
+            {tab === 'home' && biz?.review_url && view.derived.lastCompleted && !data.customer.reviewed_at && !reviewDeclined && (
+              <ReviewCard reviewUrl={biz.review_url} businessName={biz.company_name} reviewed={markedReviewed} onReviewed={markReviewed} onDecline={declineReview} />
+            )}
+            {tab === 'home' && consent && <ConsentCard token={token} consent={consent} onSave={saveConsent} />}
+            {tab === 'property' && <PropertyTab view={view} actions={actions} />}
+            {tab === 'visits' && <VisitsTab view={view} actions={actions} />}
+            {tab === 'billing' && <BillingTab view={view} actions={actions} initialCat={docsCat} focusDocId={focusDocId} />}
+            {tab === 'messages' && <MessagesTab view={view} actions={actions} />}
+            {tab === 'requests' && <RequestsTab view={view} actions={actions} />}
+          </div>
         </div>
 
         <p className="text-center text-[10px] text-ink-faint mt-10">Powered by EdgeQuote</p>

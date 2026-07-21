@@ -123,6 +123,21 @@ export function parsePortalDeepLink(search: string): PortalDeepLink {
   return { tab, docsCat, focusDocId }
 }
 
+// The tablist keyboard model (WAI-ARIA tabs): which tab index a keypress moves
+// focus to, or null to leave the event alone. Pure so the wrap-around is pinned
+// by verify — an off-by-one here silently traps keyboard users on the last tab.
+// Arrow keys wrap (a tab bar is a ring); Home/End jump to the ends.
+export function tabNavTarget(key: string, current: number, count: number): number | null {
+  if (count <= 0) return null
+  switch (key) {
+    case 'ArrowRight': case 'ArrowDown': return (current + 1) % count
+    case 'ArrowLeft': case 'ArrowUp': return (current - 1 + count) % count
+    case 'Home': return 0
+    case 'End': return count - 1
+    default: return null
+  }
+}
+
 // ── Normalize ───────────────────────────────────────────────────────────────
 // Defensive: an OLDER get_portal_data — or a customer with no rows in a section —
 // can return null for a collection (Postgres json_agg is null, not []). Coerce

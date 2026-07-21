@@ -11,7 +11,7 @@ import {
   normalizePortal, buildDerived, buildDocItems, buildPortalView,
   quoteJourney, moneySummary, buildPropertyModels, customerSinceYear,
   requestPresetsOf, resolveDocAddress, groupPhotos, orphanPhotos, liveStatusOf, visitDay,
-  daysAwayLabel, parsePortalDeepLink, NO_PROPERTY, MAX_REQUEST_PRESETS,
+  daysAwayLabel, parsePortalDeepLink, tabNavTarget, NO_PROPERTY, MAX_REQUEST_PRESETS,
   type PortalData, type PortalJob, type PortalProperty, type DocBlobRenderers,
 } from '../src/app/portal/[token]/model'
 
@@ -228,6 +228,22 @@ console.log('\nparsePortalDeepLink (the URL names a place, honestly):')
   check('?tab=billing&cat=quote → quote filter, no focus', (() => { const l = parsePortalDeepLink('?tab=billing&cat=quote'); return l.docsCat === 'quote' && l.focusDocId === null })())
   check('?tab=home → home (persisted form drops the param)', parsePortalDeepLink('?tab=home').tab === 'home')
   check('leading "?" optional', parsePortalDeepLink('tab=billing').tab === 'billing')
+}
+
+// ── tablist keyboard model (accessible tab bar) ─────────────────────────────
+console.log('\ntabNavTarget (arrow-key tab navigation — the ring must not trap):')
+{
+  const N = 6
+  check('ArrowRight advances', tabNavTarget('ArrowRight', 0, N) === 1)
+  check('ArrowRight wraps last → first', tabNavTarget('ArrowRight', N - 1, N) === 0)
+  check('ArrowLeft retreats', tabNavTarget('ArrowLeft', 2, N) === 1)
+  check('ArrowLeft wraps first → last', tabNavTarget('ArrowLeft', 0, N) === N - 1)
+  check('ArrowDown == ArrowRight, ArrowUp == ArrowLeft', tabNavTarget('ArrowDown', 0, N) === 1 && tabNavTarget('ArrowUp', 0, N) === N - 1)
+  check('Home → first, End → last', tabNavTarget('Home', 3, N) === 0 && tabNavTarget('End', 3, N) === N - 1)
+  check('an unrelated key is left alone (null)', tabNavTarget('Enter', 0, N) === null && tabNavTarget('a', 0, N) === null)
+  check('single-tab bar: arrows stay put (no wrap glitch)', tabNavTarget('ArrowRight', 0, 1) === 0 && tabNavTarget('ArrowLeft', 0, 1) === 0)
+  check('empty bar → null (no crash)', tabNavTarget('ArrowRight', 0, 0) === null)
+  check('never returns an out-of-range index', [0, 1, 5].every(c => ['ArrowRight', 'ArrowLeft', 'Home', 'End'].every(k => { const r = tabNavTarget(k, c, N); return r === null || (r >= 0 && r < N) })))
 }
 
 console.log(`\n${fail === 0 ? '✓' : '✗'} portal checks: ${pass} passed, ${fail} failed`)
