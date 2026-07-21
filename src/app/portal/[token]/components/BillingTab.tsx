@@ -6,7 +6,7 @@
 // already applied); this tab only filters, sorts, groups and renders. Every
 // money figure comes from view.money or the DocItem itself — never recomputed.
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowUpDown, Check, CheckCircle2, Clock, CreditCard, FileText, FolderOpen,
   MapPin, Receipt, Search, ShieldCheck, Wallet,
@@ -25,7 +25,7 @@ const KIND_META: Record<DocKind, { label: string; icon: typeof FileText; tone: s
   invoice: { label: 'Invoice', icon: Receipt, tone: 'text-sky-400 border-sky-500/25 bg-sky-500/10' },
 }
 
-export function BillingTab({ view, actions, initialCat }: TabProps & { initialCat?: 'all' | 'quote' | 'invoice' }) {
+export function BillingTab({ view, actions, initialCat, focusDocId }: TabProps & { initialCat?: 'all' | 'quote' | 'invoice'; focusDocId?: string | null }) {
   const { money } = view
   const business = view.data.business
   const gstPct = Number(business?.gst_percent) || 0
@@ -54,7 +54,7 @@ export function BillingTab({ view, actions, initialCat }: TabProps & { initialCa
       {/* ── Records hub — every quote and invoice, filterable. ── */}
       <div className="animate-rise stagger-2">
         <PortalSection title="Quotes & invoices" sub="Every record we've sent you, in one place.">
-          <RecordsHub view={view} actions={actions} initialCat={initialCat} />
+          <RecordsHub view={view} actions={actions} initialCat={initialCat} focusDocId={focusDocId} />
           {/* Trust footer — quiet facts that make paying feel safe. GST line only
               when the business both charges GST and registered a number. */}
           {((!!business?.gst_number && gstPct > 0) || !!business?.terms_text) && (
@@ -87,7 +87,7 @@ export function BillingTab({ view, actions, initialCat }: TabProps & { initialCa
 // Behavior preserved verbatim from the original DocumentsTab — only the data
 // source changed (prebuilt view.docItems instead of building here).
 
-function RecordsHub({ view, actions, initialCat }: TabProps & { initialCat?: 'all' | DocKind }) {
+function RecordsHub({ view, actions, initialCat, focusDocId }: TabProps & { initialCat?: 'all' | DocKind; focusDocId?: string | null }) {
   // Pre-filtered entry (the Home signpost lands on quotes, the balance path on
   // invoices) — the customer arrives looking at what they came for.
   const [cat, setCat] = useState<'all' | DocKind>(initialCat ?? 'all')
@@ -199,12 +199,12 @@ function RecordsHub({ view, actions, initialCat }: TabProps & { initialCat?: 'al
                 )}
                 <span className="text-xs text-ink-faint tabular-nums ml-auto shrink-0">{g.items.length}</span>
               </div>
-              {g.items.map(d => <DocRow key={d.id} d={d} actions={actions} />)}
+              {g.items.map(d => <DocRow key={d.id} d={d} actions={actions} focus={!!focusDocId && d.rawId === focusDocId} />)}
             </div>
           ))}
         </div>
       ) : (
-        <div className="space-y-3">{filtered.map(d => <DocRow key={d.id} d={d} actions={actions} />)}</div>
+        <div className="space-y-3">{filtered.map(d => <DocRow key={d.id} d={d} actions={actions} focus={!!focusDocId && d.rawId === focusDocId} />)}</div>
       )}
     </div>
   )
@@ -215,7 +215,7 @@ function RecordsHub({ view, actions, initialCat }: TabProps & { initialCat?: 'al
 // status, never a second lifecycle engine; declined/expired answer null and
 // get no rail — a rail promises forward motion those rows don't have). ───────
 
-function DocRow({ d, actions }: { d: DocItem; actions: PortalActions }) {
+function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; focus?: boolean }) {
   const m = KIND_META[d.kind]
   // The one action each document actually needs, right on the row: a sent quote
   // can be accepted; an invoice with a balance can be paid.
@@ -226,8 +226,22 @@ function DocRow({ d, actions }: { d: DocItem; actions: PortalActions }) {
   const canPay = d.kind === 'invoice' && actions.paymentsEnabled && d.balance > 0 && d.status !== 'draft' && d.status !== 'cancelled'
   // Invoices get NO rail — an invoice's pill already says everything it can do.
   const steps = d.kind === 'quote' ? quoteJourney(d.status) : null
+  // A deep link (?invoice=/?quote=) landed the customer here to look at THIS row —
+  // scroll it into view and glow it once, so a long list doesn't dump them at the
+  // top to hunt for the bill the text told them to pay. One-shot: it never
+  // re-fires on a manual return to Billing (the parent clears the id).
+  const rowRef = useRef<HTMLDivElement>(null)
+  const [glow, setGlow] = useState(false)
+  useEffect(() => {
+    if (!focus) return
+    rowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setGlow(true)
+    const t = setTimeout(() => setGlow(false), 2200)
+    return () => clearTimeout(t)
+  }, [focus])
   return (
-    <div className="rounded-card border border-border bg-bg-secondary p-4 card-lift">
+    <div ref={rowRef} className={cn('rounded-card border bg-bg-secondary p-4 card-lift scroll-mt-24 transition-shadow duration-500',
+      glow ? 'border-accent ring-2 ring-accent/40' : 'border-border')}>
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-start gap-3 min-w-0">
           <div className={cn('w-9 h-9 rounded-lg border flex items-center justify-center shrink-0', m.tone)}><m.icon className="w-4 h-4" /></div>

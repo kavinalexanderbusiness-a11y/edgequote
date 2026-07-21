@@ -87,6 +87,42 @@ export type SubmitRequestFn = (opts: {
 // free-text "Something else?" ask covers the rest and always works.
 export const MAX_REQUEST_PRESETS = 8
 
+// ── Deep links (URL-addressable portal) ─────────────────────────────────────
+// The portal is opened from a link — a reminder text, a bookmark, a refresh.
+// This makes the URL name a place, so the owner's existing "pay your invoice"
+// text can land the customer on the exact bill (?invoice=<id>) and a refresh
+// keeps their tab (?tab=billing) instead of bouncing them to Home. Pure
+// parsing, no navigation and no data claim: an ?invoice pointing at a bill this
+// customer can't see simply lands them on Billing with nothing to highlight —
+// wrong-answer-proof, like resolveDocAddress. It reuses the existing tab keys;
+// it never invents a route or a second navigation model.
+const TAB_KEYS: TabKey[] = ['home', 'property', 'visits', 'billing', 'messages', 'requests']
+
+export interface PortalDeepLink {
+  tab: TabKey | null
+  docsCat: 'all' | 'quote' | 'invoice' | null
+  focusDocId: string | null
+}
+
+export function parsePortalDeepLink(search: string): PortalDeepLink {
+  const sp = new URLSearchParams(search || '')
+  const rawTab = (sp.get('tab') || '').toLowerCase()
+  let tab: TabKey | null = (TAB_KEYS as string[]).includes(rawTab) ? (rawTab as TabKey) : null
+  let docsCat: 'all' | 'quote' | 'invoice' | null = null
+  let focusDocId: string | null = null
+
+  // A pointed link to one document wins and implies the Billing tab + its filter.
+  const invoice = (sp.get('invoice') || '').trim()
+  const quote = (sp.get('quote') || '').trim()
+  if (invoice) { tab = 'billing'; docsCat = 'invoice'; focusDocId = invoice }
+  else if (quote) { tab = 'billing'; docsCat = 'quote'; focusDocId = quote }
+  else if (tab === 'billing') {
+    const c = (sp.get('cat') || '').toLowerCase()
+    if (c === 'quote' || c === 'invoice' || c === 'all') docsCat = c
+  }
+  return { tab, docsCat, focusDocId }
+}
+
 // ── Normalize ───────────────────────────────────────────────────────────────
 // Defensive: an OLDER get_portal_data — or a customer with no rows in a section —
 // can return null for a collection (Postgres json_agg is null, not []). Coerce

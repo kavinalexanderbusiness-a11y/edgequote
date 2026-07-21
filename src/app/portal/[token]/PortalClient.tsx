@@ -8,7 +8,7 @@ import { ConfirmHost } from '@/components/ui/ConfirmHost'
 import { cn, formatCurrency, localTodayISO } from '@/lib/utils'
 import { renderPortalInvoiceBlob, renderPortalQuoteBlob } from '@/lib/portalPdf'
 import {
-  buildPortalView, normalizePortal,
+  buildPortalView, normalizePortal, parsePortalDeepLink,
   type PortalData, type SubmitRequestFn, type TabKey,
 } from './model'
 import type { PortalActions } from './components/shared'
@@ -44,6 +44,9 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   // Billing opens pre-filtered to what the customer came for (the quote signpost
   // filters to quotes, the balance path to invoices).
   const [docsCat, setDocsCat] = useState<'all' | 'quote' | 'invoice'>('all')
+  // A one-shot: the document a deep link (?invoice=/?quote=) asked us to land on.
+  // Billing scrolls it into view and clears it; never persisted.
+  const [focusDocId, setFocusDocId] = useState<string | null>(null)
   // One inline error surface for portal actions — fixed, friendly copy near the
   // top of the content, never a browser alert.
   const [actionError, setActionError] = useState<string | null>(null)
@@ -116,13 +119,45 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       }
       // Back from the hosted card-setup page — the webhook saves the card a beat
       // later, so reload shortly to show it.
-      if (sp.get('cardsaved') === '1') {
+      else if (sp.get('cardsaved') === '1') {
         setTab('billing')
         window.history.replaceState({}, '', `/portal/${token}`)
         setTimeout(() => load(), 1500)
       }
+      // A deep link (?tab=/?invoice=/?quote=) — land where the link points, then
+      // normalize the URL to a clean, persisted ?tab= form (dropping the one-shot
+      // focus param). Runs only when this isn't a Stripe return, which owns its own
+      // landing. A focus id that names no visible document just leaves Billing
+      // unscrolled — the link can't lie about a document the customer can't see.
+      else {
+        const link = parsePortalDeepLink(window.location.search)
+        if (link.tab) setTab(link.tab)
+        if (link.docsCat) setDocsCat(link.docsCat)
+        if (link.focusDocId) {
+          setFocusDocId(link.focusDocId)
+          // One-shot: stop it re-scrolling if they leave Billing and come back.
+          setTimeout(() => setFocusDocId(null), 4000)
+        }
+        if (link.tab || link.focusDocId) {
+          const qs = link.tab && link.tab !== 'home' ? `?tab=${link.tab}` : ''
+          window.history.replaceState({}, '', `/portal/${token}${qs}`)
+        }
+      }
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ONE place a tab change happens — keeps state and the URL in step so a refresh
+  // or a bookmark lands on the same tab instead of bouncing to Home. Billing's
+  // category resets to 'all' unless a caller pre-filters it (the Home signpost).
+  function goTab(next: TabKey, cat?: 'all' | 'quote' | 'invoice') {
+    setTab(next)
+    if (cat) setDocsCat(cat)
+    else if (next === 'billing') setDocsCat('all')
+    if (typeof window !== 'undefined') {
+      const qs = next === 'home' ? '' : `?tab=${next}`
+      window.history.replaceState({}, '', `/portal/${token}${qs}`)
+    }
+  }
 
   function photoUrl(path: string) { return supabase.storage.from('job-photos').getPublicUrl(path).data.publicUrl }
 
@@ -242,9 +277,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     request: (message: string) => request(message),
     submitRequest, photoUrl, markInvoiceViewed, refresh: load,
     navigate: (t, opts) => {
-      if (opts?.docsCat) setDocsCat(opts.docsCat)
-      else if (t === 'billing') setDocsCat('all')
-      setTab(t)
+      goTab(t, opts?.docsCat)
       if (typeof window !== 'undefined') window.scrollTo({ top: 0 })
     },
   }
@@ -285,7 +318,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
         <div className="sticky top-0 z-10 -mx-4 px-4 py-2 bg-bg/90 backdrop-blur border-b border-border">
           <div className="flex gap-1.5 overflow-x-auto">
             {TABS.map(t => (
-              <button key={t.key} onClick={() => { if (t.key === 'billing') setDocsCat('all'); setTab(t.key) }}
+              <button key={t.key} onClick={() => goTab(t.key)}
                 className={cn('shrink-0 flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-2 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
                   tab === t.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
                 <t.icon className="w-3.5 h-3.5" /> {t.label}{t.n != null && t.n > 0 && <span className="opacity-70 tabular-nums">{t.n}</span>}
@@ -300,7 +333,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
               <span className="flex items-start gap-2 font-medium">
                 <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>Payment received — thank you!{' '}
-                  <button onClick={() => setTab('billing')} className="underline underline-offset-2 hover:opacity-80">View your receipt →</button>
+                  <button onClick={() => goTab('billing')} className="underline underline-offset-2 hover:opacity-80">View your receipt →</button>
                 </span>
               </span>
               <button onClick={() => setJustPaid(null)} aria-label="Dismiss" className="shrink-0 opacity-70 hover:opacity-100"><X className="w-4 h-4" /></button>
@@ -343,7 +376,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
           {tab === 'home' && consent && <ConsentCard token={token} consent={consent} onSave={saveConsent} />}
           {tab === 'property' && <PropertyTab view={view} actions={actions} />}
           {tab === 'visits' && <VisitsTab view={view} actions={actions} />}
-          {tab === 'billing' && <BillingTab view={view} actions={actions} initialCat={docsCat} />}
+          {tab === 'billing' && <BillingTab view={view} actions={actions} initialCat={docsCat} focusDocId={focusDocId} />}
           {tab === 'messages' && <MessagesTab view={view} actions={actions} />}
           {tab === 'requests' && <RequestsTab view={view} actions={actions} />}
         </div>

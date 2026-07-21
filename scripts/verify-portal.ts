@@ -11,7 +11,7 @@ import {
   normalizePortal, buildDerived, buildDocItems, buildPortalView,
   quoteJourney, moneySummary, buildPropertyModels, customerSinceYear,
   requestPresetsOf, resolveDocAddress, groupPhotos, orphanPhotos, liveStatusOf, visitDay,
-  daysAwayLabel, NO_PROPERTY, MAX_REQUEST_PRESETS,
+  daysAwayLabel, parsePortalDeepLink, NO_PROPERTY, MAX_REQUEST_PRESETS,
   type PortalData, type PortalJob, type PortalProperty, type DocBlobRenderers,
 } from '../src/app/portal/[token]/model'
 
@@ -209,6 +209,25 @@ console.log('\nbuildPortalView:')
   // The loose 'other' photo (p3) has no job → orphan; the completed-visit
   // before/after pair is shown on the card, not here.
   check('view.orphanPhotos carries the loose photo only', view.orphanPhotos.length === 1 && view.orphanPhotos[0].id === 'p3')
+}
+
+// ── deep links (URL-addressable portal) ─────────────────────────────────────
+console.log('\nparsePortalDeepLink (the URL names a place, honestly):')
+{
+  check('?tab=billing → billing tab', parsePortalDeepLink('?tab=billing').tab === 'billing')
+  check('?tab=visits → visits tab', parsePortalDeepLink('?tab=visits').tab === 'visits')
+  check('unknown tab → null (falls back to Home)', parsePortalDeepLink('?tab=nonsense').tab === null)
+  check('empty search → all null', (() => { const l = parsePortalDeepLink(''); return l.tab === null && l.docsCat === null && l.focusDocId === null })())
+  const inv = parsePortalDeepLink('?invoice=abc-123')
+  check('?invoice= → billing + invoice filter + focus id', inv.tab === 'billing' && inv.docsCat === 'invoice' && inv.focusDocId === 'abc-123')
+  const quo = parsePortalDeepLink('?quote=q-9')
+  check('?quote= → billing + quote filter + focus id', quo.tab === 'billing' && quo.docsCat === 'quote' && quo.focusDocId === 'q-9')
+  check('?invoice wins over a conflicting ?tab', parsePortalDeepLink('?tab=visits&invoice=x').tab === 'billing')
+  check('a document id is a one-shot focus, never a data claim (any string passes through)', parsePortalDeepLink('?invoice=ghost').focusDocId === 'ghost')
+  check('empty ?invoice= value is ignored', parsePortalDeepLink('?invoice=').focusDocId === null)
+  check('?tab=billing&cat=quote → quote filter, no focus', (() => { const l = parsePortalDeepLink('?tab=billing&cat=quote'); return l.docsCat === 'quote' && l.focusDocId === null })())
+  check('?tab=home → home (persisted form drops the param)', parsePortalDeepLink('?tab=home').tab === 'home')
+  check('leading "?" optional', parsePortalDeepLink('tab=billing').tab === 'billing')
 }
 
 console.log(`\n${fail === 0 ? '✓' : '✗'} portal checks: ${pass} passed, ${fail} failed`)
