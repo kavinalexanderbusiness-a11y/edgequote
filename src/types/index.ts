@@ -1022,6 +1022,14 @@ export interface Quote {
   weekly_price: number | null
   biweekly_price: number | null
   monthly_price: number | null
+  // ── ADR-002 · pricing provenance ───────────────────────────────────────────
+  // "What priced this quote?" — read via resolveQuoteProvenance(), never by falling
+  // back to the live config (that fallback IS the bug ADR-002 removes).
+  // All four are null on the 55 pre-ADR quotes and stay that way: unknown is a fact.
+  price_source: string | null                 // 'engine' | 'template_rate' | null
+  pricing_config_version_id: string | null    // required whenever price_source='engine'
+  value_grade: string | null                  // derived state, unreconstructable later
+  nearby_count: number | null
   // Measurement provenance — lets us later compare suggested vs. actual vs. outcome.
   measured_sqft: number | null
   suggested_price: number | null
@@ -1132,6 +1140,19 @@ export interface QuoteFormValues {
   // measure path records the same provenance as the standalone Measurement Tool.
   measured_sqft: number
   suggested_price: number
+  // ADR-002 · derived state, snapshotted onto the quote at write time.
+  //
+  // These pass THE test that separates the two kinds of pricing input: "could two
+  // quotes written in the SAME SECOND legitimately differ on this?" Yes — the grade
+  // comes from live route context (where the jobs happened to be that day), so it is
+  // not configuration and can never be versioned as configuration. It is also
+  // unreconstructable afterwards: property 0071's measurement snapshot, taken two
+  // seconds before its quote, reads the neutral curve while the quote reads A+.
+  //
+  // null = no grade was computed (the owner never measured). That is a fact, not a
+  // gap — do NOT default it to a grade.
+  value_grade: string | null
+  nearby_count: number | null
   // Additional service lines beyond the primary one (multi-service quotes).
   services: QuoteServiceInput[]
 }

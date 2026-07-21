@@ -436,6 +436,15 @@ export default function QuoteDetailPage() {
         weekly_price: quote.weekly_price,
         biweekly_price: quote.biweekly_price,
         monthly_price: quote.monthly_price,
+        // ADR-002: a duplicate copies the PRICES verbatim, so it must copy the reasons
+        // that explain them. Re-stamping today's config here would be a lie — this
+        // price was struck under the original one and has not moved. (If the owner
+        // later re-prices the copy, the write path that changes the number is what
+        // records the new config.)
+        price_source: quote.price_source,
+        pricing_config_version_id: quote.pricing_config_version_id,
+        value_grade: quote.value_grade,
+        nearby_count: quote.nearby_count,
         overgrowth_multiplier: quote.overgrowth_multiplier,
         custom_travel_required: quote.custom_travel_required,
         show_travel_separately: quote.show_travel_separately,

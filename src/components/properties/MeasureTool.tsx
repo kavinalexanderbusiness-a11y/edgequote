@@ -545,7 +545,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
   // Persist the total + append a versioned snapshot to history (never overwrite).
   // The snapshot carries the FULL recommendation package, so quotes and jobs can
   // suggest measured prices later without re-measuring.
-  async function persistMeasurement(context: 'property' | 'quote'): Promise<{ total: number; sections: LawnSections }> {
+  async function persistMeasurement(context: 'property' | 'quote'): Promise<{ total: number; sections: LawnSections; valueGrade: string | null }> {
     if (currentPath.current.length >= 3) commitCurrent(activeRef.current)
     const sections = currentSections()
     const sectionsTotal = Math.round(Object.values(sections).reduce((a, b) => a + b, 0))
@@ -622,7 +622,11 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
       neighborhood: neighborhoodOf(property.postal_code, property.city, property.neighborhood),
       auto: autoRef.current, acceptedSqft: total,
     }).catch(() => {})
-    return { total, sections }
+    // ADR-002: hand back the grade that priced this, so the quote handoff records the
+    // SAME derived state the saved snapshot did. It is computed here, from the same
+    // graded package as the saved recurring prices — returning it beats recomputing it
+    // in the caller, where a second call could silently disagree with this one.
+    return { total, sections, valueGrade: scoreSave }
   }
 
   async function save() {
@@ -635,7 +639,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
   async function createQuote(sel?: CadenceSelection) {
     if (totalSqft <= 0) return
     setCreating(true)
-    const { total, sections } = await persistMeasurement('quote')
+    const { total, sections, valueGrade } = await persistMeasurement('quote')
     // Price off the SAME (per-section-rounded) total we persist, so jobPrice,
     // measured_sqft and suggested_price are all derived from one area figure.
     const tiersForTotal = priceTiers(total, cfg, overgrowth)
@@ -667,6 +671,13 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
       suggestedPrice: jobPrice + effectiveTravel,
       overgrowth,
       confidence,
+      // ADR-002 · the derived state that priced the numbers above. The comment at the
+      // weekly/biweekly fields already admits the grade is in play here ("pkgT is built
+      // WITHOUT the customer grade, so its option prices can differ from the displayed
+      // (grade-adjusted) ones") — this is what makes that admission recoverable later
+      // instead of being an unexplainable difference between two stored numbers.
+      valueGrade,
+      nearbyCount,
     }
     if (typeof window !== 'undefined') window.sessionStorage.setItem('eq_measurement', JSON.stringify(payload))
     router.push('/dashboard/quotes/new?from=measurement')

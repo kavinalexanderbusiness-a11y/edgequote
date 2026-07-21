@@ -29,6 +29,7 @@ import { cn } from '@/lib/utils'
 import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
 import { ServiceSeasons, ServiceSeason, DEFAULT_SEASONS, settingsToSeasons, seasonLabel, LAWN_HINTS, SNOW_HINTS } from '@/lib/seasons'
 import { weekdayLong } from '@/lib/preferences'
+import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
 import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin, LayoutGrid, Wallet, X, ArrowRight } from 'lucide-react'
 
 const SETTINGS_TABS: TabItem[] = [
@@ -227,6 +228,20 @@ export default function SettingsPage() {
     // unconditionally, so a failure looked identical to success.
     if (error) { toast.error('Could not save settings: ' + error.message); return }
     seasonsDirtyRef.current = false
+    // ADR-002: a rate card change is a FACT with a date, not an overwrite. Recording it
+    // here — rather than only at the next quote — is what makes `valid_from` the moment
+    // the owner actually changed it. Idempotent: if nothing pricing-related moved, this
+    // writes nothing.
+    //
+    // NOT fail-closed, deliberately, and this is the one place that's right: the
+    // settings genuinely DID save, so refusing now would be a lie about what happened.
+    // The seam is self-healing — the next quote write calls the same function and
+    // records the version then, with a slightly later valid_from. A soft warning beats
+    // both a false failure and a silent gap.
+    const ver = await ensureCurrentPricingConfigVersion(supabase, user!.id)
+    if (!ver.ok) {
+      toast.error('Settings saved, but the pricing history entry didn’t record. Your next quote will record it.')
+    }
     // The sticky footer promises "save everything" — so it must also persist any
     // edited travel-fee tier rows (they previously needed their own per-row save).
     // The footer makes the promise, so the footer has to verify it: one failed tier
