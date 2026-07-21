@@ -516,6 +516,24 @@ export function QuoteBuilder({
   // edits quote CONTENT only; status transitions happen through the control.
   const showManualName = !customerId || customerId === '__manual'
 
+  // ── The discount / value / notes row, defined ONCE ───────────────────────────
+  // A service line and a material line end in the identical trio — same fields,
+  // same registers, same layout — because both are the same species of line (one
+  // `services` array, one totals engine). Rendered from both editors below so the
+  // two can't drift, the same reason `previewBreakdown` exists. `i` is the real
+  // field-array index the row registers against.
+  const lineDiscountRow = (i: number) => (
+    <div className="grid grid-cols-2 sm:grid-cols-[auto_auto_1fr] gap-3 items-end">
+      <Select label="Discount" placeholder="None"
+        options={[{ value: 'amount', label: '$ off' }, { value: 'percent', label: '% off' }]}
+        {...register(`services.${i}.discount_type` as const)} />
+      <Input label="Value" type="number" step="1" min="0"
+        {...register(`services.${i}.discount_value` as const, { min: 0 })} />
+      <Input label="Notes" placeholder="Optional"
+        {...register(`services.${i}.notes` as const)} />
+    </div>
+  )
+
   // ── The price breakdown, defined ONCE ────────────────────────────────────────
   // Rendered by the desktop preview card AND the mobile sheet below. It used to
   // live only inside `hidden lg:block`, so a contractor quoting from a phone in
@@ -1062,15 +1080,7 @@ export function QuoteBuilder({
                       <Input label="Duration (min)" type="number" step="5" min="0"
                         {...register(`services.${i}.est_minutes` as const, { min: 0 })} />
                     </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-[auto_auto_1fr] gap-3 items-end">
-                      <Select label="Discount" placeholder="None"
-                        options={[{ value: 'amount', label: '$ off' }, { value: 'percent', label: '% off' }]}
-                        {...register(`services.${i}.discount_type` as const)} />
-                      <Input label="Value" type="number" step="1" min="0"
-                        {...register(`services.${i}.discount_value` as const, { min: 0 })} />
-                      <Input label="Notes" placeholder="Optional"
-                        {...register(`services.${i}.notes` as const)} />
-                    </div>
+                    {lineDiscountRow(i)}
                   </div>
                 )
               })}
@@ -1151,15 +1161,7 @@ export function QuoteBuilder({
                       <Input label="Price per unit ($)" type="number" step="1" min="0"
                         {...register(`services.${i}.unit_price` as const, { min: 0 })} />
                     </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-[auto_auto_1fr] gap-3 items-end">
-                      <Select label="Discount" placeholder="None"
-                        options={[{ value: 'amount', label: '$ off' }, { value: 'percent', label: '% off' }]}
-                        {...register(`services.${i}.discount_type` as const)} />
-                      <Input label="Value" type="number" step="1" min="0"
-                        {...register(`services.${i}.discount_value` as const, { min: 0 })} />
-                      <Input label="Notes" placeholder="Optional"
-                        {...register(`services.${i}.notes` as const)} />
-                    </div>
+                    {lineDiscountRow(i)}
                   </div>
                 )
               })}
