@@ -13,7 +13,8 @@ import { Card, CardBody } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Button } from '@/components/ui/Button'
-import { EmptyState } from '@/components/ui/EmptyState'
+import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
+import { SearchInput } from '@/components/ui/SearchInput'
 import { formatDate, formatCurrency, localTodayISO } from '@/lib/utils'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes, latestSavedRecommendation, recommendationIsStale, pricingConfidence } from '@/lib/pricing'
 import { resolvePrefs, prefSummary, type PrefSource } from '@/lib/preferences'
@@ -23,7 +24,7 @@ import { getPropertyContexts } from '@/lib/ai/propertyContext'
 import { LocatedJob, fetchLocatedUpcomingJobs, nearbyJobCount } from '@/lib/geo'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { listPhotosForProperties, type JobPhotoView } from '@/lib/photos'
-import { MapPin, Home, User, Ruler, History, RefreshCw, Trophy, DollarSign, CheckCircle2, Receipt, Timer, CalendarClock, AlertTriangle, Repeat, Camera, FileText, Clock, StickyNote, ShieldCheck, CalendarPlus, Lightbulb, Heart } from 'lucide-react'
+import { MapPin, Home, User, Ruler, History, RefreshCw, Trophy, DollarSign, CheckCircle2, Receipt, Timer, CalendarClock, AlertTriangle, Repeat, Camera, FileText, Clock, StickyNote, ShieldCheck, CalendarPlus, Lightbulb, Heart, SearchX } from 'lucide-react'
 
 // Quote statuses that count as a "won" price — the accepted-price memory.
 const QUOTE_WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
@@ -90,6 +91,7 @@ function buildPerformance(jobs: PerfJob[], invoices: PerfInvoice[]): Record<stri
 export default function PropertiesPage() {
   const router = useRouter()
   const [properties, setProperties] = useState<Property[]>([])
+  const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [settings, setSettings] = useState<BusinessSettings | null>(null)
   const [locatedJobs, setLocatedJobs] = useState<LocatedJob[]>([])
@@ -246,6 +248,18 @@ export default function PropertiesPage() {
     } finally { setRecalcId(null) }
   }
 
+  // Client-side filter over the already-loaded list — the same shape the customers
+  // list uses (normalise once, match any field). A landlord book of 40+ addresses
+  // was scroll-only until now: no query changes what loads, so this never touches a
+  // pricing/measurement write, it only narrows what renders.
+  const q = query.trim().toLowerCase()
+  const filtered = q
+    ? properties.filter(p =>
+        (p.address || '').toLowerCase().includes(q) ||
+        [p.city, p.province, p.postal_code].filter(Boolean).join(' ').toLowerCase().includes(q) ||
+        (p.customers?.name || '').toLowerCase().includes(q))
+    : properties
+
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader
@@ -264,7 +278,17 @@ export default function PropertiesPage() {
         />
       ) : (
         <div className="space-y-3">
-          {properties.map(property => {
+          <SearchInput
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="Search by address, city or customer"
+            aria-label="Search properties"
+          />
+          {filtered.length === 0 ? (
+            <InlineEmpty icon={SearchX}>
+              No property matches &ldquo;{query.trim()}&rdquo;.
+            </InlineEmpty>
+          ) : filtered.map(property => {
             const hist = Array.isArray(property.measurement_history) ? property.measurement_history : []
             const last = hist.length ? hist[hist.length - 1] : null
             const saved = latestSavedRecommendation(hist)
