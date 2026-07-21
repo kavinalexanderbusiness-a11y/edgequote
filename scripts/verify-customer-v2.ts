@@ -18,7 +18,7 @@
 
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { displayAddress, normalizeTags, findCustomerMatch, phoneMatches } from '../src/lib/customers'
+import { displayAddress, normalizeTags, findCustomerMatch, phoneMatches, phoneSearchDigits, addressMatches } from '../src/lib/customers'
 import type { Customer } from '../src/types'
 
 let pass = 0
@@ -123,6 +123,50 @@ check('an unknown phone does NOT phone-match; falls through to email',
   findCustomerMatch(book, { phone: '4035551234', email: 'SAM@example.com' })?.reason, 'email')
 check('a genuinely new contact matches nobody',
   findCustomerMatch(book, { phone: '4035551234', email: 'new@example.com', name: 'Nobody Here' }), null)
+
+// ═══════════════════════════════════════════════════════════════════════════
+H('6. SEARCH + ADDRESS canonical rules — one reducer per question')
+// phoneSearchDigits is THE "did the user type a phone number?" rule. Both customer-
+// search surfaces (CustomerList and the command palette) reduce a typed query through
+// it, so they can never disagree about what "call 403…" means.
+check('a plain number is a phone query', phoneSearchDigits('403 555'), '403555')
+check('formatting is irrelevant', phoneSearchDigits('(403) 555-0100'), '4035550100')
+check('letters mean a NAME search, not a phone hunt — "Rose 403" finds no phones',
+  phoneSearchDigits('Rose 403'), '')
+check('an email fragment is not a phone query', phoneSearchDigits('pat@ex'), '')
+check('too few digits (a stray "40") does not drag in every 403 number',
+  phoneSearchDigits('40'), '')
+check('empty stays empty', phoneSearchDigits('  '), '')
+
+// addressMatches is THE app-side property-identity rule. It is deliberately SMARTER
+// than the SQL seam's exact-equality (that divergence is tracked, not a bug), so these
+// pin the behavior its own comments promise — the SW/Southwest and Cres/Crescent cases
+// are exactly the duplicate properties it exists to prevent.
+check('SW == Southwest (token canonicalization)',
+  addressMatches('123 Canso Crescent SW', '123 Canso Crescent Southwest'), true)
+check('Cres == Crescent', addressMatches('7 Parkdale Cres NW', '7 Parkdale Crescent NW'), true)
+check('a bare street matches the same street with city/province appended (prefix)',
+  addressMatches('123 Main St', '123 Main St, Calgary, AB'), true)
+check('"Canada" suffix is ignored', addressMatches('123 Main St', '123 Main St, Calgary, AB, Canada'), true)
+check('different house number is NOT the same place',
+  addressMatches('123 Main St', '125 Main St'), false)
+check('too-short strings never match (no false link on a fragment)',
+  addressMatches('12', '12'), false)
+
+// ═══════════════════════════════════════════════════════════════════════════
+H('7. NO SECOND NORMALIZER — the off-pattern consumers reduce through lib/customers')
+// A phone number becomes "the same person" in more than one place (the customer list
+// search, the command palette, the inbound webhook matcher). Each must reduce a number
+// through the ONE canonical helper, or they drift the way the SQL/app doors did before
+// BK-1. These pin that no consumer re-inlines its own digit strip.
+const custList = read('components/customers/CustomerList.tsx')
+check('CustomerList phone search goes through phoneSearchDigits (not an inline \\D strip)',
+  custList.includes('phoneSearchDigits(') && !/const digits = q\.replace\(\/\\D/.test(custList), true)
+const inbound = read('lib/integrations/inboundActions.ts')
+check('inbound webhook matcher reduces phone via normalizePhone (canonical), keyed on last 10',
+  inbound.includes('normalizePhone(input.phone).slice(-10)'), true)
+check('inbound webhook no longer inlines its own digit strip',
+  /input\.phone \?\? ''\)\.replace\(\/\\D/.test(inbound), false)
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)
