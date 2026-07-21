@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { Settings, LogOut, Zap, LayoutTemplate, Menu, X, Search, LifeBuoy, MessageSquare } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
@@ -43,6 +43,44 @@ export function Sidebar() {
   // The mobile drawer is a modal overlay — trap focus, move focus in on open,
   // Escape to close, and restore focus to the hamburger on close.
   const drawerRef = useFocusTrap<HTMLElement>(open, () => setOpen(false))
+
+  // Swipe the drawer left to close it — the direction it lives in, so the
+  // gesture matches the mental model. ADDITIVE: the X, Escape and backdrop-tap
+  // all still close it, so nothing (keyboard, screen reader) is lost.
+  //
+  // Kept inline rather than shared with Modal's/Toaster's swipes: those drag
+  // DOWN-from-a-handle and SIDEWAYS-with-a-fade respectively, this drags
+  // LEFT-only — three different axes sharing ~10 lines of delta math. A hook
+  // that parameterised axis + direction + feedback for all three would be a
+  // leakier abstraction than three focused handlers. Rule of three is about
+  // three of the SAME thing; these aren't.
+  const dragStartX = useRef<number | null>(null)
+  const dragDX = useRef(0)
+
+  function drawerTouchStart(e: React.TouchEvent) {
+    if (e.touches.length !== 1) return
+    dragStartX.current = e.touches[0].clientX
+    dragDX.current = 0
+    if (drawerRef.current) drawerRef.current.style.transition = 'none'
+  }
+  function drawerTouchMove(e: React.TouchEvent) {
+    if (dragStartX.current == null) return
+    // Left only — clamp right-drags to 0 so it can't be pulled past open.
+    const dx = Math.min(0, e.touches[0].clientX - dragStartX.current)
+    dragDX.current = dx
+    if (drawerRef.current) drawerRef.current.style.transform = dx ? `translateX(${dx}px)` : ''
+  }
+  function drawerTouchEnd() {
+    if (dragStartX.current == null) return
+    const dx = dragDX.current
+    dragStartX.current = null
+    if (dx < -80) { setOpen(false); return }
+    const el = drawerRef.current
+    if (!el) return
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    el.style.transition = reduce ? 'none' : 'transform 0.2s ease'
+    el.style.transform = ''
+  }
   const [brand, setBrand] = useState<{ url: string | null; scale: number; name: string | null }>({ url: null, scale: 100, name: null })
   // THE one unread engine (hooks/useUnread), shared with the mobile bottom nav
   // so the two badges can never disagree.
@@ -218,7 +256,9 @@ export function Sidebar() {
       {open && (
         <div className="lg:hidden fixed inset-0 z-overlay">
           <div className="absolute inset-0 bg-black/60 animate-fade" onClick={() => setOpen(false)} />
-          <aside ref={drawerRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Menu" className="absolute left-0 top-0 h-full w-64 max-w-[80%] bg-bg-secondary border-r border-border flex flex-col animate-drawer focus:outline-none">
+          <aside ref={drawerRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Menu"
+            onTouchStart={drawerTouchStart} onTouchMove={drawerTouchMove} onTouchEnd={drawerTouchEnd}
+            className="absolute left-0 top-0 h-full w-64 max-w-[80%] touch-pan-y bg-bg-secondary border-r border-border flex flex-col animate-drawer focus:outline-none">
             <div className="h-14 flex items-center justify-between px-4 border-b border-border">
               {logo}
               <button onClick={() => setOpen(false)} className="text-ink-faint hover:text-ink p-2 -mr-2" aria-label="Close menu">
