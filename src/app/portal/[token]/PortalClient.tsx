@@ -47,6 +47,9 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   // A one-shot: the document a deep link (?invoice=/?quote=) asked us to land on.
   // Billing scrolls it into view and clears it; never persisted.
   const [focusDocId, setFocusDocId] = useState<string | null>(null)
+  // A one-shot seed for the Messages composer — set by "ask about this <doc>",
+  // consumed by MessagesTab on open, then cleared so a later visit starts blank.
+  const [composerPrefill, setComposerPrefill] = useState<string | null>(null)
   // One inline error surface for portal actions — fixed, friendly copy near the
   // top of the content, never a browser alert.
   const [actionError, setActionError] = useState<string | null>(null)
@@ -289,6 +292,11 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       goTab(t, opts?.docsCat)
       if (typeof window !== 'undefined') window.scrollTo({ top: 0 })
     },
+    askAbout: (prefill) => {
+      setComposerPrefill(prefill)
+      goTab('messages')
+      if (typeof window !== 'undefined') window.scrollTo({ top: 0 })
+    },
   }
 
   // Tab order = how often a customer reaches for each. Tabs whose surface would
@@ -415,7 +423,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
             {tab === 'property' && <PropertyTab view={view} actions={actions} />}
             {tab === 'visits' && <VisitsTab view={view} actions={actions} />}
             {tab === 'billing' && <BillingTab view={view} actions={actions} initialCat={docsCat} focusDocId={focusDocId} />}
-            {tab === 'messages' && <MessagesTab view={view} actions={actions} />}
+            {tab === 'messages' && <MessagesTab view={view} actions={actions} initialDraft={composerPrefill} onDraftConsumed={() => setComposerPrefill(null)} />}
             {tab === 'requests' && <RequestsTab view={view} actions={actions} />}
           </div>
         </div>

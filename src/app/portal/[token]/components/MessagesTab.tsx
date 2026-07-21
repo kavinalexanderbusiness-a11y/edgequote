@@ -20,7 +20,7 @@ import { createClient } from '@/lib/supabase/client'
 import type { PortalMessage } from '../model'
 import type { TabProps } from './shared'
 
-export function MessagesTab({ view, actions }: TabProps) {
+export function MessagesTab({ view, actions, initialDraft, onDraftConsumed }: TabProps & { initialDraft?: string | null; onDraftConsumed?: () => void }) {
   const token = actions.token
   const businessName = view.data.business?.company_name ?? null
   const supabase = useMemo(() => createClient(), [])
@@ -29,6 +29,22 @@ export function MessagesTab({ view, actions }: TabProps) {
   const [sending, setSending] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const threadRef = useRef<HTMLDivElement | null>(null)
+  const composerRef = useRef<HTMLTextAreaElement | null>(null)
+
+  // Seed the composer once from a contextual "Question about this invoice"
+  // prefill, then tell the parent to drop it so a later, unrelated visit to
+  // Messages starts blank. Only fills an empty composer — never clobbers text
+  // the customer is already writing.
+  useEffect(() => {
+    if (!initialDraft) return
+    setBody(prev => prev || initialDraft)
+    onDraftConsumed?.()
+    requestAnimationFrame(() => {
+      const el = composerRef.current
+      if (el) { el.focus(); const n = el.value.length; el.setSelectionRange(n, n) }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialDraft])
 
   // Load on open + a modest poll so an owner reply appears without a manual
   // refresh. 30s is deliberate: portal tabs are short-lived and anon.
@@ -106,7 +122,7 @@ export function MessagesTab({ view, actions }: TabProps) {
           the reply lands. */}
       <div className="animate-rise stagger-2 rounded-card border border-border bg-bg-secondary p-4">
         <form onSubmit={e => { e.preventDefault(); send() }}>
-          <textarea value={body} onChange={e => setBody(e.target.value)} rows={2} aria-label="Your message" placeholder={`Message ${businessName || 'us'}…`}
+          <textarea ref={composerRef} value={body} onChange={e => setBody(e.target.value)} rows={2} aria-label="Your message" placeholder={`Message ${businessName || 'us'}…`}
             className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
           <div className="flex items-center justify-between gap-3 mt-2">
             <p className="text-[11px] text-ink-faint">Goes straight to {businessName ? `${businessName}’s` : 'our'} inbox — replies appear right here.</p>

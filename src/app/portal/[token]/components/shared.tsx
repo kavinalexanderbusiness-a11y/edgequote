@@ -35,6 +35,8 @@ export interface PortalActions {
   refresh: () => Promise<unknown>
   /** Cross-tab navigation, with optional Billing pre-filter / property focus. */
   navigate: (tab: TabKey, opts?: { docsCat?: 'all' | 'quote' | 'invoice'; propertyKey?: string }) => void
+  /** Open Messages with the composer pre-filled (a contextual "ask about this"). */
+  askAbout: (prefill: string) => void
 }
 
 export interface TabProps { view: PortalView; actions: PortalActions }

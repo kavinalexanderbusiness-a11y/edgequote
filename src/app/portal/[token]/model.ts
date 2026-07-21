@@ -198,6 +198,17 @@ export function buildVisitICS(visits: CalendarVisit[], opts: { stampISO: string;
   return lines.join('\r\n') + '\r\n'
 }
 
+// A contextual "ask about this" seed for the message composer. It MUST carry
+// the document number — that's the whole point: the owner can tell which
+// invoice/quote the question is about instead of asking "which one?". Ends with
+// ": " so the cursor lands where the customer starts typing. Pure so verify
+// pins the number's presence (a future edit that drops it breaks the feature
+// silently).
+export function messageAboutDoc(kindLabel: string, number: string, title?: string | null): string {
+  const t = title?.trim()
+  return `About ${kindLabel.toLowerCase()} ${number}${t ? ` (${t})` : ''}: `
+}
+
 // One booked job → a calendar event. ASCII separator on purpose (max calendar
 // compatibility); location is the visit's OWN property (resolved through its
 // property_id, same rule as everywhere — never the primary as a stand-in).

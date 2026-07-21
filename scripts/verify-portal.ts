@@ -12,7 +12,7 @@ import {
   quoteJourney, moneySummary, buildPropertyModels, customerSinceYear,
   requestPresetsOf, resolveDocAddress, groupPhotos, orphanPhotos, liveStatusOf, visitDay,
   daysAwayLabel, parsePortalDeepLink, tabNavTarget, buildVisitICS, visitToCalendarEvent,
-  NO_PROPERTY, MAX_REQUEST_PRESETS,
+  messageAboutDoc, NO_PROPERTY, MAX_REQUEST_PRESETS,
   type PortalData, type PortalJob, type PortalProperty, type DocBlobRenderers,
 } from '../src/app/portal/[token]/model'
 
@@ -276,6 +276,19 @@ console.log('\nbuildVisitICS / visitToCalendarEvent (a malformed .ics silently f
   check('mapper: location is the visit’s OWN property address', ev.location === PROP_A.address)
   check('mapper: uid is stable per job', ev.uid === 'visit-jz@edgequote')
   check('mapper: unknown property → no location (never the primary as a stand-in)', visitToCalendarEvent(job({ id: 'jn', property_id: 'ghost' }), FULL.business, propsById).location === null)
+}
+
+// ── "Ask about this" composer prefill ───────────────────────────────────────
+console.log('\nmessageAboutDoc (the owner must know WHICH document):')
+{
+  const p = messageAboutDoc('Invoice', 'INV-2088', 'Lawn Mowing')
+  check('carries the document number (the load-bearing part)', p.includes('INV-2088'))
+  check('kind is lower-cased in prose', p.startsWith('About invoice '))
+  check('title parenthesized when present', p.includes('(Lawn Mowing)'))
+  check('ends with ": " so the cursor lands where they type', p.endsWith(': '))
+  check('exact shape', p === 'About invoice INV-2088 (Lawn Mowing): ')
+  check('no title → number only, still ends ready to type', messageAboutDoc('Quote', 'Q-14') === 'About quote Q-14: ')
+  check('blank title is dropped, not rendered as ()', messageAboutDoc('Quote', 'Q-14', '   ') === 'About quote Q-14: ')
 }
 
 console.log(`\n${fail === 0 ? '✓' : '✗'} portal checks: ${pass} passed, ${fail} failed`)

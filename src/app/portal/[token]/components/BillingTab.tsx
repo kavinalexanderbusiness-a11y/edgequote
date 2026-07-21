@@ -9,11 +9,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowUpDown, Check, CheckCircle2, Clock, CreditCard, FileText, FolderOpen,
-  MapPin, Receipt, Search, ShieldCheck, Wallet,
+  MapPin, MessageSquare, Receipt, Search, ShieldCheck, Wallet,
 } from 'lucide-react'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
-import { NO_PROPERTY, quoteJourney, type DocItem, type DocKind } from '../model'
+import { messageAboutDoc, NO_PROPERTY, quoteJourney, type DocItem, type DocKind } from '../model'
 import {
   DocActions, Empty, InvoiceStatusPill, JourneyRail, PortalSection,
   QuoteStatusPill, StatCard, fmtMoney, type PortalActions, type TabProps,
@@ -324,6 +324,16 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
           )}
         </div>
       )}
+      {/* Start a message ABOUT this exact document — the composer opens pre-filled
+          with its number, so the customer doesn't have to describe which one and
+          the owner knows immediately what the question is about. */}
+      <button
+        type="button"
+        onClick={() => actions.askAbout(messageAboutDoc(m.label, d.number, d.title))}
+        className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-accent-text rounded hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      >
+        <MessageSquare className="w-3.5 h-3.5" /> Question about this {m.label.toLowerCase()}?
+      </button>
       <DocActions filename={d.filename} getBlob={d.getBlob} />
     </div>
   )
