@@ -184,9 +184,23 @@ console.log('\nThe summary/email/PDF/CSV all read the same engine values:')
   check('filename carries kind + period start', reportFilename(r, 'csv') === 'report-daily-2026-07-15.csv',
     reportFilename(r, 'csv'))
 
-  // A non-registrant holds no sales tax, so the tax lines must not appear — showing
-  // "Sales tax: $0.00" invites the owner to think they're collecting it.
-  check('no sales-tax line for a non-registrant', !s.lines.some(l => l.label.includes('Sales tax')))
+  // A non-registrant holds no GST, so the tax lines must not appear — showing
+  // "GST collected: $0.00" invites the owner to think they're collecting it.
+  check('no GST line for a non-registrant',
+    !s.lines.some(l => l.label === 'GST collected' || l.label.includes('Sales tax')))
+}
+
+console.log('\nThe tax figure is named "GST", matching every other surface (not "Sales tax"):')
+{
+  // The same salesTaxCollected figure is "GST collected" on the P&L page, the
+  // cash-flow page and the accounting CSV export. The emailed report was the only
+  // surface that said "Sales tax", which reads as a different tax. One term now.
+  const REGISTERED = { gst_percent: 5 } as unknown as BusinessSettings
+  const s = summarize(composeReport('daily', TODAY, {
+    payments: [pay({ amount: 525, paid_at: '2026-07-15' })], expenses: [], settings: REGISTERED,
+  }, { closed: true }))
+  check('a registrant sees a "GST collected" line', s.lines.some(l => l.label === 'GST collected'))
+  check('...and never a "Sales tax" line', !s.lines.some(l => l.label.toLowerCase().includes('sales tax')))
 }
 
 console.log('\nThe report explains the cost BASIS exactly as /dashboard/accounting/pnl does:')

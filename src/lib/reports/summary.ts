@@ -58,7 +58,11 @@ export function summarize(r: ScheduledReport): ReportSummary {
     // than a distinction — so the tax line appears only when it is real.
     ...(pnl.registrant
       ? [
-          { label: 'Sales tax collected', value: formatCurrency(pnl.salesTaxCollected), note: 'held for the CRA, not revenue' },
+          // "GST collected", not "Sales tax collected": every other surface — the P&L
+          // page ("Less GST collected"), the cash-flow page ("GST collected") and the
+          // accounting CSV export — names this exact figure GST. The lone "Sales tax"
+          // here invited the owner to wonder whether they were two different taxes.
+          { label: 'GST collected', value: formatCurrency(pnl.salesTaxCollected), note: 'held for the CRA, not revenue' },
           { label: 'Revenue', value: formatCurrency(pnl.revenue), note: 'money in, less the tax you hold' },
         ]
       : []),
