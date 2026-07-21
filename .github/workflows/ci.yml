@@ -197,3 +197,12 @@ jobs:
       # drifting from webhook payload field sets. Pure functions, no network.
       - name: Verify integrations platform
         run: npm run verify:integrations
+
+      # The customer portal renders from ONE pure model (portal/[token]/model.ts).
+      # Its failure modes shipped before as wrong VALUES tsc can't see: a payload
+      # key silently dropped in normalize (the services bug), a legacy quote
+      # borrowing the primary property's measured area (the 25× false-claim bug),
+      # a draft invoice shown as payable, an expired quote still explaining its
+      # price. These checks run the exact production derivations.
+      - name: Verify portal model
+        run: npm run verify:portal
