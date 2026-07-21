@@ -1,6 +1,7 @@
 import { PageContainer } from '@/components/layout/PageContainer'
 import { Card } from '@/components/ui/Card'
 import { Skeleton } from '@/components/ui/Skeleton'
+import { cn } from '@/lib/utils'
 
 // The dashboard is one blocking server read, so without this boundary clicking
 // "Dashboard" left the PREVIOUS page fully mounted — no spinner, no nav
@@ -61,10 +62,14 @@ export default function DashboardLoading() {
           </div>
           <div className="divide-y divide-border">
             {[0, 1, 2, 3, 4].map(i => (
-              <div key={i} className="flex items-center gap-3 px-4 sm:px-5 py-3.5">
+              <div key={i} className={cn('flex items-center gap-3 px-4 sm:px-5 py-3.5', i === 0 && 'bg-accent/[0.04]')}>
                 <Skeleton className="h-5 w-5 rounded" />
                 <Skeleton className="h-9 w-9 rounded-lg" />
                 <div className="flex-1 min-w-0">
+                  {/* The real #1 row leads with a "Do first" eyebrow, so its
+                      placeholder is a touch taller — keeps the row from settling
+                      when the queue lands. */}
+                  {i === 0 && <Skeleton className="h-2.5 w-12 mb-1" />}
                   <Skeleton className="h-3.5 w-48" />
                   <Skeleton className="h-3 w-28 mt-1.5" />
                 </div>
