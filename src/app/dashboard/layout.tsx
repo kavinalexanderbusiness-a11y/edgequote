@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { Sidebar } from '@/components/layout/Sidebar'
+import { BottomNav } from '@/components/layout/BottomNav'
 import { InstallPrompt } from '@/components/pwa/InstallPrompt'
 import { CommandPalette } from '@/components/command/CommandPalette'
 import { OfflineStatus } from '@/components/pwa/OfflineStatus'
@@ -36,9 +37,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
         Skip to content
       </a>
       <Sidebar />
-      <main id="main-content" tabIndex={-1} className="flex-1 min-w-0 p-4 lg:p-8 bg-bg overflow-auto focus:outline-none">
+      {/* pb-28 on mobile = clearance for the fixed BottomNav (h ~64px + safe
+          area) so no page's last row hides behind the bar. lg resets it. */}
+      <main id="main-content" tabIndex={-1} className="flex-1 min-w-0 p-4 pb-28 lg:p-8 bg-bg overflow-auto focus:outline-none">
         {children}
       </main>
+      <BottomNav />
       <InstallPrompt />
       <CommandPalette />
       <OfflineStatus />

@@ -43,6 +43,11 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
             className
           )}
           {...props}
+          // type="number" alone leaves iOS showing the full text keyboard;
+          // inputMode="decimal" is what actually summons the number pad. Set
+          // centrally so every qty/price/hours field in the app gets it — an
+          // explicit inputMode from a caller still wins.
+          inputMode={props.inputMode ?? (props.type === 'number' ? 'decimal' : undefined)}
         />
         {error && <p id={errorId} className="text-xs text-red-400 animate-fade">{error}</p>}
         {hint && !error && <p id={hintId} className="text-xs text-ink-faint animate-fade">{hint}</p>}

@@ -26,7 +26,7 @@ export function Toaster() {
     <div
       aria-live="polite"
       aria-atomic="false"
-      className="fixed bottom-4 left-1/2 -translate-x-1/2 z-toast flex flex-col gap-2 w-[calc(100%-2rem)] max-w-sm pointer-events-none">
+      className="fixed above-bottom-nav left-1/2 -translate-x-1/2 z-toast flex flex-col gap-2 w-[calc(100%-2rem)] max-w-sm pointer-events-none">
       {toasts.map(t => <ToastRow key={t.id} t={t} />)}
     </div>
   )

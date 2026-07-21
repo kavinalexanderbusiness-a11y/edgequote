@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
 import { useModules } from '@/hooks/useModules'
+import { useUnread } from '@/hooks/useUnread'
 import { NotificationBell } from '@/components/notifications/NotificationBell'
 
 // Everyday work up top; the analytics pages live behind one "Grow" hub
@@ -43,7 +44,9 @@ export function Sidebar() {
   // Escape to close, and restore focus to the hamburger on close.
   const drawerRef = useFocusTrap<HTMLElement>(open, () => setOpen(false))
   const [brand, setBrand] = useState<{ url: string | null; scale: number; name: string | null }>({ url: null, scale: 100, name: null })
-  const [unread, setUnread] = useState(0)
+  // THE one unread engine (hooks/useUnread), shared with the mobile bottom nav
+  // so the two badges can never disagree.
+  const unread = useUnread()
   // Per-business module composition — ONE loader (useModules) shared with the
   // command palette and the Modules settings surface; live-updates on change.
   const { visible: navMain } = useModules()
@@ -73,31 +76,6 @@ export function Sidebar() {
     return () => { active = false }
   }, [])
 
-  // Unread Messages badge — live. The sum of conversations.unread, kept in sync
-  // through the SAME Realtime stream as the inbox, so the count updates app-wide
-  // (on any page) without a refresh or navigation. RLS scopes the stream to us.
-  // Muted conversations are excluded — mute means "stop counting this at me";
-  // the row's own badge still shows inside the inbox.
-  useEffect(() => {
-    const supabase = createClient()
-    let channel: ReturnType<typeof supabase.channel> | null = null
-    let active = true
-    async function refresh(userId: string) {
-      const { data } = await supabase.from('conversations').select('unread').eq('user_id', userId).gt('unread', 0).eq('muted', false)
-      if (active) setUnread((data as { unread: number }[] | null)?.reduce((s, c) => s + (c.unread || 0), 0) || 0)
-    }
-    ;(async () => {
-      const { data: { session } } = await supabase.auth.getSession()
-      const user = session?.user
-      if (!user || !active) return
-      await refresh(user.id)
-      channel = supabase
-        .channel(`sidebar-unread:${user.id}`)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `user_id=eq.${user.id}` }, () => refresh(user.id))
-        .subscribe()
-    })()
-    return () => { active = false; if (channel) supabase.removeChannel(channel) }
-  }, [])
 
   // Tab-title badge: "(3) EdgeQuote …" while messages wait — the one attention cue
   // that works with the app open in a background tab, no permission needed.

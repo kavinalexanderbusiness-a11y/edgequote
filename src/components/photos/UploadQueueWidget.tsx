@@ -37,7 +37,7 @@ export function UploadQueueWidget() {
   const allDone = active === 0 && failed === 0
 
   return (
-    <div role="status" aria-live="polite" className="fixed bottom-4 right-4 z-overlay-top w-[300px] max-w-[calc(100vw-2rem)] rounded-card border border-border bg-bg-secondary shadow-2xl overflow-hidden">
+    <div role="status" aria-live="polite" className="fixed above-bottom-nav right-4 z-overlay-top w-[300px] max-w-[calc(100vw-2rem)] rounded-card border border-border bg-bg-secondary shadow-2xl overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border">
         {active > 0 ? <Loader2 className="w-4 h-4 text-accent-text animate-spin" aria-hidden="true" /> : failed > 0 ? <AlertTriangle className="w-4 h-4 text-red-400" aria-hidden="true" /> : <Check className="w-4 h-4 text-emerald-400" aria-hidden="true" />}
         <span className="text-xs font-semibold text-ink flex-1 truncate"

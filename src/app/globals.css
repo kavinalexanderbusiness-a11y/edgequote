@@ -133,6 +133,16 @@ body { min-height: 100dvh; overscroll-behavior-y: none; }
 .pr-safe { padding-right: env(safe-area-inset-right); }
 .min-h-screen-safe { min-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
 
+/* ── Bottom-nav clearance ──────────────────────────────────────────────────
+   The mobile BottomNav is fixed chrome; every OTHER bottom-anchored floater
+   (toasts, offline notice, upload queue, install prompt) must sit above it on
+   mobile and exactly where it always did on desktop. ONE variable, so a future
+   bar-height change is a one-line edit instead of a scavenger hunt:
+   0 on desktop (lg:), bar height + safe area below it. */
+:root { --bottom-nav-h: calc(4rem + env(safe-area-inset-bottom)); }
+@media (min-width: 1024px) { :root { --bottom-nav-h: 0px; } }
+.above-bottom-nav { bottom: calc(1rem + var(--bottom-nav-h)); }
+
 /* In the INSTALLED app only, keep content clear of the home indicator. */
 @media (display-mode: standalone) {
   body { padding-bottom: env(safe-area-inset-bottom); }
