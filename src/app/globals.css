@@ -143,6 +143,13 @@ body { min-height: 100dvh; overscroll-behavior-y: none; }
 @media (min-width: 1024px) { :root { --bottom-nav-h: 0px; } }
 .above-bottom-nav { bottom: calc(1rem + var(--bottom-nav-h)); }
 
+/* A fixed StickyActionBar (quote builder, schedule) owns the bottom edge: the
+   nav steps aside rather than burying the save button — the tab bar's job is
+   done once you're inside a form. Ref-counted body attribute set by the bar. */
+body[data-eq-sticky-bars] .eq-bottom-nav { display: none; }
+body[data-eq-sticky-bars] { --bottom-nav-h: calc(3.4rem + env(safe-area-inset-bottom)); }
+@media (min-width: 1024px) { body[data-eq-sticky-bars] { --bottom-nav-h: 0px; } }
+
 /* In the INSTALLED app only, keep content clear of the home indicator. */
 @media (display-mode: standalone) {
   body { padding-bottom: env(safe-area-inset-bottom); }

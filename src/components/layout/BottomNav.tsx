@@ -136,7 +136,7 @@ export function BottomNav() {
         </div>
       )}
 
-      <nav aria-label="Primary" className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-bg-secondary/95 backdrop-blur border-t border-border pb-safe">
+      <nav aria-label="Primary" className="eq-bottom-nav lg:hidden fixed bottom-0 inset-x-0 z-40 bg-bg-secondary/95 backdrop-blur border-t border-border pb-safe">
         <div className="flex items-stretch px-1 pt-1 pb-1">
           {leftTabs.map(tab)}
           {/* Center action — visually raised so it reads as THE button. Hidden
