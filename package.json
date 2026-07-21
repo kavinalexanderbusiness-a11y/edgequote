@@ -30,7 +30,8 @@
     "verify:accounting": "tsx scripts/verify-accounting.ts",
     "verify:reports": "tsx scripts/verify-reports.ts",
     "verify:customer-v2": "tsx scripts/verify-customer-v2.ts",
-    "verify:portal": "tsx scripts/verify-portal.ts"
+    "verify:portal": "tsx scripts/verify-portal.ts",
+    "verify:booking-link": "tsx scripts/verify-booking-link.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

@@ -211,3 +211,10 @@ jobs:
       # price. These checks run the exact production derivations.
       - name: Verify portal model
         run: npm run verify:portal
+
+      # lib/booking mints the credential for the PUBLIC /book/<token> door. The token is
+      # an anti-enumeration boundary (long + opaque so nobody walks the space to reach
+      # other owners' funnels), and bookingUrl is the canonical link builder. Both are
+      # wrong-VALUE surfaces tsc can't see — a shortened token or a malformed link.
+      - name: Verify booking link
+        run: npm run verify:booking-link
