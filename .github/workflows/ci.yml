@@ -211,3 +211,10 @@ jobs:
       # price. These checks run the exact production derivations.
       - name: Verify portal model
         run: npm run verify:portal
+
+      # lib/bookingPhotos parses quotes.lead_meta.photos — untrusted data from the
+      # PUBLIC booking door — for the owner's gallery. The guards are load-bearing and
+      # invisible to tsc: only http(s) URLs may reach an <img src> (a javascript:/data:/
+      # relative URL must be dropped), and a malformed blob must yield [] not a throw.
+      - name: Verify booking photos
+        run: npm run verify:booking-photos
