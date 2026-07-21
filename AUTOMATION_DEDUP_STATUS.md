@@ -12,6 +12,11 @@ Branch `guardian-2`. Behaviour-preserving unless noted. No new automations.
 
 ## DONE — one rule, one home
 
+> These single homes are governed by [`DETECTION_ENGINE_ADR.md`](DETECTION_ENGINE_ADR.md):
+> `lib/signals/*` is the one detection engine and owns the canonical lifecycle vocabulary
+> (`VIP_LTV`, `cadenceDays`, `churnRisk`, `ranOut`, …) and the consume-a-signal-never-re-derive
+> rule. This snapshot reports consolidation status; it does not own the decision.
+
 | Rule | Was | Now |
 |---|---|---|
 | VIP threshold | `1500` hardcoded ×4 | `signals.VIP_LTV` |

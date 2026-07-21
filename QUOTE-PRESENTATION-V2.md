@@ -12,8 +12,11 @@ build-after-Phases-1–5 rule below is unchanged.)*
 **Date:** 2026-07-16, revised + APPROVED 2026-07-17 · **Code state:** `main` @ `f9014e1` ·
 **Prod verified live.**
 
+*Throughout, a backticked slug such as `quote-v2-spec-2026-07-17` names a project-memory
+note (the EdgeQuote knowledge base), not a file in this repository.*
+
 > ### 🔗 Read with — and not instead of — `quote-v2-spec-2026-07-17`
-> A parallel session wrote **Quote Engine V2** ([[quote-v2-spec-2026-07-17]]), which maps the owner's
+> A parallel session wrote **Quote Engine V2** (`quote-v2-spec-2026-07-17`), which maps the owner's
 > 12 areas onto the roadmap's phases and tags **"Customer experience" as Phase 6** — this document.
 > **They are a map and a territory, not rivals:** that spec answers *which phase owns what*; this one
 > is the Phase 6 detail. They agree on the finding, independently — it reached *"quotes have no
@@ -107,19 +110,19 @@ The **live** `portal_accept_quote` snapshots `accepted_price`; `main` has no suc
 code is on **`pricing/phase0` @ `0404781`, committed and NOT pushed**, while its migrations
 (`RUN-2026-07-16c`, `RUN-2026-07-16d`) are **already applied to production**. A session reading only
 `main` will conclude the snapshot doesn't exist — the audit for this spec did exactly that, and was
-right about the repo and wrong about reality. See [[prod-schema-exceeds-main]]. **Pull
+right about the repo and wrong about reality. See `prod-schema-exceeds-main`. **Pull
 `pg_get_functiondef` before touching this RPC.**
 
 ---
 
 ## §3 · Settled decisions this spec inherits (do NOT re-litigate)
 
-### 3a · From Pricing V2 Phase 0, owner 2026-07-16 ([[pricing-v2-phase0-2026-07-16]])
+### 3a · From Pricing V2 Phase 0, owner 2026-07-16 (`pricing-v2-phase0-2026-07-16`)
 
 1. **Revisions ALWAYS create a new revision.** Never mutate a quote the customer already received.
    → `parent_quote_id` + version. **This resolves the revisions fork. §5.3 implements it; it does not reopen it.**
 2. **Expired quotes do NOT count toward acceptance metrics**, and a `sent` quote past its date
-   auto-reads Expired. (Supersedes [[quote-expiry-decisions]]'s display-only rule.)
+   auto-reads Expired. (Supersedes `quote-expiry-decisions`'s display-only rule.)
 3. **Units and Dimensions stay separate.** `units.ts`'s "a unit is a LABEL, never arithmetic" holds.
 4. **Grandfather all existing recurring customers.** V2 prices NEW quotes only.
 5. **Unknown stays unknown**, and lowers confidence — never a placeholder (margin.ts's rule,
@@ -167,7 +170,7 @@ right about the repo and wrong about reality. See [[prod-schema-exceeds-main]]. 
 17. **⭐ NO ADDITIONAL SPECIFICATIONS.** *"Treat the roadmap as the architectural map and the Phase 6
     document as the implementation specification. Future work should keep those documents
     synchronized rather than creating additional specifications."*
-    → **[[quote-v2-spec-2026-07-17]] = the MAP · this file = the TERRITORY.** A third document about
+    → **`quote-v2-spec-2026-07-17` = the MAP · this file = the TERRITORY.** A third document about
     Phase 6 is now a defect, not a contribution. If you find yourself writing one, you are supposed
     to be editing one of these two. **This is the same law as "one engine per responsibility",
     applied to the documents that describe the engines** — and it is why §3d exists rather than a
@@ -255,7 +258,7 @@ mirror `portal_mark_invoice_viewed` exactly — a single `viewed_at` timestamp, 
 #### THE SEAM: an events ledger, and we already have the pattern
 Do **not** invent a telemetry system. This app already runs exactly this shape for money:
 `payments` rows are the truth and `invoices.amount_paid`/`status` are **trigger-derived** from them
-([[payment-ledger-2026-06-27]]). Engagement is the same problem — an append-only fact stream with
+(`payment-ledger-2026-06-27`). Engagement is the same problem — an append-only fact stream with
 derived convenience columns — so it gets the same architecture.
 
 ```
@@ -269,7 +272,7 @@ derived convenience columns — so it gets the same architecture.
 
 **Laws (all inherited, none new):**
 - **ONE writer.** Every event goes through `lib/quoteEvents.ts`. Mirrors `lib/comms/log.ts`'s
-  one-log-writer rule ([[comms-one-log-writer]]) — which exists because a second writer is how a log
+  one-log-writer rule (`comms-one-log-writer`) — which exists because a second writer is how a log
   starts lying.
 - **Append-only. Never update, never delete.** An event is evidence.
 - **Derived columns are trigger-maintained, never hand-written.** Same rule as `amount_paid`.
@@ -529,7 +532,7 @@ optimizing step three while step one is unmeasured. Revisit only when §5.1's da
   **A data shape, not a feature.** It costs nothing now and prevents a schema migration later.
 - ⛔ **Do NOT build:** a deposit flow, a Stripe partial/split payment, an instalment plan, a lender
   integration, or any customer-facing "pay now" on a quote.
-- ⚠️ **Payments has four deliberate non-features** ([[payments-trust-decisions-2026-07-15]]) and a
+- ⚠️ **Payments has four deliberate non-features** (`payments-trust-decisions-2026-07-15`) and a
   one-writer law for money-out. Financing touches all of it. **Do not "complete" any of them.**
 - ⚠️ Real financing = a lender integration (Affirm/Klarna/Financeit), underwriting, disclosure and
   regulated language. A project with a compliance surface, not a Phase 6 bullet.
@@ -549,7 +552,7 @@ than inventing work.
 - **The `Leaf` fallback icon** is the portal's default branding when a business has no logo
   ([:404](src/app/portal/[token]/PortalClient.tsx#L404)) — a leaf on a furnace company's portal.
   Trivial, real, and safe to fix independently of everything else.
-- ⚠️ **Customer Journey is frozen** at `7573dd9` ([[customer-journey-frozen]]) — portal + comms
+- ⚠️ **Customer Journey is frozen** at `7573dd9` (`customer-journey-frozen`) — portal + comms
   templates. Phase 6 is the explicit owner request that lifts it **for this work only**.
 
 ### 5.9 · Mobile
@@ -559,7 +562,7 @@ mobile fallback for iframe-print. Two real nits only:
 - The PDF opens in the native viewer via a blob URL — fine, but a first-class **web** quote page
   (§5.8) makes the PDF the fallback rather than the destination on a phone.
 - **[UNVERIFIED]** blob-URL PDF behaviour in the in-app browsers customers actually arrive from
-  (Facebook/Messenger — and §0 of [[customer-experience-2026-07-16]] says 44% of this book is
+  (Facebook/Messenger — and §0 of `customer-experience-2026-07-16` says 44% of this book is
   Facebook-sourced with SMS the only channel). **Test there before claiming mobile is solved.**
 
 ---
@@ -646,7 +649,7 @@ and step 1 alone may end the project early, on purpose (§10).
   a guess into the record — the reasoning that stopped Phase 0 backfilling `accepted_price`.
 - ❌ **Another "sent" writer.** Phase 0 collapsed 4 into one — [`markSentPatch()`](src/lib/quoteStatus.ts).
   `time to first view` depends on it staying one. **Consume it** (decisions #15, and §3e).
-- ❌ **A third Phase 6 document.** *(Decision #17.)* The map is [[quote-v2-spec-2026-07-17]]; the
+- ❌ **A third Phase 6 document.** *(Decision #17.)* The map is `quote-v2-spec-2026-07-17`; the
   territory is this file. Writing a new spec instead of editing one of these two is a defect.
 - ❌ **A second document/PDF system.** `renderPortalQuoteBlob` is the rule already.
 - ❌ **A cadence fallback in the accept snapshot.** Phase 0 pinned this in a harness on purpose.
@@ -699,7 +702,7 @@ Match the standard Phase 0 set, because a document is as falsifiable as a price:
 
 It does not reopen the twelve settled decisions (§3). It does not price anything. It does not build a
 deposit, a signature wall, or good/better/best. It does not touch Booking
-([[booking-redesign-deferred]] — its own project). It does not schedule itself: **Phase 6 opens when
+(`booking-redesign-deferred` — its own project). It does not schedule itself: **Phase 6 opens when
 Phases 1–5 land**, and the owner's *"do not skip phases"* stands.
 
 **One prediction to hold me to:** ship step 1 first and if the ledger still reads **0 opens**, then

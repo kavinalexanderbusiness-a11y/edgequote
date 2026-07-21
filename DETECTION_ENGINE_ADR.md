@@ -62,7 +62,8 @@ one-per-branch, kept apart by an accident of process. They are **side by side in
 shipped tree**, and the divergence in §Risks #2 is now a property of production
 code — latent, but resident.
 
-This is the codebase's recurring failure mode, stated in the Pricing V2 roadmap:
+This is the codebase's recurring failure mode, stated in the Pricing V2 roadmap and
+canonicalised in PRODUCT-VISION.md §5.1 (one engine per responsibility):
 **"one concept, two implementations — and the second copy was always the one that
 priced."** Same disease, different organ.
 
