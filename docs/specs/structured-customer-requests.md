@@ -135,3 +135,132 @@ into the calendar by hand. This closes the loop the customer half already opened
   against real tokens; writes proven end-to-end).
 - **Guardian check on Phase 2:** confirm no second scheduling or notify path was
   introduced — every apply must resolve to the existing seams.
+
+---
+
+## 8. Architecture audit (verified against `origin/main` @ `66e0181`)
+
+Re-verified before enriching this spec — every claim holds; the freeze boundary is
+the one thing to keep visible.
+
+| Claim | Verified | Note |
+|---|---|---|
+| Customer write side is live | ✅ `RUN-2026-07-15-portal-self-service.sql` | `portal_submit_request` writes the structured columns |
+| Requests reach the owner only as prose today | ✅ | `sr_to_conversation` → inbound `portal` message; no owner surface reads `kind`/`preferred_date`/`recurrence_id` |
+| Trigger chain present on main | ✅ `supabase/schema.sql` + portal/comms RUN files | `sr_to_conversation` → `bump_conversation` + `notify_inbound_message` |
+| Structured columns exist | ✅ | `kind` (CHECK: service/appointment/reschedule/plan_change), `preferred_date`, `job_id`, `recurrence_id`, `details` |
+| Profile page already subscribes | ✅ `customers/[id]/page.tsx` | `useRealtimeRefresh('service_requests', …)` + `reload()` |
+| Phase-2 apply seams are frozen | ✅ | `lib/reschedule.ts` + `job_recurrences` update in `schedule/page.tsx` — **scheduling freeze `1d4ef66`** |
+
+**The boundary, restated:** Phase 1 reads structured columns and writes only
+`service_requests.status` — un-gated. Phase 2 mutates `jobs`/`job_recurrences` and
+notifies the customer — **every write routes through the existing frozen seams**, so
+it may not begin until the owner opens the scheduling lane. No new mutation path.
+
+## 9. Sequence & data-flow diagrams
+
+**Sequence — the full request loop (customer asks → owner confirms → customer sees it):**
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Cust as Customer (portal)
+  participant RPC as portal_submit_request
+  participant SR as service_requests
+  participant Trg as triggers
+  participant Own as Owner (dashboard)
+  participant Sched as schedule seams<br/>(reschedule.ts / job_recurrences)
+
+  Cust->>RPC: submit {kind, preferred_date, job_id, recurrence_id, details}
+  RPC->>SR: INSERT (status = default)
+  SR->>Trg: sr_to_conversation → inbound portal message
+  Trg->>Trg: bump_conversation + notify_inbound_message
+  Trg-->>Own: bell + thread (prose today)
+
+  rect rgb(235,245,235)
+    note over Own: Phase 1 — triage (UN-GATED)
+    Own->>SR: realtime read (kind, preferred_date, linked job/plan)
+    Own->>SR: status → resolved / dismissed
+  end
+
+  rect rgb(245,238,230)
+    note over Own,Sched: Phase 2 — one-tap apply (GATED: scheduling lane)
+    Own->>Sched: confirm, pre-filled from request
+    Sched->>Sched: move job / update job_recurrences.end_date
+    Sched->>Cust: notifyReschedule (consent-gated, idempotent)
+    Sched->>SR: status → applied
+    Cust-->>Cust: portal shows the booked change
+  end
+```
+
+**Data flow — structured columns fan out to a read surface and (gated) the write seams:**
+
+```mermaid
+flowchart TB
+  subgraph SRT["service_requests (columns already exist)"]
+    K[kind]
+    PD[preferred_date]
+    JID[job_id]
+    RID[recurrence_id]
+    DET[details]
+    ST[status ↺ lifecycle]
+  end
+  subgraph P1["Phase 1 — triage (un-gated, read + status write)"]
+    PROF[Customer profile Requests section]
+    INBOX[Dashboard 'open requests' card]
+  end
+  subgraph P2["Phase 2 — apply (GATED: scheduling)"]
+    RESCH[reschedule → jobs move + reschedule.ts]
+    PLAN[plan_change → job_recurrences.end_date]
+    APPT[appointment → prefill new-job flow]
+  end
+  REACH{{reach.ts consent gate}}
+  CUSTV[Customer portal reflects change]
+
+  K --> PROF
+  PD --> PROF
+  JID --> PROF
+  RID --> PROF
+  DET --> PROF
+  PROF --> INBOX
+  PROF -. "owner opens lane" .-> RESCH
+  PD --> RESCH
+  JID --> RESCH
+  RID --> PLAN
+  PD --> APPT
+  RESCH --> REACH
+  PLAN --> REACH
+  REACH --> CUSTV
+  RESCH --> ST
+  PLAN --> ST
+```
+
+## 10. Implementation checklists
+
+**Phase 1a — Per-customer Requests section on `customers/[id]` (un-gated)**
+- [ ] Read the structured columns (`kind`, `preferred_date`, `job_id`, `recurrence_id`, `details`) — the page already subscribes via `useRealtimeRefresh('service_requests', …)`.
+- [ ] Render kind + parsed intent + linked job/plan + prose; deep-link to the target job/customer.
+- [ ] Reply via the existing Messages thread (no composer change).
+- [ ] Transition `status` → resolved / dismissed (confirm the live default/vocabulary first; reuse the column, don't add one).
+
+**Phase 1b — "Open requests" dashboard card (un-gated)**
+- [ ] Count + list of open structured requests across customers as the triage entry point.
+- [ ] Each links to its Phase 1a detail; status write closes it.
+
+**GATE — owner opens the scheduling lane before any Phase 2 work.**
+
+**Phase 2a — One-tap reschedule (GATED)**
+- [ ] Confirm dialog pre-filled from `preferred_date` + `job_id`, reusing `components/dispatch/RescheduleDialog`.
+- [ ] Apply routes through the **existing** schedule job-move + `lib/reschedule.notifyReschedule` (consent-gated, logged, idempotent).
+- [ ] On success: `status` → applied; portal reflects the booked date.
+- [ ] **Idempotency:** guard the apply on `status` so the realtime re-subscribe can't double-apply.
+
+**Phase 2b — Skip-next / pause / cancel plan (GATED)**
+- [ ] For `plan_change` (`recurrence_id`): route through the existing `job_recurrences` mutation + notify seam; set `status`.
+
+**Phase 2c — Appointment (GATED)**
+- [ ] For `appointment`: pre-fill the new-job/schedule flow from `preferred_date`. **Never auto-book.**
+
+**Cross-cutting**
+- [ ] Guardian check: no second scheduling or notify path introduced.
+- [ ] Verify the whole loop on a real portal token (submit → apply → job moves → consent-gated notify → portal shows change → status resolved).

@@ -121,3 +121,117 @@ already queries exactly these:
   a test artifact, not a roadmap item.
 - **Sequence:** profile panel → list markers → quote context → (later, gated)
   composer default.
+
+---
+
+## 8. Architecture audit (verified against `origin/main` @ `66e0181`)
+
+Re-verified before enriching this spec — every claim holds; two operational notes
+are load-bearing enough to call out.
+
+| Claim | Verified | Note |
+|---|---|---|
+| The engine exists and is complete | ✅ `src/lib/businessMemory.ts` | `loadBusinessMemory`, `deriveCustomerHabits`, `collectionStats`, `invalidateBusinessMemory` all present |
+| Zero UI consumers today | ✅ | Only `businessIntelligence.ts` imports it, and only `collectionStats` (aggregate); `habitsByCustomer` is unconsumed |
+| Read-only, no new storage | ✅ | Loader queries `messages`/`invoices`/`jobs` only; no writes, no new table |
+| Cached | ✅ `src/lib/clientCache.ts` | `sessionStorage` key **`eq:business-memory`**, `CACHE_TTL.medium` |
+| Explainable | ✅ | `CustomerHabits.reasons[]` is populated in the engine — the UI renders it, never invents it |
+
+**Two operational truths the implementer must honour:**
+
+1. **Cache invalidation is manual.** `invalidateBusinessMemory()` clears
+   `sessionStorage['eq:business-memory']`. A displayed habit will go stale until the
+   cache TTL expires **unless** you call it after a mutation that changes a habit
+   input — payment recorded (`medianDaysToPay`), job completed (`favoriteServices`,
+   `typicalStartTime`, `repeatCustomer`), message sent/received (`preferredChannel`,
+   `medianResponseMin`). Wire the invalidation at those existing mutation sites.
+2. **The loader is tenant-wide and bounded.** It fetches up to 2000 messages / 1000
+   paid invoices / 2000 jobs for the whole business in one cached call — so a
+   surface reads `habitsByCustomer[id]` from memory, it does **not** query per
+   customer. Deep-history tenants past those caps lose the oldest rows from the
+   derivation; acceptable for habit medians, but note it, and do not "fix" it with a
+   second per-customer query (that would fork the engine).
+
+## 9. Sequence & data-flow diagrams
+
+**Data flow — one engine composes existing tables into per-customer habits, cached once, read by many surfaces:**
+
+```mermaid
+flowchart LR
+  subgraph Tables["Existing tables (read-only)"]
+    M[(messages)]
+    I[(invoices)]
+    J[(jobs)]
+  end
+  subgraph Engine["lib/businessMemory.ts"]
+    L["loadBusinessMemory()<br/>Promise.all + auth"]
+    D["deriveCustomerHabits()<br/>pure: rows in, habits out"]
+    H["habitsByCustomer[id]<br/>+ reasons[]"]
+  end
+  C[["sessionStorage<br/>eq:business-memory"]]
+  subgraph Surfaces["Operator surfaces (new, read-only)"]
+    P[Customer profile panel]
+    LI[Customer list markers]
+    Q[Quote-builder context line]
+  end
+  MUT[["Mutations:<br/>payment · job complete · message"]]
+
+  M --> L
+  I --> L
+  J --> L
+  L --> D --> H
+  H --> C
+  C --> P
+  C --> LI
+  C --> Q
+  MUT -. "invalidateBusinessMemory()" .-> C
+```
+
+**Sequence — a customer profile renders the memory panel (cache-first):**
+
+```mermaid
+sequenceDiagram
+  participant UI as Customer profile page
+  participant BM as loadBusinessMemory()
+  participant Cache as sessionStorage
+  participant DB as Supabase
+
+  UI->>BM: loadBusinessMemory(supabase)
+  BM->>Cache: readCache('business-memory', medium)
+  alt cache hit
+    Cache-->>BM: BusinessMemory
+  else cache miss
+    BM->>DB: auth.getUser()
+    BM->>DB: Promise.all(messages, invoices, jobs, labor, travel, pricing)
+    DB-->>BM: rows
+    BM->>BM: deriveCustomerHabits(msgs, invs, jobs)
+    BM->>Cache: writeCache('business-memory', memory)
+  end
+  BM-->>UI: BusinessMemory
+  UI->>UI: render habitsByCustomer[id] — omit null facts
+  Note over UI: tap a fact → show its reasons[] string
+```
+
+## 10. Implementation checklists
+
+**Phase 1 — Customer-profile panel (un-gated)**
+- [ ] Call `loadBusinessMemory(supabase)` once on `customers/[id]` load; read `habitsByCustomer[customerId]`.
+- [ ] Render only non-null facts (preferred channel, days-to-pay, favourite service, typical start, repeat, response time); **omit** unknowns — never render 0 or "—".
+- [ ] Each fact tappable → its matching `reasons[]` entry (tooltip/expander).
+- [ ] Call `invalidateBusinessMemory()` at the existing payment-record, job-complete, and message-send mutation sites.
+- [ ] No price, no LLM text, no new column.
+
+**Phase 2 — Customer-list markers (un-gated)**
+- [ ] Reuse the same cached `BusinessMemory`; render repeat / pays-fast / pays-slow per row from `habitsByCustomer[id]`.
+- [ ] Degrade silently for customers with no derived habits.
+
+**Phase 3 — Quote-builder context line (un-gated)**
+- [ ] Read-only line: usual service + typical start, from `habitsByCustomer[id]`.
+- [ ] Wire so it is structurally incapable of touching a price field (§10 boundary).
+
+**Phase 4 — Composer channel default (GATED: messaging lane)**
+- [ ] Only after the owner opens the messaging lane: default `SendMessageDialog` channel to `preferredChannel`, fully overridable.
+
+**Cross-cutting**
+- [ ] Add a pure-function assertion harness over `deriveCustomerHabits` (unknown → null; one data point ≠ a median; caps hold).
+- [ ] Sanity-check a few real customers' derived habits vs. owner knowledge before wide enablement.
