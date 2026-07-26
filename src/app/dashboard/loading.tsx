@@ -58,7 +58,12 @@ export default function DashboardLoading() {
         <div className="lg:col-span-3 rounded-card border border-accent/20 overflow-hidden">
           <div className="px-4 sm:px-5 py-3.5 border-b border-border flex items-center gap-2.5">
             <Skeleton className="h-7 w-7 rounded-lg" />
-            <Skeleton className="h-4 w-36" />
+            {/* Title + the "most urgent first" ranking subtitle — two lines, so
+                the queue header can't shrink when the real card lands. */}
+            <div>
+              <Skeleton className="h-4 w-36" />
+              <Skeleton className="h-2.5 w-44 mt-1" />
+            </div>
           </div>
           <div className="divide-y divide-border">
             {[0, 1, 2, 3, 4].map(i => (
