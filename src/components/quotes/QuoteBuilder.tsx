@@ -726,14 +726,26 @@ export function QuoteBuilder({
               {/* Service FIRST (owner directive) — measurement, suggested pricing,
                   intelligence, duration and profitability below are all specific to
                   the selected service. */}
-              <Controller name="service_template_id" control={control}
-                render={({ field }) => (<Select label="Service" options={templateOptions} {...field} />)} />
+              {/* The catalogue picker is a SHORTCUT that auto-fills the name (and an
+                  hourly template's rate). With no active templates it can only ever
+                  read "Select a service…" — a dead dropdown a brand-new owner has to
+                  look past to reach the real field. Hidden until there's something to
+                  pick — the same rule the Additional-services template picker already
+                  follows. Service Name below stays the one required service input
+                  either way, so service_template_id is untouched (stays '') when this
+                  is hidden: presentation only, no pricing/logic change. */}
+              {activeTemplates.length > 0 && (
+                <Controller name="service_template_id" control={control}
+                  render={({ field }) => (<Select label="Service" options={templateOptions} {...field} />)} />
+              )}
               {/* The example comes from THEIR catalogue, not ours. A lawn company
                   with a "Lawn Mowing" template still reads "e.g. Lawn Mowing"; a
                   pool company reads "e.g. Pool Opening". Falls back to a neutral
                   hint before any template exists. */}
               <Input label="Service Name *" placeholder={`e.g. ${activeTemplates[0]?.name || 'Weekly Service'}`}
-                hint="Auto-fills when you pick a service above — edit to rename it on the quote."
+                hint={activeTemplates.length > 0
+                  ? 'Auto-fills when you pick a service above — edit to rename it on the quote.'
+                  : 'The name of this service, as it appears on the quote.'}
                 error={errors.service_type?.message}
                 {...register('service_type', { required: 'Service is required' })} />
 
