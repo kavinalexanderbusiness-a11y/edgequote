@@ -150,11 +150,14 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lightboxId, filtered.length])
 
-  // Before/After are taken standing on the lawn, so they go straight to the
-  // camera: `capture="environment"` opens the rear shutter instead of the OS
-  // "Take Photo / Photo Library" chooser, cutting a tap and a decision out of the
-  // action a contractor repeats at every stop. "Add photo" keeps the plain picker
-  // for attaching from the library, so neither capability is lost.
+  // Before/After default to the camera: `capture="environment"` opens the rear
+  // shutter instead of the OS "Take Photo / Photo Library" chooser, cutting a tap
+  // and a decision out of the action a contractor repeats at every stop. But the
+  // photo isn't always taken on the spot — a crew re-attaches one shot earlier, or
+  // works off a phone that already holds the picture — so each Before/After button
+  // also carries a library trigger (`source: 'library'` → the plain, capture-less
+  // input). Same tag, same upload pipeline; the fast camera path is just the
+  // primary tap, never the only one.
   function pick(kind: PhotoKind, source: 'camera' | 'library' = 'camera') {
     pendingKind.current = kind
     ;(source === 'camera' ? cameraRef : fileRef).current?.click()
@@ -267,8 +270,8 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
           Hidden in read-only mode (a pure viewer for customer-attached photos). */}
       <div className="flex items-center gap-2 flex-wrap">
         {!readOnly && <>
-          <CaptureBtn label="Before" icon={Camera} busy={busyOf('before')} onClick={() => pick('before')} tone="amber" />
-          <CaptureBtn label="After" icon={Camera} busy={busyOf('after')} onClick={() => pick('after')} tone="emerald" />
+          <CaptureBtn label="Before" icon={Camera} busy={busyOf('before')} onClick={() => pick('before')} onLibrary={() => pick('before', 'library')} tone="amber" />
+          <CaptureBtn label="After" icon={Camera} busy={busyOf('after')} onClick={() => pick('after')} onLibrary={() => pick('after', 'library')} tone="emerald" />
           {variant === 'gallery' && (
             <CaptureBtn label="Add photo" icon={ImagePlus} busy={busyOf('general')} onClick={() => pick('general', 'library')} />
           )}
@@ -423,18 +426,46 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
   )
 }
 
-function CaptureBtn({ label, icon: Icon, busy, disabled, onClick, tone }: {
-  label: string; icon: typeof Camera; busy: boolean; disabled?: boolean; onClick: () => void; tone?: 'amber' | 'emerald'
+const CAPTURE_TONES = {
+  amber: { box: 'bg-amber-500/15 border-amber-500/30 text-amber-300', seg: 'hover:bg-amber-500/25', div: 'bg-amber-500/30' },
+  emerald: { box: 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300', seg: 'hover:bg-emerald-500/25', div: 'bg-emerald-500/30' },
+  plain: { box: 'border-border text-ink-muted', seg: 'hover:text-ink hover:bg-black/10', div: 'bg-border' },
+} as const
+
+function CaptureBtn({ label, icon: Icon, busy, disabled, onClick, onLibrary, tone }: {
+  label: string; icon: typeof Camera; busy: boolean; disabled?: boolean
+  onClick: () => void
+  // When set, the button becomes a split control: the primary opens the camera,
+  // a trailing icon attaches an existing photo from the library (same tag).
+  onLibrary?: () => void
+  tone?: 'amber' | 'emerald'
 }) {
+  const t = CAPTURE_TONES[tone ?? 'plain']
+
+  // Plain button (e.g. "Add photo", already a library picker) — unchanged.
+  // tap-target: 44px on a phone (gloves, sun, one hand), unchanged 32px with a mouse.
+  if (!onLibrary) {
+    return (
+      <button type="button" onClick={onClick} disabled={disabled}
+        className={`tap-target h-8 px-2.5 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50 ${t.box} ${t.seg}`}>
+        {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Icon className="w-3.5 h-3.5" />} {label}
+      </button>
+    )
+  }
+
+  // Split control: a wide camera primary + a slim "from library" trailing action,
+  // so a crew can take OR attach a Before/After without losing the one-tap camera.
   return (
-    // tap-target: 44px on a phone (gloves, sun, one hand), unchanged 32px with a mouse.
-    <button type="button" onClick={onClick} disabled={disabled}
-      className={`tap-target h-8 px-2.5 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50 ${
-        tone === 'amber' ? 'bg-amber-500/15 border-amber-500/30 text-amber-300 hover:bg-amber-500/25'
-          : tone === 'emerald' ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25'
-            : 'border-border text-ink-muted hover:text-ink hover:bg-black/10'
-      }`}>
-      {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Icon className="w-3.5 h-3.5" />} {label}
-    </button>
+    <div className={`tap-target inline-flex items-stretch h-8 rounded-lg border overflow-hidden text-xs font-medium ${t.box}`}>
+      <button type="button" onClick={onClick} disabled={disabled} title={`Take ${label.toLowerCase()} photo`} aria-label={`Take ${label.toLowerCase()} photo`}
+        className={`pl-2.5 pr-2 flex items-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50 ${t.seg}`}>
+        {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Icon className="w-3.5 h-3.5" />} {label}
+      </button>
+      <span aria-hidden className={`w-px self-stretch ${t.div}`} />
+      <button type="button" onClick={onLibrary} disabled={disabled} title={`Upload ${label.toLowerCase()} photo from library`} aria-label={`Upload ${label.toLowerCase()} photo from library`}
+        className={`px-2.5 flex items-center justify-center active:scale-95 transition-transform disabled:opacity-50 ${t.seg}`}>
+        <ImagePlus className="w-3.5 h-3.5" />
+      </button>
+    </div>
   )
 }
