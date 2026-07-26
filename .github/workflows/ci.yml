@@ -149,6 +149,14 @@ jobs:
       - name: Verify labour estimator
         run: npm run verify:labor
 
+      #   sms-segments — the send-cost estimate the owner sees before pressing Send.
+      #              The segment math is a WRONG NUMBER when it breaks, not a type
+      #              error: a smart-quote flipping a message to Unicode, or a
+      #              surrogate-pair emoji miscounted at the 70-unit boundary, changes
+      #              the segment count and the bill while tsc/build stay green.
+      - name: Verify SMS segments
+        run: npm run verify:sms-segments
+
       #   density  — route density counts NEIGHBOURING PROPERTIES, not a property's
       #              own visits. It was fed one row per JOB and neither deduped nor
       #              excluded the target, so live counts averaged 38.1 against 2.0
