@@ -415,7 +415,12 @@ export function QuoteBuilder({
     }
   }, [serviceRec, priceLocked, priceOrigin, pickedCadence, setValue])
 
-  const travelSuggestion = distanceKm > 0 ? suggestTravelFee(distanceKm, tiers) : null
+  // Gated on tiers existing: with ZERO tiers configured (every first-run account),
+  // suggestTravelFee's no-match fallback is { fee: 0, tierLabel: 'Unknown' }, which
+  // rendered as a fabricated suggestion — "Unknown: $0.00" — plus an "Apply
+  // suggested travel fee" button whose only possible effect was wiping the owner's
+  // hand-typed fee to $0. No tiers ⇒ no suggestion to speak of, so say nothing.
+  const travelSuggestion = distanceKm > 0 && tiers.length > 0 ? suggestTravelFee(distanceKm, tiers) : null
 
   useEffect(() => {
     if (travelSuggestion?.isCustom) {
