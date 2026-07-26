@@ -1,5 +1,8 @@
 # Quote Builder — UX & Product Audit
 
+> **Round 2 (same day) is §10–§12 at the bottom** — two more correctness bugs, the
+> click-reduction pass, and the first-run dead ends. §1–§9 are round 1, shipped as `7c343ff`.
+
 **Date:** 2026-07-26 · **Scope:** `/dashboard/quotes/new` and the edit surface, i.e.
 [QuoteBuilder.tsx](src/components/quotes/QuoteBuilder.tsx) (1,337 lines) plus its two hosts
 [new/page.tsx](src/app/dashboard/quotes/new/page.tsx) and [[id]/page.tsx](src/app/dashboard/quotes/[id]/page.tsx).
@@ -270,3 +273,105 @@ touched**; `verify:pricing` and `verify:guardrails` both pass, `tsc --noEmit` cl
 6. **Profile and fix the keystroke re-render** (§4.4).
 7. **Plumb `default_crew_size`** or drop the column (§6).
 8. **Unify the accept verbs** when the pricing freeze lifts (§7).
+
+---
+---
+
+# Round 2 — friction in the creation workflow
+
+Same scope, one pass deeper, looking specifically for clicks that don't need to exist and
+decisions the owner shouldn't have to make. Two more correctness bugs fell out of it.
+
+## §10 · Two more bugs, both in the "don't lose the owner's work" class
+
+### 10.1 Restoring an autosaved draft threw away the restored price ✅ fixed
+
+`onRestore` called `reset(v)` — which restores the **fields** but not the provenance state that
+protects them. On a new quote `priceOrigin` starts at `'empty'`, so a restored draft came back
+**unlocked**, and the reconciliation effect fired on the very next render:
+
+```ts
+if (priceLocked || pickedCadence) return
+const price = serviceRec?.price ?? 0
+if (price > 0) { setValue('initial_price', price); setPriceOrigin('suggested') }
+```
+
+So: type $250 → tab crashes / phone locks / you navigate away → come back → **Restore** → the
+engine's number silently replaces your $250. On the one path whose entire purpose is not losing
+your work. `includeMonthly` was dropped by the same gap (a restored monthly price with the pill
+reading off).
+
+**Fixed:** a restored price is treated exactly like loading a saved quote — it is the owner's own
+past decision, so it locks (`'manual'`), and the monthly toggle is rehydrated from the value.
+
+### 10.2 "✓ Applied" survived changing the service ✅ fixed
+
+`priceOrigin === 'applied'` means *the owner accepted an engine's recommendation*. Nothing
+re-examined that claim when the **service** changed underneath it. Measure a lawn → tap Accept →
+switch the service to "Furnace Repair", and the badge still read a confident green **✓ Applied**
+next to a mowing price on a furnace quote — the exact failure mode
+[MEASURE-AND-QUOTE-AUDIT.md §2 P0-1](MEASURE-AND-QUOTE-AUDIT.md) was written about, arriving by a
+different door. The file's own rule is that equal numbers are not consent; consent given for one
+service is not consent for the next either.
+
+**Fixed:** every accept path now goes through one `markApplied()` that records *what was accepted,
+and for which service* (template id when there is one, so renaming a template-backed service on
+the quote doesn't count as switching). When the service changes under an accepted price, the badge
+drops to "Manual price". **The number is not touched** — it may still be what the owner wants, and
+silently zeroing their price would be a worse bug than a stale badge. It stays locked, so no
+suggestion overwrites it either.
+
+### 10.3 Two smaller ones ✅ fixed
+
+- **The Monthly pill could claim a state the quote didn't have.** The toggle skipped its write
+  whenever the price was manual, so it read *"Monthly: on"* over an empty monthly field. Now: off
+  always clears; on fills only an **empty** field, so a monthly price the owner typed is never
+  overwritten either.
+- **"Beyond your furthest travel tier — enter a custom travel fee"** kept demanding a fee after the
+  owner switched to *"Absorbing travel — no fee"*. Gated on actually charging travel.
+
+## §11 · Clicks removed
+
+### 11.1 The service picker, for the businesses that have few services ✅
+A `<select>` costs two taps and hides the entire catalogue behind the first. An owner-operator
+quoting in a driveway has a handful of services that fit on one screen — so at **≤6 active
+templates the options become the control**: a wrapped row of chips, one tap, each showing its own
+`formatServicePrice`. Past six the chip row would be worse than the dropdown, and the dropdown
+comes back. Same `Controller`, same field, same template effect — nothing downstream knows.
+
+Net for a typical small catalogue: **2 taps → 1**, on the field every quote must set, and the
+catalogue is now visible without interacting at all.
+
+### 11.2 First-run dead ends became links ✅
+On a fresh account the builder's first utterance is *"No recommendation yet — set your Default
+Labour Rate in Settings"*, and there was **no way to get there from here**. Same for the Base Rate
+hint, and for an empty catalogue (the Service dropdown offered one option: "Select a service…").
+All three now link to the page they name. A first quote is exactly where a business discovers it
+hasn't set a rate.
+
+### 11.3 The price now looks like the answer ✅
+Every other field in the fast-path card is a question; the price is the answer. It renders at
+`text-lg font-semibold tabular-nums` — the only weighted input on the form.
+
+## §12 · Recommended, still not implemented
+
+- **Carry the typed name into "+ Enter manually".** Type "Jane Smith" in the customer picker, find
+  no match, choose *Enter manually* — and the name you just typed is discarded, presenting an empty
+  "Customer Name \*". You type it twice. The fix is ~6 lines (hand the query to the caller via an
+  optional `onManual` prop, and label the row *"New customer — Jane Smith"*), and it is the single
+  biggest remaining click-saver in the flow. **Not done because `ui/CustomerPicker.tsx` was being
+  edited by another session while this pass ran** — the file changed twice under me mid-edit, so I
+  backed my changes out rather than commit someone else's half-finished work. Pick this up when
+  that file is quiet. It pairs with hiding the manual-entry panel until the owner actually chooses
+  manual entry (today it's shown by default on every new quote, three fields before you've decided
+  whether the customer already exists).
+- Everything in §9 still stands, unchanged.
+
+### A trap worth naming, not fixing
+
+`quotes/[id]/page.tsx` loads `overgrowth_multiplier: 1` and `distance_km: 0` into the builder on
+every edit — which **looks** like the "editing discards stored values" defect, and the multiplier
+really is overwritten to `1` in the database on save. Do not "fix" it by loading the stored value:
+`rate` is persisted as `applyOvergrowth(rate, mult)`, i.e. **already multiplied**, so loading the
+real multiplier would re-apply it on every save and compound the rate. The honest fix is storing a
+base rate separately — a schema change, and Pricing V2's business, not a UI pass's.
