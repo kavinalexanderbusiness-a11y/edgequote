@@ -264,3 +264,67 @@ flowchart TB
 **Cross-cutting**
 - [ ] Guardian check: no second scheduling or notify path introduced.
 - [ ] Verify the whole loop on a real portal token (submit → apply → job moves → consent-gated notify → portal shows change → status resolved).
+
+---
+
+## 11. Per-kind action matrix + status lifecycle
+
+**⚠️ Audit correction (verified against `origin/main` @ `1eb84b1`).** Earlier this
+spec said "transition to a resolved/dismissed value." The **actual** column is
+`service_requests.status text not null default 'new'` with the convention
+**`new | seen | done`** (a column *comment*, **not** a CHECK — so nothing enforces
+it; consistency depends on this spec). **Reuse `new | seen | done`; do not invent
+`resolved`/`applied`/`dismissed` strings.** If the owner later needs to distinguish
+*applied* from *dismissed*, that is a deliberate enum extension to agree with the
+owner — never an ad-hoc string in one component.
+
+**Per-kind handling (every engineer maps a kind the same way):**
+
+| `kind` | Structured fields used | Phase-1 triage view | Phase-2 apply (gated) | Target seam |
+|---|---|---|---|---|
+| `appointment` | `preferred_date`, `details` | show requested day + notes | pre-fill new-job flow (never auto-book) | schedule new-job flow |
+| `reschedule` | `job_id`, `preferred_date` | show the job + requested day | "Move to {preferred_date}" | `RescheduleDialog` + jobs move + `reschedule.ts` |
+| `plan_change` | `recurrence_id`, `details` | show the plan + ask | skip-next / pause / cancel | `job_recurrences` update + notify |
+| `service` | `message` only | free-text ask | (none — reply/triage only) | Messages reply |
+
+**Status lifecycle (reuse the existing enum):**
+
+```mermaid
+stateDiagram-v2
+  [*] --> new: portal_submit_request (default 'new')
+  new --> seen: owner opens / triages (Phase 1)
+  seen --> done: resolved or dismissed (Phase 1)
+  new --> done: dismissed without opening (Phase 1)
+  seen --> done: applied — job/plan changed (Phase 2, gated)
+  done --> [*]
+  note right of done
+    'done' is terminal. Guard every write on
+    status so a realtime re-fire cannot re-apply.
+  end note
+```
+
+## 12. Edge cases & acceptance criteria
+
+**Edge cases (all must be handled — several come straight from the schema):**
+- **Referenced row deleted.** `job_id` and `recurrence_id` are FK
+  `ON DELETE SET NULL` (per `RUN-2026-07-15-portal-self-service.sql`). A reschedule
+  request whose job was deleted arrives with `job_id = null` ⇒ the apply action must
+  degrade to triage-only ("the visit this refers to no longer exists") — never crash,
+  never guess a job.
+- **Customer deleted.** `customer_id` is `ON DELETE SET NULL`; an orphaned request
+  can't thread or apply ⇒ show it as unactionable, don't error.
+- **Partial apply failure (Phase 2).** Job moved but the consent-gated notify failed
+  ⇒ the move stands, the notify is retried by the existing `reschedule.ts` idempotent
+  path; do **not** roll back the schedule or double-move. Set `status` only after the
+  move succeeds.
+- **Double-apply.** The surface re-subscribes in realtime; guard every apply on
+  `status` (only `new`/`seen` may apply; `done` is inert) so a re-fire is a no-op.
+- **Unknown/blank `preferred_date`.** Appointment/reschedule without a date ⇒ triage
+  as a free-form ask; no apply button until a date exists.
+
+**Acceptance criteria (the feature is "done" when):**
+- [ ] Phase 1: every `kind` renders its structured fields per §11; status moves `new → seen → done`; no invented status strings.
+- [ ] A request with a null `job_id`/`recurrence_id`/`customer_id` renders as triage-only and never crashes.
+- [ ] Phase 2 (post-gate): an apply routes **only** through the existing schedule + `reschedule.ts` seams (guardian-verified), moves the job/plan, notifies via the consent gate, and flips `status` — proven end-to-end on a real portal token.
+- [ ] A realtime re-fire of an already-`done` request performs no second mutation.
+- [ ] No new scheduling/notify path, no portal/write-side change, no auto-apply without owner confirmation.
