@@ -173,6 +173,15 @@ jobs:
       - name: Verify recurrence
         run: npm run verify:recurrence
 
+      #   dedup    — THE unified duplicate-detection engine (properties, jobs,
+      #              photos). Both failure modes are silent data corruption: a false
+      #              positive swallows a real photo or blocks a real visit, a false
+      #              negative lets duplicates compound. Pins the ~35 m same-lot
+      #              radius against real haversine distances, the cancelled-job and
+      #              EXIF-only-timestamp guards, and the 5-bit near-hash line.
+      - name: Verify dedup
+        run: npm run verify:dedup
+
       # This step is why the first 17 CI runs were red, and it's worth writing down.
       # ESLint had never been configured in this repo — no .eslintrc anywhere — so
       # `next lint` dropped into an INTERACTIVE setup prompt, which cannot be
