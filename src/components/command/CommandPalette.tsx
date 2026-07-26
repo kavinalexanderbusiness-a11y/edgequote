@@ -20,6 +20,42 @@ type Icon = typeof Users
 interface Item { id: string; label: string; sub?: string; icon: Icon; run: () => void }
 interface Section { title: string; items: Item[] }
 
+// ── Recents ───────────────────────────────────────────────────────────────────
+// The empty palette used to look identical on visit 1 and visit 1,000 — a frequent
+// user re-typed a customer's name every time to reach the same profile. Recents
+// remembers the last few records you jumped to and offers them the instant ⌘K
+// opens, turning a search box into a jump-list. localStorage-only: a nicety that
+// must never throw (private mode / quota / another tab's garbage all fall back to
+// "no recents"), and it stores only what the palette already shows — a label and a
+// route, never anything sensitive the row didn't already display.
+type RecentKind = 'customer' | 'property' | 'quote' | 'invoice'
+interface RecentEntry { to: string; label: string; sub?: string; kind: RecentKind }
+const RECENTS_KEY = 'eq:cmdk:recents'
+const RECENTS_MAX = 6
+const RECENT_KINDS: RecentKind[] = ['customer', 'property', 'quote', 'invoice']
+const RECENT_ICONS: Record<RecentKind, Icon> = { customer: Users, property: Home, quote: FileText, invoice: Receipt }
+
+function readRecents(): RecentEntry[] {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(RECENTS_KEY) || '[]')
+    if (!Array.isArray(raw)) return []
+    return raw
+      .filter((r): r is RecentEntry =>
+        !!r && typeof (r as RecentEntry).to === 'string' && typeof (r as RecentEntry).label === 'string'
+        && ((r as RecentEntry).sub === undefined || typeof (r as RecentEntry).sub === 'string')
+        && RECENT_KINDS.includes((r as RecentEntry).kind))
+      .slice(0, RECENTS_MAX)
+  } catch { return [] }
+}
+
+function pushRecent(e: RecentEntry) {
+  try {
+    // Most-recent-first, de-duplicated by route so re-visiting bumps instead of piling.
+    const next = [e, ...readRecents().filter(x => x.to !== e.to)].slice(0, RECENTS_MAX)
+    localStorage.setItem(RECENTS_KEY, JSON.stringify(next))
+  } catch { /* private mode / quota — recents are a nicety, never load-bearing */ }
+}
+
 // Jump-to navigation (also filtered by the query).
 // Module destinations come from THE feature-module registry (lib/modules) —
 // same source and same per-business filtering as the sidebar, so the palette
@@ -54,6 +90,7 @@ export function CommandPalette() {
   const [q, setQ] = useState('')
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState<Section[]>([])
+  const [recents, setRecents] = useState<RecentEntry[]>([])
   const [sel, setSel] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const activeRef = useRef<HTMLButtonElement>(null)
@@ -77,6 +114,8 @@ export function CommandPalette() {
   }, [])
 
   useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 30) }, [open])
+  // Re-read on each open so a jump made in another tab (or last session) is current.
+  useEffect(() => { if (open) setRecents(readRecents()) }, [open])
 
   const go = useCallback((href: string) => { close(); router.push(href) }, [close, router])
   const tel = useCallback((phone: string) => { close(); window.location.href = `tel:${phone.replace(/[^\d+]/g, '')}` }, [close])
@@ -111,8 +150,13 @@ export function CommandPalette() {
   ], [go, NAV])
   const emptySections = useMemo<Section[]>(() => {
     const ps = pageSection()
-    return ps ? [ps, ...baseSections] : baseSections
-  }, [pageSection, baseSections])
+    // Recent sits above Create/Go-to: on an empty box, "where I just was" beats
+    // "what I could make". Hidden entirely until there's history to show.
+    const recentSec: Section | null = recents.length
+      ? { title: 'Recent', items: recents.map(r => ({ id: `r-${r.to}`, label: r.label, sub: r.sub, icon: RECENT_ICONS[r.kind], run: () => go(r.to) })) }
+      : null
+    return [ps, recentSec, ...baseSections].filter((s): s is Section => s !== null)
+  }, [pageSection, baseSections, recents, go])
 
   // Debounced universal search + command verbs.
   useEffect(() => {
@@ -211,38 +255,43 @@ export function CommandPalette() {
       if (nav.length) sections.push({ title: 'Go to', items: nav })
 
       const cRows = (cust.data as { id: string; name: string; phone: string | null; city: string | null; email: string | null }[]) || []
-      if (cRows.length) sections.push({ title: 'Customers', items: cRows.map(c => ({
-        id: `c-${c.id}`, label: c.name || 'Unnamed', sub: [c.phone, c.city || c.email].filter(Boolean).join(' · ') || undefined,
-        icon: Users, run: () => go(`/dashboard/customers/${c.id}`),
-      })) })
+      if (cRows.length) sections.push({ title: 'Customers', items: cRows.map(c => {
+        const to = `/dashboard/customers/${c.id}`
+        const label = c.name || 'Unnamed'
+        const sub = [c.phone, c.city || c.email].filter(Boolean).join(' · ') || undefined
+        return { id: `c-${c.id}`, label, sub, icon: Users, run: () => { pushRecent({ to, label, sub, kind: 'customer' }); go(to) } }
+      }) })
 
       const pRows = (prop.data as { id: string; address: string | null; city: string | null; neighborhood: string | null; customer_id: string | null }[]) || []
-      if (pRows.length) sections.push({ title: 'Properties', items: pRows.map(p => ({
-        id: `p-${p.id}`, label: p.address || 'Property', sub: [p.neighborhood, p.city].filter(Boolean).join(' · ') || undefined,
-        icon: Home, run: () => go(p.customer_id ? `/dashboard/customers/${p.customer_id}` : '/dashboard/properties'),
-      })) })
+      if (pRows.length) sections.push({ title: 'Properties', items: pRows.map(p => {
+        const to = p.customer_id ? `/dashboard/customers/${p.customer_id}` : '/dashboard/properties'
+        const label = p.address || 'Property'
+        const sub = [p.neighborhood, p.city].filter(Boolean).join(' · ') || undefined
+        return { id: `p-${p.id}`, label, sub, icon: Home, run: () => { pushRecent({ to, label, sub, kind: 'property' }); go(to) } }
+      }) })
 
       const qRows = (quo.data as { id: string; quote_number: string | null; customer_name: string | null; service_type: string | null; total: number | null; status: string }[]) || []
-      if (qRows.length) sections.push({ title: 'Quotes', items: qRows.map(qq => ({
-        id: `q-${qq.id}`, label: `${qq.quote_number || 'Quote'} · ${qq.customer_name || 'Customer'}`,
-        sub: [qq.service_type, qq.total != null ? formatCurrency(Number(qq.total)) : null, qq.status].filter(Boolean).join(' · ') || undefined,
-        icon: FileText, run: () => go(`/dashboard/quotes/${qq.id}`),
-      })) })
+      if (qRows.length) sections.push({ title: 'Quotes', items: qRows.map(qq => {
+        const to = `/dashboard/quotes/${qq.id}`
+        const label = `${qq.quote_number || 'Quote'} · ${qq.customer_name || 'Customer'}`
+        const sub = [qq.service_type, qq.total != null ? formatCurrency(Number(qq.total)) : null, qq.status].filter(Boolean).join(' · ') || undefined
+        return { id: `q-${qq.id}`, label, sub, icon: FileText, run: () => { pushRecent({ to, label, sub, kind: 'quote' }); go(to) } }
+      }) })
 
       const iRows = (inv.data as { id: string; invoice_number: string | null; customer_name: string | null; amount: number | null; status: string }[]) || []
-      if (iRows.length) sections.push({ title: 'Invoices', items: iRows.map(ii => ({
-        id: `i-${ii.id}`, label: `${ii.invoice_number || 'Invoice'} · ${ii.customer_name || 'Customer'}`,
-        sub: [ii.amount != null ? formatCurrency(Number(ii.amount)) : null, ii.status].filter(Boolean).join(' · ') || undefined,
+      if (iRows.length) sections.push({ title: 'Invoices', items: iRows.map(ii => {
         // Land on the invoice, the same way Payments does above. Finding INV-0042 and
         // then being dropped on the unfiltered list — which has no search box — meant
         // the palette could find a record and then lose it again. The `?invoice=` focus
         // seam already existed (invoices/page.tsx reads it and shows a "Showing…" banner);
         // only this link never used it.
-        icon: Receipt,
-        run: () => go(ii.invoice_number
+        const to = ii.invoice_number
           ? `/dashboard/invoices?invoice=${encodeURIComponent(ii.invoice_number)}`
-          : '/dashboard/invoices'),
-      })) })
+          : '/dashboard/invoices'
+        const label = `${ii.invoice_number || 'Invoice'} · ${ii.customer_name || 'Customer'}`
+        const sub = [ii.amount != null ? formatCurrency(Number(ii.amount)) : null, ii.status].filter(Boolean).join(' · ') || undefined
+        return { id: `i-${ii.id}`, label, sub, icon: Receipt, run: () => { pushRecent({ to, label, sub, kind: 'invoice' }); go(to) } }
+      }) })
 
       const jRows = (job.data as { id: string; title: string | null; service_type: string | null; scheduled_date: string | null; status: string }[]) || []
       if (jRows.length) sections.push({ title: 'Jobs', items: jRows.map(j => ({
