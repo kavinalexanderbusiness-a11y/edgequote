@@ -41,10 +41,13 @@ npm install
 npm run dev          # Next.js app
 npm run typecheck    # tsc --noEmit
 npm run build        # production build
-npm run verify:<x>   # deterministic engine harnesses (pricing, labor, accounting, …)
+npm run verify       # every deterministic engine harness in one shot (aggregated exit code)
+npm run verify:<x>   # one harness (pricing, labor, accounting, …)
 ```
 
-Verify suites are the contract: check **exit codes**, not checkmark counts.
+Verify suites are the contract: check **exit codes**, not checkmark counts — which
+is exactly what `npm run verify` does across the whole set, and it fails fast if the
+set has drifted (a `verify-*.ts` with no npm script, or vice versa).
 `supabase/RUN-*.sql` files are the record of applied production migrations —
 committed, never re-run out of order.
 
