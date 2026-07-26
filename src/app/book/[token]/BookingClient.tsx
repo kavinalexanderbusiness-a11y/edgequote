@@ -339,7 +339,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
         {/* STEP: address */}
         {step === 'address' && (
           <Section title="Where's your lawn?" sub="Enter your address to get an instant price.">
-            <AddressAutocomplete label="Property address" value={addressText} onChange={setAddressText}
+            <AddressAutocomplete label="Property address" value={addressText} onChange={setAddressText} bookingToken={token}
               onSelect={p => { setParsed(p); setAddressText(p.formatted); setAutoResult(undefined); setShowTracer(false); setSqft(0) }} placeholder="Start typing your address…" />
             <Button size="lg" className="w-full mt-4" disabled={!parsed?.lat} onClick={() => setStep('measure')}>
               Continue <ArrowRight className="w-4 h-4" />

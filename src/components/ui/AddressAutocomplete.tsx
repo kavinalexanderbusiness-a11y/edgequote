@@ -2,7 +2,6 @@
 
 import { useEffect, useId, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
-import { loadGoogleMaps } from '@/lib/googleMaps'
 import { MapPin } from 'lucide-react'
 
 export interface ParsedAddress {
@@ -24,19 +23,26 @@ interface AddressAutocompleteProps {
   error?: string
   /** ReactNode to match Input/Select — the form primitives take the same shapes. */
   hint?: React.ReactNode
+  /** Public /book/[token] funnel only: the owner's booking_token, which authorizes
+   *  the Places proxy for an unauthenticated visitor. Dashboard callers omit it —
+   *  their cookie session is the credential. */
+  bookingToken?: string
 }
 
 interface SuggestionItem {
   text: string
-  placePrediction: any
+  placeId: string
+}
+
+function newSession(): string {
+  try { return crypto.randomUUID() } catch { return Math.random().toString(36).slice(2) + Date.now().toString(36) }
 }
 
 export function AddressAutocomplete({
-  label, value, onChange, onSelect, placeholder, error, hint,
+  label, value, onChange, onSelect, placeholder, error, hint, bookingToken,
 }: AddressAutocompleteProps) {
   const [suggestions, setSuggestions] = useState<SuggestionItem[]>([])
   const [open, setOpen] = useState(false)
-  const [ready, setReady] = useState(false)
   const [loadError, setLoadError] = useState(false)
   // Highlighted suggestion for keyboard users. This control USED to be
   // mouse-only: no arrow-key movement and no Enter-to-select, so a keyboard or
@@ -45,8 +51,11 @@ export function AddressAutocomplete({
   // matching the pattern CustomerPicker/PropertySelect already use.
   const [hi, setHi] = useState(0)
 
-  const placesRef = useRef<any>(null)
-  const tokenRef = useRef<any>(null)
+  // One Places session token spans a type→select round trip (Google bills it as a
+  // single session), then rotates once a selection resolves its details.
+  const sessionRef = useRef<string | null>(null)
+  // Guards against a slow earlier request overwriting a newer keystroke's results.
+  const seqRef = useRef(0)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
 
@@ -57,20 +66,6 @@ export function AddressAutocomplete({
   const baseId = useId()
   const listId = `${baseId}-listbox`
   const optId = (i: number) => `${baseId}-opt-${i}`
-
-  useEffect(() => {
-    let cancelled = false
-    loadGoogleMaps()
-      .then(async () => {
-        const places = await window.google.maps.importLibrary('places')
-        if (cancelled) return
-        placesRef.current = places
-        tokenRef.current = new places.AutocompleteSessionToken()
-        setReady(true)
-      })
-      .catch(() => { if (!cancelled) setLoadError(true) })
-    return () => { cancelled = true }
-  }, [])
 
   // Escape is CAPTURED while suggestions are open — same fix as PropertySelect:
   // inside a Modal, the bubble-phase Escape raced the Modal's listener, so
@@ -93,28 +88,32 @@ export function AddressAutocomplete({
 
   function handleInput(v: string) {
     onChange(v)
-    if (!ready || !placesRef.current) return
     if (debounceRef.current) clearTimeout(debounceRef.current)
     if (!v || v.trim().length < 3) { setSuggestions([]); setOpen(false); return }
+    if (!sessionRef.current) sessionRef.current = newSession()
+    const seq = ++seqRef.current
     debounceRef.current = setTimeout(async () => {
       try {
-        const { AutocompleteSuggestion } = placesRef.current
-        const { suggestions: list } = await AutocompleteSuggestion.fetchAutocompleteSuggestions({
-          input: v,
-          sessionToken: tokenRef.current,
-          includedRegionCodes: ['ca'],
+        const res = await fetch('/api/places/autocomplete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ input: v, sessionToken: sessionRef.current, bookingToken }),
         })
+        if (seq !== seqRef.current) return // a newer keystroke has already superseded this
+        if (!res.ok) {
+          setSuggestions([]); setOpen(false)
+          if (res.status >= 500) setLoadError(true) // real misconfig, not a miss
+          return
+        }
+        const { suggestions: list } = await res.json()
         const mapped: SuggestionItem[] = (list || [])
-          .filter((s: any) => s.placePrediction)
-          .map((s: any) => ({
-            text: s.placePrediction?.text?.text || '',
-            placePrediction: s.placePrediction,
-          }))
+          .map((s: any) => ({ text: s.text || '', placeId: s.placeId || '' }))
+          .filter((s: SuggestionItem) => s.text && s.placeId)
         setSuggestions(mapped)
         setOpen(mapped.length > 0)
         setHi(0) // reset the highlight to the top on every fresh result set
       } catch {
-        setSuggestions([]); setOpen(false)
+        if (seq === seqRef.current) { setSuggestions([]); setOpen(false) }
       }
     }, 250)
   }
@@ -138,25 +137,25 @@ export function AddressAutocomplete({
     setOpen(false)
     onChange(s.text)
     try {
-      const place = s.placePrediction.toPlace()
-      await place.fetchFields({ fields: ['formattedAddress', 'addressComponents', 'location'] })
-      const comps: any[] = place.addressComponents || []
-      const get = (type: string) => comps.find(x => (x.types || []).includes(type)) || null
-      const streetNum = get('street_number')?.longText || ''
-      const route = get('route')?.longText || ''
-      const city = get('locality')?.longText || get('postal_town')?.longText || get('sublocality')?.longText || ''
-      const province = get('administrative_area_level_1')?.shortText || ''
-      const postal = get('postal_code')?.longText || ''
-      const street = [streetNum, route].filter(Boolean).join(' ')
-      const formatted = place.formattedAddress || s.text
-      const loc = place.location
-      const lat = loc ? (typeof loc.lat === 'function' ? loc.lat() : loc.lat) : null
-      const lng = loc ? (typeof loc.lng === 'function' ? loc.lng() : loc.lng) : null
-
-      onChange(street || formatted)
-      onSelect?.({ address: street || formatted, city, province, postal, formatted, lat, lng })
-
-      tokenRef.current = new placesRef.current.AutocompleteSessionToken()
+      const res = await fetch('/api/places/details', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ placeId: s.placeId, sessionToken: sessionRef.current, bookingToken }),
+      })
+      if (!res.ok) throw new Error('details')
+      const { place } = await res.json() as { place: ParsedAddress }
+      const street = place.address || place.formatted || s.text
+      onChange(street)
+      onSelect?.({
+        address: street,
+        city: place.city || '',
+        province: place.province || '',
+        postal: place.postal || '',
+        formatted: place.formatted || s.text,
+        lat: place.lat ?? null,
+        lng: place.lng ?? null,
+      })
+      sessionRef.current = newSession() // a resolved selection closes the billing session
     } catch {
       onSelect?.({ address: s.text, city: '', province: '', postal: '', formatted: s.text, lat: null, lng: null })
     }
