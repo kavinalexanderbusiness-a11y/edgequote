@@ -281,3 +281,23 @@ value once its threshold is met, so the null-check IS the honesty gate (§6, §1
 - [ ] A page with `loadBusinessMemory` → `null` renders exactly as it does today (no regression, no error).
 - [ ] Recording a payment / completing a job / sending a message refreshes the affected habit within the same session (invalidation wired).
 - [ ] No new table, no new column, no price field touched, no LLM-authored text.
+
+---
+
+## 13. Cross-spec coordination — both features land on `customers/[id]/page.tsx`
+
+This spec's profile panel and the **Structured Customer Requests** spec's per-customer
+Requests section modify the **same file**. If built in parallel, coordinate:
+
+- **Placement order.** Requests sit **above** the Memory panel: a pending request is
+  time-sensitive and actionable ("what they're asking for") and outranks the habit
+  summary, which is reference ("who they are"). Whichever ships second slots in below.
+- **Both are enrichment — neither blocks or errors the page.** The profile's core
+  (name, contact, history) renders first and stands alone; if `loadBusinessMemory`
+  returns `null` or there are no requests, that section is simply absent (§12).
+- **No shared loader to fork.** Memory reads `loadBusinessMemory` (tenant-wide,
+  `sessionStorage`-cached); Requests reads `service_requests` (already realtime-
+  subscribed on this page). Keep them independent — do **not** merge into one fetch
+  (that would fork two engines into a page-local loader, against §5.3 / no-sprawl).
+- **Merge touchpoint.** Expect one collision in this file; the second lane rebases and
+  adds its section — it never duplicates the page's existing data loads or subscriptions.
