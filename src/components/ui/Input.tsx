@@ -1,6 +1,7 @@
-import { InputHTMLAttributes, ReactNode, forwardRef, useId } from 'react'
+import { InputHTMLAttributes, ReactNode, forwardRef } from 'react'
 import { cn } from '@/lib/utils'
 import { fieldBorder } from './fieldStyles'
+import { useFieldIds } from './useFieldIds'
 
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string
@@ -15,14 +16,11 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 
 const Input = forwardRef<HTMLInputElement, InputProps>(
   ({ className, label, error, hint, id, fieldSize = 'md', ...props }, ref) => {
-    // Always-unique id (label-slugs collided when two fields shared a label,
-    // breaking label↔input association); an explicit `id` still wins.
-    const generatedId = useId()
-    const inputId = id ?? generatedId
-    // Tie the error/hint text to the field so a screen reader reads it on focus,
-    // and mark an errored field invalid — otherwise the message is visual-only.
-    const errorId = `${inputId}-error`
-    const hintId = `${inputId}-hint`
+    // Always-unique ids (label-slugs collided when two fields shared a label,
+    // breaking label↔input association); an explicit `id` still wins. The
+    // error/hint ids tie their text to the field so a screen reader reads it on
+    // focus — see the aria-describedby/aria-invalid wiring below.
+    const { id: inputId, errorId, hintId } = useFieldIds(id)
     return (
       <div className="flex flex-col gap-1.5">
         {label && (
