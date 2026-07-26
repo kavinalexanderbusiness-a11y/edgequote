@@ -139,10 +139,19 @@ export function summarize(r: ScheduledReport): ReportSummary {
       ? 'The books are empty — with no expenses recorded, the margin reads 100% only because nothing has been logged as spent. Log your costs and these figures start meaning something.'
       : null
 
+  // The accounting basis — the first thing a bookkeeper needs to read a P&L, and
+  // the one thing the emailed report never said. /dashboard/accounting/pnl badges
+  // "Cash basis" and the CSV export leads with "Cash basis: money that actually
+  // moved"; the email that gets forwarded to the accountant was the only rendering
+  // that left it unstated, so a cash-basis summary could be read as an accrual one.
+  // Declared once here and used in both the plain-text and the HTML/PDF headers.
+  const BASIS = 'Cash basis — revenue when collected, cost when paid'
+
   const subject = `${title}: ${period.label}`
   const text = [
     `${title} — ${period.label}`,
     `${period.from} to ${period.to}`,
+    BASIS,
     '',
     ...(warning ? [`⚠️ ${warning}`, ''] : []),
     ...lines.map(l => `${l.label}: ${l.value}${l.note ? `  (${l.note})` : ''}`),
@@ -154,7 +163,7 @@ export function summarize(r: ScheduledReport): ReportSummary {
 
   return {
     title,
-    subtitle: `${period.label} · ${period.from} to ${period.to}`,
+    subtitle: `${BASIS} · ${period.label} · ${period.from} to ${period.to}`,
     lines,
     warning,
     subject,
