@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { ButtonLink } from '@/components/ui/Button'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
@@ -187,10 +188,9 @@ export default function RoutesPage() {
               <div className="flex items-center gap-3">
                 <p className="text-xl font-bold text-accent-text tabular-nums">{formatCurrency(profit.revenue)}</p>
                 {route?.mapsUrl && (
-                  <a href={route.mapsUrl} target="_blank" rel="noopener noreferrer"
-                    className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-surface border border-border-strong text-ink hover:bg-surface-raised active:scale-[0.98] px-3.5 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                  <ButtonLink href={route.mapsUrl} external variant="secondary" size="sm">
                     <ExternalLink className="w-3.5 h-3.5" /> Open in Maps
-                  </a>
+                  </ButtonLink>
                 )}
               </div>
             </div>

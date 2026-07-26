@@ -13,7 +13,7 @@ import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { Modal } from '@/components/ui/Modal'
 import { CustomerPicker } from '@/components/ui/CustomerPicker'
 import type { Customer } from '@/types'
-import { Button } from '@/components/ui/Button'
+import { Button, ButtonLink } from '@/components/ui/Button'
 import { SearchInput } from '@/components/ui/SearchInput'
 import { Menu, type MenuItem } from '@/components/ui/Menu'
 import { FilterPill } from '@/components/ui/FilterPill'
@@ -710,15 +710,13 @@ export default function MessagesPage() {
                     : <Button size="sm" variant="ghost" onClick={() => actions.archive(sel)} title="Archive"><Archive className="w-3.5 h-3.5" /><span className="hidden sm:inline">Archive</span></Button>}
                   {/* One quote CTA: while the lead is open the LeadCard below carries Build quote. */}
                   {sel.lead_status !== 'new' && (
-                    <Link href={`/dashboard/quotes/new?customer=${sel.customer_id}`} title="New quote"
-                      className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-surface border border-border-strong text-ink hover:bg-surface-raised active:scale-[0.98] px-3.5 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                    <ButtonLink href={`/dashboard/quotes/new?customer=${sel.customer_id}`} title="New quote" variant="secondary" size="sm">
                       <FileText className="w-3.5 h-3.5" /><span className="hidden sm:inline">New quote</span>
-                    </Link>
+                    </ButtonLink>
                   )}
-                  <Link href={`/dashboard/customers/${sel.customer_id}`} title="Customer profile"
-                    className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 text-ink-muted hover:text-ink hover:bg-surface active:scale-[0.98] px-3.5 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                  <ButtonLink href={`/dashboard/customers/${sel.customer_id}`} title="Customer profile" variant="ghost" size="sm">
                     <User className="w-3.5 h-3.5" /><span className="hidden sm:inline">Profile</span>
-                  </Link>
+                  </ButtonLink>
                 </div>
               </div>
               {/* Website-lead context + Build Quote, shown only while the lead is open. */}

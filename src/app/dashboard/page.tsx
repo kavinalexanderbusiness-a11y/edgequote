@@ -1,3 +1,4 @@
+import { ButtonLink } from '@/components/ui/Button'
 import { WeekendOutlook } from '@/components/dashboard/WeekendOutlook'
 import { TodaysPriorities } from '@/components/dashboard/TodaysPriorities'
 import { SetupProgress } from '@/components/dashboard/SetupProgress'
@@ -68,10 +69,9 @@ export default async function DashboardPage() {
         title={d.greeting}
         description={headerFacts}
         action={
-          <Link href="/dashboard/quotes/new"
-            className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-accent text-black hover:bg-accent-hover active:scale-[0.98] shadow-sm px-4 py-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+          <ButtonLink href="/dashboard/quotes/new">
             <Plus className="w-4 h-4" /> New quote
-          </Link>
+          </ButtonLink>
         }
       />
 
