@@ -12,3 +12,8 @@ scripts/.repro.cjs
 
 .vercel
 .env*
+
+# Supabase CLI local state (linked project ref, service versions) — machine-specific
+supabase/.temp/
+# Local git worktrees used for parallel branch work
+.claude/worktrees/

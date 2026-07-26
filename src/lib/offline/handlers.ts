@@ -118,9 +118,9 @@ export function registerOfflineHandlers(): void {
   })
 
   // P5 — Jobs. The HANDLER lives here (shared), but the call sites live in the
-  // scheduler, which Session C owns. They only need to call
+  // scheduler. They only need to call
   // `queueOrRun({ kind:'job.update', payload:{ id, patch } }, run)` — no other import.
-  // See docs/OFFLINE_FOR_SESSION_C.md. We register it here so it's always available.
+  // We register it here so it's always available.
   registerHandler('job.update', async (payload) => {
     const p = payload as {
       id: string; patch: Record<string, unknown>; syncPrice?: boolean; syncReason?: string
