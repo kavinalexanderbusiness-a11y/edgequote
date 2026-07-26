@@ -41,6 +41,11 @@ export default function DataQualityPage() {
   const supabase = createClient()
   const [loading, setLoading] = useState(true)
   const [working, setWorking] = useState<string | null>(null)
+  // Live count for the sequential bulk repairs (geocode/name/link). A 40-property
+  // run over truck LTE is tens of seconds of silence otherwise — indistinguishable
+  // from a hang. `total` is fixed per run, so the sr-only status line announces once
+  // ("Locating 40 properties…") instead of chattering on every item.
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
   const [customers, setCustomers] = useState<Customer[]>([])
   const [quotes, setQuotes] = useState<QRow[]>([])
   const [jobs, setJobs] = useState<DQJob[]>([])
@@ -202,7 +207,7 @@ export default function DataQualityPage() {
   }
 
   async function fixAllProperties() {
-    setWorking('all-props')
+    setWorking('all-props'); setProgress({ done: 0, total: m.quotesNoProperty.length })
     try {
       const { data: { user } } = await supabase.auth.getUser()
       for (const q of m.quotesNoProperty) {
@@ -210,17 +215,20 @@ export default function DataQualityPage() {
           supabase, user!.id, { customerId: q.customer_id, name: q.customer_name, address: q.address }, customers,
         )
         await supabase.from('quotes').update({ property_id: ensured.propertyId }).eq('id', q.id)
+        setProgress(pr => pr ? { ...pr, done: pr.done + 1 } : pr)
       }
-      await load()
     } catch (e) { toast.error('Could not link properties: ' + (e instanceof Error ? e.message : 'error')) }
-    finally { setWorking(null) }
+    // Refresh in `finally`, not at the end of `try`: a mid-loop failure still shows
+    // the rows that DID get fixed instead of leaving them looking untouched, and a
+    // refresh error no longer masquerades as "could not link" when the writes worked.
+    finally { await load().catch(() => {}); setWorking(null); setProgress(null) }
   }
 
   // Backfill coordinates for every property with an address but no lat/lng.
   // Sequential — geocoding hits an external API (same throttle as fixAllProperties).
   // One call also resolves the real community name.
   async function geocodeAllProperties() {
-    setWorking('geo-all')
+    setWorking('geo-all'); setProgress({ done: 0, total: m.propsUngeocoded.length })
     try {
       for (const p of m.propsUngeocoded) {
         const c = await geocodeAddressDetailed(p.address)
@@ -229,24 +237,24 @@ export default function DataQualityPage() {
           if (c.neighborhood) patch.neighborhood = c.neighborhood
           await supabase.from('properties').update(patch).eq('id', p.id)
         }
+        setProgress(pr => pr ? { ...pr, done: pr.done + 1 } : pr)
       }
-      await load()
     } catch (e) { toast.error('Could not geocode properties: ' + (e instanceof Error ? e.message : 'error')) }
-    finally { setWorking(null) }
+    finally { await load().catch(() => {}); setWorking(null); setProgress(null) }
   }
 
   // Resolve real community names ("Queensland", not "T2J") for located properties.
   // Stored once on the property — every neighborhood surface reads it from there.
   async function nameAllNeighborhoods() {
-    setWorking('name-all')
+    setWorking('name-all'); setProgress({ done: 0, total: m.propsUnnamed.length })
     try {
       for (const p of m.propsUnnamed) {
         const name = await reverseNeighborhood(p.lat as number, p.lng as number)
         if (name) await supabase.from('properties').update({ neighborhood: name }).eq('id', p.id)
+        setProgress(pr => pr ? { ...pr, done: pr.done + 1 } : pr)
       }
-      await load()
     } catch (e) { toast.error('Could not resolve neighborhoods: ' + (e instanceof Error ? e.message : 'error')) }
-    finally { setWorking(null) }
+    finally { await load().catch(() => {}); setWorking(null); setProgress(null) }
   }
 
   async function repairJobCustomer(j: DQJob) {
@@ -281,6 +289,15 @@ export default function DataQualityPage() {
   return (
     <PageContainer>
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Data Quality" description="Make the data clean and trustworthy before growth features rely on it." />
+      {/* Always mounted so a screen reader announces the CHANGE; the text keys on the
+          fixed `total`, so a 40-item run announces once at the start, not per item. */}
+      <span className="sr-only" role="status" aria-live="polite">
+        {progress
+          ? working === 'geo-all' ? `Locating ${progress.total} properties. This may take a moment.`
+            : working === 'name-all' ? `Naming neighbourhoods for ${progress.total} properties. This may take a moment.`
+            : `Linking ${progress.total} quotes to their properties. This may take a moment.`
+          : ''}
+      </span>
 
       {/* Score hero */}
       <Card>
@@ -353,7 +370,7 @@ export default function DataQualityPage() {
           subtitle="These have a customer but no property record — needed for the map, routes and saturation."
           action={
             <Button size="sm" loading={working === 'all-props'} onClick={fixAllProperties}>
-              <Home className="w-3.5 h-3.5" /> Link all {m.quotesNoProperty.length}
+              <Home className="w-3.5 h-3.5" /> {working === 'all-props' && progress ? `Linking ${progress.done} of ${progress.total}` : `Link all ${m.quotesNoProperty.length}`}
             </Button>
           }>
           {m.quotesNoProperty.map((q, i) => (
@@ -376,7 +393,7 @@ export default function DataQualityPage() {
           subtitle="No map coordinates — these vanish from routes, best-day suggestions and the saturation map."
           action={
             <Button size="sm" loading={working === 'geo-all'} onClick={geocodeAllProperties}>
-              <MapPin className="w-3.5 h-3.5" /> Locate all {m.propsUngeocoded.length}
+              <MapPin className="w-3.5 h-3.5" /> {working === 'geo-all' && progress ? `Locating ${progress.done} of ${progress.total}` : `Locate all ${m.propsUngeocoded.length}`}
             </Button>
           }>
           {m.propsUngeocoded.slice(0, 40).map((p, i) => (
@@ -396,7 +413,7 @@ export default function DataQualityPage() {
           subtitle="Resolve real community names so the map and rankings say “Queensland”, not “T2J”."
           action={
             <Button size="sm" loading={working === 'name-all'} onClick={nameAllNeighborhoods}>
-              <MapPin className="w-3.5 h-3.5" /> Name all {m.propsUnnamed.length}
+              <MapPin className="w-3.5 h-3.5" /> {working === 'name-all' && progress ? `Naming ${progress.done} of ${progress.total}` : `Name all ${m.propsUnnamed.length}`}
             </Button>
           }>
           {m.propsUnnamed.slice(0, 40).map((p, i) => (

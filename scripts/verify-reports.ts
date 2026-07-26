@@ -203,6 +203,19 @@ console.log('\nThe tax figure is named "GST", matching every other surface (not 
   check('...and never a "Sales tax" line', !s.lines.some(l => l.label.toLowerCase().includes('sales tax')))
 }
 
+console.log('\nThe net cash line is named "Net movement", matching the cash-flow page and CSV:')
+{
+  // flow.net is "Net movement" on the cash-flow page and "NET MOVEMENT" in the
+  // accounting CSV export. The emailed report was the only surface calling it
+  // "Bank movement" — a term used nowhere else. One name across all three.
+  const s = summarize(composeReport('daily', TODAY, {
+    payments: [pay({ amount: 300, paid_at: '2026-07-15' })],
+    expenses: [exp({ amount: 50, spent_at: '2026-07-15' })], settings: NOT_REGISTERED,
+  }, { closed: true }))
+  check('the report has a "Net movement" line', s.lines.some(l => l.label === 'Net movement'))
+  check('...and no "Bank movement" line', !s.lines.some(l => l.label === 'Bank movement'))
+}
+
 console.log('\nThe report explains the cost BASIS exactly as /dashboard/accounting/pnl does:')
 {
   // Rule 1: a non-registrant can't reclaim the GST it pays suppliers, so its cost
