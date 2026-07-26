@@ -33,8 +33,8 @@ export interface PortalActions {
   markInvoiceViewed: (invoiceId: string) => void
   /** Re-fetch get_portal_data (post card-change / autopay truth-refresh). */
   refresh: () => Promise<unknown>
-  /** Cross-tab navigation, with optional Billing pre-filter / property focus. */
-  navigate: (tab: TabKey, opts?: { docsCat?: 'all' | 'quote' | 'invoice'; propertyKey?: string }) => void
+  /** Cross-tab navigation, with optional Billing pre-filter and a doc to scroll to. */
+  navigate: (tab: TabKey, opts?: { docsCat?: 'all' | 'quote' | 'invoice'; focusDocId?: string | null }) => void
   /** Open Messages with the composer pre-filled (a contextual "ask about this"). */
   askAbout: (prefill: string) => void
 }

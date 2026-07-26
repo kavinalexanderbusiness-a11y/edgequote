@@ -270,12 +270,15 @@ export function CommandPalette() {
 
       // Supabase types the joined `customers` row as object-or-array depending on
       // the relationship inference — normalise to a single name either way.
-      const mRows = (msg.data as unknown as { id: string; body: string | null; customers: { name: string | null } | { name: string | null }[] | null }[]) || []
+      const mRows = (msg.data as unknown as { id: string; customer_id: string | null; body: string | null; customers: { name: string | null } | { name: string | null }[] | null }[]) || []
       if (mRows.length) sections.push({ title: 'Messages', items: mRows.map(m => {
         const cname = Array.isArray(m.customers) ? m.customers[0]?.name : m.customers?.name
         return {
           id: `m-${m.id}`, label: cname || 'Conversation', sub: (m.body || '').slice(0, 70) || undefined,
-          icon: MessageSquare, run: () => go('/dashboard/messages'),
+          // Land IN the conversation, not on the bare inbox — the ?c= deep link the
+          // inbox already resolves (messages/page.tsx reads params.get('c')). Mirrors
+          // the properties result above; without it, finding a message loses it again.
+          icon: MessageSquare, run: () => go(m.customer_id ? `/dashboard/messages?c=${m.customer_id}` : '/dashboard/messages'),
         }
       }) })
 

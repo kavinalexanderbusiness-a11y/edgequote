@@ -235,3 +235,49 @@ sequenceDiagram
 **Cross-cutting**
 - [ ] Add a pure-function assertion harness over `deriveCustomerHabits` (unknown → null; one data point ≠ a median; caps hold).
 - [ ] Sanity-check a few real customers' derived habits vs. owner knowledge before wide enablement.
+
+---
+
+## 11. Field-rendering contract (so two engineers render habits identically)
+
+Each `CustomerHabits` field renders the **same way on every surface**. `null` ⇒ the
+fact is **absent from the UI** (no row, no "—", no 0) — the engine only returns a
+value once its threshold is met, so the null-check IS the honesty gate (§6, §10).
+
+| Field | Label | Format | Hide when | Surfaces |
+|---|---|---|---|---|
+| `preferredChannel` | "Replies by {channel}" | text/email/portal | `null` (needs ≥2 inbound) | profile, list marker, (gated) composer default |
+| `medianResponseMin` | "Responds in ~{n} min / ~{h} h" | min if ≤60 else hours | `null` (needs ≥2 gaps) | profile |
+| `medianDaysToPay` | "Pays fast (~{n} d)" / "Pays in ~{n} days" | ≤2 d ⇒ "fast" | `null` (no paid invoices) | profile, list marker |
+| `favoriteServices[]` | "Usually books {label}" | top item, `serviceLabel(key)` | empty (needs ≥2 of a service) | profile, quote context |
+| `typicalStartTime` | "Visits usually start ~{HH:MM}" | `HH:MM` | `null` (needs ≥2 completed) | profile, quote context |
+| `repeatCustomer` | "Repeat customer" badge | boolean | `false` (needs ≥3 completed) | profile, list marker |
+| `cancelledJobs` | "{n} cancellations on record" | integer | `< 2` | profile only (never a customer-facing surface) |
+| `reasons[]` | the "why" on tap | verbatim engine string | never fabricate | every rendered fact |
+
+**Rules that keep it consistent:**
+- Render from `reasons[]` where a phrase exists — do **not** re-phrase the fact in
+  the component (the engine owns the wording, so profile and list can't diverge).
+- Order on the profile panel: communication → money → work (matches the engine's
+  own `reasons[]` build order).
+- Design-system per vision §5.8: `StatTile`/chip primitives, `tabular-nums` for the
+  numbers, quiet confidence styling, skeleton (not spinner) while `loadBusinessMemory`
+  resolves. No new primitive.
+
+## 12. Edge cases & acceptance criteria
+
+**Edge cases (handle identically everywhere):**
+- `loadBusinessMemory` returns `null` (not signed in / all loads failed) ⇒ the panel
+  and markers are **absent**, never an error state — memory is enrichment, it never
+  blocks a page.
+- Customer with no derived habits (new customer) ⇒ panel absent, or a single calm
+  line "We'll learn {name}'s habits as you work" — never an empty metric grid.
+- Stale after a mutation ⇒ acceptable until TTL **unless** the mutation is a habit
+  input, in which case `invalidateBusinessMemory()` must have been called (see §8.1).
+
+**Acceptance criteria (the feature is "done" when):**
+- [ ] Every field renders per §11; no `null` field ever paints a value.
+- [ ] Each shown fact reveals its `reasons[]` on tap.
+- [ ] A page with `loadBusinessMemory` → `null` renders exactly as it does today (no regression, no error).
+- [ ] Recording a payment / completing a job / sending a message refreshes the affected habit within the same session (invalidation wired).
+- [ ] No new table, no new column, no price field touched, no LLM-authored text.

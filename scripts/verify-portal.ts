@@ -12,7 +12,7 @@ import {
   quoteJourney, moneySummary, buildPropertyModels, customerSinceYear,
   requestPresetsOf, resolveDocAddress, groupPhotos, orphanPhotos, liveStatusOf, visitDay,
   daysAwayLabel, parsePortalDeepLink, tabNavTarget, buildVisitICS, visitToCalendarEvent,
-  messageAboutDoc, NO_PROPERTY, MAX_REQUEST_PRESETS,
+  messageAboutDoc, primaryPortalAction, NO_PROPERTY, MAX_REQUEST_PRESETS,
   type PortalData, type PortalJob, type PortalProperty, type DocBlobRenderers,
 } from '../src/app/portal/[token]/model'
 
@@ -289,6 +289,35 @@ console.log('\nmessageAboutDoc (the owner must know WHICH document):')
   check('exact shape', p === 'About invoice INV-2088 (Lawn Mowing): ')
   check('no title → number only, still ends ready to type', messageAboutDoc('Quote', 'Q-14') === 'About quote Q-14: ')
   check('blank title is dropped, not rendered as ()', messageAboutDoc('Quote', 'Q-14', '   ') === 'About quote Q-14: ')
+}
+
+// ── primaryPortalAction (your next thing, surfaced from any tab) ─────────────
+console.log('\nprimaryPortalAction (honest priority; never nags about nothing):')
+{
+  const props = FULL.properties!
+  const B = FULL.business
+  // Run the REAL engines the banner uses, so the test catches an integration drift.
+  const act = (invoices: typeof FULL.invoices, quotes: typeof FULL.quotes = []) =>
+    primaryPortalAction(buildDocItems({ quotes, invoices, properties: props, business: B, todayISO: TODAY, renderers }), moneySummary(invoices, B))
+  const iDue = FULL.invoices.find(i => i.id === 'i-due')!    // unpaid, due 2026-07-26 (future) → due, not overdue
+  const iLate = FULL.invoices.find(i => i.id === 'i-late')!  // partial, due 2026-07-01 (past) → overdue
+  const iDraft = FULL.invoices.find(i => i.id === 'i-draft')!
+  const iPaid = FULL.invoices.find(i => i.id === 'i-paid')!
+  const qSent = FULL.quotes.find(q => q.id === 'q-sent')!
+
+  const overdue = act([iLate])
+  check('overdue invoice → pay, "Past due" headline', overdue?.kind === 'pay' && overdue.headline.startsWith('Past due:'))
+  check('single owing invoice → focus that invoice', overdue?.focusDocId === 'i-late')
+  check('due-not-overdue → pay, "Balance due" headline', act([iDue])?.headline.startsWith('Balance due:') === true)
+  check('overdue outranks a waiting quote', act([iLate], [qSent])?.headline.startsWith('Past due:') === true)
+  check('a balance outranks a waiting quote', act([iDue], [qSent])?.kind === 'pay')
+  const quoteOnly = act([], [qSent])
+  check('only a quote waiting → approve, focus the quote', quoteOnly?.kind === 'approve' && quoteOnly.docsCat === 'quote' && quoteOnly.focusDocId === 'q-sent')
+  check('several owing → land on the list, no single focus', act([iDue, iLate])?.focusDocId === null)
+  check('all paid, nothing waiting → null (banner never renders)', act([iPaid]) === null)
+  check('a draft invoice is never "owing"', act([iDraft]) === null)
+  check('key is stable for identical input (a dismissal sticks)', act([iLate])?.key === act([iLate])?.key)
+  check('key changes when the situation does (banner returns for the new thing)', act([iLate])?.key !== act([], [qSent])?.key)
 }
 
 console.log(`\n${fail === 0 ? '✓' : '✗'} portal checks: ${pass} passed, ${fail} failed`)
