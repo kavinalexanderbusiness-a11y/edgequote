@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { PageContainer } from '@/components/layout/PageContainer'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { loadBusinessIntelligence, BIReport, NamedValue, WeekdayStat, YearComparison } from '@/lib/businessIntelligence'
@@ -77,19 +78,19 @@ export default function IntelligencePage() {
 
   if (loading && !bi) {
     return (
-      <div className="max-w-6xl mx-auto space-y-6">
+      <PageContainer width="wide">
         <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" description="How your business is performing — and where to focus next." />
         <SkeletonTiles count={4} />
         <Skeleton className="h-32 w-full rounded-card" />
         <div className="grid md:grid-cols-3 gap-3">{[0, 1, 2].map(i => <Skeleton key={i} className="h-40 rounded-card" />)}</div>
         <SkeletonTiles count={4} />
-      </div>
+      </PageContainer>
     )
   }
   if (!bi) return null
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
+    <PageContainer width="wide">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" description={`How your business is performing — and where to focus. As of ${bi.generatedFor}.`} />
 
       {/* Every section below is a workspace widget: arrangeable and hideable, but
@@ -457,7 +458,7 @@ export default function IntelligencePage() {
         )}
       </Section>
       </AnalyticsWorkspace>
-    </div>
+    </PageContainer>
   )
 }
 

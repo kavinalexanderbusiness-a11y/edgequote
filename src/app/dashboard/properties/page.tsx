@@ -1,5 +1,6 @@
 'use client'
 import { toast } from '@/lib/toast'
+import { PageContainer } from '@/components/layout/PageContainer'
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
@@ -263,7 +264,7 @@ export default function PropertiesPage() {
     : properties
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <PageContainer>
       <PageHeader
         title="Properties"
         description={`${properties.length} propert${properties.length !== 1 ? 'ies' : 'y'} on file${properties.length > 0 ? ' — created automatically from customers and quotes' : ''}`}
@@ -685,7 +686,7 @@ export default function PropertiesPage() {
           ))}
         </div>
       )}
-    </div>
+    </PageContainer>
   )
 }
 

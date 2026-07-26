@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { PageContainer } from '@/components/layout/PageContainer'
 import { createClient } from '@/lib/supabase/client'
 import { measurementStats, MeasureStats } from '@/lib/autoMeasure'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -31,7 +32,7 @@ export default function MeasurementsPage() {
   const hoods = (stats?.byNeighborhood || []).length
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
+    <PageContainer width="wide">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Measurement Accuracy" description="How well auto-measure performs — and how it's learning your neighborhoods. Each property's own measurements live on its card in Properties." />
 
       {loading ? (
@@ -88,7 +89,7 @@ export default function MeasurementsPage() {
           </div>
         </>
       )}
-    </div>
+    </PageContainer>
   )
 }
 

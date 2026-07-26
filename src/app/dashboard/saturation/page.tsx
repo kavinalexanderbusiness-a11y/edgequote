@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { PageContainer } from '@/components/layout/PageContainer'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { loadAnalyticsCore } from '@/lib/analyticsData'
@@ -272,16 +273,16 @@ export default function SaturationPage() {
   }, [jobs, properties, quotes, customersById, ctx])
 
   if (loading) return (
-    <div className="max-w-6xl mx-auto space-y-6">
+    <PageContainer width="wide">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Saturation Map" description="Where your customers, revenue and routes concentrate — and where to grow next." />
       <SkeletonTiles count={4} />
-    </div>
+    </PageContainer>
   )
 
   const m = model
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
+    <PageContainer width="wide">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Saturation Map" description="Where your customers, revenue and routes concentrate — and where to grow next." />
 
       {loadError && (
@@ -421,7 +422,7 @@ export default function SaturationPage() {
       <p className="text-xs text-ink-faint">
         Neighborhood = postal area (FSA), valued by the same engines as <Link href="/dashboard/profitability" className="text-accent-text hover:underline">Profitability</Link> and <Link href="/dashboard/routes" className="text-accent-text hover:underline">Routes</Link>. Area $/hr excludes drive time, so area grades cap at C — day grades on Profitability include driving.
       </p>
-    </div>
+    </PageContainer>
   )
 }
 

@@ -1,5 +1,6 @@
 'use client'
 import { toast } from '@/lib/toast'
+import { PageContainer } from '@/components/layout/PageContainer'
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import Link from 'next/link'
@@ -269,16 +270,16 @@ export default function DataQualityPage() {
   }
 
   if (loading) return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <PageContainer>
       <PageHeader title="Data Quality" description="Make the data clean and trustworthy before growth features rely on it" />
       <SkeletonTiles count={4} />
-    </div>
+    </PageContainer>
   )
 
   const allClean = m.quotesNoCustomer.length === 0 && m.quotesNoProperty.length === 0 && m.jobsNoCustomer.length === 0 && m.jobsNoPrice === 0 && m.jobsNoQuote === 0 && m.propsUngeocoded.length === 0 && m.propsUnnamed.length === 0
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <PageContainer>
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Data Quality" description="Make the data clean and trustworthy before growth features rely on it." />
 
       {/* Score hero */}
@@ -510,7 +511,7 @@ export default function DataQualityPage() {
       ) : (
         <Banner tone="warn" icon={AlertTriangle}>{m.propsNoCustomer} propert{m.propsNoCustomer !== 1 ? 'ies have' : 'y has'} no customer.</Banner>
       )}
-    </div>
+    </PageContainer>
   )
 }
 

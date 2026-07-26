@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { PageContainer } from '@/components/layout/PageContainer'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Customer } from '@/types'
@@ -226,16 +227,16 @@ export default function ReactivationPage() {
 
   if (loading) {
     return (
-      <div className="max-w-5xl mx-auto space-y-6">
+      <PageContainer>
         <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Customer Reactivation" description="Win back customers you already paid to acquire." />
         <SkeletonTiles count={4} />
         <Card className="p-5"><Skeleton className="h-4 w-48" /><Skeleton className="h-3 w-72 mt-2.5" /></Card>
-      </div>
+      </PageContainer>
     )
   }
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <PageContainer>
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Customer Reactivation" description="Win back customers you already paid to acquire." />
 
       {/* Headline metrics */}
@@ -279,7 +280,7 @@ export default function ReactivationPage() {
           </div>
         )
       })}
-    </div>
+    </PageContainer>
   )
 }
 

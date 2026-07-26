@@ -261,13 +261,17 @@ the loop (§1).*
 
 ## 12. Six-month roadmap — *ship a trustworthy, buyable 1.0; build the demo that survives October*
 
-- **Wave 0 — Infrastructure (first, isolated).** Crons on (INF-1); canonical SQL
-  reconciled (INF-2, done). Unblocks the automated layer, defuses the portal
-  landmine.
+- **Wave 0 — Infrastructure (first, isolated).** Crons on (INF-1 — cadence
+  reconciled; `CRON_SECRET` is the one remaining owner action); canonical SQL
+  reconciliation (INF-2 — work pushed, **not yet merged**). Unblocks the automated
+  layer, defuses the portal landmine.
 - **Wave 1 — Launch blockers (parallel, disjoint sessions).** PAY-1, SCH-1, BK-1,
   MSG-1, RPT-1 + PERF-1. The quote critical path (MEAS-1 → PR-1 → QL-1 → QL-2)
-  runs as **one serialized session** (all touch QuoteBuilder). *(MEAS-1 merged;
-  PR-1/QL-1/QL-2 pushed, awaiting merge.)*
+  runs as **one serialized session** (all touch QuoteBuilder). *(Status as of
+  2026-07-21: **11 of 13 blockers merged** — MEAS-1 (PR #36), PR-1/QL-1/QL-2
+  (PR #37), and PAY-1/SCH-1/BK-1/MSG-1/RPT-1/PERF-1 all landed. Remaining:
+  INF-1's `CRON_SECRET` and OWN-1 self-serve signup, both owner actions.
+  `LAUNCH-ROADMAP.md` is the live status of record.)*
 - **Wave 2 — Pricing V2, sensors before brain.** Phase 0 (closed) → Phase 1 cost
   truth ($25 = wage, components not scalar) → Phase 2 canonical engine + real
   travel, validated by the differential harness (every price diff must map to a

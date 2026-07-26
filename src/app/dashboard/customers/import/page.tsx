@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { PageContainer } from '@/components/layout/PageContainer'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
@@ -132,7 +133,7 @@ export default function ImportCustomersPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <PageContainer width="narrow">
       {/* Hidden in the success state — the done card renders its own "Back to customers" CTA. */}
       {done == null && (
         <Link href="/dashboard/customers" className="text-sm text-ink-muted hover:text-ink flex items-center gap-1.5"><ArrowLeft className="w-4 h-4" /> Back to customers</Link>
@@ -205,6 +206,6 @@ export default function ImportCustomersPage() {
           )}
         </>
       )}
-    </div>
+    </PageContainer>
   )
 }

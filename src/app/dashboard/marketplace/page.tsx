@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
+import { PageContainer } from '@/components/layout/PageContainer'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { FilterPill } from '@/components/ui/FilterPill'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -37,7 +38,7 @@ export default function MarketplacePage() {
   const detail: FeatureModule | null = all.find(m => m.key === openKey) ?? null
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <PageContainer>
       <PageHeader title="Marketplace"
         description="Compose your EdgeQuote — every module is built in, free, and safe to try: removing one never touches your data." />
 
@@ -123,6 +124,6 @@ export default function MarketplacePage() {
       </section>
 
       <ModuleDetails m={detail} open={openKey !== null} onClose={() => setOpenKey(null)} />
-    </div>
+    </PageContainer>
   )
 }

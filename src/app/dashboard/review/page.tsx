@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { PageContainer } from '@/components/layout/PageContainer'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { loadTravelModel } from '@/lib/travelLearning'
@@ -152,18 +153,18 @@ export default function WeeklyReviewPage() {
   // nothing jumps when the numbers arrive.
   if (loading) {
     return (
-      <div className="max-w-5xl mx-auto space-y-6">
+      <PageContainer>
         <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }}
           title="Weekly Review"
           description="How the week went, and next week's moves." />
         <SkeletonTiles count={3} className="grid-cols-3 lg:grid-cols-3" />
         <SkeletonTiles count={2} className="grid-cols-1 sm:grid-cols-2 lg:grid-cols-2" />
-      </div>
+      </PageContainer>
     )
   }
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <PageContainer>
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }}
         title="Weekly Review"
         description={`${formatDate(m.weekStart)} – ${formatDate(m.today)} · how the week went, and next week's moves`}
@@ -246,7 +247,7 @@ export default function WeeklyReviewPage() {
           </div>
         </CardBody>
       </Card>
-    </div>
+    </PageContainer>
   )
 }
 

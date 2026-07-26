@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { PageContainer } from '@/components/layout/PageContainer'
 import { format } from 'date-fns'
 import {
   Bot, Radar, ListChecks, Activity, AlertTriangle, Stethoscope, Gauge,
@@ -370,16 +371,16 @@ export default function AutomationPage() {
 
   if (loading) {
     return (
-      <div className="max-w-5xl mx-auto space-y-6">
+      <PageContainer>
         <PageHeader title="Automation Center" description="What the automation engine saw, decided and did — and why it stayed quiet." />
         <SkeletonTiles count={5} />
         <SkeletonRows count={6} />
-      </div>
+      </PageContainer>
     )
   }
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <PageContainer>
       <PageHeader
         title="Automation Center"
         description="What the automation engine saw, decided and did — and why it stayed quiet."
@@ -823,7 +824,7 @@ export default function AutomationPage() {
           </Card>
         </div>
       )}
-    </div>
+    </PageContainer>
   )
 }
 

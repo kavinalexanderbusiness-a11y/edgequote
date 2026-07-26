@@ -1,6 +1,7 @@
 'use client'
 
 import { SkeletonRows } from '@/components/ui/Skeleton'
+import { PageContainer } from '@/components/layout/PageContainer'
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Property } from '@/types'
@@ -57,7 +58,7 @@ export default function MeasurePage() {
   )
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <PageContainer>
       {/* Breadcrumb instead of history-back: this page is deep-linked from
           Customers, Data Quality and the command palette, where back() would
           leave the app or bounce somewhere unhelpful. */}
@@ -82,6 +83,6 @@ export default function MeasurePage() {
 
       {mode === 'quote' && <MeasureTool property={property} context={mode} />}
       <PropertyMeasurementHistory key={refreshKey} propertyId={property.id} />
-    </div>
+    </PageContainer>
   )
 }

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState, useCallback } from 'react'
+import { PageContainer } from '@/components/layout/PageContainer'
 import { createClient } from '@/lib/supabase/client'
 import { ButtonLink } from '@/components/ui/Button'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -141,7 +142,7 @@ export default function RoutesPage() {
   const tips = improvementSuggestions(profit)
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <PageContainer>
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }}
         title="Route Analysis"
         description="Visualize and analyze a day's route — distance, density, and profit per hour."
@@ -302,7 +303,7 @@ export default function RoutesPage() {
           )}
         </div>
       )}
-    </div>
+    </PageContainer>
   )
 }
 

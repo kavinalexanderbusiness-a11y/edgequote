@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { PageContainer } from '@/components/layout/PageContainer'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card } from '@/components/ui/Card'
 import { SuggestionsCenter } from '@/components/grow/SuggestionsCenter'
@@ -83,7 +84,7 @@ function FeatureCard({ href, icon: Icon, title, blurb }: { href: string; icon: t
 
 export default function GrowPage() {
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <PageContainer>
       <PageHeader title="Grow" description="Your AI advisor for pricing, growth and retention — built on your own numbers." />
 
       {/* Suggestions Center — the action feed comes FIRST: "what should I do next?"
@@ -133,6 +134,6 @@ export default function GrowPage() {
           </div>
         </div>
       ))}
-    </div>
+    </PageContainer>
   )
 }
