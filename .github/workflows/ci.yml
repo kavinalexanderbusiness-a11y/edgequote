@@ -164,6 +164,15 @@ jobs:
       - name: Verify pricing learning
         run: npm run verify:learning
 
+      #   recurrence — the recurring-visit backbone: it materialises a series' visit
+      #              DATES, resolves the this/future/all scope, and builds the Service
+      #              Plan a customer page books against. A wrong value here is a wrong
+      #              schedule, not a type error. Pins the date-fns edges a refactor
+      #              trips on — monthly steps drift off the 31st once they clamp to
+      #              February, and count 0 / end_count 0 fall through to defaults.
+      - name: Verify recurrence
+        run: npm run verify:recurrence
+
       # This step is why the first 17 CI runs were red, and it's worth writing down.
       # ESLint had never been configured in this repo — no .eslintrc anywhere — so
       # `next lint` dropped into an INTERACTIVE setup prompt, which cannot be
