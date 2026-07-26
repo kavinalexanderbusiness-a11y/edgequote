@@ -237,3 +237,12 @@ jobs:
       # with the live marketing site. All wrong-VALUE surfaces tsc cannot see.
       - name: Verify lead intake
         run: npm run verify:lead-intake
+
+      # lib/route is THE place a day's route is ordered and timed — the Route Planner and
+      # the calendar Day Ops panel share it so they can never disagree. Wrong-VALUE and
+      # invisible to tsc: a bad ETA promises the wrong arrival, a bad dayLoad hides an
+      # overbooked (or blocked) day, and a route past Google's 9-waypoint cap sends a
+      # broken "Open in Maps" link. Deterministic distance/speed injected; pins the
+      # ordering + clock logic, not floating-point geo.
+      - name: Verify route engine
+        run: npm run verify:route

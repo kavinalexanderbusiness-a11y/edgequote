@@ -34,7 +34,8 @@
     "verify:dedup": "tsx scripts/verify-dedup.ts",
     "verify:customer-v2": "tsx scripts/verify-customer-v2.ts",
     "verify:portal": "tsx scripts/verify-portal.ts",
-    "verify:lead-intake": "tsx scripts/verify-lead-intake.ts"
+    "verify:lead-intake": "tsx scripts/verify-lead-intake.ts",
+    "verify:route": "tsx scripts/verify-route.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",
