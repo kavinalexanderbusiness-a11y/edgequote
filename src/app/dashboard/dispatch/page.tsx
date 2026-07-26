@@ -579,6 +579,7 @@ export default function DispatchPage() {
       const route = laneRoutes[lane.laneId]
       if (!route) return null
       const etaByJob = new Map(route.etas.stops.map(s => [s.jobId, s.arrival]))
+      const orderByJob = new Map(route.seq.map((j, i) => [j.id, i + 1]))
       const included = route.seq.filter(j => !onlyIds || onlyIds.has(j.id))
       if (included.length === 0) return null
       const stats = laneStats(route.etas.startMin, route.etas.finishMin, route.workMin, route.capacityMin)
@@ -593,7 +594,7 @@ export default function DispatchPage() {
         driveMin: stats.driveMin,
         workMin: stats.workMin,
         stops: included.map(j => ({
-          order: route.seq.indexOf(j) + 1,
+          order: orderByJob.get(j.id) ?? 0,
           eta: etaByJob.get(j.id) ?? null,
           promised: j.start_time ? minutesToTime12(timeToMinutes(j.start_time)) : null,
           customer: j.customers?.name || j.title,

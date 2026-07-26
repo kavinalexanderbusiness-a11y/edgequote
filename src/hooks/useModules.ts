@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useSyncExternalStore } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
   FEATURE_MODULES, visibleModules, installedKeys, normalizeEnabled,
@@ -11,9 +11,19 @@ import {
 // ── ONE loader for per-business module composition ────────────────────────────
 // Reads business_settings.enabled_modules + module_meta and exposes the
 // registry filtered by them, plus the install/uninstall workflow. Consumers:
-// the sidebar and command palette (navigation) and the Modules settings
-// surface (management). The pre-load state is null — "all modules", the same
-// as a NULL column — so nothing flickers and nothing is hidden by accident.
+// the sidebar, bottom nav and command palette (navigation — mounted on EVERY
+// dashboard page) and the marketplace/settings surfaces (management).
+//
+// Shared store, same shape as useBusinessData: all consumers read ONE
+// module-level snapshot, concurrent mounts dedupe to a single network
+// round-trip, and a revisit paints from the last snapshot instantly while a
+// background revalidate keeps it honest. Before this, every consumer ran its
+// own getSession + business_settings query on every mount — three identical
+// round-trips per page load just to draw navigation. The hook's return shape
+// is unchanged, so it stays a drop-in for all callers.
+//
+// The pre-load state is null — "all modules", the same as a NULL column — so
+// nothing flickers and nothing is hidden by accident.
 //
 // Storage semantics (see lib/modules):
 //   enabled_modules null = every module, INCLUDING future releases (default)
@@ -21,52 +31,76 @@ import {
 //   module_meta          = { key: { v: installedVersion, at: ISO } } — the
 //                          update system's memory of what each business has.
 
-export function useModules() {
-  const [enabled, setEnabledState] = useState<unknown>(null)
-  const [meta, setMeta] = useState<ModuleMetaMap>({})
-  const [loaded, setLoaded] = useState(false)
+interface ModulesSnapshot {
+  enabled: unknown
+  meta: ModuleMetaMap
+}
 
-  useEffect(() => {
-    let alive = true
-    async function load() {
+let store: ModulesSnapshot | null = null
+let inFlight: Promise<void> | null = null
+const listeners = new Set<() => void>()
+
+function emit() { for (const l of Array.from(listeners)) l() }
+function subscribe(cb: () => void) { listeners.add(cb); return () => { listeners.delete(cb) } }
+function getSnapshot() { return store }
+function getServerSnapshot() { return null }
+
+// Stale-while-revalidate: every mount calls this, but concurrent callers share
+// one round-trip and an existing snapshot keeps serving until fresh data lands.
+function loadModules(): Promise<void> {
+  if (inFlight) return inFlight
+  inFlight = (async () => {
+    try {
       const supabase = createClient()
       const { data: { session } } = await supabase.auth.getSession()
       const uid = session?.user?.id
-      if (!uid) { if (alive) setLoaded(true); return }
+      if (!uid) { store = store ?? { enabled: null, meta: {} }; emit(); return }
       const { data } = await supabase.from('business_settings').select('enabled_modules, module_meta').eq('user_id', uid).maybeSingle()
-      if (!alive) return
       const d = data as { enabled_modules: unknown; module_meta: unknown } | null
-      setEnabledState(d?.enabled_modules ?? null)
-      setMeta(readMeta(d?.module_meta))
-      setLoaded(true)
+      store = { enabled: d?.enabled_modules ?? null, meta: readMeta(d?.module_meta) }
+      emit()
+    } finally {
+      inFlight = null
     }
-    load()
-    // Every consumer (sidebar, palette, settings) refreshes the moment any of
-    // them saves a new composition — same event idiom as the command palette.
-    const onChanged = () => load()
+  })()
+  return inFlight
+}
+
+export function useModules() {
+  const snap = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
+  const enabled = snap?.enabled ?? null
+  const meta = snap?.meta ?? {}
+  const loaded = snap !== null
+
+  useEffect(() => {
+    loadModules()
+    // Every consumer refreshes the moment any of them saves a new composition —
+    // same event idiom as before; with the shared store one reload now feeds
+    // every consumer at once.
+    const onChanged = () => { loadModules() }
     window.addEventListener('eq:modules-changed', onChanged)
-    return () => { alive = false; window.removeEventListener('eq:modules-changed', onChanged) }
+    return () => { window.removeEventListener('eq:modules-changed', onChanged) }
   }, [])
 
-  // One writer for both columns — optimistic, reverts and reports on failure.
+  // One writer for both columns — optimistic through the shared store (every
+  // consumer sees the change immediately), reverts and reports on failure.
   const persist = useCallback(async (
     nextEnabled: string[] | null,
     nextMeta: ModuleMetaMap,
   ): Promise<string | null> => {
-    const prevEnabled = enabled
-    const prevMeta = meta
-    setEnabledState(nextEnabled)
-    setMeta(nextMeta)
+    const prev = store
+    store = { enabled: nextEnabled, meta: nextMeta }
+    emit()
     const supabase = createClient()
     const { data: { session } } = await supabase.auth.getSession()
     const uid = session?.user?.id
-    if (!uid) { setEnabledState(prevEnabled); setMeta(prevMeta); return 'Not signed in.' }
+    if (!uid) { store = prev; emit(); return 'Not signed in.' }
     const { error } = await supabase.from('business_settings')
       .update({ enabled_modules: nextEnabled, module_meta: nextMeta }).eq('user_id', uid)
-    if (error) { setEnabledState(prevEnabled); setMeta(prevMeta); return error.message }
+    if (error) { store = prev; emit(); return error.message }
     window.dispatchEvent(new Event('eq:modules-changed'))
     return null
-  }, [enabled, meta])
+  }, [])
 
   // Install a module: pulls in its dependency closure atomically and stamps
   // each newly-installed module's version. Returns an error message or null.
