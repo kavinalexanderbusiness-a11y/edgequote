@@ -8,21 +8,29 @@ import { cn } from '@/lib/utils'
 // one-line `summary` of what's inside so advanced settings stay out of the way
 // without hiding their state. Used to keep the Quote Builder fast path clean.
 export function Collapsible({
-  title, icon: Icon, summary, badge, defaultOpen = false, children,
+  title, icon: Icon, summary, badge, defaultOpen = false, open: openProp, onOpenChange, children,
 }: {
   title: string
   icon?: LucideIcon
   summary?: ReactNode
   badge?: ReactNode
   defaultOpen?: boolean
+  /** Controlled open state. Omit for the normal self-managed disclosure. */
+  open?: boolean
+  /** Fires on every toggle — in controlled AND uncontrolled use. */
+  onOpenChange?: (open: boolean) => void
   children: ReactNode
 }) {
-  const [open, setOpen] = useState(defaultOpen)
+  // Controlled/uncontrolled hybrid: a caller that needs to OPEN a section from
+  // outside (e.g. a blocked submit whose invalid field is hidden in here) passes
+  // `open`; everyone else keeps the internal state and notices nothing.
+  const [internalOpen, setInternalOpen] = useState(defaultOpen)
+  const open = openProp ?? internalOpen
   return (
     <div className="border border-border rounded-card bg-bg-secondary overflow-hidden">
       <button
         type="button"
-        onClick={() => setOpen(o => !o)}
+        onClick={() => { setInternalOpen(!open); onOpenChange?.(!open) }}
         aria-expanded={open}
         className="w-full flex items-center gap-2.5 px-4 py-3.5 text-left hover:bg-surface/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
