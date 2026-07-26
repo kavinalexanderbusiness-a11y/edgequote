@@ -22,6 +22,21 @@ export interface ApiKeyAuth {
   scopes: string[]
 }
 
+// The row shape returned by the authenticate_api_key() RPC. Documenting it here
+// (rather than reading fields off `any`) makes the RPC contract explicit and
+// catches a column rename at compile time instead of at runtime. The identity
+// fields are required — the code already treats them as always-present on a hit
+// (they're assigned straight into the required ApiKeyAuth fields); the two
+// defensively-read fields are optional, matching `row.rate_limited` (truthy
+// check) and `row.key_scopes ?? []`.
+interface AuthKeyRow {
+  key_user_id: string
+  key_id: string
+  key_name: string
+  rate_limited?: boolean
+  key_scopes?: string[]
+}
+
 export function apiError(status: number, message: string): NextResponse {
   return NextResponse.json({ error: message }, { status })
 }
@@ -45,7 +60,7 @@ export async function authenticateRequest(
 
   const { data, error } = await sb.rpc('authenticate_api_key', { p_hash: hashApiKey(raw) })
   if (error) return { fail: apiError(500, 'Authentication failed.') }
-  const row = Array.isArray(data) ? data[0] : data
+  const row = (Array.isArray(data) ? data[0] : data) as AuthKeyRow | null | undefined
   if (!row) return { fail: apiError(401, 'Invalid API key.') }
   if (row.rate_limited) return { fail: apiError(429, 'Rate limit exceeded (120 requests/minute). Slow down and retry.') }
 

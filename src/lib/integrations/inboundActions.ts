@@ -30,7 +30,7 @@ const pick = (obj: Record<string, unknown>, keys: string[]): string | null => {
   for (const k of keys) {
     const v = obj[k]
     if (typeof v === 'string' && v.trim()) return v.trim()
-    if (typeof v === 'number' && keys.includes(k)) return String(v)
+    if (typeof v === 'number') return String(v)
   }
   return null
 }
