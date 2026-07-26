@@ -1,5 +1,11 @@
 # EdgeQuote Production Readiness Report
 
+> **⚠️ Status note (2026-07-21) — this is a point-in-time audit, not live status.**
+> The 7 Criticals + High findings below were triaged into the 13 canonical launch
+> blockers; **11 of 13 are now merged to `main`.** See **`LAUNCH-ROADMAP.md`** for
+> the live status of record. The verdict below ("not launch-ready") reflects
+> 2026-07-02 and has been largely resolved — kept here as the historical audit.
+
 **Date:** 2026-07-02 · **Branch audited:** `feature/crm-automation` (working tree) · **Method:** 9 parallel deep-read subsystem audits (quotes/pricing, scheduling/routing, customers/CRM, messaging/notifications, invoices/payments/Stripe, photos/uploads/Grow, API/security/RLS, design system/a11y/mobile, dashboard/analytics/data layer) + live production DB verification (migrations, function grants, RPC definitions, Supabase security & performance advisors). Every finding was verified in code with file:line; all Critical money/security claims were re-verified against the **live production database**. No fixes were applied — this is audit-only.
 
 ---
