@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { PageContainer } from '@/components/layout/PageContainer'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
@@ -132,7 +133,7 @@ export default function PropertyDetailPage() {
     reload()
   }
 
-  if (loading) return <div className="max-w-3xl mx-auto space-y-6"><SkeletonRows count={5} /></div>
+  if (loading) return <PageContainer width="narrow"><SkeletonRows count={5} /></PageContainer>
 
   if (!property) return (
     <div className="max-w-3xl mx-auto">
@@ -153,7 +154,7 @@ export default function PropertyDetailPage() {
   const place = [property.city, property.province, property.postal_code].filter(Boolean).join(', ')
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <PageContainer width="narrow">
       <PageHeader crumb={{ label: 'Properties', href: '/dashboard/properties' }}
         title={property.address || 'Property'} description={place || undefined} />
 
@@ -288,6 +289,6 @@ export default function PropertyDetailPage() {
           </>
         }
       />
-    </div>
+    </PageContainer>
   )
 }

@@ -1,5 +1,6 @@
 'use client'
 import { toast } from '@/lib/toast'
+import { PageContainer } from '@/components/layout/PageContainer'
 import { confirm as confirmDialog } from '@/lib/confirm'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -244,7 +245,7 @@ export default function CustomersPage() {
   function openEdit(c: Customer) { setEditing(c); setShowForm(false); scrollToTop() }
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <PageContainer>
       <PageHeader
         title="Customers"
         description={`${customers.length.toLocaleString()} customer${customers.length !== 1 ? 's' : ''} in your database`}
@@ -389,6 +390,6 @@ export default function CustomersPage() {
           onClose={() => setIntroFor(null)}
         />
       )}
-    </div>
+    </PageContainer>
   )
 }

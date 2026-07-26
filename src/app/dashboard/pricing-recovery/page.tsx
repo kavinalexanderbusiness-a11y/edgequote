@@ -1,5 +1,6 @@
 'use client'
 import { toast } from '@/lib/toast'
+import { PageContainer } from '@/components/layout/PageContainer'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
 
 import { useEffect, useMemo, useState } from 'react'
@@ -304,17 +305,17 @@ export default function PricingRecoveryPage() {
   }
 
   if (loading) return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <PageContainer>
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Pricing Recovery" description="Find unpriced work so reports and growth features run on real revenue" />
       <SkeletonTiles count={4} />
-    </div>
+    </PageContainer>
   )
 
   const m = model
   const scoreTone = m.score >= 90 ? 'text-emerald-400' : m.score >= 60 ? 'text-amber-400' : 'text-red-400'
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <PageContainer>
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Pricing Recovery" description="Find unpriced work so reports and growth features run on real revenue." />
 
       {/* Data Quality Score */}
@@ -420,7 +421,7 @@ export default function PricingRecoveryPage() {
           })}
         </Section>
       )}
-    </div>
+    </PageContainer>
   )
 }
 

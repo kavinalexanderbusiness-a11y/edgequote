@@ -1,5 +1,6 @@
 'use client'
 import { toast } from '@/lib/toast'
+import { PageContainer } from '@/components/layout/PageContainer'
 
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -225,7 +226,7 @@ export default function NeighborsPage() {
   if (loading) return <SkeletonRows count={5} />
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <PageContainer>
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Neighbor Leads" description="Turn strong routes into denser routes — knock the doors next to your best customers." />
 
       {/* Funnel metrics */}
@@ -401,6 +402,6 @@ export default function NeighborsPage() {
         <Target className="w-3.5 h-3.5 shrink-0 mt-0.5" />
         Prospects stay separate from customers — a customer record is only created when you convert, and the lead keeps the link.
       </p>
-    </div>
+    </PageContainer>
   )
 }

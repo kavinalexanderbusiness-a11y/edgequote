@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { PageContainer } from '@/components/layout/PageContainer'
 import { useParams } from 'next/navigation'
 import {
   Radar, Activity, CheckCircle2, Clock, Info, AlertTriangle, Unlink, History,
@@ -204,18 +205,18 @@ export default function SubjectTimelinePage() {
 
   if (loading) {
     return (
-      <div className="max-w-5xl mx-auto space-y-6">
+      <PageContainer>
         <PageHeader title="Subject timeline" crumb={{ label: 'Automation Center', href: '/dashboard/automation' }}
           description="Everything the engine has seen and decided about this subject." />
         <SkeletonTiles count={5} />
         <SkeletonRows count={6} />
-      </div>
+      </PageContainer>
     )
   }
 
   if (!validId) {
     return (
-      <div className="max-w-5xl mx-auto space-y-6">
+      <PageContainer>
         <PageHeader title="Not a subject" crumb={{ label: 'Automation Center', href: '/dashboard/automation' }} />
         <EmptyState icon={AlertTriangle} title="That isn’t a subject the ledger could hold"
           description={
@@ -225,12 +226,12 @@ export default function SubjectTimelinePage() {
             </>
           }
           action={{ label: 'Back to Automation Center', href: '/dashboard/automation' }} />
-      </div>
+      </PageContainer>
     )
   }
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <PageContainer>
       <PageHeader
         title={label}
         crumb={{ label: 'Automation Center', href: '/dashboard/automation' }}
@@ -382,7 +383,7 @@ export default function SubjectTimelinePage() {
           </Card>
         </>
       )}
-    </div>
+    </PageContainer>
   )
 }
 

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { PageContainer } from '@/components/layout/PageContainer'
 import { createClient } from '@/lib/supabase/client'
 import { loadAnalyticsCore } from '@/lib/analyticsData'
 import { loadTravelModel } from '@/lib/travelLearning'
@@ -151,14 +152,14 @@ export default function ProfitabilityPage() {
   }, [jobs, routes])
 
   if (loading) return (
-    <div className="max-w-6xl mx-auto space-y-6">
+    <PageContainer width="wide">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Route Profitability" description="Which routes, days and neighborhoods make the most per hour." />
       <SkeletonTiles count={4} />
-    </div>
+    </PageContainer>
   )
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
+    <PageContainer width="wide">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Route Profitability" description="Which routes, days and neighborhoods make the most per hour." />
 
       {loadError && (
@@ -290,7 +291,7 @@ export default function ProfitabilityPage() {
           <ProfitMap points={mapPoints} />
         </div>
       )}
-    </div>
+    </PageContainer>
   )
 }
 

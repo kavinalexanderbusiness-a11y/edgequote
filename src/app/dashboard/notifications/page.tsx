@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { PageContainer } from '@/components/layout/PageContainer'
 import { useRouter } from 'next/navigation'
 import { formatDistanceToNow } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
@@ -143,7 +144,7 @@ export default function NotificationsPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <PageContainer width="narrow">
       <PageHeader title="Notifications" description="Grouped and prioritized — only what needs you."
         action={(totalUnread > 0 || readVisible.length > 0) ? (
           <div className="flex items-center gap-2">
@@ -249,6 +250,6 @@ export default function NotificationsPage() {
           )}
         </div>
       )}
-    </div>
+    </PageContainer>
   )
 }

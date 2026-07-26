@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { PageContainer } from '@/components/layout/PageContainer'
 import { createClient } from '@/lib/supabase/client'
 import { Invoice, Payment, BusinessSettings, INVOICE_STATUS_LABELS, paymentMethodLabel } from '@/types'
 import { invoiceTotals } from '@/lib/invoiceTotals'
@@ -302,13 +303,13 @@ export default function ReportsPage() {
   // nothing jumps when the numbers arrive.
   if (loading) {
     return (
-      <div className="max-w-5xl mx-auto space-y-6">
+      <PageContainer>
         <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }}
           title="Reports & Exports"
           description="Pick a period, hand your bookkeeper the file." />
         <SkeletonTiles count={4} />
         <SkeletonRows count={3} />
-      </div>
+      </PageContainer>
     )
   }
 
@@ -316,7 +317,7 @@ export default function ReportsPage() {
   const nothingHere = t.count === 0 && period.pays.length === 0
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <PageContainer>
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }}
         title="Reports & Exports"
         description="Pick a period, hand your bookkeeper the file."
@@ -441,7 +442,7 @@ export default function ReportsPage() {
           </CardBody>
         </Card>
       )}
-    </div>
+    </PageContainer>
   )
 }
 

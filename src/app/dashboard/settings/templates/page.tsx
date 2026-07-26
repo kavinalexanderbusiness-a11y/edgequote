@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { PageContainer } from '@/components/layout/PageContainer'
 import { createClient } from '@/lib/supabase/client'
 import { useBusinessData } from '@/hooks/useBusinessData'
 import type { ServiceTemplate, ServiceTemplateFormValues } from '@/types'
@@ -179,18 +180,18 @@ export default function ServiceTemplatesPage() {
   const pricingTypeOptions = PRICING_DISPLAY_TYPES.map(t => ({ value: t, label: PRICING_DISPLAY_TYPE_LABELS[t] }))
 
   if (loading) return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <PageContainer width="narrow">
       <PageHeader
         crumb={{ label: 'Settings', href: '/dashboard/settings' }}
         title="Service Templates"
         description="Add, edit, or remove services. The quote builder pulls from this list."
       />
       <Card><div className="p-2"><SkeletonRows count={5} /></div></Card>
-    </div>
+    </PageContainer>
   )
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <PageContainer width="narrow">
       <PageHeader
         crumb={{ label: 'Settings', href: '/dashboard/settings' }}
         title="Service Templates"
@@ -347,6 +348,6 @@ export default function ServiceTemplatesPage() {
           </div>
         ))
       )}
-    </div>
+    </PageContainer>
   )
 }

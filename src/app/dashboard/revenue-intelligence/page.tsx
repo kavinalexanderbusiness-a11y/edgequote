@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { PageContainer } from '@/components/layout/PageContainer'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import {
@@ -54,12 +55,12 @@ export default function RevenueIntelligencePage() {
 
   if (loading && !report) {
     return (
-      <div className="max-w-5xl mx-auto space-y-6">
+      <PageContainer>
         <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Revenue Intelligence" description="Every customer scored for the moves that grow revenue — ranked by expected impact." />
         <SkeletonTiles count={4} />
         <Skeleton className="h-20 w-full rounded-card" />
         <SkeletonRows count={5} />
-      </div>
+      </PageContainer>
     )
   }
   if (!report) return null
@@ -77,7 +78,7 @@ export default function RevenueIntelligencePage() {
   const kindCount = (k: OppKind | 'all') => k === 'all' ? live.length : live.filter(o => o.kind === k).length
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <PageContainer>
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Revenue Intelligence"
         description="Every customer scored for the moves that grow revenue — ranked by expected impact."
         action={<Link href="/dashboard/intelligence"><Button variant="secondary" size="sm">View BI dashboard <ArrowRight className="w-3.5 h-3.5" /></Button></Link>} />
@@ -169,7 +170,7 @@ export default function RevenueIntelligencePage() {
       <p className="text-[11px] text-ink-faint text-center">
         Acting on / dismissing a recommendation is tracked so the ranking learns which plays actually produce revenue.
       </p>
-    </div>
+    </PageContainer>
   )
 }
 

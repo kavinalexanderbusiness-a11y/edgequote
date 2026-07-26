@@ -1,5 +1,6 @@
 'use client'
 import { toast } from '@/lib/toast'
+import { PageContainer } from '@/components/layout/PageContainer'
 import { confirm as confirmDialog } from '@/lib/confirm'
 
 import { useEffect, useMemo, useState } from 'react'
@@ -453,7 +454,7 @@ export default function CustomerDetailPage() {
     [tlSources, quotes, jobs, invoices, gstPercent],
   )
 
-  if (loading) return <div className="max-w-5xl mx-auto space-y-6"><SkeletonTiles count={4} /><SkeletonRows count={5} /></div>
+  if (loading) return <PageContainer><SkeletonTiles count={4} /><SkeletonRows count={5} /></PageContainer>
   // Cached customer (if any) keeps showing on a revalidation blip; only when there's
   // genuinely nothing to show do we branch error-vs-not-found.
   if (!customer) return loadError ? (
@@ -549,7 +550,7 @@ export default function CustomerDetailPage() {
   ]
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <PageContainer>
       {/* THE shared DetailHeader — same back/title/action anatomy as quotes/[id]. */}
       <DetailHeader
         title={customer.name}
@@ -1122,7 +1123,7 @@ export default function CustomerDetailPage() {
           onCancel={() => setEditing(false)}
         />
       </Modal>
-    </div>
+    </PageContainer>
   )
 }
 

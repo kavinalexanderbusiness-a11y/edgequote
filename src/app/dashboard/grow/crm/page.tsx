@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { PageContainer } from '@/components/layout/PageContainer'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
@@ -82,7 +83,7 @@ export default function CrmAutomationPage() {
   useRealtimeRefresh('referrals', uid ? `user_id=eq.${uid}` : null, load)
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <PageContainer>
       {/* No back arrow — the Grow rail above is the navigation, same as every
           sibling subpage; "Automations" matches its rail pill and hub card. */}
       <PageHeader title="Automations" description="Reviews, referrals, follow-ups and campaigns — all wired into your customers and messaging." />
@@ -173,7 +174,7 @@ export default function CrmAutomationPage() {
 
       {/* Campaign engine */}
       <div id="campaigns" className="scroll-mt-4"><CampaignManager /></div>
-    </div>
+    </PageContainer>
   )
 }
 
