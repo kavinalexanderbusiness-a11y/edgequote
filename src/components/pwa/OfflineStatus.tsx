@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useOnline } from '@/hooks/useOnline'
 import { count, flush, subscribe } from '@/lib/offline/outbox'
-import { registerOfflineHandlers } from '@/lib/offline/handlers'
 import { cn } from '@/lib/utils'
 import { WifiOff, RefreshCw, CheckCircle2 } from 'lucide-react'
 
@@ -17,21 +16,33 @@ export function OfflineStatus() {
   const [syncing, setSyncing] = useState(false)
   const [justSynced, setJustSynced] = useState(0)
 
-  // Register replay handlers before the first flush can run (on reconnect / mount).
-  useEffect(() => { registerOfflineHandlers() }, [])
-
   const refresh = useCallback(() => { count().then(setQueued).catch(() => {}) }, [])
   useEffect(() => { refresh(); return subscribe(refresh) }, [refresh])
 
   // Drain the outbox. No-ops when offline or empty; flush() itself is single-flight +
   // cross-tab locked, so overlapping triggers are safe.
+  //
+  // The replay handlers — and the engines they pull in (invoicing, comms
+  // idempotency, parts, price audit: ~46 kB minified) — load HERE, behind the
+  // empty-outbox early exit, registered before flush() exactly as the mount
+  // effect used to guarantee. In the overwhelmingly common session (nothing
+  // queued) that graph is never downloaded at all; it used to ship in every
+  // dashboard route's layout bundle just in case. Registration is idempotent
+  // (module-guarded), and a failed chunk fetch strands nothing: ops stay
+  // queued and the 30s interval / next wake retries — the same net the outbox
+  // already gives ops with no registered handler.
   const syncNow = useCallback(async () => {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return
     if (!(await count())) return
     setSyncing(true)
-    const res = await flush()
-    setSyncing(false)
-    if (res.done > 0) { setJustSynced(res.done); setTimeout(() => { setJustSynced(0) }, 4000) }
+    try {
+      const { registerOfflineHandlers } = await import('@/lib/offline/handlers')
+      registerOfflineHandlers()
+      const res = await flush()
+      if (res.done > 0) { setJustSynced(res.done); setTimeout(() => { setJustSynced(0) }, 4000) }
+    } catch { /* retried by the interval/wake triggers */ } finally {
+      setSyncing(false)
+    }
   }, [])
 
   // Flush on mount, on reconnect, AND on wake/focus/interval — an op can be queued
