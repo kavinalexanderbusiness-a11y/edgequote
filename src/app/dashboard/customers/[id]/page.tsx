@@ -38,7 +38,7 @@ import { CustomerForm } from '@/components/customers/CustomerForm'
 import { Banner } from '@/components/ui/Banner'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { InlineEmpty } from '@/components/ui/EmptyState'
-import { Button } from '@/components/ui/Button'
+import { Button, ButtonLink } from '@/components/ui/Button'
 import { Textarea } from '@/components/ui/Textarea'
 import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { formatCurrency, formatDate, cn, localTodayISO } from '@/lib/utils'
@@ -1176,21 +1176,20 @@ function ServicePlanRow({ plan, customerId, pausing, onPause }: {
       </div>
       <div className="flex flex-wrap gap-2 mt-2.5">
         {/* One entry into the schedule — focuses this plan when it has an upcoming visit. */}
-        <Link
+        <ButtonLink
           href={!plan.paused && plan.nextVisitDate ? `/dashboard/schedule?focus=${plan.recurrenceId}` : `/dashboard/schedule?customer=${customerId}`}
-          className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-surface border border-border-strong text-ink hover:bg-surface-raised active:scale-[0.98] px-3.5 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+          variant="secondary" size="sm">
           Open schedule
-        </Link>
+        </ButtonLink>
         {!plan.paused && plan.remaining > 0 && (
           <Button variant="ghost" size="sm" loading={pausing} onClick={onPause}>
             Pause schedule
           </Button>
         )}
         {plan.paused && (
-          <Link href={`/dashboard/schedule?customer=${customerId}`}
-            className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-surface border border-border-strong text-ink hover:bg-surface-raised active:scale-[0.98] px-3.5 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+          <ButtonLink href={`/dashboard/schedule?customer=${customerId}`} variant="secondary" size="sm">
             Resume schedule
-          </Link>
+          </ButtonLink>
         )}
       </div>
     </div>

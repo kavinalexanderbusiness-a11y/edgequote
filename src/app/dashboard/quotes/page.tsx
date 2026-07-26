@@ -3,6 +3,7 @@ import { toast } from '@/lib/toast'
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { ButtonLink } from '@/components/ui/Button'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
@@ -113,12 +114,9 @@ export default function QuotesPage() {
         title="Quotes"
         description={loading ? 'Loading your quotes…' : `${quotes.length} quote${quotes.length !== 1 ? 's' : ''} total`}
         action={
-          <Link
-            href="/dashboard/quotes/new"
-            className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-accent text-black hover:bg-accent-hover active:scale-[0.98] shadow-sm px-4 py-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-          >
+          <ButtonLink href="/dashboard/quotes/new">
             <Plus className="w-4 h-4" /> New quote
-          </Link>
+          </ButtonLink>
         }
       />
       {!loading && quotes.length > 0 && (

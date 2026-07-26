@@ -19,7 +19,7 @@ import { CustomerForm } from '@/components/customers/CustomerForm'
 import { Avatar } from '@/components/ui/Avatar'
 import { PageHeader } from '@/components/layout/PageHeader'
 import Link from 'next/link'
-import { Button } from '@/components/ui/Button'
+import { Button, ButtonLink } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Plus, X, Upload, Archive, RotateCcw, Trash2, Home } from 'lucide-react'
 import { scrollBehavior } from '@/lib/motion'
@@ -250,10 +250,9 @@ export default function CustomersPage() {
         description={`${customers.length.toLocaleString()} customer${customers.length !== 1 ? 's' : ''} in your database`}
         action={
           <div className="flex items-center gap-2">
-            <Link href="/dashboard/customers/import"
-              className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-surface border border-border-strong text-ink hover:bg-surface-raised active:scale-[0.98] px-4 py-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+            <ButtonLink href="/dashboard/customers/import" variant="secondary">
               <Upload className="w-4 h-4" /> Import
-            </Link>
+            </ButtonLink>
             <Button onClick={openAdd}>
               <Plus className="w-4 h-4" /> Add customer
             </Button>

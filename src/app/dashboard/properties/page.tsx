@@ -12,7 +12,7 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { SkeletonRows } from '@/components/ui/Skeleton'
-import { Button } from '@/components/ui/Button'
+import { Button, ButtonLink } from '@/components/ui/Button'
 import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { SearchInput } from '@/components/ui/SearchInput'
 import { Select } from '@/components/ui/Select'
@@ -490,14 +490,13 @@ export default function PropertiesPage() {
                     ) : actionHref ? (
                       // The Link IS the button (no nested <Button>) — one focusable
                       // element, styled with the shared primary sm recipe.
-                      <Link href={actionHref}
-                        className="w-full inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-accent text-black hover:bg-accent-hover active:scale-[0.98] shadow-sm px-3.5 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                      <ButtonLink href={actionHref} size="sm" className="w-full">
                         {health.action === 'quote' ? <FileText className="w-3.5 h-3.5" />
                           : health.action === 'schedule' ? <CalendarPlus className="w-3.5 h-3.5" />
                           : health.action === 'view' ? <User className="w-3.5 h-3.5" />
                           : <Ruler className="w-3.5 h-3.5" />}
                         {health.actionLabel}
-                      </Link>
+                      </ButtonLink>
                     ) : null}
                     {/* Quiet utility — re-measuring is always one tap away, but never
                         competes as the primary. Follows the score's own verdict on
