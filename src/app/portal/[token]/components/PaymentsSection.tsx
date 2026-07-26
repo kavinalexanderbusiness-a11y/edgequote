@@ -19,7 +19,7 @@ import { downloadBlob, renderPortalReceiptBlob } from '@/lib/portalPdf'
 import { receiptNumberFor } from '@/lib/payments/ledger'
 import { cardExpLabel, cardExpiryState } from '@/lib/payments/card'
 import { Empty, type TabProps } from './shared'
-import type { PortalCard, PortalInvoice, PortalPayment } from '../model'
+import { etransferReference, type PortalCard, type PortalInvoice, type PortalPayment } from '../model'
 
 // ── Payment history ──
 function paymentMethodLabel(provider: string): string {
@@ -85,6 +85,9 @@ export function PaymentsSection({ view, actions }: TabProps) {
   // one owing invoice, generic guidance when several. Balance comes from the
   // prebuilt docItems (the same per-invoice balance the Billing rows show).
   const owingNums = view.docItems.filter(d => d.kind === 'invoice' && d.balance > 0).map(d => d.number)
+  // The exact number to put in the e-transfer memo — only when it's
+  // unambiguous (one owing invoice), so "Copy" never hands over the wrong ref.
+  const etransferRef = etransferReference(view.docItems)
   return (
     <div className="space-y-3">
       {/* ── Ways to pay — Card / E-transfer / Cash (cheque retired). E-transfer
@@ -122,6 +125,15 @@ export function PaymentsSection({ view, actions }: TabProps) {
               {outstanding > 0 && (
                 <Button size="sm" variant="secondary" onClick={() => copyText('amount', outstanding.toFixed(2))}>
                   {copied === 'amount' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />} {copied === 'amount' ? 'Copied' : `Copy amount (${formatCurrency(outstanding)})`}
+                </Button>
+              )}
+              {/* The memo is the one field a customer had to read off the screen and
+                  retype into their bank app — and a mistyped memo is why an
+                  e-transfer can't be matched. One tap now, and only when there's a
+                  single owing invoice (so the reference is never ambiguous). */}
+              {etransferRef && (
+                <Button size="sm" variant="secondary" onClick={() => copyText('ref', etransferRef)}>
+                  {copied === 'ref' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />} {copied === 'ref' ? 'Copied' : `Copy invoice # (${etransferRef})`}
                 </Button>
               )}
             </div>

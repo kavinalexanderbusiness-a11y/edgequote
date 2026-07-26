@@ -571,6 +571,17 @@ export function primaryPortalAction(docItems: DocItem[], money: MoneySummary): P
   return null
 }
 
+// The invoice number a customer should put in their e-transfer memo so the
+// business can match the payment — returned ONLY when there is exactly one
+// owing invoice, so the "copy" affordance never hands them an ambiguous or
+// wrong reference (a mistyped/absent memo is the #1 reason an e-transfer can't
+// be reconciled). With several owing, the customer pays one at a time and the
+// UI keeps its plain guidance; with none, there's nothing to reference.
+export function etransferReference(docItems: DocItem[]): string | null {
+  const owing = docItems.filter(d => d.kind === 'invoice' && d.balance > 0 && d.status !== 'cancelled')
+  return owing.length === 1 ? owing[0].number : null
+}
+
 // ── Per-property view (the "every property" surface) ────────────────────────
 // Grouping rule (from the property-identity work): a single-property customer
 // sees ONE unified story — splitting their history over property_id nulls would

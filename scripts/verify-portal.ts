@@ -12,7 +12,8 @@ import {
   quoteJourney, moneySummary, buildPropertyModels, customerSinceYear,
   requestPresetsOf, resolveDocAddress, groupPhotos, orphanPhotos, liveStatusOf, visitDay,
   daysAwayLabel, parsePortalDeepLink, tabNavTarget, buildVisitICS, visitToCalendarEvent,
-  messageAboutDoc, primaryPortalAction, draftStorageKey, NO_PROPERTY, MAX_REQUEST_PRESETS,
+  messageAboutDoc, primaryPortalAction, draftStorageKey, etransferReference,
+  NO_PROPERTY, MAX_REQUEST_PRESETS,
   type PortalData, type PortalJob, type PortalProperty, type DocBlobRenderers,
 } from '../src/app/portal/[token]/model'
 
@@ -330,6 +331,25 @@ console.log('\ndraftStorageKey (token-scoped, collision-free):')
   check('different tokens → different keys (no cross-customer draft)', draftStorageKey('a', 'message') !== draftStorageKey('b', 'message'))
   check('stable for identical input', draftStorageKey(tok, 'request') === draftStorageKey(tok, 'request'))
   check('namespaced so it can never collide with another app key', draftStorageKey(tok, 'message').startsWith('eqp:draft:'))
+}
+
+// ── etransferReference (the memo to copy — never an ambiguous one) ──────────
+console.log('\netransferReference (one-tap e-transfer memo; never a wrong ref):')
+{
+  const props = FULL.properties!
+  const B = FULL.business
+  const ref = (invoices: typeof FULL.invoices) =>
+    etransferReference(buildDocItems({ quotes: [], invoices, properties: props, business: B, todayISO: TODAY, renderers }))
+  const iDue = FULL.invoices.find(i => i.id === 'i-due')!    // unpaid, balance 105
+  const iLate = FULL.invoices.find(i => i.id === 'i-late')!  // partial, balance 110
+  const iDraft = FULL.invoices.find(i => i.id === 'i-draft')!
+  const iPaid = FULL.invoices.find(i => i.id === 'i-paid')!
+  check('exactly one owing invoice → its number', ref([iDue]) === 'INV-1')
+  check('several owing → null (ambiguous; keep the plain guidance)', ref([iDue, iLate]) === null)
+  check('nothing owing → null', ref([iPaid]) === null)
+  check('a draft invoice is never a reference', ref([iDraft]) === null)
+  check('a cancelled invoice is never a reference', ref([{ ...iDue, id: 'i-x', status: 'cancelled' }]) === null)
+  check('quotes are ignored entirely', etransferReference(buildDocItems({ quotes: FULL.quotes, invoices: [], properties: props, business: B, todayISO: TODAY, renderers })) === null)
 }
 
 console.log(`\n${fail === 0 ? '✓' : '✗'} portal checks: ${pass} passed, ${fail} failed`)
