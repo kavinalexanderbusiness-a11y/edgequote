@@ -176,8 +176,15 @@ No Stripe **publishable** key is needed (card capture uses hosted Checkout in se
 ```
 npm install
 npm run typecheck     # tsc --noEmit — must pass
+npm run verify        # every engine guard, one command — must exit 0
 npm run build         # next build — must pass
 ```
+> `npm run verify` runs all `scripts/verify-*.ts` in one shot and **fails on the exit
+> code**, not a printed tally — a guard that dies mid-way still counts as failed. It
+> also refuses to run if the guard set has drifted (a `verify-*.ts` with no npm
+> script, or vice versa), so "the suite is whole" is asserted, not assumed. Run a
+> single domain with `npm run verify:<name>`; `npm run verify -- --check` does the
+> drift check alone. None of these ship — they are dev/CI gates, not build steps.
 
 ## Deploy
 ```
