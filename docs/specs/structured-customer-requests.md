@@ -328,3 +328,24 @@ stateDiagram-v2
 - [ ] Phase 2 (post-gate): an apply routes **only** through the existing schedule + `reschedule.ts` seams (guardian-verified), moves the job/plan, notifies via the consent gate, and flips `status` — proven end-to-end on a real portal token.
 - [ ] A realtime re-fire of an already-`done` request performs no second mutation.
 - [ ] No new scheduling/notify path, no portal/write-side change, no auto-apply without owner confirmation.
+
+---
+
+## 13. Cross-spec coordination — both features land on `customers/[id]/page.tsx`
+
+This spec's per-customer Requests section and the **Customer Memory Surfaces** spec's
+profile panel modify the **same file**. If built in parallel, coordinate:
+
+- **Placement order.** Requests sit **above** the Memory panel: a pending request is
+  time-sensitive and actionable ("what they're asking for") and outranks the habit
+  summary, which is reference ("who they are"). Whichever ships second slots in below.
+- **Both are enrichment — neither blocks or errors the page.** The profile's core
+  (name, contact, history) renders first and stands alone; if there are no requests or
+  `loadBusinessMemory` returns `null`, that section is simply absent.
+- **No shared loader to fork.** Requests read `service_requests` (already realtime-
+  subscribed on this page via `useRealtimeRefresh`); Memory reads `loadBusinessMemory`
+  (tenant-wide, `sessionStorage`-cached). Keep them independent — do **not** merge into
+  one fetch (that would fork two engines into a page-local loader, against §5.3 /
+  no-sprawl).
+- **Merge touchpoint.** Expect one collision in this file; the second lane rebases and
+  adds its section — it never duplicates the page's existing data loads or subscriptions.
