@@ -21,9 +21,15 @@ interface BannerProps {
 
 export function Banner({ tone = 'accent', variant = 'soft', icon: Icon, children, onDismiss, action, className }: BannerProps) {
   const solid = variant === 'solid'
+  // Errors and warnings INTERRUPT (assertive); calmer notices stay polite — the
+  // same escalation the Toaster already makes (Toaster.tsx). Every tone got
+  // role="status" (polite) before, so a danger Banner announcing "couldn't save"
+  // sat silently in a polite live region behind other output and was easy to
+  // miss — the one notice a screen-reader user most needs to hear.
+  const assertive = tone === 'danger' || tone === 'warn'
   return (
     <div
-      role="status"
+      role={assertive ? 'alert' : 'status'}
       className={cn(
         'flex items-center gap-2.5 rounded-card border px-4 py-2.5 text-sm animate-fade',
         solid ? 'bg-ink text-bg border-border-strong shadow-lg' : toneSoft[tone],
