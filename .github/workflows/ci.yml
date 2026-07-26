@@ -211,3 +211,11 @@ jobs:
       # price. These checks run the exact production derivations.
       - name: Verify portal model
         run: npm run verify:portal
+
+      # lib/intake is the door every external submission enters through. Its pure helpers
+      # guard UNTRUSTED PUBLIC input: normalizeFormspree strips the auth token + the spam
+      # honeypot before anything persists, esc is the HTML-injection boundary into the
+      # owner's alert email, and leadField holds the snake_case/camelCase alias contract
+      # with the live marketing site. All wrong-VALUE surfaces tsc cannot see.
+      - name: Verify lead intake
+        run: npm run verify:lead-intake

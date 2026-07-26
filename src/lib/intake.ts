@@ -72,8 +72,10 @@ export async function submitLead(opts: {
   return { ok: true, status: 200, body: { ok: true, ...result } }
 }
 
-// Resolve a lead field across the same aliases the RPC accepts.
-function leadField(p: Record<string, unknown>, keys: string[]): string {
+// Resolve a lead field across the same aliases the RPC accepts. Exported so
+// verify-lead-intake can pin the alias set — the snake_case/camelCase compatibility
+// with the live marketing site is a real contract, not an incidental detail.
+export function leadField(p: Record<string, unknown>, keys: string[]): string {
   for (const k of keys) {
     const v = p[k]
     if (typeof v === 'string' && v.trim()) return v.trim()
@@ -82,7 +84,11 @@ function leadField(p: Record<string, unknown>, keys: string[]): string {
   return ''
 }
 
-const esc = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] || c))
+// HTML-escape lead-supplied text before it lands in the owner-alert email. This is an
+// injection boundary: a lead's name/notes come from a PUBLIC form, so a `<script>` or
+// `"><img onerror=…>` in that data must not render live in the owner's inbox. Exported
+// so verify-lead-intake can pin it — a weakened escaper is a wrong VALUE tsc can't see.
+export const esc = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] || c))
 
 async function emailOwnerAboutLead(anon: SupabaseClient, token: string, source: string, p: Record<string, unknown>): Promise<void> {
   if (!commsEnabled().email) return
