@@ -82,7 +82,10 @@ export function summarize(r: ScheduledReport): ReportSummary {
     },
     { label: 'Profit', value: formatCurrency(pnl.profit), note: `margin ${marginText(pnl.margin)}` },
     {
-      label: 'Bank movement',
+      // "Net movement", the term the cash-flow page ("Net movement") and the
+      // accounting CSV export ("NET MOVEMENT") both use for flow.net. The report
+      // was the only surface calling it "Bank movement" — a name used nowhere else.
+      label: 'Net movement',
       value: formatCurrency(flow.net),
       note: `${formatCurrency(flow.inflow)} in, ${formatCurrency(flow.outflow)} out`,
     },
@@ -92,7 +95,7 @@ export function summarize(r: ScheduledReport): ReportSummary {
   // The P&L page surfaces these in its own "money that left but isn't a cost" card,
   // "because it's real cash and its absence from the figures above is exactly what
   // an owner would query". In the emailed report the same query is sharper: Profit
-  // excludes both (correctly), Bank movement includes them as outflow, so the bank
+  // excludes both (correctly), Net movement includes them as outflow, so the bank
   // moved LESS than the profit and nothing explained the gap. Same labels + notes as
   // the page (pnl/page.tsx). No figure is altered — these values are read off `pnl`.
   if (pnl.capitalSpend > 0) {
