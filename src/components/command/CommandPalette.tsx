@@ -11,9 +11,7 @@ import {
   Settings, LayoutDashboard, UserPlus, FilePlus2, ReceiptText, Send,
   Home, Image as ImageIcon, CreditCard, Eye, Phone, CalendarPlus, Sparkles, LifeBuoy, Store, BookOpen,
 } from 'lucide-react'
-import { searchHelp, helpHref } from '@/lib/help/content'
 import { useModules } from '@/hooks/useModules'
-import { receiptNumberFor } from '@/lib/payments/ledger'
 import { getPageCommands, subscribePageCommands, PageCommand } from '@/components/command/pageCommands'
 import { phoneSearchDigits } from '@/lib/customers'
 
@@ -122,6 +120,15 @@ export function CommandPalette() {
     setLoading(true)
     const myReq = ++reqRef.current
     const handle = setTimeout(async () => {
+      // Search-only dependencies, loaded when someone actually searches: the
+      // full help-article text and the payments-ledger graph are ~28 kB min
+      // that every dashboard page used to carry in its layout bundle. The
+      // chunk fetches once (then cached) inside a path that already awaits
+      // the session + nine queries — same results, lighter every first paint.
+      const [{ searchHelp, helpHref }, { receiptNumberFor }] = await Promise.all([
+        import('@/lib/help/content'),
+        import('@/lib/payments/ledger'),
+      ])
       const { data: { session } } = await supabase.auth.getSession()
       const uid = session?.user?.id
       if (!uid) { setLoading(false); return }
