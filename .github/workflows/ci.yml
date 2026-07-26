@@ -211,3 +211,11 @@ jobs:
       # price. These checks run the exact production derivations.
       - name: Verify portal model
         run: npm run verify:portal
+
+      # lib/dedup answers "does this already exist?" for properties, jobs and photos.
+      # Wrong-VALUE, invisible to tsc: findPropertyMatch gates property creation, and
+      # findJobMatch drives the schedule form's "duplicate visit" warning AND its DELETE
+      # suggestion — so a wrong reason/confidence there proposes deleting real work. Pins
+      # the reason + confidence for every branch (confident = auto-link; not = ask).
+      - name: Verify dedup engine
+        run: npm run verify:dedup
