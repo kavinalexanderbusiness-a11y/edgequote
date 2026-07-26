@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { cn, formatCurrency } from '@/lib/utils'
+import { Kbd } from '@/components/ui/Kbd'
 import {
   Search, CornerDownLeft, ArrowUp, ArrowDown, Loader2,
   Users, FileText, Receipt, CalendarDays, MessageSquare, Navigation, Sprout,
@@ -393,7 +394,7 @@ export function CommandPalette() {
         <div className="hidden sm:flex items-center gap-3 px-4 py-2 border-t border-border text-[10px] text-ink-faint shrink-0">
           <span className="flex items-center gap-1"><ArrowUp className="w-3 h-3" /><ArrowDown className="w-3 h-3" /> navigate</span>
           <span className="flex items-center gap-1"><CornerDownLeft className="w-3 h-3" /> open</span>
-          <span className="flex items-center gap-1"><kbd className="px-1 rounded bg-surface border border-border">Esc</kbd> close</span>
+          <span className="flex items-center gap-1"><Kbd>Esc</Kbd> close</span>
           <span className="ml-auto">Search &amp; commands</span>
         </div>
       </div>

@@ -42,6 +42,7 @@ import { RescheduleDialog } from '@/components/dispatch/RescheduleDialog'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { StatTile } from '@/components/ui/StatTile'
+import { Kbd } from '@/components/ui/Kbd'
 import { FilterPill } from '@/components/ui/FilterPill'
 import { Badge, jobStatusTone } from '@/components/ui/Badge'
 import { Banner } from '@/components/ui/Banner'
@@ -1504,7 +1505,7 @@ export default function DispatchPage() {
                   {keys.map(([k, what]) => (
                     <div key={k} className="flex items-center justify-between gap-3">
                       <span className="text-xs text-ink-muted">{what}</span>
-                      <kbd className="shrink-0 rounded-md border border-border-strong bg-bg-tertiary px-1.5 py-0.5 text-[11px] font-semibold text-ink tabular-nums">{k}</kbd>
+                      <Kbd variant="map" className="shrink-0">{k}</Kbd>
                     </div>
                   ))}
                 </div>

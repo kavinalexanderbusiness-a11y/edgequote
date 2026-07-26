@@ -10,6 +10,7 @@ import { useFocusTrap } from '@/hooks/useFocusTrap'
 import { useModules } from '@/hooks/useModules'
 import { useUnread } from '@/hooks/useUnread'
 import { NotificationBell } from '@/components/notifications/NotificationBell'
+import { Kbd } from '@/components/ui/Kbd'
 
 // Everyday work up top; the analytics pages live behind one "Grow" hub
 // (/dashboard/grow) so the sidebar stays short — fewer navigation decisions.
@@ -149,7 +150,7 @@ export function Sidebar() {
             className="flex items-center gap-3 px-3 py-2.5 mb-1 rounded-xl text-sm font-medium text-ink-muted bg-surface/60 border border-border hover:text-ink hover:bg-surface transition-all w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
             <Search className="w-4 h-4" />
             <span className="flex-1 text-left">Search</span>
-            <kbd className="hidden lg:inline text-[10px] font-semibold text-ink-faint border border-border rounded px-1.5 py-0.5">⌘K</kbd>
+            <Kbd className="hidden lg:inline">⌘K</Kbd>
           </button>
           {navMain.map(({ label, href, icon: Icon }) => {
             const section = Object.keys(sectionOf).find(p => pathname.startsWith(p))
