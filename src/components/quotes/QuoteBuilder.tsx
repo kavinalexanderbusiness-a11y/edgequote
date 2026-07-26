@@ -286,12 +286,20 @@ export function QuoteBuilder({
 
   // Why we can't recommend anything — shown verbatim to the owner instead of a
   // number. Ordered by what they'd do next.
-  const noRecReason = useMemo(() => {
-    if (!watch('service_type')?.trim()) return 'Pick a service and we’ll recommend a price.'
-    if (pricingKind === 'lawn_recurring') return 'Measure the property to see recommended pricing for this service.'
-    if (rate <= 0) return 'No recommendation yet — set your Default Labour Rate in Settings, or type a price.'
-    return 'No recommendation yet — add hours in the Labour calculator, or type a price. EdgeQuote won’t guess.'
-  }, [watch, pricingKind, rate])
+  // Deliberately NOT memoized: this was a useMemo over [watch, pricingKind, rate],
+  // and it went stale. watch is referentially stable, and servicePricingKind maps
+  // '' and any free-text non-lawn name both to 'labour' — so typing a service name
+  // changed NO dep, and the card kept saying "Pick a service and we'll recommend a
+  // price." AFTER the owner typed one: telling them to do the thing they'd just
+  // done. It's a four-way string pick; recomputing each render costs nothing and
+  // the whole form is already watched (autosave), so every keystroke re-renders.
+  const noRecReason = !watch('service_type')?.trim()
+    ? 'Pick a service and we’ll recommend a price.'
+    : pricingKind === 'lawn_recurring'
+      ? 'Measure the property to see recommended pricing for this service.'
+      : rate <= 0
+        ? 'No recommendation yet — set your Default Labour Rate in Settings, or type a price.'
+        : 'No recommendation yet — add hours in the Labour calculator, or type a price. EdgeQuote won’t guess.'
 
   // Accept for one-off services: fill the one price that makes sense and CLEAR
   // the lawn cadence fields (weekly mulch makes no sense on a quote).
