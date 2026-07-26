@@ -12,7 +12,7 @@ import {
   quoteJourney, moneySummary, buildPropertyModels, customerSinceYear,
   requestPresetsOf, resolveDocAddress, groupPhotos, orphanPhotos, liveStatusOf, visitDay,
   daysAwayLabel, parsePortalDeepLink, tabNavTarget, buildVisitICS, visitToCalendarEvent,
-  messageAboutDoc, primaryPortalAction, NO_PROPERTY, MAX_REQUEST_PRESETS,
+  messageAboutDoc, primaryPortalAction, draftStorageKey, NO_PROPERTY, MAX_REQUEST_PRESETS,
   type PortalData, type PortalJob, type PortalProperty, type DocBlobRenderers,
 } from '../src/app/portal/[token]/model'
 
@@ -318,6 +318,18 @@ console.log('\nprimaryPortalAction (honest priority; never nags about nothing):'
   check('a draft invoice is never "owing"', act([iDraft]) === null)
   check('key is stable for identical input (a dismissal sticks)', act([iLate])?.key === act([iLate])?.key)
   check('key changes when the situation does (banner returns for the new thing)', act([iLate])?.key !== act([], [qSent])?.key)
+}
+
+// ── draftStorageKey (a composer draft that survives tapping away) ────────────
+console.log('\ndraftStorageKey (token-scoped, collision-free):')
+{
+  const tok = 'jordan-EQ5SEXHP'
+  check('carries the token (a draft is scoped to its customer)', draftStorageKey(tok, 'message').includes(tok))
+  check('names the surface', draftStorageKey(tok, 'message').includes('message') && draftStorageKey(tok, 'request').includes('request'))
+  check('the two composers never share a key', draftStorageKey(tok, 'message') !== draftStorageKey(tok, 'request'))
+  check('different tokens → different keys (no cross-customer draft)', draftStorageKey('a', 'message') !== draftStorageKey('b', 'message'))
+  check('stable for identical input', draftStorageKey(tok, 'request') === draftStorageKey(tok, 'request'))
+  check('namespaced so it can never collide with another app key', draftStorageKey(tok, 'message').startsWith('eqp:draft:'))
 }
 
 console.log(`\n${fail === 0 ? '✓' : '✗'} portal checks: ${pass} passed, ${fail} failed`)

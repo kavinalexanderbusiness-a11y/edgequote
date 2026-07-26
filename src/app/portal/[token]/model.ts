@@ -198,6 +198,17 @@ export function buildVisitICS(visits: CalendarVisit[], opts: { stampISO: string;
   return lines.join('\r\n') + '\r\n'
 }
 
+// Per-token, per-surface sessionStorage key for a composer draft, so a
+// half-typed message or request survives tapping to another tab (and a
+// refresh) instead of being lost when the tab unmounts. Token-scoped hygiene:
+// a draft belongs to the one customer whose link it is, and the two composers
+// never share a key. sessionStorage (not local) so it clears when the tab
+// closes — a draft never outlives the session that wrote it.
+export type DraftSurface = 'message' | 'request'
+export function draftStorageKey(token: string, surface: DraftSurface): string {
+  return `eqp:draft:${surface}:${token}`
+}
+
 // A contextual "ask about this" seed for the message composer. It MUST carry
 // the document number — that's the whole point: the owner can tell which
 // invoice/quote the question is about instead of asking "which one?". Ends with

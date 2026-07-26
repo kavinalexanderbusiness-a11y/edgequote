@@ -17,7 +17,7 @@ import { Loader2, MessageSquare, Send } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { cn, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
-import type { PortalMessage } from '../model'
+import { draftStorageKey, type PortalMessage } from '../model'
 import type { TabProps } from './shared'
 
 export function MessagesTab({ view, actions, initialDraft, onDraftConsumed }: TabProps & { initialDraft?: string | null; onDraftConsumed?: () => void }) {
@@ -30,6 +30,7 @@ export function MessagesTab({ view, actions, initialDraft, onDraftConsumed }: Ta
   const [err, setErr] = useState<string | null>(null)
   const threadRef = useRef<HTMLDivElement | null>(null)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
+  const draftKey = draftStorageKey(token, 'message')
 
   // Seed the composer once from a contextual "Question about this invoice"
   // prefill, then tell the parent to drop it so a later, unrelated visit to
@@ -45,6 +46,20 @@ export function MessagesTab({ view, actions, initialDraft, onDraftConsumed }: Ta
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialDraft])
+
+  // Restore a draft the customer left behind by tapping to another tab mid-
+  // message (this tab unmounts on switch, which used to throw the text away).
+  // Mount-only, and defers to an ask-about prefill when one is present.
+  useEffect(() => {
+    if (initialDraft) return
+    try { const saved = sessionStorage.getItem(draftKey); if (saved) setBody(saved) } catch { /* storage blocked */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Persist every keystroke; a successful send clears body → clears storage.
+  useEffect(() => {
+    try { if (body) sessionStorage.setItem(draftKey, body); else sessionStorage.removeItem(draftKey) } catch { /* storage blocked */ }
+  }, [body, draftKey])
 
   // Load on open + a modest poll so an owner reply appears without a manual
   // refresh. 30s is deliberate: portal tabs are short-lived and anon.

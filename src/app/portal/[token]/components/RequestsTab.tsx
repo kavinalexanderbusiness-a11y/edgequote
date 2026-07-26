@@ -13,12 +13,12 @@
 // actions.submitRequest (portal_request_service / portal_submit_request), which
 // thread into the owner's ONE Messages hub. Nothing here mutates jobs or plans.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { CalendarPlus, Check, CheckCircle2, ChevronDown, Loader2, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { cn, formatDate, localTodayISO } from '@/lib/utils'
 import { formatServicePrice, type PriceableService } from '@/lib/servicePricing'
-import { MAX_REQUEST_PRESETS, type PortalData, type PortalService, type SubmitRequestFn } from '../model'
+import { draftStorageKey, MAX_REQUEST_PRESETS, type PortalData, type PortalService, type SubmitRequestFn } from '../model'
 import type { TabProps } from './shared'
 
 // The honest price label. No rate ⇒ no label — formatServicePrice would render
@@ -48,6 +48,19 @@ export function RequestsTab({ view, actions }: TabProps) {
   // Free-text "Something else?" ask — always available, always works.
   const [reqMsg, setReqMsg] = useState('')
   const [customSent, setCustomSent] = useState(false)
+
+  // Keep a half-typed request when the customer taps to another tab (this tab
+  // unmounts on switch, which used to discard it) — restored on return, cleared
+  // once the request is sent. Same per-token sessionStorage as the message
+  // composer; the two never share a key.
+  const draftKey = draftStorageKey(actions.token, 'request')
+  useEffect(() => {
+    try { const saved = sessionStorage.getItem(draftKey); if (saved) setReqMsg(saved) } catch { /* storage blocked */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  useEffect(() => {
+    try { if (reqMsg) sessionStorage.setItem(draftKey, reqMsg); else sessionStorage.removeItem(draftKey) } catch { /* storage blocked */ }
+  }, [reqMsg, draftKey])
 
   const shown = expanded ? services : services.slice(0, MAX_REQUEST_PRESETS)
   const hiddenCount = services.length - MAX_REQUEST_PRESETS
@@ -142,7 +155,7 @@ export function RequestsTab({ view, actions }: TabProps) {
               setBusyKey('custom')
               const ok = await actions.request(reqMsg, 'custom')
               setBusyKey(null)
-              if (ok) setCustomSent(true)
+              if (ok) { setCustomSent(true); setReqMsg('') } // clears the persisted draft too
             }}
           >
             <textarea
