@@ -128,6 +128,18 @@ function Flow({ data, period }: { data: AccountingData; period: Period }) {
             <InlineEmpty icon={Waves}>Nothing moved in {period.label}.</InlineEmpty>
           ) : (
             <div className="flex flex-col gap-3">
+              {/* Two bars per month share the colours of the tiles up top but had no
+                  key — an owner had to guess which was money in and which was out.
+                  Same wording as the "Cash in"/"Cash out" tiles, same bar colours.
+                  Swatches are decorative; the words carry the meaning. */}
+              <div className="flex items-center gap-4 text-xs text-ink-faint">
+                <span className="inline-flex items-center gap-1.5">
+                  <span aria-hidden className="w-2.5 h-2.5 rounded-full bg-success/70" /> Cash in
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span aria-hidden className="w-2.5 h-2.5 rounded-full bg-danger/60" /> Cash out
+                </span>
+              </div>
               {cf.byMonth.map(m => (
                 <div key={m.key} className="flex items-center gap-3">
                   <span className="w-20 shrink-0 text-xs text-ink-muted">{monthKeyLabel(m.key)}</span>

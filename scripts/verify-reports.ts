@@ -216,6 +216,19 @@ console.log('\nThe net cash line is named "Net movement", matching the cash-flow
   check('...and no "Bank movement" line', !s.lines.some(l => l.label === 'Bank movement'))
 }
 
+console.log('\nThe report DECLARES its accounting basis, like the P&L page and CSV:')
+{
+  // Cash vs accrual is the first thing a bookkeeper needs to read a P&L. The page
+  // badges "Cash basis" and the CSV export leads with it; the emailed report — the
+  // artefact that actually gets forwarded — must say so too. Asserted in BOTH the
+  // header the HTML/PDF render (subtitle) and the plain-text email body (text).
+  const s = summarize(composeReport('weekly', TODAY, {
+    payments: [pay({ amount: 400, paid_at: '2026-07-13' })], expenses: [], settings: NOT_REGISTERED,
+  }, { closed: false }))
+  check('the subtitle (HTML/PDF header) states "Cash basis"', s.subtitle.includes('Cash basis'))
+  check('the plain-text email states "Cash basis"', s.text.includes('Cash basis'))
+}
+
 console.log('\nThe report explains the cost BASIS exactly as /dashboard/accounting/pnl does:')
 {
   // Rule 1: a non-registrant can't reclaim the GST it pays suppliers, so its cost

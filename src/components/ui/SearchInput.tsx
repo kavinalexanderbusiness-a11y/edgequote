@@ -23,6 +23,16 @@ const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
         <input
           ref={ref}
           type="search"
+          // Mobile keyboard ergonomics for a search box, all overridable via
+          // {...props} below:
+          // • enterKeyHint="search" — the return key becomes a Search key.
+          // • no autocapitalize/autocorrect/spellcheck — a query is a name, an
+          //   address, an email or a quote #, not prose; iOS capitalising the
+          //   first letter and autocorrecting identifiers actively fights it.
+          enterKeyHint="search"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
           className={cn(
             'w-full bg-bg-tertiary border border-border-strong text-ink placeholder:text-ink-faint outline-none transition-all',
             'focus:border-accent focus:ring-2 focus:ring-accent/20',
