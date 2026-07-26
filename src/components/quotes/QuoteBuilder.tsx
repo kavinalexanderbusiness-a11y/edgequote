@@ -263,6 +263,11 @@ export function QuoteBuilder({
     }
   }, [pricingKind, measuredSqft, overgrowth, settings])
 
+  // The cadence Pricing Intelligence leads with — the engine's pick, or one_time
+  // when there's no live suggestion yet. Falls back BEFORE the '?' checks below so
+  // "no suggestion" reads as one_time everywhere, exactly as spelled out inline before.
+  const recommendedCadence = suggested?.recommended ?? 'one_time'
+
   // The service's own recommendation, from the ONE seam in lib/servicePricing.
   // It returns null when we have no honest basis — and null is load-bearing: the
   // old code fell back to `hours × crew × rate` using defaults nobody entered, so
@@ -735,13 +740,13 @@ export function QuoteBuilder({
                 <PriceIntelligence
                   sqft={measuredSqft}
                   serviceType={watch('service_type')}
-                  cadence={suggested?.recommended ?? 'one_time'}
+                  cadence={recommendedCadence}
                   overgrowth={overgrowth}
                   propertyId={defaultPropertyId}
                   customerId={activeCustomerId}
-                  currentPrice={(suggested?.recommended ?? 'one_time') === 'one_time' ? initialPrice
-                    : (suggested?.recommended === 'weekly' ? weeklyPrice
-                      : suggested?.recommended === 'biweekly' ? biweeklyPrice : monthlyPrice)}
+                  currentPrice={recommendedCadence === 'one_time' ? initialPrice
+                    : recommendedCadence === 'weekly' ? weeklyPrice
+                      : recommendedCadence === 'biweekly' ? biweeklyPrice : monthlyPrice}
                   onApply={(price) => {
                     // Accept = fill the FULL lawn structure in one tap: the learned
                     // price takes the recommended cadence's slot, the engine fills
