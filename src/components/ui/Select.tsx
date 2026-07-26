@@ -1,6 +1,7 @@
-import { SelectHTMLAttributes, ReactNode, forwardRef, useId } from 'react'
+import { SelectHTMLAttributes, ReactNode, forwardRef } from 'react'
 import { cn } from '@/lib/utils'
 import { fieldBorder } from './fieldStyles'
+import { useFieldIds } from './useFieldIds'
 
 interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
   label?: string
@@ -15,11 +16,8 @@ interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
 
 const Select = forwardRef<HTMLSelectElement, SelectProps>(
   ({ className, label, error, hint, options, placeholder, id, fieldSize = 'md', ...props }, ref) => {
-    const generatedId = useId()
-    const inputId = id ?? generatedId
     // Tie the error/hint text to the field so a screen reader reads it on focus.
-    const errorId = `${inputId}-error`
-    const hintId = `${inputId}-hint`
+    const { id: inputId, errorId, hintId } = useFieldIds(id)
     return (
       <div className="flex flex-col gap-1.5">
         {label && (

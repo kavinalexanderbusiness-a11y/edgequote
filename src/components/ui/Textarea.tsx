@@ -1,6 +1,7 @@
-import { TextareaHTMLAttributes, forwardRef, useId } from 'react'
+import { TextareaHTMLAttributes, forwardRef } from 'react'
 import { cn } from '@/lib/utils'
 import { fieldBorder } from './fieldStyles'
+import { useFieldIds } from './useFieldIds'
 
 interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
   label?: string
@@ -9,10 +10,9 @@ interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
 
 const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
   ({ className, label, error, id, ...props }, ref) => {
-    const generatedId = useId()
-    const inputId = id ?? generatedId
     // Tie the error text to the field so a screen reader reads it on focus.
-    const errorId = `${inputId}-error`
+    // (Textarea takes no hint, so hintId from the shared hook goes unused.)
+    const { id: inputId, errorId } = useFieldIds(id)
     return (
       <div className="flex flex-col gap-1.5">
         {label && (
