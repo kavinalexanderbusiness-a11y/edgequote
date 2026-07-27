@@ -182,6 +182,16 @@ jobs:
       - name: Verify dedup
         run: npm run verify:dedup
 
+      #   route    — THE routing brain: stop ordering (NN + 2-opt), km estimates,
+      #              drive minutes, the day ETAs a customer is told, the day-load
+      #              capacity signal (an explicit 0 = a blocked day, never the 8h
+      #              default), the capped Open-in-Maps links, and the three-lens
+      #              schedule recommender. Every output is a time, distance or
+      #              day a human acts on — wrong is a broken promise, not a type
+      #              error.
+      - name: Verify route
+        run: npm run verify:route
+
       # This step is why the first 17 CI runs were red, and it's worth writing down.
       # ESLint had never been configured in this repo — no .eslintrc anywhere — so
       # `next lint` dropped into an INTERACTIVE setup prompt, which cannot be
@@ -237,3 +247,11 @@ jobs:
       # with the live marketing site. All wrong-VALUE surfaces tsc cannot see.
       - name: Verify lead intake
         run: npm run verify:lead-intake
+
+      # lib/quoteStatus decides two quote-workflow questions, both wrong-VALUE surfaces
+      # tsc can't see: EXPIRY (a sent quote's lapse is a display overlay off status +
+      # valid_until — a wrong answer nags about a live quote or lets a lapsed price be
+      # accepted) and SEND-GATING (a quote with no price or no customer must be stopped
+      # at the door). Deterministic (explicit dates); pins the overlay + the gate.
+      - name: Verify quote status
+        run: npm run verify:quote-status

@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
+import { fieldBorder } from '@/components/ui/fieldStyles'
 import { PageContainer } from '@/components/layout/PageContainer'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { FilterPill } from '@/components/ui/FilterPill'
@@ -48,7 +49,7 @@ export default function MarketplacePage() {
           <Search className="w-4 h-4 text-ink-faint absolute left-3.5 top-1/2 -translate-y-1/2" aria-hidden="true" />
           <input value={q} onChange={e => setQ(e.target.value)} aria-label="Search modules"
             placeholder="Search modules — try “invoice”, “sms”, “routes”…"
-            className="w-full h-11 pl-10 pr-4 rounded-xl bg-bg-tertiary border border-border-strong text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+            className={`w-full h-11 pl-10 pr-4 rounded-xl bg-bg-tertiary border text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all ${fieldBorder()}`} />
         </div>
         <div className="flex flex-wrap gap-1.5">
           <FilterPill active={cat === 'all'} onClick={() => setCat('all')}>All</FilterPill>

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { fieldBorder } from '@/components/ui/fieldStyles'
 import { PageContainer } from '@/components/layout/PageContainer'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -165,7 +166,7 @@ export default function ImportCustomersPage() {
                 rows={8}
                 aria-label="Paste CSV data"
                 placeholder={'name,email,phone,city,sms_opt_in,email_opt_in\nJane Doe,jane@example.com,403-555-0100,Calgary,false,true'}
-                className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm font-mono text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
+                className={`w-full bg-bg-tertiary border rounded-xl px-3.5 py-2.5 text-sm font-mono text-ink outline-none transition-all ${fieldBorder()}`}
               />
               {parseError && <Banner tone="danger" icon={AlertTriangle}>{parseError}</Banner>}
             </CardBody>
