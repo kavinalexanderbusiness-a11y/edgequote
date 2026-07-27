@@ -33,8 +33,26 @@ import { exportRowsToCsv } from '@/lib/csv'
 import { notifyRescheduleBatch } from '@/lib/reschedule'
 import { DisruptionReason } from '@/lib/disruption'
 import { Coord } from '@/lib/geo'
+import dynamic from 'next/dynamic'
 import { RouteTimeline, TimelineStop } from '@/components/schedule/RouteTimeline'
-import { DispatchMap, DispatchMapLane } from '@/components/dispatch/DispatchMap'
+import type { DispatchMapLane } from '@/components/dispatch/DispatchMap'
+
+// The map renders only in map view, and it already sits behind its own
+// "Loading map…" state while the Google SDK fetches — so its code (and the
+// Maps loader) can arrive the same way, off the board's critical bundle. The
+// fallback mirrors the component's own placeholder, making the first switch
+// to map view visually identical.
+const DispatchMap = dynamic(
+  () => import('@/components/dispatch/DispatchMap').then(m => m.DispatchMap),
+  {
+    ssr: false,
+    loading: () => (
+      <div style={{ height: 560 }} className="relative rounded-card overflow-hidden border border-border bg-bg-secondary flex items-center justify-center text-sm text-ink-muted">
+        Loading map…
+      </div>
+    ),
+  },
+)
 import { CrewManager, AssignableEquipment } from '@/components/dispatch/CrewManager'
 import { ConflictPanel } from '@/components/dispatch/ConflictPanel'
 import { DispatchFilters, DispatchFilterState, EMPTY_DISPATCH_FILTER, hasActiveFilter } from '@/components/dispatch/DispatchFilters'
