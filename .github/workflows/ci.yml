@@ -198,6 +198,9 @@ jobs:
       - name: Verify dedup
         run: npm run verify:dedup
 
+      - name: Dedup contract (confident vs ask) characterization
+        run: npm run verify:dedup-contract
+
       #   route    — THE routing brain: stop ordering (NN + 2-opt), km estimates,
       #              drive minutes, the day ETAs a customer is told, the day-load
       #              capacity signal (an explicit 0 = a blocked day, never the 8h
@@ -290,3 +293,14 @@ jobs:
       # at the door). Deterministic (explicit dates); pins the overlay + the gate.
       - name: Verify quote status
         run: npm run verify:quote-status
+
+      # lib/dedup answers "does this already exist?" for properties, jobs and photos.
+      # Wrong-VALUE, invisible to tsc: findPropertyMatch gates property creation, and
+      # findJobMatch drives the schedule form's "duplicate visit" warning AND its DELETE
+      # suggestion — so a wrong reason/confidence there proposes deleting real work. Pins
+      # the reason + confidence for every branch (confident = auto-link; not = ask).
+      - name: Verify dedup engine
+        run: npm run verify:dedup
+
+      - name: Dedup contract (confident vs ask) characterization
+        run: npm run verify:dedup-contract
