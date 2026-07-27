@@ -237,3 +237,13 @@ jobs:
       # with the live marketing site. All wrong-VALUE surfaces tsc cannot see.
       - name: Verify lead intake
         run: npm run verify:lead-intake
+
+      # lib/followup is the quote-chasing engine (cron, dashboard queue, weekly review).
+      # verify-automations pins the cron/manual agreement; this pins the rest, all
+      # wrong-VALUE and invisible to tsc: the CASL/reachability consent gate (chasing an
+      # unreachable customer spends an attempt on nobody, and mislabelling WHY sends the
+      # owner hunting a consent problem that doesn't exist), the two-then-stop cap, the
+      # oldest-then-stale-money-first queue order, and the policy clamps that keep a
+      # hostile jsonb value from making the chaser a same-day spammer or endless.
+      - name: Verify follow-up engine
+        run: npm run verify:followup
