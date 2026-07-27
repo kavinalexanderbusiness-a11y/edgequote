@@ -11,9 +11,9 @@ import {
   ArrowUpDown, Check, CheckCircle2, Clock, CreditCard, FileText, FolderOpen,
   MapPin, MessageSquare, Receipt, Search, ShieldCheck, Wallet,
 } from 'lucide-react'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, localTodayISO } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
-import { messageAboutDoc, NO_PROPERTY, quoteJourney, type DocItem, type DocKind } from '../model'
+import { dueSoonLabel, messageAboutDoc, NO_PROPERTY, quoteJourney, type DocItem, type DocKind } from '../model'
 import {
   DocActions, Empty, InvoiceStatusPill, JourneyRail, PortalSection,
   QuoteStatusPill, StatCard, fmtMoney, type PortalActions, type TabProps,
@@ -249,12 +249,20 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
             <p className="text-sm font-semibold text-ink truncate tracking-tight">{d.title}</p>
             <p className="text-xs text-ink-muted">{m.label} · {d.number} · {formatDate(d.date)}</p>
             {/* When it's due — the row showed only the ISSUE date, so "am I late?" was
-                unanswerable from the one screen built to answer it. */}
-            {d.kind === 'invoice' && d.dueDate && d.balance > 0 && (
-              <p className={cn('text-xs mt-0.5', d.status === 'overdue' ? 'text-red-400 font-medium' : 'text-ink-muted')}>
-                {d.status === 'overdue' ? `Was due ${formatDate(d.dueDate)}` : `Due ${formatDate(d.dueDate)}`}
-              </p>
-            )}
+                unanswerable from the one screen built to answer it. Now a soon-due
+                bill also says how soon (and raises its voice for today/tomorrow), so
+                one due next week doesn't look the same as one due next month. */}
+            {d.kind === 'invoice' && d.dueDate && d.balance > 0 && (() => {
+              if (d.status === 'overdue') {
+                return <p className="text-xs mt-0.5 text-red-400 font-medium">Was due {formatDate(d.dueDate)}</p>
+              }
+              const soon = dueSoonLabel(d.dueDate, localTodayISO())
+              return (
+                <p className={cn('text-xs mt-0.5', soon?.urgent ? 'text-amber-400 font-medium' : 'text-ink-muted')}>
+                  Due {formatDate(d.dueDate)}{soon ? ` · ${soon.rel}` : ''}
+                </p>
+              )
+            })()}
           </div>
         </div>
         <div className="text-right shrink-0">

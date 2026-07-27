@@ -295,6 +295,21 @@ export function daysAwayLabel(dateISO: string, todayISO: string): string | null 
   return days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : `In ${days} days`
 }
 
+// How soon an unpaid invoice is DUE — so a bill due tomorrow doesn't read the
+// same as one due next month, which is how a customer misses it and lets it
+// slip overdue. Returns a relative phrase only inside a 7-day window (a due
+// date further out is not yet urgent and the absolute date carries it), and
+// `urgent` for today/tomorrow so the row can raise its voice. Past dates return
+// null — an overdue invoice already has its own (louder) treatment. Pure so
+// verify pins the window and the urgent boundary.
+export function dueSoonLabel(dueISO: string, todayISO: string): { rel: string; urgent: boolean } | null {
+  const days = Math.round((parseLocalDate(dueISO).getTime() - parseLocalDate(todayISO).getTime()) / 86_400_000)
+  if (days < 0 || days > 7) return null
+  if (days === 0) return { rel: 'due today', urgent: true }
+  if (days === 1) return { rel: 'due tomorrow', urgent: true }
+  return { rel: `due in ${days} days`, urgent: false }
+}
+
 export function groupPhotos(photos: PortalPhoto[]): Map<string, PortalPhoto[]> {
   const m = new Map<string, PortalPhoto[]>()
   for (const p of photos) { const k = p.job_id || 'none'; if (!m.has(k)) m.set(k, []); m.get(k)!.push(p) }

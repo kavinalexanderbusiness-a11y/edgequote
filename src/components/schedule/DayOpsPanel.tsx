@@ -882,7 +882,7 @@ export function DayOpsPanel({
                             className="tap-target h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border border-current/30 text-xs font-medium flex items-center justify-center gap-1 hover:bg-black/10">
                             <Receipt className="w-3.5 h-3.5" /> Invoice
                           </a>
-                          <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Edit" />
+                          <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Edit job" />
                           <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setAddonsId(null); setMessageId(null); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
                         </div>
                       ) : (
@@ -918,11 +918,15 @@ export function DayOpsPanel({
                         )}
                         <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setAddonsId(null); setMessageId(null); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
                         <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setMessageId(null); setAddonsId(addonsId === job.id ? null : job.id) }} icon={PlusCircle} label={addons.length ? `Services (${addons.length})` : 'Services'} />
-                        {/* Rare edit actions live in ONE overflow — same handlers, less chrome. */}
-                        <Menu align="end" items={[
-                          { key: 'quick', label: 'Quick edit', icon: SlidersHorizontal, onSelect: () => { quickId === job.id ? setQuickId(null) : openQuick(job) } },
-                          { key: 'edit', label: 'Edit job', icon: Pencil, onSelect: () => onOpenJob(job) },
-                          { key: 'move', label: 'Move to another day', icon: Move, onSelect: () => setMoveId(moveId === job.id ? null : job.id) },
+                        {/* Rare edit actions live in ONE overflow — same handlers, less
+                            chrome. Descriptions carry the hierarchy the flat list can't:
+                            "Quick edit" is the fast field change, "Edit job" is the whole
+                            record, "Move" reschedules — same wording as the completed
+                            card's Edit-job button and the quick panel's footer. */}
+                        <Menu align="end" width={300} items={[
+                          { key: 'quick', label: 'Quick edit', description: 'Time, crew, status & notes — this visit', icon: SlidersHorizontal, onSelect: () => { quickId === job.id ? setQuickId(null) : openQuick(job) } },
+                          { key: 'edit', label: 'Edit job', description: 'Property, title & the recurring schedule', icon: Pencil, onSelect: () => onOpenJob(job) },
+                          { key: 'move', label: 'Move to another day', description: 'Reschedule this visit to another date', icon: Move, onSelect: () => setMoveId(moveId === job.id ? null : job.id) },
                         ]}>
                           {({ toggle, triggerProps }) => (
                             <Button size="sm" variant="ghost" onClick={toggle} aria-label="More actions" title="More actions" {...triggerProps}>
@@ -1013,7 +1017,7 @@ export function DayOpsPanel({
                           <div className="flex items-center gap-2">
                             <Button size="sm" onClick={() => saveQuick(job)} loading={savingQuick}>Save</Button>
                             <Button size="sm" variant="ghost" onClick={() => setQuickId(null)}>Cancel</Button>
-                            <span className="text-[10px] text-ink-faint ml-auto">This visit only · use Open for more</span>
+                            <span className="text-[10px] text-ink-faint ml-auto">This visit only · use Edit job for more</span>
                           </div>
                         </div>
                       )}

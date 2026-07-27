@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { loadGoogleMaps } from '@/lib/googleMaps'
 import { MapPin } from 'lucide-react'
@@ -38,6 +38,12 @@ export function AddressAutocomplete({
   const [open, setOpen] = useState(false)
   const [ready, setReady] = useState(false)
   const [loadError, setLoadError] = useState(false)
+  // Highlighted suggestion for keyboard users. This control USED to be
+  // mouse-only: no arrow-key movement and no Enter-to-select, so a keyboard or
+  // screen-reader user could type an address but never choose a suggestion —
+  // a WCAG 2.1.1 keyboard failure. `hi` + the combobox ARIA below fix that,
+  // matching the pattern CustomerPicker/PropertySelect already use.
+  const [hi, setHi] = useState(0)
 
   const placesRef = useRef<any>(null)
   const tokenRef = useRef<any>(null)
@@ -45,6 +51,12 @@ export function AddressAutocomplete({
   const boxRef = useRef<HTMLDivElement>(null)
 
   const inputId = label ? label.toLowerCase().replace(/\s+/g, '-') : undefined
+  // Combobox a11y ids: the input points at the listbox (aria-controls) and, as
+  // the user arrows, at the active option (aria-activedescendant) — focus stays
+  // in the input throughout (ARIA 1.2 combobox + listbox-popup).
+  const baseId = useId()
+  const listId = `${baseId}-listbox`
+  const optId = (i: number) => `${baseId}-opt-${i}`
 
   useEffect(() => {
     let cancelled = false
@@ -100,10 +112,26 @@ export function AddressAutocomplete({
           }))
         setSuggestions(mapped)
         setOpen(mapped.length > 0)
+        setHi(0) // reset the highlight to the top on every fresh result set
       } catch {
         setSuggestions([]); setOpen(false)
       }
     }, 250)
+  }
+
+  // Keyboard operation of the suggestion list (the whole point of this fix):
+  // arrows move the highlight, Enter picks it, Escape closes. Enter is only
+  // intercepted while the list is open with a highlight — otherwise it falls
+  // through to the form so a plain typed address still submits.
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (!open || suggestions.length === 0) {
+      if (e.key === 'ArrowDown' && suggestions.length > 0) { e.preventDefault(); setOpen(true); setHi(0) }
+      return
+    }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setHi(h => Math.min(h + 1, suggestions.length - 1)) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setHi(h => Math.max(h - 1, 0)) }
+    else if (e.key === 'Enter') { const s = suggestions[hi]; if (s) { e.preventDefault(); choose(s) } }
+    else if (e.key === 'Escape') { setOpen(false) }
   }
 
   async function choose(s: SuggestionItem) {
@@ -145,10 +173,16 @@ export function AddressAutocomplete({
         <input
           id={inputId}
           autoComplete="off"
+          role="combobox"
+          aria-expanded={open && suggestions.length > 0}
+          aria-controls={listId}
+          aria-autocomplete="list"
+          aria-activedescendant={open && suggestions.length > 0 ? optId(hi) : undefined}
           value={value}
           placeholder={placeholder}
           onChange={(e) => handleInput(e.target.value)}
-          onFocus={() => { if (suggestions.length) setOpen(true) }}
+          onFocus={() => { if (suggestions.length) { setOpen(true); setHi(0) } }}
+          onKeyDown={onKeyDown}
           className={cn(
          'w-full bg-bg-tertiary border rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all',
             error
@@ -157,13 +191,19 @@ export function AddressAutocomplete({
           )}
         />
         {open && suggestions.length > 0 && (
-          <div className="absolute z-overlay mt-1 w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl overflow-hidden origin-top animate-pop">
+          <div id={listId} role="listbox" aria-label={label || 'Address suggestions'}
+            className="absolute z-overlay mt-1 w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl overflow-hidden origin-top animate-pop">
             {suggestions.map((s, i) => (
               <button
                 key={i}
                 type="button"
+                role="option"
+                id={optId(i)}
+                aria-selected={i === hi}
+                tabIndex={-1}
+                onMouseEnter={() => setHi(i)}
                 onClick={() => choose(s)}
-                className="w-full text-left px-3.5 py-2.5 text-sm text-ink hover:bg-surface flex items-center gap-2 transition-colors"
+                className={cn('w-full text-left px-3.5 py-2.5 text-sm text-ink flex items-center gap-2 transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface')}
               >
                 <MapPin className="w-3.5 h-3.5 text-ink-faint shrink-0" />
                 <span className="truncate">{s.text}</span>

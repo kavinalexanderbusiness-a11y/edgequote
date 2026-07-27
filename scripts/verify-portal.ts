@@ -11,7 +11,7 @@ import {
   normalizePortal, buildDerived, buildDocItems, buildPortalView,
   quoteJourney, moneySummary, buildPropertyModels, customerSinceYear,
   requestPresetsOf, resolveDocAddress, groupPhotos, orphanPhotos, liveStatusOf, visitDay,
-  daysAwayLabel, parsePortalDeepLink, tabNavTarget, buildVisitICS, visitToCalendarEvent,
+  daysAwayLabel, dueSoonLabel, parsePortalDeepLink, tabNavTarget, buildVisitICS, visitToCalendarEvent,
   messageAboutDoc, primaryPortalAction, draftStorageKey, etransferReference, isSendChord,
   NO_PROPERTY, MAX_REQUEST_PRESETS,
   type PortalData, type PortalJob, type PortalProperty, type DocBlobRenderers,
@@ -361,6 +361,20 @@ console.log('\nisSendChord (a phone keyboard, which sends no modifier, must neve
   check('Shift+Enter does NOT send', !isSendChord({ key: 'Enter', shiftKey: true } as { key: string; metaKey?: boolean; ctrlKey?: boolean }))
   check('Cmd without Enter does NOT send', !isSendChord({ key: 'a', metaKey: true }))
   check('Cmd+Shift+Enter still sends (shift is irrelevant)', isSendChord({ key: 'Enter', metaKey: true, ctrlKey: false }))
+}
+
+// ── dueSoonLabel (surface an imminent due date; never nag beyond the window) ─
+console.log('\ndueSoonLabel (so "due tomorrow" never reads like "due next month"):')
+{
+  const T = '2026-07-18'
+  check('due today → urgent', JSON.stringify(dueSoonLabel('2026-07-18', T)) === JSON.stringify({ rel: 'due today', urgent: true }))
+  check('due tomorrow → urgent', JSON.stringify(dueSoonLabel('2026-07-19', T)) === JSON.stringify({ rel: 'due tomorrow', urgent: true }))
+  check('due in 5 days → shown, NOT urgent', JSON.stringify(dueSoonLabel('2026-07-23', T)) === JSON.stringify({ rel: 'due in 5 days', urgent: false }))
+  check('due in exactly 7 days → still shown', dueSoonLabel('2026-07-25', T)?.rel === 'due in 7 days')
+  check('due in 8 days → null (date alone carries it)', dueSoonLabel('2026-07-26', T) === null)
+  check('due next month → null', dueSoonLabel('2026-08-30', T) === null)
+  check('past due → null (overdue has its own louder treatment)', dueSoonLabel('2026-07-10', T) === null)
+  check('only today/tomorrow are urgent', dueSoonLabel('2026-07-20', T)?.urgent === false && dueSoonLabel('2026-07-19', T)?.urgent === true)
 }
 
 console.log(`\n${fail === 0 ? '✓' : '✗'} portal checks: ${pass} passed, ${fail} failed`)
