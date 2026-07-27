@@ -154,8 +154,24 @@ export function DayOpsPanel({
     }
   }
 
+  // A card shows at most ONE inline panel at a time (price, quick edit, move,
+  // photos, services or message). That invariant used to be re-implemented at
+  // every button — each opener spelled out its own "close the other five" list,
+  // and they drifted: the price/add-ons openers forgot Message, and the overflow
+  // menu's Quick-edit and Move forgot Photos/Services/Message, so those stacked.
+  // ONE closer, called by every opener, is the source of truth. Toggle helpers
+  // keep the tap-again-to-close behaviour the buttons already had.
+  function closePanels() {
+    setPriceId(null); setQuickId(null); setMoveId(null)
+    setPhotoId(null); setAddonsId(null); setMessageId(null)
+  }
+  const togglePhoto = (job: Job) => { const was = photoId === job.id; closePanels(); if (!was) setPhotoId(job.id) }
+  const toggleAddons = (job: Job) => { const was = addonsId === job.id; closePanels(); if (!was) setAddonsId(job.id) }
+  const toggleMessage = (job: Job) => { const was = messageId === job.id; closePanels(); if (!was) setMessageId(job.id) }
+  const toggleMove = (job: Job) => { const was = moveId === job.id; closePanels(); if (!was) setMoveId(job.id) }
+
   function openPrice(job: Job) {
-    setQuickId(null); setMoveId(null); setPhotoId(null); setAddonsId(null)
+    closePanels()
     setPriceId(job.id)
     setPriceVal(job.price != null ? String(job.price) : '')
     setPriceReason('')
@@ -188,7 +204,7 @@ export function DayOpsPanel({
   }
 
   function openQuick(job: Job) {
-    setPriceId(null); setMoveId(null)
+    closePanels()
     setQuickId(job.id)
     setQv({
       start_time: job.start_time || '',
@@ -733,7 +749,7 @@ export function DayOpsPanel({
                                 className="tap-target-y text-[10px] font-semibold uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 flex items-center gap-1 hover:bg-amber-500/20">
                                 <AlertTriangle className="w-3 h-3" /> Set price
                               </button>}
-                          {/* Delete lives in the job form (Open → trash) — a 28px
+                          {/* Delete lives in the job form (Edit job → trash) — a 28px
                               destructive button beside the price invited mis-taps. */}
                         </div>
                       </div>
@@ -855,7 +871,7 @@ export function DayOpsPanel({
                         {job.start_time && <span>· {job.start_time.slice(0, 5)}</span>}
                         {/* At-a-glance add-on indicator — names when few, else count */}
                         {addons.length > 0 && (
-                          <button onClick={e => { e.stopPropagation(); setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setAddonsId(addonsId === job.id ? null : job.id) }}
+                          <button onClick={e => { e.stopPropagation(); toggleAddons(job) }}
                             title={addons.map(a => `${a.description} ${formatCurrency(Number(a.amount))}`).join(' · ')}
                             className="text-[10px] font-semibold text-accent-text border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5 shrink-0 hover:bg-accent/20">
                             +{addons.length <= 2 ? addons.map(a => a.description).join(' + ') : `${addons.length} services`}
@@ -882,8 +898,12 @@ export function DayOpsPanel({
                             className="tap-target h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border border-current/30 text-xs font-medium flex items-center justify-center gap-1 hover:bg-black/10">
                             <Receipt className="w-3.5 h-3.5" /> Invoice
                           </a>
+                          {/* "Edit job" (main's wording — it matches the overflow
+                              item and the quick panel's footer) driving the
+                              togglePhoto helper (this commit's point: closePanels()
+                              first, so two inline panels can never stack). */}
                           <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Edit job" />
-                          <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setAddonsId(null); setMessageId(null); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
+                          <ActionBtn onClick={() => togglePhoto(job)} icon={Camera} label="Photos" />
                         </div>
                       ) : (
                       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
@@ -906,7 +926,7 @@ export function DayOpsPanel({
                         >
                           <Navigation className="w-3.5 h-3.5" /> Route to
                         </a>
-                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setAddonsId(null); setMessageId(messageId === job.id ? null : job.id) }} icon={MessageSquare} label="Message" />
+                        <ActionBtn onClick={() => toggleMessage(job)} icon={MessageSquare} label="Message" />
                         {job.status === 'scheduled' && job.on_my_way_at && (
                           <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : `On my way · ${ONE_TAP_ETA_MIN}m`}
                             title={`Texts ${job.customers?.name || 'the customer'} that you'll arrive in about ${ONE_TAP_ETA_MIN} minutes. Use Message to send a different ETA.`} />
@@ -916,17 +936,18 @@ export function DayOpsPanel({
                         {job.status === 'scheduled' && (
                           <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onMarkDone(job) } finally { setActing(null) } }} icon={CheckCircle2} label="Complete" />
                         )}
-                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setAddonsId(null); setMessageId(null); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
-                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setMessageId(null); setAddonsId(addonsId === job.id ? null : job.id) }} icon={PlusCircle} label={addons.length ? `Services (${addons.length})` : 'Services'} />
-                        {/* Rare edit actions live in ONE overflow — same handlers, less
-                            chrome. Descriptions carry the hierarchy the flat list can't:
-                            "Quick edit" is the fast field change, "Edit job" is the whole
-                            record, "Move" reschedules — same wording as the completed
-                            card's Edit-job button and the quick panel's footer. */}
+                        {/* The toggle helpers (this commit) call closePanels() before
+                            opening, which is what stops two inline panels stacking —
+                            the hand-rolled setState chains they replace could only
+                            close the panels whose setters they happened to list.
+                            Main's richer overflow is kept: width + descriptions carry
+                            the hierarchy a flat list can't. */}
+                        <ActionBtn onClick={() => togglePhoto(job)} icon={Camera} label="Photos" />
+                        <ActionBtn onClick={() => toggleAddons(job)} icon={PlusCircle} label={addons.length ? `Services (${addons.length})` : 'Services'} />
                         <Menu align="end" width={300} items={[
                           { key: 'quick', label: 'Quick edit', description: 'Time, crew, status & notes — this visit', icon: SlidersHorizontal, onSelect: () => { quickId === job.id ? setQuickId(null) : openQuick(job) } },
                           { key: 'edit', label: 'Edit job', description: 'Property, title & the recurring schedule', icon: Pencil, onSelect: () => onOpenJob(job) },
-                          { key: 'move', label: 'Move to another day', description: 'Reschedule this visit to another date', icon: Move, onSelect: () => setMoveId(moveId === job.id ? null : job.id) },
+                          { key: 'move', label: 'Move to another day', description: 'Reschedule this visit to another date', icon: Move, onSelect: () => toggleMove(job) },
                         ]}>
                           {({ toggle, triggerProps }) => (
                             <Button size="sm" variant="ghost" onClick={toggle} aria-label="More actions" title="More actions" {...triggerProps}>
