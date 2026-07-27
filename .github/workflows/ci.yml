@@ -191,6 +191,15 @@ jobs:
       #              error.
       - name: Verify route
         run: npm run verify:route
+      #   customer-health — the lifecycle engine one layer above the signal
+      #              detectors: the 0–100 score, tier, flags and headline reason
+      #              the Growth screen sorts a whole book by. Pins the score
+      #              arithmetic, the off-season calm (a snow customer in July is
+      #              watch, never at_risk), reason precedence (overdue beats
+      #              unpaid), the capped unpaid penalty, and the value-weighted
+      #              worst-first sort.
+      - name: Verify customer health
+        run: npm run verify:customer-health
 
       # This step is why the first 17 CI runs were red, and it's worth writing down.
       # ESLint had never been configured in this repo — no .eslintrc anywhere — so
