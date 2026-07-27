@@ -4,9 +4,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { formatDistanceToNow } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
-import { cn } from '@/lib/utils'
+import { cn, timeAgo } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import type { Quote } from '@/types'
@@ -38,7 +37,6 @@ const ICON: Record<string, typeof FileText> = {
   payment_refunded: RotateCcw, payment_disputed: ShieldAlert,
   payment_dispute_lost: ShieldAlert, payment_dispute_won: ShieldCheck,
 }
-const timeAgo = (iso: string) => { try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) } catch { return '' } }
 
 // Fixed-position coordinates for the dropdown panel, measured from the bell.
 interface PanelPos { top: number; left: number; width: number; maxHeight: number }

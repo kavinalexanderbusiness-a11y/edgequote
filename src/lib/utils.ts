@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from 'clsx'
 import { twMerge } from 'tailwind-merge'
+import { formatDistanceToNow } from 'date-fns'
 import type { TravelFeeTier } from '@/types'
 
 export function cn(...inputs: ClassValue[]) {
@@ -26,6 +27,13 @@ export function formatDate(dateStr: string): string {
     month: 'short',
     day: 'numeric',
   }).format(parseLocalDate(dateStr))
+}
+
+// "3 minutes ago" — the long-form relative stamp (notifications bell + page).
+// Body moved verbatim from the two identical local copies; the inbox keeps its
+// own compact "5m" formatter on purpose (different density for list rows).
+export function timeAgo(iso: string): string {
+  try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) } catch { return '' }
 }
 
 // Local (not UTC) yyyy-MM-dd — evening work must not stamp tomorrow's date.

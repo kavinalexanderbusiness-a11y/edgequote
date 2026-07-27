@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { PageContainer } from '@/components/layout/PageContainer'
 import { useRouter } from 'next/navigation'
-import { formatDistanceToNow } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
 import { AppNotification } from '@/components/notifications/NotificationBell'
@@ -14,7 +13,7 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Banner } from '@/components/ui/Banner'
 import { SectionHeading } from '@/components/ui/SectionHeading'
-import { cn } from '@/lib/utils'
+import { cn, timeAgo } from '@/lib/utils'
 import { Bell, Check, FileText, DollarSign, MessageSquare, Globe, Star, CreditCard, AlertTriangle, RotateCcw, ShieldAlert, ShieldCheck, ChevronDown, Clock, X, Archive } from 'lucide-react'
 
 const ICON: Record<string, typeof FileText> = {
@@ -24,7 +23,6 @@ const ICON: Record<string, typeof FileText> = {
   payment_refunded: RotateCcw, payment_disputed: ShieldAlert,
   payment_dispute_lost: ShieldAlert, payment_dispute_won: ShieldCheck,
 }
-const timeAgo = (iso: string) => { try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) } catch { return '' } }
 // A website lead arrives as a portal_request whose body is the "New … lead — …"
 // summary. Detect it at the render layer so a hot prospect gets the lead treatment
 // (title, Build-quote action, accent) instead of reading like ordinary portal chatter.
