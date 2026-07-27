@@ -66,7 +66,18 @@ const nextConfig: NextConfig = {
 // skips source-map upload, and without a DSN the SDK never initialises. So CI and
 // local builds are unaffected, and a deploy that hasn't been given the env vars
 // behaves exactly as it does today.
-export default withSentryConfig(nextConfig, {
+//
+// …but "never initialises" is not "never ships": measured on this repo, the
+// wrapper injects the client SDK into the shared-by-all bundle — 187 kB → 106 kB
+// First Load JS on EVERY page (login, portal, booking, all of the dashboard)
+// with nothing to initialise it. So the wrap is gated on the env that makes it
+// do anything. The day the Sentry vars land in Vercel, this activates exactly
+// as written below — until then, no page pays for an inert SDK.
+const sentryEnabled = !!(
+  process.env.SENTRY_AUTH_TOKEN || process.env.SENTRY_DSN || process.env.NEXT_PUBLIC_SENTRY_DSN
+)
+
+const sentryWrapped = withSentryConfig(nextConfig, {
   org: process.env.SENTRY_ORG,
   project: process.env.SENTRY_PROJECT,
   authToken: process.env.SENTRY_AUTH_TOKEN,
@@ -92,3 +103,5 @@ export default withSentryConfig(nextConfig, {
     automaticVercelMonitors: true,
   },
 })
+
+export default sentryEnabled ? sentryWrapped : nextConfig
