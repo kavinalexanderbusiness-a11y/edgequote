@@ -7,7 +7,7 @@ Produced 2026-07-17 from a three-design panel (speed-first / AI-conversation-fir
 
 **The thesis:** a person starting a landscaping business does not want to configure software; they want to hand a neighbour a price. So the wizard's only job is to get out of the way: **one 60-second screen, then a real quote for a real customer.** Every other setting is captured as a side-effect of quoting, or deferred to the SetupProgress card that already exists. Configuration is what happens *while* they work, not before they're allowed to.
 
-**Not a second system.** Every piece below is an evolution of the shipped `/setup` wizard and its seeding engine (`applyTradeSelection` / pure `seedPlan`, fills-emptiness-only, fail-closed), a *presentation mode* of the existing QuoteBuilder, and new tasks in the existing `lib/ai/assist` registry. "Onboarding done" stays exactly what it is today — the `business_settings` row exists; no flag columns. "First-run" is *derived*: `quotes count === 0` (and, for one branch, `service_templates count === 0`), the same derivation philosophy as setupHealth.
+**Not a second system.** *(Per PRODUCT-VISION.md §5.1 — one engine per responsibility.)* Every piece below is an evolution of the shipped `/setup` wizard and its seeding engine (`applyTradeSelection` / pure `seedPlan`, fills-emptiness-only, fail-closed), a *presentation mode* of the existing QuoteBuilder, and new tasks in the existing `lib/ai/assist` registry. "Onboarding done" stays exactly what it is today — the `business_settings` row exists; no flag columns. "First-run" is *derived*: `quotes count === 0` (and, for one branch, `service_templates count === 0`), the same derivation philosophy as setupHealth.
 
 ---
 
