@@ -255,3 +255,13 @@ jobs:
       # at the door). Deterministic (explicit dates); pins the overlay + the gate.
       - name: Verify quote status
         run: npm run verify:quote-status
+
+      # lib/visitValue is THE "what is one visit worth" seam (~17 importers: geo/optimizer,
+      # accounting, businessIntelligence, dashboards, reactivation, the invoice engine). A
+      # wrong value is the RPT-1 disease — a recurring visit valued at its setup-inflated
+      # first-visit price, or a null-priced job counted as $0 revenue — and the margin on
+      # the owner's screen is simply wrong while tsc/build stay green. Pins the price-BUCKET
+      # resolution (month/quarterly/annual all → monthly; there is no annual column) and
+      # jobVisitValue's precedence (manual price wins; the anchor visit uses INITIAL price).
+      - name: Verify visit value
+        run: npm run verify:visit-value
