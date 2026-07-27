@@ -611,7 +611,21 @@ export function QuoteBuilder({
           <DraftRestoreBanner
             savedAt={autosave.savedAt}
             label="unsaved quote"
-            onRestore={() => { const v = autosave.restore(); if (v) reset(v) }}
+            onRestore={() => {
+              const v = autosave.restore()
+              if (!v) return
+              reset(v)
+              // reset() restores the VALUES but not the ownership state, and the
+              // draft never persisted priceOrigin/includeMonthly. Left at 'empty',
+              // the reconciliation effect immediately overwrote a restored
+              // hand-typed price with the live labour suggestion — then the
+              // debounced autosave wrote that wrong price back over the draft too.
+              // Same inference the saved-quote load path already makes (a loaded
+              // non-zero price is the owner's own decision → 'manual'; a non-zero
+              // monthly means monthly was enabled).
+              if ((Number(v.initial_price) || 0) > 0) setPriceOrigin('manual')
+              if ((Number(v.monthly_price) || 0) > 0) setIncludeMonthly(true)
+            }}
             onDiscard={autosave.discard}
           />
         </div>
