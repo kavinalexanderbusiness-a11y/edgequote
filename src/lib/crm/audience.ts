@@ -124,6 +124,39 @@ async function narrowToRecurring<T extends { id: string }>(
   return rows.filter(r => recurring.has(r.id))
 }
 
+// Keep only customers who have actually RECEIVED SERVICE — at least one job that
+// reached status 'completed'. Chunked like narrowToRecurring so a big book can't
+// overflow the request URI.
+//
+// This is THE review campaign's legitimacy gate. Without it, `not_reviewed` selects
+// every active customer we simply haven't asked yet — including brand-new records,
+// imported contacts, and never-served leads. Asking someone for a review of work you
+// never did for them is both embarrassing and against Google/review-platform policy.
+//
+// It mirrors the day-after review automation exactly (api/cron/notifications:
+// jobs.scheduled_date = yesterday AND status = 'completed'), so the two review
+// senders agree on who is even a candidate — the campaign is the periodic sweep of
+// the SAME served population the automation asks per job, which is what the review
+// preset's own blurb promises ("the day-after automation covers new jobs; this one
+// sweeps up the rest").
+async function narrowToServed<T extends { id: string }>(
+  sb: SupabaseClient, rows: T[], spec: AudienceSpec,
+): Promise<T[]> {
+  if (!rows.length) return rows
+  const served = new Set<string>()
+  for (let i = 0; i < rows.length; i += IN_CHUNK) {
+    const ids = rows.slice(i, i + IN_CHUNK).map(r => r.id)
+    const { data, error } = await sb.from('jobs')
+      .select('customer_id')
+      .eq('user_id', spec.userId)
+      .eq('status', 'completed')
+      .in('customer_id', ids)
+    if (error) throw new Error(`served lookup failed: ${error.message}`)
+    for (const r of ((data as { customer_id: string }[]) || [])) served.add(r.customer_id)
+  }
+  return rows.filter(r => served.has(r.id))
+}
+
 async function loadPool(sb: SupabaseClient, spec: AudienceSpec): Promise<{ rows: AudienceCustomer[]; capped: boolean }> {
   // A stable order makes the MAX_AUDIENCE bound deterministic: without it Postgres
   // may return any 2000 rows, so the preview and the cron could slice different
@@ -160,6 +193,10 @@ export async function resolveAudience(
   else if (spec.kind === 'anniversary') out = out.filter(c => dateFieldFiresToday(c.anniversary, spec.today, leadDays))
 
   if (spec.audience?.recurring_only) out = await narrowToRecurring(sb, out, spec)
+  // A review request is only legitimate for someone we actually served. Gated on
+  // the KIND, not an owner toggle — there is no correct configuration in which a
+  // review campaign asks a never-served customer, so it can't be switched off.
+  if (spec.kind === 'review') out = await narrowToServed(sb, out, spec)
   return { customers: out, capped }
 }
 
@@ -192,7 +229,10 @@ export async function previewAudience(
   sb: SupabaseClient, spec: AudienceSpec, channels: string[], template: MsgType,
 ): Promise<AudiencePreview> {
   const { rows, capped } = await loadPool(sb, spec)
-  const pool = spec.audience?.recurring_only ? await narrowToRecurring(sb, rows, spec) : rows
+  // Same narrowing as the send path (resolveAudience) so the preview count can't
+  // over-promise: recurring_only, then the review kind's served-customers gate.
+  let pool = spec.audience?.recurring_only ? await narrowToRecurring(sb, rows, spec) : rows
+  if (spec.kind === 'review') pool = await narrowToServed(sb, pool, spec)
 
   const counts = new Map<string, number>()
   let reachable = 0
