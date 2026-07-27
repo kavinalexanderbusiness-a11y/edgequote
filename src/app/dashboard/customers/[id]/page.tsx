@@ -771,6 +771,14 @@ export default function CustomerDetailPage() {
               <Textarea
                 value={notesValue}
                 onChange={e => setNotesValue(e.target.value)}
+                // ⌘/Ctrl+Enter saves, Escape cancels — the same keyboard contract
+                // ui/Modal already gives every dialog, so the busiest inline editor
+                // in the app doesn't force a trip to the mouse mid-note. Mirrors the
+                // Save/Cancel buttons below exactly (Cancel restores the saved value).
+                onKeyDown={e => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); if (!savingNotes) saveNotes() }
+                  else if (e.key === 'Escape') { e.preventDefault(); setNotesValue(customer.notes || ''); setEditingNotes(false) }
+                }}
                 rows={4}
                 autoFocus
                 placeholder="Gate codes, dog info, preferred contact, billing notes, access instructions, equipment restrictions..."
