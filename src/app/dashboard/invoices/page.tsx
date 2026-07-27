@@ -854,6 +854,17 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
     const { error } = await supabase.from('invoices').update(patch).eq('id', inv.id)
     setSaving(false)
     if (error) { notify.error('Could not save the invoice: ' + error.message); return }
+    // A money edit re-derives status/amount_paid/paid_at in the DB (the same
+    // recompute engine payments fire — trg_recompute_invoice_on_edit). RETURNING
+    // can't see that AFTER-trigger write, so read the row back: discounting an
+    // invoice to exactly what's been paid flips it to 'paid' and the pill must
+    // say so now, not after a refresh. Best-effort — on a failed read the edit
+    // is still saved and the next fetch shows the derived state.
+    if (!locked) {
+      const { data: derived } = await supabase.from('invoices')
+        .select('status, amount_paid, paid_at').eq('id', inv.id).maybeSingle()
+      if (derived) Object.assign(patch, derived)
+    }
     onSaved(patch as Partial<Invoice>)
   }
 
