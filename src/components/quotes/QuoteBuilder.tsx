@@ -351,7 +351,13 @@ export function QuoteBuilder({
   const travelSummary = Number(travelFee) > 0
     ? `${formatCurrency(Number(travelFee))}${distanceKm > 0 ? ` · ${distanceKm} km` : ''}`
     : (includeTravel ? 'No fee yet' : 'Absorbing travel')
-  const laborSummary = `${Number(hours) || 0} hr · ${crewSize} crew · ${formatCurrency(Number(rate))}/hr`
+  // "0 hr · 1 crew · $0.00/hr" is not a summary, it's a fabricated fact — the $0.00
+  // asserts the owner's rate IS zero on the very form whose doctrine is "unknown
+  // stays unknown". Until something real is entered, say so in words, like the
+  // travel ('No fee yet') and plan ('One-time quote') summaries already do.
+  const laborSummary = Number(hours) > 0 || Number(rate) > 0 || Number(crewSize) > 1
+    ? `${Number(hours) || 0} hr · ${crewSize} crew · ${formatCurrency(Number(rate))}/hr`
+    : 'Not estimated yet'
 
   useEffect(() => {
     if (!customerId || customerId === '__manual') return
@@ -1269,7 +1275,12 @@ export function QuoteBuilder({
             )}
           </Collapsible>
 
-          <Collapsible title="Scheduling" icon={SlidersHorizontal}>
+          {/* Sparkles, not SlidersHorizontal: sharing Advanced Pricing's icon made
+              the first and last sections in the stack wear the same glyph, so the
+              icon column stopped working as a map. Sparkles already brands the
+              best-days content inside. The summary line brings it in line with
+              every other collapsed section (all the rest reveal their state). */}
+          <Collapsible title="Scheduling" icon={Sparkles} summary="Best days to schedule">
             <div className="pt-1">
               <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide flex items-center gap-2 mb-2">
                 <Sparkles className="w-3.5 h-3.5 text-accent-text" /> Best days to schedule
