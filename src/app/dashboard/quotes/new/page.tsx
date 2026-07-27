@@ -144,7 +144,7 @@ export default function NewQuotePage() {
       // because a lost draft is recoverable in ten seconds and a silent orphan is not
       // recoverable at all.
       toast.error('Could not link this quote to a customer — nothing was saved. Check your connection and press Save again.')
-      return
+      return false   // nothing saved — keep the autosave draft the toast relies on
     }
 
     const mult = Number(values.overgrowth_multiplier) || 1
@@ -172,7 +172,7 @@ export default function NewQuotePage() {
     const ver = await ensureCurrentPricingConfigVersion(supabase, user!.id)
     if (!ver.ok) {
       toast.error('Could not record which pricing settings this quote used — nothing was saved. Check your connection and press Save again.')
-      return
+      return false   // nothing saved — keep the autosave draft
     }
 
     const { data, error } = await supabase.from('quotes').insert({
@@ -344,6 +344,7 @@ export default function NewQuotePage() {
       router.push(`/dashboard/quotes/${data.id}`)
     } else if (error) {
       toast.error('Could not save quote: ' + error.message)
+      return false   // insert failed — keep the autosave draft
     }
   }
 

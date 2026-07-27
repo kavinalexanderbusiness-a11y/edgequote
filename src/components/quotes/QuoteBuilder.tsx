@@ -48,7 +48,10 @@ interface QuoteBuilderProps {
   // property's address + saved lawn size instead of the customer's primary.
   defaultPropertyId?: string
   defaultValues?: Partial<QuoteFormValues>
-  onSubmit: (values: QuoteFormValues) => Promise<void>
+  /** Return `false` to signal "nothing was saved" — the autosave draft is kept so a
+      refresh after the failure toast can still restore everything the owner typed.
+      Returning void/undefined (or true) means saved: the draft is cleared as before. */
+  onSubmit: (values: QuoteFormValues) => Promise<void | boolean>
   isEdit?: boolean
   /** Autosave key — defaults per new/edit; pass a precise one (e.g. `quote:${id}`). */
   autosaveKey?: string
@@ -150,7 +153,13 @@ export function QuoteBuilder({
     baselineUpdatedAt: autosaveBaselineUpdatedAt ?? null,
     isEmpty: v => !v.customer_id && !v.customer_name?.trim() && !v.address?.trim() && !v.service_type?.trim() && !(Number(v.initial_price) > 0),
   })
-  const submit = handleSubmit(async v => { await onSubmit(v); autosave.clear() })
+  // Clear the draft ONLY when something was saved. Every failure path in the pages
+  // toasts and resolves normally (deliberately — the form state must survive), so an
+  // unconditional clear() here deleted the one DURABLE copy of a first quote at the
+  // exact moment the toast said "nothing was saved… press Save again": the refresh
+  // that toast invites then lost everything. `ok !== false` keeps old void-returning
+  // callers byte-identical on success.
+  const submit = handleSubmit(async v => { const ok = await onSubmit(v); if (ok !== false) autosave.clear() })
 
   const [calcLoading, setCalcLoading] = useState(false)
   const [calcMsg, setCalcMsg] = useState<{ text: string; error?: boolean } | null>(null)

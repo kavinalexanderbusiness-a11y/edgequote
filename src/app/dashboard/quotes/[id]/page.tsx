@@ -176,7 +176,7 @@ export default function QuoteDetailPage() {
       const ver = await ensureCurrentPricingConfigVersion(supabase, user!.id)
       if (!ver.ok) {
         toast.error('Could not record which pricing settings this change used — nothing was saved. Check your connection and press Save again.')
-        return
+        return false   // nothing saved — keep the autosave draft the toast relies on
       }
       provenance = {
         price_source: 'engine',
@@ -280,6 +280,7 @@ export default function QuoteDetailPage() {
       }
     } else if (error) {
       toast.error('Could not update quote: ' + error.message)
+      return false   // update failed — keep the autosave draft
     }
   }
 
