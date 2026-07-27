@@ -225,7 +225,14 @@ export function QuoteBuilder({
   const [showMeasure, setShowMeasure] = useState(false)
   // Mobile-only: the desktop preview card is lg-only, so the phone needs a way in.
   const [showPreview, setShowPreview] = useState(false)
-  const [includeTravel, setIncludeTravel] = useState(true)
+  // Derived from the quote being edited, not assumed. It was hardcoded `true`, so
+  // reopening a quote whose travel the owner had deliberately absorbed showed the
+  // toggle reading "Charging travel fee" over a $0 fee — the control stating the
+  // opposite of the document it belongs to. Worse than the label: with the flag on,
+  // a later "Calculate distance" re-applies the tier fee, silently adding money to
+  // a quote that was written without any. A NEW quote still starts as "charging"
+  // (nothing to infer from, and charging is the right default posture).
+  const [includeTravel, setIncludeTravel] = useState(!isEdit || (Number(defaultValues?.travel_fee) || 0) > 0)
   // Loading a saved quote → that price is the owner's own past decision, so it is
   // never live-overwritten by a suggestion (same behaviour the old boolean had).
   const [priceOrigin, setPriceOrigin] = useState<PriceOrigin>(
@@ -709,28 +716,54 @@ export function QuoteBuilder({
   // laptop. Same JSX both places: one breakdown, no second copy to drift.
   const previewBreakdown = (
     <>
-      <div className="flex items-center justify-between text-sm">
-        <span className="flex items-center gap-2 text-ink-muted"><Clock className="w-3.5 h-3.5" /> Hours</span>
-        <span className="text-ink font-medium tabular-nums">{Number(hours).toFixed(1)} hrs · {crewSize} crew</span>
-      </div>
+      {/* Only when there ARE hours. `Number(hours).toFixed(1)` rendered unknown
+          hours as "0.0 hrs · 1 crew" — a confident claim that the job takes no
+          time, in the one place the owner checks their numbers, on a form whose
+          doctrine is "unknown stays unknown". The labour SUMMARY one section up
+          already says "Not estimated yet" for exactly this state; the breakdown
+          was still asserting the zero. */}
+      {Number(hours) > 0 && (
+        <div className="flex items-center justify-between text-sm">
+          <span className="flex items-center gap-2 text-ink-muted"><Clock className="w-3.5 h-3.5" /> Hours</span>
+          <span className="text-ink font-medium tabular-nums">{Number(hours).toFixed(1)} hrs · {crewSize} crew</span>
+        </div>
+      )}
       <div className="border-t border-border pt-3 space-y-2">
         <div className="flex items-center justify-between">
           <span className="text-sm text-ink-muted">First visit{priceOrigin === 'manual' ? ' (manual)' : ''}</span>
-          <span className="text-ink font-semibold tabular-nums">{formatCurrency(initialPrice)}</span>
+          <span className="text-ink font-semibold tabular-nums">{initialPrice > 0 ? formatCurrency(initialPrice) : '—'}</span>
         </div>
-        {extras.net > 0 && (
+        {/* Split, and counted correctly. ONE row labelled "Additional services
+            (N)" used serviceLines.fields.length — the length of the array holding
+            BOTH kinds — over a figure that also included materials. One hedge trim
+            plus two yards of mulch read "Additional services (3)". Both subtotals
+            come from the same sumServiceLines engine as `extras`, and
+            serviceExtras.net + materialsSum.net === extras.net, so the total below
+            is untouched. */}
+        {serviceExtras.net > 0 && (
           <div className="flex items-center justify-between text-sm">
-            <span className="flex items-center gap-2 text-ink-muted"><Layers className="w-3.5 h-3.5" /> Additional services ({serviceLines.fields.length})</span>
-            <span className="text-ink font-medium tabular-nums">{formatCurrency(extras.net)}</span>
+            <span className="flex items-center gap-2 text-ink-muted"><Layers className="w-3.5 h-3.5" /> Additional services ({serviceIdx.length})</span>
+            <span className="text-ink font-medium tabular-nums">{formatCurrency(serviceExtras.net)}</span>
           </div>
         )}
-        <div className="flex items-center justify-between text-sm">
-          <span className="flex items-center gap-2 text-ink-muted"><Car className="w-3.5 h-3.5" /> Travel{showTravelSeparately ? ' (shown)' : ''}</span>
-          <span className="text-ink font-medium tabular-nums">{formatCurrency(Number(travelFee))}</span>
-        </div>
+        {materialsSum.net > 0 && (
+          <div className="flex items-center justify-between text-sm">
+            <span className="flex items-center gap-2 text-ink-muted"><Package className="w-3.5 h-3.5" /> Materials ({materialIdx.length})</span>
+            <span className="text-ink font-medium tabular-nums">{formatCurrency(materialsSum.net)}</span>
+          </div>
+        )}
+        {/* A $0.00 travel line on a quote with no travel fee is a row that only
+            ever says "nothing here"; the Travel section's own summary already
+            reports "No fee yet" / "Absorbing travel". */}
+        {Number(travelFee) > 0 && (
+          <div className="flex items-center justify-between text-sm">
+            <span className="flex items-center gap-2 text-ink-muted"><Car className="w-3.5 h-3.5" /> Travel{showTravelSeparately ? ' (shown)' : ''}</span>
+            <span className="text-ink font-medium tabular-nums">{formatCurrency(Number(travelFee))}</span>
+          </div>
+        )}
         <div className="flex items-center justify-between pt-2 border-t border-border">
           <span className="text-sm font-semibold text-ink">First visit total</span>
-          <span className="text-2xl font-bold text-accent-text tabular-nums">{formatCurrency(effectiveTotal)}</span>
+          <span className="text-2xl font-bold text-accent-text tabular-nums">{effectiveTotal > 0 ? formatCurrency(effectiveTotal) : '—'}</span>
         </div>
       </div>
       {(weeklyPrice > 0 || biweeklyPrice > 0 || monthlyPrice > 0) && (
@@ -1057,6 +1090,45 @@ export function QuoteBuilder({
                 </div>
               )}
 
+              {/* ── THE PRICE ────────────────────────────────────────────────────
+                  The number the whole document is about, and it lived one
+                  disclosure deep inside a COLLAPSED "Advanced Pricing" — directly
+                  under a card that says, in this very card body, "No recommended
+                  price · …type a price." There was no price field on screen to
+                  type it into. That is the DEFAULT state for every trade the lawn
+                  engine can't price and for every business with no history yet,
+                  and editing a saved quote to change its price was the same hunt.
+                  It is one field; it belongs under whatever recommendation is (or
+                  isn't) offered. Same registration, same hint states, same
+                  priceOrigin tracking — only its position changed. */}
+              <div>
+                <Input label="Price ($, first visit)" type="number" step="1" min="0"
+                  className="text-lg font-semibold tabular-nums"
+                  hint={
+                    priceOrigin === 'manual'
+                      ? (serviceRec ? `Manual — overrides the ${formatCurrency(serviceRec.price)} recommendation.` : 'Manual — no recommendation available for this service.')
+                      : priceOrigin === 'applied'
+                        ? 'Applied from the recommendation. Type to override.'
+                        : serviceRec
+                          ? `Suggested ${formatCurrency(serviceRec.price)} — ${serviceRec.basis}. Type to override.`
+                          : 'No recommendation for this service yet — enter your price.'
+                  }
+                  {...register('initial_price', { min: 0, onChange: () => { setPriceOrigin('manual'); setPickedCadence(null) } })} />
+                {/* Only offer "use the recommendation" when one actually exists. */}
+                {priceOrigin === 'manual' && serviceRec && (
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setPriceOrigin('empty')} className="mt-1.5">
+                    Use suggested ({formatCurrency(serviceRec.price)})
+                  </Button>
+                )}
+              </div>
+
+              {/* Guardrails follow the price they judge. They rendered inside the
+                  "Plan pricing" sub-section, so a warning that the FIRST-VISIT
+                  price is below the crew-cost floor waited for someone to open a
+                  section about recurring plans. A never-block warning nobody sees
+                  is not a warning. Moved, not copied. */}
+              <PriceGuardrailNote guardrails={priceGuardrails} />
+
             </CardBody>
           </Card>
 
@@ -1101,27 +1173,8 @@ export function QuoteBuilder({
             </div>
           )}
 
-          {/* Price — the hint states where the number came from, and admits when
-              there is no recommendation to fall back to. */}
-          <div>
-            <Input label="Price ($, first visit)" type="number" step="1" min="0"
-              hint={
-                priceOrigin === 'manual'
-                  ? (serviceRec ? `Manual — overrides the ${formatCurrency(serviceRec.price)} recommendation.` : 'Manual — no recommendation available for this service.')
-                  : priceOrigin === 'applied'
-                    ? 'Applied from the recommendation. Type to override.'
-                    : serviceRec
-                      ? `Suggested ${formatCurrency(serviceRec.price)} — ${serviceRec.basis}. Type to override.`
-                      : 'No recommendation for this service yet — enter your price.'
-              }
-              {...register('initial_price', { min: 0, onChange: () => { setPriceOrigin('manual'); setPickedCadence(null) } })} />
-            {/* Only offer "use the recommendation" when one actually exists. */}
-            {priceOrigin === 'manual' && serviceRec && (
-              <Button type="button" variant="ghost" size="sm" onClick={() => setPriceOrigin('empty')} className="mt-1.5">
-                Use suggested ({formatCurrency(serviceRec.price)})
-              </Button>
-            )}
-          </div>
+          {/* The price field itself now lives in the fast path above — see the
+              note there. What stays here is the engine that FEEDS it. */}
 
           <Collapsible title="Labour calculator" icon={Calculator} summary={laborSummary}>
             <p className="text-xs text-ink-faint">Hours × crew × rate — this is what the suggested price above is built from when there’s no measurement to price against.</p>
@@ -1176,7 +1229,8 @@ export function QuoteBuilder({
               <Input label="Bi-Weekly ($/visit)" type="number" step="1" min="0" {...register('biweekly_price', { min: 0 })} />
               <Input label="Monthly ($/visit)" type="number" step="1" min="0" {...register('monthly_price', { min: 0 })} />
             </div>
-            <PriceGuardrailNote guardrails={priceGuardrails} />
+            {/* The guardrail note moved up beside the price it judges (fast path).
+                One instance, so the two can't disagree about what's warned. */}
           </Collapsible>
 
           <Collapsible title="Travel" icon={Car} summary={travelSummary}>
@@ -1477,7 +1531,9 @@ export function QuoteBuilder({
           <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1">
             First visit total <ChevronUp className="w-3 h-3" />
           </p>
-          <p className="text-xl font-bold text-accent-text leading-none tabular-nums">{formatCurrency(effectiveTotal)}</p>
+          {/* Matches the breakdown it opens: an unpriced quote reads "—", not a
+              confident $0.00 sitting where the price goes. */}
+          <p className="text-xl font-bold text-accent-text leading-none tabular-nums">{effectiveTotal > 0 ? formatCurrency(effectiveTotal) : '—'}</p>
         </button>
         <div className="flex items-center gap-2 shrink-0">
           <Button type="button" variant="ghost" size="sm" onClick={() => router.back()}>Cancel</Button>
