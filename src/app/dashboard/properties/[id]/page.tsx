@@ -253,6 +253,12 @@ export default function PropertyDetailPage() {
           {editingNotes ? (
             <div className="space-y-3">
               <Textarea value={notesDraft} onChange={e => setNotesDraft(e.target.value)} rows={3} autoFocus
+                // ⌘/Ctrl+Enter saves, Escape cancels — same keyboard contract as
+                // ui/Modal and the customer-profile note editor. Mirrors the buttons below.
+                onKeyDown={e => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); if (!savingNotes) saveNotes() }
+                  else if (e.key === 'Escape') { e.preventDefault(); setEditingNotes(false) }
+                }}
                 placeholder="Anything worth knowing about this property…" />
               <p className="text-[11px] text-ink-faint">Visible to the customer on their portal (“Notes from your provider”). Private notes belong on the customer’s profile.</p>
               <div className="flex items-center justify-end gap-2">

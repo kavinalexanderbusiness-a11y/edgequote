@@ -10,7 +10,8 @@ git log, not assumed — a blocker is "done" only when it is on `main`.
 The roadmap began as **104 audit findings reduced to 13 canonical blockers + 1
 owner decision** (root pattern the owner accepted: *a canonical seam is
 introduced, the old execution path keeps running* — every fix ENFORCES the seam
-by deleting or routing the old caller, never adds a new one).
+by deleting or routing the old caller, never adds a new one). This is
+PRODUCT-VISION.md §5.1–§5.2 (one engine per responsibility; enforce with the DB).
 
 ---
 

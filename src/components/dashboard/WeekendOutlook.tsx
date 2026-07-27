@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { format, parseISO } from 'date-fns'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { InlineEmpty } from '@/components/ui/EmptyState'
 import { formatCurrency, cn } from '@/lib/utils'
 import type { DayPlan } from '@/lib/dashboard/dayPlan'
 import { CalendarRange, Phone, MapPin, DollarSign, Clock, Plus } from 'lucide-react'
@@ -22,13 +23,24 @@ export function WeekendOutlook({ plan }: { plan: DayPlan }) {
           </span>
           <h2 className="text-sm font-bold tracking-tight text-ink">Your next work days</h2>
         </span>
-        <span className="ml-auto flex items-center gap-3 text-xs text-ink-muted tabular-nums">
-          <span className="flex items-center gap-1"><DollarSign className="w-3 h-3 text-accent-text" />{formatCurrency(totalRevenue)}</span>
-          <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{totalHours}h</span>
-          <span>{totalJobs} job{totalJobs !== 1 ? 's' : ''}</span>
-        </span>
+        {/* Totals only when there ARE days to total — "$0 · 0h · 0 jobs" above an
+            empty card is noise, not information. */}
+        {groups.length > 0 && (
+          <span className="ml-auto flex items-center gap-3 text-xs text-ink-muted tabular-nums">
+            <span className="flex items-center gap-1"><DollarSign className="w-3 h-3 text-accent-text" />{formatCurrency(totalRevenue)}</span>
+            <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{totalHours}h</span>
+            <span>{totalJobs} job{totalJobs !== 1 ? 's' : ''}</span>
+          </span>
+        )}
       </CardHeader>
       <CardBody className="p-0">
+        {/* No work days to show (no jobs today and no preferred work days set —
+            typically a brand-new or unconfigured book). Say so plainly instead
+            of leaving a blank card; "what's next" here is: plan the week. The
+            "Open Schedule →" footer below is the door. */}
+        {groups.length === 0 ? (
+          <InlineEmpty icon={CalendarRange}>Nothing scheduled yet — plan your week from the schedule.</InlineEmpty>
+        ) : (
         <div className="divide-y divide-border">
           {groups.map(g => (
             // Today gets a faint accent wash + a Today chip — of three near-identical
@@ -71,7 +83,17 @@ export function WeekendOutlook({ plan }: { plan: DayPlan }) {
                         {j.service_type && <span className="text-ink-faint truncate hidden sm:inline">· {j.service_type}</span>}
                       </span>
                       <span className="flex items-center gap-1 shrink-0">
-                        <span className={cn('tabular-nums', j.value > 0 ? 'text-ink-muted' : 'text-amber-400')}>{j.value > 0 ? formatCurrency(j.value) : '$?'}</span>
+                        {/* A booked job with no price is an UNKNOWN value, and the
+                          honesty rule is explicit: unknown renders as "—", never
+                          0 (and never an alarm). It used to show amber "$?" — but
+                          amber means risk on this page (overdue money, an
+                          overloaded day), and an unpriced job is a data gap, not
+                          a risk. Spending the alarm colour on it both mis-signals
+                          severity and reads as an anxiety-prompt with no fix here
+                          (pricing lives on the quote). Quiet "—" tells the truth
+                          without crying wolf, matching the "—" the month strip
+                          already uses for an unknown rate. */}
+                      <span className={cn('tabular-nums', j.value > 0 ? 'text-ink-muted' : 'text-ink-faint')}>{j.value > 0 ? formatCurrency(j.value) : '—'}</span>
                         {/* 40px hit areas — these get tapped with gloves on.
                             aria-label names the CUSTOMER, not the verb: `title`
                             alone is a last-resort accessible name, and a column
@@ -98,6 +120,7 @@ export function WeekendOutlook({ plan }: { plan: DayPlan }) {
             </div>
           ))}
         </div>
+        )}
         <div className="px-5 py-2.5 border-t border-border">
           <Link href="/dashboard/schedule" className="text-xs text-accent-text font-medium hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Open Schedule →</Link>
         </div>

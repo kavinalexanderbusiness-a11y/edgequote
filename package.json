@@ -32,12 +32,22 @@
     "verify:reports": "tsx scripts/verify-reports.ts",
     "verify:recurrence": "tsx scripts/verify-recurrence.ts",
     "verify:dedup": "tsx scripts/verify-dedup.ts",
+    "verify:dedup-contract": "tsx scripts/verify-dedup-contract.ts",
     "verify:route": "tsx scripts/verify-route.ts",
+    "verify:route-characterization": "tsx scripts/verify-route-characterization.ts",
+    "verify:customer-health": "tsx scripts/verify-customer-health.ts",
+    "verify:invoice-totals": "tsx scripts/verify-invoice-totals.ts",
+    "verify:signals": "tsx scripts/verify-signals.ts",
+    "verify:sms-segments": "tsx scripts/verify-sms-segments.ts",
     "verify:customer-v2": "tsx scripts/verify-customer-v2.ts",
     "verify:portal": "tsx scripts/verify-portal.ts",
     "verify:lead-intake": "tsx scripts/verify-lead-intake.ts",
     "verify:quote-status": "tsx scripts/verify-quote-status.ts",
-    "verify:invoice-status": "tsx scripts/verify-invoice-status.ts"
+    "verify:invoice-status": "tsx scripts/verify-invoice-status.ts",
+    "verify:dedup-contract": "tsx scripts/verify-dedup-contract.ts",
+    "verify:followup": "tsx scripts/verify-followup.ts",
+    "verify:booking-photos": "tsx scripts/verify-booking-photos.ts",
+    "verify:booking-link": "tsx scripts/verify-booking-link.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

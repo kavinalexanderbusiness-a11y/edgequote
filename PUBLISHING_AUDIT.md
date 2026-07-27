@@ -16,14 +16,14 @@ _Scope requested: direct auto-publish (real OAuth + provider `publish()` to Meta
 
 ## Root cause — four layers, all stubbed
 
-1. **No provider is live.** [`providers.ts`](website-int/src/lib/marketing/providers.ts): facebook/instagram/gbp/linkedin/threads are all `apiStatus:'planned'`; nextdoor is `'unavailable'`. A `planned` provider's `publish()` **throws** `ProviderError('api_unavailable')`.
+1. **No provider is live.** [`providers.ts`](src/lib/marketing/providers.ts): facebook/instagram/gbp/linkedin/threads are all `apiStatus:'planned'`; nextdoor is `'unavailable'`. A `planned` provider's `publish()` **throws** `ProviderError('api_unavailable')`.
 2. **`effectiveMode` can only return `'manual'`.** It returns `'api'` only when `apiStatus==='available'` — which is never true. So even an `api`-mode connection is downgraded to manual.
-3. **The OAuth round-trip is a no-op.** [`connect/callback`](website-int/src/app/api/marketing/connect/callback/route.ts) validates CSRF state and then **returns `connect=pending`** — it never exchanges the `code` for tokens and never inserts an `api`-mode connection. (Comment: *"Not yet wired → pending."*)
-4. **The dispatch is never reached.** In [`publishQueue.processJobNow`](website-int/src/lib/marketing/publishQueue.ts), `mode==='manual'` short-circuits to "queued + copy/open" before `dispatchPublish`. The real publish branch is dead code in practice.
+3. **The OAuth round-trip is a no-op.** [`connect/callback`](src/app/api/marketing/connect/callback/route.ts) validates CSRF state and then **returns `connect=pending`** — it never exchanges the `code` for tokens and never inserts an `api`-mode connection. (Comment: *"Not yet wired → pending."*)
+4. **The dispatch is never reached.** In [`publishQueue.processJobNow`](src/lib/marketing/publishQueue.ts), `mode==='manual'` short-circuits to "queued + copy/open" before `dispatchPublish`. The real publish branch is dead code in practice.
 
 ## How that produces the exact symptoms
 
-- **"Published but nothing appears."** [`PublishPanel`](website-int/src/components/grow/marketing/PublishPanel.tsx) → manual path copies the caption, `window.open`s the platform, then the owner clicks **Mark as posted** → `markManualPublished` sets the **piece + job to `published` with no proof** (no external URL required). If the owner clicks it without actually pasting (easy to do — it looks like it published), the piece reads *Published* while the platform has nothing. Picking the "connected" Facebook account behaves **identically to Copy & paste** — the account selection is cosmetic.
+- **"Published but nothing appears."** [`PublishPanel`](src/components/grow/marketing/PublishPanel.tsx) → manual path copies the caption, `window.open`s the platform, then the owner clicks **Mark as posted** → `markManualPublished` sets the **piece + job to `published` with no proof** (no external URL required). If the owner clicks it without actually pasting (easy to do — it looks like it published), the piece reads *Published* while the platform has nothing. Picking the "connected" Facebook account behaves **identically to Copy & paste** — the account selection is cosmetic.
 - **Silent failures.** Because the API branch is never taken, the owner never sees "auto-publish isn't available." The system quietly degrades to manual; a post that the owner believed would auto-post just sits `queued`. The one error that *would* surface (`api_unavailable`) is unreachable.
 
 ## Why this isn't a one-line fix

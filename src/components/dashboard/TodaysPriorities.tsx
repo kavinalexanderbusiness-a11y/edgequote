@@ -34,7 +34,18 @@ export function TodaysPriorities({ items }: { items: Priority[] }) {
         <span className="w-7 h-7 rounded-lg bg-accent/15 border border-accent/25 icon-glow flex items-center justify-center shrink-0">
           <ListChecks className="w-4 h-4 text-accent-text" />
         </span>
-        <h2 className="text-sm font-bold tracking-tight text-ink">Today&rsquo;s Priorities</h2>
+        <div className="min-w-0">
+          <h2 className="text-sm font-bold tracking-tight text-ink">Today&rsquo;s Priorities</h2>
+          {/* Name the ordering. The queue IS ranked (urgency × value, per the
+              engine's own description) and #1 wears "Do first" — but nothing told
+              the owner the list is deliberately ordered rather than an arbitrary
+              pile, so "work top-down" wasn't legible. This is the vision's
+              "explain the ranking" posture, in plain words. Only when there are
+              rows to rank — the empty state speaks for itself. */}
+          {items.length > 0 && (
+            <p className="text-[11px] text-ink-muted">Most urgent and highest-value first</p>
+          )}
+        </div>
       </div>
 
       {items.length === 0 ? (

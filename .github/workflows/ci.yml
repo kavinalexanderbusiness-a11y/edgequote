@@ -149,6 +149,22 @@ jobs:
       - name: Verify labour estimator
         run: npm run verify:labor
 
+      #   invoice-totals — the money math on the customer-facing invoice: GST rides
+      #                the NET (post-discount) amount, the percent discount inverts
+      #                exactly to reconstruct the gross for display, and the $ cap
+      #                keeps a discount from driving the net negative. Consumed by
+      #                the two live charge paths and every invoice/receipt PDF, and
+      #                previously exercised by nothing.
+      - name: Verify invoice totals
+        run: npm run verify:invoice-totals
+      #   sms-segments — the send-cost estimate the owner sees before pressing Send.
+      #              The segment math is a WRONG NUMBER when it breaks, not a type
+      #              error: a smart-quote flipping a message to Unicode, or a
+      #              surrogate-pair emoji miscounted at the 70-unit boundary, changes
+      #              the segment count and the bill while tsc/build stay green.
+      - name: Verify SMS segments
+        run: npm run verify:sms-segments
+
       #   density  — route density counts NEIGHBOURING PROPERTIES, not a property's
       #              own visits. It was fed one row per JOB and neither deduped nor
       #              excluded the target, so live counts averaged 38.1 against 2.0
@@ -182,6 +198,9 @@ jobs:
       - name: Verify dedup
         run: npm run verify:dedup
 
+      - name: Dedup contract (confident vs ask) characterization
+        run: npm run verify:dedup-contract
+
       #   route    — THE routing brain: stop ordering (NN + 2-opt), km estimates,
       #              drive minutes, the day ETAs a customer is told, the day-load
       #              capacity signal (an explicit 0 = a blocked day, never the 8h
@@ -191,6 +210,28 @@ jobs:
       #              error.
       - name: Verify route
         run: npm run verify:route
+
+      - name: Route characterization (second suite)
+        run: npm run verify:route-characterization
+      #   customer-health — the lifecycle engine one layer above the signal
+      #              detectors: the 0–100 score, tier, flags and headline reason
+      #              the Growth screen sorts a whole book by. Pins the score
+      #              arithmetic, the off-season calm (a snow customer in July is
+      #              watch, never at_risk), reason precedence (overdue beats
+      #              unpaid), the capped unpaid penalty, and the value-weighted
+      #              worst-first sort.
+      - name: Verify customer health
+        run: npm run verify:customer-health
+      #   signals  — THE canonical detector engine (ran-out / lapsed / churn /
+      #              seasonal dormancy / lifetime value), consumed by eight
+      #              surfaces including the signals cron and reactivation. It
+      #              exists because these rules once had 4–6 divergent copies —
+      #              the same snow customer in July read dormant on one screen
+      #              and lost on another. Pins the guard-ladder order, the
+      #              inclusive threshold edges, and the initial-visit valuation
+      #              that once flipped a customer's VIP status between pages.
+      - name: Verify signals
+        run: npm run verify:signals
 
       # This step is why the first 17 CI runs were red, and it's worth writing down.
       # ESLint had never been configured in this repo — no .eslintrc anywhere — so
@@ -255,3 +296,43 @@ jobs:
       # at the door). Deterministic (explicit dates); pins the overlay + the gate.
       - name: Verify quote status
         run: npm run verify:quote-status
+
+      # lib/dedup answers "does this already exist?" for properties, jobs and photos.
+      # Wrong-VALUE, invisible to tsc: findPropertyMatch gates property creation, and
+      # findJobMatch drives the schedule form's "duplicate visit" warning AND its DELETE
+      # suggestion — so a wrong reason/confidence there proposes deleting real work. Pins
+      # the reason + confidence for every branch (confident = auto-link; not = ask).
+      - name: Verify dedup engine
+        run: npm run verify:dedup
+
+      - name: Dedup contract (confident vs ask) characterization
+        run: npm run verify:dedup-contract
+      # lib/followup is the quote-chasing engine (cron, dashboard queue, weekly review).
+      # verify-automations pins the cron/manual agreement; this pins the rest, all
+      # wrong-VALUE and invisible to tsc: the CASL/reachability consent gate (chasing an
+      # unreachable customer spends an attempt on nobody, and mislabelling WHY sends the
+      # owner hunting a consent problem that doesn't exist), the two-then-stop cap, the
+      # oldest-then-stale-money-first queue order, and the policy clamps that keep a
+      # hostile jsonb value from making the chaser a same-day spammer or endless.
+      - name: Verify follow-up engine
+        run: npm run verify:followup
+      # lib/route is THE place a day's route is ordered and timed — the Route Planner and
+      # the calendar Day Ops panel share it so they can never disagree. Wrong-VALUE and
+      # invisible to tsc: a bad ETA promises the wrong arrival, a bad dayLoad hides an
+      # overbooked (or blocked) day, and a route past Google's 9-waypoint cap sends a
+      # broken "Open in Maps" link. Deterministic distance/speed injected; pins the
+      # ordering + clock logic, not floating-point geo.
+      - name: Verify route engine
+        run: npm run verify:route
+      # lib/bookingPhotos parses quotes.lead_meta.photos — untrusted data from the
+      # PUBLIC booking door — for the owner's gallery. The guards are load-bearing and
+      # invisible to tsc: only http(s) URLs may reach an <img src> (a javascript:/data:/
+      # relative URL must be dropped), and a malformed blob must yield [] not a throw.
+      - name: Verify booking photos
+        run: npm run verify:booking-photos
+      # lib/booking mints the credential for the PUBLIC /book/<token> door. The token is
+      # an anti-enumeration boundary (long + opaque so nobody walks the space to reach
+      # other owners' funnels), and bookingUrl is the canonical link builder. Both are
+      # wrong-VALUE surfaces tsc can't see — a shortened token or a malformed link.
+      - name: Verify booking link
+        run: npm run verify:booking-link

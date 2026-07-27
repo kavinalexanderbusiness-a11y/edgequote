@@ -69,6 +69,12 @@ interface QuoteBuilderProps {
 //   manual    → the owner typed their own number (or we loaded a saved quote).
 type PriceOrigin = 'empty' | 'suggested' | 'applied' | 'manual'
 
+// The cadences the owner can lead a quote with — the plan tiles and the "which one
+// did you pitch" highlight. Monthly is deliberately absent: it's off the standard
+// lawn menu (a month of growth is a rough cut) and never a picked lead, so it isn't
+// one of these. The full four-cadence set (incl. monthly) is priceGuardrails' Cadence.
+type PitchCadence = 'one_time' | 'weekly' | 'biweekly'
+
 export function QuoteBuilder({
   customers, templates, tiers, settings, defaultCustomerId, defaultPropertyId, defaultValues, onSubmit, isEdit,
   autosaveKey, autosaveBaselineUpdatedAt,
@@ -236,7 +242,7 @@ export function QuoteBuilder({
   const [savedRec, setSavedRec] = useState<{ rec: SavedRecommendation; sqft: number; date: string } | null>(null)
   // Which suggested price the owner tapped — drives the compact "Suggested Pricing"
   // highlight. Cleared the moment a price is edited (manual override).
-  const [pickedCadence, setPickedCadence] = useState<'one_time' | 'weekly' | 'biweekly' | null>(null)
+  const [pickedCadence, setPickedCadence] = useState<PitchCadence | null>(null)
 
   const hours = watch('hours') || 0
   const crewSize = watch('crew_size') || 1
@@ -412,7 +418,7 @@ export function QuoteBuilder({
   // Tap a suggestion → fill One-Time + Weekly + Bi-Weekly TOGETHER (the customer
   // sees every option, no re-typing); the tapped cadence is just the one you'd
   // pitch. Monthly fills only when enabled. All fields stay editable after.
-  function applySuggested(c: 'one_time' | 'weekly' | 'biweekly') {
+  function applySuggested(c: PitchCadence) {
     if (!suggested) return
     setValue('initial_price', suggested.one_time)
     setValue('weekly_price', suggested.weekly)
@@ -664,6 +670,17 @@ export function QuoteBuilder({
   // expire (the 0-of-55 bug) and entered the follow-up queue as a lie. The builder
   // edits quote CONTENT only; status transitions happen through the control.
   const showManualName = !customerId || customerId === '__manual'
+  // A first-ever quote has nobody to search: with zero customers the picker's only
+  // dropdown rows are an empty-state whose copy ("add one to start a conversation")
+  // sends a brand-new owner AWAY from the form that saves the customer automatically,
+  // and "+ Enter manually" — the state the form is ALREADY in (the manual fields
+  // render below whenever no customer is linked). A search box whose every outcome
+  // is the state you're already in is pure friction, so it's hidden and the form
+  // leads with the manual fields. Kept whenever a customer IS linked, so editing can
+  // always re-point. Same rule as the catalogue picker: hidden until there's
+  // something to pick. '' vs '__manual' changes nothing — every reader (submit,
+  // likelyMatch, activeCustomerId) treats them identically.
+  const showCustomerPicker = customers.length > 0 || !showManualName
 
   // ── The discount / value / notes row, defined ONCE ───────────────────────────
   // A service line and a material line end in the identical trio — same fields,
@@ -777,11 +794,15 @@ export function QuoteBuilder({
               </div>
             </CardHeader>
             <CardBody className="space-y-4">
-              {/* Customer — type-to-search picker (scales past a giant <select>) */}
-              <Controller name="customer_id" control={control}
-                render={({ field }) => (
-                  <CustomerPicker label="Customer" customers={customers} value={field.value || ''} onChange={field.onChange} />
-                )} />
+              {/* Customer — type-to-search picker (scales past a giant <select>).
+                  Hidden on a first-ever quote (see showCustomerPicker); the form
+                  keeps customer_id in state while unmounted (no shouldUnregister). */}
+              {showCustomerPicker && (
+                <Controller name="customer_id" control={control}
+                  render={({ field }) => (
+                    <CustomerPicker label="Customer" customers={customers} value={field.value || ''} onChange={field.onChange} />
+                  )} />
+              )}
               {showManualName && (
                 <div className="space-y-3 rounded-xl border border-accent/20 bg-accent/5 p-3">
                   <p className="text-[11px] text-ink-muted flex items-center gap-1.5">
@@ -837,14 +858,26 @@ export function QuoteBuilder({
               {/* Service FIRST (owner directive) — measurement, suggested pricing,
                   intelligence, duration and profitability below are all specific to
                   the selected service. */}
-              <Controller name="service_template_id" control={control}
-                render={({ field }) => (<Select label="Service" options={templateOptions} {...field} />)} />
+              {/* The catalogue picker is a SHORTCUT that auto-fills the name (and an
+                  hourly template's rate). With no active templates it can only ever
+                  read "Select a service…" — a dead dropdown a brand-new owner has to
+                  look past to reach the real field. Hidden until there's something to
+                  pick — the same rule the Additional-services template picker already
+                  follows. Service Name below stays the one required service input
+                  either way, so service_template_id is untouched (stays '') when this
+                  is hidden: presentation only, no pricing/logic change. */}
+              {activeTemplates.length > 0 && (
+                <Controller name="service_template_id" control={control}
+                  render={({ field }) => (<Select label="Service" options={templateOptions} {...field} />)} />
+              )}
               {/* The example comes from THEIR catalogue, not ours. A lawn company
                   with a "Lawn Mowing" template still reads "e.g. Lawn Mowing"; a
                   pool company reads "e.g. Pool Opening". Falls back to a neutral
                   hint before any template exists. */}
               <Input label="Service Name *" placeholder={`e.g. ${activeTemplates[0]?.name || 'Weekly Service'}`}
-                hint="Auto-fills when you pick a service above — edit to rename it on the quote."
+                hint={activeTemplates.length > 0
+                  ? 'Auto-fills when you pick a service above — edit to rename it on the quote.'
+                  : 'The name of this service, as it appears on the quote.'}
                 error={errors.service_type?.message}
                 {...register('service_type', { required: 'Service is required' })} />
 
@@ -1044,7 +1077,7 @@ export function QuoteBuilder({
           {savedRec && !suggested && pricingKind === 'lawn_recurring' && (
             <div className="rounded-xl border border-accent/30 bg-accent/5 p-3 space-y-2">
               <p className="text-[11px] font-semibold text-accent-text uppercase tracking-wide">
-                Measured property · {savedRec.sqft.toLocaleString()} ft² · {formatCurrency(savedRec.rec[savedRec.rec.cadence === 'one_time' ? 'one_time' : savedRec.rec.cadence])}/{savedRec.rec.cadence === 'one_time' ? 'visit' : savedRec.rec.cadence} recommended
+                Measured property · {savedRec.sqft.toLocaleString()} ft² · {formatCurrency(savedRec.rec[savedRec.rec.cadence])}/{savedRec.rec.cadence === 'one_time' ? 'visit' : savedRec.rec.cadence} recommended
               </p>
               <p className="text-xs text-ink-muted">
                 One-Time <span className="text-ink font-semibold">${savedRec.rec.one_time}</span> · Weekly <span className="text-ink font-semibold">${savedRec.rec.weekly}</span> · Bi-Weekly <span className="text-ink font-semibold">${savedRec.rec.biweekly}</span> · Monthly <span className="text-ink font-semibold">${savedRec.rec.monthly}</span>
