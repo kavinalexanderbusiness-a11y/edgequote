@@ -9,17 +9,29 @@
 -- idempotency, quote expiry, delivery tracking, equipment/parts, and campaign studio.
 -- Nothing errors — you just get a schema that the app then fails against at runtime.
 --
--- TO BUILD A DATABASE (fresh / disaster recovery), run BOTH, in this order:
+-- TO BUILD A DATABASE (fresh / disaster recovery), run ALL THREE, in this order:
 --   1. this file
 --   2. EVERY supabase/RUN-*.sql dated after 2026-06-25, in filename (date) order
+--   3. supabase/CANONICAL-*.sql  ← LAST, and not optional
 -- See DEPLOY_CHECKLIST.md, which lists them.
 --
+-- Step 3 is last on purpose: a CANONICAL-* file holds the single current body of an
+-- object that used to be redefined by many migrations. Running it last means the
+-- newest definition wins no matter what the dated files did on the way past.
+-- Today that is exactly one object — CANONICAL-get_portal_data.sql. Skip step 3 and
+-- the portal RPC does not exist at all, so the customer portal returns nothing.
+--
 -- ⚠️ READING THIS FILE ALSO MISLEADS. Objects here are redefined repeatedly as the
--- schema evolved — get_portal_data alone appears ELEVEN times. Only the LAST
--- definition of any object is what this file finally creates, and even that is
--- superseded by the later RUN-*.sql files. To learn what production actually has,
--- query production (pg_get_functiondef / information_schema), never this file.
+-- schema evolved. Only the LAST definition of any object is what this file finally
+-- creates, and even that is superseded by the later RUN-*.sql files. To learn what
+-- production actually has, query production (pg_get_functiondef /
+-- information_schema), never this file.
 -- Two wrong conclusions were reached this way on 2026-07-15 by trusting it.
+--
+-- get_portal_data used to appear ELEVEN times in this file and in nine RUN-*.sql
+-- besides — every copy a complete, runnable body, so running an older one silently
+-- rolled the portal backward (INF-2). All of them are now tombstones pointing at
+-- supabase/CANONICAL-get_portal_data.sql, which is the only definition left.
 --
 -- Objects that exist in production but are NOT in this file at all:
 --   • quotes.valid_until          → RUN-2026-07-14-quote-expiry.sql
@@ -884,30 +896,20 @@ create policy "service_requests: delete own" on public.service_requests for dele
 create index if not exists service_requests_user_idx on public.service_requests(user_id, status);
 
 -- Portal read: ONE function, returns ONLY the token's customer data.
-create or replace function public.get_portal_data(p_token text)
-returns json language plpgsql security definer set search_path = public as $$
-declare v_customer uuid; v_user uuid; result json;
-begin
-  select customer_id, user_id into v_customer, v_user
-    from public.customer_portal_tokens where token = p_token and not revoked;
-  if v_customer is null then return null; end if;
-  select json_build_object(
-    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code from public.customers where id = v_customer) c),
-    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, website, logo_url from public.business_settings where user_id = v_user) b),
-    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
-    -- Show the customer every quote that has left the workshop — sent, accepted,
-    -- declined, and (crucially) scheduled/completed/paid once it's been won and
-    -- booked. Only internal DRAFTS are hidden. (Was status in (sent,accepted,
-    -- declined), which made a won quote vanish from the portal the moment it was
-    -- scheduled into a job.)
-    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, weekly_price, biweekly_price, monthly_price, notes, status, created_at from public.quotes where customer_id = v_customer and status <> 'draft') q), '[]'::json),
-    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, status, issued_date, due_date, line_items, job_id, created_at from public.invoices where customer_id = v_customer) i), '[]'::json),
-    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
-    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
-    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json)
-  ) into result;
-  return result;
-end; $$;
+-- ══════════════════════════════════════════════════════════════════════════
+-- ⚠️  SUPERSEDED — DO NOT RESTORE THIS BODY.  (INF-2, 2026-07-17)
+--
+--   get_portal_data now has exactly ONE definition:
+--       supabase/CANONICAL-get_portal_data.sql
+--
+--   A complete, runnable OLDER copy stood here. Running this file replaced the
+--   live function with it — silently, with no error — dropping
+--   the `services` key and `quotes.valid_until`.
+--   Nothing failed; the portal just started returning less. That is why the
+--   body is gone rather than merely commented "outdated".
+--
+--   Everything else in this file is UNCHANGED and still safe to run.
+-- ══════════════════════════════════════════════════════════════════════════
 grant execute on function public.get_portal_data(text) to anon, authenticated;
 
 -- Accept a quote from the portal (scoped to the token's customer + a sent quote).
@@ -1202,25 +1204,20 @@ end; $$;
 grant execute on function public.portal_invoice_for_payment(text, uuid) to anon, authenticated;
 
 -- Portal display needs gst_percent in the business object to show Subtotal/GST/Total.
-create or replace function public.get_portal_data(p_token text)
-returns json language plpgsql security definer set search_path = public as $$
-declare v_customer uuid; v_user uuid; result json;
-begin
-  select customer_id, user_id into v_customer, v_user
-    from public.customer_portal_tokens where token = p_token and not revoked;
-  if v_customer is null then return null; end if;
-  select json_build_object(
-    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code from public.customers where id = v_customer) c),
-    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, website, logo_url, coalesce(gst_percent,0) as gst_percent from public.business_settings where user_id = v_user) b),
-    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
-    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, weekly_price, biweekly_price, monthly_price, notes, status, created_at from public.quotes where customer_id = v_customer and status <> 'draft') q), '[]'::json),
-    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, status, issued_date, due_date, line_items, job_id, created_at from public.invoices where customer_id = v_customer) i), '[]'::json),
-    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
-    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
-    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json)
-  ) into result;
-  return result;
-end; $$;
+-- ══════════════════════════════════════════════════════════════════════════
+-- ⚠️  SUPERSEDED — DO NOT RESTORE THIS BODY.  (INF-2, 2026-07-17)
+--
+--   get_portal_data now has exactly ONE definition:
+--       supabase/CANONICAL-get_portal_data.sql
+--
+--   A complete, runnable OLDER copy stood here. Running this file replaced the
+--   live function with it — silently, with no error — dropping
+--   the `services` key and `quotes.valid_until`.
+--   Nothing failed; the portal just started returning less. That is why the
+--   body is gone rather than merely commented "outdated".
+--
+--   Everything else in this file is UNCHANGED and still safe to run.
+-- ══════════════════════════════════════════════════════════════════════════
 grant execute on function public.get_portal_data(text) to anon, authenticated;
 
 -- ════════════════════════════════════════════════════════════
@@ -1271,25 +1268,20 @@ end; $$;
 grant execute on function public.portal_set_consent(text, boolean, boolean) to anon, authenticated;
 
 -- get_portal_data: expose sms_opt_in/email_opt_in so the portal can show + edit consent.
-create or replace function public.get_portal_data(p_token text)
-returns json language plpgsql security definer set search_path = public as $$
-declare v_customer uuid; v_user uuid; result json;
-begin
-  select customer_id, user_id into v_customer, v_user
-    from public.customer_portal_tokens where token = p_token and not revoked;
-  if v_customer is null then return null; end if;
-  select json_build_object(
-    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in from public.customers where id = v_customer) c),
-    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, website, logo_url, coalesce(gst_percent,0) as gst_percent from public.business_settings where user_id = v_user) b),
-    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
-    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, weekly_price, biweekly_price, monthly_price, notes, status, created_at from public.quotes where customer_id = v_customer and status <> 'draft') q), '[]'::json),
-    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, status, issued_date, due_date, line_items, job_id, created_at from public.invoices where customer_id = v_customer) i), '[]'::json),
-    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
-    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
-    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json)
-  ) into result;
-  return result;
-end; $$;
+-- ══════════════════════════════════════════════════════════════════════════
+-- ⚠️  SUPERSEDED — DO NOT RESTORE THIS BODY.  (INF-2, 2026-07-17)
+--
+--   get_portal_data now has exactly ONE definition:
+--       supabase/CANONICAL-get_portal_data.sql
+--
+--   A complete, runnable OLDER copy stood here. Running this file replaced the
+--   live function with it — silently, with no error — dropping
+--   the `services` key and `quotes.valid_until`.
+--   Nothing failed; the portal just started returning less. That is why the
+--   body is gone rather than merely commented "outdated".
+--
+--   Everything else in this file is UNCHANGED and still safe to run.
+-- ══════════════════════════════════════════════════════════════════════════
 grant execute on function public.get_portal_data(text) to anon, authenticated;
 
 -- ════════════════════════════════════════════════════════════
@@ -1660,25 +1652,20 @@ grant select, insert, update, delete on public.revenue_recommendations to authen
 -- invoice notes/address; business terms/base_address/email_secondary/logo_scale)
 -- so the customer-facing PDF is identical. Still token-scoped: only this token's
 -- customer's records are ever returned.
-create or replace function public.get_portal_data(p_token text)
-returns json language plpgsql security definer set search_path = public as $$
-declare v_customer uuid; v_user uuid; result json;
-begin
-  select customer_id, user_id into v_customer, v_user
-    from public.customer_portal_tokens where token = p_token and not revoked;
-  if v_customer is null then return null; end if;
-  select json_build_object(
-    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in from public.customers where id = v_customer) c),
-    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, coalesce(gst_percent,0) as gst_percent from public.business_settings where user_id = v_user) b),
-    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
-    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, subtotal, weekly_price, biweekly_price, monthly_price, notes, status, created_at, issued_date, crew_size, hours, travel_fee from public.quotes where customer_id = v_customer and status <> 'draft') q), '[]'::json),
-    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, status, issued_date, due_date, notes, address, line_items, job_id, created_at from public.invoices where customer_id = v_customer) i), '[]'::json),
-    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
-    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
-    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json)
-  ) into result;
-  return result;
-end; $$;
+-- ══════════════════════════════════════════════════════════════════════════
+-- ⚠️  SUPERSEDED — DO NOT RESTORE THIS BODY.  (INF-2, 2026-07-17)
+--
+--   get_portal_data now has exactly ONE definition:
+--       supabase/CANONICAL-get_portal_data.sql
+--
+--   A complete, runnable OLDER copy stood here. Running this file replaced the
+--   live function with it — silently, with no error — dropping
+--   the `services` key and `quotes.valid_until`.
+--   Nothing failed; the portal just started returning less. That is why the
+--   body is gone rather than merely commented "outdated".
+--
+--   Everything else in this file is UNCHANGED and still safe to run.
+-- ══════════════════════════════════════════════════════════════════════════
 grant execute on function public.get_portal_data(text) to anon, authenticated;
 
 -- ════════════════════════════════════════════════════════════
@@ -1852,26 +1839,20 @@ create trigger trg_notify_invoice_paid after update of status on public.invoices
 -- Property details tab — all from the SAME token-scoped read. Backward
 -- compatible (only adds fields). Idempotent.
 -- ════════════════════════════════════════════════════════════
-create or replace function public.get_portal_data(p_token text)
-returns json language plpgsql security definer set search_path = public as $$
-declare v_customer uuid; v_user uuid; result json;
-begin
-  select customer_id, user_id into v_customer, v_user
-    from public.customer_portal_tokens where token = p_token and not revoked;
-  if v_customer is null then return null; end if;
-  select json_build_object(
-    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in from public.customers where id = v_customer) c),
-    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, coalesce(gst_percent,0) as gst_percent from public.business_settings where user_id = v_user) b),
-    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
-    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, subtotal, weekly_price, biweekly_price, monthly_price, notes, status, created_at, issued_date, crew_size, hours, travel_fee from public.quotes where customer_id = v_customer and status <> 'draft') q), '[]'::json),
-    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, status, issued_date, due_date, notes, address, line_items, job_id, created_at from public.invoices where customer_id = v_customer) i), '[]'::json),
-    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, invoice_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
-    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
-    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
-    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json)
-  ) into result;
-  return result;
-end; $$;
+-- ══════════════════════════════════════════════════════════════════════════
+-- ⚠️  SUPERSEDED — DO NOT RESTORE THIS BODY.  (INF-2, 2026-07-17)
+--
+--   get_portal_data now has exactly ONE definition:
+--       supabase/CANONICAL-get_portal_data.sql
+--
+--   A complete, runnable OLDER copy stood here. Running this file replaced the
+--   live function with it — silently, with no error — dropping
+--   the `services` key and `quotes.valid_until`.
+--   Nothing failed; the portal just started returning less. That is why the
+--   body is gone rather than merely commented "outdated".
+--
+--   Everything else in this file is UNCHANGED and still safe to run.
+-- ══════════════════════════════════════════════════════════════════════════
 grant execute on function public.get_portal_data(text) to anon, authenticated;
 
 -- ════════════════════════════════════════════════════════════
@@ -1966,26 +1947,20 @@ grant execute on function public.portal_mark_reviewed(text) to anon, authenticat
 -- get_portal_data refreshed: adds business.review_url (so the portal can show a
 -- "leave a review" link) and customer.reviewed_at (so it hides the ask once done).
 -- This redefinition is the active one (last create-or-replace wins).
-create or replace function public.get_portal_data(p_token text)
-returns json language plpgsql security definer set search_path = public as $$
-declare v_customer uuid; v_user uuid; result json;
-begin
-  select customer_id, user_id into v_customer, v_user
-    from public.customer_portal_tokens where token = p_token and not revoked;
-  if v_customer is null then return null; end if;
-  select json_build_object(
-    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in, reviewed_at from public.customers where id = v_customer) c),
-    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, review_url, coalesce(gst_percent,0) as gst_percent from public.business_settings where user_id = v_user) b),
-    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
-    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, subtotal, weekly_price, biweekly_price, monthly_price, notes, status, created_at, issued_date, crew_size, hours, travel_fee from public.quotes where customer_id = v_customer and status <> 'draft') q), '[]'::json),
-    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, status, issued_date, due_date, notes, address, line_items, job_id, created_at from public.invoices where customer_id = v_customer) i), '[]'::json),
-    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, invoice_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
-    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
-    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
-    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json)
-  ) into result;
-  return result;
-end; $$;
+-- ══════════════════════════════════════════════════════════════════════════
+-- ⚠️  SUPERSEDED — DO NOT RESTORE THIS BODY.  (INF-2, 2026-07-17)
+--
+--   get_portal_data now has exactly ONE definition:
+--       supabase/CANONICAL-get_portal_data.sql
+--
+--   A complete, runnable OLDER copy stood here. Running this file replaced the
+--   live function with it — silently, with no error — dropping
+--   the `services` key and `quotes.valid_until`.
+--   Nothing failed; the portal just started returning less. That is why the
+--   body is gone rather than merely commented "outdated".
+--
+--   Everything else in this file is UNCHANGED and still safe to run.
+-- ══════════════════════════════════════════════════════════════════════════
 grant execute on function public.get_portal_data(text) to anon, authenticated;
 
 -- ════════════════════════════════════════════════════════════
@@ -2485,27 +2460,20 @@ grant execute on function public.portal_remove_card(text) to anon, authenticated
 -- (8) get_portal_data refreshed AGAIN (last create-or-replace wins): adds
 -- customer.autopay_enabled + a top-level payment_method summary so the portal can
 -- render the saved card + AutoPay state from the same token-scoped read.
-create or replace function public.get_portal_data(p_token text)
-returns json language plpgsql security definer set search_path = public as $$
-declare v_customer uuid; v_user uuid; result json;
-begin
-  select customer_id, user_id into v_customer, v_user
-    from public.customer_portal_tokens where token = p_token and not revoked;
-  if v_customer is null then return null; end if;
-  select json_build_object(
-    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in, reviewed_at, autopay_enabled from public.customers where id = v_customer) c),
-    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, review_url, coalesce(gst_percent,0) as gst_percent from public.business_settings where user_id = v_user) b),
-    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
-    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, subtotal, weekly_price, biweekly_price, monthly_price, notes, status, created_at, issued_date, crew_size, hours, travel_fee from public.quotes where customer_id = v_customer and status <> 'draft') q), '[]'::json),
-    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, status, issued_date, due_date, notes, address, line_items, job_id, created_at from public.invoices where customer_id = v_customer) i), '[]'::json),
-    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, invoice_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
-    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
-    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
-    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json),
-    'payment_method', (select to_json(pm) from (select brand, last4, exp_month, exp_year from public.payment_methods where customer_id = v_customer and is_default order by created_at desc limit 1) pm)
-  ) into result;
-  return result;
-end; $$;
+-- ══════════════════════════════════════════════════════════════════════════
+-- ⚠️  SUPERSEDED — DO NOT RESTORE THIS BODY.  (INF-2, 2026-07-17)
+--
+--   get_portal_data now has exactly ONE definition:
+--       supabase/CANONICAL-get_portal_data.sql
+--
+--   A complete, runnable OLDER copy stood here. Running this file replaced the
+--   live function with it — silently, with no error — dropping
+--   the `services` key and `quotes.valid_until`.
+--   Nothing failed; the portal just started returning less. That is why the
+--   body is gone rather than merely commented "outdated".
+--
+--   Everything else in this file is UNCHANGED and still safe to run.
+-- ══════════════════════════════════════════════════════════════════════════
 grant execute on function public.get_portal_data(text) to anon, authenticated;
 
 -- ════════════════════════════════════════════════════════════
@@ -3132,27 +3100,20 @@ end $$;
 -- subtotal, so charged totals are unaffected. (Columns added near the invoices table
 -- above.) See RUN-2026-06-27-invoice-discounts.sql.
 -- ════════════════════════════════════════════════════════════
-create or replace function public.get_portal_data(p_token text)
-returns json language plpgsql security definer set search_path = public as $$
-declare v_customer uuid; v_user uuid; result json;
-begin
-  select customer_id, user_id into v_customer, v_user
-    from public.customer_portal_tokens where token = p_token and not revoked;
-  if v_customer is null then return null; end if;
-  select json_build_object(
-    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in, reviewed_at, autopay_enabled from public.customers where id = v_customer) c),
-    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, review_url, coalesce(gst_percent,0) as gst_percent from public.business_settings where user_id = v_user) b),
-    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
-    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, subtotal, weekly_price, biweekly_price, monthly_price, notes, status, created_at, issued_date, crew_size, hours, travel_fee from public.quotes where customer_id = v_customer and status <> 'draft') q), '[]'::json),
-    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, status, issued_date, due_date, notes, address, line_items, job_id, created_at, discount_type, discount_value from public.invoices where customer_id = v_customer) i), '[]'::json),
-    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, invoice_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
-    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
-    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
-    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json),
-    'payment_method', (select to_json(pm) from (select brand, last4, exp_month, exp_year from public.payment_methods where customer_id = v_customer and is_default order by created_at desc limit 1) pm)
-  ) into result;
-  return result;
-end; $$;
+-- ══════════════════════════════════════════════════════════════════════════
+-- ⚠️  SUPERSEDED — DO NOT RESTORE THIS BODY.  (INF-2, 2026-07-17)
+--
+--   get_portal_data now has exactly ONE definition:
+--       supabase/CANONICAL-get_portal_data.sql
+--
+--   A complete, runnable OLDER copy stood here. Running this file replaced the
+--   live function with it — silently, with no error — dropping
+--   the `services` key and `quotes.valid_until`.
+--   Nothing failed; the portal just started returning less. That is why the
+--   body is gone rather than merely commented "outdated".
+--
+--   Everything else in this file is UNCHANGED and still safe to run.
+-- ══════════════════════════════════════════════════════════════════════════
 grant execute on function public.get_portal_data(text) to anon, authenticated;
 
 -- ════════════════════════════════════════════════════════════
@@ -3208,27 +3169,20 @@ create trigger trg_recompute_invoice_paid after insert or update or delete on pu
   for each row execute function public.recompute_invoice_paid();
 
 -- get_portal_data + portal_invoice_for_payment — final superset (amount_paid, discount, payment kind).
-create or replace function public.get_portal_data(p_token text)
-returns json language plpgsql security definer set search_path = public as $$
-declare v_customer uuid; v_user uuid; result json;
-begin
-  select customer_id, user_id into v_customer, v_user
-    from public.customer_portal_tokens where token = p_token and not revoked;
-  if v_customer is null then return null; end if;
-  select json_build_object(
-    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in, reviewed_at, autopay_enabled from public.customers where id = v_customer) c),
-    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, review_url, coalesce(gst_percent,0) as gst_percent from public.business_settings where user_id = v_user) b),
-    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
-    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, subtotal, weekly_price, biweekly_price, monthly_price, notes, status, created_at, issued_date, crew_size, hours, travel_fee from public.quotes where customer_id = v_customer and status <> 'draft') q), '[]'::json),
-    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, amount_paid, status, issued_date, due_date, notes, address, line_items, job_id, created_at, discount_type, discount_value from public.invoices where customer_id = v_customer) i), '[]'::json),
-    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, kind, invoice_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
-    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
-    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
-    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json),
-    'payment_method', (select to_json(pm) from (select brand, last4, exp_month, exp_year from public.payment_methods where customer_id = v_customer and is_default order by created_at desc limit 1) pm)
-  ) into result;
-  return result;
-end; $$;
+-- ══════════════════════════════════════════════════════════════════════════
+-- ⚠️  SUPERSEDED — DO NOT RESTORE THIS BODY.  (INF-2, 2026-07-17)
+--
+--   get_portal_data now has exactly ONE definition:
+--       supabase/CANONICAL-get_portal_data.sql
+--
+--   A complete, runnable OLDER copy stood here. Running this file replaced the
+--   live function with it — silently, with no error — dropping
+--   the `services` key and `quotes.valid_until`.
+--   Nothing failed; the portal just started returning less. That is why the
+--   body is gone rather than merely commented "outdated".
+--
+--   Everything else in this file is UNCHANGED and still safe to run.
+-- ══════════════════════════════════════════════════════════════════════════
 grant execute on function public.get_portal_data(text) to anon, authenticated;
 
 create or replace function public.portal_invoice_for_payment(p_token text, p_invoice_id uuid)
@@ -3391,36 +3345,20 @@ grant execute on function public.portal_mark_invoice_viewed(text, uuid) to anon,
 -- ════════════════════════════════════════════════════════════
 -- get_portal_data quotes now carry a nested services array (quote_services),
 -- so the portal + portal PDF show every line instead of a lump sum.
-create or replace function public.get_portal_data(p_token text)
-returns json language plpgsql security definer set search_path = public as $$
-declare v_customer uuid; v_user uuid; result json;
-begin
-  select customer_id, user_id into v_customer, v_user
-    from public.customer_portal_tokens where token = p_token and not revoked;
-  if v_customer is null then return null; end if;
-  select json_build_object(
-    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in, reviewed_at, autopay_enabled from public.customers where id = v_customer) c),
-    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, review_url, coalesce(gst_percent,0) as gst_percent from public.business_settings where user_id = v_user) b),
-    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
-    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (
-      select qt.id, qt.quote_number, qt.service_type, qt.address, qt.total, qt.initial_price, qt.subtotal,
-             qt.weekly_price, qt.biweekly_price, qt.monthly_price, qt.notes, qt.status, qt.created_at,
-             qt.issued_date, qt.crew_size, qt.hours, qt.travel_fee,
-             coalesce((select json_agg(s order by s.sort_order) from (
-               select qs.service_type, qs.quantity, qs.unit, qs.unit_price, qs.est_minutes,
-                      qs.discount_type, qs.discount_value, qs.notes, qs.sort_order
-               from public.quote_services qs where qs.quote_id = qt.id
-             ) s), '[]'::json) as services
-      from public.quotes qt where qt.customer_id = v_customer and qt.status <> 'draft') q), '[]'::json),
-    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, amount_paid, status, issued_date, due_date, notes, address, line_items, job_id, created_at, discount_type, discount_value from public.invoices where customer_id = v_customer) i), '[]'::json),
-    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, kind, invoice_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
-    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
-    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
-    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json),
-    'payment_method', (select to_json(pm) from (select brand, last4, exp_month, exp_year from public.payment_methods where customer_id = v_customer and is_default order by created_at desc limit 1) pm)
-  ) into result;
-  return result;
-end; $$;
+-- ══════════════════════════════════════════════════════════════════════════
+-- ⚠️  SUPERSEDED — DO NOT RESTORE THIS BODY.  (INF-2, 2026-07-17)
+--
+--   get_portal_data now has exactly ONE definition:
+--       supabase/CANONICAL-get_portal_data.sql
+--
+--   A complete, runnable OLDER copy stood here. Running this file replaced the
+--   live function with it — silently, with no error — dropping
+--   the `services` key and `quotes.valid_until`.
+--   Nothing failed; the portal just started returning less. That is why the
+--   body is gone rather than merely commented "outdated".
+--
+--   Everything else in this file is UNCHANGED and still safe to run.
+-- ══════════════════════════════════════════════════════════════════════════
 grant execute on function public.get_portal_data(text) to anon, authenticated;
 -- ════════════════════════════════════════════════════════════
 -- MIGRATION 2026-07-09 — Backfill ledger rows for LEGACY paid invoices.
@@ -3474,36 +3412,20 @@ alter table public.business_settings
 
 -- Recreate get_portal_data with etransfer_email in the business projection
 -- (same definition as 2026-07-07, one field added).
-create or replace function public.get_portal_data(p_token text)
-returns json language plpgsql security definer set search_path = public as $$
-declare v_customer uuid; v_user uuid; result json;
-begin
-  select customer_id, user_id into v_customer, v_user
-    from public.customer_portal_tokens where token = p_token and not revoked;
-  if v_customer is null then return null; end if;
-  select json_build_object(
-    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in, reviewed_at, autopay_enabled from public.customers where id = v_customer) c),
-    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, review_url, coalesce(gst_percent,0) as gst_percent, etransfer_email from public.business_settings where user_id = v_user) b),
-    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
-    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (
-      select qt.id, qt.quote_number, qt.service_type, qt.address, qt.total, qt.initial_price, qt.subtotal,
-             qt.weekly_price, qt.biweekly_price, qt.monthly_price, qt.notes, qt.status, qt.created_at,
-             qt.issued_date, qt.crew_size, qt.hours, qt.travel_fee,
-             coalesce((select json_agg(s order by s.sort_order) from (
-               select qs.service_type, qs.quantity, qs.unit, qs.unit_price, qs.est_minutes,
-                      qs.discount_type, qs.discount_value, qs.notes, qs.sort_order
-               from public.quote_services qs where qs.quote_id = qt.id
-             ) s), '[]'::json) as services
-      from public.quotes qt where qt.customer_id = v_customer and qt.status <> 'draft') q), '[]'::json),
-    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, amount_paid, status, issued_date, due_date, notes, address, line_items, job_id, created_at, discount_type, discount_value from public.invoices where customer_id = v_customer) i), '[]'::json),
-    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, kind, invoice_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
-    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
-    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
-    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json),
-    'payment_method', (select to_json(pm) from (select brand, last4, exp_month, exp_year from public.payment_methods where customer_id = v_customer and is_default order by created_at desc limit 1) pm)
-  ) into result;
-  return result;
-end; $$;
+-- ══════════════════════════════════════════════════════════════════════════
+-- ⚠️  SUPERSEDED — DO NOT RESTORE THIS BODY.  (INF-2, 2026-07-17)
+--
+--   get_portal_data now has exactly ONE definition:
+--       supabase/CANONICAL-get_portal_data.sql
+--
+--   A complete, runnable OLDER copy stood here. Running this file replaced the
+--   live function with it — silently, with no error — dropping
+--   the `services` key and `quotes.valid_until`.
+--   Nothing failed; the portal just started returning less. That is why the
+--   body is gone rather than merely commented "outdated".
+--
+--   Everything else in this file is UNCHANGED and still safe to run.
+-- ══════════════════════════════════════════════════════════════════════════
 grant execute on function public.get_portal_data(text) to anon, authenticated;
 
 -- ── Website leads: Budget + Preferred schedule + richer summary (2026-07-13) ──
