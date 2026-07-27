@@ -3,7 +3,7 @@ import type {
   Payment, BusinessSettings, ExpenseWithRelations, FixedAsset, Liability,
 } from '@/types'
 import { pageAll } from '@/lib/supabase/pageAll'
-import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import { jobVisitValue, effectiveFreq } from '@/lib/visitValue'
 import { listExpenses } from '@/lib/accounting/expenses'
 import type { GstInput } from '@/lib/accounting/gst'
 

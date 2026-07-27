@@ -26,7 +26,7 @@ import {
 import { TimelineCard } from '@/components/timeline/TimelineCard'
 import { needsFollowUp, daysSince } from '@/lib/followup'
 import { recurrenceLabel, recurringCustomerLabel, buildServicePlans, ServicePlan } from '@/lib/recurrence'
-import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import { jobVisitValue, effectiveFreq } from '@/lib/visitValue'
 import { settingsToSeasons, DEFAULT_SEASONS, ServiceSeasons } from '@/lib/seasons'
 import { loadBusinessShape, showLawnFieldFor, SHAPE_LOADING, type BusinessShape } from '@/lib/businessShape'
 import { resolvePrefs, prefSummary, hasAnyPref, monthShort } from '@/lib/preferences'

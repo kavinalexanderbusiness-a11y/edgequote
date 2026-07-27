@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { localTodayISO } from '@/lib/utils'
-import { effectiveFreq, jobVisitValue } from '@/lib/invoicing'
+import { effectiveFreq, jobVisitValue } from '@/lib/visitValue'
 import { estimateLabor, learnLaborModel, LaborModel, LaborObservation } from '@/lib/labor'
 import { fetchForecast, DayForecast, weatherScore, WeatherScore } from '@/lib/weather'
 import { buildDayStatusMap, DAY_STATUS_SELECT, DayStatusRow, DayStatusMap, dayStatusLabel } from '@/lib/dayStatus'

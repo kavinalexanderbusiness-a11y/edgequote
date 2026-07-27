@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { localTodayISO } from '@/lib/utils'
-import { effectiveFreq } from '@/lib/invoicing'
+import { effectiveFreq } from '@/lib/visitValue'
 import { serviceCategory, seasonForService, isWithinSeason, settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
 import { VIP_LTV, cadenceDays, churnRisk, daysBetween, isLapsed, lifetimeValue } from '@/lib/signals'
 

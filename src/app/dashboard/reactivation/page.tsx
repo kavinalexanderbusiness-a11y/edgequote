@@ -5,7 +5,7 @@ import { PageContainer } from '@/components/layout/PageContainer'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Customer } from '@/types'
-import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import { jobVisitValue, effectiveFreq } from '@/lib/visitValue'
 import { settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
 // seasonForService/isWithinSeason are reached through signals' isSeasonallyDormant —
 // the ONE dormancy rule, so this page and the dashboard can't disagree about a snow

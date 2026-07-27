@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { localTodayISO } from '@/lib/utils'
-import { effectiveFreq, jobVisitValue } from '@/lib/invoicing'
+import { effectiveFreq, jobVisitValue } from '@/lib/visitValue'
 import { SEASON_VISITS } from '@/lib/pricing'
 import { serviceCategory, seasonForService, isWithinSeason, settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
 import { densityFor, locatedStops, DensityTier } from '@/lib/routeDensity'

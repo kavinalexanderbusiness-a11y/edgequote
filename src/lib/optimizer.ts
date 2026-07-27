@@ -14,7 +14,7 @@ import { routeKmEstimate, clusterKmEstimate, AVG_SPEED_KM_PER_MIN, DEFAULT_JOB_M
 // Learned drive minutes/km (lib/travelLearning, passed via OptOptions.minPerKm) or
 // the legacy 2 min/km fallback — so capacity/drive-time decisions sharpen over time.
 const DEFAULT_MIN_PER_KM = 1 / AVG_SPEED_KM_PER_MIN
-import { effectiveFreq } from '@/lib/invoicing'
+import { effectiveFreq } from '@/lib/visitValue'
 import { DayStatusMap, isDayBlocked } from '@/lib/dayStatus'
 
 export type OptimizeMode = 'density' | 'balanced' | 'revenue' | 'recommended'

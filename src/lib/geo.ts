@@ -1,6 +1,6 @@
 import { parseISO, addDays, format } from 'date-fns'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import { jobVisitValue, effectiveFreq } from '@/lib/visitValue'
 import { localTodayISO } from '@/lib/utils'
 
 // ── Single source of truth for geo math shared by the Route Planner and the

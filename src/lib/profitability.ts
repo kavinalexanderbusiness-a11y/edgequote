@@ -7,7 +7,7 @@
 import { Coord } from '@/lib/geo'
 import { routeKmEstimate, routeStats, type SpeedModel } from '@/lib/route'
 import { visitEconomics } from '@/lib/economics'
-import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import { jobVisitValue, effectiveFreq } from '@/lib/visitValue'
 import type { Grade } from './grade'
 
 export interface ProfitJob {

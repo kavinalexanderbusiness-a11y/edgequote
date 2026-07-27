@@ -13,7 +13,7 @@ import {
   dayProfitability, neighborhoodProfitability, jobValue,
 } from '@/lib/profitability'
 import { needsFollowUp } from '@/lib/followup'
-import { effectiveFreq } from '@/lib/invoicing'
+import { effectiveFreq } from '@/lib/visitValue'
 import { settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
 import { ranOut as ranOutSignal, cadenceDays, isSeasonallyDormant } from '@/lib/signals'
 import { localTodayISO, formatCurrency, formatDate, cn } from '@/lib/utils'

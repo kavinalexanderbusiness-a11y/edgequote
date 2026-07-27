@@ -5,7 +5,7 @@
 // ONE route/capacity engine (roughFinishEstimate/dayLoad); it only aggregates.
 
 import { addDays, format, getDay, parseISO } from 'date-fns'
-import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import { jobVisitValue, effectiveFreq } from '@/lib/visitValue'
 import { roughFinishEstimate, dayLoad } from '@/lib/route'
 
 export const DEFAULT_WORK_DAYS = [5, 6, 0]

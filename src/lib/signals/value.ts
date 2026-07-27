@@ -1,4 +1,4 @@
-import { effectiveFreq, jobVisitValue } from '@/lib/invoicing'
+import { effectiveFreq, jobVisitValue } from '@/lib/visitValue'
 import { VIP_LTV } from './constants'
 
 // ── Lifetime value — THE "what is this customer worth" engine ────────────────

@@ -2,7 +2,7 @@ import { DEFAULT_JOB_MIN } from '@/lib/route'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { estimateVisitMinutes } from '@/lib/pricing'
 import { crewCostPerHour } from '@/lib/economics'
-import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import { jobVisitValue, effectiveFreq } from '@/lib/visitValue'
 import { clamp } from '@/lib/utils'
 
 // ── Smart Labor Calculator V2 — the self-learning labor engine ───────────────────

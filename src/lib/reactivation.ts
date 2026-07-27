@@ -18,7 +18,7 @@
 // Generic SupabaseClient (like lib/crm/radar) so server callers work too.
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Customer } from '@/types'
-import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import { jobVisitValue, effectiveFreq } from '@/lib/visitValue'
 import { seasonForService, isWithinSeason, settingsToSeasons, type ServiceSeasons } from '@/lib/seasons'
 import { localTodayISO } from '@/lib/utils'
 
