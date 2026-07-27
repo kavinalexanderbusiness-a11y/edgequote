@@ -45,7 +45,8 @@
     "verify:quote-status": "tsx scripts/verify-quote-status.ts",
     "verify:dedup-contract": "tsx scripts/verify-dedup-contract.ts",
     "verify:followup": "tsx scripts/verify-followup.ts",
-    "verify:booking-photos": "tsx scripts/verify-booking-photos.ts"
+    "verify:booking-photos": "tsx scripts/verify-booking-photos.ts",
+    "verify:booking-link": "tsx scripts/verify-booking-link.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",
