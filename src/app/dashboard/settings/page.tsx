@@ -382,6 +382,13 @@ export default function SettingsPage() {
                     aria-label="Logo size percent" aria-valuetext={`${logoScale}%`}
                     onChange={e => setLogoScale(Number(e.target.value))}
                     onPointerUp={e => persistLogoScale(Number((e.target as HTMLInputElement).value))}
+                    // onPointerUp only fires for mouse/touch/pen — a keyboard user
+                    // moving the slider with arrows sees the live preview (onChange)
+                    // but the value was never saved and vanished on reload. onBlur
+                    // commits the final value once the slider loses focus, for
+                    // keyboard/switch users, without the write-spam or save-order
+                    // races that a per-keystroke onKeyUp would add.
+                    onBlur={e => persistLogoScale(Number(e.currentTarget.value))}
                     className="flex-1 accent-[rgb(var(--c-accent))]" />
                   <span className="text-xs font-semibold text-ink w-11 text-right">{logoScale}%</span>
                 </div>
