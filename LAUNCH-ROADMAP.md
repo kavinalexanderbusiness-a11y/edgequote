@@ -65,15 +65,14 @@ Both are **owner actions**, not engineering work.
 
 ## 🟡 Open, but not launch-gating
 
-- **INF-2 — canonical `get_portal_data` is NOT merged.** The reconciliation work
-  exists on branch `inf/portal-canonical` (`f387053`, `4b1f2e9`) but never landed;
-  `main` still carries **10 RUN files** that `create or replace` `get_portal_data`,
-  and nothing enforces a single definition. Production already holds the correct
-  body, so this is a **disaster-recovery / repo-hygiene** risk (a fresh deploy or a
-  re-run of an older file rolls the portal backward), not a customer-transacting
-  bug. *Recommend: merge the branch, then add a `verify:sql` guard asserting
-  exactly one canonical definition. Needs an owner go-ahead — it touches the
-  portal freeze's SQL surface.*
+- **INF-2 — canonical `get_portal_data`: branch LANDED (2026-07-26 merge train);
+  guard still open.** `inf/portal-canonical` (`f387053`, `4b1f2e9`) is now on
+  `main`. Still true: older RUN files that `create or replace` `get_portal_data`
+  remain in the repo's history of record, and nothing yet enforces a single
+  canonical definition — so the disaster-recovery risk (a re-run of an older
+  file rolls the portal backward) is reduced but not closed. *Remaining ask: a
+  `verify:sql` guard asserting exactly one canonical definition. Needs an owner
+  go-ahead — it touches the portal freeze's SQL surface.*
 
 ---
 
