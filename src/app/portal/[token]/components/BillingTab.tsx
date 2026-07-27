@@ -13,7 +13,7 @@ import {
 } from 'lucide-react'
 import { cn, formatCurrency, formatDate, localTodayISO } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
-import { dueSoonLabel, messageAboutDoc, NO_PROPERTY, quoteJourney, type DocItem, type DocKind } from '../model'
+import { dueSoonLabel, invoicePaymentNote, messageAboutDoc, NO_PROPERTY, quoteJourney, type DocItem, type DocKind } from '../model'
 import {
   DocActions, Empty, InvoiceStatusPill, JourneyRail, PortalSection,
   QuoteStatusPill, StatCard, fmtMoney, type PortalActions, type TabProps,
@@ -267,7 +267,21 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
         </div>
         <div className="text-right shrink-0">
           <p className="text-sm font-bold text-ink tabular-nums">{formatCurrency(d.amount)}</p>
-          {d.amountNote && <p className="text-[11px] text-ink-faint mt-0.5">{d.amountNote}</p>}
+          {/* On a partially-paid invoice the bold number is the TOTAL, but the
+              customer owes the balance — so state what's still due plainly
+              (amber, legible) instead of leaving them to subtract or read it off
+              a Pay button that e-transfer/cash payers don't have. Quotes keep
+              their GST note via amountNote. */}
+          {(() => {
+            const pay = invoicePaymentNote(d)
+            if (pay) return (
+              <p className="text-[11px] mt-0.5 tabular-nums">
+                <span className="font-semibold text-amber-400">{pay.due} still due</span>
+                <span className="text-ink-faint"> · {pay.paid} paid</span>
+              </p>
+            )
+            return d.amountNote ? <p className="text-[11px] text-ink-faint mt-0.5">{d.amountNote}</p> : null
+          })()}
           {/* How long the price stands, said while it still does — the row already
               explains a LAPSED price; the live one deserves its date too. Only on
               quotes that carry one (expiry stamping began 2026-07; older quotes

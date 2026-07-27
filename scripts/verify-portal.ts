@@ -11,7 +11,7 @@ import {
   normalizePortal, buildDerived, buildDocItems, buildPortalView,
   quoteJourney, moneySummary, buildPropertyModels, customerSinceYear,
   requestPresetsOf, resolveDocAddress, groupPhotos, orphanPhotos, liveStatusOf, visitDay,
-  daysAwayLabel, dueSoonLabel, parsePortalDeepLink, tabNavTarget, buildVisitICS, visitToCalendarEvent,
+  daysAwayLabel, dueSoonLabel, invoicePaymentNote, parsePortalDeepLink, tabNavTarget, buildVisitICS, visitToCalendarEvent,
   messageAboutDoc, primaryPortalAction, draftStorageKey, etransferReference, isSendChord,
   NO_PROPERTY, MAX_REQUEST_PRESETS,
   type PortalData, type PortalJob, type PortalProperty, type DocBlobRenderers,
@@ -146,7 +146,7 @@ check('count = quotes + non-draft invoices', docs.length === 4 + 3, String(docs.
   check('expired: expiredOn carries the lapse date', exp.expiredOn === '2026-07-01')
   const late = byId.get('i-late')!
   check('overdue: display overlay from due_date', late.status === 'overdue')
-  check('partial: "already paid" note', late.amountNote?.includes('already paid') === true)
+  check('partial: no faint amountNote (breakdown moved to invoicePaymentNote)', late.amountNote === undefined)
   check('invoice balance is GST-true minus paid', Math.abs(late.balance - 110) < 0.01, String(late.balance))
   check('multi-property invoice with null property stays unassigned', late.propertyId === null)
   const due = byId.get('i-due')!
@@ -375,6 +375,21 @@ console.log('\ndueSoonLabel (so "due tomorrow" never reads like "due next month"
   check('due next month → null', dueSoonLabel('2026-08-30', T) === null)
   check('past due → null (overdue has its own louder treatment)', dueSoonLabel('2026-07-10', T) === null)
   check('only today/tomorrow are urgent', dueSoonLabel('2026-07-20', T)?.urgent === false && dueSoonLabel('2026-07-19', T)?.urgent === true)
+}
+
+// ── invoicePaymentNote (a partial bill states what's OWED, not just the total) ─
+console.log('\ninvoicePaymentNote (never mistakes the total for what is owed):')
+{
+  const d = new Map(buildDocItems({ quotes: FULL.quotes, invoices: FULL.invoices, properties: FULL.properties!, business: FULL.business, todayISO: TODAY, renderers }).map(x => [x.rawId, x]))
+  const late = d.get('i-late')!   // total 210, paid 100, balance 110 (partial)
+  const dueDoc = d.get('i-due')!  // total 105, paid 0, balance 105 (full unpaid)
+  const paid = d.get('i-paid')!   // settled
+  const pn = invoicePaymentNote(late)
+  check('partial → still-due is the BALANCE, not the total', pn?.due === '$110.00')
+  check('partial → paid is total minus balance', pn?.paid === '$100.00')
+  check('full-unpaid invoice → null (its total IS what is due)', invoicePaymentNote(dueDoc) === null)
+  check('settled invoice → null', invoicePaymentNote(paid) === null)
+  check('a quote is never a payment note', invoicePaymentNote(d.get('q-sent')!) === null)
 }
 
 console.log(`\n${fail === 0 ? '✓' : '✗'} portal checks: ${pass} passed, ${fail} failed`)
