@@ -500,8 +500,17 @@ export function QuoteBuilder({
       const data = await res.json()
       if (res.ok && typeof data.km === 'number') {
         setValue('distance_km', data.km)
-        const sugg = suggestTravelFee(data.km, tiers)
-        if (includeTravel && !sugg.isCustom && sugg.fee !== null) setValue('travel_fee', sugg.fee)
+        // Same rule as travelSuggestion above: with zero tiers, suggestTravelFee
+        // only has its fabricated { fee: 0 } fallback to offer, and auto-applying
+        // it here silently WIPED a typed or saved travel fee to $0 whenever the
+        // address changed (AddressAutocomplete onSelect calls this) — worst on
+        // edit, where the fee was already on the quote and the Travel section sat
+        // collapsed out of sight. No tiers ⇒ the distance still fills, the fee is
+        // the owner's to set.
+        if (tiers.length > 0 && includeTravel) {
+          const sugg = suggestTravelFee(data.km, tiers)
+          if (!sugg.isCustom && sugg.fee !== null) setValue('travel_fee', sugg.fee)
+        }
         setCalcMsg({ text: `${data.km} km${data.durationText ? ` · ${data.durationText} drive` : ''}` })
       } else {
         setCalcMsg({ text: data.error || 'Could not calculate distance.', error: true })
@@ -517,7 +526,10 @@ export function QuoteBuilder({
     setIncludeTravel(on)
     if (!on) {
       setValue('travel_fee', 0)
-    } else if (distanceKm > 0) {
+    } else if (distanceKm > 0 && tiers.length > 0) {
+      // tiers.length gate completes the invariant: suggestTravelFee is never
+      // consulted without tiers anywhere in this file. (Here it was near-harmless —
+      // toggling off already zeroed the fee — but one rule beats three cases.)
       const s = suggestTravelFee(distanceKm, tiers)
       if (!s.isCustom && s.fee !== null) setValue('travel_fee', s.fee)
     }
