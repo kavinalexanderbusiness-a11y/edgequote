@@ -553,6 +553,17 @@ export function QuoteBuilder({
   // expire (the 0-of-55 bug) and entered the follow-up queue as a lie. The builder
   // edits quote CONTENT only; status transitions happen through the control.
   const showManualName = !customerId || customerId === '__manual'
+  // A first-ever quote has nobody to search: with zero customers the picker's only
+  // dropdown rows are an empty-state whose copy ("add one to start a conversation")
+  // sends a brand-new owner AWAY from the form that saves the customer automatically,
+  // and "+ Enter manually" — the state the form is ALREADY in (the manual fields
+  // render below whenever no customer is linked). A search box whose every outcome
+  // is the state you're already in is pure friction, so it's hidden and the form
+  // leads with the manual fields. Kept whenever a customer IS linked, so editing can
+  // always re-point. Same rule as the catalogue picker: hidden until there's
+  // something to pick. '' vs '__manual' changes nothing — every reader (submit,
+  // likelyMatch, activeCustomerId) treats them identically.
+  const showCustomerPicker = customers.length > 0 || !showManualName
 
   // ── The discount / value / notes row, defined ONCE ───────────────────────────
   // A service line and a material line end in the identical trio — same fields,
@@ -666,11 +677,15 @@ export function QuoteBuilder({
               </div>
             </CardHeader>
             <CardBody className="space-y-4">
-              {/* Customer — type-to-search picker (scales past a giant <select>) */}
-              <Controller name="customer_id" control={control}
-                render={({ field }) => (
-                  <CustomerPicker label="Customer" customers={customers} value={field.value || ''} onChange={field.onChange} />
-                )} />
+              {/* Customer — type-to-search picker (scales past a giant <select>).
+                  Hidden on a first-ever quote (see showCustomerPicker); the form
+                  keeps customer_id in state while unmounted (no shouldUnregister). */}
+              {showCustomerPicker && (
+                <Controller name="customer_id" control={control}
+                  render={({ field }) => (
+                    <CustomerPicker label="Customer" customers={customers} value={field.value || ''} onChange={field.onChange} />
+                  )} />
+              )}
               {showManualName && (
                 <div className="space-y-3 rounded-xl border border-accent/20 bg-accent/5 p-3">
                   <p className="text-[11px] text-ink-muted flex items-center gap-1.5">
