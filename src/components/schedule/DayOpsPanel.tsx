@@ -47,6 +47,10 @@ interface Props {
   onStartJob: (job: Job) => void | Promise<void>
   onMarkDone: (job: Job) => void | Promise<void>
   onMove: (job: Job, newDateISO: string) => void
+  // Send an in-progress visit to another day WITHOUT completing it: banks the time
+  // worked so far, pauses the timer, keeps photos/notes/price, and lands it on the
+  // chosen day ready to resume. Nothing is billed until the job is completed.
+  onContinue: (job: Job, newDateISO: string) => void
   onDeleteJob: (job: Job) => void
   onSetPrice: (job: Job, price: number | null, reason?: string) => Promise<void>
   workStartTime: string
@@ -78,7 +82,7 @@ export interface QuickPatch {
 
 export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
-  onOpenJob, onStartJob, onMarkDone, onMove, onSetPrice, workStartTime, capacityHours, onRainDelay, onAddJob, onQuickSave,
+  onOpenJob, onStartJob, onMarkDone, onMove, onContinue, onSetPrice, workStartTime, capacityHours, onRainDelay, onAddJob, onQuickSave,
   addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons, addonTemplates,
 }: Props) {
   const supabase = createClient()
@@ -87,6 +91,8 @@ export function DayOpsPanel({
   const [acting, setActing] = useState<string | null>(null)
   const [quickId, setQuickId] = useState<string | null>(null)
   const [moveId, setMoveId] = useState<string | null>(null)
+  // Which in-progress job's "continue on another day" date picker is open.
+  const [continueId, setContinueId] = useState<string | null>(null)
   const [qv, setQv] = useState<{ start_time: string; crew_size: number; duration_minutes: number; status: JobStatus; notes: string; price: number }>({ start_time: '', crew_size: 1, duration_minutes: 0, status: 'scheduled', notes: '', price: 0 })
   const [savingQuick, setSavingQuick] = useState(false)
   // First-class price: a dedicated, price-only inline editor on every card.
@@ -163,12 +169,13 @@ export function DayOpsPanel({
   // keep the tap-again-to-close behaviour the buttons already had.
   function closePanels() {
     setPriceId(null); setQuickId(null); setMoveId(null)
-    setPhotoId(null); setAddonsId(null); setMessageId(null)
+    setPhotoId(null); setAddonsId(null); setMessageId(null); setContinueId(null)
   }
   const togglePhoto = (job: Job) => { const was = photoId === job.id; closePanels(); if (!was) setPhotoId(job.id) }
   const toggleAddons = (job: Job) => { const was = addonsId === job.id; closePanels(); if (!was) setAddonsId(job.id) }
   const toggleMessage = (job: Job) => { const was = messageId === job.id; closePanels(); if (!was) setMessageId(job.id) }
   const toggleMove = (job: Job) => { const was = moveId === job.id; closePanels(); if (!was) setMoveId(job.id) }
+  const toggleContinue = (job: Job) => { const was = continueId === job.id; closePanels(); if (!was) setContinueId(job.id) }
 
   function openPrice(job: Job) {
     closePanels()
@@ -947,6 +954,9 @@ export function DayOpsPanel({
                         <Menu align="end" width={300} items={[
                           { key: 'quick', label: 'Quick edit', description: 'Time, crew, status & notes — this visit', icon: SlidersHorizontal, onSelect: () => { quickId === job.id ? setQuickId(null) : openQuick(job) } },
                           { key: 'edit', label: 'Edit job', description: 'Property, title & the recurring schedule', icon: Pencil, onSelect: () => onOpenJob(job) },
+                          // Only an already-started job can be "continued" — banks today's
+                          // time & photos and finishes another day, without completing/billing it.
+                          ...(job.status === 'in_progress' ? [{ key: 'continue', label: 'Continue on another day', description: 'Not done today? Keep today’s time & photos, finish it another day', icon: CalendarDays, onSelect: () => toggleContinue(job) }] : []),
                           { key: 'move', label: 'Move to another day', description: 'Reschedule this visit to another date', icon: Move, onSelect: () => toggleMove(job) },
                         ]}>
                           {({ toggle, triggerProps }) => (
@@ -966,6 +976,23 @@ export function DayOpsPanel({
                             onChange={e => { if (e.target.value && e.target.value !== date) { onMove(job, e.target.value); setMoveId(null) } }}
                             className="bg-bg-secondary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
                           <Button size="sm" variant="ghost" onClick={() => setMoveId(null)}>Cancel</Button>
+                        </div>
+                      )}
+
+                      {/* Continue on another day — an in-progress visit that isn't finished.
+                          Banks today's worked time, pauses the timer, keeps photos/notes/price,
+                          and lands it on the chosen day ready to resume. Not billed until done. */}
+                      {continueId === job.id && (
+                        <div className="mt-2 rounded-lg border border-border bg-bg-secondary p-2.5 space-y-2" onClick={e => e.stopPropagation()}>
+                          <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><CalendarDays className="w-3 h-3" /> Continue on another day</p>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs text-ink-muted">Finish on</span>
+                            <input type="date" defaultValue={date}
+                              onChange={e => { if (e.target.value && e.target.value !== date) { onContinue(job, e.target.value); setContinueId(null) } }}
+                              className="bg-bg-secondary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+                            <Button size="sm" variant="ghost" onClick={() => setContinueId(null)}>Cancel</Button>
+                          </div>
+                          <p className="text-[10px] text-ink-faint">Today’s time and photos are kept — it lands on that day ready to resume, and isn’t billed until you complete it.</p>
                         </div>
                       )}
 

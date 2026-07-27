@@ -1355,7 +1355,12 @@ export default function SchedulePage() {
   async function completeJob(job: Job) {
     const prev = { status: job.status, completed_at: job.completed_at, actual_minutes: job.actual_minutes }
     const now = new Date().toISOString()
-    const actual = job.started_at ? minutesBetween(job.started_at, now) : job.actual_minutes
+    // Accumulate, don't overwrite. A job continued across days banks each session's
+    // minutes into actual_minutes (see continueJobAnotherDay); the final complete then
+    // ADDS the last session to that banked total, so a two-day job records both days.
+    // Single-day jobs are unchanged: actual_minutes is null from Start until here, so
+    // (null || 0) + this session == this session, exactly as before.
+    const actual = job.started_at ? (job.actual_minutes || 0) + minutesBetween(job.started_at, now) : job.actual_minutes
     const patch = { status: 'completed' as const, completed_at: now, actual_minutes: actual }
     const completed = { ...job, ...patch }
     const notify = !!(automations.job_complete && job.customer_id)
@@ -1865,6 +1870,39 @@ export default function SchedulePage() {
     })
   }
 
+  // Continue an in-progress visit on another day WITHOUT completing it — for the
+  // landscaping job that runs long (upsell, weather, materials, daylight). Reuses
+  // the pieces that already exist rather than adding a new system:
+  //   • time tracking — banks the session worked so far into actual_minutes and
+  //     pauses the timer (clears started_at) so it can't run overnight; completeJob
+  //     later ADDS the final session to this banked total.
+  //   • status — returns to 'scheduled' so the visit shows Start again on the new
+  //     day (no new "carryover" status to teach the rest of the app about).
+  //   • routing — a plain scheduled_date change; the day's route recomputes from it.
+  //   • photos/notes/price/quote link — all keyed to the same job row, untouched.
+  //   • invoicing — nothing is billed; the draft is only created on completion.
+  // This-occurrence only: a recurring series is not rescheduled, just this visit.
+  async function continueJobAnotherDay(job: Job, newDate: string) {
+    if (newDate === job.scheduled_date) return
+    const now = new Date().toISOString()
+    const banked = job.started_at ? (job.actual_minutes || 0) + minutesBetween(job.started_at, now) : job.actual_minutes
+    const patch = { status: 'scheduled' as const, started_at: null, actual_minutes: banked, scheduled_date: newDate }
+    const prev = { status: job.status, started_at: job.started_at, actual_minutes: job.actual_minutes, scheduled_date: job.scheduled_date, route_order: job.route_order ?? null }
+    // Optimistic patch mirrors the move: a date change clears the manual route slot.
+    setJobs(prevJobs => prevJobs.map(j => j.id === job.id ? { ...j, ...patch, route_order: null } : j))
+    const { error } = await supabase.from('jobs').update(patch).eq('id', job.id)
+    if (error) {
+      setJobs(prevJobs => prevJobs.map(j => j.id === job.id ? { ...j, ...prev } : j))
+      setBanner('Could not continue the job on another day: ' + error.message)
+      return
+    }
+    offerUndo(`Continuing on ${format(parseISO(newDate + 'T00:00:00'), 'EEE, MMM d')} — today’s time and photos are kept`, async () => {
+      const { error: undoErr } = await supabase.from('jobs').update(prev).eq('id', job.id)
+      await fetchJobs()
+      if (undoErr) setBanner('Could not undo — check the job’s day and status.')
+    })
+  }
+
   async function handleScopeChoice(scope: RecurrenceScope) {
     const action = pendingAction
     setPendingAction(null)
@@ -2195,6 +2233,7 @@ export default function SchedulePage() {
           onStartJob={startJob}
           onMarkDone={completeJob}
           onMove={(job, iso) => moveJobToDate(job, new Date(iso + 'T00:00:00'))}
+          onContinue={continueJobAnotherDay}
           onDeleteJob={deleteJob}
           onSetPrice={setJobPrice}
           addonsByJobId={addonsByJobId}
