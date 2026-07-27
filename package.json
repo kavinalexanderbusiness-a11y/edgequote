@@ -42,7 +42,8 @@
     "verify:portal": "tsx scripts/verify-portal.ts",
     "verify:lead-intake": "tsx scripts/verify-lead-intake.ts",
     "verify:quote-status": "tsx scripts/verify-quote-status.ts",
-    "verify:dedup-contract": "tsx scripts/verify-dedup-contract.ts"
+    "verify:dedup-contract": "tsx scripts/verify-dedup-contract.ts",
+    "verify:followup": "tsx scripts/verify-followup.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",
