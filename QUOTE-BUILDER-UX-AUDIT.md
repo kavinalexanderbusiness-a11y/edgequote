@@ -1,7 +1,8 @@
 # Quote Builder — UX & Product Audit
 
-> **Round 2 (same day) is §10–§12 at the bottom** — two more correctness bugs, the
-> click-reduction pass, and the first-run dead ends. §1–§9 are round 1, shipped as `7c343ff`.
+> **Round 2 is §10–§12** — two more correctness bugs, the click-reduction pass, the first-run
+> dead ends (`cb38580`). **Round 3 is §13–§17** — everything the builder used to overwrite
+> without telling anyone. §1–§9 are round 1 (`7c343ff`).
 
 **Date:** 2026-07-26 · **Scope:** `/dashboard/quotes/new` and the edit surface, i.e.
 [QuoteBuilder.tsx](src/components/quotes/QuoteBuilder.tsx) (1,337 lines) plus its two hosts
@@ -367,7 +368,7 @@ Every other field in the fast-path card is a question; the price is the answer. 
   whether the customer already exists).
 - Everything in §9 still stands, unchanged.
 
-### A trap worth naming, not fixing
+### A trap worth naming, not fixing (round 2)
 
 `quotes/[id]/page.tsx` loads `overgrowth_multiplier: 1` and `distance_km: 0` into the builder on
 every edit — which **looks** like the "editing discards stored values" defect, and the multiplier
@@ -375,3 +376,110 @@ really is overwritten to `1` in the database on save. Do not "fix" it by loading
 `rate` is persisted as `applyOvergrowth(rate, mult)`, i.e. **already multiplied**, so loading the
 real multiplier would re-apply it on every save and compound the rate. The honest fix is storing a
 base rate separately — a schema change, and Pricing V2's business, not a UI pass's.
+
+---
+---
+
+# Round 3 — what the builder overwrites, and what it lets you get wrong
+
+Rounds 1 and 2 each turned up a data-loss bug by accident. Round 3 went looking for the
+**class**: every place the form writes into a field the owner may already have filled. There
+were two more, and they are the worst ones yet, because unlike the price they don't announce
+themselves — the wrong value simply sits there looking like something you typed.
+
+## §13 · Fields the builder silently overwrote ✅ all fixed
+
+**The rule this file already follows in three places** — *"fill it when it's empty, never
+overwrite what the owner typed"*, stated most plainly at the property-address effect
+(*"never make the owner retype data we just fetched"*) — **was not followed in two others.**
+
+### 13.1 Picking a customer destroyed the address you had typed
+
+```ts
+if (!isEdit && customer.address) setValue('address', full)   // unconditional
+```
+
+Type the service address first — a rental, a second property, a job site, the thing you are
+standing in front of — then pick the existing customer from the picker, and your address is
+replaced by their **home** address. No prompt, no undo, no visual difference afterwards. The
+quote then goes out, gets scheduled, and gets driven to for the wrong property.
+
+It also silently overwrote the two prefilled paths that exist precisely to save typing: a
+**website lead's** stated service address, and the **measure-tool handoff's** address, both of
+which arrive with a `customer_id` attached and were immediately clobbered by that customer's
+record.
+
+**Fixed** by remembering what *we* auto-filled: the address is written when the field is empty
+or still holds our own previous fill (so switching customers keeps working exactly as before),
+and never when it holds something the owner typed. The property-address effect records its
+fills the same way, so the two effects agree.
+
+### 13.2 Changing service destroyed the notes you had written
+
+```ts
+if (!isEdit && t.default_description) setValue('notes', t.default_description)   // unconditional
+```
+
+Write the scope of work, then change the service — the template's canned description replaces
+it. Worse for AI-written scope: `aiScopePrior` (the Undo state) knows nothing about this write,
+so the Undo button restores what was there *before the assistant ran*, not what the template
+just ate. A minute of typing, or twenty seconds of streaming, gone to a dropdown change.
+
+**Fixed** the same way: template descriptions still swap when you move between templates (that
+text is ours to replace), typed notes now survive.
+
+### 13.3 A quote made of line items was never autosaved
+
+`isEmpty` — the predicate deciding whether a draft is worth keeping — checked customer, name,
+address, service and price, and **ignored `services` entirely**. So a quote whose content *is*
+its lines ("Mulch, 6 yd, $55 · Delivery, 1 each, $40") looked blank to the autosave and was
+never drafted. The quote that takes the most typing to rebuild was the one kind that got no
+protection. **Fixed:** any line with a name or a price makes the draft real.
+
+## §14 · Preventing the mistake the product can't undo ✅
+
+A quote with **no price saves happily**, and afterwards looks identical to a priced one — in the
+list, on the PDF, in the portal. The mistake surfaces when the customer reads it. The builder
+now says so before the tap, next to the total, in the shared breakdown (desktop card *and*
+mobile sheet):
+
+> ⚠ No price yet — saving now creates a $0 quote. You can price it later.
+
+**It warns and does not block.** A placeholder quote you intend to price later is legitimate;
+blocking it would be the product deciding it knows better — the same never-block posture the
+price guardrails already take.
+
+## §15 · The third first-run dead end ✅
+
+*"Set your base address in Settings first."* — the error you get when you tap **Calculate
+distance** on a fresh account. It names a page and leaves you to find it. Distance, travel tiers
+and route density all hang off that one field, so a new business hits this on quote one. Now it
+links. That is the last of the three dead ends (rate, service catalogue, base address).
+
+## §16 · Two smaller correctness fixes ✅
+
+- **`role="switch"` with no state.** `show_travel_separately` has no entry in `defaultValues`,
+  so on a new quote the PDF toggle rendered `aria-checked={undefined}` — a switch that announces
+  no state at all. Coerced at the render site rather than adding a default, so **what gets
+  written to the database is byte-identical**.
+- **An effect that re-ran on every render.** `travelSuggestion` was rebuilt inline, so a fresh
+  object was a fresh dependency for the effect that writes `custom_travel_required` — meaning a
+  `setValue` on every render of a form that re-renders on every keystroke. Memoised on
+  `(distanceKm, tiers)`: same function, same arguments, same result, no longer a new object.
+
+## §17 · Found, deliberately not changed
+
+**The crew cost has two defaults.** [priceGuardrails' input in the builder](src/components/quotes/QuoteBuilder.tsx)
+hand-rolls `settings?.crew_cost_per_hour > 0 ? … : 40`, while
+[lib/economics](src/lib/economics.ts) exports `DEFAULT_CREW_COST = 40` and `crewCostPerHour()`
+doing the same guard — which is what `QuoteMeasure` uses. They agree **today**, by coincidence
+of both being 40; the literal is a copy that will not follow the constant if it ever moves, and
+[[engineering-principles]] is explicit that one responsibility gets one engine. Swapping the
+literal for the shared call is output-identical for every value the column can hold — but it is
+still a line feeding a pricing guardrail, and this pass was told not to touch pricing. Flagged
+for whoever opens the Pricing V2 lane.
+
+Also still open from §12: **the customer picker discards the name you typed** when you choose
+"+ Enter manually", so a new customer's name gets typed twice. Still the biggest single
+click-saver left in the flow; `ui/CustomerPicker.tsx` remains another session's active work, so
+this pass stayed out of it again.
