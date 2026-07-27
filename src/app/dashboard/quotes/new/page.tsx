@@ -100,7 +100,10 @@ export default function NewQuotePage() {
     load()
   }, [])
 
-  async function handleSubmit(values: QuoteFormValues) {
+  // Resolves FALSE when the insert failed, so the builder keeps the autosave
+  // draft instead of clearing it — the toast below is otherwise the only trace of
+  // a quote that no longer exists anywhere.
+  async function handleSubmit(values: QuoteFormValues): Promise<boolean> {
     const { data: { user } } = await supabase.auth.getUser()
 
     // Next number from the highest EXISTING quote number — a row count would
@@ -342,10 +345,14 @@ export default function NewQuotePage() {
       }
       toast.success(lead ? 'Quote created from the website lead.' : 'Quote created.')
       router.push(`/dashboard/quotes/${data.id}`)
-    } else if (error) {
-      toast.error('Could not save quote: ' + error.message)
-      return false   // insert failed — keep the autosave draft
+      return true
     }
+    // Same contract as `else if (error)` — return false so the builder keeps the
+    // draft — but reached by falling through, which also covers the response that
+    // carries NEITHER a row nor an error. That case used to produce no toast and
+    // no state change at all: tap Save, nothing happens.
+    toast.error(error ? 'Could not save quote: ' + error.message : 'Could not save quote. Your draft is still here — try again.')
+    return false
   }
 
   // ── The MeasureTool → quote handoff (sessionStorage 'eq_measurement') ────────

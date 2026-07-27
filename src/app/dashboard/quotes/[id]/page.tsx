@@ -106,7 +106,9 @@ export default function QuoteDetailPage() {
     load()
   }, [id])
 
-  async function handleUpdate(values: QuoteFormValues) {
+  // Resolves FALSE when the update failed, so the builder keeps the autosave
+  // draft rather than clearing it on a save that never landed.
+  async function handleUpdate(values: QuoteFormValues): Promise<boolean> {
     const { data: { user } } = await supabase.auth.getUser()
 
     // QL-2: quotes.address is a DOCUMENT SNAPSHOT, never a match key. The old code
@@ -278,10 +280,13 @@ export default function QuoteDetailPage() {
           }
         }
       }
-    } else if (error) {
-      toast.error('Could not update quote: ' + error.message)
-      return false   // update failed — keep the autosave draft
+      return true
     }
+    // Same contract as `else if (error)` — return false so the builder keeps the
+    // draft — but reached by falling through, so a response carrying NEITHER a row
+    // nor an error is reported too, instead of Update doing visibly nothing.
+    toast.error(error ? 'Could not update quote: ' + error.message : 'Could not update quote. Your changes are still here — try again.')
+    return false
   }
 
  // Returns TRUE only when the PDF actually reached the device — the caller gates the

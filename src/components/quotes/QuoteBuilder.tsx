@@ -153,13 +153,51 @@ export function QuoteBuilder({
     baselineUpdatedAt: autosaveBaselineUpdatedAt ?? null,
     isEmpty: v => !v.customer_id && !v.customer_name?.trim() && !v.address?.trim() && !v.service_type?.trim() && !(Number(v.initial_price) > 0),
   })
-  // Clear the draft ONLY when something was saved. Every failure path in the pages
-  // toasts and resolves normally (deliberately — the form state must survive), so an
-  // unconditional clear() here deleted the one DURABLE copy of a first quote at the
-  // exact moment the toast said "nothing was saved… press Save again": the refresh
-  // that toast invites then lost everything. `ok !== false` keeps old void-returning
-  // callers byte-identical on success.
-  const submit = handleSubmit(async v => { const ok = await onSubmit(v); if (ok !== false) autosave.clear() })
+  // Which disclosure sections are open. Held here (not inside each Collapsible)
+  // because a BLOCKED submit has to be able to open the one hiding the problem.
+  const [pricingOpen, setPricingOpen] = useState(false)
+  // A section that ALREADY HAS content starts open. Opening a saved quote showed
+  // "Additional services · 2 lines · $180" as one collapsed row, so the money most
+  // likely to be wrong was the money you had to go looking for — and a quote can
+  // be edited, re-saved and sent without its extra lines ever being on screen. A
+  // new quote has nothing to reveal and starts closed exactly as before.
+  const [servicesOpen, setServicesOpen] = useState(
+    () => (defaultValues?.services || []).some(s => (s?.kind ?? 'service') !== 'material'),
+  )
+  const [materialsOpen, setMaterialsOpen] = useState(
+    () => (defaultValues?.services || []).some(s => s?.kind === 'material'),
+  )
+
+  // Fields that live inside "Pricing details" — used to route a validation error
+  // back to its section.
+  const PRICING_DETAIL_FIELDS = ['hours', 'crew_size', 'rate', 'overgrowth_multiplier', 'weekly_price', 'biweekly_price', 'monthly_price', 'travel_fee', 'distance_km']
+
+  const submit = handleSubmit(
+    // The draft is the owner's only copy until the row exists. It used to be
+    // cleared the moment onSubmit RETURNED — and both pages catch their own
+    // Supabase error, toast it, and return normally, so a save that failed (RLS,
+    // network, a constraint) threw the draft away too: "Could not save quote",
+    // then refresh, and a quote that took minutes to build is gone. Clear it only
+    // on a save that actually happened. Same rule handleOpenPdf already applies
+    // to marking a quote Sent.
+    async v => { if (await onSubmit(v) !== false) autosave.clear() },
+    // Save used to fail SILENTLY. `crew_size` is required and lives inside a
+    // collapsed section, so clearing it meant tapping Save did visibly nothing:
+    // react-hook-form blocked the submit and then tried to focus a field that
+    // wasn't mounted. Say what's wrong, and open the section holding it.
+    errs => {
+      const keys = Object.keys(errs)
+      if (!keys.length) return
+      if (keys.some(k => PRICING_DETAIL_FIELDS.includes(k))) setPricingOpen(true)
+      if (errs.services) {
+        const bad = (errs.services as unknown[]).map((e, i) => (e ? i : -1)).filter(i => i >= 0)
+        if (bad.some(i => kindAt(i) === 'material')) setMaterialsOpen(true)
+        if (bad.some(i => kindAt(i) !== 'material')) setServicesOpen(true)
+      }
+      const first = errs[keys[0] as keyof typeof errs] as { message?: string } | undefined
+      toast.error(first?.message || 'Some fields still need filling in — we’ve opened the section holding them.')
+    },
+  )
 
   const [calcLoading, setCalcLoading] = useState(false)
   const [calcMsg, setCalcMsg] = useState<{ text: string; error?: boolean } | null>(null)

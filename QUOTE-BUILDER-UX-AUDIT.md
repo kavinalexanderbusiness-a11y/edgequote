@@ -2,7 +2,8 @@
 
 > **Round 2 is §10–§12** — two more correctness bugs, the click-reduction pass, the first-run
 > dead ends (`cb38580`). **Round 3 is §13–§17** — everything the builder used to overwrite
-> without telling anyone. §1–§9 are round 1 (`7c343ff`).
+> without telling anyone (`2b07fa4`). **Round 4 is §18–§21** — the draft that a failed save
+> deleted, and the map of what's left. §1–§9 are round 1 (`7c343ff`).
 
 **Date:** 2026-07-26 · **Scope:** `/dashboard/quotes/new` and the edit surface, i.e.
 [QuoteBuilder.tsx](src/components/quotes/QuoteBuilder.tsx) (1,337 lines) plus its two hosts
@@ -483,3 +484,94 @@ Also still open from §12: **the customer picker discards the name you typed** w
 "+ Enter manually", so a new customer's name gets typed twice. Still the biggest single
 click-saver left in the flow; `ui/CustomerPicker.tsx` remains another session's active work, so
 this pass stayed out of it again.
+
+---
+---
+
+# Round 4 — the draft a failed save deleted, and the map of what's left
+
+## §18 · The autosave draft was destroyed by a save that didn't happen ✅ fixed
+
+The draft is the owner's **only copy** until the row exists. It was cleared the moment
+`onSubmit` *returned*:
+
+```ts
+async v => { await onSubmit(v); autosave.clear() }
+```
+
+Both pages catch their own Supabase error, toast it, and **return normally**. So a save that
+failed — RLS, a network drop, a constraint, an expired session — cleared the draft anyway. The
+owner reads *"Could not save quote: …"*, refreshes or navigates, and a quote that took minutes
+to build is gone from every copy that existed.
+
+The codebase already had the right answer two functions further down the same file:
+
+```ts
+// Returns TRUE only when the PDF actually reached the device — the caller gates the
+// "mark sent" write on it, so a failed render can never flip the quote to Sent.
+async function handleOpenPdf(): Promise<boolean>
+```
+
+**Fixed** by applying that rule to saving: `onSubmit` may now resolve `false` for "did not
+save", both pages return it on their error branch, and the builder clears the draft only when
+the save actually happened. Returning nothing still means saved, so nothing else changes. The
+error toasts now also say the draft is still there — because now it is.
+
+*(Both pages previously had a silent hole too: `else if (error)` meant a response with neither
+`data` nor `error` produced no toast and no state change — tap Update, nothing happens, no
+message. Now anything that isn't a confirmed row is reported and returns `false`.)*
+
+## §19 · Content hidden behind a closed accordion on the edit screen ✅ fixed
+
+Opening a saved quote rendered *"Additional services · 2 lines · $180"* as a single collapsed
+row. The money most likely to be wrong is the money you have to go looking for — and a quote
+could be edited, re-saved and sent without its extra lines ever being on screen. **Sections
+that already have content now start open**; a new quote has nothing to reveal and starts
+closed exactly as before.
+
+## §20 · The overwrite class is now fully mapped
+
+Three rounds of hunting, and the picture is complete. Every automatic write into a field the
+owner can edit:
+
+| What writes it | Field | Status |
+|---|---|---|
+| Customer effect | `address` | ✅ fixed §13.1 — guarded by "we filled it" |
+| Property effect | `address`, `measured_sqft` | ✅ already guarded (records its fills since §13.1) |
+| Template effect | `notes` | ✅ fixed §13.2 |
+| Template effect | `service_type` | ✔ correct — a different template *is* a different service |
+| Suggestion effect | `initial_price` | ✔ correct — `priceLocked` since round 1 |
+| Monthly toggle | `monthly_price` | ✅ fixed round 2 §10.3 |
+| Draft restore | everything | ✅ fixed round 2 §10.1 |
+| **Template effect** | **`rate`** | ⚠️ **open — pricing input** |
+| **`calculateDistance`** | **`travel_fee`** | ⚠️ **open — pricing input** |
+
+**The two that are left are both pricing inputs, and both are real:**
+
+- **Picking a different hourly template replaces a per-quote rate override.** The field's own
+  hint invites the override — *"Change it here for this quote only"* — and then a service
+  change silently reverts it to the template's default.
+- **Re-picking an address replaces a hand-entered travel fee.** `onSelect` calls
+  `calculateDistance`, which re-applies the tier fee whenever travel is being charged. Set
+  $25 by hand, fix a typo in the address, and you are back to the tier's $15 with no notice.
+
+Both fixes are the same three-line guard used everywhere else in §13. **Neither was applied**,
+because both change *when a pricing input is written* — which this pass was told not to touch,
+and which [[pricing-experience-locked]] reserves for the Pricing V2 lane. They are listed here
+as ready-to-implement, not as open questions.
+
+## §21 · Also found, not changed
+
+- **`includeTravel` starts `true` even on a quote that charges no travel.** Editing a quote
+  the owner deliberately absorbed travel on shows the toggle reading *"Charging travel fee"*
+  over a $0 fee — the label states the opposite of the quote's actual state. The one-line fix
+  (`useState((defaultValues?.travel_fee ?? 0) > 0 || !isEdit)`) also changes whether a later
+  **Calculate distance** re-applies a fee to that quote, so it is the same pricing-input call
+  as §20 and belongs with it.
+- The **crew-cost duplicate literal** (§17) is unchanged and still worth folding into
+  `lib/economics` when the pricing lane opens.
+- **`QuoteMeasure` was audited this round and needs nothing.** Closing is always explicit,
+  a traced-but-unfinished measurement confirms before discarding, Escape routes through the
+  same guard, and the in-progress trace is persisted per property and offered as *Resume*.
+  It is the best-defended surface in the whole flow — the rest of the builder was measured
+  against it.
