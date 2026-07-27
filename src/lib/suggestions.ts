@@ -1869,7 +1869,9 @@ export async function createRecurringPlan(
   supabase: SupabaseClient,
   plan: RecurringPlanPayload,
 ): Promise<{ ok: boolean; error?: string; count?: number }> {
-  const { data: { user } } = await supabase.auth.getUser()
+  // getSession (local read), not getUser (network hop): the id only scopes RLS-filtered reads.
+  const { data: { session } } = await supabase.auth.getSession()
+  const user = session?.user
   if (!user) return { ok: false, error: 'Not signed in' }
   try {
     const dates = generateOccurrences(plan.startDate, plan.intervalUnit, plan.intervalCount, plan.endDate, null)

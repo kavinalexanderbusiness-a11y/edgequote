@@ -485,7 +485,9 @@ export function buildLaborInsights(
 
 // ── loaders ──────────────────────────────────────────────────────────────────────
 export async function loadLaborModel(supabase: SupabaseClient): Promise<{ model: LaborModel; enabled: boolean; crewCost: number } | null> {
-  const { data: { user } } = await supabase.auth.getUser()
+  // getSession (local read), not getUser (network hop): the id only scopes RLS-filtered reads.
+  const { data: { session } } = await supabase.auth.getSession()
+  const user = session?.user
   if (!user) return null
   const [oRes, sRes] = await Promise.all([
     supabase.from('labor_observations').select('job_id, property_id, service_date, sqft, service_type, crew_size, frequency, is_initial_visit, overgrowth, estimated_minutes, actual_minutes').eq('user_id', user.id),
@@ -497,7 +499,9 @@ export async function loadLaborModel(supabase: SupabaseClient): Promise<{ model:
 }
 
 export async function loadLaborInsights(supabase: SupabaseClient): Promise<{ insights: LaborInsights; model: LaborModel } | null> {
-  const { data: { user } } = await supabase.auth.getUser()
+  // getSession (local read), not getUser (network hop): the id only scopes RLS-filtered reads.
+  const { data: { session } } = await supabase.auth.getSession()
+  const user = session?.user
   if (!user) return null
   const uid = user.id
   const [oRes, jRes, qRes, pRes, sRes, rRes] = await Promise.all([

@@ -34,7 +34,9 @@ function subscribe(cb: () => void) { listeners.add(cb); return () => { listeners
 
 async function fetchBusinessData(): Promise<Snapshot | null> {
   const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  // getSession (local read), not getUser (network hop): the id only scopes RLS-filtered reads.
+  const { data: { session } } = await supabase.auth.getSession()
+  const user = session?.user
   if (!user) return null
   const [settingsRes, templatesRes, tiersRes] = await Promise.all([
     supabase.from('business_settings').select('*').eq('user_id', user.id).maybeSingle(),
