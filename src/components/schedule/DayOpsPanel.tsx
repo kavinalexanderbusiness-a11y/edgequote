@@ -154,8 +154,16 @@ export function DayOpsPanel({
     }
   }
 
+  // Only ONE inline panel opens per card (quick / move / price / photos / message /
+  // services). This is THE single closer every opener calls first, so the invariant
+  // can't drift: it used to be six separate null-litanies and four of them missed a
+  // sibling, so tapping e.g. Quick edit with Message open left both stacked open.
+  function closeInlinePanels() {
+    setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setMessageId(null); setAddonsId(null)
+  }
+
   function openPrice(job: Job) {
-    setQuickId(null); setMoveId(null); setPhotoId(null); setAddonsId(null)
+    closeInlinePanels()
     setPriceId(job.id)
     setPriceVal(job.price != null ? String(job.price) : '')
     setPriceReason('')
@@ -188,7 +196,7 @@ export function DayOpsPanel({
   }
 
   function openQuick(job: Job) {
-    setPriceId(null); setMoveId(null)
+    closeInlinePanels()
     setQuickId(job.id)
     setQv({
       start_time: job.start_time || '',
@@ -855,7 +863,7 @@ export function DayOpsPanel({
                         {job.start_time && <span>· {job.start_time.slice(0, 5)}</span>}
                         {/* At-a-glance add-on indicator — names when few, else count */}
                         {addons.length > 0 && (
-                          <button onClick={e => { e.stopPropagation(); setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setAddonsId(addonsId === job.id ? null : job.id) }}
+                          <button onClick={e => { e.stopPropagation(); closeInlinePanels(); setAddonsId(addonsId === job.id ? null : job.id) }}
                             title={addons.map(a => `${a.description} ${formatCurrency(Number(a.amount))}`).join(' · ')}
                             className="text-[10px] font-semibold text-accent-text border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5 shrink-0 hover:bg-accent/20">
                             +{addons.length <= 2 ? addons.map(a => a.description).join(' + ') : `${addons.length} services`}
@@ -883,7 +891,7 @@ export function DayOpsPanel({
                             <Receipt className="w-3.5 h-3.5" /> Invoice
                           </a>
                           <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Edit job" />
-                          <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setAddonsId(null); setMessageId(null); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
+                          <ActionBtn onClick={() => { closeInlinePanels(); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
                         </div>
                       ) : (
                       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
@@ -906,7 +914,7 @@ export function DayOpsPanel({
                         >
                           <Navigation className="w-3.5 h-3.5" /> Route to
                         </a>
-                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setAddonsId(null); setMessageId(messageId === job.id ? null : job.id) }} icon={MessageSquare} label="Message" />
+                        <ActionBtn onClick={() => { closeInlinePanels(); setMessageId(messageId === job.id ? null : job.id) }} icon={MessageSquare} label="Message" />
                         {job.status === 'scheduled' && job.on_my_way_at && (
                           <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : `On my way · ${ONE_TAP_ETA_MIN}m`}
                             title={`Texts ${job.customers?.name || 'the customer'} that you'll arrive in about ${ONE_TAP_ETA_MIN} minutes. Use Message to send a different ETA.`} />
@@ -916,8 +924,8 @@ export function DayOpsPanel({
                         {job.status === 'scheduled' && (
                           <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onMarkDone(job) } finally { setActing(null) } }} icon={CheckCircle2} label="Complete" />
                         )}
-                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setAddonsId(null); setMessageId(null); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
-                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setMessageId(null); setAddonsId(addonsId === job.id ? null : job.id) }} icon={PlusCircle} label={addons.length ? `Services (${addons.length})` : 'Services'} />
+                        <ActionBtn onClick={() => { closeInlinePanels(); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
+                        <ActionBtn onClick={() => { closeInlinePanels(); setAddonsId(addonsId === job.id ? null : job.id) }} icon={PlusCircle} label={addons.length ? `Services (${addons.length})` : 'Services'} />
                         {/* Rare edit actions live in ONE overflow — same handlers, less
                             chrome. Descriptions carry the hierarchy the flat list can't:
                             "Quick edit" is the fast field change, "Edit job" is the whole
@@ -926,7 +934,7 @@ export function DayOpsPanel({
                         <Menu align="end" width={300} items={[
                           { key: 'quick', label: 'Quick edit', description: 'Time, crew, status & notes — this visit', icon: SlidersHorizontal, onSelect: () => { quickId === job.id ? setQuickId(null) : openQuick(job) } },
                           { key: 'edit', label: 'Edit job', description: 'Property, title & the recurring schedule', icon: Pencil, onSelect: () => onOpenJob(job) },
-                          { key: 'move', label: 'Move to another day', description: 'Reschedule this visit to another date', icon: Move, onSelect: () => setMoveId(moveId === job.id ? null : job.id) },
+                          { key: 'move', label: 'Move to another day', description: 'Reschedule this visit to another date', icon: Move, onSelect: () => { closeInlinePanels(); setMoveId(moveId === job.id ? null : job.id) } },
                         ]}>
                           {({ toggle, triggerProps }) => (
                             <Button size="sm" variant="ghost" onClick={toggle} aria-label="More actions" title="More actions" {...triggerProps}>

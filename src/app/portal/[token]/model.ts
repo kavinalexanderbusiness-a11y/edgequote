@@ -497,9 +497,10 @@ export function buildDocItems(opts: {
     return {
       id: 'i' + ii.id, rawId: ii.id, kind: 'invoice' as const, number: ii.invoice_number, title: ii.service_type || 'Invoice',
       date: ii.issued_date || ii.created_at, status: overdue ? 'overdue' : ii.status, dueDate: ii.due_date, amount: total, balance,
-      // A partial payment is the customer's own money already on this bill —
-      // not showing it made the row look like they'd paid nothing.
-      amountNote: Number(ii.amount_paid) > 0 && balance > 0 ? `${formatCurrency(Number(ii.amount_paid))} already paid` : undefined,
+      // An invoice's headline is its total (GST already in it) — no note. The
+      // partial-payment breakdown ("still due / paid") is derived on demand by
+      // invoicePaymentNote so the amount OWED, not just the total, is legible.
+      amountNote: undefined,
       filename: `${ii.invoice_number}.pdf`, getBlob: () => { onInvoiceOpen?.(ii.id); return renderers.invoice(ii) },
       // Same resolver as quotes. An invoice that spans several properties answers
       // null on purpose — it lands in the neutral bucket rather than being filed
@@ -508,6 +509,18 @@ export function buildDocItems(opts: {
     }
   })
   return [...q, ...inv]
+}
+
+// For a partially-paid invoice, the breakdown a customer actually needs: what's
+// still OWED (the actionable number the row can raise its voice for) and what's
+// already been paid (their money, accounted for). Null for anything else — a
+// full bill's total is its own answer, and a settled or overpaid one has
+// nothing outstanding. Works for every payment method, including e-transfer and
+// cash where there's no Pay button to read the amount off. Pure, so verify pins
+// that "still due" is the remaining balance — never the total.
+export function invoicePaymentNote(d: DocItem): { due: string; paid: string } | null {
+  if (d.kind !== 'invoice' || !(d.balance > 0) || !(d.balance < d.amount)) return null
+  return { due: formatCurrency(d.balance), paid: formatCurrency(d.amount - d.balance) }
 }
 
 // ── Progress (the journey rail) ─────────────────────────────────────────────
