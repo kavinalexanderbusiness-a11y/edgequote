@@ -210,6 +210,9 @@ jobs:
       #              error.
       - name: Verify route
         run: npm run verify:route
+
+      - name: Route characterization (second suite)
+        run: npm run verify:route-characterization
       #   customer-health — the lifecycle engine one layer above the signal
       #              detectors: the 0–100 score, tier, flags and headline reason
       #              the Growth screen sorts a whole book by. Pins the score
@@ -313,3 +316,11 @@ jobs:
       # hostile jsonb value from making the chaser a same-day spammer or endless.
       - name: Verify follow-up engine
         run: npm run verify:followup
+      # lib/route is THE place a day's route is ordered and timed — the Route Planner and
+      # the calendar Day Ops panel share it so they can never disagree. Wrong-VALUE and
+      # invisible to tsc: a bad ETA promises the wrong arrival, a bad dayLoad hides an
+      # overbooked (or blocked) day, and a route past Google's 9-waypoint cap sends a
+      # broken "Open in Maps" link. Deterministic distance/speed injected; pins the
+      # ordering + clock logic, not floating-point geo.
+      - name: Verify route engine
+        run: npm run verify:route
