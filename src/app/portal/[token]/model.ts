@@ -138,6 +138,15 @@ export function tabNavTarget(key: string, current: number, count: number): numbe
   }
 }
 
+// The keyboard "send" chord for a composer: Cmd/Ctrl+Enter, matching the app's
+// Modal convention. Plain Enter stays a newline (a message can be multi-line),
+// so a phone's soft keyboard — which never sends the modifier — is completely
+// unaffected; this is a desktop convenience only. Pure so verify pins that
+// plain Enter never sends.
+export function isSendChord(e: { key: string; metaKey?: boolean; ctrlKey?: boolean }): boolean {
+  return (!!e.metaKey || !!e.ctrlKey) && e.key === 'Enter'
+}
+
 // ── Add to calendar (client-side .ics) ──────────────────────────────────────
 // A homeowner wants their service visit in their phone's calendar so they can
 // plan around it. Everything needed is already in the payload — this generates

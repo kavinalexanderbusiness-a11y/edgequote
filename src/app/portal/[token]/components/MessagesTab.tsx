@@ -17,8 +17,8 @@ import { Loader2, MessageSquare, Send } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { cn, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
-import { draftStorageKey, type PortalMessage } from '../model'
-import type { TabProps } from './shared'
+import { draftStorageKey, isSendChord, type PortalMessage } from '../model'
+import { autoGrow, type TabProps } from './shared'
 
 export function MessagesTab({ view, actions, initialDraft, onDraftConsumed }: TabProps & { initialDraft?: string | null; onDraftConsumed?: () => void }) {
   const token = actions.token
@@ -60,6 +60,10 @@ export function MessagesTab({ view, actions, initialDraft, onDraftConsumed }: Ta
   useEffect(() => {
     try { if (body) sessionStorage.setItem(draftKey, body); else sessionStorage.removeItem(draftKey) } catch { /* storage blocked */ }
   }, [body, draftKey])
+
+  // Grow the box to fit the message (incl. a restored/prefilled draft) so a
+  // long note isn't cramped in two rows on a phone.
+  useEffect(() => { autoGrow(composerRef.current) }, [body])
 
   // Load on open + a modest poll so an owner reply appears without a manual
   // refresh. 30s is deliberate: portal tabs are short-lived and anon.
@@ -138,7 +142,8 @@ export function MessagesTab({ view, actions, initialDraft, onDraftConsumed }: Ta
       <div className="animate-rise stagger-2 rounded-card border border-border bg-bg-secondary p-4">
         <form onSubmit={e => { e.preventDefault(); send() }}>
           <textarea ref={composerRef} value={body} onChange={e => setBody(e.target.value)} rows={2} aria-label="Your message" placeholder={`Message ${businessName || 'us'}…`}
-            className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+            onKeyDown={e => { if (isSendChord(e)) { const form = e.currentTarget.form; if (form?.requestSubmit) { e.preventDefault(); form.requestSubmit() } } }}
+            className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none resize-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
           <div className="flex items-center justify-between gap-3 mt-2">
             <p className="text-[11px] text-ink-faint">Goes straight to {businessName ? `${businessName}’s` : 'our'} inbox — replies appear right here.</p>
             <Button size="sm" type="submit" loading={sending} disabled={!body.trim()}><Send className="w-4 h-4" /> Send</Button>

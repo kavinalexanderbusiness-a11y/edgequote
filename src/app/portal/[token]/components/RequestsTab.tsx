@@ -13,13 +13,13 @@
 // actions.submitRequest (portal_request_service / portal_submit_request), which
 // thread into the owner's ONE Messages hub. Nothing here mutates jobs or plans.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CalendarPlus, Check, CheckCircle2, ChevronDown, Loader2, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { cn, formatDate, localTodayISO } from '@/lib/utils'
 import { formatServicePrice, type PriceableService } from '@/lib/servicePricing'
-import { draftStorageKey, MAX_REQUEST_PRESETS, type PortalData, type PortalService, type SubmitRequestFn } from '../model'
-import type { TabProps } from './shared'
+import { draftStorageKey, isSendChord, MAX_REQUEST_PRESETS, type PortalData, type PortalService, type SubmitRequestFn } from '../model'
+import { autoGrow, type TabProps } from './shared'
 
 // The honest price label. No rate ⇒ no label — formatServicePrice would render
 // "$0", which is a claim, so we stay silent instead. A rate with a null
@@ -54,6 +54,7 @@ export function RequestsTab({ view, actions }: TabProps) {
   // once the request is sent. Same per-token sessionStorage as the message
   // composer; the two never share a key.
   const draftKey = draftStorageKey(actions.token, 'request')
+  const reqRef = useRef<HTMLTextAreaElement | null>(null)
   useEffect(() => {
     try { const saved = sessionStorage.getItem(draftKey); if (saved) setReqMsg(saved) } catch { /* storage blocked */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -61,6 +62,8 @@ export function RequestsTab({ view, actions }: TabProps) {
   useEffect(() => {
     try { if (reqMsg) sessionStorage.setItem(draftKey, reqMsg); else sessionStorage.removeItem(draftKey) } catch { /* storage blocked */ }
   }, [reqMsg, draftKey])
+  // Grow to fit the request (incl. a restored draft), like the message composer.
+  useEffect(() => { autoGrow(reqRef.current) }, [reqMsg])
 
   const shown = expanded ? services : services.slice(0, MAX_REQUEST_PRESETS)
   const hiddenCount = services.length - MAX_REQUEST_PRESETS
@@ -159,12 +162,14 @@ export function RequestsTab({ view, actions }: TabProps) {
             }}
           >
             <textarea
+              ref={reqRef}
               value={reqMsg}
               onChange={e => setReqMsg(e.target.value)}
+              onKeyDown={e => { if (isSendChord(e)) { const form = e.currentTarget.form; if (form?.requestSubmit) { e.preventDefault(); form.requestSubmit() } } }}
               rows={3}
               aria-label="Your request"
               placeholder="e.g. Can you add a fall cleanup this month?"
-              className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
+              className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none resize-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
             />
             <div className="mt-2"><Button size="sm" type="submit" loading={busyKey === 'custom'} disabled={!reqMsg.trim()}>Send request</Button></div>
           </form>

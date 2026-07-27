@@ -223,6 +223,16 @@ export function fmtMoney(n: number): string {
   return formatCurrency(Number(n) || 0)
 }
 
+// Grow a composer textarea to fit its content, up to a cap after which it
+// scrolls — so a long message isn't trapped scrolling inside a two-row window
+// on a phone. Pure DOM, cheap enough to call on every keystroke; a null ref
+// (the field isn't mounted) is a safe no-op.
+export function autoGrow(el: HTMLTextAreaElement | null, max = 160): void {
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, max) + 'px'
+}
+
 // ── Add to calendar ─────────────────────────────────────────────────────────
 // Builds a standard .ics from booked visits and downloads it — on a phone this
 // opens the calendar's "add event" sheet. Client-side only (buildVisitICS is

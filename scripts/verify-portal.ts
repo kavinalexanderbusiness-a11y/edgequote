@@ -12,7 +12,7 @@ import {
   quoteJourney, moneySummary, buildPropertyModels, customerSinceYear,
   requestPresetsOf, resolveDocAddress, groupPhotos, orphanPhotos, liveStatusOf, visitDay,
   daysAwayLabel, parsePortalDeepLink, tabNavTarget, buildVisitICS, visitToCalendarEvent,
-  messageAboutDoc, primaryPortalAction, draftStorageKey, etransferReference,
+  messageAboutDoc, primaryPortalAction, draftStorageKey, etransferReference, isSendChord,
   NO_PROPERTY, MAX_REQUEST_PRESETS,
   type PortalData, type PortalJob, type PortalProperty, type DocBlobRenderers,
 } from '../src/app/portal/[token]/model'
@@ -350,6 +350,17 @@ console.log('\netransferReference (one-tap e-transfer memo; never a wrong ref):'
   check('a draft invoice is never a reference', ref([iDraft]) === null)
   check('a cancelled invoice is never a reference', ref([{ ...iDue, id: 'i-x', status: 'cancelled' }]) === null)
   check('quotes are ignored entirely', etransferReference(buildDocItems({ quotes: FULL.quotes, invoices: [], properties: props, business: B, todayISO: TODAY, renderers })) === null)
+}
+
+// ── isSendChord (Cmd/Ctrl+Enter to send; plain Enter stays a newline) ───────
+console.log('\nisSendChord (a phone keyboard, which sends no modifier, must never fire it):')
+{
+  check('Cmd+Enter sends', isSendChord({ key: 'Enter', metaKey: true }))
+  check('Ctrl+Enter sends', isSendChord({ key: 'Enter', ctrlKey: true }))
+  check('plain Enter does NOT send (stays a newline)', !isSendChord({ key: 'Enter' }))
+  check('Shift+Enter does NOT send', !isSendChord({ key: 'Enter', shiftKey: true } as { key: string; metaKey?: boolean; ctrlKey?: boolean }))
+  check('Cmd without Enter does NOT send', !isSendChord({ key: 'a', metaKey: true }))
+  check('Cmd+Shift+Enter still sends (shift is irrelevant)', isSendChord({ key: 'Enter', metaKey: true, ctrlKey: false }))
 }
 
 console.log(`\n${fail === 0 ? '✓' : '✗'} portal checks: ${pass} passed, ${fail} failed`)
