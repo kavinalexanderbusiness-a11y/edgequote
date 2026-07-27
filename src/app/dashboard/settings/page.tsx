@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { fieldBorder } from '@/components/ui/fieldStyles'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
@@ -795,11 +796,11 @@ function SeasonEditor({ icon, title, hint, season, onChange, editable, onRemove,
   const dayField = (val: number, key: 'startDay' | 'endDay') => (
     <input type="number" min={1} max={31} value={val} aria-label={key === 'startDay' ? 'Start day' : 'End day'}
       onChange={e => set({ [key]: Math.min(31, Math.max(1, Number(e.target.value) || 1)) })}
-      className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+      className={`w-16 bg-bg-tertiary border rounded-lg px-2 py-2 text-sm text-ink outline-none transition-all ${fieldBorder()}`} />
   )
   const monthField = (val: number, key: 'startMonth' | 'endMonth') => (
     <select value={val} onChange={e => set({ [key]: Number(e.target.value) })} aria-label={key === 'startMonth' ? 'Start month' : 'End month'}
-      className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20">
+      className={`bg-bg-tertiary border rounded-lg px-2 py-2 text-sm text-ink outline-none transition-all ${fieldBorder()}`}>
       {MONTH_OPTS.map(o => <option key={o.value} value={o.value} className="bg-bg-secondary">{o.label}</option>)}
     </select>
   )
@@ -811,7 +812,7 @@ function SeasonEditor({ icon, title, hint, season, onChange, editable, onRemove,
           <input value={season.label || ''} placeholder="e.g. Pool season"
             aria-label="Season name"
             onChange={e => set({ label: e.target.value })}
-            className="flex-1 min-w-0 bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-1.5 text-sm font-semibold text-ink placeholder:font-normal placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+            className={`flex-1 min-w-0 bg-bg-tertiary border rounded-lg px-2.5 py-1.5 text-sm font-semibold text-ink placeholder:font-normal placeholder:text-ink-faint outline-none transition-all ${fieldBorder()}`} />
         ) : (
           <span className="text-sm font-semibold text-ink">{title}</span>
         )}
@@ -839,7 +840,7 @@ function SeasonEditor({ icon, title, hint, season, onChange, editable, onRemove,
                 setKwText(e.target.value)
                 set({ match: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })
               }}
-              className="mt-1 w-full bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-2 text-sm font-normal text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+              className={`mt-1 w-full bg-bg-tertiary border rounded-lg px-2.5 py-2 text-sm font-normal text-ink placeholder:text-ink-faint outline-none transition-all ${fieldBorder()}`} />
           </label>
           {/* An empty match list is a season that can never fire — the engine only
               resolves a custom season through these keywords. Say so here, not in a

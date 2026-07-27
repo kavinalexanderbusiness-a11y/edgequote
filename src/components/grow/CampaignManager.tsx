@@ -1,5 +1,6 @@
 'use client'
 import { toast } from '@/lib/toast'
+import { fieldBorder } from '@/components/ui/fieldStyles'
 
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
@@ -39,7 +40,7 @@ import {
 // a broken sentence. These four are the ones the cron can genuinely fill.
 const CAMPAIGN_VARS = new Set(['first_name', 'business_name', 'review_link', 'portal_link'])
 
-const NUM_INPUT = 'bg-bg-tertiary border border-border-strong rounded-xl px-3 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20'
+const NUM_INPUT = `bg-bg-tertiary border rounded-xl px-3 py-2 text-base sm:text-sm text-ink outline-none ${fieldBorder()}`
 
 const KIND_ICON: Record<CampaignKind, typeof Cake> = {
   birthday: Cake, anniversary: PartyPopper, win_back: Coffee, broadcast: Repeat,

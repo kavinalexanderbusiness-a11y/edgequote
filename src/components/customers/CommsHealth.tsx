@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
+import { fieldBorder } from '@/components/ui/fieldStyles'
 import { createClient } from '@/lib/supabase/client'
 import { Customer } from '@/types'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -82,7 +83,7 @@ export function CommsHealth({ customer, onChange }: {
               onChange={e => setValue(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') save(adding) }}
               placeholder={adding === 'email' ? 'name@example.com' : '(403) 555-0100'}
-              className="flex-1 rounded-lg border border-border-strong bg-bg-tertiary px-3 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
+              className={`flex-1 rounded-lg border bg-bg-tertiary px-3 py-1.5 text-sm text-ink outline-none transition-all ${fieldBorder()}`}
             />
             <Button size="sm" onClick={() => save(adding)} loading={saving} disabled={!value.trim()}>Save</Button>
             <Button size="sm" variant="ghost" onClick={() => { setAdding(null); setValue('') }}>Cancel</Button>

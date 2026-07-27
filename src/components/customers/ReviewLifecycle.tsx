@@ -1,5 +1,6 @@
 'use client'
 import { toast } from '@/lib/toast'
+import { fieldBorder } from '@/components/ui/fieldStyles'
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
@@ -171,7 +172,7 @@ export function ReviewLifecycle({ customer, onChange }: {
                 <p className="text-[10px] uppercase tracking-wide text-ink-faint">Suggested public reply · edit before posting</p>
                 <textarea value={reply} onChange={e => setReply(e.target.value)} rows={3} aria-label="Suggested review reply"
                   readOnly={ai.running}
-                  className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3 py-2.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 resize-none" />
+                  className={`w-full bg-bg-tertiary border rounded-xl px-3 py-2.5 text-sm text-ink outline-none transition-all resize-none ${fieldBorder()}`} />
                 <AiError message={ai.error} />
                 <div className="flex items-center gap-2">
                   <Button size="sm" variant="secondary" onClick={copyReply} disabled={ai.running || !reply.trim()}>

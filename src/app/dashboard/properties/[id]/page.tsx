@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { fieldBorder } from '@/components/ui/fieldStyles'
 import { PageContainer } from '@/components/layout/PageContainer'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
@@ -200,11 +201,11 @@ export default function PropertyDetailPage() {
             />
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <input value={addrDraft.city} onChange={e => setAddrDraft(d => ({ ...d, city: e.target.value }))} placeholder="City"
-                className="rounded-xl border border-border-strong bg-bg-tertiary px-3 py-2 text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" aria-label="City" />
+                className={`rounded-xl border bg-bg-tertiary px-3 py-2 text-sm text-ink placeholder:text-ink-faint outline-none transition-all ${fieldBorder()}`} aria-label="City" />
               <input value={addrDraft.province} onChange={e => setAddrDraft(d => ({ ...d, province: e.target.value }))} placeholder="Province"
-                className="rounded-xl border border-border-strong bg-bg-tertiary px-3 py-2 text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" aria-label="Province" />
+                className={`rounded-xl border bg-bg-tertiary px-3 py-2 text-sm text-ink placeholder:text-ink-faint outline-none transition-all ${fieldBorder()}`} aria-label="Province" />
               <input value={addrDraft.postal} onChange={e => setAddrDraft(d => ({ ...d, postal: e.target.value }))} placeholder="Postal code"
-                className="rounded-xl border border-border-strong bg-bg-tertiary px-3 py-2 text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" aria-label="Postal code" />
+                className={`rounded-xl border bg-bg-tertiary px-3 py-2 text-sm text-ink placeholder:text-ink-faint outline-none transition-all ${fieldBorder()}`} aria-label="Postal code" />
             </div>
             <div className="flex items-center justify-end gap-2">
               <Button size="sm" variant="ghost" type="button" onClick={() => setEditingAddress(false)}>Cancel</Button>
