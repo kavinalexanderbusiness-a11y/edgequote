@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { useRouter } from 'next/navigation'
 import { Input } from '@/components/ui/Input'
@@ -131,6 +131,15 @@ export function QuoteBuilder({
   // The two sections below are a VIEW over it, split by `kind`; the real index is
   // carried through so register() still addresses the right row.
   const serviceLines = useFieldArray({ control, name: 'services' })
+  // Declared HERE, above its first reader. It used to be declared ~150 lines
+  // below, so `kindAt` — called synchronously by the two filters underneath —
+  // reached a `const` still in its temporal dead zone. With no lines that is
+  // invisible (the filters never run); with ONE line it is a hard
+  // `ReferenceError: Cannot access 'watchedServices' before initialization`,
+  // i.e. tapping "Add service"/"Add material", or opening any saved quote that
+  // has extra lines, blanked the whole builder. tsconfig targets ES2017, so
+  // there is no var-hoisting to soften it. Nothing else moved.
+  const watchedServices = watch('services')
   const indexedLines = serviceLines.fields.map((f, i) => ({ f, i }))
   const kindAt = (i: number) => watchedServices?.[i]?.kind ?? 'service'
   const serviceIdx = indexedLines.filter(({ i }) => kindAt(i) !== 'material')
@@ -151,7 +160,13 @@ export function QuoteBuilder({
     key: autosaveKey || (isEdit ? 'quote:edit' : 'quote:new'),
     value: formValues,
     baselineUpdatedAt: autosaveBaselineUpdatedAt ?? null,
-    isEmpty: v => !v.customer_id && !v.customer_name?.trim() && !v.address?.trim() && !v.service_type?.trim() && !(Number(v.initial_price) > 0),
+    // "Empty" has to mean empty. Additional service and material lines weren't
+    // counted, so a quote whose content was its LINES ("Mulch, 6 yd, $55") looked
+    // blank to the autosave and was never drafted — the one kind of quote that
+    // takes the most typing to rebuild.
+    isEmpty: v => !v.customer_id && !v.customer_name?.trim() && !v.address?.trim() && !v.service_type?.trim()
+      && !(Number(v.initial_price) > 0)
+      && !(v.services || []).some(s => s?.service_type?.trim() || Number(s?.unit_price) > 0),
   })
   // Which disclosure sections are open. Held here (not inside each Collapsible)
   // because a BLOCKED submit has to be able to open the one hiding the problem.
@@ -284,7 +299,7 @@ export function QuoteBuilder({
   const suggestedInitial = laborSuggestion(Number(hours), Number(crewSize), Number(rate), overgrowth || 1)
   // Additional service lines — summed by the ONE quote-services engine (same
   // discount semantics as invoices). The first-visit total = primary + extras + travel.
-  const watchedServices = watch('services')
+  // (`watchedServices` is declared at the top of the component — see the note there.)
   const extras = useMemo(() => sumServiceLines(watchedServices), [watchedServices])
   const effectiveTotal = initialPrice + extras.net + Number(travelFee || 0)
 
@@ -293,6 +308,34 @@ export function QuoteBuilder({
   // rate vs labour). Template display type wins; else the serviceKey normalizer.
   const svcTemplate = templates.find(t => t.id === templateId) ?? null
   const pricingKind = servicePricingKind(watch('service_type'), svcTemplate)
+
+  // WHICH SERVICE the accepted price was accepted for. "Applied" is a claim that
+  // the owner agreed to an engine's recommendation — and it survived changing the
+  // service, so measuring a lawn, tapping Accept and then switching to "Furnace
+  // Repair" left a green ✓ Applied badge next to a mowing price on a furnace
+  // quote. Equal numbers aren't consent (this file's own rule); neither is consent
+  // given for one service consent for the next.
+  // Trimmed + lowercased so fixing a typo in a free-text name doesn't read as
+  // switching service; a template-backed one compares by id anyway.
+  const [appliedFor, setAppliedFor] = useState<string | null>(null)
+  const serviceKey = templateId || String(watch('service_type') || '').trim().toLowerCase()
+  const currentServiceKey = () => getValues('service_template_id') || String(getValues('service_type') || '').trim().toLowerCase()
+  // THE one road to "Applied" — every accept path goes through here so none of
+  // them can forget to record what was accepted, and for what.
+  function markApplied() {
+    setPriceOrigin('applied')
+    setAppliedFor(currentServiceKey())
+  }
+  // The service changed under an accepted price. The number STAYS (it may still be
+  // what the owner wants, and silently zeroing their price would be the worse bug)
+  // but it stops claiming to be an engine recommendation anyone agreed to. Still
+  // "locked", so no suggestion overwrites it.
+  useEffect(() => {
+    if (priceOrigin !== 'applied' || appliedFor === null || appliedFor === serviceKey) return
+    setPriceOrigin('manual')
+    setPickedCadence(null)
+    setAppliedFor(null)
+  }, [serviceKey, priceOrigin, appliedFor])
 
   // Live suggested prices straight from the measured lawn — the compact one-tap
   // pricing. Same engine as everywhere else; ONLY for lawn-cadence services (a
@@ -357,7 +400,7 @@ export function QuoteBuilder({
     setValue('biweekly_price', 0)
     setValue('monthly_price', 0)
     setValue('suggested_price', serviceRec.price)
-    setPriceOrigin('applied')   // a real tap — this is the ONLY road to "Applied"
+    markApplied()   // a real tap — the ONLY road to "Applied"
     setPickedCadence(null)
   }
 
@@ -376,7 +419,7 @@ export function QuoteBuilder({
     setValue('biweekly_price', suggested.biweekly)
     setValue('monthly_price', includeMonthly ? suggested.monthly : 0)
     setValue('suggested_price', suggested.one_time)
-    setPriceOrigin('applied')   // tapping a plan tile IS an accept
+    markApplied()   // tapping a plan tile IS an accept
     setPickedCadence(c)
   }
 
@@ -397,6 +440,19 @@ export function QuoteBuilder({
     ? `${Number(hours) || 0} hr · ${crewSize} crew · ${formatCurrency(Number(rate))}/hr`
     : 'Not estimated yet'
 
+  // What WE last auto-filled into the address. The rule everywhere else in this
+  // file is "fill it when it's empty, never overwrite what the owner typed"; this
+  // effect was the exception and overwrote unconditionally. So: type the service
+  // address for a rental, a second property, or the job site — then pick the
+  // existing customer, and the address you typed was silently replaced by their
+  // home address. Nothing said so. The quote goes out for the wrong property.
+  // It also clobbered the two prefilled paths that exist to save typing — a
+  // website lead's stated address and the measure-tool handoff — because both
+  // arrive WITH a customer_id attached. Remembering our own fill keeps switching
+  // customers working (their address IS still ours to replace) while a typed
+  // address is now untouchable.
+  const autoFilledAddress = useRef<string | null>(null)
+
   useEffect(() => {
     if (!customerId || customerId === '__manual') return
     const customer = customers.find(c => c.id === customerId)
@@ -404,10 +460,14 @@ export function QuoteBuilder({
       setValue('customer_name', customer.name)
       if (!isEdit && customer.address) {
         const full = [customer.address, customer.city, customer.province].filter(Boolean).join(', ')
-        setValue('address', full)
+        const current = String(getValues('address') || '')
+        if (!current.trim() || current === autoFilledAddress.current) {
+          setValue('address', full)
+          autoFilledAddress.current = full
+        }
       }
     }
-  }, [customerId, customers, setValue, isEdit])
+  }, [customerId, customers, setValue, getValues, isEdit])
 
   // Pull the latest measurement recommendation for the relevant property — the
   // SPECIFIC property when one was requested (per-property Quote button), else the
@@ -436,12 +496,25 @@ export function QuoteBuilder({
       // the customer record — never make the owner retype data we just fetched).
       if (!isEdit && row?.address) {
         const full = [row.address, row.city, row.province].filter(Boolean).join(', ')
-        if (full && (defaultPropertyId || !getValues('address'))) setValue('address', full)
+        // Record it as ours too, so switching customer afterwards can still
+        // replace it — see autoFilledAddress above.
+        if (full && (defaultPropertyId || !getValues('address'))) {
+          setValue('address', full)
+          autoFilledAddress.current = full
+        }
       }
     }
     load()
     return () => { active = false }
   }, [customerId, defaultPropertyId, isEdit, getValues, setValue])
+
+  // Same rule for the notes a template pre-fills. Changing service used to
+  // REPLACE whatever was in the Notes field — including a scope the owner had
+  // just written by hand, and including AI-written text whose Undo (aiScopePrior)
+  // knows nothing about this write, so it restores the pre-assistant text rather
+  // than what the template ate. Switching between templates still swaps their
+  // canned descriptions (that text is ours), but typed notes now survive.
+  const autoFilledNotes = useRef<string | null>(null)
 
   useEffect(() => {
     if (!templateId) return
@@ -453,9 +526,15 @@ export function QuoteBuilder({
       if (t.pricing_display_type === 'hourly' || t.pricing_display_type === 'hourly_materials') {
         setValue('rate', t.default_rate)
       }
-      if (!isEdit && t.default_description) setValue('notes', t.default_description)
+      if (!isEdit && t.default_description) {
+        const current = String(getValues('notes') || '')
+        if (!current.trim() || current === autoFilledNotes.current) {
+          setValue('notes', t.default_description)
+          autoFilledNotes.current = t.default_description
+        }
+      }
     }
-  }, [templateId, templates, setValue, isEdit])
+  }, [templateId, templates, setValue, getValues, isEdit])
 
   // The recommendation stays live in the price field until the owner owns the
   // number. What changed: it can now be ABSENT. This effect used to run on mount
@@ -832,7 +911,7 @@ export function QuoteBuilder({
                     // price takes the recommended cadence's slot, the engine fills
                     // the rest (monthly only when enabled). Everything stays editable.
                     if (!suggested) {
-                      setValue('initial_price', price); setValue('suggested_price', price); setPriceOrigin('applied')
+                      setValue('initial_price', price); setValue('suggested_price', price); markApplied()
                       return
                     }
                     const c = suggested.recommended
@@ -841,7 +920,7 @@ export function QuoteBuilder({
                     setValue('biweekly_price', c === 'biweekly' ? price : suggested.biweekly)
                     setValue('monthly_price', includeMonthly ? (c === 'monthly' ? price : suggested.monthly) : 0)
                     setValue('suggested_price', suggested.one_time)
-                    setPriceOrigin('applied')
+                    markApplied()
                     setPickedCadence(c === 'monthly' ? null : c)
                   }}
                 />
@@ -949,7 +1028,7 @@ export function QuoteBuilder({
           </Card>
 
           {/* ── Advanced Pricing — exact price + the full engine, collapsed until needed ── */}
-          <Collapsible title="Advanced Pricing" icon={SlidersHorizontal} summary="Exact price · labour · recurring · travel — full control">
+          <Collapsible title="Advanced Pricing" icon={SlidersHorizontal} summary="Exact price · labour · recurring · travel — full control" open={pricingOpen} onOpenChange={setPricingOpen}>
           {/* Saved measurement — the pricing source of truth for this property.
               Shown ONLY when there's no LIVE suggestion (same numbers, same
               engine — never two copies of the price list on screen).
@@ -979,7 +1058,7 @@ export function QuoteBuilder({
                   setValue('monthly_price', savedRec.rec.monthly)
                   setValue('measured_sqft', savedRec.sqft)
                   setValue('suggested_price', savedRec.rec.one_time)
-                  setPriceOrigin('applied')   // an explicit tap on a real recommendation
+                  markApplied()   // an explicit tap on a real recommendation
                 }}>
                 <CheckCircle2 className="w-3.5 h-3.5" /> Use measured prices
               </Button>
@@ -1113,7 +1192,7 @@ export function QuoteBuilder({
               Measure → Recommended price → Accept → fine-tune → extras. Each line
               has qty × unit price − discount; totals sum via the one
               quote-services engine. The primary service above stays untouched. ── */}
-          <Collapsible title="Additional services" icon={Layers}
+          <Collapsible title="Additional services" icon={Layers} open={servicesOpen} onOpenChange={setServicesOpen}
             summary={serviceIdx.length ? `${serviceIdx.length} line${serviceIdx.length !== 1 ? 's' : ''} · ${formatCurrency(serviceExtrasNet)}` : 'One-service quote — add cleanup, hedges…'}>
             <div className="space-y-3">
               {serviceIdx.map(({ f, i }, n) => {
@@ -1195,7 +1274,7 @@ export function QuoteBuilder({
               question (Pricing V2 Phase 1 / Inventory D1), and a cost field here
               would pre-empt it. Lines live in the SAME array as services and sum
               through the SAME engine — this is a view, not a second system. ── */}
-          <Collapsible title="Materials" icon={Package}
+          <Collapsible title="Materials" icon={Package} open={materialsOpen} onOpenChange={setMaterialsOpen}
             summary={materialIdx.length
               ? `${materialIdx.length} material${materialIdx.length !== 1 ? 's' : ''} · ${formatCurrency(materialsSum.net)}`
               : 'Mulch, gravel, sod, plants…'}>
@@ -1432,7 +1511,7 @@ export function QuoteBuilder({
             // grade priced anything and recording one would be a fabrication.
             setValue('value_grade', sel.valueGrade)
             setValue('nearby_count', sel.nearbyCount)
-            setPriceOrigin('applied')   // they tapped a tier in the modal
+            markApplied()   // they tapped a tier in the modal
             setShowMeasure(false)
           }}
         />
