@@ -48,7 +48,10 @@ interface QuoteBuilderProps {
   // property's address + saved lawn size instead of the customer's primary.
   defaultPropertyId?: string
   defaultValues?: Partial<QuoteFormValues>
-  onSubmit: (values: QuoteFormValues) => Promise<void>
+  /** Return `false` to signal "nothing was saved" — the autosave draft is kept so a
+      refresh after the failure toast can still restore everything the owner typed.
+      Returning void/undefined (or true) means saved: the draft is cleared as before. */
+  onSubmit: (values: QuoteFormValues) => Promise<void | boolean>
   isEdit?: boolean
   /** Autosave key — defaults per new/edit; pass a precise one (e.g. `quote:${id}`). */
   autosaveKey?: string
@@ -150,7 +153,13 @@ export function QuoteBuilder({
     baselineUpdatedAt: autosaveBaselineUpdatedAt ?? null,
     isEmpty: v => !v.customer_id && !v.customer_name?.trim() && !v.address?.trim() && !v.service_type?.trim() && !(Number(v.initial_price) > 0),
   })
-  const submit = handleSubmit(async v => { await onSubmit(v); autosave.clear() })
+  // Clear the draft ONLY when something was saved. Every failure path in the pages
+  // toasts and resolves normally (deliberately — the form state must survive), so an
+  // unconditional clear() here deleted the one DURABLE copy of a first quote at the
+  // exact moment the toast said "nothing was saved… press Save again": the refresh
+  // that toast invites then lost everything. `ok !== false` keeps old void-returning
+  // callers byte-identical on success.
+  const submit = handleSubmit(async v => { const ok = await onSubmit(v); if (ok !== false) autosave.clear() })
 
   const [calcLoading, setCalcLoading] = useState(false)
   const [calcMsg, setCalcMsg] = useState<{ text: string; error?: boolean } | null>(null)
@@ -286,12 +295,20 @@ export function QuoteBuilder({
 
   // Why we can't recommend anything — shown verbatim to the owner instead of a
   // number. Ordered by what they'd do next.
-  const noRecReason = useMemo(() => {
-    if (!watch('service_type')?.trim()) return 'Pick a service and we’ll recommend a price.'
-    if (pricingKind === 'lawn_recurring') return 'Measure the property to see recommended pricing for this service.'
-    if (rate <= 0) return 'No recommendation yet — set your Default Labour Rate in Settings, or type a price.'
-    return 'No recommendation yet — add hours in the Labour calculator, or type a price. EdgeQuote won’t guess.'
-  }, [watch, pricingKind, rate])
+  // Deliberately NOT memoized: this was a useMemo over [watch, pricingKind, rate],
+  // and it went stale. watch is referentially stable, and servicePricingKind maps
+  // '' and any free-text non-lawn name both to 'labour' — so typing a service name
+  // changed NO dep, and the card kept saying "Pick a service and we'll recommend a
+  // price." AFTER the owner typed one: telling them to do the thing they'd just
+  // done. It's a four-way string pick; recomputing each render costs nothing and
+  // the whole form is already watched (autosave), so every keystroke re-renders.
+  const noRecReason = !watch('service_type')?.trim()
+    ? 'Pick a service and we’ll recommend a price.'
+    : pricingKind === 'lawn_recurring'
+      ? 'Measure the property to see recommended pricing for this service.'
+      : rate <= 0
+        ? 'No recommendation yet — set your Default Labour Rate in Settings, or type a price.'
+        : 'No recommendation yet — add hours in the Labour calculator, or type a price. EdgeQuote won’t guess.'
 
   // Accept for one-off services: fill the one price that makes sense and CLEAR
   // the lawn cadence fields (weekly mulch makes no sense on a quote).
@@ -334,7 +351,13 @@ export function QuoteBuilder({
   const travelSummary = Number(travelFee) > 0
     ? `${formatCurrency(Number(travelFee))}${distanceKm > 0 ? ` · ${distanceKm} km` : ''}`
     : (includeTravel ? 'No fee yet' : 'Absorbing travel')
-  const laborSummary = `${Number(hours) || 0} hr · ${crewSize} crew · ${formatCurrency(Number(rate))}/hr`
+  // "0 hr · 1 crew · $0.00/hr" is not a summary, it's a fabricated fact — the $0.00
+  // asserts the owner's rate IS zero on the very form whose doctrine is "unknown
+  // stays unknown". Until something real is entered, say so in words, like the
+  // travel ('No fee yet') and plan ('One-time quote') summaries already do.
+  const laborSummary = Number(hours) > 0 || Number(rate) > 0 || Number(crewSize) > 1
+    ? `${Number(hours) || 0} hr · ${crewSize} crew · ${formatCurrency(Number(rate))}/hr`
+    : 'Not estimated yet'
 
   useEffect(() => {
     if (!customerId || customerId === '__manual') return
@@ -415,7 +438,12 @@ export function QuoteBuilder({
     }
   }, [serviceRec, priceLocked, priceOrigin, pickedCadence, setValue])
 
-  const travelSuggestion = distanceKm > 0 ? suggestTravelFee(distanceKm, tiers) : null
+  // Gated on tiers existing: with ZERO tiers configured (every first-run account),
+  // suggestTravelFee's no-match fallback is { fee: 0, tierLabel: 'Unknown' }, which
+  // rendered as a fabricated suggestion — "Unknown: $0.00" — plus an "Apply
+  // suggested travel fee" button whose only possible effect was wiping the owner's
+  // hand-typed fee to $0. No tiers ⇒ no suggestion to speak of, so say nothing.
+  const travelSuggestion = distanceKm > 0 && tiers.length > 0 ? suggestTravelFee(distanceKm, tiers) : null
 
   useEffect(() => {
     if (travelSuggestion?.isCustom) {
@@ -589,7 +617,21 @@ export function QuoteBuilder({
           <DraftRestoreBanner
             savedAt={autosave.savedAt}
             label="unsaved quote"
-            onRestore={() => { const v = autosave.restore(); if (v) reset(v) }}
+            onRestore={() => {
+              const v = autosave.restore()
+              if (!v) return
+              reset(v)
+              // reset() restores the VALUES but not the ownership state, and the
+              // draft never persisted priceOrigin/includeMonthly. Left at 'empty',
+              // the reconciliation effect immediately overwrote a restored
+              // hand-typed price with the live labour suggestion — then the
+              // debounced autosave wrote that wrong price back over the draft too.
+              // Same inference the saved-quote load path already makes (a loaded
+              // non-zero price is the owner's own decision → 'manual'; a non-zero
+              // monthly means monthly was enabled).
+              if ((Number(v.initial_price) || 0) > 0) setPriceOrigin('manual')
+              if ((Number(v.monthly_price) || 0) > 0) setIncludeMonthly(true)
+            }}
             onDiscard={autosave.discard}
           />
         </div>
@@ -1233,7 +1275,12 @@ export function QuoteBuilder({
             )}
           </Collapsible>
 
-          <Collapsible title="Scheduling" icon={SlidersHorizontal}>
+          {/* Sparkles, not SlidersHorizontal: sharing Advanced Pricing's icon made
+              the first and last sections in the stack wear the same glyph, so the
+              icon column stopped working as a map. Sparkles already brands the
+              best-days content inside. The summary line brings it in line with
+              every other collapsed section (all the rest reveal their state). */}
+          <Collapsible title="Scheduling" icon={Sparkles} summary="Best days to schedule">
             <div className="pt-1">
               <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide flex items-center gap-2 mb-2">
                 <Sparkles className="w-3.5 h-3.5 text-accent-text" /> Best days to schedule
