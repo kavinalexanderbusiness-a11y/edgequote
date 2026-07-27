@@ -3,7 +3,7 @@ import { toast } from '@/lib/toast'
 import { PageContainer } from '@/components/layout/PageContainer'
 import { confirm as confirmDialog } from '@/lib/confirm'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
@@ -172,6 +172,14 @@ export default function CustomerDetailPage() {
   const [editingNotes, setEditingNotes] = useState(false)
   const [notesValue, setNotesValue] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
+  // load() reruns on every realtime tick (payments, messages, jobs, quotes,
+  // invoices, portal requests — see below) and re-seeds notesValue from the server.
+  // That is right when the field is idle, but if the owner is mid-note when one of
+  // those events fires, the re-seed wipes what they were typing. A ref (not a dep of
+  // the load effect, which must NOT re-run each time the editor opens) lets load()
+  // see "is the owner editing right now?" and skip the re-seed if so.
+  const editingNotesRef = useRef(false)
+  useEffect(() => { editingNotesRef.current = editingNotes }, [editingNotes])
 
   // Scheduling preferences (customer default + per-property override).
   const [editingPrefs, setEditingPrefs] = useState(false)
@@ -232,7 +240,11 @@ export default function CustomerDetailPage() {
       setLoadError(null)
       const cust = cRes.data as Customer | null
       setCustomer(cust)
-      setNotesValue(cust?.notes || '')
+      // Keep the notes field in sync with the server ONLY while it's idle. Mid-edit,
+      // a background refresh must not overwrite the owner's in-progress note (Cancel
+      // still restores from the freshly-loaded `customer`). The rest of the page
+      // stays live — this guards the one editable draft, nothing else.
+      if (!editingNotesRef.current) setNotesValue(cust?.notes || '')
       setProperties((pRes.data as Property[]) || [])
       setQuotes((qRes.data as Quote[]) || [])
       setJobs((jRes.data as Job[]) || [])
