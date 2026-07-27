@@ -487,7 +487,9 @@ export async function recordRecommendation(
 // ── loader ──────────────────────────────────────────────────────────────────────
 export interface RevenueIntelLoad { report: RevenueIntelReport; feedback: Record<string, FeedbackRow> }
 export async function loadRevenueIntel(supabase: SupabaseClient): Promise<RevenueIntelLoad | null> {
-  const { data: { user } } = await supabase.auth.getUser()
+  // getSession (local read), not getUser (network hop): the id only scopes RLS-filtered reads.
+  const { data: { session } } = await supabase.auth.getSession()
+  const user = session?.user
   if (!user) return null
   const uid = user.id
   const [jRes, qRes, rRes, pRes, cRes, iRes, liRes, sRes, fRes] = await Promise.all([

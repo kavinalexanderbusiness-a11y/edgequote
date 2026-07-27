@@ -141,7 +141,9 @@ export interface WinLossData { stats: WinLossStats; lostQuotes: LostQuoteRow[] }
 
 export async function loadWinLoss(supabase: SupabaseClient): Promise<WinLossData> {
   const empty: WinLossData = { stats: { decided: 0, won: 0, lost: 0, winRate: 0, taggedLost: 0, untaggedLost: 0, reasonCounts: {}, byHood: [] }, lostQuotes: [] }
-  const { data: { user } } = await supabase.auth.getUser()
+  // getSession (local read), not getUser (network hop): the id only scopes RLS-filtered reads.
+  const { data: { session } } = await supabase.auth.getSession()
+  const user = session?.user
   if (!user) return empty
   const uid = user.id
   const [qRes, pRes, oRes] = await Promise.all([
