@@ -209,6 +209,16 @@ jobs:
       #              worst-first sort.
       - name: Verify customer health
         run: npm run verify:customer-health
+      #   signals  — THE canonical detector engine (ran-out / lapsed / churn /
+      #              seasonal dormancy / lifetime value), consumed by eight
+      #              surfaces including the signals cron and reactivation. It
+      #              exists because these rules once had 4–6 divergent copies —
+      #              the same snow customer in July read dormant on one screen
+      #              and lost on another. Pins the guard-ladder order, the
+      #              inclusive threshold edges, and the initial-visit valuation
+      #              that once flipped a customer's VIP status between pages.
+      - name: Verify signals
+        run: npm run verify:signals
 
       # This step is why the first 17 CI runs were red, and it's worth writing down.
       # ESLint had never been configured in this repo — no .eslintrc anywhere — so
