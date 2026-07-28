@@ -13,6 +13,7 @@ import {
   requestPresetsOf, resolveDocAddress, groupPhotos, orphanPhotos, liveStatusOf, visitDay,
   daysAwayLabel, dueSoonLabel, invoicePaymentNote, parsePortalDeepLink, tabNavTarget, buildVisitICS, visitToCalendarEvent,
   messageAboutDoc, primaryPortalAction, draftStorageKey, etransferReference, isSendChord,
+  needsContactMethod, contactUpdateMessage, contactSentKey,
   NO_PROPERTY, MAX_REQUEST_PRESETS,
   type PortalData, type PortalJob, type PortalProperty, type DocBlobRenderers,
 } from '../src/app/portal/[token]/model'
@@ -390,6 +391,28 @@ console.log('\ninvoicePaymentNote (never mistakes the total for what is owed):')
   check('full-unpaid invoice → null (its total IS what is due)', invoicePaymentNote(dueDoc) === null)
   check('settled invoice → null', invoicePaymentNote(paid) === null)
   check('a quote is never a payment note', invoicePaymentNote(d.get('q-sent')!) === null)
+}
+
+// ── missing-contact prompt (asks ONLY the truly unreachable; message always carries the info) ─
+console.log('\nneedsContactMethod / contactUpdateMessage (the unreachable-customer card):')
+{
+  check('no phone AND no email → prompt', needsContactMethod({ phone: null, email: null }) === true)
+  check('empty strings → prompt', needsContactMethod({ phone: '', email: '' }) === true)
+  check('whitespace is not a contact method', needsContactMethod({ phone: '  ', email: ' ' }) === true)
+  check('phone alone is enough — never nags for the second', needsContactMethod({ phone: '403-555-0100', email: null }) === false)
+  check('email alone is enough', needsContactMethod({ phone: null, email: 'j@x.com' }) === false)
+  check('both on file → no prompt', needsContactMethod({ phone: '403-555-0100', email: 'j@x.com' }) === false)
+  check('missing customer payload → no claim', needsContactMethod(null) === false && needsContactMethod(undefined) === false)
+
+  check('message carries the phone', contactUpdateMessage('403-555-0100', '') === 'Please add my contact details to your file — Phone: 403-555-0100')
+  check('message carries the email', contactUpdateMessage('', 'j@x.com') === 'Please add my contact details to your file — Email: j@x.com')
+  check('both → both, phone first', contactUpdateMessage('403-555-0100', 'j@x.com') === 'Please add my contact details to your file — Phone: 403-555-0100 · Email: j@x.com')
+  check('nothing typed → null (empty request unsendable)', contactUpdateMessage('', '') === null)
+  check('whitespace-only → null', contactUpdateMessage('  ', ' ') === null)
+  check('values are trimmed', contactUpdateMessage(' 403-555-0100 ', '') === 'Please add my contact details to your file — Phone: 403-555-0100')
+
+  check('sent-flag key is token-scoped', contactSentKey('tok-a') !== contactSentKey('tok-b'))
+  check('sent-flag key never collides with a draft key', contactSentKey('t') !== draftStorageKey('t', 'message') && !contactSentKey('t').startsWith('eqp:draft:'))
 }
 
 console.log(`\n${fail === 0 ? '✓' : '✗'} portal checks: ${pass} passed, ${fail} failed`)
