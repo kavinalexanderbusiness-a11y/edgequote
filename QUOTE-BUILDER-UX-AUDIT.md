@@ -575,3 +575,76 @@ as ready-to-implement, not as open questions.
   same guard, and the in-progress trace is persisted per property and offered as *Resume*.
   It is the best-defended surface in the whole flow — the rest of the builder was measured
   against it.
+
+---
+---
+
+# Round 7 — multi-agent audit of current main (2026-07-28)
+
+**Method:** six parallel dimension auditors (builder correctness · pages correctness · owner
+speed · customer presentation · recurring/upsell · approvals/lifecycle) over the merged code,
+then two adversarial lenses per actionable finding. 37 raw findings; 13 verdicts landed;
+**zero refuted**. Seven verifier agents died on a session limit, so three findings below are
+explicitly UNVERIFIED.
+
+## §22 · Fixed this round (all verified, freeze-safe)
+
+1. **P0 — Editing a quote with no first-visit price minted one.** `priceOrigin` seeded from
+   `initial_price > 0` alone, so a weekly-only quote (initial_price null, hours/rate saved)
+   opened unlocked; the reconciliation effect wrote `hours×crew×rate` into the field and
+   Update persisted it — quotes.total changed, ADR-002 provenance re-stamped, from an edit
+   that touched only the notes. Seed is now `'manual'` on every edit; "Use suggested" still
+   re-enables the engine with one tap, and the empty-manual hint says what's going on.
+2. **P0 — Edit path swallowed identity-resolution failure.** The catch recovered a display
+   name and FELL THROUGH: a failed resolve during a customer/address change wrote
+   `customer_id: null` (or the old customer's property under a new customer's id), returned
+   true, toasted nothing — the orphan class the create path already fails closed on, with four
+   documented live rows. Now: toast + `return false` (draft kept), and a customer *change*
+   never falls back to the old quote's property on a soft-fail.
+3. **P1 — `quote_services` delete+reinsert checked neither error.** A failed delete doubled
+   every line (PDF and invoice conversion bill twice); a failed insert vanished the breakdown
+   while `setServices([])` made the screen agree; both returned true. Both steps now check,
+   toast honestly, and return false so the draft powers a retry.
+4. **P1 — Stale `defaultPropertyId` re-asserted the original property.** The property effect
+   re-runs on every customer change but kept querying the URL's property and stomping the new
+   customer's address (its async write always landed after the customer effect's sync one).
+   The prop now only speaks while the ORIGINAL customer is selected, and the address write
+   obeys the `autoFilledAddress` contract. Same contract extended to `measured_sqft`
+   (`autoFilledSqft`): customer A's 5,000 ft² no longer prices customer B's plan tiles, and a
+   fill nothing backs is cleared.
+5. **P1 — Draft restore never re-derived `includeTravel`.** Restoring an absorbed-travel
+   draft over a charging server record left the toggle ON, and the next Calculate distance
+   re-applied the tier fee. onRestore now re-runs the mount seed's exact formula on the draft.
+6. **P1 — Typed plan prices kept the engine's provenance.** Only `initial_price` demoted the
+   origin on typing, so hand-editing a weekly price left "✓ Applied" in the header and let one
+   Monthly-pill cycle overwrite a typed monthly. All four price fields now demote to manual;
+   the pill clears on off and fills only an EMPTY field on on.
+
+## §23 · Confirmed but NOT fixed — the standing trap holds
+
+**Every edit wipes the stored `overgrowth_multiplier` to 1** (create stores the real value;
+the edit form deliberately seeds 1 — the documented trap — and Update writes that 1 back).
+Both verifiers confirmed the column corruption is real, and consumers exist (the detail
+page's Overgrowth chip). Not fixed here: any change to what edit writes into a stored
+pricing input belongs to the Pricing V2 lane with the base-rate schema fix; until then the
+chip can lie after an edit. This upgrades the trap note from "display quirk" to "known data
+corruption on edit" for the V2 hand-off.
+
+## §24 · UNVERIFIED (verifier agents lost) — check before acting
+
+- Autosave baseline is captured before the auto-fill effects run → prefilled builders mint a
+  phantom "unsaved quote" draft.
+- Create insert prefers the measurement handoff's stale `suggested_price` over the builder's
+  live value.
+- `measurement.propertyId` unconditionally overrides the resolved property on create.
+
+## §25 · Found, unverified, worth the next round (customer-facing money/promise)
+
+- PDF "Valid Until" computes `issued_date + 30` and ignores `quotes.valid_until`.
+- `show_travel_separately` is ignored by every customer-facing surface — the PDF always
+  itemizes travel.
+- Portal Approve has no expiry check at click time (stale tab accepts a lapsed quote).
+- Bulk Duplicate copies the quote row but not its `quote_services` (single-quote Duplicate
+  preserves them).
+- Scheduling an accepted recurring quote creates a single one-time visit; surfaces say done.
+- Editing an ACCEPTED quote warns nobody, and `accepted_price` is read nowhere.

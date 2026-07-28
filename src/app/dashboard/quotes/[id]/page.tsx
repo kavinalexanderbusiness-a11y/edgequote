@@ -132,10 +132,22 @@ export default function QuoteDetailPage() {
         )
         customerId = ensured.customerId
         customerName = ensured.customerName
-        propertyId = ensured.propertyId ?? propertyId
+        // A re-point to a DIFFERENT customer must never keep the old customer's
+        // property: when resolution soft-fails (ensurePropertyForCustomer returns
+        // null without throwing), falling back to quote.property_id would write
+        // customer B's id with customer A's property on one row.
+        propertyId = ensured.propertyId ?? (customerChanged ? null : propertyId)
       } catch {
-        const c = customers.find(c => c.id === values.customer_id)
-        if (c) customerName = c.name
+        // Fail CLOSED, exactly like the create path (whose comment documents four
+        // live orphan rows produced by this same swallow). Falling through here
+        // wrote customer_id NULL — or the old customer's property under a new
+        // customer's id — then returned true and toasted nothing: the quote lost
+        // its Send card, its follow-up cron and its portal link, with a success
+        // outcome on screen. Nothing has been written yet at this point, so
+        // stopping is safe, and `return false` keeps the autosave draft (the
+        // same contract this function already uses below).
+        toast.error('Could not link this quote to a customer — nothing was saved. Check your connection and press Save again.')
+        return false
       }
     } else {
       // Nothing identity-bearing changed → keep the existing linkage untouched.
@@ -226,10 +238,22 @@ export default function QuoteDetailPage() {
     if (data) {
       // Replace the service breakdown atomically-enough for a single owner:
       // clear + reinsert (rows exist ONLY for multi-service quotes).
+      // Both steps used to be fire-and-forget: a failed DELETE meant the insert
+      // DOUBLED every line (PDF and invoice conversion bill twice), a failed
+      // INSERT meant the breakdown vanished while setServices([]) made the screen
+      // agree — and either way the function returned true, so the owner watched a
+      // clean save. supabase-js reports failure in the result object, never by
+      // throwing, so ignoring the result IS swallowing the error.
       const { data: { user: u2 } } = await supabase.auth.getUser()
-      await supabase.from('quote_services').delete().eq('quote_id', id)
+      const del = await supabase.from('quote_services').delete().eq('quote_id', id)
+      if (del.error) {
+        // Old lines are still intact — nothing about the breakdown changed. The
+        // quote row above DID update; a retry re-runs both, which is safe.
+        toast.error('Saved the quote, but its service lines could not be updated: ' + del.error.message + ' — press Save again.')
+        return false
+      }
       if (extraLines.length && u2) {
-        const { data: rows } = await supabase.from('quote_services').insert([
+        const { data: rows, error: insError } = await supabase.from('quote_services').insert([
           {
             user_id: u2.id, quote_id: id, sort_order: 0,
             service_type: values.service_type, service_template_id: values.service_template_id || null,
@@ -251,6 +275,15 @@ export default function QuoteDetailPage() {
             kind: s.kind || 'service',
           })),
         ]).select('*')
+        if (insError) {
+          // The delete above succeeded, so the DB genuinely holds no lines now —
+          // reflect that truthfully rather than pretending. The autosave draft
+          // still holds every line (return false keeps it), so pressing Save
+          // again re-inserts the full breakdown.
+          setServices([])
+          toast.error('Saved the quote, but its service lines were lost mid-save: ' + insError.message + ' — press Save again to restore them.')
+          return false
+        }
         setServices((rows as QuoteService[]) || [])
       } else {
         setServices([])

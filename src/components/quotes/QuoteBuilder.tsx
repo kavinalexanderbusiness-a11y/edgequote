@@ -233,10 +233,17 @@ export function QuoteBuilder({
   // a quote that was written without any. A NEW quote still starts as "charging"
   // (nothing to infer from, and charging is the right default posture).
   const [includeTravel, setIncludeTravel] = useState(!isEdit || (Number(defaultValues?.travel_fee) || 0) > 0)
-  // Loading a saved quote → that price is the owner's own past decision, so it is
-  // never live-overwritten by a suggestion (same behaviour the old boolean had).
+  // Loading a saved quote → EVERY loaded price state is the owner's own past
+  // decision — including a price they deliberately left ABSENT. The seed used to
+  // check only `initial_price > 0`, so a weekly-only quote (initial_price null in
+  // the DB, hours/rate saved with it) opened as 'empty'/unlocked, the
+  // reconciliation effect below immediately wrote hours×crew×rate into the field,
+  // and Update persisted it: a quote gained a first-visit price — changing
+  // quotes.total and re-stamping ADR-002 provenance — from an edit that only
+  // touched the notes. On edit the field starts 'manual' whatever it holds; the
+  // "Use suggested" button still re-enables the engine with one explicit tap.
   const [priceOrigin, setPriceOrigin] = useState<PriceOrigin>(
-    (defaultValues?.initial_price ?? 0) > 0 ? 'manual' : 'empty',
+    isEdit ? 'manual' : (defaultValues?.initial_price ?? 0) > 0 ? 'manual' : 'empty',
   )
   // The suggestion engine stops writing to the field once the owner owns the
   // number — by accepting one or by typing one. Both used to be the single
@@ -465,6 +472,12 @@ export function QuoteBuilder({
   // customers working (their address IS still ours to replace) while a typed
   // address is now untouchable.
   const autoFilledAddress = useRef<string | null>(null)
+  // Same contract for the lawn size the property effect fills: remember OUR fill
+  // so switching customers can replace (or clear) it, while a typed or measured
+  // figure is untouchable. Without this the fill-only-when-0 guard meant customer
+  // A's 5,000 ft² kept driving the plan tiles after the owner switched to
+  // customer B — the one-tap prices quoted the wrong property.
+  const autoFilledSqft = useRef<number | null>(null)
 
   useEffect(() => {
     if (!customerId || customerId === '__manual') return
@@ -487,31 +500,49 @@ export function QuoteBuilder({
   // customer's primary. Measured prices become the suggestion, no re-measuring.
   useEffect(() => {
     if (!customerId || customerId === '__manual') { setSavedRec(null); return }
+    // defaultPropertyId is a STATIC prop from the URL, but this effect re-runs on
+    // every customerId change — so after the owner switched away from the customer
+    // the property arrived with, it kept re-fetching the ORIGINAL property and,
+    // because its address write was unconditional on that branch, stomped the new
+    // customer's freshly-filled address back to the old property's (this async
+    // effect resolves after the customer effect's sync write, so it always won).
+    // The prop only speaks for the customer it came with.
+    const propertyStillApplies = !!defaultPropertyId && (!defaultCustomerId || customerId === defaultCustomerId)
     let active = true
     async function load() {
       const supabase = createClient()
       const cols = 'lawn_sqft, measurement_history, address, city, province'
-      const res = defaultPropertyId
-        ? await supabase.from('properties').select(cols).eq('id', defaultPropertyId).limit(1).maybeSingle()
+      const res = propertyStillApplies
+        ? await supabase.from('properties').select(cols).eq('id', defaultPropertyId!).limit(1).maybeSingle()
         : await supabase.from('properties').select(cols).eq('customer_id', customerId).order('is_primary', { ascending: false }).limit(1).maybeSingle()
       if (!active) return
       const row = res.data as { lawn_sqft: number | null; measurement_history: MeasurementSnapshot[]; address: string | null; city: string | null; province: string | null } | null
       setSavedRec(latestSavedRecommendation(row?.measurement_history))
-      // Default the Lawn Size from the property's saved size when it's still empty —
-      // don't clobber an edit, a website-measurement handoff, or a manual entry.
+      // Default the Lawn Size from the property's saved size when it's still empty
+      // OR still holding our own previous fill — don't clobber an edit, a
+      // website-measurement handoff, or a manual entry, but DO follow a customer
+      // switch (see autoFilledSqft above). When the new property has no saved size
+      // and the field still holds the OLD property's auto-fill, clear it: a lawn
+      // size nothing backs must not keep pricing the plan tiles.
       const lawn = Number(row?.lawn_sqft) || 0
-      if (!isEdit && lawn > 0 && (Number(getValues('measured_sqft')) || 0) === 0) {
+      const currentSqft = Number(getValues('measured_sqft')) || 0
+      if (!isEdit && lawn > 0 && (currentSqft === 0 || currentSqft === autoFilledSqft.current)) {
         setValue('measured_sqft', lawn)
+        autoFilledSqft.current = lawn
+      } else if (!isEdit && lawn === 0 && currentSqft > 0 && currentSqft === autoFilledSqft.current) {
+        setValue('measured_sqft', 0)
+        autoFilledSqft.current = null
       }
       // Targeting a specific property → its address wins. Otherwise the primary
-      // property's address fills the field only when it's still EMPTY (imported
-      // customers and website leads often carry the address on the property, not
-      // the customer record — never make the owner retype data we just fetched).
+      // property's address fills the field only when it's still EMPTY or still
+      // holds OUR OWN previous fill (imported customers and website leads often
+      // carry the address on the property, not the customer record — never make
+      // the owner retype data we just fetched, and never overwrite what they typed:
+      // the same autoFilledAddress contract the customer effect above enforces).
       if (!isEdit && row?.address) {
         const full = [row.address, row.city, row.province].filter(Boolean).join(', ')
-        // Record it as ours too, so switching customer afterwards can still
-        // replace it — see autoFilledAddress above.
-        if (full && (defaultPropertyId || !getValues('address'))) {
+        const current = String(getValues('address') || '')
+        if (full && (propertyStillApplies || !current.trim() || current === autoFilledAddress.current)) {
           setValue('address', full)
           autoFilledAddress.current = full
         }
@@ -519,7 +550,7 @@ export function QuoteBuilder({
     }
     load()
     return () => { active = false }
-  }, [customerId, defaultPropertyId, isEdit, getValues, setValue])
+  }, [customerId, defaultPropertyId, defaultCustomerId, isEdit, getValues, setValue])
 
   // Same rule for the notes a template pre-fills. Changing service used to
   // REPLACE whatever was in the Notes field — including a scope the owner had
@@ -798,6 +829,13 @@ export function QuoteBuilder({
               // monthly means monthly was enabled).
               if ((Number(v.initial_price) || 0) > 0) setPriceOrigin('manual')
               if ((Number(v.monthly_price) || 0) > 0) setIncludeMonthly(true)
+              // includeTravel too — it was seeded at mount from the SERVER record,
+              // so restoring an absorbed-travel draft over a quote that charged
+              // travel left the toggle ON: the next "Calculate distance" (or
+              // toggle cycle) re-applied the tier fee to a draft written without
+              // any. Re-run the mount seed's EXACT formula over the draft's fee:
+              // a new quote keeps its charging default; an edit reads the draft.
+              setIncludeTravel(!isEdit || (Number(v.travel_fee) || 0) > 0)
             }}
             onDiscard={autosave.discard}
           />
@@ -1079,8 +1117,13 @@ export function QuoteBuilder({
                       onClick={() => {
                         const next = !includeMonthly
                         setIncludeMonthly(next)
-                        // Toggling applies immediately when suggestions already filled the fields.
-                        if (suggested && priceOrigin !== 'manual') setValue('monthly_price', next ? suggested.monthly : 0)
+                        // Off always clears; on fills ONLY an empty field. The old
+                        // guard (`priceOrigin !== 'manual'`) let one pill cycle
+                        // overwrite a hand-typed monthly price while the origin
+                        // still read 'applied' — and could claim "Monthly: on"
+                        // over a field it had declined to fill.
+                        if (!next) setValue('monthly_price', 0)
+                        else if (suggested && !(Number(getValues('monthly_price')) > 0)) setValue('monthly_price', suggested.monthly)
                       }}
                       className={cn('shrink-0 text-[10px] font-semibold rounded-full px-2 py-0.5 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                         includeMonthly ? 'text-accent-text border-accent/40 bg-accent/10' : 'text-ink-faint border-border hover:text-ink')}>
@@ -1106,7 +1149,12 @@ export function QuoteBuilder({
                   className="text-lg font-semibold tabular-nums"
                   hint={
                     priceOrigin === 'manual'
-                      ? (serviceRec ? `Manual — overrides the ${formatCurrency(serviceRec.price)} recommendation.` : 'Manual — no recommendation available for this service.')
+                      // An EMPTY manual field is a real state now (an edited quote
+                      // that never had a first-visit price) — "overrides the
+                      // recommendation" would be describing a number that isn't there.
+                      ? (initialPrice <= 0
+                        ? (serviceRec ? `No first-visit price on this quote — type one, or Use suggested (${formatCurrency(serviceRec.price)}) below.` : 'No first-visit price on this quote — recurring prices below carry it.')
+                        : serviceRec ? `Manual — overrides the ${formatCurrency(serviceRec.price)} recommendation.` : 'Manual — no recommendation available for this service.')
                       : priceOrigin === 'applied'
                         ? 'Applied from the recommendation. Type to override.'
                         : serviceRec
@@ -1225,9 +1273,14 @@ export function QuoteBuilder({
           <Collapsible title="Plan pricing" icon={Repeat} summary={recSummary || 'One-time quote'}>
             <p className="text-xs text-ink-faint">Fill any cadence you want to offer — they appear on the quote as options the customer can pick.</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <Input label="Weekly ($/visit)" type="number" step="1" min="0" {...register('weekly_price', { min: 0 })} />
-              <Input label="Bi-Weekly ($/visit)" type="number" step="1" min="0" {...register('biweekly_price', { min: 0 })} />
-              <Input label="Monthly ($/visit)" type="number" step="1" min="0" {...register('monthly_price', { min: 0 })} />
+              {/* Typing a plan price is the same act of ownership as typing the
+                  first-visit price, and only initial_price used to demote the
+                  origin — so hand-editing a weekly price left the header reading
+                  "✓ Applied" over numbers the engine no longer stands behind, and
+                  left the Monthly pill licensed to overwrite a typed monthly. */}
+              <Input label="Weekly ($/visit)" type="number" step="1" min="0" {...register('weekly_price', { min: 0, onChange: () => { setPriceOrigin('manual'); setPickedCadence(null) } })} />
+              <Input label="Bi-Weekly ($/visit)" type="number" step="1" min="0" {...register('biweekly_price', { min: 0, onChange: () => { setPriceOrigin('manual'); setPickedCadence(null) } })} />
+              <Input label="Monthly ($/visit)" type="number" step="1" min="0" {...register('monthly_price', { min: 0, onChange: () => { setPriceOrigin('manual'); setPickedCadence(null) } })} />
             </div>
             {/* The guardrail note moved up beside the price it judges (fast path).
                 One instance, so the two can't disagree about what's warned. */}
