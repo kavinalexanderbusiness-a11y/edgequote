@@ -77,6 +77,8 @@ export default function ReactivationPage() {
       // Local session read — no auth round-trip before the data batch below.
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
+      // No session must not strand the skeleton forever.
+      if (!user) { setLoading(false); return }
       const [cRes, jRes, qRes, rRes, sRes] = await Promise.all([
         supabase.from('customers').select('*').eq('user_id', user!.id).is('archived_at', null), // don't suggest re-engaging deliberately-archived customers
         supabase.from('jobs').select('customer_id, scheduled_date, status, service_type, quote_id, recurrence_id, price').eq('user_id', user!.id),

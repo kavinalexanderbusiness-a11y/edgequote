@@ -213,6 +213,8 @@ export default function CustomerDetailPage() {
       // realtime refresh.
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
+      // No session must not strand the skeleton forever.
+      if (!user) { setLoading(false); return }
       const [cRes, pRes, qRes, jRes, iRes, refRes, recRes, setRes, lRes, shapeRes, tlCustomer] = await Promise.all([
         supabase.from('customers').select('*').eq('id', id).eq('user_id', user!.id).single(),
         supabase.from('properties').select('*').eq('customer_id', id).order('is_primary', { ascending: false }),

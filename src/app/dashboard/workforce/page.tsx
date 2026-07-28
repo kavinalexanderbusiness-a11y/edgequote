@@ -17,7 +17,7 @@ import {
 } from '@/lib/workforce'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
-import { Button } from '@/components/ui/Button'
+import { Button, ButtonLink } from '@/components/ui/Button'
 import { StatTile } from '@/components/ui/StatTile'
 import { Banner } from '@/components/ui/Banner'
 import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
@@ -160,9 +160,11 @@ export default function WorkforcePage() {
         description="Your people: hours, pay, time off and what the crew costs."
         action={
           <div className="flex items-center gap-2">
-            <Link href="/dashboard/dispatch/time"><Button variant="secondary" size="sm"><Clock className="w-3.5 h-3.5" /> Timesheet</Button></Link>
-            <Link href="/dashboard/dispatch/time-off"><Button variant="secondary" size="sm"><Palmtree className="w-3.5 h-3.5" /> Time off</Button></Link>
-            <Link href="/dashboard/dispatch/payroll"><Button size="sm"><Wallet className="w-3.5 h-3.5" /> Payroll</Button></Link>
+            {/* ButtonLink, not <Link><Button/></Link> — a button inside an anchor is
+                invalid HTML and a double tab stop; THE primitive exists for this. */}
+            <ButtonLink href="/dashboard/dispatch/time" variant="secondary" size="sm"><Clock className="w-3.5 h-3.5" /> Timesheet</ButtonLink>
+            <ButtonLink href="/dashboard/dispatch/time-off" variant="secondary" size="sm"><Palmtree className="w-3.5 h-3.5" /> Time off</ButtonLink>
+            <ButtonLink href="/dashboard/dispatch/payroll" size="sm"><Wallet className="w-3.5 h-3.5" /> Payroll</ButtonLink>
           </div>
         }
       />

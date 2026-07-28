@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { PageContainer } from '@/components/layout/PageContainer'
 import { createClient } from '@/lib/supabase/client'
 import { loadAccountingData, type AccountingData } from '@/lib/accounting/data'
 import { resolvePeriod, PERIOD_OPTIONS, type Period, type PeriodKey } from '@/lib/accounting/period'
@@ -66,7 +67,9 @@ export function ReportShell({ title, description, mode = 'period', action, child
   const childProps: ReportChildProps = { data: data!, period, todayISO }
 
   return (
-    <div className="rise">
+    // THE page shell (PageContainer) — the 11 report pages were the one family
+    // still rendering full-bleed outside the app's content column and rhythm.
+    <PageContainer className="rise">
       <PageHeader
         title={title}
         description={description}
@@ -116,6 +119,6 @@ export function ReportShell({ title, description, mode = 'period', action, child
       </div>
 
       {loading || !data ? <SkeletonTiles count={4} /> : children({ ...childProps, asOf })}
-    </div>
+    </PageContainer>
   )
 }

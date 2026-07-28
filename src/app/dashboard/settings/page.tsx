@@ -14,6 +14,7 @@ import { Select } from '@/components/ui/Select'
 import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
+import { Banner } from '@/components/ui/Banner'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { CommunicationsTest } from '@/components/settings/CommunicationsTest'
 import { MessageTemplateEditor } from '@/components/settings/MessageTemplateEditor'
@@ -49,7 +50,7 @@ const WEEKDAYS = [1, 2, 3, 4, 5, 6, 0].map(i => ({ i, l: weekdayLong(i) }))
 const DEFAULT_WORK_DAYS = [5, 6, 0] // Fri/Sat/Sun
 
 export default function SettingsPage() {
-  const { settings, tiers, loading, refresh } = useBusinessData()
+  const { settings, tiers, loading, error: loadError, refresh } = useBusinessData()
   const supabase = createClient()
 
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
@@ -294,6 +295,18 @@ export default function SettingsPage() {
       setLocalTiers(prev => [...prev.slice(0, idx), t, ...prev.slice(idx)])
     })
   }
+
+  // A failed load must NEVER render the empty form as truth: every field would
+  // paint blank, and a Save from that state overwrites real settings with
+  // empties. An error with no data gets an honest banner and a retry instead.
+  if (loadError && !settings) return (
+    <div className="max-w-3xl space-y-6">
+      <PageHeader title="Business Settings" description="Business info, pricing, scheduling, messaging, notifications and booking." />
+      <Banner tone="danger" action={<Button size="sm" variant="secondary" onClick={() => refresh()}>Retry</Button>}>
+        Could not load your settings — nothing is shown so nothing can be overwritten. ({loadError})
+      </Banner>
+    </div>
+  )
 
   if (loading) return (
     <div className="max-w-3xl space-y-6">

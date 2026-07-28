@@ -87,7 +87,16 @@ export default function IntelligencePage() {
       </PageContainer>
     )
   }
-  if (!bi) return null
+  // A failed load must not render a literally blank page — say so, offer retry.
+  if (!bi) return (
+    <PageContainer width="wide">
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" />
+      <p className="text-sm text-ink-muted">
+        Could not load the report — check your connection and{' '}
+        <button type="button" onClick={() => window.location.reload()} className="text-accent-text underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">try again</button>.
+      </p>
+    </PageContainer>
+  )
 
   return (
     <PageContainer width="wide">

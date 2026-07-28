@@ -57,6 +57,8 @@ export default function DataQualityPage() {
   const load = useCallback(async () => {
     const { data: { session } } = await supabase.auth.getSession()
     const user = session?.user
+    // No session must not strand the skeleton forever.
+    if (!user) { setLoading(false); return }
     const [cRes, qRes, jRes, rRes, pRes, shapeRes] = await Promise.all([
       supabase.from('customers').select('*').eq('user_id', user!.id).order('name'),
       supabase.from('quotes').select('id, quote_number, customer_id, customer_name, address, property_id, status, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),

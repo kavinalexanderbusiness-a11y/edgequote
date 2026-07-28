@@ -122,6 +122,9 @@ export default function PropertiesPage() {
   useEffect(() => {
     async function fetchProperties() {
       const { data: { user } } = await supabase.auth.getUser()
+      // No session must not strand the skeleton forever (the `user!.id` reads
+      // below would throw unhandled and setLoading(false) would never run).
+      if (!user) { setLoading(false); return }
       const [pRes, sRes, located, jRes, iRes, planJRes, rRes, qRes, shapeRes] = await Promise.all([
         supabase
           .from('properties')

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import type {
   BusinessSettings, FixedAsset, Liability, FixedAssetFormValues, LiabilityFormValues,
 } from '@/types'
@@ -88,7 +89,9 @@ export default function SetupPage() {
         onChange={k => setTab(k as TabKey)}
       />
 
-      {loading ? null : (
+      {loading ? (
+        <div className="mt-5"><SkeletonRows count={4} /></div>
+      ) : (
         <div className="mt-5">
           {tab === 'opening' && (
             <OpeningPanel supabase={supabase} userId={userId} settings={settings} onSaved={load} />

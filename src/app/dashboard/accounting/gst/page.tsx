@@ -159,6 +159,14 @@ function Gst({ data, period }: { data: AccountingData; period: Period }) {
                 </tr>
               </thead>
               <tbody>
+                {/* A quiet quarter is a legitimate answer — a bare header isn't. */}
+                {r.rows.length === 0 && (
+                  <tr className="border-t border-line">
+                    <td colSpan={4} className="py-4 text-center text-sm text-ink-muted">
+                      No invoices were issued in this period — line 105 is $0.
+                    </td>
+                  </tr>
+                )}
                 {r.rows.map(row => (
                   <tr key={row.invoiceNumber ?? Math.random()} className="border-t border-line">
                     <td className="py-2 text-ink-muted">{row.invoiceNumber ?? '—'}</td>
