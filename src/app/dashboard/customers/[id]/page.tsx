@@ -3,7 +3,7 @@ import { toast } from '@/lib/toast'
 import { PageContainer } from '@/components/layout/PageContainer'
 import { confirm as confirmDialog } from '@/lib/confirm'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
@@ -293,17 +293,93 @@ export default function CustomerDetailPage() {
   }, [id, tick]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Live timeline: a new message, payment, quote/job/invoice change, or portal
-  // request for THIS customer re-runs load() — no refresh. Tables must be on the
-  // realtime publication (migration 2026-06-24d); unpublished ones just stay quiet.
+  // request for THIS customer refreshes the page — no manual refresh. Tables must
+  // be on the realtime publication (migration 2026-06-24d); unpublished ones just
+  // stay quiet.
+  //
+  // SCOPED, not shotgun: a single inbound SMS used to re-run the ENTIRE load()
+  // (~20 queries — every table, the timeline sources, the referrer tail). Each
+  // table now enqueues its SCOPE and one dispatcher, after a short gather
+  // window, refetches only what that scope actually feeds. The rules encode the
+  // couplings the data layer has:
+  //   payments  → also refetches invoices (recompute_invoice_paid_for mutates
+  //               the invoice row server-side; its own event is belt-and-braces)
+  //   jobs      → also reloads the job-scoped timeline sources (they key off
+  //               the job-id list)
+  //   customers → FULL reload (that row shapes referrer chain, notes, header)
+  //   ≥6 scopes → FULL reload (that's a tab-wake/reconnect firing every
+  //               subscription — exactly one load(), same as before)
+  // buildTimeline consumes the per-table state slices + tlSources, so a narrow
+  // path yields an identical timeline. The prefetch cache stays warmed by the
+  // full path only — narrow paths never write a partial snapshot.
   const reload = () => setTick(t => t + 1)
+  const pendingScopes = useRef<Set<string>>(new Set())
+  const gatherTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const narrowRefetch = useCallback(async (scopes: Set<string>) => {
+    const tasks: PromiseLike<unknown>[] = []
+    if (scopes.has('quotes')) tasks.push(
+      supabase.from('quotes').select('*').eq('customer_id', id).order('created_at', { ascending: false })
+        .then(r => { if (!r.error) setQuotes((r.data as Quote[]) || []) }),
+    )
+    if (scopes.has('jobs')) tasks.push((async () => {
+      const r = await supabase.from('jobs').select('*').eq('customer_id', id).order('scheduled_date', { ascending: true })
+      if (r.error) return
+      const rows = (r.data as Job[]) || []
+      setJobs(rows)
+      const tlJob = await loadJobTimelineSources(supabase, rows.map(j => j.id))
+      setTlSources(prev => ({ ...prev, ...tlJob }))
+    })())
+    if (scopes.has('invoices') || scopes.has('payments')) tasks.push(
+      supabase.from('invoices').select('*').eq('customer_id', id).order('created_at', { ascending: false })
+        .then(r => { if (!r.error) setInvoices((r.data as Invoice[]) || []) }),
+    )
+    if (scopes.has('payments') || scopes.has('messages') || scopes.has('service_requests')) tasks.push((async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      const uid = session?.user?.id
+      if (!uid) return
+      const tlCust = await loadCustomerTimelineSources(supabase, uid, id)
+      setTlSources(prev => ({ ...prev, ...tlCust }))
+    })())
+    await Promise.all(tasks)
+  }, [supabase, id])
+  const narrowRefetchRef = useRef(narrowRefetch)
+  narrowRefetchRef.current = narrowRefetch
+
+  // Stable handler identities (built once, state via refs) — the realtime
+  // hook's burst-coalescing keys on callback identity, so these must not churn.
+  const scopeHandlers = useMemo(() => {
+    const run = () => {
+      const scopes = new Set(pendingScopes.current)
+      pendingScopes.current.clear()
+      if (scopes.size === 0) return
+      if (scopes.has('customers') || scopes.size >= 6) { reload(); return }
+      narrowRefetchRef.current(scopes)
+    }
+    const enqueue = (scope: string) => () => {
+      pendingScopes.current.add(scope)
+      // Gather the sibling subscriptions' debounce timers (they land within a
+      // few ms of each other on a burst or wake) into ONE decision.
+      if (gatherTimer.current) clearTimeout(gatherTimer.current)
+      gatherTimer.current = setTimeout(() => { gatherTimer.current = null; run() }, 50)
+    }
+    return {
+      quotes: enqueue('quotes'), jobs: enqueue('jobs'), invoices: enqueue('invoices'),
+      messages: enqueue('messages'), payments: enqueue('payments'),
+      service_requests: enqueue('service_requests'), customers: enqueue('customers'),
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  useEffect(() => () => { if (gatherTimer.current) clearTimeout(gatherTimer.current) }, [])
+
   const custFilter = id ? `customer_id=eq.${id}` : null
-  useRealtimeRefresh('quotes', custFilter, reload)
-  useRealtimeRefresh('jobs', custFilter, reload)
-  useRealtimeRefresh('invoices', custFilter, reload)
-  useRealtimeRefresh('messages', custFilter, reload)
-  useRealtimeRefresh('payments', custFilter, reload)
-  useRealtimeRefresh('service_requests', custFilter, reload)
-  useRealtimeRefresh('customers', id ? `id=eq.${id}` : null, reload)
+  useRealtimeRefresh('quotes', custFilter, scopeHandlers.quotes)
+  useRealtimeRefresh('jobs', custFilter, scopeHandlers.jobs)
+  useRealtimeRefresh('invoices', custFilter, scopeHandlers.invoices)
+  useRealtimeRefresh('messages', custFilter, scopeHandlers.messages)
+  useRealtimeRefresh('payments', custFilter, scopeHandlers.payments)
+  useRealtimeRefresh('service_requests', custFilter, scopeHandlers.service_requests)
+  useRealtimeRefresh('customers', id ? `id=eq.${id}` : null, scopeHandlers.customers)
 
   async function saveNotes() {
     if (!customer) return
