@@ -412,9 +412,10 @@ export default function CustomerDetailPage() {
         async () => { const { error } = await supabase.from('customers').update(row).eq('id', customer.id); if (error) throw new Error(error.message) },
       )
       setCustomer({ ...customer, ...row })
+      setEditingPrefs(false)
       if (outcome === 'queued') toast.info('Saved offline — syncs when you’re back online.')
-    } catch { toast.error('Could not save changes.') }
-    finally { setSavingPrefs(false); setEditingPrefs(false) }
+    } catch { toast.error('Could not save changes.') }   // keep the editor open — a failed save must not discard the draft
+    finally { setSavingPrefs(false) }
   }
 
   function startEditPropPrefs(p: Property) {
@@ -571,6 +572,10 @@ export default function CustomerDetailPage() {
     .filter(i => i.status !== 'draft' && i.status !== 'cancelled')
     .reduce((s, i) => s + Math.max(0, Math.round((Number(i.amount || 0) * custGstMult - (Number(i.amount_paid) || 0)) * 100) / 100), 0)
   const avgJobValue = wonQuotes.length > 0 ? bookedRevenue / wonQuotes.length : 0
+  // "Open" = still awaiting an answer — the SAME 'sent'/'draft' rule the per-property
+  // roll-up uses below, applied customer-wide for the header answer strip.
+  const openQuotesAll = quotes.filter(q => q.status === 'sent' || q.status === 'draft')
+  const openQuoteValue = openQuotesAll.reduce((s, q) => s + Number(q.total || 0), 0)
 
   // ── Upcoming + retention ──
   const upcoming = jobs
@@ -611,9 +616,12 @@ export default function CustomerDetailPage() {
   }
   for (const inv of invoices.filter(i => OPEN_INVOICE.has(i.status))) {
     const overdue = !!inv.due_date && inv.due_date < today
+    // What's still OWED, not the invoice's face value — a partially paid invoice used
+    // to show its gross here. Same balance arithmetic as the per-property roll-up.
+    const remaining = Math.round((Number(inv.amount || 0) * custGstMult - (Number(inv.amount_paid) || 0)) * 100) / 100
     // Deep-link straight to the focused invoice — landing on the unfiltered list
     // meant re-finding the invoice you just tapped.
-    openItems.push({ key: `inv-${inv.id}`, icon: Receipt, label: `${overdue ? 'Overdue' : 'Unpaid'} invoice ${inv.invoice_number}`, sub: `${formatCurrency(Math.round(Number(inv.amount) * custGstMult * 100) / 100)}${inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}`, href: `/dashboard/invoices?invoice=${encodeURIComponent(inv.invoice_number)}`, tone: overdue ? 'text-red-400' : 'text-amber-400' })
+    openItems.push({ key: `inv-${inv.id}`, icon: Receipt, label: `${overdue ? 'Overdue' : inv.status === 'partial' ? 'Partially paid' : 'Unpaid'} invoice ${inv.invoice_number}`, sub: `${formatCurrency(remaining)}${inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}`, href: `/dashboard/invoices?invoice=${encodeURIComponent(inv.invoice_number)}`, tone: overdue ? 'text-red-400' : 'text-amber-400' })
   }
 
   const phone = customer.phone
@@ -722,6 +730,24 @@ export default function CustomerDetailPage() {
                     <Users className="w-3 h-3" /> Referred by {referrer.name}
                   </Link>
                 )}
+                {/* The answer strip — the two phone-call questions ("how much do I
+                    owe?", "when are you coming?") were already computed on this page
+                    but rendered many cards down. Same figures, beside the name. */}
+                {outstandingRevenue > 0 && (
+                  <a href="#customer-revenue" className="text-xs text-amber-400 hover:underline flex items-center gap-1">
+                    <DollarSign className="w-3 h-3" /> Owes {formatCurrency(outstandingRevenue)}
+                  </a>
+                )}
+                {nextVisit && (
+                  <span className="text-xs text-ink-muted flex items-center gap-1">
+                    <CalendarClock className="w-3 h-3" /> Next visit {formatDate(nextVisit.scheduled_date)}
+                  </span>
+                )}
+                {openQuotesAll.length > 0 && (
+                  <span className="text-xs text-ink-muted flex items-center gap-1">
+                    <FileText className="w-3 h-3" /> {openQuotesAll.length} open quote{openQuotesAll.length !== 1 ? 's' : ''} · {formatCurrency(openQuoteValue)}
+                  </span>
+                )}
                 {lastServicedDays != null && (
                   <span className="text-xs text-ink-faint">Last serviced {lastServicedDays}d ago</span>
                 )}
@@ -807,30 +833,6 @@ export default function CustomerDetailPage() {
         </CardBody>
       </Card>
 
-      {/* Communication health — opt-in/contact mismatches (only shows when relevant) */}
-      <CommsHealth customer={customer} onChange={patch => setCustomer({ ...customer, ...patch })} />
-
-      {/* AI brief — on-demand summary of this customer's history (renders nothing
-          when no AI key is configured; never automatic, never stored) */}
-      <CustomerAiSummary customerId={customer.id} />
-
-      {/* Conversation — two-way SMS + portal thread */}
-      <Card>
-        <CardHeader>
-          <h2 className="text-sm font-semibold text-ink">Conversation</h2>
-          <p className="text-xs text-ink-faint mt-0.5">Two-way SMS &amp; portal messages with this customer.</p>
-        </CardHeader>
-        <CardBody>
-          <div className="h-[440px]"><ConversationThread customerId={customer.id} /></div>
-        </CardBody>
-      </Card>
-
-      {/* Communication — consent + history */}
-      <CustomerComms customerId={customer.id} smsOptIn={!!customer.sms_opt_in} emailOptIn={!!customer.email_opt_in} />
-
-      {/* Review lifecycle — ask, then record the outcome (stops asking once done) */}
-      <ReviewLifecycle customer={customer} onChange={patch => setCustomer({ ...customer, ...patch })} />
-
       {/* Notes & access info — prominent, quick-edit */}
       <Card>
         <CardHeader className="flex items-center justify-between">
@@ -874,40 +876,8 @@ export default function CustomerDetailPage() {
         </CardBody>
       </Card>
 
-      {/* Scheduling preferences — customer-wide default (properties can override) */}
-      <Card>
-        <CardHeader className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CalendarClock className="w-4 h-4 text-accent-text" /> Scheduling Preferences</h2>
-          {!editingPrefs && (
-            <button onClick={startEditPrefs} className="text-xs text-accent-text hover:underline flex items-center gap-1">
-              <Edit2 className="w-3 h-3" /> Edit
-            </button>
-          )}
-        </CardHeader>
-        <CardBody>
-          {editingPrefs ? (
-            <div className="space-y-3">
-              <SchedulePrefsFields value={prefsDraft} onChange={setPrefsDraft} />
-              <div className="flex items-center gap-2">
-                <Button size="sm" onClick={savePrefs} loading={savingPrefs}>Save preferences</Button>
-                <Button size="sm" variant="ghost" onClick={() => setEditingPrefs(false)}>Cancel</Button>
-              </div>
-            </div>
-          ) : prefSummary(resolvePrefs(customer)) ? (
-            <p className="text-sm text-ink">{prefSummary(resolvePrefs(customer))}</p>
-          ) : (
-            <button onClick={startEditPrefs} className="text-sm text-ink-faint hover:text-ink-muted transition-colors text-left">
-              No preferences set — add preferred/avoid days or a time window (e.g. “always Fridays, mornings”).
-            </button>
-          )}
-        </CardBody>
-      </Card>
-
-      {/* Payment method + AutoPay (card-on-file for recurring customers) */}
-      <PaymentMethodCard customer={customer} onCustomerChange={patch => setCustomer({ ...customer, ...patch })} />
-
-      {/* Revenue + service history */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Revenue + service history — anchor target for the header's "Owes" chip */}
+      <div id="customer-revenue" className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {revenueCards.map(c => {
           const Icon = c.icon
           return (
@@ -994,6 +964,65 @@ export default function CustomerDetailPage() {
           )}
         </CardBody>
       </Card>
+
+      {/* The comms cluster — health, AI brief, live thread, then consent + history.
+          It follows the daily-use cards above: the phone-call answers (owed · notes ·
+          schedule) must never sit below a 440px conversation pane. */}
+      {/* Communication health — opt-in/contact mismatches (only shows when relevant) */}
+      <CommsHealth customer={customer} onChange={patch => setCustomer({ ...customer, ...patch })} />
+
+      {/* AI brief — on-demand summary of this customer's history (renders nothing
+          when no AI key is configured; never automatic, never stored) */}
+      <CustomerAiSummary customerId={customer.id} />
+
+      {/* Conversation — two-way SMS + portal thread */}
+      <Card>
+        <CardHeader>
+          <h2 className="text-sm font-semibold text-ink">Conversation</h2>
+          <p className="text-xs text-ink-faint mt-0.5">Two-way SMS &amp; portal messages with this customer.</p>
+        </CardHeader>
+        <CardBody>
+          <div className="h-[440px]"><ConversationThread customerId={customer.id} /></div>
+        </CardBody>
+      </Card>
+
+      {/* Communication — consent + history */}
+      <CustomerComms customerId={customer.id} smsOptIn={!!customer.sms_opt_in} emailOptIn={!!customer.email_opt_in} />
+
+      {/* Review lifecycle — ask, then record the outcome (stops asking once done) */}
+      <ReviewLifecycle customer={customer} onChange={patch => setCustomer({ ...customer, ...patch })} />
+
+      {/* Scheduling preferences — customer-wide default (properties can override) */}
+      <Card>
+        <CardHeader className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CalendarClock className="w-4 h-4 text-accent-text" /> Scheduling Preferences</h2>
+          {!editingPrefs && (
+            <button onClick={startEditPrefs} className="text-xs text-accent-text hover:underline flex items-center gap-1">
+              <Edit2 className="w-3 h-3" /> Edit
+            </button>
+          )}
+        </CardHeader>
+        <CardBody>
+          {editingPrefs ? (
+            <div className="space-y-3">
+              <SchedulePrefsFields value={prefsDraft} onChange={setPrefsDraft} />
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={savePrefs} loading={savingPrefs}>Save preferences</Button>
+                <Button size="sm" variant="ghost" onClick={() => setEditingPrefs(false)}>Cancel</Button>
+              </div>
+            </div>
+          ) : prefSummary(resolvePrefs(customer)) ? (
+            <p className="text-sm text-ink">{prefSummary(resolvePrefs(customer))}</p>
+          ) : (
+            <button onClick={startEditPrefs} className="text-sm text-ink-faint hover:text-ink-muted transition-colors text-left">
+              No preferences set — add preferred/avoid days or a time window (e.g. “always Fridays, mornings”).
+            </button>
+          )}
+        </CardBody>
+      </Card>
+
+      {/* Payment method + AutoPay (card-on-file for recurring customers) */}
+      <PaymentMethodCard customer={customer} onCustomerChange={patch => setCustomer({ ...customer, ...patch })} />
 
       <div className="grid lg:grid-cols-2 gap-6">
         {/* Timeline — the shared card over the shared engine (components/timeline).
