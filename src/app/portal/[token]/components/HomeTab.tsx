@@ -24,7 +24,7 @@ import { Button } from '@/components/ui/Button'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
 import {
-  daysAwayLabel, liveStatusOf, visitToCalendarEvent, visitDay,
+  contactSentKey, contactUpdateMessage, daysAwayLabel, liveStatusOf, visitToCalendarEvent, visitDay,
   type Derived, type PortalJob, type PortalView, type SubmitRequestFn,
 } from '../model'
 import { AddToCalendar, PortalSection, StatusPill, StatusStepper, Thumb, type TabProps } from './shared'
@@ -624,6 +624,62 @@ function PrefRow({ label, icon: Icon, on, onChange }: { label: string; icon: typ
         className={cn('relative w-11 h-6 rounded-full transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50', on ? 'bg-accent' : 'bg-border-strong')}>
         <span className={cn('absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform', on && 'translate-x-5')} />
       </button>
+    </div>
+  )
+}
+
+// ── Missing contact method (PortalClient mounts it on Home — model.needsContactMethod) ──
+// The one thing the portal ASKS a first-time customer for. With neither a phone
+// nor an email on file the owner cannot confirm a visit date or send the invoice
+// for the work — the relationship dead-ends the moment either side needs the
+// other. Submitting is a REQUEST like every portal action (portal_request_service
+// → the owner's ONE Messages hub): the owner applies it to the file; the portal
+// never writes customer identity itself. sessionStorage (token-scoped) keeps the
+// thank-you up across tab switches; once the owner records a method,
+// needsContactMethod hides the card for good.
+export function ContactMethodCard({ token, businessName, onSubmit }: { token: string; businessName: string | null; onSubmit: (message: string) => Promise<boolean> }) {
+  const [phone, setPhone] = useState('')
+  const [email, setEmail] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [sent, setSent] = useState<boolean>(() => {
+    try { return typeof window !== 'undefined' && window.sessionStorage.getItem(contactSentKey(token)) === '1' } catch { return false }
+  })
+  const message = contactUpdateMessage(phone, email)
+
+  if (sent) return (
+    <div className="rounded-card border border-emerald-500/30 bg-emerald-500/[0.06] p-4 mt-3">
+      <p className="text-sm font-semibold text-emerald-400 flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4" /> Contact details sent</p>
+      <p className="text-xs text-ink-muted mt-0.5">{businessName || 'We'}&rsquo;ll add them to your file so you get visit confirmations and invoices.</p>
+    </div>
+  )
+  return (
+    <div className="rounded-card border border-amber-400/30 bg-amber-400/[0.06] p-4 mt-3">
+      <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><Phone className="w-4 h-4 text-amber-400" /> How can we reach you?</p>
+      <p className="text-xs text-ink-muted mt-0.5 mb-3">
+        {businessName || 'Your service provider'} has no phone number or email on file for you — so there&rsquo;s no way to confirm a visit date or send your invoice. Add at least one:
+      </p>
+      <form className="space-y-2" onSubmit={async e => {
+        e.preventDefault()
+        if (!message || busy) return
+        setBusy(true)
+        const ok = await onSubmit(message)   // failure → PortalClient's actionError explains; the form stays for retry
+        setBusy(false)
+        if (ok) {
+          setSent(true)
+          try { window.sessionStorage.setItem(contactSentKey(token), '1') } catch { /* storage-blocked → thank-you lasts this render only */ }
+        }
+      }}>
+        <input type="tel" inputMode="tel" autoComplete="tel" value={phone} onChange={e => setPhone(e.target.value)}
+          placeholder="Phone — (403) 555-0100" aria-label="Phone number"
+          className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
+        <input type="email" inputMode="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)}
+          placeholder="Email — jane@example.com" aria-label="Email address"
+          className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
+        <Button type="submit" className="w-full" loading={busy} disabled={!message}>
+          Send to {businessName || 'us'}
+        </Button>
+      </form>
+      <p className="text-[10px] text-ink-faint mt-2">Goes straight to {businessName || 'the business'} — they&rsquo;ll add it to your file. Nothing else is shared.</p>
     </div>
   )
 }

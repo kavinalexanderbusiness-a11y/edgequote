@@ -292,6 +292,13 @@ export default function InvoicesPage() {
       customer_name: i.customer_name, address: i.address, service_type: i.service_type,
       amount: i.amount, status: i.status, issued_date: i.issued_date, due_date: i.due_date,
       notes: i.notes, line_items: i.line_items,
+      // Restore everything that makes the invoice what it was — else Undo silently
+      // drops it: the discount (its net wouldn't reproduce), the owner's internal
+      // note (home of the AutoPay-hold flag — losing it un-holds a held invoice),
+      // and the hand-edited-breakdown pin (else a restored change-order draft goes
+      // back to auto-re-pricing and loses the owner's lines on the next job edit).
+      discount_type: i.discount_type ?? null, discount_value: i.discount_value ?? null,
+      internal_notes: i.internal_notes, line_items_edited: i.line_items_edited ?? false,
       // Carry the paid state so restoring a Paid invoice keeps its date + method (else a
       // manually-paid invoice loses its only payment record).
       paid_at: i.paid_at, payment_method: i.payment_method,
@@ -782,6 +789,24 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
     })),
   )
   const lineAmount = (li: { qty: string; unit: string }) => Math.round((Number(li.qty) || 0) * (Number(li.unit) || 0))
+  // The exact shape persisted to invoices.line_items — reused to detect a genuine
+  // breakdown edit (persisted-vs-baseline, so a blank row, key order, or a
+  // defaulted kind can't fake an edit).
+  const toPersisted = (arr: { description: string; qty: string; unit: string; kind: string }[]) =>
+    arr
+      .filter(li => li.description.trim())
+      .map(li => ({
+        description: li.description.trim(),
+        amount: lineAmount(li),          // the figure every total + the PDF reads
+        kind: li.kind,
+        // Only persist the breakdown when it says something the amount doesn't.
+        // At qty 1 the unit price IS the amount, so writing it would add no
+        // information — and would grow Qty/Unit columns on the PDF of every
+        // engine-priced invoice the owner happens to open and save.
+        ...(Number(li.qty) !== 1 ? { qty: Number(li.qty) || 0, unit_price: Number(li.unit) || 0 } : {}),
+      }))
+  // Snapshot the loaded breakdown once, so save can tell an owner edit from a no-op.
+  const [baselinePersistedJSON] = useState(() => JSON.stringify(toPersisted(items)))
   const [saving, setSaving] = useState(false)
 
   const editItems = items.length > 0
@@ -838,18 +863,13 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
     // Persist the breakdown the owner sees: edited rows when itemized, or the
     // single line kept in step with the base so the PDF total never diverges.
     if (!locked && editItems) {
-      patch.line_items = items
-        .filter(li => li.description.trim())
-        .map(li => ({
-          description: li.description.trim(),
-          amount: lineAmount(li),          // the figure every total + the PDF reads
-          kind: li.kind,
-          // Only persist the breakdown when it says something the amount doesn't.
-          // At qty 1 the unit price IS the amount, so writing it would add no
-          // information — and would grow Qty/Unit columns on the PDF of every
-          // engine-priced invoice the owner happens to open and save.
-          ...(Number(li.qty) !== 1 ? { qty: Number(li.qty) || 0, unit_price: Number(li.unit) || 0 } : {}),
-        }))
+      const nextLineItems = toPersisted(items)
+      patch.line_items = nextLineItems
+      // The moment the owner's breakdown diverges from what loaded, this draft is
+      // theirs: pin it so syncDraftInvoiceAmounts never silently re-derives their
+      // line_items/amount from the job later (the change-order-loss bug). Set only,
+      // never cleared — a later no-op save can't un-own it.
+      if (JSON.stringify(nextLineItems) !== baselinePersistedJSON) patch.line_items_edited = true
     }
     const { error } = await supabase.from('invoices').update(patch).eq('id', inv.id)
     setSaving(false)

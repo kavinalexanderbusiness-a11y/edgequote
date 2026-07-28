@@ -87,8 +87,8 @@ export async function syncDraftInvoiceAmounts(
 ): Promise<{ changed: number; failed: number }> {
   const ids = [...new Set(jobIds.filter(Boolean))]
   if (ids.length === 0) return { changed: 0, failed: 0 }
-  const { data: invData } = await supabase.from('invoices').select('id, job_id, amount, notes, line_items, discount_type, discount_value').in('job_id', ids).eq('status', 'draft')
-  const invoices = (invData as { id: string; job_id: string; amount: number; notes: string | null; line_items: InvoiceLineItem[] | null; discount_type: DiscountType | null; discount_value: number | null }[] | null) || []
+  const { data: invData } = await supabase.from('invoices').select('id, job_id, amount, notes, line_items, discount_type, discount_value, line_items_edited').in('job_id', ids).eq('status', 'draft')
+  const invoices = (invData as { id: string; job_id: string; amount: number; notes: string | null; line_items: InvoiceLineItem[] | null; discount_type: DiscountType | null; discount_value: number | null; line_items_edited: boolean }[] | null) || []
   if (invoices.length === 0) return { changed: 0, failed: 0 }
 
   const jobIdsWithInv = [...new Set(invoices.map(i => i.job_id))]
@@ -115,6 +115,12 @@ export async function syncDraftInvoiceAmounts(
   for (const inv of invoices) {
     const j = jobsById[inv.job_id]
     if (!j) continue
+    // Once the owner hand-edits a draft's breakdown in the invoice editor, the
+    // invoice is theirs — a later job-price change must never silently overwrite
+    // their line_items/amount (the change-order-loss bug: an added "Extra: gutter
+    // clear $80" line vanished on the next re-price). Job-derived drafts keep
+    // line_items_edited=false and re-price exactly as before.
+    if (inv.line_items_edited) continue
     const quote = j.quote_id ? quotesById[j.quote_id] : null
     const rec = j.recurrence_id ? recById[j.recurrence_id] : null
     const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null

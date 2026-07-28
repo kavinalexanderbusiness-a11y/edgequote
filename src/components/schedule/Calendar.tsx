@@ -94,7 +94,7 @@ function JobChip({ job, onSelect, onDragStart, recurLabel, value, addonCount, on
           JOB_STATUS_COLORS[job.status],
           job.status === 'completed' && 'opacity-60' // done work recedes; active work commands attention
         )}
-        title={recurLabel ? `${job.customers?.name || job.title} · ${recurLabel} (recurring)` : (job.customers?.name || job.title)}
+        title={[job.customers?.name || job.title, job.properties?.address, recurLabel && `${recurLabel} (recurring)`].filter(Boolean).join(' · ')}
       >
         <span className="flex items-center gap-0.5">
           {job.status === 'completed' && <Check className="w-3 h-3 shrink-0" />}
