@@ -16,7 +16,7 @@ import { WebsiteLead } from '@/lib/leads'
 import { LeadSummary } from '@/components/leads/LeadSummary'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { bookingPhotosFromQuotes } from '@/lib/bookingPhotos'
-import { normalizeTags } from '@/lib/customers'
+import { normalizeTags, propertyLabel } from '@/lib/customers'
 import { PropertySelect } from '@/components/ui/PropertySelect'
 import { buildTimeline } from '@/lib/timeline'
 import {
@@ -1023,7 +1023,9 @@ export default function CustomerDetailPage() {
                         one property, the profile timeline mixes them together. */}
                     <Link href={`/dashboard/properties/${p.id}`}
                       className="text-sm font-medium text-ink hover:text-accent-text transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                      {p.address}{p.is_primary ? ' · primary' : ''}
+                      {/* propertyLabel adds the city when the street alone is ambiguous —
+                          two "100 Main St" in different towns must not read as one. */}
+                      {propertyLabel(p, { primaryTag: true })}
                     </Link>
                     <span className="text-xs text-ink-muted shrink-0">{jobCount} job{jobCount !== 1 ? 's' : ''}</span>
                   </div>

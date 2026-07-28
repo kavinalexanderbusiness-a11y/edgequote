@@ -123,6 +123,37 @@ export function displayAddress(c: AddressCarrier): { address: string; city: stri
   return { address: c.address || '', city: c.city || '' }
 }
 
+export interface PropertyLabelFields {
+  address?: string | null
+  city?: string | null
+  neighborhood?: string | null
+  is_primary?: boolean | null
+}
+/**
+ * Name ONE property on a single line — THE answer to "which address is this?".
+ *
+ * `displayAddress` above resolves a CUSTOMER's address (it picks the primary); this
+ * names a specific property you already have in hand. Different question, so a
+ * different function — but one seam each, so no surface invents its own format (the
+ * " (primary)" vs " · primary" drift that got the picker extracted, wearing a new hat).
+ *
+ * The street alone is not enough for the very case multi-property exists to serve: a
+ * landlord's "100 Main St" in two towns renders as one address without the city. So
+ * the city (or neighbourhood as a fallback) is appended when it isn't already in the
+ * street text — the disambiguator, added only when it actually disambiguates.
+ *
+ * `primaryTag` appends " · primary" for lists that mark the home address; leave it off
+ * where the surrounding UI already carries a star (the picker) so the mark isn't doubled.
+ */
+export function propertyLabel(p: PropertyLabelFields, opts?: { primaryTag?: boolean }): string {
+  const street = (p.address || '').trim()
+  const place = (p.city || p.neighborhood || '').trim()
+  const base = street
+    ? (place && !street.toLowerCase().includes(place.toLowerCase()) ? `${street}, ${place}` : street)
+    : (place || 'Property')
+  return opts?.primaryTag && p.is_primary ? `${base} · primary` : base
+}
+
 /** Tags as stored: trimmed, deduped case-insensitively (first spelling wins),
  *  empty strings dropped. Pure — the form and any importer share it. */
 export function normalizeTags(raw: Array<string | null | undefined>): string[] {
