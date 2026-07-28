@@ -35,6 +35,7 @@ import { DisruptionReason } from '@/lib/disruption'
 import { Coord } from '@/lib/geo'
 import dynamic from 'next/dynamic'
 import { RouteTimeline, TimelineStop } from '@/components/schedule/RouteTimeline'
+import { VisitAddress } from '@/components/schedule/VisitAddress'
 import type { DispatchMapLane } from '@/components/dispatch/DispatchMap'
 
 // The map renders only in map view, and it already sits behind its own
@@ -1891,6 +1892,9 @@ const CrewLaneCard = memo(function CrewLaneCard({
                         </span>
                       )}
                     </div>
+                    {/* Which property — a customer can have several; the name alone
+                        doesn't say which one this stop is at. */}
+                    <VisitAddress address={job.properties?.address} />
                     <p className="text-[11px] text-ink-faint truncate tabular-nums">
                       {eta ? `ETA ${eta.arrival}` : 'ETA —'}
                       {promisedMin != null && (

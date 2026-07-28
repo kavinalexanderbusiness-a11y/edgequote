@@ -448,6 +448,10 @@ create table if not exists public.invoices (
   notes          text,
   job_id         uuid references public.jobs(id) on delete set null,
   line_items     jsonb,
+  -- True once the owner hand-edits this draft's breakdown in the invoice editor;
+  -- syncDraftInvoiceAmounts then skips the draft so a later job-price change can't
+  -- silently overwrite owner-authored line_items/amount (the change-order-loss bug).
+  line_items_edited boolean not null default false,
   paid_at        timestamptz,
   payment_method text check (payment_method is null or payment_method in ('stripe','etransfer','cash','cheque')),
   -- Discount (fixed $ or %). amount stays the NET (post-discount) subtotal; these are
@@ -474,6 +478,8 @@ create index if not exists invoices_job_id_idx      on public.invoices(job_id);
 -- Invoice discounts (idempotent — mirrors RUN-2026-06-27-invoice-discounts.sql).
 alter table public.invoices add column if not exists discount_type  text;
 alter table public.invoices add column if not exists discount_value numeric(10,2);
+-- Owner-hand-edited-breakdown pin (idempotent — mirrors RUN-2026-07-28-invoice-line-items-edited.sql).
+alter table public.invoices add column if not exists line_items_edited boolean not null default false;
 do $$ begin
   if not exists (select 1 from pg_constraint where conname = 'invoices_discount_type_check') then
     alter table public.invoices add constraint invoices_discount_type_check

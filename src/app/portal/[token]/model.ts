@@ -218,6 +218,38 @@ export function draftStorageKey(token: string, surface: DraftSurface): string {
   return `eqp:draft:${surface}:${token}`
 }
 
+// ── Missing contact method (the "unreachable customer" problem, portal side) ──
+// True ONLY when the file holds neither a phone nor an email with real content —
+// whitespace is not a way to reach someone. One method on file is enough: the
+// card asks for "at least one" and never nags for the second. A missing customer
+// payload is false — the portal can't claim a gap it can't see.
+export function needsContactMethod(customer: { phone: string | null; email: string | null } | null | undefined): boolean {
+  if (!customer) return false
+  return !(customer.phone ?? '').trim() && !(customer.email ?? '').trim()
+}
+
+// The request text for "add my contact details". Pure so verify pins that it
+// ALWAYS carries the typed value(s) — a message saying "update my contact info"
+// WITHOUT the info would make the owner ask for it, which is the exact
+// round-trip this card exists to remove. Null when nothing real was typed: an
+// empty request must be unsendable.
+export function contactUpdateMessage(phone: string, email: string): string | null {
+  const p = phone.trim()
+  const e = email.trim()
+  if (!p && !e) return null
+  const parts = [p ? `Phone: ${p}` : null, e ? `Email: ${e}` : null].filter(Boolean)
+  return `Please add my contact details to your file — ${parts.join(' · ')}`
+}
+
+// Session flag "this visit already sent contact details" — token-scoped like
+// draftStorageKey (two customers on one shared device never see each other's
+// thank-you) and namespaced apart from drafts so neither key can clobber the
+// other. Session-scoped on purpose: the card should stay down while the owner
+// applies the change, but a NEW visit may ask again if the file is still empty.
+export function contactSentKey(token: string): string {
+  return `eqp:contact-sent:${token}`
+}
+
 // A contextual "ask about this" seed for the message composer. It MUST carry
 // the document number — that's the whole point: the owner can tell which
 // invoice/quote the question is about instead of asking "which one?". Ends with
