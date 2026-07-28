@@ -57,7 +57,12 @@ export interface DashboardData {
     jobsDoneLastMonth: number
     conversionRate: number | null
   }
-  weather: WeatherImpactReport | null
+  /** UNAWAITED on purpose — weather is the one band fed by an external
+   *  forecast API (worst case 2.5s on a cold lambda). Every other band is
+   *  DB-derived and returns immediately; the page streams this one into a
+   *  reserved, same-height slot via Suspense. Resolves null on failure —
+   *  the strip's own "couldn't check" honesty rules are unchanged. */
+  weather: Promise<WeatherImpactReport | null>
   greeting: string
   dateLine: string
 }
@@ -195,10 +200,14 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     conversations,
     quotes: quotes as unknown as LeadQuoteRow[],
   })
-  // Weather is the one slow dependency (an external forecast). A failure must
-  // degrade to `null` rather than take the morning down — but null means
-  // "we couldn't check", NOT "no rain risk", and the strip says exactly that.
-  const weather = await loadWeatherImpact(sb, {
+  // Weather is the one slow dependency (an external forecast, 2.5s worst case,
+  // plus its own follow-up queries). It is deliberately NOT awaited: every
+  // DB-derived band ships on the first byte and the strip streams in behind a
+  // same-height placeholder — the forecast must never hold the page hostage
+  // (weather.ts says exactly this). A failure still degrades to `null` rather
+  // than take the morning down — null means "we couldn't check", NOT "no rain
+  // risk", and the strip says exactly that.
+  const weather = loadWeatherImpact(sb, {
     settings: settings ?? null,
     jobs: (planJobRes.data as unknown[]) || [],
     quotes: quotes as unknown as { id: string }[],

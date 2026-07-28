@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import { ButtonLink } from '@/components/ui/Button'
 import { WeekendOutlook } from '@/components/dashboard/WeekendOutlook'
 import { TodaysPriorities } from '@/components/dashboard/TodaysPriorities'
@@ -29,11 +30,17 @@ import { Plus, CalendarCheck, ArrowRight } from 'lucide-react'
 //                   last month — the trend read, deliberately last and
 //                   deliberately quieter.
 //
-// ONE server fetch (lib/dashboard/data) feeds every band, so the page paints
-// complete on the first byte — no spinners, no waterfall, and no figure that can
-// disagree with another because two components loaded at different moments.
-// Every number comes from an existing engine (ledger, reactivation, priorities,
-// day plan, weather impact); nothing is recomputed here.
+// ONE server fetch (lib/dashboard/data) feeds every band, so every NUMBER paints
+// complete on the first byte — no per-component query waterfalls, and no figure
+// that can disagree with another because two components loaded at different
+// moments. Every number comes from an existing engine (ledger, reactivation,
+// priorities, day plan, weather impact); nothing is recomputed here.
+//
+// The ONE exception is weather — the only band fed by an external forecast API
+// (2.5s worst case on a cold hit) rather than our own data. It streams into a
+// reserved slot exactly the strip's height, so nothing below it ever moves and
+// no business figure waits on someone else's server. weather.ts states the
+// rule: the forecast must never hold the page hostage.
 //
 // Deliberately NOT here: growth suggestions, recent quotes, acquisition insights —
 // they don't help you start the day and live on their own pages.
@@ -98,8 +105,18 @@ export default async function DashboardPage() {
           {/* Weather sits WITH the day plan it threatens — risk and the work at
               risk in one glance column. The strip's own honesty rules are
               untouched: it still says "no rain risk" explicitly and renders
-              "couldn't check" on failure rather than silence. */}
-          <div className="animate-rise stagger-4"><WeatherStrip report={d.weather} /></div>
+              "couldn't check" on failure rather than silence. It STREAMS in
+              behind a placeholder of exactly its height (all strip variants are
+              one line at px-4 py-2.5), so the forecast's latency never delays a
+              business number and its arrival never shifts the outlook below.
+              The fallback is deliberately NOT <WeatherStrip> itself: given no
+              report, the strip client-fetches its own copy — a duplicate 7-query
+              load during the stream window. */}
+          <div className="animate-rise stagger-4">
+            <Suspense fallback={<WeatherPending />}>
+              <WeatherSection weather={d.weather} />
+            </Suspense>
+          </div>
           <div className="animate-rise stagger-5"><WeekendOutlook plan={d.dayPlan} /></div>
         </div>
       </div>
@@ -132,5 +149,23 @@ export default async function DashboardPage() {
         </Card>
       </Link>
     </PageContainer>
+  )
+}
+
+// Awaits the streamed forecast and hands it to the strip as a RESOLVED report,
+// so the strip's "no report → fetch my own" fallback never fires here.
+async function WeatherSection({ weather }: { weather: Awaited<ReturnType<typeof loadDashboard>>['weather'] }) {
+  return <WeatherStrip report={await weather} />
+}
+
+// Same box as every strip variant (all are one line at px-4 py-2.5), so the
+// real strip replaces this in place — nothing below it ever moves. Reads as
+// pending, never as "no risk": unknown must not look like fine.
+function WeatherPending() {
+  return (
+    <div className="flex items-center gap-2 rounded-card border border-border bg-bg-secondary px-4 py-2.5">
+      <span className="w-3.5 h-3.5 shrink-0" aria-hidden />
+      <p className="text-xs text-ink-faint">Checking the forecast…</p>
+    </div>
   )
 }

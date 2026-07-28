@@ -168,9 +168,16 @@ export function TimelineCard({
                         </div>
                       </div>
                     )
+                    // content-visibility keeps "Show all" honest at scale: a
+                    // mature customer's timeline can run past 1,000 events, and
+                    // without containment one click lays out and paints every
+                    // row (and reserves every lazy-image slot) synchronously.
+                    // Same idiom as the dispatch board's stop rows — offscreen
+                    // rows skip layout/paint until they approach the viewport;
+                    // DOM structure, find-in-page and filters are unchanged.
                     return e.href
-                      ? <Link key={`${month.label}-${i}`} href={e.href} className="block hover:opacity-80 transition-opacity">{row}</Link>
-                      : <div key={`${month.label}-${i}`}>{row}</div>
+                      ? <Link key={`${month.label}-${i}`} href={e.href} className="block hover:opacity-80 transition-opacity [content-visibility:auto] [contain-intrinsic-size:auto_44px]">{row}</Link>
+                      : <div key={`${month.label}-${i}`} className="[content-visibility:auto] [contain-intrinsic-size:auto_44px]">{row}</div>
                   })}
                 </div>
               ))
