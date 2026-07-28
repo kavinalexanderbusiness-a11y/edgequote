@@ -651,6 +651,10 @@ export interface Invoice {
   // Snapshot breakdown for the customer (base service + add-ons + travel). Null
   // on legacy invoices → render the single (service_type, amount) row.
   line_items: InvoiceLineItem[] | null
+  // True once the owner hand-edits this draft's breakdown in the invoice editor.
+  // syncDraftInvoiceAmounts then leaves the draft alone, so a later job-price
+  // change can't silently overwrite the owner's line_items/amount. Defaults false.
+  line_items_edited?: boolean
   // How it was paid (set on mark-paid / by the Stripe webhook). null = unpaid.
   payment_method?: 'stripe' | 'etransfer' | 'cash' | 'cheque' | null
   paid_at?: string | null
