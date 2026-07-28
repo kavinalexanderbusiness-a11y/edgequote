@@ -287,6 +287,16 @@ export async function rehydrateUploads(): Promise<number> {
   for (const r of recs) {
     if (seenSigs.has(r.sig)) continue          // already back in the queue this session
     seenSigs.add(r.sig)
+    // It came OFF the disk, so a durable record EXISTS for it — mark it persisted so
+    // the shared drop path (dropWhenPersisted) actually removes that record once the
+    // re-upload lands. `persist()` adds this for same-session photos; rehydrate is the
+    // ONLY other producer and forgot to, so `persisted.has(id)` (dropWhenPersisted) was
+    // false for every restored photo: dropPending() never ran, the IDB record survived
+    // each successful upload, and the NEXT launch rehydrated + uploaded it again —
+    // uploadPhoto has no idempotency, so one duplicate row + storage object per launch
+    // until the 30-day sweep. (Also fixes dismiss/clearDone leaving a restored photo's
+    // bytes behind, since both route through the same persisted-gated drop.)
+    persisted.add(r.id)
     // Rebuild a File from the stored bytes so the rest of the pipeline (uploadPhoto,
     // visualHash) sees exactly what it would have seen before the restart.
     const file = new File([r.blob], r.name, { type: r.blob.type || 'image/jpeg' })
