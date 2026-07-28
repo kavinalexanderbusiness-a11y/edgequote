@@ -8,11 +8,11 @@ import { ConfirmHost } from '@/components/ui/ConfirmHost'
 import { cn, formatCurrency, localTodayISO } from '@/lib/utils'
 import { renderPortalInvoiceBlob, renderPortalQuoteBlob } from '@/lib/portalPdf'
 import {
-  buildPortalView, normalizePortal, parsePortalDeepLink, primaryPortalAction, tabNavTarget,
+  buildPortalView, needsContactMethod, normalizePortal, parsePortalDeepLink, primaryPortalAction, tabNavTarget,
   type PortalData, type SubmitRequestFn, type TabKey,
 } from './model'
 import type { PortalActions } from './components/shared'
-import { HomeTab, ReviewCard, ConsentCard } from './components/HomeTab'
+import { HomeTab, ReviewCard, ConsentCard, ContactMethodCard } from './components/HomeTab'
 import { PropertyTab } from './components/PropertyTab'
 import { VisitsTab } from './components/VisitsTab'
 import { BillingTab } from './components/BillingTab'
@@ -445,6 +445,13 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
               banners above stay outside it (they aren't tab content). */}
           <div id="portal-panel" role="tabpanel" aria-labelledby={`porttab-${tab}`} tabIndex={-1} className="focus-visible:outline-none">
             {tab === 'home' && <HomeTab view={view} actions={actions} suppressApproved={justAccepted} />}
+            {/* Reachability outranks the review ask: with no phone AND no email on
+                file, the owner literally cannot confirm a date or send the invoice.
+                Submitting goes through the same request pipeline as everything else
+                (portal_request_service) — the owner applies it to the file. */}
+            {tab === 'home' && needsContactMethod(data.customer) && (
+              <ContactMethodCard token={token} businessName={biz?.company_name ?? null} onSubmit={request} />
+            )}
             {tab === 'home' && biz?.review_url && view.derived.lastCompleted && !data.customer.reviewed_at && !reviewDeclined && (
               <ReviewCard reviewUrl={biz.review_url} businessName={biz.company_name} reviewed={markedReviewed} onReviewed={markReviewed} onDecline={declineReview} />
             )}

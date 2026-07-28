@@ -18,6 +18,7 @@ import { Menu } from '@/components/ui/Menu'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { RouteTimeline, type TimelineStop } from '@/components/schedule/RouteTimeline'
+import { VisitAddress } from '@/components/schedule/VisitAddress'
 import { JobAddons } from '@/components/schedule/JobAddons'
 import { JobMessages } from '@/components/schedule/JobMessages'
 import { SendMessageDialog, type MessageRecipient } from '@/components/comms/SendMessageDialog'
@@ -760,6 +761,10 @@ export function DayOpsPanel({
                               destructive button beside the price invited mis-taps. */}
                         </div>
                       </div>
+
+                      {/* Property address — a customer can have several properties;
+                          the name alone never says which one this visit is at. */}
+                      <VisitAddress address={job.properties?.address} className="mt-0.5" />
 
                       {/* Clean price-only editor — first-class, opens inline */}
                       {priceId === job.id && (

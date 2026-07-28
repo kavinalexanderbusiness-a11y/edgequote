@@ -20,27 +20,47 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
   // One parallel round-trip for the whole advisor. Line items are fetched by
   // user_id directly (not by the jobs' ids) so they no longer serialize AFTER the
   // jobs query — every read fires at once. Dismissals load here too.
+  //
+  // COLUMN LISTS, NOT select('*'): these are full-history reads of the account's
+  // widest tables (quotes alone is ~45 columns incl. lead_meta intake payloads
+  // the advisor never opens), so every unused column crossed the wire on each
+  // Grow visit. Each list below is the traced union of what buildSuggestions and
+  // every engine it hands rows to actually reads — including the indirect
+  // consumers: visitValue (the five quote price fields), winLoss WLQuote
+  // (property_id), followup quoteIsQuiet (sent_at, last_followed_up_at),
+  // preferences resolvePrefs (the embed pref fields), duration.ts
+  // (actual/duration_minutes), signals/* (recurrence freq/interval fields),
+  // sqftFor (properties.measurement_history — jsonb, wide, genuinely read).
+  // Rows are blind-cast to app types, so a MISSED column fails silently as
+  // undefined (the context-starvation bug class) — if you add a field read in
+  // suggestions.ts or its engines, add the column here in the same commit.
+  const JOB_COLS = 'id, customer_id, property_id, quote_id, recurrence_id, title, service_type, status, scheduled_date, start_time, duration_minutes, actual_minutes, price, is_initial_visit, crew_size'
+  const QUOTE_COLS = 'id, status, total, initial_price, weekly_price, biweekly_price, monthly_price, property_id, sent_at, last_followed_up_at'
+  const PROPERTY_COLS = 'id, customer_id, lat, lng, neighborhood, city, postal_code, lawn_sqft, measurement_history'
+  const CUSTOMER_COLS = 'id, name, created_at, referred_by_customer_id'
+  const RECURRENCE_COLS = 'id, freq, interval_unit, interval_count'
+  const LINE_ITEM_COLS = 'id, job_id, amount, service_key, description, created_at'
   const today = localTodayISO()
   const [jRes, qRes, rRes, pRes, cRes, iRes, nRes, sRes, liRes, dRes, woRes, travelM] = await Promise.all([
     supabase.from('jobs')
-      .select('*, customers(id, name, phone, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)')
+      .select(`${JOB_COLS}, customers(id, name, phone, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)`)
       .eq('user_id', uid),
-    supabase.from('quotes').select('*').eq('user_id', uid),
-    supabase.from('job_recurrences').select('*').eq('user_id', uid),
-    supabase.from('properties').select('*').eq('user_id', uid),
-    supabase.from('customers').select('*').eq('user_id', uid),
+    supabase.from('quotes').select(QUOTE_COLS).eq('user_id', uid),
+    supabase.from('job_recurrences').select(RECURRENCE_COLS).eq('user_id', uid),
+    supabase.from('properties').select(PROPERTY_COLS).eq('user_id', uid),
+    supabase.from('customers').select(CUSTOMER_COLS).eq('user_id', uid),
     supabase.from('invoices').select('job_id, status, amount, property_id, customer_id').eq('user_id', uid),
     supabase.from('neighbor_leads').select('status, neighborhood').eq('user_id', uid),
     supabase.from('business_settings')
       .select('crew_cost_per_hour, target_rev_per_hour, pricing_base_charge, pricing_mow_rate, pricing_recommended_mult, pricing_premium_mult, pricing_travel_rate, preferred_work_days, daily_capacity_hours, work_start_time, base_lat, base_lng, service_seasons')
       .eq('user_id', uid).maybeSingle(),
-    supabase.from('job_line_items').select('*').eq('user_id', uid).order('created_at', { ascending: true }),
+    supabase.from('job_line_items').select(LINE_ITEM_COLS).eq('user_id', uid).order('created_at', { ascending: true }),
     supabase.from('suggestion_dismissals').select('suggestion_key, snooze_until').eq('user_id', uid),
     supabase.from('quote_outcomes').select('quote_id, reason, detail, competitor_price').eq('user_id', uid),
     loadTravelModel(supabase),
   ])
 
-  const jobs = (jRes.data as Job[]) || []
+  const jobs = (jRes.data as unknown as Job[]) || []
   const settings = sRes.data as Record<string, unknown> | null
 
   const recurrences: Record<string, JobRecurrence> = {}
