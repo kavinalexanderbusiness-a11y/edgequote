@@ -706,3 +706,43 @@ and prints real units in the qty column (`6 yd³ × $55`, not `6 × $55`).
 - §24's unverified trio, unchanged.
 - From §25: scheduling an accepted recurring quote creates a one-time visit; editing an
   ACCEPTED quote warns nobody. Both are lifecycle/product decisions, not presentation fixes.
+
+---
+---
+
+# Round 9 — launch-readiness pass: the deal the customer already made (2026-07-28)
+
+Walked the full owner loop (create → edit → duplicate → send → schedule → invoice) on current
+main. The builder itself is in good shape after eight rounds and two parallel PRs — the
+remaining friction was all downstream, in what happens AFTER a customer says yes. Root cause,
+found while fixing: **the acceptance snapshot columns (`accepted_price`, `selected_cadence`,
+RUN-2026-07-16c/d) were written by the portal and `markWonPatch` but never added to the TS
+`Quote` type** — so for twelve days no owner surface *could* read what the customer agreed to.
+
+## §29 · Fixed this round
+
+1. **Typed the snapshot.** `accepted_price` and `selected_cadence` joined the `Quote`
+   interface (read-only app-side; the RPC and `markWonPatch` remain the only writers).
+2. **Editing an approved quote now says so.** Edit was offered on accepted/scheduled/
+   completed/paid quotes with no acknowledgement a deal existed. The edit screen now opens
+   with a warning banner naming the approved amount — warn, never block: post-acceptance
+   corrections are legitimate, but they must be made knowing the customer hasn't agreed to
+   the new number.
+3. **Scheduling tells the truth about recurrence.** `scheduleQuoteAsJob` books ONE visit,
+   deliberately — but "Job added to today's schedule" read as *done* for a quote whose
+   customer approved a weekly plan, and the plan never became a repeating schedule. Both
+   callers (quote page + notification bell) now say: *"First visit added — the weekly plan
+   isn't a repeating schedule yet; open the job to set its recurrence."* Copy only; the
+   engine is unchanged.
+4. **The plan list names the customer's choice.** The detail page listed Weekly/Bi-Weekly/
+   Monthly as three equal rows on quotes where `selected_cadence` already recorded which one
+   the customer picked. A "Customer's choice" chip now marks it.
+
+## §30 · State of the surface
+
+The New Quote fast path, additional-services flow, breakdowns, PDF, duplication and portal
+gating have all been audited to a standstill across nine rounds. What remains is catalogued,
+not unknown: the §24 unverified trio, the portal travel breakout (RPC lane), the `quote:new`
+autosave key strategy, and the Pricing-V2-gated items (§20, §23). Nothing in the create-to-
+invoice loop still silently loses, invents, or misrepresents a number the owner or customer
+decided.

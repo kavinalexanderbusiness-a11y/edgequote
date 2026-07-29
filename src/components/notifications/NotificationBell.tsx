@@ -186,7 +186,16 @@ export function NotificationBell() {
       if (error) toast.error('Could not create job: ' + error)
       else {
         markRead([n.id])
-        toast('Job added to today’s schedule.', {
+        // Same honesty as the quote page's Schedule button: ONE visit was booked,
+        // never a repeating schedule — a quote with an approved recurring plan
+        // still needs its recurrence set on the job, and "Job added" hid that.
+        const cad = quote.selected_cadence && quote.selected_cadence !== 'one_time'
+          ? quote.selected_cadence
+          : (Number(quote.weekly_price) > 0 || Number(quote.biweekly_price) > 0 || Number(quote.monthly_price) > 0) ? 'recurring' : null
+        const cadLabel = cad === 'weekly' ? 'weekly plan' : cad === 'biweekly' ? 'bi-weekly plan' : cad === 'monthly' ? 'monthly plan' : cad === 'recurring' ? 'recurring plan' : null
+        toast(cadLabel
+          ? `First visit added to today’s schedule. The ${cadLabel} isn’t a repeating schedule yet — open the job to set its recurrence.`
+          : 'Job added to today’s schedule.', {
           tone: 'success',
           action: { label: 'View job', run: () => { setOpen(false); router.push('/dashboard/schedule') } },
         })
