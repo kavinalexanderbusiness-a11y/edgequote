@@ -58,6 +58,12 @@ interface QuoteBuilderProps {
   autosaveKey?: string
   /** Server record's updated_at — drafts older than this are never offered. */
   autosaveBaselineUpdatedAt?: string | null
+  /** Where Cancel goes. The EDIT flow is a same-route state toggle (the detail
+      page flips `editing`), so its Cancel must return to the quote VIEW — the
+      default router.back() pops history right out of the quote (or the app
+      section, on a deep link), leaving "did it save?" uncertainty plus a stale
+      draft banner on the next Edit. New-quote callers omit it and keep back(). */
+  onCancel?: () => void
 }
 
 // Where the price in the field came from. NEVER inferred by comparing the field to
@@ -90,7 +96,7 @@ type PitchCadence = 'one_time' | 'weekly' | 'biweekly'
 
 export function QuoteBuilder({
   customers, templates, tiers, settings, defaultCustomerId, defaultPropertyId, defaultValues, onSubmit, isEdit,
-  autosaveKey, autosaveBaselineUpdatedAt,
+  autosaveKey, autosaveBaselineUpdatedAt, onCancel,
 }: QuoteBuilderProps) {
   const router = useRouter()
   const { register, handleSubmit, watch, setValue, getValues, reset, control, formState: { errors, isSubmitting } } =
@@ -1815,7 +1821,7 @@ export function QuoteBuilder({
                 <Button type="submit" className="w-full" size="lg" loading={isSubmitting}>
                   {isEdit ? 'Update quote' : 'Save quote'}
                 </Button>
-                <Button type="button" variant="ghost" className="w-full" onClick={() => router.back()}>Cancel</Button>
+                <Button type="button" variant="ghost" className="w-full" onClick={onCancel ?? (() => router.back())}>Cancel</Button>
               </div>
             </CardBody>
           </Card>
@@ -1837,7 +1843,7 @@ export function QuoteBuilder({
           <p className="text-xl font-bold text-accent-text leading-none tabular-nums">{effectiveTotal > 0 ? formatCurrency(effectiveTotal) : '—'}</p>
         </button>
         <div className="flex items-center gap-2 shrink-0">
-          <Button type="button" variant="ghost" size="sm" onClick={() => router.back()}>Cancel</Button>
+          <Button type="button" variant="ghost" size="sm" onClick={onCancel ?? (() => router.back())}>Cancel</Button>
           <Button type="submit" size="lg" loading={isSubmitting}>{isEdit ? 'Update quote' : 'Save quote'}</Button>
         </div>
       </StickyActionBar>
