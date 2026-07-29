@@ -130,6 +130,16 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
                 is on their way, a date-change form is the wrong tool. */}
             {liveStatusOf(next) === 'scheduled' && (
               <>
+                {/* A booked visit carries a DATE, never a time — PortalJob has no
+                    time field, so the customer sees "Thu, Jul 30" and is left to
+                    wonder "but when?". Name the expectation honestly, and point at
+                    the live signal they already have: this hero flips to "On the
+                    way" (and the on_my_way text goes out) the moment the crew sets
+                    out. No business rule here — just saying what already happens. */}
+                <p className="text-xs text-ink-muted mt-2 flex items-start gap-1.5">
+                  <CalendarClock className="w-3.5 h-3.5 text-ink-faint shrink-0 mt-0.5" />
+                  <span>We don&rsquo;t book an exact time — expect us any time that day. You&rsquo;ll see &lsquo;On the way&rsquo; here when we&rsquo;re heading over.</span>
+                </p>
                 <RescheduleRequest key={next.id} job={next} todayISO={todayISO} submitRequest={actions.submitRequest} />
                 {/* Put the visit in their own calendar — one tap, no account, no
                     backend. All-day on the scheduled date (we have a date, not a
