@@ -922,6 +922,13 @@ export function QuoteBuilder({
             No price yet — saving now creates a $0 quote. You can price it later.
           </p>
         )}
+        {/* Same predicate and promise as QuotePDF's "Plus GST (X%) — added on your
+            invoice". The owner's checking surface was the ONLY totals surface not
+            disclosing it — so a registered owner read "$180" here, said "$180
+            all-in" at the door, and the first invoice arrived at $189. */}
+        {Number(settings?.gst_percent) > 0 && effectiveTotal > 0 && (
+          <p className="text-xs text-ink-faint text-right">Plus GST ({Number(settings?.gst_percent)}%) — added on the invoice</p>
+        )}
       </div>
       {(weeklyPrice > 0 || biweeklyPrice > 0 || monthlyPrice > 0) && (
         <div className="border-t border-border pt-3 space-y-1.5">
