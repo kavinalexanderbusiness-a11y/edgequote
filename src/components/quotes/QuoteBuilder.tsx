@@ -710,6 +710,35 @@ export function QuoteBuilder({
   }, [])
   const unitOptions = useMemo(() => units.map(u => ({ value: u.code, label: u.label })), [units])
 
+  // ── Line-pricing clarity (Additional services + Materials) ───────────────────
+  // The Qty field wears the UNIT's name. A static "Qty" made hourly pricing
+  // invisible: picking a "$95/hr" template filled Unit price and flipped the unit
+  // to hours, but the line still read "Qty 1 × $95" — so a 3-hour hedge job went
+  // out at a third of its price unless the owner guessed that Qty meant hours.
+  // "Hours: 3" is unmistakable; same for "Square feet: 1,200" and "Cubic yards".
+  // Each/flat keep the plain "Qty" (their quantity really is just a count).
+  const unitFor = (code: string | null | undefined) => units.find(u => u.code === (code || 'each'))
+  const qtyLabelFor = (code: string | null | undefined) => {
+    const u = unitFor(code)
+    return u && u.code !== 'each' && u.code !== 'flat' ? u.label : 'Qty'
+  }
+  // How this line's price forms, spelled out by the SAME engine that sums it
+  // (serviceLineTotals — never a second multiplication here). Shown only when it
+  // says something the header net doesn't: a quantity in play or a discount at
+  // work. Mirrors the engine's qty ≤ 0 → 1 rule so the equation can never
+  // disagree with the money it explains.
+  const lineEquation = (line: (Parameters<typeof serviceLineTotals>[0] & { unit?: string | null }) | undefined) => {
+    if (!line) return null
+    const qty = Number(line.quantity) > 0 ? Number(line.quantity) : 1
+    const price = Number(line.unit_price) || 0
+    if (price <= 0) return null
+    const t = serviceLineTotals(line)
+    if (qty === 1 && t.discountAmount <= 0) return null   // header net already says it all
+    const u = unitFor(line.unit)
+    const unitBit = u && u.code !== 'each' && u.code !== 'flat' ? ` ${u.abbrev}` : ''
+    return `${qty}${unitBit} × ${formatCurrency(price)}${t.discountAmount > 0 ? ` − ${formatCurrency(t.discountAmount)} off` : ''} = ${formatCurrency(t.net)}`
+  }
+
   // Favourites first, then the business's own sort_order within each group.
   // THIS is what a favourite is for: the settings toggle promises "shown first in
   // the quote builder", and this is the only place that promise can be kept — the
@@ -1405,7 +1434,9 @@ export function QuoteBuilder({
                       )}
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      <Input label="Qty" type="number" step="0.5" min="0"
+                      {/* The label follows the unit ("Hours: 3", "Square feet: 1,200")
+                          and the step follows the unit's own granularity (0.25 hr). */}
+                      <Input label={qtyLabelFor(line?.unit)} type="number" step={unitFor(line?.unit)?.step ?? 0.5} min="0"
                         {...register(`services.${i}.quantity` as const, { min: 0 })} />
                       <Select label="Unit" options={unitOptions}
                         {...register(`services.${i}.unit` as const)} />
@@ -1414,6 +1445,9 @@ export function QuoteBuilder({
                       <Input label="Duration (min)" type="number" step="5" min="0"
                         {...register(`services.${i}.est_minutes` as const, { min: 0 })} />
                     </div>
+                    {lineEquation(line) && (
+                      <p className="text-[11px] text-ink-muted tabular-nums">{lineEquation(line)}</p>
+                    )}
                     {lineDiscountRow(i)}
                   </div>
                 )
@@ -1488,13 +1522,18 @@ export function QuoteBuilder({
                     {/* No Duration field: spreading the mulch is the SERVICE line's
                         minutes. Minutes here would inflate the scheduled job twice. */}
                     <div className="grid grid-cols-3 gap-3">
-                      <Input label="Qty" type="number" step="0.5" min="0"
+                      {/* Same rule as the services grid: the label and step follow
+                          the unit — "Cubic yards: 3.5", not "Qty: 3.5". */}
+                      <Input label={qtyLabelFor(line?.unit)} type="number" step={unitFor(line?.unit)?.step ?? 0.5} min="0"
                         {...register(`services.${i}.quantity` as const, { min: 0 })} />
                       <Select label="Unit" options={unitOptions}
                         {...register(`services.${i}.unit` as const)} />
                       <Input label="Price per unit ($)" type="number" step="1" min="0"
                         {...register(`services.${i}.unit_price` as const, { min: 0 })} />
                     </div>
+                    {lineEquation(line) && (
+                      <p className="text-[11px] text-ink-muted tabular-nums">{lineEquation(line)}</p>
+                    )}
                     {lineDiscountRow(i)}
                   </div>
                 )
