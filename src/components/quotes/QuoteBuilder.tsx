@@ -840,17 +840,32 @@ export function QuoteBuilder({
   // `services` array, one totals engine). Rendered from both editors below so the
   // two can't drift, the same reason `previewBreakdown` exists. `i` is the real
   // field-array index the row registers against.
-  const lineDiscountRow = (i: number) => (
-    <div className="grid grid-cols-2 sm:grid-cols-[auto_auto_1fr] gap-3 items-end">
-      <Select label="Discount" placeholder="None"
-        options={[{ value: 'amount', label: '$ off' }, { value: 'percent', label: '% off' }]}
-        {...register(`services.${i}.discount_type` as const)} />
-      <Input label="Value" type="number" step="1" min="0"
-        {...register(`services.${i}.discount_value` as const, { min: 0 })} />
-      <Input label="Notes" placeholder="Optional"
-        {...register(`services.${i}.notes` as const)} />
-    </div>
-  )
+  const lineDiscountRow = (i: number) => {
+    // applyDiscount deliberately ignores a half-specified discount (a Value with
+    // no $/% picked, a type with no Value) — correct maths, silent trap: the
+    // owner promised "$20 off", the line kept charging full price, and the save
+    // dropped the orphan half without a trace. Say so in the moment instead —
+    // warn-never-block, and the lineEquation above confirms once it applies.
+    const dv = Number(watch(`services.${i}.discount_value`)) || 0
+    const dt = watch(`services.${i}.discount_type`)
+    const halfSpecified = dv > 0 && !dt
+      ? 'Pick “$ off” or “% off” — this discount isn’t applied yet.'
+      : dt && dv <= 0 ? 'Enter a discount amount — nothing is taken off yet.' : null
+    return (
+      <>
+        <div className="grid grid-cols-2 sm:grid-cols-[auto_auto_1fr] gap-3 items-end">
+          <Select label="Discount" placeholder="None"
+            options={[{ value: 'amount', label: '$ off' }, { value: 'percent', label: '% off' }]}
+            {...register(`services.${i}.discount_type` as const)} />
+          <Input label="Value" type="number" step="1" min="0"
+            {...register(`services.${i}.discount_value` as const, { min: 0 })} />
+          <Input label="Notes" placeholder="Optional"
+            {...register(`services.${i}.notes` as const)} />
+        </div>
+        {halfSpecified && <p className="text-[11px] text-amber-400">{halfSpecified}</p>}
+      </>
+    )
+  }
 
   // ── The price breakdown, defined ONCE ────────────────────────────────────────
   // Rendered by the desktop preview card AND the mobile sheet below. It used to
