@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { fieldBorder } from '@/components/ui/fieldStyles'
 import { PageContainer } from '@/components/layout/PageContainer'
 import { useParams } from 'next/navigation'
@@ -36,6 +36,11 @@ export default function PropertyDetailPage() {
   const [tick, setTick] = useState(0)
 
   const [property, setProperty] = useState<Property | null>(null)
+  // Read inside load()'s synchronous head to decide skeleton-vs-repaint without
+  // making `load` depend on them (which would re-run it).
+  const loadedIdRef = useRef<string | null>(null)
+  const propertyRef = useRef<Property | null>(null)
+  propertyRef.current = property
   const [customer, setCustomer] = useState<{ id: string; name: string } | null>(null)
   const [events, setEvents] = useState<ReturnType<typeof buildTimeline>>([])
   const [loading, setLoading] = useState(true)
@@ -54,9 +59,17 @@ export default function PropertyDetailPage() {
   useEffect(() => {
     let active = true
     async function load() {
-      // Opening a different property must not paint the previous one's history under
-      // the new address while this runs.
-      setLoading(true)
+      // Skeleton ONLY when there is nothing trustworthy on screen: a genuine
+      // property switch (its predecessor's history must never sit under the new
+      // address — the guarantee this check exists for) or a retry from the
+      // error/not-found state, where Retry would otherwise look dead.
+      // A background refresh — a realtime echo, a live quote at this address —
+      // repaints in place instead of blanking the page mid-read and unmounting
+      // an open, autofocused editor. Same rule the customer profile already
+      // follows: skeleton on first mount, never on a refresh.
+      const isSwitch = loadedIdRef.current !== id
+      loadedIdRef.current = id   // set at START, so a Retry doesn't re-skeleton
+      if (isSwitch || !propertyRef.current) setLoading(true)
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
       // No session is a load failure, not a reason to sit on a skeleton forever.
@@ -121,7 +134,20 @@ export default function PropertyDetailPage() {
     if (error) { toast.error('Could not save the address: ' + error.message); return }
     setEditingAddress(false)
     toast.success('Address updated — it re-locates on the next route or measurement.')
-    reload()
+    // Patch what we just wrote instead of re-running the whole loader. The
+    // nulls matter: lat/lng/neighborhood were cleared above, so the "Located"
+    // pin must stop claiming a position we no longer have. Patched only AFTER
+    // the error check — these are direct writes with no offline queue, so
+    // optimistic state must never outlive a failed one. The live `properties`
+    // subscription still delivers the echo as the backstop.
+    setProperty(p => p ? {
+      ...p,
+      address: addrDraft.address.trim(),
+      city: addrDraft.city.trim() || null,
+      province: addrDraft.province.trim() || null,
+      postal_code: addrDraft.postal.trim() || null,
+      lat: null, lng: null, neighborhood: null,
+    } : p)
   }
 
   async function saveNotes() {
@@ -131,7 +157,7 @@ export default function PropertyDetailPage() {
     setSavingNotes(false)
     if (error) { toast.error('Could not save the notes: ' + error.message); return }
     setEditingNotes(false)
-    reload()
+    setProperty(p => p ? { ...p, notes: notesDraft.trim() || null } : p)
   }
 
   if (loading) return <PageContainer width="narrow"><SkeletonRows count={5} /></PageContainer>
