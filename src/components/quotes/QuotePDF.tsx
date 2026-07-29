@@ -98,6 +98,14 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
   const initialPrice = quote.initial_price ?? quote.subtotal
   const hasMaintenance = !!(quote.weekly_price || quote.biweekly_price || quote.monthly_price)
   const lines = services && services.length ? services : null
+  // The builder's toggle promises 'Travel rolled into total on PDF' — and this
+  // document ignored it, itemizing travel whenever a fee existed. Rolled-in
+  // travel now folds into the FIRST-VISIT line's displayed amount (the fee is
+  // already inside quote.total, so every displayed row still sums to the grand
+  // total); an itemized travel row renders only when the owner opted to show it.
+  const travelFee = Number(quote.travel_fee) || 0
+  const shownTravel = quote.show_travel_separately ? travelFee : 0
+  const rolledTravel = quote.show_travel_separately ? 0 : travelFee
   const company = settings?.company_name || 'Your service provider'
   const contactLines = [
     settings?.phone,
@@ -147,7 +155,14 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
           </View>
           <View>
             <Text style={styles.quoteBarLabel}>Valid Until</Text>
-            <Text style={styles.quoteBarValue}>{dateStrPlusDays(quote.issued_date || quote.created_at, 30)}</Text>
+            {/* quotes.valid_until is THE stamped promise (set on send, extended by
+                the owner) — the PDF used to compute issued+30 regardless, so an
+                EXTENDED quote's re-rendered document still printed the original
+                lapse date: the paper contradicted the portal about when the price
+                stops standing. issued+30 remains only as the fallback for a PDF
+                rendered before first send stamps the real date (same 30-day
+                default markSentPatch will write). */}
+            <Text style={styles.quoteBarValue}>{quote.valid_until ? dateStr(quote.valid_until) : dateStrPlusDays(quote.issued_date || quote.created_at, 30)}</Text>
           </View>
           <View>
             <Text style={styles.quoteBarLabel}>Status</Text>
@@ -184,18 +199,23 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
           {lines ? (
             // Multi-service: one row per line, net of its own discount (the same
             // engine math as the app; quote.total already sums these + travel).
+            // Rolled-in travel rides on the PRIMARY row (sort_order 0) so the
+            // displayed rows still sum to the grand total.
             lines.map(s => {
               const t = serviceLineTotals(s)
-              const qtyLabel = Number(s.quantity) > 1 ? `${s.quantity} × ${money(s.unit_price)}` : s.sort_order === 0 ? `${quote.crew_size} crew · ${quote.hours} hrs` : '—'
+              const qtyLabel = Number(s.quantity) > 1 ? `${s.quantity} ${s.unit && s.unit !== 'each' ? s.unit + ' ' : ''}× ${money(s.unit_price)}` : s.sort_order === 0 ? `${quote.crew_size} crew · ${quote.hours} hrs` : '—'
+              const amount = t.net + (s.sort_order === 0 ? rolledTravel : 0)
               return (
                 <View key={s.id} style={styles.tableRow} wrap={false}>
                   <View style={styles.cellDesc}>
-                    <Text style={styles.td}>{s.service_type}</Text>
-                    {s.notes ? <Text style={styles.muted}>{s.notes}</Text> : s.sort_order === 0 ? <Text style={styles.muted}>First visit</Text> : null}
+                    {/* Materials are labelled as what they are — a customer reading
+                        "Mulch" with no qualifier can't tell supply from labour. */}
+                    <Text style={styles.td}>{s.service_type}{s.kind === 'material' ? '  (materials)' : ''}</Text>
+                    {s.notes ? <Text style={styles.muted}>{s.notes}</Text> : s.sort_order === 0 ? <Text style={styles.muted}>First visit{rolledTravel > 0 ? ' · includes travel' : ''}</Text> : null}
                     {t.discountAmount > 0 ? <Text style={styles.muted}>Includes {money(t.discountAmount)} discount</Text> : null}
                   </View>
                   <Text style={[styles.td, styles.cellQty]}>{qtyLabel}</Text>
-                  <Text style={[styles.td, styles.cellAmt]}>{money(t.net)}</Text>
+                  <Text style={[styles.td, styles.cellAmt]}>{money(amount)}</Text>
                 </View>
               )
             })
@@ -203,20 +223,20 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
             <View style={styles.tableRow} wrap={false}>
               <View style={styles.cellDesc}>
                 <Text style={styles.td}>{quote.service_type}</Text>
-                <Text style={styles.muted}>First visit</Text>
+                <Text style={styles.muted}>First visit{rolledTravel > 0 ? ' · includes travel' : ''}</Text>
               </View>
               <Text style={[styles.td, styles.cellQty]}>{quote.crew_size} crew · {quote.hours} hrs</Text>
-              <Text style={[styles.td, styles.cellAmt]}>{money(initialPrice)}</Text>
+              <Text style={[styles.td, styles.cellAmt]}>{money(initialPrice + rolledTravel)}</Text>
             </View>
           )}
-          {quote.travel_fee > 0 ? (
+          {shownTravel > 0 ? (
             <View style={styles.tableRow} wrap={false}>
               <View style={styles.cellDesc}>
                 <Text style={styles.td}>Travel Fee</Text>
                 <Text style={styles.muted}>Travel to job site</Text>
               </View>
               <Text style={[styles.td, styles.cellQty]}>—</Text>
-              <Text style={[styles.td, styles.cellAmt]}>{money(quote.travel_fee)}</Text>
+              <Text style={[styles.td, styles.cellAmt]}>{money(shownTravel)}</Text>
             </View>
           ) : null}
         </View>
@@ -225,16 +245,20 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
             the single line above it (multi-service or a travel fee); otherwise a
             one-service quote printed the same number three rows in a row. */}
         <View style={styles.totals} wrap={false}>
-          {((lines && lines.length > 1) || quote.travel_fee > 0) ? (
+          {/* Subtotal/travel rows only when they'd differ from the grand total —
+              and only ITEMIZED travel appears here; rolled-in travel is already
+              inside the line amounts above, so a subtotal excluding it would
+              contradict the very rows it claims to sum. */}
+          {((lines && lines.length > 1) || shownTravel > 0) ? (
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>{lines && lines.length > 1 ? 'Services subtotal' : 'First visit'}</Text>
-              <Text style={styles.totalValue}>{money(initialPrice)}</Text>
+              <Text style={styles.totalValue}>{money(initialPrice + rolledTravel)}</Text>
             </View>
           ) : null}
-          {quote.travel_fee > 0 ? (
+          {shownTravel > 0 ? (
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Travel Fee</Text>
-              <Text style={styles.totalValue}>{money(quote.travel_fee)}</Text>
+              <Text style={styles.totalValue}>{money(shownTravel)}</Text>
             </View>
           ) : null}
           <View style={styles.grandRow}>

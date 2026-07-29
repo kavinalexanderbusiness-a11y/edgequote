@@ -1230,6 +1230,22 @@ export function QuoteBuilder({
                 )}
               </div>
 
+              {/* Additional lines exist → say so RIGHT HERE, where the owner is
+                  looking at a price that is no longer the whole first visit. The
+                  extra services/materials live in sections below this card, so
+                  without this the only clue the field wasn't the total was a
+                  different number in the sticky bar. Tapping it opens the section
+                  that holds the money. */}
+              {extras.net > 0 && (
+                <button type="button"
+                  onClick={() => { if (serviceExtras.net > 0) setServicesOpen(true); if (materialsSum.net > 0) setMaterialsOpen(true) }}
+                  className="text-left text-xs text-ink-muted rounded px-1 -mx-1 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                  Plus <span className="font-semibold text-ink tabular-nums">{formatCurrency(extras.net)}</span> in additional
+                  {serviceExtras.net > 0 ? ' services' : ''}{serviceExtras.net > 0 && materialsSum.net > 0 ? ' &' : ''}{materialsSum.net > 0 ? ' materials' : ''} below
+                  {' '}— first visit total <span className="font-semibold text-accent-text tabular-nums">{formatCurrency(effectiveTotal)}</span>
+                </button>
+              )}
+
               {/* Guardrails follow the price they judge. They rendered inside the
                   "Plan pricing" sub-section, so a warning that the FIRST-VISIT
                   price is below the crew-cost floor waited for someone to open a
