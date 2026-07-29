@@ -1,10 +1,14 @@
 # Quote Builder audit — round 5: merge status, and what is still live on `main`
 
+> **SUPERSEDED 2026-07-26.** `deploy/main-2026-07-16` has since merged to main
+> (`67c5897`); the rounds 1–4 fixes and `QUOTE-BUILDER-UX-AUDIT.md` are now on
+> `origin/main`. The merge-status analysis below describes a pre-merge state —
+> kept for the audit trail only.
+
 **Date:** 2026-07-26 · **Method:** read-only, against **immutable git objects** (`git show <ref>:<path>`),
 not the working tree — see §0 for why that distinction mattered this round.
-**Companion:** `QUOTE-BUILDER-UX-AUDIT.md` (rounds 1–4), which is on `deploy/main-2026-07-16` and
-**not yet on main**. This file is standalone on purpose: it has zero conflict surface with the
-rebase described below, and should be folded into the main audit once that lands.
+**Companion:** `QUOTE-BUILDER-UX-AUDIT.md` (rounds 1–4), now on `main` (merged via `67c5897`).
+This file is standalone on purpose: it had zero conflict surface with the rebase described below.
 
 ---
 

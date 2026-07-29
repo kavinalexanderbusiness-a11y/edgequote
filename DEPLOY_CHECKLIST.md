@@ -75,11 +75,9 @@ That has already happened three times, all found and transcribed back on 2026-07
 
 **Verified 2026-07-15 — production vs. source control:**
 all 54 tables, 43 functions, 36 triggers and 4 storage buckets are now creatable from
-this repo, with one known exception below.
-
-`automation_signals` is still in this state — it exists in production, but its
-migration lives only on the unmerged `guardian-2` branch (`aca9a6b`), so a rebuild
-from `main` will not create it.
+this repo. (The previous known exception is closed: `automation_signals` is
+covered by `supabase/RUN-2026-07-14-automation-signals.sql`, on `main` — a
+rebuild from `main` creates it.)
 
 ### Existing database — incremental files (already applied this session; listed for the audit trail / a DB that's behind). Apply in this order; each is idempotent:
 1. `supabase/RUN-2026-06-25-autopay-website.sql` — AutoPay (2026-06-25c) + Website Import (2026-06-25d)
@@ -99,7 +97,7 @@ SUPABASE_SERVICE_ROLE_KEY            # server-only — NEVER prefix NEXT_PUBLIC_
 GOOGLE_MAPS_API_KEY                  # server-side (geocode/distance/route proxies)
 NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY  # restrict by HTTP referrer
 NEXT_PUBLIC_APP_URL                  # e.g. https://app.example.com (builds portal links in server-sent messages)
-CRON_SECRET                          # Vercel sends as Bearer; both cron routes validate it
+CRON_SECRET                          # Vercel sends as Bearer; all 12 cron routes validate it
 ```
 **Required for payments + AutoPay + receipts:**
 ```
@@ -174,12 +172,22 @@ No Stripe **publishable** key is needed (card capture uses hosted Checkout in se
 
 ## Vercel configuration
 
-- **Cron jobs** (defined in `vercel.json` — deployed automatically; confirm they appear under Project → Cron):
-  | Path | Schedule (UTC) | Purpose |
-  |---|---|---|
-  | `/api/cron/notifications` | `0 14 * * *` (daily 14:00) | Tomorrow's reminders + yesterday's review requests |
-  | `/api/cron/autopay` | `0 2 * * *` (daily 02:00) | AutoPay safety-net sweep (charges recurring drafts a dropped fire-and-forget missed) |
-  > Vercel **Hobby** allows daily-only cron frequency (both fit). On **Pro** you may increase `/api/cron/autopay` (e.g. `0 */4 * * *`) for a faster backstop.
+- **Cron jobs** (defined in `vercel.json` — deployed automatically; confirm they appear under Project → Cron). Twelve daily crons; `vercel.json` is the source of truth if this table rots:
+  | Path | Schedule (UTC) |
+  |---|---|
+  | `/api/cron/signals` | `0 11 * * *` |
+  | `/api/cron/engine` | `30 11 * * *` |
+  | `/api/cron/reports` | `0 12 * * *` |
+  | `/api/cron/publish` | `0 13 * * *` |
+  | `/api/cron/notifications` | `0 14 * * *` |
+  | `/api/cron/campaigns` | `0 15 * * *` |
+  | `/api/cron/scheduled-messages` | `0 15 * * *` |
+  | `/api/cron/integrations` | `30 15 * * *` |
+  | `/api/cron/marketing-draft` | `0 16 * * *` |
+  | `/api/cron/quote-followup` | `0 17 * * *` |
+  | `/api/cron/invoice-reminders` | `0 18 * * *` |
+  | `/api/cron/autopay` | `0 2 * * *` |
+  > Vercel **Hobby** rejects any sub-daily cron at deploy time — every schedule here must stay daily (this has broken every deploy twice; see git history). On **Pro**, sub-daily backstops may be restored.
 - Set every environment variable above for the **Production** environment.
 
 ---
@@ -264,7 +272,7 @@ Env vars and per-service config are above; these are the human steps that gate t
   **status code** (`ok` and `degraded` both return `200` on purpose; `503` = DB unreachable).
 - **Stripe webhook** — watch for `500`s / retries in the Stripe dashboard. The webhook
   returns `500` on a DB write failure so Stripe retries — a spike means DB trouble.
-- **Cron** — confirm both daily runs (`/api/cron/notifications`, `/api/cron/autopay`)
+- **Cron** — confirm all 12 daily runs appear under Project → Cron (list in `vercel.json`)
   succeed; watch the `sent` count and error logs. A `403` means `CRON_SECRET` is unset.
 - **Push delivery** — `select status_code, content, created from net._http_response order by created desc limit 20;`
   (pg_net auto-expires rows ~6h; `sent:N` = delivered, non-200 = a problem).

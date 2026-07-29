@@ -107,7 +107,7 @@ export default function PartsPage() {
 
       {loadError && (
         <Banner tone="danger" icon={AlertTriangle}
-          action={<button type="button" onClick={() => { setLoading(true); load() }} className="shrink-0 underline font-semibold">Retry</button>}>
+          action={<Button size="sm" variant="secondary" onClick={() => { setLoading(true); load() }}>Retry</Button>}>
           {loadError}
         </Banner>
       )}

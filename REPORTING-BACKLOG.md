@@ -77,10 +77,12 @@ can't stand behind. This is logic downstream of that decision, not presentation.
 (`localTodayISO`, cron ~06:00 America/Edmonton). An owner in another timezone gets
 period boundaries — and therefore which day's money lands in which report — off by
 hours.
-**Why blocked — a missing column (small).** There is no per-owner timezone field.
-Once one exists this is a roughly one-line change in the period engine (the code
-already notes "One line to change when a per-owner tz lands"). Blocked on data, not
-effort.
+**Why blocked — wiring, not data.** The column now exists:
+`business_settings.timezone` (NOT NULL, default `America/Edmonton`; added by
+`supabase/RUN-2026-07-18-comms-governor-timezone.sql`, applied to prod). The comms
+governor reads it; the period engine does not yet. Remaining work is the roughly
+one-line change in the period engine (the code already notes "One line to change
+when a per-owner tz lands") plus verifying every report entry point passes it.
 
 ## P6 · Quote engagement in reporting (viewed_at)
 **What:** reporting on whether quotes were opened/viewed.

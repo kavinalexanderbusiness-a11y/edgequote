@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { addDays, format, startOfWeek, endOfWeek, subMonths, startOfMonth } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
@@ -40,6 +41,7 @@ import {
 // the Payroll page, that would be a bug, not a different opinion.
 
 export default function WorkforcePage() {
+  const router = useRouter()
   const supabase = useMemo(() => createClient(), [])
   const [uid, setUid] = useState<string | null>(null)
   const [settings, setSettings] = useState<BusinessSettings | null>(null)
@@ -189,20 +191,20 @@ export default function WorkforcePage() {
           tone={otInsight.otMinutesThisWeek > 0 ? 'warn' : undefined} tonedSurface={otInsight.otMinutesThisWeek > 0} />
         <StatTile label="Payroll this period" icon={Wallet} value={formatCurrency(draft.grossPay)}
           sub="Worked + time off, gross" accent
-          onClick={() => { window.location.href = '/dashboard/dispatch/payroll' }} />
+          onClick={() => router.push('/dashboard/dispatch/payroll')} />
       </div>
 
       {/* Nudges that are actionable, not decorative. */}
       {runStats.periodsSinceLastRun != null && runStats.periodsSinceLastRun >= 1 && (
         <Banner tone="warn" icon={Lock}
-          action={<Link href="/dashboard/dispatch/payroll" className="shrink-0 text-xs font-semibold underline">Finalize</Link>}>
+          action={<Link href="/dashboard/dispatch/payroll" className="shrink-0 text-xs font-semibold underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Finalize</Link>}>
           {runStats.periodsSinceLastRun} pay period{runStats.periodsSinceLastRun !== 1 ? 's have' : ' has'} finished since you last
           finalized a pay run. Finalizing freezes what you paid so it can’t drift later.
         </Banner>
       )}
       {wages.missingWage.length > 0 && (
         <Banner tone="warn" icon={AlertTriangle}
-          action={<Link href="/dashboard/dispatch?roster=1" className="shrink-0 text-xs font-semibold underline">Set wages</Link>}>
+          action={<Link href="/dashboard/dispatch?roster=1" className="shrink-0 text-xs font-semibold underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Set wages</Link>}>
           {wages.missingWage.join(', ')} {wages.missingWage.length !== 1 ? 'have' : 'has'} no wage set, so their hours record time
           but cost $0.
         </Banner>
@@ -264,7 +266,7 @@ export default function WorkforcePage() {
             {overtimeOff(rules) ? (
               <div className="px-5 py-4">
                 <Banner tone="info" icon={Info}
-                  action={<Link href="/dashboard/settings#payroll" className="shrink-0 text-xs font-semibold underline">Set rules</Link>}>
+                  action={<Link href="/dashboard/settings#payroll" className="shrink-0 text-xs font-semibold underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Set rules</Link>}>
                   Overtime law differs by province, so EdgeQuote won’t guess a threshold for you.
                 </Banner>
               </div>

@@ -11,7 +11,7 @@ import { Card, CardBody } from '@/components/ui/Card'
 import { Banner } from '@/components/ui/Banner'
 import { SkeletonTiles } from '@/components/ui/Skeleton'
 import { StatTile } from '@/components/ui/StatTile'
-import { Button } from '@/components/ui/Button'
+import { Button, ButtonLink } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { format } from 'date-fns'
 import {
@@ -188,7 +188,9 @@ export default function DataQualityPage() {
         { customerId: mode === 'link' ? linkId : null, name: q.customer_name, address: q.address },
         mode === 'new' ? [] : customers, // empty list forces a fresh customer
       )
-      await supabase.from('quotes').update({ customer_id: ensured.customerId, property_id: ensured.propertyId }).eq('id', q.id)
+      // supabase-js RETURNS errors — promote to a throw so the catch actually fires.
+      const { error: upErr } = await supabase.from('quotes').update({ customer_id: ensured.customerId, property_id: ensured.propertyId }).eq('id', q.id)
+      if (upErr) throw new Error(upErr.message)
       await load()
     } catch (e) { toast.error('Could not fix quote: ' + (e instanceof Error ? e.message : 'error')) }
     finally { setWorking(null) }
@@ -202,7 +204,8 @@ export default function DataQualityPage() {
       const ensured = await ensureCustomerAndProperty(
         supabase, user!.id, { customerId: q.customer_id, name: q.customer_name, address: q.address }, customers,
       )
-      await supabase.from('quotes').update({ property_id: ensured.propertyId }).eq('id', q.id)
+      const { error: upErr } = await supabase.from('quotes').update({ property_id: ensured.propertyId }).eq('id', q.id)
+      if (upErr) throw new Error(upErr.message)
       await load()
     } catch (e) { toast.error('Could not link property: ' + (e instanceof Error ? e.message : 'error')) }
     finally { setWorking(null) }
@@ -216,7 +219,8 @@ export default function DataQualityPage() {
         const ensured = await ensureCustomerAndProperty(
           supabase, user!.id, { customerId: q.customer_id, name: q.customer_name, address: q.address }, customers,
         )
-        await supabase.from('quotes').update({ property_id: ensured.propertyId }).eq('id', q.id)
+        const { error: upErr } = await supabase.from('quotes').update({ property_id: ensured.propertyId }).eq('id', q.id)
+        if (upErr) throw new Error(upErr.message)
         setProgress(pr => pr ? { ...pr, done: pr.done + 1 } : pr)
       }
     } catch (e) { toast.error('Could not link properties: ' + (e instanceof Error ? e.message : 'error')) }
@@ -237,7 +241,8 @@ export default function DataQualityPage() {
         if (c) {
           const patch: Record<string, unknown> = { lat: c.lat, lng: c.lng }
           if (c.neighborhood) patch.neighborhood = c.neighborhood
-          await supabase.from('properties').update(patch).eq('id', p.id)
+          const { error: upErr } = await supabase.from('properties').update(patch).eq('id', p.id)
+          if (upErr) throw new Error(upErr.message)
         }
         setProgress(pr => pr ? { ...pr, done: pr.done + 1 } : pr)
       }
@@ -252,7 +257,10 @@ export default function DataQualityPage() {
     try {
       for (const p of m.propsUnnamed) {
         const name = await reverseNeighborhood(p.lat as number, p.lng as number)
-        if (name) await supabase.from('properties').update({ neighborhood: name }).eq('id', p.id)
+        if (name) {
+          const { error: upErr } = await supabase.from('properties').update({ neighborhood: name }).eq('id', p.id)
+          if (upErr) throw new Error(upErr.message)
+        }
         setProgress(pr => pr ? { ...pr, done: pr.done + 1 } : pr)
       }
     } catch (e) { toast.error('Could not resolve neighborhoods: ' + (e instanceof Error ? e.message : 'error')) }
@@ -271,7 +279,8 @@ export default function DataQualityPage() {
         propId = propId ?? q?.property_id ?? null
       }
       if (custId) {
-        await supabase.from('jobs').update({ customer_id: custId, property_id: propId }).eq('id', j.id)
+        const { error: upErr } = await supabase.from('jobs').update({ customer_id: custId, property_id: propId }).eq('id', j.id)
+        if (upErr) { toast.error('Could not repair this job: ' + upErr.message); return }
         await load()
       } else {
         toast.error('This job has no property or quote to derive a customer from — open it on the Schedule and assign one.')
@@ -433,7 +442,7 @@ export default function DataQualityPage() {
         <Section icon={Phone} title={`${m.customersNoContact.length} customer${m.customersNoContact.length !== 1 ? 's' : ''} with no contact info`}
           subtitle={`No phone or email — they can't receive quotes, reminders or invoices. (${m.customersNoPhone} missing a phone · ${m.customersNoEmail} missing an email in total.)`}>
           {m.customersNoContact.slice(0, 40).map((c, i) => (
-            <Link key={c.id} href={`/dashboard/customers/${c.id}`} className={`flex items-center justify-between gap-2 rounded-card border border-border p-3 hover:border-border-strong transition-colors animate-rise stagger-${Math.min(i + 1, 6)}`}>
+            <Link key={c.id} href={`/dashboard/customers/${c.id}`} className={`flex items-center justify-between gap-2 rounded-card border border-border p-3 hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 animate-rise stagger-${Math.min(i + 1, 6)}`}>
               <div className="min-w-0">
                 <p className="text-sm font-medium text-ink truncate">{c.name}</p>
                 <p className="text-xs text-ink-muted truncate">{c.address || 'No address'}</p>
@@ -452,9 +461,9 @@ export default function DataQualityPage() {
           {m.propsNoSize.slice(0, 40).map((p, i) => (
             <div key={p.id} className={`flex items-center justify-between gap-2 rounded-card border border-border p-3 animate-rise stagger-${Math.min(i + 1, 6)}`}>
               <p className="text-sm text-ink truncate min-w-0">{p.address}</p>
-              <Link href={`/dashboard/properties/measure?id=${p.id}`}>
-                <Button size="sm" variant="secondary"><Ruler className="w-3.5 h-3.5" /> Measure</Button>
-              </Link>
+              <ButtonLink href={`/dashboard/properties/measure?id=${p.id}`} size="sm" variant="secondary">
+                <Ruler className="w-3.5 h-3.5" /> Measure
+              </ButtonLink>
             </div>
           ))}
           {m.propsNoSize.length > 40 && <p className="text-xs text-ink-faint">+{m.propsNoSize.length - 40} more.</p>}
@@ -469,9 +478,9 @@ export default function DataQualityPage() {
             <div key={i} className={`rounded-card border border-border p-3 animate-rise stagger-${Math.min(i + 1, 6)}`}>
               <span className="text-[10px] uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded-full px-2 py-0.5">Same {d.reason}</span>
               <div className="flex items-center justify-between gap-2 mt-2">
-                <Link href={`/dashboard/customers/${d.a.id}`} className="text-sm font-medium text-ink hover:text-accent-text truncate min-w-0 flex-1">{d.a.name}</Link>
+                <Link href={`/dashboard/customers/${d.a.id}`} className="text-sm font-medium text-ink hover:text-accent-text truncate min-w-0 flex-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{d.a.name}</Link>
                 <Copy className="w-3.5 h-3.5 text-ink-faint shrink-0" />
-                <Link href={`/dashboard/customers/${d.b.id}`} className="text-sm font-medium text-ink hover:text-accent-text truncate min-w-0 flex-1 text-right">{d.b.name}</Link>
+                <Link href={`/dashboard/customers/${d.b.id}`} className="text-sm font-medium text-ink hover:text-accent-text truncate min-w-0 flex-1 text-right rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{d.b.name}</Link>
               </div>
             </div>
           ))}

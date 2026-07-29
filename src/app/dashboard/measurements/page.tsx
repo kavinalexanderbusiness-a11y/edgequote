@@ -14,13 +14,18 @@ import { Ruler, TrendingUp, Target, MapPin, Gauge } from 'lucide-react'
 export default function MeasurementsPage() {
   const [stats, setStats] = useState<MeasureStats | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
 
   useEffect(() => {
     (async () => {
       const supabase = createClient()
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
-      if (user) setStats(await measurementStats(supabase, user.id))
+      // A no-session/failed load must not render "No auto-measurements yet" as
+      // fact — that empty state is indistinguishable from a real zero.
+      if (user) {
+        try { setStats(await measurementStats(supabase, user.id)) } catch { setLoadError(true) }
+      } else setLoadError(true)
       setLoading(false)
     })()
   }, [])
@@ -37,6 +42,11 @@ export default function MeasurementsPage() {
 
       {loading ? (
         <SkeletonTiles count={4} />
+      ) : loadError ? (
+        <p className="text-sm text-ink-muted">
+          Could not load measurement stats — check your connection and{' '}
+          <button type="button" onClick={() => window.location.reload()} className="text-accent-text underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">try again</button>.
+        </p>
       ) : !stats || stats.autoTotal === 0 ? (
         <Card><EmptyState icon={Ruler} title="No auto-measurements yet"
           description="As you measure quotes and properties, the accuracy and per-neighborhood learning will show up here."

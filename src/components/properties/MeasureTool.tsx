@@ -545,7 +545,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
   // Persist the total + append a versioned snapshot to history (never overwrite).
   // The snapshot carries the FULL recommendation package, so quotes and jobs can
   // suggest measured prices later without re-measuring.
-  async function persistMeasurement(context: 'property' | 'quote'): Promise<{ total: number; sections: LawnSections; valueGrade: string | null }> {
+  async function persistMeasurement(context: 'property' | 'quote'): Promise<{ total: number; sections: LawnSections; valueGrade: string | null } | null> {
     if (currentPath.current.length >= 3) commitCurrent(activeRef.current)
     const sections = currentSections()
     const sectionsTotal = Math.round(Object.values(sections).reduce((a, b) => a + b, 0))
@@ -612,7 +612,13 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
     // auto/manual re-save never wipes a previously-saved shape.
     const propUpdate: Record<string, unknown> = { measurement_history: nextHistory }
     if (polygon.length > 0) propUpdate.lawn_polygon = polygon
-    await supabase.from('properties').update(propUpdate).eq('id', property.id)
+    const { error: persistErr } = await supabase.from('properties').update(propUpdate).eq('id', property.id)
+    if (persistErr) {
+      // Don't show the measurement as saved while the boundary/history never
+      // landed — the next visit would re-trace from nothing with no warning.
+      toast.error(`Measured, but the traced boundary didn’t save: ${persistErr.message}`)
+      return null
+    }
     setHistory(nextHistory)
     setSavedSqft(total)
     // Record auto vs accepted so the estimate self-calibrates per neighborhood.
@@ -639,7 +645,9 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
   async function createQuote(sel?: CadenceSelection) {
     if (totalSqft <= 0) return
     setCreating(true)
-    const { total, sections, valueGrade } = await persistMeasurement('quote')
+    const persisted = await persistMeasurement('quote')
+    if (!persisted) { setCreating(false); return }   // persist failed and already toasted — don't quote off an unsaved boundary
+    const { total, sections, valueGrade } = persisted
     // Price off the SAME (per-section-rounded) total we persist, so jobPrice,
     // measured_sqft and suggested_price are all derived from one area figure.
     const tiersForTotal = priceTiers(total, cfg, overgrowth)

@@ -46,6 +46,7 @@ export default function ScheduledReportsPage() {
 
   const [data, setData] = useState<AccountingData | null>(null)
   const [schedules, setSchedules] = useState<ScheduleRow[]>([])
+  const [schedError, setSchedError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [authError, setAuthError] = useState(false)
   const [kind, setKind] = useState<ReportKind>('weekly')
@@ -61,7 +62,11 @@ export default function ScheduledReportsPage() {
       supabase.from('report_schedules').select('id, kind, enabled, recipient, last_sent_at, last_period_to, last_error').eq('user_id', uid),
     ])
     setData(acct)
-    setSchedules((sched.data ?? []) as ScheduleRow[])
+    // A failed read must not paint every toggle OFF as fact — an owner who IS
+    // subscribed would see themselves unsubscribed (and might "re-subscribe",
+    // or trust the lie). Keep the last known rows and say the read failed.
+    if (sched.error) setSchedError('Couldn’t load your report subscriptions — the toggles below may be stale.')
+    else { setSchedError(null); setSchedules((sched.data ?? []) as ScheduleRow[]) }
     setLoading(false)
   }, [supabase])
 
@@ -156,6 +161,8 @@ export default function ScheduledReportsPage() {
         description="Pick a cadence, see exactly what lands in your inbox, turn it on."
         crumb={{ label: 'Reports', href: '/dashboard/reports' }}
       />
+
+      {schedError && <Banner tone="warn" icon={AlertTriangle} className="mb-4">{schedError}</Banner>}
 
       <Tabs
         tabs={REPORT_KINDS.map(r => ({ key: r.value, label: r.label }))}

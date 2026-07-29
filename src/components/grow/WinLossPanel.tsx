@@ -7,6 +7,7 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { formatCurrency, cn } from '@/lib/utils'
 import { Trophy, RefreshCw, Check } from 'lucide-react'
+import { toast } from '@/lib/toast'
 import { IconButton } from '@/components/ui/IconButton'
 
 // ── Win/Loss (Growth) ───────────────────────────────────────────────────────────
@@ -33,6 +34,10 @@ export function WinLossPanel() {
     if (res.ok) {
       // optimistic: stamp the reason locally so the row collapses to its tag
       setData(d => d && { ...d, lostQuotes: d.lostQuotes.map(x => x.id === q.id ? { ...x, reason } : x) })
+    } else {
+      // Without this, the tap just looked ignored — spinner cleared, no row
+      // collapse, no message, and the loss reason silently never recorded.
+      toast.error('Could not save the reason: ' + (res.error ?? 'please try again.'))
     }
   }
 

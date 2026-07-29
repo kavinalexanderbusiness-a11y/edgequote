@@ -245,7 +245,10 @@ export function CampaignManager() {
     })
   }
   async function delPreset(p: CrmCampaignPreset) {
-    await supabase.from('crm_campaign_presets').delete().eq('id', p.id)
+    // Verify before announcing — a failed delete with a "Removed" toast (and an
+    // Undo that would insert a duplicate) is the exact lie del() above avoids.
+    const { error } = await supabase.from('crm_campaign_presets').delete().eq('id', p.id)
+    if (error) { toast.error('Could not remove the preset: ' + error.message); return }
     load()
     toast.undo(`Removed preset "${p.name}"`, async () => {
       await supabase.from('crm_campaign_presets').insert(p); load()
