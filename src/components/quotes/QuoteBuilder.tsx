@@ -37,7 +37,7 @@ import type { MeasurementSnapshot, SavedRecommendation } from '@/types'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { PriceIntelligence } from '@/components/pricing/PriceIntelligence'
-import { Clock, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp, Package } from 'lucide-react'
+import { Clock, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp, Package } from 'lucide-react'
 
 interface QuoteBuilderProps {
   customers: Customer[]
@@ -201,15 +201,27 @@ export function QuoteBuilder({
   })
   // Which disclosure sections are open. Held here (not inside each Collapsible)
   // because a BLOCKED submit has to be able to open the one hiding the problem.
-  const [pricingOpen, setPricingOpen] = useState(false)
-  // The three sections nested INSIDE "Advanced Pricing" are controlled too.
-  // Opening only the outer section wasn't enough: a cleared crew_size lives two
-  // levels deep, so the blocked submit opened Advanced Pricing and the field was
-  // still hidden inside a closed "Labour calculator" — react-hook-form's focus
-  // then failed exactly the way §4.1 describes, one door further in.
-  const [laborOpen, setLaborOpen] = useState(false)
-  const [planOpen, setPlanOpen] = useState(false)
-  const [travelOpen, setTravelOpen] = useState(false)
+  // Labour / Plan pricing / Travel were three Collapsibles NESTED inside an
+  // "Advanced Pricing" Collapsible — two disclosure taps to the first labour
+  // field on every manually-priced quote, and (worse) with the outer section
+  // closed all three state summaries UNMOUNTED, so "Absorbing travel — no fee"
+  // vs "Charging travel fee" rode along unseen to Save. Flattened to top-level
+  // siblings (the pattern Additional services already follows), each CONTROLLED
+  // so the error handler can open the exact section hiding an invalid field
+  // (main's parallel pass made them controlled for the same reason — a cleared
+  // crew_size two doors deep defeated focus-on-error; the flatten removes the
+  // outer door entirely).
+  // Same content-starts-open rule as services/materials below: a saved quote's
+  // plan prices, travel fee and labour inputs start on screen when they exist.
+  const [laborOpen, setLaborOpen] = useState(
+    () => !!isEdit && (Number(defaultValues?.hours) > 0 || Number(defaultValues?.rate) > 0),
+  )
+  const [planOpen, setPlanOpen] = useState(
+    () => !!isEdit && (Number(defaultValues?.weekly_price) > 0 || Number(defaultValues?.biweekly_price) > 0 || Number(defaultValues?.monthly_price) > 0),
+  )
+  const [travelOpen, setTravelOpen] = useState(
+    () => !!isEdit && (Number(defaultValues?.travel_fee) > 0 || Number(defaultValues?.distance_km) > 0),
+  )
   // A section that ALREADY HAS content starts open. Opening a saved quote showed
   // "Additional services · 2 lines · $180" as one collapsed row, so the money most
   // likely to be wrong was the money you had to go looking for — and a quote can
@@ -222,9 +234,9 @@ export function QuoteBuilder({
     () => (defaultValues?.services || []).some(s => s?.kind === 'material'),
   )
 
-  // Fields that live inside "Advanced Pricing" — mapped to the NESTED section
-  // each lives in, so a validation error opens the exact door hiding the field,
-  // not just the outer one.
+  // Which section owns each pricing field — a validation error routes to (and
+  // opens) exactly the section holding the invalid input. Union of the three ==
+  // the old single PRICING_DETAIL_FIELDS list; no field orphaned.
   const LABOR_FIELDS = ['hours', 'crew_size', 'rate', 'overgrowth_multiplier']
   const PLAN_FIELDS = ['weekly_price', 'biweekly_price', 'monthly_price']
   const TRAVEL_FIELDS = ['travel_fee', 'distance_km']
@@ -262,9 +274,9 @@ export function QuoteBuilder({
     errs => {
       const keys = Object.keys(errs)
       if (!keys.length) return
-      if (keys.some(k => LABOR_FIELDS.includes(k))) { setPricingOpen(true); setLaborOpen(true) }
-      if (keys.some(k => PLAN_FIELDS.includes(k))) { setPricingOpen(true); setPlanOpen(true) }
-      if (keys.some(k => TRAVEL_FIELDS.includes(k))) { setPricingOpen(true); setTravelOpen(true) }
+      if (keys.some(k => LABOR_FIELDS.includes(k))) setLaborOpen(true)
+      if (keys.some(k => PLAN_FIELDS.includes(k))) setPlanOpen(true)
+      if (keys.some(k => TRAVEL_FIELDS.includes(k))) setTravelOpen(true)
       if (errs.services) {
         const bad = (errs.services as unknown[]).map((e, i) => (e ? i : -1)).filter(i => i >= 0)
         if (bad.some(i => kindAt(i) === 'material')) setMaterialsOpen(true)
@@ -1439,8 +1451,15 @@ export function QuoteBuilder({
             </CardBody>
           </Card>
 
-          {/* ── Advanced Pricing — exact price + the full engine, collapsed until needed ── */}
-          <Collapsible title="Advanced Pricing" icon={SlidersHorizontal} summary="Exact price · labour · recurring · travel — full control" open={pricingOpen} onOpenChange={setPricingOpen}>
+          {/* ── The pricing engine sections — Labour · Plan pricing · Travel ────
+              These were three Collapsibles NESTED inside an "Advanced Pricing"
+              shell: two disclosure taps to the first labour field, and with the
+              shell closed (the default) all three live summaries — including
+              "Absorbing travel — no fee" vs "Charging travel fee" — were
+              unmounted entirely. Now top-level siblings like Additional services
+              below: one tap each, and every section's state is readable while
+              collapsed. The price FIELD stays in the fast path above; these
+              sections hold the engine that feeds it. ── */}
           {/* Saved measurement — the pricing source of truth for this property.
               Shown ONLY when there's no LIVE suggestion (same numbers, same
               engine — never two copies of the price list on screen).
@@ -1480,8 +1499,8 @@ export function QuoteBuilder({
             </div>
           )}
 
-          {/* The price field itself now lives in the fast path above — see the
-              note there. What stays here is the engine that FEEDS it. */}
+          {/* The price field itself lives in the fast path above — see the note
+              there. These sections hold the engine that FEEDS it. */}
 
           <Collapsible title="Labour calculator" icon={Calculator} summary={laborSummary} open={laborOpen} onOpenChange={setLaborOpen}>
             <p className="text-xs text-ink-faint">Hours × crew × rate — this is what the suggested price above is built from when there’s no measurement to price against.</p>
@@ -1592,9 +1611,8 @@ export function QuoteBuilder({
                 )} />
             </div>
           </Collapsible>
-          </Collapsible>
           {/* ── Additional services — a quote can hold one OR many services. Sits
-              right after Advanced Pricing so the primary flow reads Address →
+              right after the pricing sections so the primary flow reads Address →
               Measure → Recommended price → Accept → fine-tune → extras. Each line
               has qty × unit price − discount; totals sum via the one
               quote-services engine. The primary service above stays untouched. ── */}
