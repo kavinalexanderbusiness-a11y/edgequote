@@ -1004,7 +1004,12 @@ export function QuoteBuilder({
               {showCustomerPicker && (
                 <Controller name="customer_id" control={control}
                   render={({ field }) => (
-                    <CustomerPicker label="Customer" customers={customers} value={field.value || ''} onChange={field.onChange} />
+                    <CustomerPicker label="Customer" customers={customers} value={field.value || ''} onChange={field.onChange}
+                      // The typed search IS the new customer's name — carry it into
+                      // the manual Name field instead of making the owner type it
+                      // twice. Fill-when-empty only (the file's own overwrite rule):
+                      // a name already entered is never replaced.
+                      onManual={typed => { if (typed && !String(getValues('customer_name') || '').trim()) setValue('customer_name', typed) }} />
                   )} />
               )}
               {showManualName && (
