@@ -354,7 +354,7 @@ export default function AccountingPage() {
                           key={c.categoryId ?? 'none'}
                           type="button"
                           onClick={() => setCategoryId(c.categoryId ?? '')}
-                          className="flex items-center gap-3 text-left group"
+                          className="flex items-center gap-3 text-left group rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                         >
                           <span className="w-32 shrink-0 text-sm text-ink-muted truncate group-hover:text-ink">
                             {c.name}

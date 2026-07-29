@@ -107,7 +107,11 @@ export async function scheduleQuoteAsJob(
   }
 
   if (quote.status === 'accepted') {
-    await supabase.from('quotes').update({ status: 'scheduled' }).eq('id', quote.id)
+    // The job is real either way — but a silently failed advance leaves the quote
+    // reading "Accepted", so follow-up radars keep chasing a job that's booked.
+    // Same partial-outcome voice as the extras block above.
+    const { error: stErr } = await supabase.from('quotes').update({ status: 'scheduled' }).eq('id', quote.id)
+    if (stErr) toast.error('Scheduled, but the quote still shows Accepted — refresh and mark it Scheduled by hand.')
   }
   return { jobId: newJob.id as string, error: null }
 }

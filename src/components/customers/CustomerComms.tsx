@@ -10,16 +10,28 @@ import { formatDate, cn } from '@/lib/utils'
 import { MessageSquare, Mail, Check } from 'lucide-react'
 import { MSG_LABELS, MsgType } from '@/lib/comms/templates'
 import { applyConsent, SMS_CONSENT_WARNING } from '@/lib/consent'
+import { toast } from '@/lib/toast'
 
 interface LogRow { id: string; created_at: string; channel: string; template: string; status: string; detail: string | null }
 interface ConsentRow { id: string; created_at: string; channel: string; old_value: boolean | null; new_value: boolean | null; source: string; changed_by: string | null }
 
 // Per-customer Communication Center: consent toggles + the full SMS/email history
 // (what was sent, delivery status, when). Reads notification_log.
-export function CustomerComms({ customerId, smsOptIn, emailOptIn }: { customerId: string; smsOptIn: boolean; emailOptIn: boolean }) {
+export function CustomerComms({ customerId, smsOptIn, emailOptIn, onChange }: {
+  customerId: string; smsOptIn: boolean; emailOptIn: boolean
+  /** Lift a saved consent change to the parent, so the header badge and this card can
+   *  never disagree about whether texting is allowed. The sibling cards (CommsHealth,
+   *  ReviewLifecycle, PaymentMethodCard) all report upward the same way. */
+  onChange?: (patch: { sms_opt_in?: boolean; email_opt_in?: boolean }) => void
+}) {
   const supabase = useMemo(() => createClient(), [])
   const [sms, setSms] = useState(smsOptIn)
   const [email, setEmail] = useState(emailOptIn)
+  // Re-seed when the record changes underneath us — a consent change made from the
+  // list's bulk action, another device, or the sibling card arrives here as new props
+  // via the page's realtime refetch. Without this the toggle keeps showing the value it
+  // was mounted with, and one page states two different answers about consent.
+  useEffect(() => { setSms(smsOptIn); setEmail(emailOptIn) }, [smsOptIn, emailOptIn])
   const [log, setLog] = useState<LogRow[]>([])
   const [consentLog, setConsentLog] = useState<ConsentRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -44,14 +56,22 @@ export function CustomerComms({ customerId, smsOptIn, emailOptIn }: { customerId
       if (!ok) return
     }
     const prevSms = sms, prevEmail = email
+    // Optimistic flip — reverted below if the write doesn't land. Consent is the gate on
+    // every automated message, so a pill that says "SMS On" after a failed save is the
+    // most expensive lie this page can tell: the owner believes they may text.
     if (channel === 'sms') setSms(value); else setEmail(value)
+    const revert = () => { setSms(prevSms); setEmail(prevEmail) }
     const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
+    if (!user) { revert(); toast.error('Could not save — please sign in again.'); return }
     // Update + audit (who/when/old→new) via the shared consent layer.
-    await applyConsent(supabase, {
+    const { error } = await applyConsent(supabase, {
       targets: [{ id: customerId, sms_opt_in: prevSms, email_opt_in: prevEmail }],
       channel, value, userId: user.id, changedBy: user.email || user.id, source: 'single',
     })
+    if (error) { revert(); toast.error('Could not update consent: ' + error); return }
+    // Tell the parent, so the identity header's badge updates now rather than waiting
+    // for a realtime tick to refetch the whole page.
+    onChange?.(channel === 'sms' ? { sms_opt_in: value } : { email_opt_in: value })
     loadLog() // refresh consent history with the new audit row
   }
 

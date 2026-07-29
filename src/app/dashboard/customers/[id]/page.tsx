@@ -28,6 +28,7 @@ import { needsFollowUp, daysSince } from '@/lib/followup'
 import { recurrenceLabel, recurringCustomerLabel, buildServicePlans, ServicePlan } from '@/lib/recurrence'
 import { jobVisitValue, effectiveFreq } from '@/lib/visitValue'
 import { settingsToSeasons, DEFAULT_SEASONS, ServiceSeasons } from '@/lib/seasons'
+import { invoiceBalance } from '@/lib/payments/ledger'
 import { loadBusinessShape, showLawnFieldFor, SHAPE_LOADING, type BusinessShape } from '@/lib/businessShape'
 import { resolvePrefs, prefSummary, hasAnyPref, monthShort } from '@/lib/preferences'
 import { SchedulePrefsFields, PrefsDraft, EMPTY_DRAFT, toDraft, draftToRow } from '@/components/customers/SchedulePrefsFields'
@@ -147,7 +148,9 @@ export default function CustomerDetailPage() {
   // sync that used to live here (and once half-applied, sending a crew to the
   // wrong house) is gone with its cause — addresses are edited on the property
   // itself, in its own section below, one table, one write.
-  async function handleSaveEdit(values: CustomerFormValues) {
+  // Resolves FALSE when the update failed, so the form keeps its autosave draft rather
+  // than clearing it on a save that never landed.
+  async function handleSaveEdit(values: CustomerFormValues): Promise<boolean> {
     // Explicit WHITELIST (found in review): reset() keeps unregistered keys, so a
     // pre-V2 autosave draft can still carry address fields — a spread would write
     // them back invisibly. Consent stays out too: it's audited through the shared
@@ -164,9 +167,10 @@ export default function CustomerDetailPage() {
       tags: normalizeTags(values.tags || []),
     }
     const { error } = await supabase.from('customers').update(patch).eq('id', id)
-    if (error) { toast.error('Could not save the customer: ' + error.message); return }   // keep the form open to retry
+    if (error) { toast.error('Could not save the customer: ' + error.message); return false }   // keep the form open — and its draft — to retry
     setEditing(false)
     reload()
+    return true
   }
 
   const [editingNotes, setEditingNotes] = useState(false)
@@ -493,9 +497,15 @@ export default function CustomerDetailPage() {
   // no property_id column. That works precisely because jobs are 100% property-
   // populated; it is the reason JobForm's hidden auto-select above is a real bug and
   // not a cosmetic one.
+  // ONE balance engine for every owed figure on this page. invoiceBalance is the
+  // same GST-inclusive, discount-aware rule the invoices page, the portal and the
+  // GST return read — it replaces `amount * gstMult - amount_paid`, which was
+  // hand-rolled in three places here (a fourth parallel copy of the balance rule
+  // that could drift from the canonical per-component rounding). FeeSettings needs
+  // only gst_percent, which is all this page loads.
+  const feeSettings = useMemo(() => ({ gst_percent: gstPercent }), [gstPercent])
   const propRollup = useMemo(() => {
     const t = localTodayISO()
-    const gstMult = 1 + (Number(gstPercent) || 0) / 100
     const byProp: Record<string, {
       plans: ServicePlan[]; upcoming: Job[]; openQuotes: Quote[]; outstanding: number; lastServiceDate: string | null
     }> = {}
@@ -519,11 +529,11 @@ export default function CustomerDetailPage() {
     for (const inv of invoices) {
       if (!inv.property_id || !byProp[inv.property_id]) continue
       if (inv.status === 'draft' || inv.status === 'cancelled') continue
-      const bal = Number(inv.amount || 0) * gstMult - (Number(inv.amount_paid) || 0)
+      const bal = invoiceBalance(inv, feeSettings).balance
       if (bal > 0.01) byProp[inv.property_id].outstanding += bal
     }
     return byProp
-  }, [properties, servicePlans, jobs, quotes, invoices, gstPercent])
+  }, [properties, servicePlans, jobs, quotes, invoices, feeSettings])
 
   // The customer-level totals, summed from the same per-property figures so the
   // header and the rows can never disagree.
@@ -568,11 +578,11 @@ export default function CustomerDetailPage() {
   // Collected = money actually received (ledger amount_paid, incl. partial payments);
   // Outstanding = remaining balance across issued invoices.
   const collectedRevenue = invoices.reduce((s, i) => s + (Number(i.amount_paid) || 0), 0)
-  // GST-inclusive + cancelled excluded — agrees with the Invoices page ledger math.
-  const custGstMult = 1 + (Number(gstPercent) || 0) / 100
+  // GST-inclusive + cancelled excluded — agrees with the Invoices page ledger math
+  // because it IS that math: invoiceBalance, not a re-derivation.
   const outstandingRevenue = invoices
     .filter(i => i.status !== 'draft' && i.status !== 'cancelled')
-    .reduce((s, i) => s + Math.max(0, Math.round((Number(i.amount || 0) * custGstMult - (Number(i.amount_paid) || 0)) * 100) / 100), 0)
+    .reduce((s, i) => s + Math.max(0, invoiceBalance(i, feeSettings).balance), 0)
   const avgJobValue = wonQuotes.length > 0 ? bookedRevenue / wonQuotes.length : 0
   // "Open" = still awaiting an answer — the SAME 'sent'/'draft' rule the per-property
   // roll-up uses below, applied customer-wide for the header answer strip.
@@ -619,8 +629,8 @@ export default function CustomerDetailPage() {
   for (const inv of invoices.filter(i => OPEN_INVOICE.has(i.status))) {
     const overdue = !!inv.due_date && inv.due_date < today
     // What's still OWED, not the invoice's face value — a partially paid invoice used
-    // to show its gross here. Same balance arithmetic as the per-property roll-up.
-    const remaining = Math.round((Number(inv.amount || 0) * custGstMult - (Number(inv.amount_paid) || 0)) * 100) / 100
+    // to show its gross here. Same balance engine as everywhere else: invoiceBalance.
+    const remaining = invoiceBalance(inv, feeSettings).balance
     // Deep-link straight to the focused invoice — landing on the unfiltered list
     // meant re-finding the invoice you just tapped.
     openItems.push({ key: `inv-${inv.id}`, icon: Receipt, label: `${overdue ? 'Overdue' : inv.status === 'partial' ? 'Partially paid' : 'Unpaid'} invoice ${inv.invoice_number}`, sub: `${formatCurrency(remaining)}${inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}`, href: `/dashboard/invoices?invoice=${encodeURIComponent(inv.invoice_number)}`, tone: overdue ? 'text-red-400' : 'text-amber-400' })
@@ -967,6 +977,204 @@ export default function CustomerDetailPage() {
         </CardBody>
       </Card>
 
+      {/* Properties — the ADDRESS, and the per-property Maps / Quote / Job actions.
+          It sat 18th of 19 cards, below a 440px conversation pane and two panels
+          prod data says nobody uses. This is where someone standing in a driveway
+          looks, so it belongs with the other daily-use cards, not after them. */}
+      {/* Properties */}
+      <Card>
+        <CardHeader className="flex items-center gap-2">
+          <MapPin className="w-4 h-4 text-accent-text" />
+          <h2 className="text-sm font-semibold text-ink">Properties</h2>
+          {properties.length > 0 && <span className="text-xs text-ink-faint tabular-nums">{properties.length}</span>}
+          {/* A customer could own a second house and there was no way to say so from
+              their profile — every properties.insert in the app was first-property-
+              only (new customer, CSV import, or implied by a quote's address). The
+              second address was reachable only by typing it into a quote. */}
+          <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setAddingProperty(true)}>
+            <Plus className="w-3.5 h-3.5" /> Add
+          </Button>
+        </CardHeader>
+        <CardBody className="space-y-3">
+          {/* The roll-up: what this customer's whole portfolio is doing, before the
+              per-address detail. Summed from the rows already on the page, so it
+              cannot disagree with the figures elsewhere on this profile. Hidden for
+              a one-property customer — "1 property · 1 active service" is just their
+              only property, restated. */}
+          {properties.length > 1 && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <RollupStat icon={Home} label="Properties" value={String(rollupTotals.properties)} />
+              <RollupStat icon={Repeat} label="Active services" value={String(rollupTotals.activeServices)} />
+              <RollupStat icon={CalendarClock} label="Upcoming visits" value={String(rollupTotals.upcoming)} />
+              <RollupStat icon={FileText} label="Open quotes" value={String(rollupTotals.openQuotes)} />
+              {rollupTotals.outstanding > 0.01 && (
+                <RollupStat icon={DollarSign} label="Outstanding" value={formatCurrency(rollupTotals.outstanding)} tone="text-amber-400" />
+              )}
+            </div>
+          )}
+          {addingProperty && (
+            <div className="rounded-xl border border-accent/30 bg-accent/[0.04] p-3">
+              {/* THE shared picker's inline-create, reused rather than a second address
+                  form: it calls ensurePropertyForCustomer, so an address added here and
+                  the same address typed into a quote resolve to ONE property. */}
+              <PropertySelect
+                properties={properties}
+                value=""
+                onChange={() => {}}
+                customerId={id}
+                onCreated={p => { setProperties(prev => [...prev, p]); setAddingProperty(false); toast.success(`${p.address} added.`) }}
+                label="Add a property"
+                hint="Search to check it isn’t already here, or add a new address."
+                autoFocus
+              />
+              <div className="flex justify-end pt-2">
+                <Button variant="ghost" size="sm" onClick={() => setAddingProperty(false)}>Done</Button>
+              </div>
+            </div>
+          )}
+          {properties.length === 0 && !addingProperty ? (
+            // Properties are created from the customer's address, so "none" almost
+            // always means "this customer has no address" — which is why they can't
+            // be scheduled, measured or priced. Say that, and offer the fix.
+            <InlineEmpty className="py-6">
+              No properties on file — so there’s no address to schedule, measure or price.
+              <button type="button" onClick={() => setAddingProperty(true)}
+                className="block mx-auto mt-1.5 text-xs font-medium text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                Add their address →
+              </button>
+            </InlineEmpty>
+          ) : properties.map(p => {
+            const jobCount = jobs.filter(j => j.property_id === p.id).length
+            // Lawn is the one measurement here that doesn't apply to every trade, so
+            // it renders when the business does lawn work OR when THIS property
+            // already holds a lawn size — never hide data someone entered. The rest
+            // (fence, mulch, rock, driveway, lot) are generic property facts, and are
+            // untouched.
+            //
+            // The `!= null` behind the gate is deliberately left as it was: a lawn
+            // business with lawn_sqft = 0 still gets today's "Lawn 0 ft²" chip. It's
+            // arguably noise, but it is EXISTING noise, and this change is not
+            // allowed to alter what a lawn business sees.
+            // fence/mulch/rock/driveway use `> 0`, not `!= null`: zero feet of
+            // fence is not a measurement, it is the absence of one, and "Fence
+            // 0 ft" would state a fact nobody established. (These four have no
+            // writer anywhere in the app and are 0/62 populated in production —
+            // so this changes nothing on screen today. It makes the rule true in
+            // the code rather than true by accident, which is what stops the next
+            // person wiring a writer that defaults them to 0.)
+            const measures = [
+              showLawnFieldFor(shape, p.lawn_sqft) && p.lawn_sqft != null && `Lawn ${Number(p.lawn_sqft).toLocaleString()} ft²`,
+              Number(p.fence_length) > 0 && `Fence ${Number(p.fence_length).toLocaleString()} ft`,
+              Number(p.mulch_area) > 0 && `Mulch ${Number(p.mulch_area).toLocaleString()} ft²`,
+              Number(p.rock_area) > 0 && `Rock ${Number(p.rock_area).toLocaleString()} ft²`,
+              Number(p.driveway_area) > 0 && `Driveway ${Number(p.driveway_area).toLocaleString()} ft²`,
+              p.lot_size != null && `Lot ${Number(p.lot_size).toLocaleString()} ft²`,
+            ].filter(Boolean) as string[]
+            const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.address)}`
+            return (
+              <div key={p.id} className="rounded-xl border border-border p-3">
+                <div className="flex items-start justify-between gap-2">
+                  {/* Into this address's own history — for a customer with more than
+                      one property, the profile timeline mixes them together. */}
+                  <Link href={`/dashboard/properties/${p.id}`}
+                    className="text-sm font-medium text-ink hover:text-accent-text transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                    {/* propertyLabel adds the city when the street alone is ambiguous —
+                        two "100 Main St" in different towns must not read as one. */}
+                    {propertyLabel(p, { primaryTag: true })}
+                  </Link>
+                  <span className="text-xs text-ink-muted shrink-0">{jobCount} job{jobCount !== 1 ? 's' : ''}</span>
+                </div>
+                {/* What this ADDRESS is doing — the roll-up's per-property half. A job
+                    count alone says how busy it's been, never whether it's earning,
+                    booked, or owing. Each figure is omitted when it's zero: a quiet
+                    property should read as quiet, not as a row of noughts. */}
+                {(() => {
+                  const r = propRollup[p.id]
+                  if (!r) return null
+                  const facts = [
+                    r.plans.length > 0 && { icon: Repeat, text: r.plans.map(pl => pl.cadenceLabel).join(', '), tone: 'text-accent-text' },
+                    r.upcoming.length > 0 && { icon: CalendarClock, text: `Next ${formatDate(r.upcoming[0].scheduled_date)}${r.upcoming.length > 1 ? ` · ${r.upcoming.length} booked` : ''}`, tone: 'text-ink-muted' },
+                    r.openQuotes.length > 0 && { icon: FileText, text: `${r.openQuotes.length} open quote${r.openQuotes.length !== 1 ? 's' : ''}`, tone: 'text-ink-muted' },
+                    r.outstanding > 0.01 && { icon: DollarSign, text: `${formatCurrency(r.outstanding)} outstanding`, tone: 'text-amber-400' },
+                    !r.plans.length && !r.upcoming.length && r.lastServiceDate && { icon: History, text: `Last serviced ${formatDate(r.lastServiceDate)}`, tone: 'text-ink-faint' },
+                  ].filter(Boolean) as { icon: typeof Repeat; text: string; tone: string }[]
+                  if (!facts.length) return null
+                  return (
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
+                      {facts.map(f => (
+                        <span key={f.text} className={`text-[11px] inline-flex items-center gap-1 ${f.tone}`}>
+                          <f.icon className="w-3 h-3 shrink-0" /> {f.text}
+                        </span>
+                      ))}
+                    </div>
+                  )
+                })()}
+                {measures.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {measures.map(m => <span key={m} className="text-[11px] text-ink-muted bg-surface border border-border rounded px-1.5 py-0.5">{m}</span>)}
+                  </div>
+                )}
+                <p className="text-[11px] text-ink-faint mt-2">
+                  {p.lat != null && p.lng != null ? `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}` : 'No coordinates yet'}
+                </p>
+                {/* Property actions — one tap each (2-up on phones for bigger targets).
+                    Measure traces a LAWN boundary and writes lawn_sqft, so it's the one
+                    action here that a plumber has no use for. It stays for anyone who
+                    does lawn work, and for any property already measured (re-measure
+                    must never become unreachable). The grid drops to 3 columns rather
+                    than leaving a hole where it was. */}
+                {(() => { const showMeasure = showLawnFieldFor(shape, p.lawn_sqft); return (
+                <div className={`grid grid-cols-2 gap-1.5 mt-3 ${showMeasure ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>
+                  <a href={mapsUrl} target="_blank" rel="noopener noreferrer" title="Open in Google Maps" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
+                    <ExternalLink className="w-3.5 h-3.5" /> Maps
+                  </a>
+                  <Link href={`/dashboard/quotes/new?customer=${customer.id}&property=${p.id}`} title="New quote" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
+                    <FilePlus className="w-3.5 h-3.5" /> Quote
+                  </Link>
+                  <Link href={`/dashboard/schedule?customer=${customer.id}&property=${p.id}`} title="Schedule job" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
+                    <CalendarPlus className="w-3.5 h-3.5" /> Job
+                  </Link>
+                  {showMeasure && (
+                    <Link href={`/dashboard/properties/measure?id=${p.id}`} title="Re-measure property" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
+                      <Ruler className="w-3.5 h-3.5" /> Measure
+                    </Link>
+                  )}
+                </div>
+                ) })()}
+
+                {/* Scheduling override for this property (falls back to the customer default) */}
+                <div className="mt-3 pt-3 border-t border-border">
+                  {editingPropPrefs === p.id ? (
+                    <div className="space-y-3">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint flex items-center gap-1.5">
+                        <CalendarClock className="w-3.5 h-3.5 text-accent-text" /> Scheduling override
+                      </p>
+                      <SchedulePrefsFields value={propPrefsDraft} onChange={setPropPrefsDraft} />
+                      <div className="flex items-center gap-2">
+                        <Button size="sm" onClick={() => savePropPrefs(p.id)} loading={savingPropPrefs}>Save override</Button>
+                        <Button size="sm" variant="ghost" onClick={() => setEditingPropPrefs(null)}>Cancel</Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button onClick={() => startEditPropPrefs(p)} className="w-full text-left flex items-center gap-1.5 text-[11px] text-ink-muted hover:text-ink transition-colors">
+                      <CalendarClock className="w-3.5 h-3.5 text-accent-text shrink-0" />
+                      <span className="min-w-0 truncate">
+                        {hasAnyPref(p)
+                          ? <>Override: {prefSummary(resolvePrefs(null, p))}</>
+                          : prefSummary(resolvePrefs(customer))
+                            ? <>Using customer default · {prefSummary(resolvePrefs(customer))}</>
+                            : 'Set a scheduling override'}
+                      </span>
+                      <Edit2 className="w-3 h-3 shrink-0 ml-auto opacity-50" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </CardBody>
+      </Card>
+
       {/* The comms cluster — health, AI brief, live thread, then consent + history.
           It follows the daily-use cards above: the phone-call answers (owed · notes ·
           schedule) must never sit below a 440px conversation pane. */}
@@ -989,7 +1197,8 @@ export default function CustomerDetailPage() {
       </Card>
 
       {/* Communication — consent + history */}
-      <CustomerComms customerId={customer.id} smsOptIn={!!customer.sms_opt_in} emailOptIn={!!customer.email_opt_in} />
+      <CustomerComms customerId={customer.id} smsOptIn={!!customer.sms_opt_in} emailOptIn={!!customer.email_opt_in}
+        onChange={patch => setCustomer({ ...customer, ...patch })} />
 
       {/* Review lifecycle — ask, then record the outcome (stops asking once done) */}
       <ReviewLifecycle customer={customer} onChange={patch => setCustomer({ ...customer, ...patch })} />
@@ -1026,207 +1235,12 @@ export default function CustomerDetailPage() {
       {/* Payment method + AutoPay (card-on-file for recurring customers) */}
       <PaymentMethodCard customer={customer} onCustomerChange={patch => setCustomer({ ...customer, ...patch })} />
 
-      <div className="grid lg:grid-cols-2 gap-6">
         {/* Timeline — the shared card over the shared engine (components/timeline).
             Keyed by customer: navigating profile→profile (via "Referred by") keeps
             this component mounted, and a search typed for one customer must not
             silently filter the next one's history. */}
         <TimelineCard key={id} events={allEvents} />
 
-        {/* Properties */}
-        <Card>
-          <CardHeader className="flex items-center gap-2">
-            <MapPin className="w-4 h-4 text-accent-text" />
-            <h2 className="text-sm font-semibold text-ink">Properties</h2>
-            {properties.length > 0 && <span className="text-xs text-ink-faint tabular-nums">{properties.length}</span>}
-            {/* A customer could own a second house and there was no way to say so from
-                their profile — every properties.insert in the app was first-property-
-                only (new customer, CSV import, or implied by a quote's address). The
-                second address was reachable only by typing it into a quote. */}
-            <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setAddingProperty(true)}>
-              <Plus className="w-3.5 h-3.5" /> Add
-            </Button>
-          </CardHeader>
-          <CardBody className="space-y-3">
-            {/* The roll-up: what this customer's whole portfolio is doing, before the
-                per-address detail. Summed from the rows already on the page, so it
-                cannot disagree with the figures elsewhere on this profile. Hidden for
-                a one-property customer — "1 property · 1 active service" is just their
-                only property, restated. */}
-            {properties.length > 1 && (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                <RollupStat icon={Home} label="Properties" value={String(rollupTotals.properties)} />
-                <RollupStat icon={Repeat} label="Active services" value={String(rollupTotals.activeServices)} />
-                <RollupStat icon={CalendarClock} label="Upcoming visits" value={String(rollupTotals.upcoming)} />
-                <RollupStat icon={FileText} label="Open quotes" value={String(rollupTotals.openQuotes)} />
-                {rollupTotals.outstanding > 0.01 && (
-                  <RollupStat icon={DollarSign} label="Outstanding" value={formatCurrency(rollupTotals.outstanding)} tone="text-amber-400" />
-                )}
-              </div>
-            )}
-            {addingProperty && (
-              <div className="rounded-xl border border-accent/30 bg-accent/[0.04] p-3">
-                {/* THE shared picker's inline-create, reused rather than a second address
-                    form: it calls ensurePropertyForCustomer, so an address added here and
-                    the same address typed into a quote resolve to ONE property. */}
-                <PropertySelect
-                  properties={properties}
-                  value=""
-                  onChange={() => {}}
-                  customerId={id}
-                  onCreated={p => { setProperties(prev => [...prev, p]); setAddingProperty(false); toast.success(`${p.address} added.`) }}
-                  label="Add a property"
-                  hint="Search to check it isn’t already here, or add a new address."
-                  autoFocus
-                />
-                <div className="flex justify-end pt-2">
-                  <Button variant="ghost" size="sm" onClick={() => setAddingProperty(false)}>Done</Button>
-                </div>
-              </div>
-            )}
-            {properties.length === 0 && !addingProperty ? (
-              // Properties are created from the customer's address, so "none" almost
-              // always means "this customer has no address" — which is why they can't
-              // be scheduled, measured or priced. Say that, and offer the fix.
-              <InlineEmpty className="py-6">
-                No properties on file — so there’s no address to schedule, measure or price.
-                <button type="button" onClick={() => setAddingProperty(true)}
-                  className="block mx-auto mt-1.5 text-xs font-medium text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                  Add their address →
-                </button>
-              </InlineEmpty>
-            ) : properties.map(p => {
-              const jobCount = jobs.filter(j => j.property_id === p.id).length
-              // Lawn is the one measurement here that doesn't apply to every trade, so
-              // it renders when the business does lawn work OR when THIS property
-              // already holds a lawn size — never hide data someone entered. The rest
-              // (fence, mulch, rock, driveway, lot) are generic property facts, and are
-              // untouched.
-              //
-              // The `!= null` behind the gate is deliberately left as it was: a lawn
-              // business with lawn_sqft = 0 still gets today's "Lawn 0 ft²" chip. It's
-              // arguably noise, but it is EXISTING noise, and this change is not
-              // allowed to alter what a lawn business sees.
-              // fence/mulch/rock/driveway use `> 0`, not `!= null`: zero feet of
-              // fence is not a measurement, it is the absence of one, and "Fence
-              // 0 ft" would state a fact nobody established. (These four have no
-              // writer anywhere in the app and are 0/62 populated in production —
-              // so this changes nothing on screen today. It makes the rule true in
-              // the code rather than true by accident, which is what stops the next
-              // person wiring a writer that defaults them to 0.)
-              const measures = [
-                showLawnFieldFor(shape, p.lawn_sqft) && p.lawn_sqft != null && `Lawn ${Number(p.lawn_sqft).toLocaleString()} ft²`,
-                Number(p.fence_length) > 0 && `Fence ${Number(p.fence_length).toLocaleString()} ft`,
-                Number(p.mulch_area) > 0 && `Mulch ${Number(p.mulch_area).toLocaleString()} ft²`,
-                Number(p.rock_area) > 0 && `Rock ${Number(p.rock_area).toLocaleString()} ft²`,
-                Number(p.driveway_area) > 0 && `Driveway ${Number(p.driveway_area).toLocaleString()} ft²`,
-                p.lot_size != null && `Lot ${Number(p.lot_size).toLocaleString()} ft²`,
-              ].filter(Boolean) as string[]
-              const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.address)}`
-              return (
-                <div key={p.id} className="rounded-xl border border-border p-3">
-                  <div className="flex items-start justify-between gap-2">
-                    {/* Into this address's own history — for a customer with more than
-                        one property, the profile timeline mixes them together. */}
-                    <Link href={`/dashboard/properties/${p.id}`}
-                      className="text-sm font-medium text-ink hover:text-accent-text transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                      {/* propertyLabel adds the city when the street alone is ambiguous —
-                          two "100 Main St" in different towns must not read as one. */}
-                      {propertyLabel(p, { primaryTag: true })}
-                    </Link>
-                    <span className="text-xs text-ink-muted shrink-0">{jobCount} job{jobCount !== 1 ? 's' : ''}</span>
-                  </div>
-                  {/* What this ADDRESS is doing — the roll-up's per-property half. A job
-                      count alone says how busy it's been, never whether it's earning,
-                      booked, or owing. Each figure is omitted when it's zero: a quiet
-                      property should read as quiet, not as a row of noughts. */}
-                  {(() => {
-                    const r = propRollup[p.id]
-                    if (!r) return null
-                    const facts = [
-                      r.plans.length > 0 && { icon: Repeat, text: r.plans.map(pl => pl.cadenceLabel).join(', '), tone: 'text-accent-text' },
-                      r.upcoming.length > 0 && { icon: CalendarClock, text: `Next ${formatDate(r.upcoming[0].scheduled_date)}${r.upcoming.length > 1 ? ` · ${r.upcoming.length} booked` : ''}`, tone: 'text-ink-muted' },
-                      r.openQuotes.length > 0 && { icon: FileText, text: `${r.openQuotes.length} open quote${r.openQuotes.length !== 1 ? 's' : ''}`, tone: 'text-ink-muted' },
-                      r.outstanding > 0.01 && { icon: DollarSign, text: `${formatCurrency(r.outstanding)} outstanding`, tone: 'text-amber-400' },
-                      !r.plans.length && !r.upcoming.length && r.lastServiceDate && { icon: History, text: `Last serviced ${formatDate(r.lastServiceDate)}`, tone: 'text-ink-faint' },
-                    ].filter(Boolean) as { icon: typeof Repeat; text: string; tone: string }[]
-                    if (!facts.length) return null
-                    return (
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
-                        {facts.map(f => (
-                          <span key={f.text} className={`text-[11px] inline-flex items-center gap-1 ${f.tone}`}>
-                            <f.icon className="w-3 h-3 shrink-0" /> {f.text}
-                          </span>
-                        ))}
-                      </div>
-                    )
-                  })()}
-                  {measures.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mt-2">
-                      {measures.map(m => <span key={m} className="text-[11px] text-ink-muted bg-surface border border-border rounded px-1.5 py-0.5">{m}</span>)}
-                    </div>
-                  )}
-                  <p className="text-[11px] text-ink-faint mt-2">
-                    {p.lat != null && p.lng != null ? `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}` : 'No coordinates yet'}
-                  </p>
-                  {/* Property actions — one tap each (2-up on phones for bigger targets).
-                      Measure traces a LAWN boundary and writes lawn_sqft, so it's the one
-                      action here that a plumber has no use for. It stays for anyone who
-                      does lawn work, and for any property already measured (re-measure
-                      must never become unreachable). The grid drops to 3 columns rather
-                      than leaving a hole where it was. */}
-                  {(() => { const showMeasure = showLawnFieldFor(shape, p.lawn_sqft); return (
-                  <div className={`grid grid-cols-2 gap-1.5 mt-3 ${showMeasure ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>
-                    <a href={mapsUrl} target="_blank" rel="noopener noreferrer" title="Open in Google Maps" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
-                      <ExternalLink className="w-3.5 h-3.5" /> Maps
-                    </a>
-                    <Link href={`/dashboard/quotes/new?customer=${customer.id}&property=${p.id}`} title="New quote" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
-                      <FilePlus className="w-3.5 h-3.5" /> Quote
-                    </Link>
-                    <Link href={`/dashboard/schedule?customer=${customer.id}&property=${p.id}`} title="Schedule job" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
-                      <CalendarPlus className="w-3.5 h-3.5" /> Job
-                    </Link>
-                    {showMeasure && (
-                      <Link href={`/dashboard/properties/measure?id=${p.id}`} title="Re-measure property" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
-                        <Ruler className="w-3.5 h-3.5" /> Measure
-                      </Link>
-                    )}
-                  </div>
-                  ) })()}
-
-                  {/* Scheduling override for this property (falls back to the customer default) */}
-                  <div className="mt-3 pt-3 border-t border-border">
-                    {editingPropPrefs === p.id ? (
-                      <div className="space-y-3">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint flex items-center gap-1.5">
-                          <CalendarClock className="w-3.5 h-3.5 text-accent-text" /> Scheduling override
-                        </p>
-                        <SchedulePrefsFields value={propPrefsDraft} onChange={setPropPrefsDraft} />
-                        <div className="flex items-center gap-2">
-                          <Button size="sm" onClick={() => savePropPrefs(p.id)} loading={savingPropPrefs}>Save override</Button>
-                          <Button size="sm" variant="ghost" onClick={() => setEditingPropPrefs(null)}>Cancel</Button>
-                        </div>
-                      </div>
-                    ) : (
-                      <button onClick={() => startEditPropPrefs(p)} className="w-full text-left flex items-center gap-1.5 text-[11px] text-ink-muted hover:text-ink transition-colors">
-                        <CalendarClock className="w-3.5 h-3.5 text-accent-text shrink-0" />
-                        <span className="min-w-0 truncate">
-                          {hasAnyPref(p)
-                            ? <>Override: {prefSummary(resolvePrefs(null, p))}</>
-                            : prefSummary(resolvePrefs(customer))
-                              ? <>Using customer default · {prefSummary(resolvePrefs(customer))}</>
-                              : 'Set a scheduling override'}
-                        </span>
-                        <Edit2 className="w-3 h-3 shrink-0 ml-auto opacity-50" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-          </CardBody>
-        </Card>
-      </div>
 
       {/* Referrals — advocates this customer brought in (with statuses + rewards) */}
       <ReferralPanel customer={customer} referrer={referrer} referredRevenue={referredRevenue} />
@@ -1237,6 +1251,11 @@ export default function CustomerDetailPage() {
           isEdit
           customers={allCustomers}
           autosaveKey={`customer:${customer.id}`}
+          // A draft older than the stored row is stale — never offer it. Without this
+          // baseline, a month-old abandoned draft is presented as "unsaved changes" over
+          // a record that has since been edited, and one tap on Restore silently reverts
+          // the newer name/email/phone/tags.
+          baselineUpdatedAt={customer.updated_at}
           defaultValues={{
             name: customer.name || '',
             email: customer.email || '',

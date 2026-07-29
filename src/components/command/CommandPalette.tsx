@@ -264,7 +264,13 @@ export function CommandPalette() {
 
       const pRows = (prop.data as { id: string; address: string | null; city: string | null; neighborhood: string | null; customer_id: string | null }[]) || []
       if (pRows.length) sections.push({ title: 'Properties', items: pRows.map(p => {
-        const to = p.customer_id ? `/dashboard/customers/${p.customer_id}` : '/dashboard/properties'
+        // Land on the PROPERTY you searched, the same way Quotes/Invoices/Payments land
+        // on their record. It used to jump to the customer, which for a landlord means
+        // searching "100 Main St" drops you on a profile listing all six addresses —
+        // re-hiding the one you just found. /properties/[id] is that address's own
+        // history and works even when the property has no customer (the old fallback
+        // went to the unsearchable list).
+        const to = `/dashboard/properties/${p.id}`
         const label = p.address || 'Property'
         const sub = [p.neighborhood, p.city].filter(Boolean).join(' · ') || undefined
         return { id: `p-${p.id}`, label, sub, icon: Home, run: () => { pushRecent({ to, label, sub, kind: 'property' }); go(to) } }

@@ -76,7 +76,7 @@ import {
   Radio, Users, UserMinus, MapIcon, LayoutGrid, ChevronLeft, ChevronRight, Scale, GripVertical,
   ChevronUp, ChevronDown, Wand2, ExternalLink, Truck, StickyNote, HardHat, Navigation, Clock,
   Printer, FileDown, CalendarDays, AlertTriangle, Keyboard, Phone, MessageSquare, Check,
-  Play, Copy, History, Activity, CheckCircle2, PlayCircle, Send, Loader2,
+  Play, Copy, History, Activity, CheckCircle2, PlayCircle, Send, Loader2, MoreHorizontal,
 } from 'lucide-react'
 
 function todayISO(): string {
@@ -1407,7 +1407,7 @@ export default function DispatchPage() {
           </div>
           {visibleLanes.length === 0 && (
             <InlineEmpty icon={Radio} className="py-8">
-              Nothing matches these filters. <button type="button" className="underline hover:text-ink" onClick={() => setFilter(EMPTY_DISPATCH_FILTER)}>Clear them</button>.
+              Nothing matches these filters. <button type="button" className="underline hover:text-ink rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => setFilter(EMPTY_DISPATCH_FILTER)}>Clear them</button>.
             </InlineEmpty>
           )}
           {hasActiveFilter(filter) && visibleLanes.length > 0 && visibleLanes.length < lanes.filter(l => (laneRoutes[l.laneId]?.seq.length ?? 0) > 0).length && (
@@ -1944,7 +1944,7 @@ const CrewLaneCard = memo(function CrewLaneCard({
                     <Menu width={220} align="end" ariaLabel="Visit actions" items={menuItems}>
                       {({ toggle, triggerProps }) => (
                         <button type="button" onClick={toggle} {...triggerProps} aria-label="Visit actions"
-                          className="shrink-0 text-ink-faint hover:text-ink rounded px-1.5 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">⋯</button>
+                          className="shrink-0 text-ink-faint hover:text-ink rounded px-1.5 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><MoreHorizontal className="w-4 h-4" /></button>
                       )}
                     </Menu>
                   )}

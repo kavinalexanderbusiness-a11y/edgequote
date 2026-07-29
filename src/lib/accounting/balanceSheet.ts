@@ -2,6 +2,7 @@ import type {
   Payment, BusinessSettings, ExpenseWithRelations, FixedAsset, Liability, Invoice,
 } from '@/types'
 import { summarizeTransactions } from '@/lib/payments/analytics'
+import { invoiceBalance } from '@/lib/payments/ledger'
 import { isUnpaid, isOwnerDraw } from '@/lib/accounting/expenses'
 import { profitAndLoss, isGstRegistrant, expenseCost } from '@/lib/accounting/report'
 import { gstReturn, type GstInput } from '@/lib/accounting/gst'
@@ -151,12 +152,21 @@ export interface BalanceSheetInput {
 export function accountsReceivable(
   invoices: BalanceSheetInput['invoices'],
   asOf: string,
+  settings: BusinessSettings | null | undefined,
 ): number {
   return round2(
     invoices
       .filter(i => i.status !== 'draft' && i.status !== 'cancelled')
       .filter(i => !i.issued_date || i.issued_date <= asOf)
-      .reduce((s, i) => s + Math.max(0, (Number(i.amount) || 0) - (Number(i.amount_paid) || 0)), 0),
+      // The balance the customer actually owes — GST-inclusive and discount-applied —
+      // through the ONE ledger engine every other surface reads (invoices page,
+      // customer page, and the GST return's `outstanding` computed right beside this
+      // figure in salesTaxOwingAsAt). Hand-rolling `amount − amount_paid` mixed an
+      // ex-GST subtotal (`amount`) with a GST-inclusive paid figure (`amount_paid`):
+      // for a registrant it understated A/R by the GST on every unpaid invoice, made
+      // the balance sheet disagree with itself, and broke the very Assets =
+      // Liabilities + Equity identity this statement exists to be. Identity at 0%.
+      .reduce((s, i) => s + Math.max(0, invoiceBalance(i, settings).balance), 0),
   )
 }
 
@@ -217,7 +227,7 @@ export function balanceSheet(input: BalanceSheetInput): BalanceSheet {
   if (cash == null) {
     gaps.push('No opening bank balance recorded, so cash on hand can\'t be worked out — the ledger knows every movement since it started, but not what was in the bank before that.')
   }
-  const ar = accountsReceivable(input.invoices, asOf)
+  const ar = accountsReceivable(input.invoices, asOf, input.settings)
   const register = assetRegister(input.fixedAssets, asOf)
   const inventory = round2(input.inventoryValue || 0)
 

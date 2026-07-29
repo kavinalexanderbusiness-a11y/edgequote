@@ -30,13 +30,18 @@ export function CommsHealth({ customer, onChange }: {
 
   type W = { key: string; icon: typeof Mail; text: string; add?: 'email' | 'phone' }
   const warnings: W[] = []
-  if (emailOptIn && !hasEmail) warnings.push({ key: 'email-no-addr', icon: Mail, text: 'Email opt-in is on, but no email address is saved.', add: 'email' })
-  if (smsOptIn && !hasPhone) warnings.push({ key: 'sms-no-phone', icon: Phone, text: 'SMS opt-in is on, but no phone number is saved.', add: 'phone' })
+  // "No way to reach them at all" SUBSUMES the per-channel mismatches, and 35 of 88
+  // customers are in exactly that state — they were being shown two stacked warnings
+  // with two identical "Add phone" buttons that did the same thing. Say the whole truth
+  // once; the mismatch lines are for when the OTHER channel still works.
+  const noContact = !hasEmail && !hasPhone
+  if (!noContact && emailOptIn && !hasEmail) warnings.push({ key: 'email-no-addr', icon: Mail, text: 'Email opt-in is on, but no email address is saved.', add: 'email' })
+  if (!noContact && smsOptIn && !hasPhone) warnings.push({ key: 'sms-no-phone', icon: Phone, text: 'SMS opt-in is on, but no phone number is saved.', add: 'phone' })
   // The worst case was the only one with no way out: the two milder warnings above
   // each offered an inline fix, while "we cannot reach this person at all" offered
   // a sentence. It asks for a phone for the same reason describeSkip does — SMS is
   // the channel that reaches this audience, and one ask beats a choice.
-  if (!hasEmail && !hasPhone) warnings.push({ key: 'no-contact', icon: AlertTriangle, text: 'No phone or email on file — nothing can reach this customer, automatic or not.', add: 'phone' })
+  if (noContact) warnings.push({ key: 'no-contact', icon: AlertTriangle, text: 'No phone or email on file — nothing can reach this customer, automatic or not.', add: 'phone' })
   else if (!emailOptIn && !smsOptIn) warnings.push({ key: 'both-off', icon: AlertTriangle, text: 'Both SMS and email are off — automatic messages won’t be sent to this customer.' })
 
   if (warnings.length === 0) return null

@@ -5,7 +5,7 @@ import { useListShortcuts } from '@/hooks/useListShortcuts'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { hoverIntent } from '@/lib/prefetch'
-import { Quote, QuoteStatus } from '@/types'
+import { Quote, QuoteService, QuoteStatus } from '@/types'
 import { formatCurrency, formatDate, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { needsFollowUp, daysSince, compareFollowUp, chaseBlockedReason } from '@/lib/followup'
 import type { ReachCustomer } from '@/lib/comms/reach'
@@ -202,9 +202,22 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
     setBusyKey('duplicate')
     const { data: qnums } = await supabase.from('quotes').select('quote_number').eq('user_id', user.id)
     let next = maxNumericSuffix(((qnums as { quote_number: string }[]) || []).map(n => n.quote_number)) + 1
-    let created = 0
+    // The multi-service breakdown, fetched up front for every selected quote.
+    // Bulk Duplicate used to copy only the quotes row — the copy's TOTAL was
+    // right (initial_price caches the summed net) but its lines were gone, so
+    // the duplicate's PDF collapsed a multi-service quote to one opaque number
+    // and every material lost its kind. One query, grouped client-side.
+    const ids = sel.selectedItems.map(q => q.id)
+    const { data: lineRows } = await supabase.from('quote_services')
+      .select('*').in('quote_id', ids).order('sort_order')
+    const linesByQuote = new Map<string, QuoteService[]>()
+    for (const r of (lineRows as QuoteService[]) || []) {
+      const list = linesByQuote.get(r.quote_id) || []
+      list.push(r); linesByQuote.set(r.quote_id, list)
+    }
+    let created = 0, lineFailures = 0
     for (const q of sel.selectedItems) {
-      const { error } = await supabase.from('quotes').insert({
+      const { data: dup, error } = await supabase.from('quotes').insert({
         quote_number: generateQuoteNumber(next), user_id: user.id, status: 'draft', issued_date: localTodayISO(),
         customer_id: q.customer_id, customer_name: q.customer_name, address: q.address,
         service_type: q.service_type, service_template_id: q.service_template_id,
@@ -218,11 +231,33 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
         rate: q.rate, travel_fee: q.travel_fee, property_id: q.property_id,
         measured_sqft: q.measured_sqft, suggested_price: q.suggested_price, travel_distance_km: q.travel_distance_km,
         pricing_confidence: q.pricing_confidence,
-      })
-      if (!error) { created++; next++ }
+        // Section measurements ride along exactly as single-quote Duplicate copies
+        // them — dropping them here silently downgraded the copy's analysis.
+        front_lawn_sqft: q.front_lawn_sqft, back_lawn_sqft: q.back_lawn_sqft,
+        left_side_sqft: q.left_side_sqft, right_side_sqft: q.right_side_sqft,
+        boulevard_sqft: q.boulevard_sqft, other_sqft: q.other_sqft,
+      }).select('id').single()
+      if (!error && dup) {
+        created++; next++
+        const src = linesByQuote.get(q.id)
+        if (src?.length) {
+          const { error: lineErr } = await supabase.from('quote_services').insert(src.map(s => ({
+            user_id: user.id, quote_id: (dup as { id: string }).id, sort_order: s.sort_order,
+            service_type: s.service_type, service_template_id: s.service_template_id,
+            quantity: s.quantity, unit: s.unit, unit_price: s.unit_price,
+            est_minutes: s.est_minutes, discount_type: s.discount_type,
+            discount_value: s.discount_value, notes: s.notes,
+            // kind is what makes a material a material — same rule as every other
+            // path that re-inserts these rows.
+            kind: s.kind ?? 'service',
+          })))
+          if (lineErr) lineFailures++
+        }
+      }
     }
     setBusyKey(null); sel.clear(); router.refresh()
-    toast.success(`Duplicated ${created} quote${created !== 1 ? 's' : ''} as drafts.`)
+    if (lineFailures) toast.error(`Duplicated ${created} quote${created !== 1 ? 's' : ''}, but ${lineFailures} lost their service lines — open those copies and re-add them.`)
+    else toast.success(`Duplicated ${created} quote${created !== 1 ? 's' : ''} as drafts.`)
   }
 
   function bulkExport() {

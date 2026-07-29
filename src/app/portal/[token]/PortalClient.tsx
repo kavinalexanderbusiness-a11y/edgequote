@@ -6,6 +6,8 @@ import { createClient } from '@/lib/supabase/client'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { ConfirmHost } from '@/components/ui/ConfirmHost'
 import { cn, formatCurrency, localTodayISO } from '@/lib/utils'
+import { displayQuoteStatus } from '@/lib/quoteStatus'
+import type { QuoteStatus } from '@/types'
 import { renderPortalInvoiceBlob, renderPortalQuoteBlob } from '@/lib/portalPdf'
 import {
   buildPortalView, needsContactMethod, normalizePortal, parsePortalDeepLink, primaryPortalAction, tabNavTarget,
@@ -183,6 +185,19 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     // approve an amount without showing it, and always say that approving isn't
     // paying (the thing they're most afraid of when they tap).
     const q = data?.quotes.find(x => x.id === qid)
+    // Expiry is judged AT CLICK TIME, not at page load. The render path already
+    // labels an expired quote via the shared engine — but a portal tab left open
+    // overnight (or for a week) still shows yesterday's button, and this handler
+    // used to call the RPC regardless: a lapsed price could be accepted from a
+    // stale tab. valid_until in the loaded payload is still the truth (expiry is
+    // the DATE passing, not the data changing), so re-running the one shared
+    // engine against TODAY closes the gap without touching any RPC.
+    if (q && displayQuoteStatus({ status: q.status as QuoteStatus, valid_until: q.valid_until }, localTodayISO()) === 'expired') {
+      setActionError('This quote has expired, so it can no longer be approved from here — message us below and we’ll refresh the price for you.')
+      // Re-derive the view so the button and label catch up with today.
+      setData(d => d ? { ...d } : d)
+      return
+    }
     const svc = (q?.service_type || '').trim()
     const amount = Number(q?.total) || 0
     const plan = q ? ([

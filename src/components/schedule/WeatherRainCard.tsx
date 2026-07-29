@@ -23,6 +23,9 @@ interface Props {
   onDisableAndOptimize: () => void
   onDisableOnly: () => void
   onOptimizeOnly: () => void
+  // Opens the Weather hub pre-targeted to this day so the owner can move the work AND
+  // text the affected customers. The one-tap buttons above move jobs silently.
+  onMoveAndNotify?: () => void
   onLater: () => void
   onDismissSummary: () => void
 }
@@ -108,6 +111,15 @@ export function WeatherRainCard(props: Props) {
         <Button size="sm" variant="secondary" onClick={props.onOptimizeOnly} disabled={busy}>
           <Wand2 className="w-3.5 h-3.5" /> Auto-optimize only
         </Button>
+        {props.onMoveAndNotify && (
+          <button
+            type="button"
+            onClick={props.onMoveAndNotify}
+            disabled={busy}
+            className="text-xs font-medium text-sky-300 hover:text-sky-200 inline-flex items-center gap-1 disabled:opacity-50 disabled:pointer-events-none">
+            Move &amp; notify customers <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
     </div>
   )

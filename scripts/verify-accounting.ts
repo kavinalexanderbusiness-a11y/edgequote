@@ -697,6 +697,33 @@ console.log('\nGST return — ACCRUAL (owed when invoiced), which is not the P&L
   eq('...claims no ITCs', nr.inputTaxCredits, 0)
   eq('...owes nothing', nr.netTax, 0)
   eq('...but still sees the sales', nr.sales, 1000)
+
+  // ── The balance sheet's A/R is the SAME balance every other surface shows ────
+  // Regression pin. A/R once hand-rolled `amount − amount_paid`, subtracting a
+  // GST-inclusive paid figure from an ex-GST subtotal — mixed units. For a
+  // registrant that understated A/R by the GST on every unpaid invoice and made the
+  // balance sheet disagree with the GST return computed right beside it (and broke
+  // the Assets = Liabilities + Equity identity the statement exists to be). A/R now
+  // runs through invoiceBalance, like the invoices page, the customer page, and the
+  // return's own `outstanding`. Identity at 0%; this is where it used to diverge.
+  const bsReg = balanceSheet({
+    asOf: '2026-07-31', todayISO: '2026-07-31', settings: REG5,
+    payments: [], expenses: [], fixedAssets: [], liabilities: [],
+    invoices: [inv({})], inventoryValue: 0,
+  })
+  eq('A/R is GST-inclusive (net 1000 @ 5% = 1050), not the ex-GST subtotal', bsReg.accountsReceivable, 1050)
+  check('...so A/R is NOT the raw amount − amount_paid', bsReg.accountsReceivable !== 1000)
+  eq('...and ties EXACTLY to the GST return outstanding beside it',
+    bsReg.accountsReceivable,
+    gstReturn({ invoices: [inv({})], expenses: [], settings: REG5, period: P }).outstanding)
+
+  // Partial payment: total 1050, paid 500 → still owed 550, never the ex-GST 500.
+  const bsPartial = balanceSheet({
+    asOf: '2026-07-31', todayISO: '2026-07-31', settings: REG5,
+    payments: [], expenses: [], fixedAssets: [], liabilities: [],
+    invoices: [inv({ amount_paid: 500 })], inventoryValue: 0,
+  })
+  eq('A/R under partial payment = total − paid = 1050 − 500', bsPartial.accountsReceivable, 550)
 }
 
 // ── 18. EXPORTS read the engine — they never re-derive ───────────────────────

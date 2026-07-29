@@ -20,7 +20,7 @@ import { Textarea } from '@/components/ui/Textarea'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { getPropertyContext, type PropertyIntelligence } from '@/lib/ai/propertyContext'
 import { toast } from '@/lib/toast'
-import { Home, Ruler, FileText, User, MapPin, Edit2, StickyNote, Sparkles } from 'lucide-react'
+import { Home, Ruler, FileText, User, MapPin, Edit2, StickyNote, Sparkles, CalendarPlus } from 'lucide-react'
 
 // The history of ONE address. The properties list already shows what a property IS
 // (health, plan, performance, pricing, latest measurement) — this shows what
@@ -300,8 +300,11 @@ export default function PropertyDetailPage() {
         </CardBody>
       </Card>
 
-      {/* Quick actions live in the timeline header — the two things you reach for
-          from a property's history, using the same links as the properties list. */}
+      {/* Quick actions live in the timeline header — the things you reach for from a
+          property's history, using the SAME deep links the customer profile's per-
+          property cards use (?customer&property), so the target opens pre-scoped to
+          THIS address, not the customer's primary. Quote and Schedule need a customer
+          (a quote/visit is billed to someone); Measure is about the address alone. */}
       <TimelineCard
         key={id}
         events={events}
@@ -309,16 +312,26 @@ export default function PropertyDetailPage() {
         emptyText="Nothing has happened at this address yet."
         actions={
           <>
-            <Link href={`/dashboard/properties/measure?id=${property.id}`}
-              className="text-[11px] font-medium px-2 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong transition-colors inline-flex items-center gap-1">
-              <Ruler className="w-3 h-3" /> Measure
-            </Link>
             {property.customer_id && (
               <Link href={`/dashboard/quotes/new?customer=${property.customer_id}&property=${property.id}`}
                 className="text-[11px] font-medium px-2 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong transition-colors inline-flex items-center gap-1">
                 <FileText className="w-3 h-3" /> Quote
               </Link>
             )}
+            {property.customer_id && (
+              // The gap this closes: you could measure and quote a property here, but to
+              // book a visit for it you had to leave for the customer profile and re-pick
+              // the address. The schedule route already pre-fills the property from
+              // ?property= (the profile's own Schedule link proves it).
+              <Link href={`/dashboard/schedule?customer=${property.customer_id}&property=${property.id}`}
+                className="text-[11px] font-medium px-2 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong transition-colors inline-flex items-center gap-1">
+                <CalendarPlus className="w-3 h-3" /> Schedule
+              </Link>
+            )}
+            <Link href={`/dashboard/properties/measure?id=${property.id}`}
+              className="text-[11px] font-medium px-2 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong transition-colors inline-flex items-center gap-1">
+              <Ruler className="w-3 h-3" /> Measure
+            </Link>
           </>
         }
       />
