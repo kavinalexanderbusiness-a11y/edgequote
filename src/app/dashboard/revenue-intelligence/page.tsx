@@ -155,10 +155,14 @@ export default function RevenueIntelligencePage() {
       <div id="ltv-forecast" className="rounded-card border border-border bg-bg-secondary overflow-hidden scroll-mt-4">
         <button onClick={() => setShowForecast(s => !s)} aria-expanded={showForecast} className="w-full px-5 py-3.5 flex items-center justify-between text-left rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40">
           <span className="text-sm font-bold text-ink flex items-center gap-2"><Sparkles className="w-4 h-4 text-accent-text" /> Lifetime Value Forecast</span>
-          <span className="text-xs text-ink-muted">{showForecast ? 'Hide' : `Show top ${Math.min(12, ltvForecast.length)}`}</span>
+          <span className="text-xs text-ink-muted">{showForecast ? 'Hide' : ltvForecast.length === 0 ? 'Nothing to forecast yet' : `Show top ${Math.min(12, ltvForecast.length)}`}</span>
         </button>
         {showForecast && (
           <div className="divide-y divide-border border-t border-border">
+            {/* "Show top 0" over an empty bordered void was an invitation to nothing. */}
+            {ltvForecast.length === 0 && (
+              <p className="px-5 py-4 text-sm text-ink-muted">Forecasts appear once customers have completed jobs.</p>
+            )}
             {ltvForecast.slice(0, 12).map(f => (
               <div key={f.customerId} className="px-5 py-2.5 flex items-center gap-3">
                 <div className="min-w-0 flex-1">

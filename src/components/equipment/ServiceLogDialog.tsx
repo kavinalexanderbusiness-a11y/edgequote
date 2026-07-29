@@ -96,11 +96,16 @@ export function ServiceLogDialog({ open, userId, equipment, services, parts = []
     // If they serviced it at more hours than the machine records, move the meter
     // forward too — otherwise the next due-date would be computed from a stale
     // reading. (The trigger owns last_service_*; `hours` is the live meter.)
+    let meterStale = false
     if (loggedHours != null && loggedHours > Number(equipment.hours || 0)) {
-      await supabase.from('equipment').update({ hours: loggedHours }).eq('id', equipment.id)
+      const { error: meterErr } = await supabase.from('equipment').update({ hours: loggedHours }).eq('id', equipment.id)
+      if (meterErr) meterStale = true
     }
     setSaving(false)
-    toast.success(`${serviceKindLabel(v.kind)} logged for ${equipment.name}.`)
+    // Partial-outcome voice: the service row saved; a stale meter must be said,
+    // or the next due-date silently computes from the wrong hours.
+    if (meterStale) toast.error(`${serviceKindLabel(v.kind)} logged, but the hour meter didn’t update — edit ${equipment.name}'s hours by hand.`)
+    else toast.success(`${serviceKindLabel(v.kind)} logged for ${equipment.name}.`)
     setV(s => ({ ...s, cost: '', notes: '' }))
     onChanged()
   }

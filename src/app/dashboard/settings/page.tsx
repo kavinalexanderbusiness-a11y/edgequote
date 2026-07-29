@@ -272,10 +272,11 @@ export default function SettingsPage() {
   async function addTier() {
     const { data: { user } } = await supabase.auth.getUser()
     const nextOrder = (localTiers.length || 0) + 1
-    const { data } = await supabase.from('travel_fee_tiers')
+    const { data, error } = await supabase.from('travel_fee_tiers')
       .insert({ min_km: 0, max_km: null, fee: 0, is_custom: false, sort_order: nextOrder, user_id: user!.id })
       .select().single()
-    if (data) setLocalTiers(prev => [...prev, data])
+    if (error || !data) { toast.error('Could not add a travel fee tier: ' + (error?.message ?? 'please try again.')); return }
+    setLocalTiers(prev => [...prev, data])
   }
 
   // Per-row saving was removed from the UI — the sticky "Save settings" footer

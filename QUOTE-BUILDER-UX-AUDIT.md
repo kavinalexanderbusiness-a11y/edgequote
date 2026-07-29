@@ -648,3 +648,61 @@ corruption on edit" for the V2 hand-off.
   preserves them).
 - Scheduling an accepted recurring quote creates a single one-time visit; surfaces say done.
 - Editing an ACCEPTED quote warns nobody, and `accepted_price` is read nowhere.
+
+---
+---
+
+# Round 8 — the customer-facing four, and additional-services visibility (2026-07-28)
+
+## §26 · The four queued items from §25, now verified and fixed
+
+1. **PDF "Valid Until" now uses `quotes.valid_until`.** It computed `issued_date + 30`
+   unconditionally, so an EXTENDED quote's re-rendered PDF still printed the original lapse
+   date — the paper contradicted the portal about when the price stops standing. `issued + 30`
+   survives only as the fallback for a PDF rendered before first send stamps the real date
+   (the same 30-day default `markSentPatch` writes).
+2. **`show_travel_separately` is honoured end-to-end.** The PDF itemized travel whenever a fee
+   existed, ignoring the builder toggle whose label literally promises *"Travel rolled into
+   total on PDF"*. Rolled-in travel now folds into the first-visit line's displayed amount
+   (rows still sum to the grand total, which never changed); the travel row and travel
+   subtotal render only when the owner opted to show them. Surfaces audited: builder toggle →
+   owner detail (already honoured, verbally) → PDF (fixed) → invoice conversion (already
+   honoured — separate line only when flagged). **The portal cannot honour it:** the frozen
+   `get_portal_data` RPC does not return the column, so the portal always itemizes travel.
+   Documented as the one inconsistency, waiting on the RPC lane; amounts are correct either way.
+3. **The portal can no longer approve an expired quote from a stale tab.** The render path
+   labels expiry via the shared engine, but `accept()` called the RPC regardless — a tab left
+   open past midnight on the lapse date still showed yesterday's button. The handler now
+   re-runs `displayQuoteStatus` against TODAY at click time (valid_until in the loaded payload
+   is still the truth — expiry is the date passing, not the data changing), refuses with a
+   plain message, and re-derives the view. No RPC touched.
+4. **Duplicate is now a faithful copy on both paths.** Bulk Duplicate copied only the quotes
+   row — the copy's total was right but its `quote_services` were gone (multi-service PDFs
+   collapsed to one number, materials lost their kind) and the six section measurements were
+   dropped. It now fetches all selected quotes' lines in one query and copies them with
+   `kind`, plus the section fields — the same field set as single-quote Duplicate. Both paths
+   now also CHECK the line-copy insert and say so when it fails, instead of leaving a
+   plausible-looking copy with silently missing lines. Verified duplicated field-by-field:
+   customer/property links, service + template, all four prices, provenance (ADR-002:
+   verbatim, never re-stamped), overgrowth, both travel flags + fee + distance, notes,
+   hours/crew/rate, measurement + sections + confidence, every line with qty/unit/price/
+   discount/notes/kind. (Quotes have no attachments; photos live on jobs.)
+
+## §27 · Additional services — visibility from the fast path
+
+A parallel session (PR #67) landed the row-level fix this round planned: qty labels that
+follow the unit, unit-granular steps, and a live `qty × unit − discount = total` equation
+under each line. Kept theirs; added the piece still missing: **the fast path now says when
+the first-visit price isn't the whole first visit.** With extra lines present, a note under
+the Price field reads *"Plus $X in additional services & materials below — first visit total
+$Y"* and tapping it opens the section holding the money. Also: the quote detail page heading
+reads **"Services & materials"** when materials exist (mulch no longer files under labour),
+material rows are tagged on the detail page, and the PDF labels material lines `(materials)`
+and prints real units in the qty column (`6 yd³ × $55`, not `6 × $55`).
+
+## §28 · Still open after this round
+
+- Portal travel breakout (waits on the frozen RPC gaining `show_travel_separately`).
+- §24's unverified trio, unchanged.
+- From §25: scheduling an accepted recurring quote creates a one-time visit; editing an
+  ACCEPTED quote warns nobody. Both are lifecycle/product decisions, not presentation fixes.
