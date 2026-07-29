@@ -229,6 +229,11 @@ export function QuoteBuilder({
   const PLAN_FIELDS = ['weekly_price', 'biweekly_price', 'monthly_price']
   const TRAVEL_FIELDS = ['travel_fee', 'distance_km']
 
+  // Armed by a Save attempt on a $0 first-visit total (see submit below) — flips
+  // both save buttons to "Save anyway" behind a persistent explanatory note, and
+  // disarms the moment a price exists.
+  const [zeroTotalArmed, setZeroTotalArmed] = useState(false)
+
   const submit = handleSubmit(
     // The draft is the owner's only copy until the row exists. It used to be
     // cleared the moment onSubmit RETURNED — and both pages catch their own
@@ -237,7 +242,19 @@ export function QuoteBuilder({
     // then refresh, and a quote that took minutes to build is gone. Clear it only
     // on a save that actually happened. Same rule handleOpenPdf already applies
     // to marking a quote Sent.
-    async v => { if (await onSubmit(v) !== false) autosave.clear() },
+    async v => {
+      // Warn-never-block on a $0 first-visit total. Saving it is LEGAL (a
+      // weekly-only pitch deliberately has no first-visit price) — but it saves
+      // as a quote that Send/PDF/invoice will hard-block one screen later as
+      // "no price", and the only cheap moment to say so is while the pricing
+      // fields are still on screen. First tap: don't save — arm a PERSISTENT
+      // note above both save buttons and relabel them "Save anyway" (a toast
+      // alone would make Save silently do nothing, this file's own documented
+      // bug DNA). Second tap saves unchanged. Arming resets the moment a price
+      // exists, so a fixed quote is back to one-tap Save.
+      if (effectiveTotal <= 0 && !zeroTotalArmed) { setZeroTotalArmed(true); return }
+      if (await onSubmit(v) !== false) autosave.clear()
+    },
     // Save used to fail SILENTLY. `crew_size` is required and lives inside a
     // collapsed section, so clearing it meant tapping Save did visibly nothing:
     // react-hook-form blocked the submit and then tried to focus a field that
@@ -374,6 +391,8 @@ export function QuoteBuilder({
   // (`watchedServices` is declared at the top of the component — see the note there.)
   const extras = useMemo(() => sumServiceLines(watchedServices), [watchedServices])
   const effectiveTotal = initialPrice + extras.net + Number(travelFee || 0)
+  // A price arriving disarms the $0-save warning — Save is one tap again.
+  useEffect(() => { if (zeroTotalArmed && effectiveTotal > 0) setZeroTotalArmed(false) }, [zeroTotalArmed, effectiveTotal])
 
   // Which pricing STRUCTURE this service uses — the one seam that decides which
   // engine recommends and which fields an Accept fills (lawn cadences vs area
@@ -961,6 +980,16 @@ export function QuoteBuilder({
       )}
     </>
   )
+
+  // The persistent $0-save note + relabeled button — rendered beside BOTH save
+  // controls, never a toast (a toast fades, and the withheld first save would
+  // read as Save silently doing nothing — this file's own documented bug DNA).
+  const zeroSaveNote = zeroTotalArmed && effectiveTotal <= 0 ? (
+    <p className="text-xs text-amber-400 font-medium">
+      No first-visit price — this saves as a draft, but it can&rsquo;t be sent, PDF&rsquo;d or invoiced until it has one.
+    </p>
+  ) : null
+  const saveLabel = zeroTotalArmed && effectiveTotal <= 0 ? 'Save anyway' : isEdit ? 'Update quote' : 'Save quote'
 
   return (
     <form onSubmit={submit} className="pb-24 lg:pb-0">
@@ -1818,8 +1847,9 @@ export function QuoteBuilder({
             <CardBody className="space-y-3">
               {previewBreakdown}
               <div className="pt-2 space-y-2">
+                {zeroSaveNote}
                 <Button type="submit" className="w-full" size="lg" loading={isSubmitting}>
-                  {isEdit ? 'Update quote' : 'Save quote'}
+                  {saveLabel}
                 </Button>
                 <Button type="button" variant="ghost" className="w-full" onClick={onCancel ?? (() => router.back())}>Cancel</Button>
               </div>
@@ -1829,22 +1859,25 @@ export function QuoteBuilder({
       </div>
 
       {/* Mobile sticky save bar — always reachable without scrolling */}
-      <StickyActionBar fixed className="lg:hidden flex items-center justify-between gap-3">
-        {/* The total is the handle for the breakdown on mobile — the desktop
-            preview card is the only other place it exists, and it's lg-only. */}
-        <button type="button" onClick={() => setShowPreview(true)}
-          className="leading-tight min-w-0 text-left rounded-lg -m-1 p-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          aria-label="Show the price breakdown">
-          <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1">
-            First visit total <ChevronUp className="w-3 h-3" />
-          </p>
-          {/* Matches the breakdown it opens: an unpriced quote reads "—", not a
-              confident $0.00 sitting where the price goes. */}
-          <p className="text-xl font-bold text-accent-text leading-none tabular-nums">{effectiveTotal > 0 ? formatCurrency(effectiveTotal) : '—'}</p>
-        </button>
-        <div className="flex items-center gap-2 shrink-0">
-          <Button type="button" variant="ghost" size="sm" onClick={onCancel ?? (() => router.back())}>Cancel</Button>
-          <Button type="submit" size="lg" loading={isSubmitting}>{isEdit ? 'Update quote' : 'Save quote'}</Button>
+      <StickyActionBar fixed className="lg:hidden">
+        {zeroSaveNote && <div className="pb-2">{zeroSaveNote}</div>}
+        <div className="flex items-center justify-between gap-3">
+          {/* The total is the handle for the breakdown on mobile — the desktop
+              preview card is the only other place it exists, and it's lg-only. */}
+          <button type="button" onClick={() => setShowPreview(true)}
+            className="leading-tight min-w-0 text-left rounded-lg -m-1 p-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            aria-label="Show the price breakdown">
+            <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1">
+              First visit total <ChevronUp className="w-3 h-3" />
+            </p>
+            {/* Matches the breakdown it opens: an unpriced quote reads "—", not a
+                confident $0.00 sitting where the price goes. */}
+            <p className="text-xl font-bold text-accent-text leading-none tabular-nums">{effectiveTotal > 0 ? formatCurrency(effectiveTotal) : '—'}</p>
+          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <Button type="button" variant="ghost" size="sm" onClick={onCancel ?? (() => router.back())}>Cancel</Button>
+            <Button type="submit" size="lg" loading={isSubmitting}>{saveLabel}</Button>
+          </div>
         </div>
       </StickyActionBar>
 
