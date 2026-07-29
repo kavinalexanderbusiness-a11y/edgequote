@@ -65,11 +65,11 @@ export function PaymentsSection({ view, actions }: TabProps) {
   // Receipts (money movements) vs the customer-credit ledger — kept apart so totals
   // and history stay honest.
   const receipts = payments.filter(p => p.kind !== 'credit')
-  // Refunds are negative rows in the ledger. Netting them into "Total paid" makes the
-  // headline contradict the list directly beneath it — pay $500, get refunded $500, and
-  // the tile reads "Total paid $0.00" above a row showing the $500 you paid. Show what
-  // was paid, and name the refund separately.
-  const totalPaid = receipts.filter(p => Number(p.amount) > 0).reduce((s, p) => s + Number(p.amount), 0)
+  // Refunds are negative rows in the ledger, and they stay NAMED rather than netted:
+  // pay $500, get refunded $500, and a netted headline would read "$0.00 paid" above a
+  // row showing the $500 that was actually paid. (The "total paid" tile this rule was
+  // written for now lives once, in Billing's money strip above — the refund line it
+  // qualified is still here, on the history it describes.)
   const refunded = Math.abs(receipts.filter(p => Number(p.amount) < 0).reduce((s, p) => s + Number(p.amount), 0))
   const availableCredit = Math.round(payments.filter(p => p.kind === 'credit').reduce((s, p) => s + Number(p.amount || 0), 0) * 100) / 100
 
@@ -166,20 +166,21 @@ export function PaymentsSection({ view, actions }: TabProps) {
           <p className="text-lg font-bold text-accent-text tabular-nums">{formatCurrency(availableCredit)}</p>
         </div>
       )}
-      <div className="grid grid-cols-2 gap-3 animate-rise">
-        <div className="rounded-card border border-emerald-500/20 bg-emerald-500/[0.06] p-3.5">
-          <p className="text-[10px] uppercase tracking-[0.14em] text-emerald-400 font-semibold flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Total paid</p>
-          <p className="text-lg font-bold text-ink mt-1 tabular-nums">{formatCurrency(totalPaid)}</p>
-          {refunded > 0 && <p className="text-[11px] text-ink-faint mt-0.5 tabular-nums">{formatCurrency(refunded)} refunded</p>}
-        </div>
-        <div className="rounded-card border border-border bg-bg-secondary p-3.5">
-          {/* Same figure as the Home tile, so it must carry the same name — one number
-              with two labels ("Outstanding" here, "Amount due" there) reads as two
-              different numbers. "Outstanding" is also collections vocabulary. */}
-          <p className="text-[10px] uppercase tracking-[0.14em] text-ink-faint font-semibold flex items-center gap-1"><Receipt className="w-3 h-3" /> Amount due</p>
-          <p className={cn('text-lg font-bold mt-1 tabular-nums', outstanding > 0 ? 'text-amber-400' : 'text-emerald-400')}>{formatCurrency(outstanding)}</p>
-        </div>
-      </div>
+      {/* The "Total paid" / "Amount due" pair that stood here is GONE. Billing's money
+          strip sits directly above this section and already answers both, from the
+          canonical view.money — so the customer met four money tiles on one scroll,
+          two of them restating the other two under different names.
+          They were also computed differently: the strip's "You've paid" sums
+          invoices.amount_paid, while the tile summed positive ledger rows. Those agree
+          across every customer today (checked), but they diverge the moment an invoice
+          is marked paid without a ledger row — cash and e-transfer, which the
+          Ways-to-pay block right here actively encourages. Deleting the duplicate
+          removes the clutter now and the contradiction before it can happen.
+          A refund is NOT a duplicate — it's a fact only this section knows, so it moves
+          onto the payment history it describes. */}
+      {refunded > 0 && (
+        <p className="text-[11px] text-ink-faint tabular-nums">{formatCurrency(refunded)} refunded</p>
+      )}
 
       {/* The receipts below were an unheaded list hanging off the totals — name it, so
           it reads as a record you can rely on rather than a loose pile of rows. */}

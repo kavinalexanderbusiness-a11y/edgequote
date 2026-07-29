@@ -266,21 +266,26 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
           </div>
         </div>
         <div className="text-right shrink-0">
-          <p className="text-sm font-bold text-ink tabular-nums">{formatCurrency(d.amount)}</p>
-          {/* On a partially-paid invoice the bold number is the TOTAL, but the
-              customer owes the balance — so state what's still due plainly
-              (amber, legible) instead of leaving them to subtract or read it off
-              a Pay button that e-transfer/cash payers don't have. Quotes keep
-              their GST note via amountNote. */}
+          {/* On a partially-paid invoice the question is "what do I still owe?", so the
+              BALANCE takes the headline and the total steps down to the sub-line. It
+              used to be the other way round: the biggest, boldest, top-right number —
+              exactly where the eye lands for "how much?" — was the one figure that
+              wasn't the answer, with the real one at 11px beneath it. Same two values
+              from the same verify-pinned helper; only which one shouts changed. */}
           {(() => {
             const pay = invoicePaymentNote(d)
             if (pay) return (
-              <p className="text-[11px] mt-0.5 tabular-nums">
-                <span className="font-semibold text-amber-400">{pay.due} still due</span>
-                <span className="text-ink-faint"> · {pay.paid} paid</span>
-              </p>
+              <>
+                <p className="text-sm font-bold text-amber-400 tabular-nums">{pay.due}</p>
+                <p className="text-[11px] text-ink-faint mt-0.5 tabular-nums">still due · {formatCurrency(d.amount)} total, {pay.paid} paid</p>
+              </>
             )
-            return d.amountNote ? <p className="text-[11px] text-ink-faint mt-0.5">{d.amountNote}</p> : null
+            return (
+              <>
+                <p className="text-sm font-bold text-ink tabular-nums">{formatCurrency(d.amount)}</p>
+                {d.amountNote ? <p className="text-[11px] text-ink-faint mt-0.5">{d.amountNote}</p> : null}
+              </>
+            )
           })()}
           {/* How long the price stands, said while it still does — the row already
               explains a LAPSED price; the live one deserves its date too. Only on

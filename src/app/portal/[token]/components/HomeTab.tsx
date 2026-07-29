@@ -24,7 +24,7 @@ import { Button } from '@/components/ui/Button'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
 import {
-  contactSentKey, contactUpdateMessage, daysAwayLabel, liveStatusOf, visitToCalendarEvent, visitDay,
+  contactSentKey, contactUpdateMessage, daysAwayLabel, liveStatusOf, primaryPortalAction, visitToCalendarEvent, visitDay,
   type Derived, type PortalJob, type PortalView, type SubmitRequestFn,
 } from '../model'
 import { AddToCalendar, PortalSection, StatusPill, StatusStepper, Thumb, type TabProps } from './shared'
@@ -57,57 +57,108 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
   const lastPhotos = last ? (view.photosByJob.get(last.id) || []).slice(0, 3) : []
   const events = useRecentActivity(view)
 
+  // THE ranked next action — the one engine that knows overdue beats balance-due beats
+  // quote-awaiting. It already powers the cross-tab banner; Home ignored it and always
+  // put quotes first, so someone with a past-due invoice AND a new quote met two
+  // identical amber cards in the wrong order. Same engine, so the two surfaces can't
+  // disagree about what matters most.
+  const topAction = primaryPortalAction(view.docItems, view.money)
+  const payFirst = topAction?.kind === 'pay'
+  // When the ranked action names exactly ONE document, the real button belongs HERE.
+  // This is the surface a texted link lands on; making someone tap through to a list
+  // to find the thing they came to do is a tap we can spend for them. Several
+  // documents keeps the signpost — we can't guess which one they meant.
+  const oneQuoteId = topAction?.kind === 'approve' ? topAction.focusDocId : null
+  const oneInvoice = topAction?.kind === 'pay' && topAction.focusDocId
+    ? view.docItems.find(d => d.rawId === topAction.focusDocId) || null
+    : null
+  // Pay inline only when Stripe is actually on AND one invoice is named — an
+  // e-transfer/cash business has no checkout to send them to, and the Billing card
+  // (with the Ways-to-pay block beneath it) is the honest destination there.
+  const canPayInline = !!oneInvoice && actions.paymentsEnabled && oneInvoice.balance > 0
+
+  // "Outstanding" is collections vocabulary — it lands like an accusation on the one
+  // banner someone reads when they're already tense about money.
+  const dueBanner = view.money.due > 0 ? (
+    <div className="rounded-card border border-amber-500/30 bg-amber-500/[0.06] card-lift animate-rise stagger-2">
+      <button type="button" onClick={() => actions.navigate('billing', { docsCat: 'invoice' })}
+        className="w-full text-left p-4 rounded-card hover:border-amber-500/50 active:scale-[0.99] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0"><Receipt className="w-4 h-4" /></div>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-ink">
+                Amount due · <span className="tabular-nums text-amber-400">{formatCurrency(view.money.due)}</span>
+              </p>
+              <p className="text-xs text-ink-muted">
+                {view.money.owingCount === 1 ? '1 invoice' : `${view.money.owingCount} invoices`} — view and pay whenever you&rsquo;re ready
+              </p>
+            </div>
+          </div>
+          <span className="text-xs font-semibold text-amber-400 shrink-0">View →</span>
+        </div>
+      </button>
+      {canPayInline && oneInvoice && (
+        <div className="px-4 pb-4">
+          <Button className="w-full" onClick={() => actions.pay(oneInvoice.rawId)} loading={actions.payingId === oneInvoice.rawId}>
+            <CreditCard className="w-4 h-4" /> Pay {formatCurrency(oneInvoice.balance)}
+          </Button>
+          <p className="text-[11px] text-ink-faint mt-1.5 text-center">Secure checkout by Stripe — you&rsquo;ll confirm on the next screen.</p>
+        </div>
+      )}
+    </div>
+  ) : null
+
   return (
     <div className="space-y-3">
       {/* 1 · Who takes care of you — quiet trust card, not a pitch */}
       <TrustCard view={view} />
 
-      {/* 2 · Needs your attention — no-pressure framing on purpose */}
+      {/* 2 · Needs your attention — no-pressure framing on purpose. Rendered in the
+          ranked order above; each card keeps its whole-surface tap AND, when it names
+          one document, carries the real action so the decision happens right here. */}
+      {payFirst && dueBanner}
       {awaiting.length > 0 && (
-        <button type="button" onClick={() => actions.navigate('billing', { docsCat: 'quote' })}
-          className="w-full text-left rounded-card border border-amber-500/30 bg-amber-500/10 p-4 hover:border-amber-500/50 active:scale-[0.99] transition-colors card-lift animate-rise stagger-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-9 h-9 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0"><FileText className="w-4 h-4" /></div>
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-ink truncate">
-                  {awaiting.length === 1
-                    ? (awaiting[0].title !== 'Quote' ? `Your ${awaiting[0].title} quote is ready` : 'Your quote is ready')
-                    : `${awaiting.length} quotes are ready for your review`}
-                </p>
-                <p className="text-xs text-ink-muted">
-                  {awaiting.length === 1 ? `${formatCurrency(awaiting[0].amount)} — review and approve when you're ready` : `Review and approve when you're ready`}
-                </p>
-                {awaiting.length === 1 && (
-                  <p className="text-[11px] text-ink-faint mt-0.5">Valid until {formatDate(new Date(new Date(awaiting[0].date).getTime() + 30 * 86400000).toISOString().slice(0, 10))}</p>
-                )}
+        <div className="rounded-card border border-amber-500/30 bg-amber-500/10 card-lift animate-rise stagger-2">
+          <button type="button" onClick={() => actions.navigate('billing', { docsCat: 'quote' })}
+            className="w-full text-left p-4 rounded-card hover:border-amber-500/50 active:scale-[0.99] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0"><FileText className="w-4 h-4" /></div>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-ink truncate">
+                    {awaiting.length === 1
+                      ? (awaiting[0].title !== 'Quote' ? `Your ${awaiting[0].title} quote is ready` : 'Your quote is ready')
+                      : `${awaiting.length} quotes are ready for your review`}
+                  </p>
+                  <p className="text-xs text-ink-muted">
+                    {awaiting.length === 1 ? `${formatCurrency(awaiting[0].amount)} — review and approve when you're ready` : `Review and approve when you're ready`}
+                  </p>
+                  {/* The quote's OWN expiry, or nothing. This used to print issue-date +
+                      30 days as fact — inventing a deadline for the 2 in 3 live quotes
+                      that carry no valid_until at all ("null = it never lapses"), and
+                      contradicting the Billing card, which has always read the real
+                      field. A made-up deadline on the one screen someone reads while
+                      deciding is pressure we have no right to apply. */}
+                  {awaiting.length === 1 && awaiting[0].validUntil && (
+                    <p className="text-[11px] text-ink-faint mt-0.5">Valid until {formatDate(awaiting[0].validUntil)}</p>
+                  )}
+                </div>
               </div>
+              <span className="text-xs font-semibold text-amber-400 shrink-0">Review →</span>
             </div>
-            <span className="text-xs font-semibold text-amber-400 shrink-0">Review →</span>
-          </div>
-        </button>
-      )}
-      {/* "Outstanding" is collections vocabulary — it lands like an accusation on
-          the one banner someone reads when they're already tense about money. */}
-      {view.money.due > 0 && (
-        <button type="button" onClick={() => actions.navigate('billing', { docsCat: 'invoice' })}
-          className="w-full text-left rounded-card border border-amber-500/30 bg-amber-500/[0.06] p-4 hover:border-amber-500/50 active:scale-[0.99] transition-colors card-lift animate-rise stagger-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-9 h-9 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0"><Receipt className="w-4 h-4" /></div>
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-ink">
-                  Amount due · <span className="tabular-nums text-amber-400">{formatCurrency(view.money.due)}</span>
-                </p>
-                <p className="text-xs text-ink-muted">
-                  {view.money.owingCount === 1 ? '1 invoice' : `${view.money.owingCount} invoices`} — view and pay whenever you&rsquo;re ready
-                </p>
-              </div>
+          </button>
+          {oneQuoteId && (
+            <div className="px-4 pb-4">
+              <Button className="w-full" onClick={() => actions.accept(oneQuoteId)} loading={actions.accepting === oneQuoteId}>
+                <Check className="w-4 h-4" /> Approve — {formatCurrency(awaiting[0].amount)}
+              </Button>
+              <p className="text-[11px] text-ink-faint mt-1.5 text-center">Nothing is charged when you approve.</p>
             </div>
-            <span className="text-xs font-semibold text-amber-400 shrink-0">View →</span>
-          </div>
-        </button>
+          )}
+        </div>
       )}
+      {!payFirst && dueBanner}
 
       {/* 3 · Next service hero (hidden for a pure prospect — the quote card above is their whole visit) */}
       {!prospect && (

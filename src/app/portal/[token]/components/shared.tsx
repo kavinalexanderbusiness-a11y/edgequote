@@ -52,7 +52,7 @@ export const STATUS_META: Record<LiveStatus, { label: string; icon: typeof Play;
 
 export function StatusPill({ s }: { s: LiveStatus }) {
   const m = STATUS_META[s]
-  return <span className={cn('inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', m.tone)}><m.icon className="w-3 h-3" /> {m.label}</span>
+  return <span className={cn('inline-flex items-center gap-1 text-[11px] font-semibold rounded-full px-2 py-0.5 border', m.tone)}><m.icon className="w-3 h-3" /> {m.label}</span>
 }
 
 export function StatusStepper({ s }: { s: LiveStatus }) {
@@ -83,10 +83,13 @@ export function JourneyRail({ steps }: { steps: JourneyStep[] }) {
           <div key={s.key} className={cn('h-1.5 flex-1 rounded-full', s.done ? 'bg-accent' : s.current ? 'bg-accent/60' : 'bg-border')} />
         ))}
       </div>
+      {/* An endpoint that IS the current step is not repeated: a quote sitting at
+          'sent' used to render "Sent · Sent · Paid" — the same word twice, on the card
+          someone is deciding on. Show where they are, and where it ends up. */}
       <div className="flex items-center justify-between mt-1">
-        <span className="text-[10px] text-ink-faint">{steps[0].label}</span>
+        {!steps[0].current && <span className="text-[10px] text-ink-faint">{steps[0].label}</span>}
         {current && <span className="text-[10px] font-semibold text-accent-text">{current.label}</span>}
-        <span className="text-[10px] text-ink-faint">{steps[steps.length - 1].label}</span>
+        {!steps[steps.length - 1].current && <span className="text-[10px] text-ink-faint">{steps[steps.length - 1].label}</span>}
       </div>
     </div>
   )
@@ -108,7 +111,7 @@ export function QuoteStatusPill({ status }: { status: string }) {
     expired:   { label: 'Expired',                tone: 'text-ink-muted border-border bg-bg-tertiary' },
   }
   const m = map[status] ?? { label: 'Quote', tone: 'text-ink-muted border-border bg-bg-tertiary' }
-  return <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', m.tone)}>{m.label}</span>
+  return <span className={cn('text-[11px] font-semibold rounded-full px-2 py-0.5 border', m.tone)}>{m.label}</span>
 }
 
 export function InvoiceStatusPill({ status }: { status: string }) {
@@ -128,7 +131,7 @@ export function InvoiceStatusPill({ status }: { status: string }) {
     draft:    { label: 'Not yet issued', tone: 'text-ink-muted border-border bg-bg-tertiary' },
   }
   const m = map[status] || { label: 'Due', tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' }
-  return <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', m.tone)}>{m.label}</span>
+  return <span className={cn('text-[11px] font-semibold rounded-full px-2 py-0.5 border', m.tone)}>{m.label}</span>
 }
 
 // ── Small bits ──────────────────────────────────────────────────────────────
@@ -188,16 +191,19 @@ export function DocActions({ getBlob, filename }: { getBlob: () => Promise<Blob>
       <div className="flex flex-wrap items-center gap-2">
         <DocBtn icon={Eye} label="View" loading={busy === 'view'} disabled={busy !== null} onClick={() => run('view')} />
         <DocBtn icon={Download} label="Download PDF" loading={busy === 'download'} disabled={busy !== null} onClick={() => run('download')} primary />
-        <DocBtn icon={Printer} label="Print" loading={busy === 'print'} disabled={busy !== null} onClick={() => run('print')} />
+        {/* Print is desktop-only: nobody AirPrints a lawn quote from the couch, and it
+            was a third of the tap-noise on every card on the smallest screen. View and
+            Download stay everywhere — the phone keeps a real way to read AND save. */}
+        <DocBtn icon={Printer} label="Print" loading={busy === 'print'} disabled={busy !== null} onClick={() => run('print')} className="hidden sm:inline-flex" />
       </div>
       {err && <p className="text-xs text-red-400 mt-2">{err}</p>}
     </div>
   )
 }
 
-function DocBtn({ icon: Icon, label, loading, disabled, onClick, primary }: { icon: typeof Eye; label: string; loading?: boolean; disabled?: boolean; onClick: () => void; primary?: boolean }) {
+function DocBtn({ icon: Icon, label, loading, disabled, onClick, primary, className }: { icon: typeof Eye; label: string; loading?: boolean; disabled?: boolean; onClick: () => void; primary?: boolean; className?: string }) {
   return (
-    <Button size="sm" variant={primary ? 'secondary' : 'ghost'} loading={loading} disabled={disabled} onClick={onClick} className="flex-1 min-w-[92px]">
+    <Button size="sm" variant={primary ? 'secondary' : 'ghost'} loading={loading} disabled={disabled} onClick={onClick} className={cn('flex-1 min-w-[92px]', className)}>
       {!loading && <Icon className="w-4 h-4" />} {label}
     </Button>
   )
