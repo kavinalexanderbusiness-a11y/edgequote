@@ -69,6 +69,18 @@ interface QuoteBuilderProps {
 //   manual    → the owner typed their own number (or we loaded a saved quote).
 type PriceOrigin = 'empty' | 'suggested' | 'applied' | 'manual'
 
+// Seeds an EMPTY input where a `0` seed painted a literal zero into every numeric
+// field of a fresh form — eight zeros posing as data, placeholders ("e.g. 5,000")
+// permanently hidden, and "type your price" meaning select-the-0-then-retype.
+// Typed as number to satisfy QuoteFormValues, but the cast only states the existing
+// runtime: react-hook-form number inputs hold STRINGS once touched ('' when the
+// owner clears one — a state every reader already survives today), and every
+// consumer normalizes via Number(...) / `|| 0`, where Number('') === 0 — so maths,
+// autosave and submitted writes are byte-identical to the 0 seed. NEVER swap this
+// for undefined: an untouched field would then submit NaN through the pages'
+// Number(values.x) wrappers, changing the DB write.
+const BLANK = '' as unknown as number
+
 // The cadences the owner can lead a quote with — the plan tiles and the "which one
 // did you pitch" highlight. Monthly is deliberately absent: it's off the standard
 // lawn menu (a month of growth is a rough cut) and never a picked lead, so it isn't
@@ -90,18 +102,24 @@ export function QuoteBuilder({
         address: '',
         service_type: '',
         service_template_id: '',
-        initial_price: 0,
-        weekly_price: 0,
-        biweekly_price: 0,
-        monthly_price: 0,
-        measured_sqft: 0,
+        // BLANK, not 0 (see the constant above): a fresh form must LOOK empty.
+        // Edit/lead/measurement flows spread real numbers over these via
+        // `...defaultValues` below, so only the untouched-field display changes.
+        // (Restored 2026-07-28 — this fix shipped in PR #60, then the 07-26
+        // 12-commit replay silently took the pre-fix side; the zeros returned.)
+        initial_price: BLANK,
+        weekly_price: BLANK,
+        biweekly_price: BLANK,
+        monthly_price: BLANK,
+        measured_sqft: BLANK,
+        // Not BLANK: never rendered as an input — hidden form data, 0 is its "none".
         suggested_price: 0,
         // ADR-002: null until an engine recommendation is applied. Never a default
         // grade — "nobody computed one" and "grade F" are different facts.
         value_grade: null,
         nearby_count: null,
         overgrowth_multiplier: 1,
-        distance_km: 0,
+        distance_km: BLANK,
         // Hours has NO default. It used to be 2 — a number nobody entered, about a
         // job nobody had described yet, which multiplied out into a fabricated
         // price the form then badged as confirmed. Unknown hours is not 2 hours.
@@ -109,7 +127,7 @@ export function QuoteBuilder({
         // that engine has real history for this service, and stays empty when it
         // doesn't. Empty hours ⇒ no labour recommendation ⇒ no price. That is the
         // correct behaviour, not a gap.
-        hours: 0,
+        hours: BLANK,
         // 1 is the structural floor, not a guess: crew_size has min=1, you cannot
         // send zero people, and with hours empty it multiplies into nothing anyway.
         // (business_settings.default_crew_size exists in the DB but is not in the
@@ -123,7 +141,7 @@ export function QuoteBuilder({
         // settings is always resolved before this form mounts. No settings ⇒ 0 ⇒
         // no labour recommendation, which is honest rather than invented.
         rate: Number(settings?.default_rate) || 0,
-        travel_fee: 0,
+        travel_fee: BLANK,
         notes: '',
         status: 'draft',
         services: [],
@@ -594,7 +612,9 @@ export function QuoteBuilder({
       setValue('initial_price', price)
       setPriceOrigin('suggested')
     } else if (priceOrigin === 'suggested') {
-      setValue('initial_price', 0)
+      // BLANK, not 0: 'empty' means the field LOOKS empty (its documented contract),
+      // not that it holds a zero the owner must delete before typing.
+      setValue('initial_price', BLANK)
       setPriceOrigin('empty')
     }
   }, [serviceRec, priceLocked, priceOrigin, pickedCadence, setValue])
@@ -636,8 +656,16 @@ export function QuoteBuilder({
       const data = await res.json()
       if (res.ok && typeof data.km === 'number') {
         setValue('distance_km', data.km)
-        const sugg = suggestTravelFee(data.km, tiers)
-        if (includeTravel && !sugg.isCustom && sugg.fee !== null) setValue('travel_fee', sugg.fee)
+        // Same rule as travelSuggestion above: with zero tiers, suggestTravelFee
+        // only has its fabricated { fee: 0 } fallback to offer, and auto-applying
+        // it here silently WIPED a typed or saved travel fee to $0 whenever the
+        // address changed (AddressAutocomplete onSelect calls this) — worst on
+        // edit, where the fee was already on the quote and the Travel section sat
+        // collapsed out of sight. (Restored 2026-07-28 — lost in the 07-26 replay.)
+        if (tiers.length > 0 && includeTravel) {
+          const sugg = suggestTravelFee(data.km, tiers)
+          if (!sugg.isCustom && sugg.fee !== null) setValue('travel_fee', sugg.fee)
+        }
         setCalcMsg({ text: `${data.km} km${data.durationText ? ` · ${data.durationText} drive` : ''}` })
       } else {
         setCalcMsg({ text: data.error || 'Could not calculate distance.', error: true })
@@ -653,7 +681,10 @@ export function QuoteBuilder({
     setIncludeTravel(on)
     if (!on) {
       setValue('travel_fee', 0)
-    } else if (distanceKm > 0) {
+    } else if (distanceKm > 0 && tiers.length > 0) {
+      // tiers.length gate completes the invariant: suggestTravelFee is never
+      // consulted without tiers anywhere in this file. (Here it was near-harmless —
+      // toggling off already zeroed the fee — but one rule beats three cases.)
       const s = suggestTravelFee(distanceKm, tiers)
       if (!s.isCustom && s.fee !== null) setValue('travel_fee', s.fee)
     }
@@ -678,6 +709,35 @@ export function QuoteBuilder({
     return () => { alive = false }
   }, [])
   const unitOptions = useMemo(() => units.map(u => ({ value: u.code, label: u.label })), [units])
+
+  // ── Line-pricing clarity (Additional services + Materials) ───────────────────
+  // The Qty field wears the UNIT's name. A static "Qty" made hourly pricing
+  // invisible: picking a "$95/hr" template filled Unit price and flipped the unit
+  // to hours, but the line still read "Qty 1 × $95" — so a 3-hour hedge job went
+  // out at a third of its price unless the owner guessed that Qty meant hours.
+  // "Hours: 3" is unmistakable; same for "Square feet: 1,200" and "Cubic yards".
+  // Each/flat keep the plain "Qty" (their quantity really is just a count).
+  const unitFor = (code: string | null | undefined) => units.find(u => u.code === (code || 'each'))
+  const qtyLabelFor = (code: string | null | undefined) => {
+    const u = unitFor(code)
+    return u && u.code !== 'each' && u.code !== 'flat' ? u.label : 'Qty'
+  }
+  // How this line's price forms, spelled out by the SAME engine that sums it
+  // (serviceLineTotals — never a second multiplication here). Shown only when it
+  // says something the header net doesn't: a quantity in play or a discount at
+  // work. Mirrors the engine's qty ≤ 0 → 1 rule so the equation can never
+  // disagree with the money it explains.
+  const lineEquation = (line: (Parameters<typeof serviceLineTotals>[0] & { unit?: string | null }) | undefined) => {
+    if (!line) return null
+    const qty = Number(line.quantity) > 0 ? Number(line.quantity) : 1
+    const price = Number(line.unit_price) || 0
+    if (price <= 0) return null
+    const t = serviceLineTotals(line)
+    if (qty === 1 && t.discountAmount <= 0) return null   // header net already says it all
+    const u = unitFor(line.unit)
+    const unitBit = u && u.code !== 'each' && u.code !== 'flat' ? ` ${u.abbrev}` : ''
+    return `${qty}${unitBit} × ${formatCurrency(price)}${t.discountAmount > 0 ? ` − ${formatCurrency(t.discountAmount)} off` : ''} = ${formatCurrency(t.net)}`
+  }
 
   // Favourites first, then the business's own sort_order within each group.
   // THIS is what a favourite is for: the settings toggle promises "shown first in
@@ -1374,7 +1434,9 @@ export function QuoteBuilder({
                       )}
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      <Input label="Qty" type="number" step="0.5" min="0"
+                      {/* The label follows the unit ("Hours: 3", "Square feet: 1,200")
+                          and the step follows the unit's own granularity (0.25 hr). */}
+                      <Input label={qtyLabelFor(line?.unit)} type="number" step={unitFor(line?.unit)?.step ?? 0.5} min="0"
                         {...register(`services.${i}.quantity` as const, { min: 0 })} />
                       <Select label="Unit" options={unitOptions}
                         {...register(`services.${i}.unit` as const)} />
@@ -1383,6 +1445,9 @@ export function QuoteBuilder({
                       <Input label="Duration (min)" type="number" step="5" min="0"
                         {...register(`services.${i}.est_minutes` as const, { min: 0 })} />
                     </div>
+                    {lineEquation(line) && (
+                      <p className="text-[11px] text-ink-muted tabular-nums">{lineEquation(line)}</p>
+                    )}
                     {lineDiscountRow(i)}
                   </div>
                 )
@@ -1457,13 +1522,18 @@ export function QuoteBuilder({
                     {/* No Duration field: spreading the mulch is the SERVICE line's
                         minutes. Minutes here would inflate the scheduled job twice. */}
                     <div className="grid grid-cols-3 gap-3">
-                      <Input label="Qty" type="number" step="0.5" min="0"
+                      {/* Same rule as the services grid: the label and step follow
+                          the unit — "Cubic yards: 3.5", not "Qty: 3.5". */}
+                      <Input label={qtyLabelFor(line?.unit)} type="number" step={unitFor(line?.unit)?.step ?? 0.5} min="0"
                         {...register(`services.${i}.quantity` as const, { min: 0 })} />
                       <Select label="Unit" options={unitOptions}
                         {...register(`services.${i}.unit` as const)} />
                       <Input label="Price per unit ($)" type="number" step="1" min="0"
                         {...register(`services.${i}.unit_price` as const, { min: 0 })} />
                     </div>
+                    {lineEquation(line) && (
+                      <p className="text-[11px] text-ink-muted tabular-nums">{lineEquation(line)}</p>
+                    )}
                     {lineDiscountRow(i)}
                   </div>
                 )
