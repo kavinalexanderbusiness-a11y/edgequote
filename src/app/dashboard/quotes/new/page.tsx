@@ -116,7 +116,17 @@ export default function NewQuotePage() {
 
     // Every quote gets a real customer + property (create or match — no dupes, no orphans).
     let customerId: string | null = values.customer_id && values.customer_id !== '__manual' ? values.customer_id : null
-    let propertyId: string | null = measurement?.propertyId ?? null
+    // The measurement's property speaks only while the quote is STILL FOR the
+    // measured address. It used to win unconditionally — so measuring property A,
+    // then switching the builder to customer B at address B, saved B's quote
+    // pointing at A's property row (schedule, portal and lawn-size sync all
+    // follow property_id). The address is the honest test of "still the same
+    // place": it was seeded FROM the measurement and untouched on the normal
+    // flow, so this is byte-identical for every measure→quote handoff that
+    // doesn't re-target — and only re-targeting is the case being fixed.
+    const measurementPropertyApplies = !!measurement?.propertyId
+      && (values.address || '').trim() === (measurement.address || '').trim()
+    let propertyId: string | null = measurementPropertyApplies ? measurement!.propertyId : null
     let customerName = values.customer_name
     let createdCustomer = false
     let matchedBy: string | null = null
@@ -128,7 +138,7 @@ export default function NewQuotePage() {
       )
       customerId = ensured.customerId
       customerName = ensured.customerName
-      propertyId = measurement?.propertyId ?? ensured.propertyId
+      propertyId = measurementPropertyApplies ? measurement!.propertyId : ensured.propertyId
       createdCustomer = ensured.createdCustomer
       matchedBy = ensured.matchedBy
     } catch {
@@ -213,7 +223,13 @@ export default function NewQuotePage() {
       rate: finalRate,
       travel_fee: applyFeeRecovery(Number(values.travel_fee), settings) ?? 0,
       measured_sqft: Number(values.measured_sqft) || measurement?.sqft || null,
-      suggested_price: measurement?.suggestedPrice ?? (Number(values.suggested_price) || null),
+      // The LIVE form value wins: re-measuring or re-applying a recommendation
+      // inside the builder updates values.suggested_price, and preferring the
+      // handoff's snapshot here stored yesterday's suggestion against today's
+      // price — poisoning the "suggested vs quoted" analysis and the learner
+      // that reads the pair. The handoff remains the fallback for the untouched
+      // measure→save flow (where the form value is still 0), byte-identical.
+      suggested_price: Number(values.suggested_price) > 0 ? Number(values.suggested_price) : (measurement?.suggestedPrice ?? null),
       front_lawn_sqft: measurement?.sections?.front ?? null,
       back_lawn_sqft: measurement?.sections?.back ?? null,
       left_side_sqft: measurement?.sections?.left ?? null,

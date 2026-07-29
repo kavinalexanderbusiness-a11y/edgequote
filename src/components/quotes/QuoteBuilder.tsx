@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { Input } from '@/components/ui/Input'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { CustomerPicker } from '@/components/ui/CustomerPicker'
@@ -195,6 +196,14 @@ export function QuoteBuilder({
   // Which disclosure sections are open. Held here (not inside each Collapsible)
   // because a BLOCKED submit has to be able to open the one hiding the problem.
   const [pricingOpen, setPricingOpen] = useState(false)
+  // The three sections nested INSIDE "Advanced Pricing" are controlled too.
+  // Opening only the outer section wasn't enough: a cleared crew_size lives two
+  // levels deep, so the blocked submit opened Advanced Pricing and the field was
+  // still hidden inside a closed "Labour calculator" — react-hook-form's focus
+  // then failed exactly the way §4.1 describes, one door further in.
+  const [laborOpen, setLaborOpen] = useState(false)
+  const [planOpen, setPlanOpen] = useState(false)
+  const [travelOpen, setTravelOpen] = useState(false)
   // A section that ALREADY HAS content starts open. Opening a saved quote showed
   // "Additional services · 2 lines · $180" as one collapsed row, so the money most
   // likely to be wrong was the money you had to go looking for — and a quote can
@@ -207,9 +216,12 @@ export function QuoteBuilder({
     () => (defaultValues?.services || []).some(s => s?.kind === 'material'),
   )
 
-  // Fields that live inside "Pricing details" — used to route a validation error
-  // back to its section.
-  const PRICING_DETAIL_FIELDS = ['hours', 'crew_size', 'rate', 'overgrowth_multiplier', 'weekly_price', 'biweekly_price', 'monthly_price', 'travel_fee', 'distance_km']
+  // Fields that live inside "Advanced Pricing" — mapped to the NESTED section
+  // each lives in, so a validation error opens the exact door hiding the field,
+  // not just the outer one.
+  const LABOR_FIELDS = ['hours', 'crew_size', 'rate', 'overgrowth_multiplier']
+  const PLAN_FIELDS = ['weekly_price', 'biweekly_price', 'monthly_price']
+  const TRAVEL_FIELDS = ['travel_fee', 'distance_km']
 
   const submit = handleSubmit(
     // The draft is the owner's only copy until the row exists. It used to be
@@ -227,7 +239,9 @@ export function QuoteBuilder({
     errs => {
       const keys = Object.keys(errs)
       if (!keys.length) return
-      if (keys.some(k => PRICING_DETAIL_FIELDS.includes(k))) setPricingOpen(true)
+      if (keys.some(k => LABOR_FIELDS.includes(k))) { setPricingOpen(true); setLaborOpen(true) }
+      if (keys.some(k => PLAN_FIELDS.includes(k))) { setPricingOpen(true); setPlanOpen(true) }
+      if (keys.some(k => TRAVEL_FIELDS.includes(k))) { setPricingOpen(true); setTravelOpen(true) }
       if (errs.services) {
         const bad = (errs.services as unknown[]).map((e, i) => (e ? i : -1)).filter(i => i >= 0)
         if (bad.some(i => kindAt(i) === 'material')) setMaterialsOpen(true)
@@ -239,7 +253,10 @@ export function QuoteBuilder({
   )
 
   const [calcLoading, setCalcLoading] = useState(false)
-  const [calcMsg, setCalcMsg] = useState<{ text: string; error?: boolean } | null>(null)
+  // `settingsLink` renders a live link to the page the message names — a first-run
+  // dead end ("Set your base address in Settings first") must hand over the door,
+  // not just the direction (§15: the last of the three first-run dead ends).
+  const [calcMsg, setCalcMsg] = useState<{ text: string; error?: boolean; settingsLink?: boolean } | null>(null)
   const [showMeasure, setShowMeasure] = useState(false)
   // Mobile-only: the desktop preview card is lg-only, so the phone needs a way in.
   const [showPreview, setShowPreview] = useState(false)
@@ -269,6 +286,17 @@ export function QuoteBuilder({
   // indistinguishable in the header badge.
   const priceLocked = priceOrigin === 'applied' || priceOrigin === 'manual'
   const [showBestDays, setShowBestDays] = useState(false)
+  // §2.3 — once a template has settled the Service Name, the required input
+  // collapses to a one-line "Customer reads X · Rename": two adjacent fields
+  // asking one question read as an unanswered required field. Renaming (or a
+  // validation error, or free-text) brings the real input back; the value is
+  // never unregistered, so nothing downstream changes.
+  const [renamingService, setRenamingService] = useState(false)
+  // §2.4 — the measured area renders as a full field only when it PRICES this
+  // service (lawn cadence / per-area) or a figure already exists; for labour
+  // trades it collapses to an opt-in link instead of a full-width input whose
+  // caption explains its own irrelevance.
+  const [showAreaField, setShowAreaField] = useState(false)
   // Saved recommendation from the customer's latest property measurement — the
   // source of truth for suggested prices (no re-measuring needed).
   const [savedRec, setSavedRec] = useState<{ rec: SavedRecommendation; sqft: number; date: string } | null>(null)
@@ -346,6 +374,29 @@ export function QuoteBuilder({
   // rate vs labour). Template display type wins; else the serviceKey normalizer.
   const svcTemplate = templates.find(t => t.id === templateId) ?? null
   const pricingKind = servicePricingKind(watch('service_type'), svcTemplate)
+  // §2.3 — the name is "settled" while it still equals the template's own; any
+  // edit (a rename) makes it free text and the real input stays. Reset the
+  // rename mode when the template changes so the next pick collapses again.
+  const serviceNameValue = watch('service_type')
+  const nameSettledByTemplate = !!svcTemplate && serviceNameValue === svcTemplate.name
+  useEffect(() => { setRenamingService(false) }, [templateId])
+  // §2.4 — does the measured area PRICE this service? (Everything else only
+  // feeds the labour estimate, and gets the opt-in link instead of the field.)
+  const areaPricesService = pricingKind === 'lawn_recurring' || pricingKind === 'per_area'
+
+  // Favourites first, then the business's own sort_order within each group.
+  // THIS is what a favourite is for: the settings toggle promises "shown first in
+  // the quote builder", and this is the only place that promise can be kept — the
+  // picker is the sole reader of display order. Stable within groups (the queries
+  // already order by sort_order), so a business with no favourites sees the exact
+  // order it saw before. Declared HERE, above its first reader (noRecReason) —
+  // the same TDZ rule §1 exists to enforce.
+  const activeTemplates = useMemo(
+    () => templates.filter(t => t.is_active)
+      .slice()   // never sort the shared store's array in place
+      .sort((a, b) => Number(!!b.is_favorite) - Number(!!a.is_favorite)),
+    [templates],
+  )
 
   // WHICH SERVICE the accepted price was accepted for. "Applied" is a claim that
   // the owner agreed to an engine's recommendation — and it survived changing the
@@ -421,12 +472,20 @@ export function QuoteBuilder({
   // price." AFTER the owner typed one: telling them to do the thing they'd just
   // done. It's a four-way string pick; recomputing each render costs nothing and
   // the whole form is already watched (autosave), so every keystroke re-renders.
-  const noRecReason = !watch('service_type')?.trim()
-    ? 'Pick a service and we’ll recommend a price.'
+  // The two first-run dead ends here LINK to the page they name (§11.2): a first
+  // quote is exactly where a business discovers it hasn't set a rate or built a
+  // catalogue, and a message that names a page but doesn't open it is a chore.
+  const settingsLink = (label: string) => (
+    <Link href="/dashboard/settings" className="underline text-accent-text hover:text-ink">{label}</Link>
+  )
+  const noRecReason: React.ReactNode = !watch('service_type')?.trim()
+    ? (activeTemplates.length === 0
+      ? <>Type the service name — or {settingsLink('set up your service catalogue in Settings')} to pick from it here.</>
+      : 'Pick a service and we’ll recommend a price.')
     : pricingKind === 'lawn_recurring'
       ? 'Measure the property to see recommended pricing for this service.'
       : rate <= 0
-        ? 'No recommendation yet — set your Default Labour Rate in Settings, or type a price.'
+        ? <>No recommendation yet — {settingsLink('set your Default Labour Rate in Settings')}, or type a price.</>
         : 'No recommendation yet — add hours in the Labour calculator, or type a price. EdgeQuote won’t guess.'
 
   // Accept for one-off services: fill the one price that makes sense and CLEAR
@@ -624,7 +683,14 @@ export function QuoteBuilder({
   // rendered as a fabricated suggestion — "Unknown: $0.00" — plus an "Apply
   // suggested travel fee" button whose only possible effect was wiping the owner's
   // hand-typed fee to $0. No tiers ⇒ no suggestion to speak of, so say nothing.
-  const travelSuggestion = distanceKm > 0 && tiers.length > 0 ? suggestTravelFee(distanceKm, tiers) : null
+  // Memoised on (distanceKm, tiers): built inline, this was a FRESH object every
+  // render, and it's a dependency of the effect below — so a form that re-renders
+  // on every keystroke ran a setValue on every keystroke too. Same function, same
+  // arguments, same result, no longer a new object.
+  const travelSuggestion = useMemo(
+    () => (distanceKm > 0 && tiers.length > 0 ? suggestTravelFee(distanceKm, tiers) : null),
+    [distanceKm, tiers],
+  )
 
   useEffect(() => {
     if (travelSuggestion?.isCustom) {
@@ -644,7 +710,7 @@ export function QuoteBuilder({
     setCalcMsg(null)
     const base = settings?.base_address
     const dest = addr || address
-    if (!base) { setCalcMsg({ text: 'Set your base address in Settings first.', error: true }); return }
+    if (!base) { setCalcMsg({ text: 'Set your base address in Settings first.', error: true, settingsLink: true }); return }
     if (!dest) { setCalcMsg({ text: 'Enter a service address first.', error: true }); return }
     setCalcLoading(true)
     try {
@@ -739,19 +805,7 @@ export function QuoteBuilder({
     return `${qty}${unitBit} × ${formatCurrency(price)}${t.discountAmount > 0 ? ` − ${formatCurrency(t.discountAmount)} off` : ''} = ${formatCurrency(t.net)}`
   }
 
-  // Favourites first, then the business's own sort_order within each group.
-  // THIS is what a favourite is for: the settings toggle promises "shown first in
-  // the quote builder", and this is the only place that promise can be kept — the
-  // picker is the sole reader of display order. Marking a favourite does nothing
-  // without this line. Stable within groups (the queries already order by
-  // sort_order), so a business with no favourites sees the exact order it saw
-  // before — the sort is a no-op until someone opts in.
-  const activeTemplates = useMemo(
-    () => templates.filter(t => t.is_active)
-      .slice()   // never sort the shared store's array in place
-      .sort((a, b) => Number(!!b.is_favorite) - Number(!!a.is_favorite)),
-    [templates],
-  )
+  // (activeTemplates is declared above, before its first reader — see §1's TDZ rule.)
   const templateOptions = useMemo(() => [
     { value: '', label: 'Select a service...' },
     ...activeTemplates.map(t => ({
@@ -856,6 +910,18 @@ export function QuoteBuilder({
           <span className="text-sm font-semibold text-ink">First visit total</span>
           <span className="text-2xl font-bold text-accent-text tabular-nums">{effectiveTotal > 0 ? formatCurrency(effectiveTotal) : '—'}</span>
         </div>
+        {/* §14 — the mistake the product can't undo: a priceless quote saves
+            happily and afterwards looks identical to a priced one, in the list,
+            on the PDF and in the portal. Say so BEFORE the tap, next to the
+            total, in both breakdowns (this JSX renders in the desktop card AND
+            the mobile sheet). Warns, never blocks: a placeholder quote the
+            owner will price later is legitimate. */}
+        {effectiveTotal <= 0 && !(weeklyPrice > 0 || biweeklyPrice > 0 || monthlyPrice > 0) && (
+          <p className="text-[11px] text-amber-400 flex items-start gap-1.5 leading-snug">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+            No price yet — saving now creates a $0 quote. You can price it later.
+          </p>
+        )}
       </div>
       {(weeklyPrice > 0 || biweeklyPrice > 0 || monthlyPrice > 0) && (
         <div className="border-t border-border pt-3 space-y-1.5">
@@ -996,42 +1062,66 @@ export function QuoteBuilder({
                   pick — the same rule the Additional-services template picker already
                   follows. Service Name below stays the one required service input
                   either way, so service_template_id is untouched (stays '') when this
-                  is hidden: presentation only, no pricing/logic change. */}
-              {activeTemplates.length > 0 && (
+                  is hidden: presentation only, no pricing/logic change.
+                  §11.1 — at ≤6 active templates the OPTIONS become the control: a
+                  wrapped row of chips, one tap, each showing its own price. An
+                  owner-operator's whole catalogue fits on one screen, so a
+                  <select> costs a tap and hides everything behind the first. Past
+                  six the chip row is worse than the dropdown, and the dropdown
+                  returns. Same Controller, same field, same template effect —
+                  nothing downstream knows which control set it. */}
+              {activeTemplates.length > 0 && activeTemplates.length <= 6 ? (
+                <Controller name="service_template_id" control={control}
+                  render={({ field }) => (
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Service</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {activeTemplates.map(t => {
+                          const active = field.value === t.id
+                          return (
+                            <button key={t.id} type="button" aria-pressed={active}
+                              onClick={() => field.onChange(active ? '' : t.id)}
+                              className={cn('text-xs font-medium rounded-full border px-2.5 py-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                                active ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink hover:border-border-strong')}>
+                              {t.is_favorite ? '★ ' : ''}{t.name}
+                              <span className={active ? 'opacity-70' : 'text-ink-faint'}> · {formatServicePrice(t)}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )} />
+              ) : activeTemplates.length > 0 ? (
                 <Controller name="service_template_id" control={control}
                   render={({ field }) => (<Select label="Service" options={templateOptions} {...field} />)} />
+              ) : null}
+              {/* §2.3 — two fields for one answer: once a template settles the
+                  name, the required input reads as an EMPTY-looking field asking
+                  the question the chip above just answered. Collapse it to what
+                  the customer will actually read, with the way back one tap away.
+                  Free-text quotes, renames and validation errors keep the real
+                  field, and the value is never unregistered. */}
+              {nameSettledByTemplate && !renamingService && !errors.service_type ? (
+                <p className="text-sm text-ink-muted flex items-baseline gap-2">
+                  <span>Customer reads <span className="font-semibold text-ink">{serviceNameValue}</span></span>
+                  <button type="button" onClick={() => setRenamingService(true)}
+                    className="text-xs font-medium text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                    Rename
+                  </button>
+                </p>
+              ) : (
+                // The example comes from THEIR catalogue, not ours. A lawn company
+                // with a "Lawn Mowing" template still reads "e.g. Lawn Mowing".
+                <Input label="Service Name *" placeholder={`e.g. ${activeTemplates[0]?.name || 'Weekly Service'}`}
+                  hint={activeTemplates.length > 0
+                    ? 'Auto-fills when you pick a service above — edit to rename it on the quote.'
+                    : 'The name of this service, as it appears on the quote.'}
+                  error={errors.service_type?.message}
+                  {...register('service_type', { required: 'Service is required' })} />
               )}
-              {/* The example comes from THEIR catalogue, not ours. A lawn company
-                  with a "Lawn Mowing" template still reads "e.g. Lawn Mowing"; a
-                  pool company reads "e.g. Pool Opening". Falls back to a neutral
-                  hint before any template exists. */}
-              <Input label="Service Name *" placeholder={`e.g. ${activeTemplates[0]?.name || 'Weekly Service'}`}
-                hint={activeTemplates.length > 0
-                  ? 'Auto-fills when you pick a service above — edit to rename it on the quote.'
-                  : 'The name of this service, as it appears on the quote.'}
-                error={errors.service_type?.message}
-                {...register('service_type', { required: 'Service is required' })} />
 
-              {/* A measured AREA — a core property attribute (powers pricing, labour
-                  & future analytics). Auto-filled from a website/satellite measurement
-                  or the property's saved size; always editable, and synced back to the
-                  property on save.
-                  The label said "Lawn Size (ft²)" for every trade, so a plumber pricing
-                  a drain clean was asked for a lawn. Same de-lawning rule already
-                  applied in Settings and the customer Portal: the stored column stays
-                  `measured_sqft` / `lawn_sqft` (read in ~74 places — renaming it is a
-                  migration, not a label fix), only the words change. The hint states
-                  what the area actually does for THIS service, which for a labour job
-                  is: nothing to the price, but it still feeds the labour estimate. */}
-              <Input label="Measured Area (ft²)" type="number" step="1" min="0"
-                placeholder="e.g. 5,000"
-                hint={pricingKind === 'lawn_recurring'
-                  ? 'Powers pricing & labour. Auto-filled from a measurement or the saved property size — edit to correct.'
-                  : pricingKind === 'per_area'
-                    ? 'Multiplied by your per-unit rate to price this service. Auto-filled from a measurement or the saved property size.'
-                    : 'Optional for this service — it feeds the labour estimate, not the price. Auto-filled from a measurement or the saved property size.'}
-                {...register('measured_sqft', { min: 0 })} />
-
+              {/* §2.4 — the fast path leads with the fast input: the satellite
+                  Measure button sits ABOVE the manual area field, not after it. */}
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                 <Button type="button" variant="secondary" size="sm"
                   onClick={() => {
@@ -1050,6 +1140,32 @@ export function QuoteBuilder({
                   </span>
                 )}
               </div>
+
+              {/* A measured AREA — a core property attribute (powers pricing, labour
+                  & future analytics). Auto-filled from a website/satellite measurement
+                  or the property's saved size; always editable, and synced back to the
+                  property on save. The stored column stays `measured_sqft` /
+                  `lawn_sqft` (read in ~74 places — renaming it is a migration, not a
+                  label fix), only the words change.
+                  §2.4 — rendered as a full field only when the area PRICES this
+                  service or a figure already exists; for labour trades a full-width
+                  numeric input whose caption explains its own irrelevance collapses
+                  to an opt-in link. The field stays registered either way. */}
+              {(areaPricesService || measuredSqft > 0 || showAreaField) ? (
+                <Input label="Measured Area (ft²)" type="number" step="1" min="0"
+                  placeholder="e.g. 5,000"
+                  hint={pricingKind === 'lawn_recurring'
+                    ? 'Powers pricing & labour. Auto-filled from a measurement or the saved property size — edit to correct.'
+                    : pricingKind === 'per_area'
+                      ? 'Multiplied by your per-unit rate to price this service. Auto-filled from a measurement or the saved property size.'
+                      : 'Optional for this service — it feeds the labour estimate, not the price. Auto-filled from a measurement or the saved property size.'}
+                  {...register('measured_sqft', { min: 0 })} />
+              ) : (
+                <button type="button" onClick={() => setShowAreaField(true)}
+                  className="self-start text-xs font-medium text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                  + Enter measured area (optional — feeds the labour estimate)
+                </button>
+              )}
 
               {/* ── THE recommended price ─────────────────────────────────────
                   ONE primary recommendation per service kind; everything below
@@ -1144,34 +1260,11 @@ export function QuoteBuilder({
                   these together; tap one to lead with a different frequency. */}
               {suggested && (
                 <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">Plan options — one tap fills all</p>
-                  <div className="grid grid-cols-3 gap-2">
-                    {([
-                      { c: 'weekly', label: 'Weekly', price: suggested.weekly, per: '/visit' },
-                      { c: 'biweekly', label: 'Bi-Weekly', price: suggested.biweekly, per: '/visit' },
-                      { c: 'one_time', label: 'One-Time', price: suggested.one_time, per: '' },
-                    ] as const).map(opt => {
-                      const active = pickedCadence === opt.c && priceOrigin === 'applied'
-                      return (
-                        <button key={opt.c} type="button" onClick={() => applySuggested(opt.c)}
-                          className={cn('rounded-xl border p-2.5 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50', // transition-all so the selection ring eases in too
-                            active ? 'border-accent bg-accent/10 ring-1 ring-accent' : 'border-border bg-surface hover:border-border-strong')}>
-                          <span className="flex items-center justify-between gap-1">
-                            <span className="text-[11px] font-medium text-ink-muted">{opt.label}</span>
-                            {/* ONE recommendation on screen: when Pricing Intelligence is
-                                the primary card, the tile badge would be a second,
-                                differently-priced "Rec". */}
-                            {!(pricingKind === 'lawn_recurring' && measuredSqft > 0) && suggested.recommended === opt.c && <span className="text-[10px] font-bold uppercase tracking-wide text-accent-text">Rec</span>}
-                          </span>
-                          <span className="block text-base font-bold text-ink mt-0.5 leading-tight tabular-nums">
-                            {formatCurrency(opt.price)}<span className="text-[10px] font-normal text-ink-faint">{opt.per}</span>
-                          </span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                  <div className="flex items-center justify-between gap-2 mt-1.5">
-                    <p className="text-[10px] text-ink-faint">One tap fills One-Time + Weekly + Bi-Weekly together — every field stays editable below.</p>
+                  {/* §2.5 — the heading already says "one tap fills all"; the
+                      14-word restatement it used to carry underneath is gone, and
+                      the Monthly pill rides the heading row instead. */}
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Plan options — one tap fills all</p>
                     <button type="button"
                       aria-pressed={includeMonthly}
                       onClick={() => {
@@ -1189,6 +1282,34 @@ export function QuoteBuilder({
                         includeMonthly ? 'text-accent-text border-accent/40 bg-accent/10' : 'text-ink-faint border-border hover:text-ink')}>
                       {includeMonthly ? 'Monthly: on' : '+ Monthly'}
                     </button>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {([
+                      { c: 'weekly', label: 'Weekly', price: suggested.weekly, per: '/visit' },
+                      { c: 'biweekly', label: 'Bi-Weekly', price: suggested.biweekly, per: '/visit' },
+                      { c: 'one_time', label: 'One-Time', price: suggested.one_time, per: '' },
+                    ] as const).map(opt => {
+                      const active = pickedCadence === opt.c && priceOrigin === 'applied'
+                      return (
+                        // aria-pressed (§7): the selection ring is visual-only, so
+                        // without it a screen reader hears three identical price
+                        // buttons and no way to tell which plan is picked.
+                        <button key={opt.c} type="button" aria-pressed={active} onClick={() => applySuggested(opt.c)}
+                          className={cn('rounded-xl border p-2.5 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50', // transition-all so the selection ring eases in too
+                            active ? 'border-accent bg-accent/10 ring-1 ring-accent' : 'border-border bg-surface hover:border-border-strong')}>
+                          <span className="flex items-center justify-between gap-1">
+                            <span className="text-[11px] font-medium text-ink-muted">{opt.label}</span>
+                            {/* ONE recommendation on screen: when Pricing Intelligence is
+                                the primary card, the tile badge would be a second,
+                                differently-priced "Rec". */}
+                            {!(pricingKind === 'lawn_recurring' && measuredSqft > 0) && suggested.recommended === opt.c && <span className="text-[10px] font-bold uppercase tracking-wide text-accent-text">Rec</span>}
+                          </span>
+                          <span className="block text-base font-bold text-ink mt-0.5 leading-tight tabular-nums">
+                            {formatCurrency(opt.price)}<span className="text-[10px] font-normal text-ink-faint">{opt.per}</span>
+                          </span>
+                        </button>
+                      )
+                    })}
                   </div>
                 </div>
               )}
@@ -1300,7 +1421,7 @@ export function QuoteBuilder({
           {/* The price field itself now lives in the fast path above — see the
               note there. What stays here is the engine that FEEDS it. */}
 
-          <Collapsible title="Labour calculator" icon={Calculator} summary={laborSummary}>
+          <Collapsible title="Labour calculator" icon={Calculator} summary={laborSummary} open={laborOpen} onOpenChange={setLaborOpen}>
             <p className="text-xs text-ink-faint">Hours × crew × rate — this is what the suggested price above is built from when there’s no measurement to price against.</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* NOT required, and no minimum. Unknown hours must be expressible —
@@ -1346,7 +1467,7 @@ export function QuoteBuilder({
               {...register('rate', { min: { value: 0, message: 'Rate cannot be negative' } })} />
           </Collapsible>
 
-          <Collapsible title="Plan pricing" icon={Repeat} summary={recSummary || 'One-time quote'}>
+          <Collapsible title="Plan pricing" icon={Repeat} summary={recSummary || 'One-time quote'} open={planOpen} onOpenChange={setPlanOpen}>
             <p className="text-xs text-ink-faint">Fill any cadence you want to offer — they appear on the quote as options the customer can pick.</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {/* Typing a plan price is the same act of ownership as typing the
@@ -1362,13 +1483,18 @@ export function QuoteBuilder({
                 One instance, so the two can't disagree about what's warned. */}
           </Collapsible>
 
-          <Collapsible title="Travel" icon={Car} summary={travelSummary}>
+          <Collapsible title="Travel" icon={Car} summary={travelSummary} open={travelOpen} onOpenChange={setTravelOpen}>
             <div className="flex justify-end">
               <Button type="button" variant="secondary" size="sm" onClick={() => calculateDistance()} loading={calcLoading}>
                 <MapPin className="w-3.5 h-3.5" /> Calculate distance
               </Button>
             </div>
-            {calcMsg && <p className={cn('text-xs', calcMsg.error ? 'text-red-400' : 'text-accent-text')}>{calcMsg.text}</p>}
+            {calcMsg && (
+              <p className={cn('text-xs', calcMsg.error ? 'text-red-400' : 'text-accent-text')}>
+                {calcMsg.text}
+                {calcMsg.settingsLink && <> <Link href="/dashboard/settings" className="underline hover:text-ink">Open Settings →</Link></>}
+              </p>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
               <Input label="Distance (km)" type="number" step="0.1" min="0" {...register('distance_km', { min: 0 })} />
               <Input label="Travel Fee ($)" type="number" step="5" min="0" {...register('travel_fee', { min: 0 })} />
@@ -1382,7 +1508,9 @@ export function QuoteBuilder({
                 )}
               </div>
             )}
-            {customTravelRequired && (
+            {/* Gated on actually charging travel (§10.3): this kept demanding a
+                custom fee after the owner switched to "Absorbing travel — no fee". */}
+            {customTravelRequired && includeTravel && (
               <Banner tone="warn" icon={AlertTriangle} className="text-xs">
                 Beyond your furthest travel tier — enter a custom travel fee above.
               </Banner>
@@ -1521,20 +1649,25 @@ export function QuoteBuilder({
                       hint="Pick a suggestion or type your own."
                       {...register(`services.${i}.service_type` as const, { required: true })} />
                     {/* Suggestions prefill the unit too — the point is that mulch
-                        arrives already measured in cubic yards, not 'each'. */}
-                    <div className="flex flex-wrap gap-1.5">
-                      {MATERIAL_SUGGESTIONS.map(s => (
-                        <button key={s.label} type="button"
-                          onClick={() => {
-                            setValue(`services.${i}.service_type`, s.label, { shouldDirty: true })
-                            setValue(`services.${i}.unit`, s.unit, { shouldDirty: true })
-                          }}
-                          title={s.hint}
-                          className="text-[11px] rounded-full border border-border px-2 py-0.5 text-ink-muted hover:text-ink hover:border-accent transition-colors">
-                          {s.label}
-                        </button>
-                      ))}
-                    </div>
+                        arrives already measured in cubic yards, not 'each'. They
+                        retire once the line is NAMED (§2.5): eight chips repeated
+                        under every filled line forever was pure noise, and the
+                        datalist on the input still offers them while typing. */}
+                    {!line?.service_type?.trim() && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {MATERIAL_SUGGESTIONS.map(s => (
+                          <button key={s.label} type="button"
+                            onClick={() => {
+                              setValue(`services.${i}.service_type`, s.label, { shouldDirty: true })
+                              setValue(`services.${i}.unit`, s.unit, { shouldDirty: true })
+                            }}
+                            title={s.hint}
+                            className="text-[11px] rounded-full border border-border px-2 py-0.5 text-ink-muted hover:text-ink hover:border-accent transition-colors">
+                            {s.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     {/* No Duration field: spreading the mulch is the SERVICE line's
                         minutes. Minutes here would inflate the scheduled job twice. */}
                     <div className="grid grid-cols-3 gap-3">
@@ -1645,7 +1778,9 @@ export function QuoteBuilder({
           <Card className="sticky top-6">
             <CardHeader className="flex items-center gap-2">
               <Calculator className="w-4 h-4 text-accent-text" />
-              <h2 className="text-sm font-semibold text-ink">Quote Preview</h2>
+              {/* §3.4 — the mobile sheet already says "Quote breakdown" for this
+                  same JSX, and neither is a preview of the quote document. */}
+              <h2 className="text-sm font-semibold text-ink">Quote breakdown</h2>
             </CardHeader>
             <CardBody className="space-y-3">
               {previewBreakdown}

@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { hoverIntent } from '@/lib/prefetch'
 import { Quote, QuoteService, QuoteStatus } from '@/types'
+import { serviceLineTotals } from '@/lib/quoteServices'
 import { formatCurrency, formatDate, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { needsFollowUp, daysSince, compareFollowUp, chaseBlockedReason } from '@/lib/followup'
 import type { ReachCustomer } from '@/lib/comms/reach'
@@ -160,6 +161,25 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
     toast.success(`Quote sent to ${sent} customer${sent !== 1 ? 's' : ''}${parts.length ? ` · ${parts.join(' · ')}` : ''}.`)
   }
 
+  // The multi-service breakdown for a set of quotes, in ONE query — both bulk
+  // actions below need it. Bulk Duplicate used to copy only the quotes row, so a
+  // multi-line quote's copy kept the summed total but silently LOST every line
+  // (the duplicate rendered one opaque "First visit" at the full amount); bulk
+  // Convert wrote invoices with no line_items while the single-quote Convert
+  // carries the full breakdown. Same engine rows, same shapes as the single-quote
+  // paths on the detail page — additional services must survive every route.
+  async function fetchLinesByQuote(supabase: ReturnType<typeof createClient>, quoteIds: string[]): Promise<Map<string, QuoteService[]>> {
+    const map = new Map<string, QuoteService[]>()
+    if (!quoteIds.length) return map
+    const { data } = await supabase.from('quote_services').select('*').in('quote_id', quoteIds).order('sort_order')
+    for (const row of (data as QuoteService[]) || []) {
+      const list = map.get(row.quote_id) || []
+      list.push(row)
+      map.set(row.quote_id, list)
+    }
+    return map
+  }
+
   // Convert to invoice: eligible (accepted/scheduled/completed) + not already
   // invoiced. Sequential INV-#### from the current max — same rules as the
   // single-quote Convert (quote_id recorded so auto-invoice can never double-bill).
@@ -170,9 +190,10 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
     const eligible = sel.selectedItems.filter(q => ['accepted', 'scheduled', 'completed'].includes(q.status))
     if (!eligible.length) { toast.error('Select accepted, scheduled or completed quotes to convert.'); return }
     setBusyKey('convert')
-    const [{ data: nums }, { data: existing }] = await Promise.all([
+    const [{ data: nums }, { data: existing }, linesByQuote] = await Promise.all([
       supabase.from('invoices').select('invoice_number').eq('user_id', user.id),
       supabase.from('invoices').select('quote_id').in('quote_id', eligible.map(q => q.id)),
+      fetchLinesByQuote(supabase, eligible.map(q => q.id)),
     ])
     const already = new Set(((existing as { quote_id: string | null }[]) || []).map(r => r.quote_id))
     let next = maxNumericSuffix(((nums as { invoice_number: string }[]) || []).map(n => n.invoice_number)) + 1
@@ -181,10 +202,23 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
     let created = 0
     for (const q of eligible) {
       if (already.has(q.id)) continue
+      // Carry the full breakdown onto the invoice — the SAME line_items shape the
+      // single-quote Convert builds (amount stays q.total: summed net + travel).
+      const lines = linesByQuote.get(q.id) || []
+      const lineItems = lines.length
+        ? [
+            ...lines.map(s => ({
+              description: Number(s.quantity) > 1 ? `${s.service_type} × ${s.quantity}` : s.service_type,
+              amount: serviceLineTotals(s).net,
+              kind: 'service' as const,
+            })),
+            ...(Number(q.travel_fee) > 0 ? [{ description: 'Travel', amount: Number(q.travel_fee), kind: 'travel' as const }] : []),
+          ]
+        : null
       const { error } = await supabase.from('invoices').insert({
         user_id: user.id, quote_id: q.id, customer_id: q.customer_id, property_id: q.property_id,
         invoice_number: `INV-${String(next).padStart(4, '0')}`, customer_name: q.customer_name,
-        address: q.address, service_type: q.service_type, amount: q.total, status: 'unpaid',
+        address: q.address, service_type: q.service_type, amount: q.total, line_items: lineItems, status: 'unpaid',
         issued_date: issued, due_date: dueISO, notes: q.notes,
       })
       if (!error) { created++; next++ }
@@ -200,22 +234,15 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
     setBusyKey('duplicate')
-    const { data: qnums } = await supabase.from('quotes').select('quote_number').eq('user_id', user.id)
+    const [{ data: qnums }, linesByQuote] = await Promise.all([
+      supabase.from('quotes').select('quote_number').eq('user_id', user.id),
+      fetchLinesByQuote(supabase, sel.selectedItems.map(q => q.id)),
+    ])
     let next = maxNumericSuffix(((qnums as { quote_number: string }[]) || []).map(n => n.quote_number)) + 1
-    // The multi-service breakdown, fetched up front for every selected quote.
-    // Bulk Duplicate used to copy only the quotes row — the copy's TOTAL was
-    // right (initial_price caches the summed net) but its lines were gone, so
-    // the duplicate's PDF collapsed a multi-service quote to one opaque number
-    // and every material lost its kind. One query, grouped client-side.
-    const ids = sel.selectedItems.map(q => q.id)
-    const { data: lineRows } = await supabase.from('quote_services')
-      .select('*').in('quote_id', ids).order('sort_order')
-    const linesByQuote = new Map<string, QuoteService[]>()
-    for (const r of (lineRows as QuoteService[]) || []) {
-      const list = linesByQuote.get(r.quote_id) || []
-      list.push(r); linesByQuote.set(r.quote_id, list)
-    }
-    let created = 0, lineFailures = 0
+    // (The breakdown for every selected quote was batch-fetched above via
+    // fetchLinesByQuote — the same helper bulkConvert uses.)
+    let created = 0
+    let lineFailures = 0
     for (const q of sel.selectedItems) {
       const { data: dup, error } = await supabase.from('quotes').insert({
         quote_number: generateQuoteNumber(next), user_id: user.id, status: 'draft', issued_date: localTodayISO(),

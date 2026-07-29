@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { queueOrRun } from '@/lib/offline/outbox'
 import { toast } from '@/lib/toast'
@@ -32,6 +32,24 @@ export function QuoteStatusControl({ quoteId, status, followUpCount, sentAt, val
   const supabase = createClient()
   const [current, setCurrent] = useState<QuoteStatus>(status)
   const [saving, setSaving] = useState(false)
+
+  // Adopt an EXTERNAL status change. `current` seeds from the prop once at
+  // mount, and the quote list renders this control under a stable key={q.id} —
+  // so when the customer accepted in the portal (or another tab/Stripe changed
+  // the row) and the list's realtime refetch delivered the new status, the pill
+  // kept showing the mount-time value forever. Reconcile only when the PROP
+  // ITSELF changes (tracked in a ref): a parent re-render that still carries
+  // the OLD status — the normal state right after our own successful write,
+  // before its refetch lands — must not revert the optimistic value we just
+  // set. Never adopt mid-save either; the in-flight change owns the pill.
+  const lastPropStatus = useRef(status)
+  useEffect(() => {
+    if (saving) return
+    if (status !== lastPropStatus.current) {
+      lastPropStatus.current = status
+      setCurrent(status)
+    }
+  }, [status, saving])
 
   async function handleChange(e: React.ChangeEvent<HTMLSelectElement>) {
     const s = e.target.value as QuoteStatus

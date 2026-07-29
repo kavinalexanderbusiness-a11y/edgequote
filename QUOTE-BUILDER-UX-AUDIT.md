@@ -746,3 +746,43 @@ not unknown: the §24 unverified trio, the portal travel breakout (RPC lane), th
 autosave key strategy, and the Pricing-V2-gated items (§20, §23). Nothing in the create-to-
 invoice loop still silently loses, invents, or misrepresents a number the owner or customer
 decided.
+
+---
+---
+
+# Round 10 — the parallel restoration lands (2026-07-28, second session)
+
+Two sessions independently re-verified this document against merged main on the same day
+and restored disjoint halves of the 07-26 rebase regression. Round 8/9 above restored the
+BLANK seeds, the travel-fee wipe gates, unit-labelled line pricing, the PDF's promises and
+faithful duplicates. This round carried the other half, plus the fixes the earlier rounds
+had left open:
+
+## §30 · Restored here (rounds 1–3 content lost in the same replay)
+
+§2.3 Service-Name collapse ("Customer reads X · Rename") · §2.4 measured-area demoted to a
+link on trades it doesn't price, Measure button promoted above it · §2.5 copy trims
+(plan-options restatement gone; material chips retire once named) · §3.4 "Quote breakdown"
+naming · §7 `aria-pressed` on plan tiles · §10.3 travel banner gated on charging · §11.1
+service chips at ≤6 active templates · §11.2+§15 all three first-run dead-end links ·
+§14 no-price warning in both breakdowns (skips recurring-only quotes — §22.1 made those a
+deliberate state) · §16 `travelSuggestion` memoised. **§4.1 completed one level deeper:**
+the blocked-submit router now opens the exact NESTED section (Labour/Plan/Travel) hiding
+the offending field, not just the outer one. §3.1's flattening stays unrestored on purpose.
+
+## §31 · New fixes this round
+
+- **The status pill froze at mount** (`QuoteStatusControl` seeded state from its prop once,
+  under the list's stable `key={q.id}`) — a portal accept never repainted it. It now adopts
+  prop CHANGES via a ref: never mid-save, never from a pre-refetch parent re-render.
+- **Bulk Convert now carries `line_items`** (breakdown + travel), built exactly as the
+  single-quote Convert builds them — bulk-converted invoices no longer flatten a
+  multi-service quote to one opaque amount. (Bulk Duplicate's line copy landed in §26;
+  both bulk actions now share one batched line fetch.)
+- **Create no longer prefers the measurement handoff's stale values**: the builder's live
+  `suggested_price` wins when present, and the handoff's `propertyId` applies only while
+  the quote still targets the measured address — re-targeting mid-build used to save the
+  new customer's quote against the old property row.
+
+Still open, unchanged: §24's phantom-draft baseline, the portal travel breakout (frozen
+RPC), portal Approve's stale-tab expiry check, and everything Pricing-V2-gated (§20, §23).
