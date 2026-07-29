@@ -31,6 +31,9 @@ interface Props {
   capacityHours: number
   dayStatusMap?: DayStatusMap
   capacityForDate?: (dateISO: string) => number
+  // Pre-select the day to reschedule (e.g. a known rain day surfaced by the weather
+  // card). Without it this hub opens on tomorrow, ignoring the day actually at risk.
+  initialDay?: string
   // Returns an outcome — this screen texts customers about the moves, so it must be
   // able to tell a persisted move from a rejected one.
   onApply: (moves: { jobId: string; from: string; to: string }[]) => Promise<{ ok: boolean; error?: string }>
@@ -52,12 +55,14 @@ interface Recipient { customerId: string; name: string; from: string; to: string
 // capacity and revenue impact, apply in one tap (with Undo), and notify the
 // affected customers — all reusing planRainDelay, the disruption seam and the
 // existing comms pipeline. No second scheduler, rain engine or notifier.
-export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, preferredWorkDays, capacityHours, dayStatusMap, capacityForDate, onApply, onClose }: Props) {
+export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, preferredWorkDays, capacityHours, dayStatusMap, capacityForDate, initialDay, onApply, onClose }: Props) {
   const supabase = useMemo(() => createClient(), [])
   const today = localTodayISO()
   const [invoicedIds, setInvoicedIds] = useState<Set<string> | null>(null)
   const [reason, setReason] = useState<DisruptionReason>('weather')
-  const [selectedDay, setSelectedDay] = useState<string>(format(addDays(parseISO(today), 1), 'yyyy-MM-dd'))
+  // Open on the day actually at risk when the caller names one (a rain day may be
+  // several days out); otherwise fall back to tomorrow.
+  const [selectedDay, setSelectedDay] = useState<string>(initialDay && initialDay >= today ? initialDay : format(addDays(parseISO(today), 1), 'yyyy-MM-dd'))
   const [strategy, setStrategy] = useState<DestinationStrategy>('auto_optimize')
   const [specificDate, setSpecificDate] = useState<string>(format(addDays(parseISO(today), 2), 'yyyy-MM-dd'))
   const [selectedJobIds, setSelectedJobIds] = useState<Set<string>>(new Set())
@@ -156,16 +161,22 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
   // must not bump jobs onto a day the owner already marked unavailable.
   const blockedDates = dayStatusMap?.blockedDates
 
-  // The next few candidate affected days (today → +3) with their load.
-  const dayChips = useMemo(() => [0, 1, 2, 3].map(n => {
-    const date = format(addDays(parseISO(today), n), 'yyyy-MM-dd')
-    const dj = jobs.filter(j => j.scheduled_date === date && j.status !== 'cancelled' && j.status !== 'completed')
-    return {
-      date, label: n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : format(parseISO(date + 'T00:00:00'), 'EEE, MMM d'),
-      jobs: dj.length, revenue: Math.round(dj.reduce((s, j) => s + (valueByJobId[j.id] || 0), 0)),
-      hours: Math.round((dj.reduce((s, j) => s + durMin(j), 0) / 60) * 10) / 10,
-    }
-  }), [jobs, valueByJobId, today]) // eslint-disable-line react-hooks/exhaustive-deps
+  // The next few candidate affected days (today → +3) with their load, plus the
+  // caller's flagged day if it falls beyond that window (a rain day can be several
+  // days out — it must still be one tap, not hidden behind the date picker).
+  const dayChips = useMemo(() => {
+    const tomorrow = format(addDays(parseISO(today), 1), 'yyyy-MM-dd')
+    const dates = [0, 1, 2, 3].map(n => format(addDays(parseISO(today), n), 'yyyy-MM-dd'))
+    if (initialDay && initialDay >= today && !dates.includes(initialDay)) dates.push(initialDay)
+    return dates.map(date => {
+      const dj = jobs.filter(j => j.scheduled_date === date && j.status !== 'cancelled' && j.status !== 'completed')
+      return {
+        date, label: date === today ? 'Today' : date === tomorrow ? 'Tomorrow' : format(parseISO(date + 'T00:00:00'), 'EEE, MMM d'),
+        jobs: dj.length, revenue: Math.round(dj.reduce((s, j) => s + (valueByJobId[j.id] || 0), 0)),
+        hours: Math.round((dj.reduce((s, j) => s + durMin(j), 0) / 60) * 10) / 10,
+      }
+    })
+  }, [jobs, valueByJobId, today, initialDay]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Build the move plan + per-day capacity impact from the chosen strategy.
   const plan = useMemo(() => {
