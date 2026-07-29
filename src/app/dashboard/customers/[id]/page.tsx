@@ -28,6 +28,7 @@ import { needsFollowUp, daysSince } from '@/lib/followup'
 import { recurrenceLabel, recurringCustomerLabel, buildServicePlans, ServicePlan } from '@/lib/recurrence'
 import { jobVisitValue, effectiveFreq } from '@/lib/visitValue'
 import { settingsToSeasons, DEFAULT_SEASONS, ServiceSeasons } from '@/lib/seasons'
+import { invoiceBalance } from '@/lib/payments/ledger'
 import { loadBusinessShape, showLawnFieldFor, SHAPE_LOADING, type BusinessShape } from '@/lib/businessShape'
 import { resolvePrefs, prefSummary, hasAnyPref, monthShort } from '@/lib/preferences'
 import { SchedulePrefsFields, PrefsDraft, EMPTY_DRAFT, toDraft, draftToRow } from '@/components/customers/SchedulePrefsFields'
@@ -496,9 +497,15 @@ export default function CustomerDetailPage() {
   // no property_id column. That works precisely because jobs are 100% property-
   // populated; it is the reason JobForm's hidden auto-select above is a real bug and
   // not a cosmetic one.
+  // ONE balance engine for every owed figure on this page. invoiceBalance is the
+  // same GST-inclusive, discount-aware rule the invoices page, the portal and the
+  // GST return read — it replaces `amount * gstMult - amount_paid`, which was
+  // hand-rolled in three places here (a fourth parallel copy of the balance rule
+  // that could drift from the canonical per-component rounding). FeeSettings needs
+  // only gst_percent, which is all this page loads.
+  const feeSettings = useMemo(() => ({ gst_percent: gstPercent }), [gstPercent])
   const propRollup = useMemo(() => {
     const t = localTodayISO()
-    const gstMult = 1 + (Number(gstPercent) || 0) / 100
     const byProp: Record<string, {
       plans: ServicePlan[]; upcoming: Job[]; openQuotes: Quote[]; outstanding: number; lastServiceDate: string | null
     }> = {}
@@ -522,11 +529,11 @@ export default function CustomerDetailPage() {
     for (const inv of invoices) {
       if (!inv.property_id || !byProp[inv.property_id]) continue
       if (inv.status === 'draft' || inv.status === 'cancelled') continue
-      const bal = Number(inv.amount || 0) * gstMult - (Number(inv.amount_paid) || 0)
+      const bal = invoiceBalance(inv, feeSettings).balance
       if (bal > 0.01) byProp[inv.property_id].outstanding += bal
     }
     return byProp
-  }, [properties, servicePlans, jobs, quotes, invoices, gstPercent])
+  }, [properties, servicePlans, jobs, quotes, invoices, feeSettings])
 
   // The customer-level totals, summed from the same per-property figures so the
   // header and the rows can never disagree.
@@ -571,11 +578,11 @@ export default function CustomerDetailPage() {
   // Collected = money actually received (ledger amount_paid, incl. partial payments);
   // Outstanding = remaining balance across issued invoices.
   const collectedRevenue = invoices.reduce((s, i) => s + (Number(i.amount_paid) || 0), 0)
-  // GST-inclusive + cancelled excluded — agrees with the Invoices page ledger math.
-  const custGstMult = 1 + (Number(gstPercent) || 0) / 100
+  // GST-inclusive + cancelled excluded — agrees with the Invoices page ledger math
+  // because it IS that math: invoiceBalance, not a re-derivation.
   const outstandingRevenue = invoices
     .filter(i => i.status !== 'draft' && i.status !== 'cancelled')
-    .reduce((s, i) => s + Math.max(0, Math.round((Number(i.amount || 0) * custGstMult - (Number(i.amount_paid) || 0)) * 100) / 100), 0)
+    .reduce((s, i) => s + Math.max(0, invoiceBalance(i, feeSettings).balance), 0)
   const avgJobValue = wonQuotes.length > 0 ? bookedRevenue / wonQuotes.length : 0
   // "Open" = still awaiting an answer — the SAME 'sent'/'draft' rule the per-property
   // roll-up uses below, applied customer-wide for the header answer strip.
@@ -622,8 +629,8 @@ export default function CustomerDetailPage() {
   for (const inv of invoices.filter(i => OPEN_INVOICE.has(i.status))) {
     const overdue = !!inv.due_date && inv.due_date < today
     // What's still OWED, not the invoice's face value — a partially paid invoice used
-    // to show its gross here. Same balance arithmetic as the per-property roll-up.
-    const remaining = Math.round((Number(inv.amount || 0) * custGstMult - (Number(inv.amount_paid) || 0)) * 100) / 100
+    // to show its gross here. Same balance engine as everywhere else: invoiceBalance.
+    const remaining = invoiceBalance(inv, feeSettings).balance
     // Deep-link straight to the focused invoice — landing on the unfiltered list
     // meant re-finding the invoice you just tapped.
     openItems.push({ key: `inv-${inv.id}`, icon: Receipt, label: `${overdue ? 'Overdue' : inv.status === 'partial' ? 'Partially paid' : 'Unpaid'} invoice ${inv.invoice_number}`, sub: `${formatCurrency(remaining)}${inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}`, href: `/dashboard/invoices?invoice=${encodeURIComponent(inv.invoice_number)}`, tone: overdue ? 'text-red-400' : 'text-amber-400' })
