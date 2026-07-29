@@ -28,7 +28,7 @@ import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { servicePricingKind } from '@/lib/servicePricing'
 import { saveManual } from '@/lib/measure/data'
-import { Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Camera, Globe, CalendarClock } from 'lucide-react'
+import { AlertTriangle, Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Camera, Globe, CalendarClock } from 'lucide-react'
 
 export default function QuoteDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -414,7 +414,19 @@ export default function QuoteDetailPage() {
         if (quote.status === 'accepted') setQuote({ ...quote, status: 'scheduled' })
         // Say exactly where the job landed (TODAY's route until moved) and offer
         // one tap to it — crew/notes/time tweaks usually happen immediately.
-        toast('Job added to today’s schedule.', {
+        // AND say what did NOT happen: scheduleQuoteAsJob books ONE visit, never a
+        // recurring schedule — deliberately (recurrence needs a day/frequency the
+        // owner picks on the job). But for a quote whose customer chose a weekly
+        // plan, "Job added" read as "done", the plan never became a schedule, and
+        // every surface agreed the work was booked. The toast now carries the
+        // remaining step instead of implying there isn't one.
+        const cad = quote.selected_cadence && quote.selected_cadence !== 'one_time'
+          ? quote.selected_cadence
+          : (Number(quote.weekly_price) > 0 || Number(quote.biweekly_price) > 0 || Number(quote.monthly_price) > 0) ? 'recurring' : null
+        const cadLabel = cad === 'weekly' ? 'weekly plan' : cad === 'biweekly' ? 'bi-weekly plan' : cad === 'monthly' ? 'monthly plan' : cad === 'recurring' ? 'recurring plan' : null
+        toast(cadLabel
+          ? `First visit added to today’s schedule. The ${cadLabel} isn’t a repeating schedule yet — open the job to set its recurrence.`
+          : 'Job added to today’s schedule.', {
           tone: 'success',
           action: { label: 'View job', run: () => router.push('/dashboard/schedule') },
         })
@@ -681,6 +693,21 @@ export default function QuoteDetailPage() {
   if (editing) return (
     <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader title={`Edit ${quote.quote_number}`} />
+      {/* The customer's approval covered a SPECIFIC number. Edit was offered on
+          accepted/scheduled/completed quotes with no acknowledgement that a deal
+          existed — and the accepted_price snapshot the portal writes was read
+          nowhere in the app, so rewriting an approved total looked identical to
+          tweaking a draft. Warn, never block: price corrections after acceptance
+          are legitimate (that's why Edit exists here), but they must be made
+          knowing the customer hasn't agreed to the new number. */}
+      {['accepted', 'scheduled', 'completed', 'paid'].includes(quote.status) && (
+        <Banner tone="warn" icon={AlertTriangle}>
+          <span className="font-semibold text-ink">
+            The customer approved this quote{Number(quote.accepted_price) > 0 ? ` at ${formatCurrency(Number(quote.accepted_price))}` : ''}.
+          </span>{' '}
+          Changes here are not re-approved automatically — if the price moves, send it again or confirm with them before the work is billed.
+        </Banner>
+      )}
       <QuoteBuilder
         customers={customers}
         templates={templates}
@@ -1089,15 +1116,25 @@ export default function QuoteDetailPage() {
             {(quote.weekly_price || quote.biweekly_price || quote.monthly_price) ? (
               <div className="pt-3 border-t border-border space-y-1.5">
                 <p className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide">Ongoing maintenance options</p>
-                {quote.weekly_price ? (
-                  <div className="flex justify-between text-sm"><span className="text-ink-muted">Weekly</span><span className="text-ink font-medium tabular-nums">{formatCurrency(quote.weekly_price)}/visit</span></div>
-                ) : null}
-                {quote.biweekly_price ? (
-                  <div className="flex justify-between text-sm"><span className="text-ink-muted">Bi-Weekly</span><span className="text-ink font-medium tabular-nums">{formatCurrency(quote.biweekly_price)}/visit</span></div>
-                ) : null}
-                {quote.monthly_price ? (
-                  <div className="flex justify-between text-sm"><span className="text-ink-muted">Monthly</span><span className="text-ink font-medium tabular-nums">{formatCurrency(quote.monthly_price)}/visit</span></div>
-                ) : null}
+                {/* WHICH plan the customer picked (selected_cadence, snapshotted at
+                    acceptance) was stored but shown nowhere — the owner read three
+                    equal options on a quote whose customer had already chosen one,
+                    and had to find the answer in the portal conversation. */}
+                {([
+                  { key: 'weekly', label: 'Weekly', price: quote.weekly_price },
+                  { key: 'biweekly', label: 'Bi-Weekly', price: quote.biweekly_price },
+                  { key: 'monthly', label: 'Monthly', price: quote.monthly_price },
+                ] as const).map(p => p.price ? (
+                  <div key={p.key} className="flex justify-between text-sm">
+                    <span className="text-ink-muted">
+                      {p.label}
+                      {quote.selected_cadence === p.key && (
+                        <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5">Customer’s choice</span>
+                      )}
+                    </span>
+                    <span className="text-ink font-medium tabular-nums">{formatCurrency(p.price)}/visit</span>
+                  </div>
+                ) : null)}
               </div>
             ) : null}
           </div>

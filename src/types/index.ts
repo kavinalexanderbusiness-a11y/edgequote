@@ -1060,6 +1060,13 @@ export interface Quote {
   follow_up_count: number
   // Captured at acceptance so recovery impact can be measured later
   accepted_after_followup: boolean
+  // Acceptance snapshot (RUN-2026-07-16c/d): what the customer actually agreed
+  // to. Written ONLY by the portal-accept RPC and markWonPatch — app code reads
+  // these, never writes them. They existed in the DB for twelve days before
+  // being typed here, which is why no owner surface could warn "the customer
+  // approved a different number".
+  accepted_price: number | null
+  selected_cadence: 'one_time' | 'weekly' | 'biweekly' | 'monthly' | null
   follow_up_count_at_acceptance: number | null
   service_template_id: string | null
   overgrowth_multiplier: number

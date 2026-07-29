@@ -9,14 +9,18 @@
 
 import { createHash, randomBytes } from 'crypto'
 
-export const API_KEY_PREFIX = 'eq_live_'
-export const WEBHOOK_SECRET_PREFIX = 'whsec_'
-export const INBOUND_TOKEN_PREFIX = 'eqin_'
-
-export const API_SCOPES = ['read', 'write'] as const
-export type ApiScope = (typeof API_SCOPES)[number]
-
-export const API_RATE_LIMIT_PER_MINUTE = 120 // enforced in authenticate_api_key()
+// The constants live in ./constants — a leaf with NO imports, so a browser
+// module that only needs a prefix or a limit doesn't drag this file's `crypto`
+// import (and its ~124 kB polyfill) into the client bundle. Re-exported as
+// VALUES here so every existing `from './keys'` import site is unchanged.
+import {
+  API_KEY_PREFIX, WEBHOOK_SECRET_PREFIX, INBOUND_TOKEN_PREFIX,
+  API_SCOPES, API_RATE_LIMIT_PER_MINUTE, type ApiScope,
+} from './constants'
+export {
+  API_KEY_PREFIX, WEBHOOK_SECRET_PREFIX, INBOUND_TOKEN_PREFIX,
+  API_SCOPES, API_RATE_LIMIT_PER_MINUTE, type ApiScope,
+}
 
 /** Mint a full API key: `eq_live_` + 64 hex chars (32 random bytes). */
 export function generateApiKey(): string {

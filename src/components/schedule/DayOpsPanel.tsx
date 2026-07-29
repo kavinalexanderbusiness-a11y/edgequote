@@ -524,6 +524,17 @@ export function DayOpsPanel({
   const workedMin = completed.reduce((s, j) => s + (j.actual_minutes || 0), 0)
     + (inProgress?.started_at ? elapsedMin(inProgress.started_at) : 0)
   const live = isToday && (!!inProgress || (!!firstStart && completed.length > 0))
+  // ── End-of-day wrap-up ──
+  // Once nothing is left to START (every job is done or on the clock), surface the
+  // loose ends the owner would otherwise find tomorrow: a timer still running —
+  // which banks overnight hours into actual_minutes the moment it's completed — and
+  // completed work with no price, which silently drafts no invoice. Read-only over
+  // arrays already in memory; jumps straight to the offending stop.
+  const notStarted = remaining.filter(j => j.status === 'scheduled')
+  const stillRunning = remaining.filter(j => j.status === 'in_progress')
+  const unpricedDone = completed.filter(j => jobTotal(j) <= 0)
+  const looseEnds = stillRunning.length > 0 || unpricedDone.length > 0
+  const showWrapUp = isToday && completed.length > 0 && notStarted.length === 0
   // Re-render each minute on TODAY so elapsed, finish and the timeline's "now"
   // line stay current — the now line has to keep moving before the first
   // check-in, which is exactly when you're deciding whether you're already late.
@@ -625,6 +636,46 @@ export function DayOpsPanel({
           action={{ label: 'Add job', onClick: onAddJob }} />
       ) : (
         <div className="p-4 space-y-4">
+          {/* End-of-day wrap-up — appears once nothing is left to start, so the
+              owner clears loose ends (a running timer, unpriced completed work)
+              before leaving instead of discovering them tomorrow. */}
+          {showWrapUp && (looseEnds ? (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.06] px-3.5 py-3">
+              <div className="flex items-center gap-2 mb-2">
+                <ListChecks className="w-4 h-4 text-amber-300 shrink-0" />
+                <p className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Before you wrap up</p>
+              </div>
+              <div className="space-y-1.5">
+                {stillRunning.map(j => (
+                  <button key={j.id} type="button" onClick={() => jumpToStop(j.id)}
+                    className="w-full flex items-center gap-2 text-left text-xs group"
+                    title="Finish or continue this job — a running timer banks overnight hours when completed">
+                    <Timer className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span className="text-ink font-medium truncate">{j.customers?.name || j.title}</span>
+                    <span className="text-ink-faint truncate">still on the clock{j.started_at ? ` · ${elapsedMin(j.started_at)}m` : ''} — finish or continue it</span>
+                    <ChevronDown className="w-3.5 h-3.5 text-ink-faint ml-auto shrink-0 -rotate-90 group-hover:text-ink" />
+                  </button>
+                ))}
+                {unpricedDone.map(j => (
+                  <button key={j.id} type="button" onClick={() => jumpToStop(j.id)}
+                    className="w-full flex items-center gap-2 text-left text-xs group"
+                    title="Set a price so this completed job gets invoiced">
+                    <DollarSign className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span className="text-ink font-medium truncate">{j.customers?.name || j.title}</span>
+                    <span className="text-ink-faint truncate">done with no price — set one to bill it</span>
+                    <ChevronDown className="w-3.5 h-3.5 text-ink-faint ml-auto shrink-0 -rotate-90 group-hover:text-ink" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/[0.06] px-3.5 py-3 flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-300 shrink-0" />
+              <p className="text-xs text-ink">
+                <span className="font-semibold text-emerald-300">Day wrapped up.</span> {completed.length} job{completed.length !== 1 ? 's' : ''} done · <span className="tabular-nums">{formatCurrency(revenueCompleted)}</span> ready to invoice.
+              </p>
+            </div>
+          ))}
           {/* Route intelligence — the dispatcher board. (The old 4-stat "day
               operations" grid repeated the metric strip and settings bar — gone.) */}
           <div className="rounded-xl border border-border bg-bg-tertiary px-3 py-2.5">

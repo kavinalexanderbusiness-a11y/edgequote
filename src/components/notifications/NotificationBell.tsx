@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -46,10 +46,45 @@ interface PanelPos { top: number; left: number; width: number; maxHeight: number
 // The dropdown is rendered in a portal with fixed, viewport-clamped coordinates so
 // it's ALWAYS fully visible (GitHub/Slack style) regardless of where the bell sits
 // or how narrow the screen is — never clipped by the sidebar or the viewport edge.
+// ── Shared feed: ONE fetch, ONE realtime channel, however many bells ─────────
+// The Sidebar mounts a bell TWICE — the mobile top bar and the desktop rail —
+// and hides one with CSS. Both used to run this effect, and both used to open
+// `notif:<uid>`: supabase-js reuses the topic, and RealtimeChannel THROWS when
+// you add a postgres_changes binding to a channel that has already subscribed.
+// So the second bell's chain threw inside an unawaited async IIFE — an uncaught
+// rejection on every dashboard load, and that bell held NO subscription for the
+// whole session. Effects run in document order, so the mobile bell won and the
+// desktop rail's bell — the VISIBLE one on a laptop — was typically the dead
+// one: its badge only updated on a full page reload.
+//
+// A module-level store fixes the defect and the duplication together (same
+// shape as useBusinessData/useModules). Deliberately NOT folded into useUnread:
+// that hook documents its two-channel choice, and the notifications PAGE runs a
+// different query (limit 100, keeps snoozed rows) — merging them would change
+// what each surface shows.
+let feedStore: AppNotification[] = []
+const feedListeners = new Set<() => void>()
+let feedChannel: ReturnType<ReturnType<typeof createClient>['channel']> | null = null
+let feedRefs = 0
+let feedLoaded = false
+
+function emitFeed() { for (const l of Array.from(feedListeners)) l() }
+function subscribeFeed(cb: () => void) { feedListeners.add(cb); return () => { feedListeners.delete(cb) } }
+function getFeed() { return feedStore }
+function getServerFeed(): AppNotification[] { return EMPTY_FEED }
+const EMPTY_FEED: AppNotification[] = []
+
+/** Optimistic local patch (mark-read + its revert) — every bell re-renders. */
+function patchFeed(fn: (prev: AppNotification[]) => AppNotification[]): void {
+  feedStore = fn(feedStore)
+  emitFeed()
+}
+
 export function NotificationBell() {
   const supabase = useMemo(() => createClient(), [])
   const router = useRouter()
-  const [items, setItems] = useState<AppNotification[]>([])
+  const items = useSyncExternalStore(subscribeFeed, getFeed, getServerFeed)
+  const setItems = patchFeed
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState<PanelPos | null>(null)
   const [mounted, setMounted] = useState(false)
@@ -74,22 +109,35 @@ export function NotificationBell() {
     }
     const now = Date.now()
     const rows = (data || []).filter(n => !n.snoozed_until || new Date(n.snoozed_until).getTime() <= now).slice(0, 20)
-    setItems(rows)
+    feedStore = rows
+    emitFeed()
   }
 
+  // Ref-counted: the FIRST bell to mount loads the feed and opens the single
+  // channel; the last to unmount closes it. A second bell just joins the store.
   useEffect(() => {
     let active = true
-    let channel: ReturnType<typeof supabase.channel> | null = null
+    feedRefs++
     ;(async () => {
       const { data: { session } } = await supabase.auth.getSession()
       const uid = session?.user?.id
       if (!uid || !active) return
-      await load(uid)
-      channel = supabase.channel(`notif:${uid}`)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${uid}` }, () => load(uid))
-        .subscribe()
+      if (!feedLoaded) { feedLoaded = true; await load(uid) }
+      if (!feedChannel) {
+        feedChannel = supabase.channel(`notif:${uid}`)
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${uid}` }, () => load(uid))
+          .subscribe()
+      }
     })()
-    return () => { active = false; if (channel) supabase.removeChannel(channel) }
+    return () => {
+      active = false
+      feedRefs--
+      if (feedRefs <= 0 && feedChannel) {
+        supabase.removeChannel(feedChannel)
+        feedChannel = null
+        feedLoaded = false
+      }
+    }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const unread = items.filter(n => !n.read).length
@@ -186,7 +234,16 @@ export function NotificationBell() {
       if (error) toast.error('Could not create job: ' + error)
       else {
         markRead([n.id])
-        toast('Job added to today’s schedule.', {
+        // Same honesty as the quote page's Schedule button: ONE visit was booked,
+        // never a repeating schedule — a quote with an approved recurring plan
+        // still needs its recurrence set on the job, and "Job added" hid that.
+        const cad = quote.selected_cadence && quote.selected_cadence !== 'one_time'
+          ? quote.selected_cadence
+          : (Number(quote.weekly_price) > 0 || Number(quote.biweekly_price) > 0 || Number(quote.monthly_price) > 0) ? 'recurring' : null
+        const cadLabel = cad === 'weekly' ? 'weekly plan' : cad === 'biweekly' ? 'bi-weekly plan' : cad === 'monthly' ? 'monthly plan' : cad === 'recurring' ? 'recurring plan' : null
+        toast(cadLabel
+          ? `First visit added to today’s schedule. The ${cadLabel} isn’t a repeating schedule yet — open the job to set its recurrence.`
+          : 'Job added to today’s schedule.', {
           tone: 'success',
           action: { label: 'View job', run: () => { setOpen(false); router.push('/dashboard/schedule') } },
         })

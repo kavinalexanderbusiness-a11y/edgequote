@@ -706,3 +706,83 @@ and prints real units in the qty column (`6 yd³ × $55`, not `6 × $55`).
 - §24's unverified trio, unchanged.
 - From §25: scheduling an accepted recurring quote creates a one-time visit; editing an
   ACCEPTED quote warns nobody. Both are lifecycle/product decisions, not presentation fixes.
+
+---
+---
+
+# Round 9 — launch-readiness pass: the deal the customer already made (2026-07-28)
+
+Walked the full owner loop (create → edit → duplicate → send → schedule → invoice) on current
+main. The builder itself is in good shape after eight rounds and two parallel PRs — the
+remaining friction was all downstream, in what happens AFTER a customer says yes. Root cause,
+found while fixing: **the acceptance snapshot columns (`accepted_price`, `selected_cadence`,
+RUN-2026-07-16c/d) were written by the portal and `markWonPatch` but never added to the TS
+`Quote` type** — so for twelve days no owner surface *could* read what the customer agreed to.
+
+## §29 · Fixed this round
+
+1. **Typed the snapshot.** `accepted_price` and `selected_cadence` joined the `Quote`
+   interface (read-only app-side; the RPC and `markWonPatch` remain the only writers).
+2. **Editing an approved quote now says so.** Edit was offered on accepted/scheduled/
+   completed/paid quotes with no acknowledgement a deal existed. The edit screen now opens
+   with a warning banner naming the approved amount — warn, never block: post-acceptance
+   corrections are legitimate, but they must be made knowing the customer hasn't agreed to
+   the new number.
+3. **Scheduling tells the truth about recurrence.** `scheduleQuoteAsJob` books ONE visit,
+   deliberately — but "Job added to today's schedule" read as *done* for a quote whose
+   customer approved a weekly plan, and the plan never became a repeating schedule. Both
+   callers (quote page + notification bell) now say: *"First visit added — the weekly plan
+   isn't a repeating schedule yet; open the job to set its recurrence."* Copy only; the
+   engine is unchanged.
+4. **The plan list names the customer's choice.** The detail page listed Weekly/Bi-Weekly/
+   Monthly as three equal rows on quotes where `selected_cadence` already recorded which one
+   the customer picked. A "Customer's choice" chip now marks it.
+
+## §30 · State of the surface
+
+The New Quote fast path, additional-services flow, breakdowns, PDF, duplication and portal
+gating have all been audited to a standstill across nine rounds. What remains is catalogued,
+not unknown: the §24 unverified trio, the portal travel breakout (RPC lane), the `quote:new`
+autosave key strategy, and the Pricing-V2-gated items (§20, §23). Nothing in the create-to-
+invoice loop still silently loses, invents, or misrepresents a number the owner or customer
+decided.
+
+---
+---
+
+# Round 10 — the parallel restoration lands (2026-07-28, second session)
+
+Two sessions independently re-verified this document against merged main on the same day
+and restored disjoint halves of the 07-26 rebase regression. Round 8/9 above restored the
+BLANK seeds, the travel-fee wipe gates, unit-labelled line pricing, the PDF's promises and
+faithful duplicates. This round carried the other half, plus the fixes the earlier rounds
+had left open:
+
+## §30 · Restored here (rounds 1–3 content lost in the same replay)
+
+§2.3 Service-Name collapse ("Customer reads X · Rename") · §2.4 measured-area demoted to a
+link on trades it doesn't price, Measure button promoted above it · §2.5 copy trims
+(plan-options restatement gone; material chips retire once named) · §3.4 "Quote breakdown"
+naming · §7 `aria-pressed` on plan tiles · §10.3 travel banner gated on charging · §11.1
+service chips at ≤6 active templates · §11.2+§15 all three first-run dead-end links ·
+§14 no-price warning in both breakdowns (skips recurring-only quotes — §22.1 made those a
+deliberate state) · §16 `travelSuggestion` memoised. **§4.1 completed one level deeper:**
+the blocked-submit router now opens the exact NESTED section (Labour/Plan/Travel) hiding
+the offending field, not just the outer one. §3.1's flattening stays unrestored on purpose.
+
+## §31 · New fixes this round
+
+- **The status pill froze at mount** (`QuoteStatusControl` seeded state from its prop once,
+  under the list's stable `key={q.id}`) — a portal accept never repainted it. It now adopts
+  prop CHANGES via a ref: never mid-save, never from a pre-refetch parent re-render.
+- **Bulk Convert now carries `line_items`** (breakdown + travel), built exactly as the
+  single-quote Convert builds them — bulk-converted invoices no longer flatten a
+  multi-service quote to one opaque amount. (Bulk Duplicate's line copy landed in §26;
+  both bulk actions now share one batched line fetch.)
+- **Create no longer prefers the measurement handoff's stale values**: the builder's live
+  `suggested_price` wins when present, and the handoff's `propertyId` applies only while
+  the quote still targets the measured address — re-targeting mid-build used to save the
+  new customer's quote against the old property row.
+
+Still open, unchanged: §24's phantom-draft baseline, the portal travel breakout (frozen
+RPC), portal Approve's stale-tab expiry check, and everything Pricing-V2-gated (§20, §23).

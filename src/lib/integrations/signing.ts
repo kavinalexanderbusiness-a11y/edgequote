@@ -10,10 +10,14 @@
 
 import { createHmac, timingSafeEqual } from 'crypto'
 
-export const SIGNATURE_HEADER = 'x-edgequote-signature'
-export const EVENT_HEADER = 'x-edgequote-event'
-export const DELIVERY_HEADER = 'x-edgequote-delivery'
-export const SIGNATURE_TOLERANCE_SECONDS = 300
+// Header names + tolerance live in ./constants (a no-import leaf) so browser
+// code can read them without pulling this file's `crypto` import into the
+// client bundle. Re-exported as VALUES — existing `from './signing'` sites
+// are unchanged.
+import {
+  SIGNATURE_HEADER, EVENT_HEADER, DELIVERY_HEADER, SIGNATURE_TOLERANCE_SECONDS,
+} from './constants'
+export { SIGNATURE_HEADER, EVENT_HEADER, DELIVERY_HEADER, SIGNATURE_TOLERANCE_SECONDS }
 
 function hmacHex(secret: string, message: string): string {
   return createHmac('sha256', secret).update(message).digest('hex')

@@ -15,8 +15,11 @@ import { SectionHeading } from '@/components/ui/SectionHeading'
 import { CodeBlock, CopyRow } from '@/components/integrations/CodeBlock'
 import { INTEGRATION_EVENTS, SERIALIZED_FIELDS, TEST_EVENT, sampleDeliveryBody } from '@/lib/integrations/events'
 import { BACKOFF_MINUTES, MAX_ATTEMPTS, AUTO_DISABLE_AFTER, RETENTION_DAYS } from '@/lib/integrations/retry'
-import { API_RATE_LIMIT_PER_MINUTE } from '@/lib/integrations/keys'
-import { SIGNATURE_HEADER, SIGNATURE_TOLERANCE_SECONDS } from '@/lib/integrations/signing'
+// From the constants LEAF, not keys.ts/signing.ts: those are Node-only
+// (`crypto`), and importing four values through them pulled the whole
+// crypto-browserify polyfill into this page's browser bundle. Same constants,
+// same no-drift contract.
+import { API_RATE_LIMIT_PER_MINUTE, SIGNATURE_HEADER, SIGNATURE_TOLERANCE_SECONDS } from '@/lib/integrations/constants'
 
 const RESOURCES: { path: string; method: string; scope: string; note: string }[] = [
   { path: '/api/v1/me', method: 'GET', scope: 'read', note: 'Key introspection — use as the connection test.' },
