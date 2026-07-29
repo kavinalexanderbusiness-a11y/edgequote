@@ -200,18 +200,34 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     }
     const svc = (q?.service_type || '').trim()
     const amount = Number(q?.total) || 0
-    const plan = q ? ([
+    // The dialog's whole job is stating what the customer commits to, so it must
+    // match the doc row one tap beneath it:
+    // • every plan price is PER VISIT (model.ts's own doc-row comment calls the
+    //   "per month" reading a 4× misread the customer only discovers on their
+    //   first bill — this dialog used to BE that misread, at the moment of
+    //   commitment);
+    // • several plan prices are OPTIONS — enumerate them instead of asserting
+    //   the first as settled fact;
+    // • a multi-service total must not be pinned on the primary service's name
+    //   alone ("Mowing for $840" hides the other lines the row itemizes).
+    const lineCount = q?.services?.length ?? 0
+    const planBits = q ? [
       Number(q.weekly_price) > 0 ? `${formatCurrency(Number(q.weekly_price))} per weekly visit` : null,
       Number(q.biweekly_price) > 0 ? `${formatCurrency(Number(q.biweekly_price))} per bi-weekly visit` : null,
-      Number(q.monthly_price) > 0 ? `${formatCurrency(Number(q.monthly_price))} per month` : null,
-    ].filter(Boolean)[0] as string | undefined) : undefined
+      Number(q.monthly_price) > 0 ? `${formatCurrency(Number(q.monthly_price))} per visit on the monthly plan` : null,
+    ].filter((s): s is string => !!s) : []
+    const plan = planBits.length > 1
+      ? `Ongoing plan options: ${planBits.join(' · ')} — we'll confirm your schedule with you.`
+      : planBits.length === 1 ? `Ongoing visits after that are ${planBits[0]}.` : null
     const gst = Number(data?.business?.gst_percent) || 0
-    const what = svc ? `${svc} for ${formatCurrency(amount)}` : formatCurrency(amount)
+    const what = svc
+      ? `${lineCount > 1 ? `${svc} + ${lineCount - 1} more service${lineCount > 2 ? 's' : ''}` : svc} for ${formatCurrency(amount)}`
+      : formatCurrency(amount)
     const confirmed = await confirmDialog({
       title: `Approve ${formatCurrency(amount)}?`,
       message: [
         `You're approving ${what}${gst > 0 ? `, plus GST (${gst}%) added on your invoice` : ''}.`,
-        plan ? `Ongoing visits after that are ${plan}.` : null,
+        plan,
         `Approving doesn't charge you — we'll confirm a date with you first, and you'll only get an invoice after the work is done.`,
       ].filter(Boolean).join(' '),
       confirmLabel: `Approve ${formatCurrency(amount)}`,

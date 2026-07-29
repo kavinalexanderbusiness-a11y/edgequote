@@ -37,7 +37,7 @@ import type { MeasurementSnapshot, SavedRecommendation } from '@/types'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { PriceIntelligence } from '@/components/pricing/PriceIntelligence'
-import { Clock, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp, Package } from 'lucide-react'
+import { Clock, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp, Package } from 'lucide-react'
 
 interface QuoteBuilderProps {
   customers: Customer[]
@@ -58,6 +58,12 @@ interface QuoteBuilderProps {
   autosaveKey?: string
   /** Server record's updated_at — drafts older than this are never offered. */
   autosaveBaselineUpdatedAt?: string | null
+  /** Where Cancel goes. The EDIT flow is a same-route state toggle (the detail
+      page flips `editing`), so its Cancel must return to the quote VIEW — the
+      default router.back() pops history right out of the quote (or the app
+      section, on a deep link), leaving "did it save?" uncertainty plus a stale
+      draft banner on the next Edit. New-quote callers omit it and keep back(). */
+  onCancel?: () => void
 }
 
 // Where the price in the field came from. NEVER inferred by comparing the field to
@@ -90,7 +96,7 @@ type PitchCadence = 'one_time' | 'weekly' | 'biweekly'
 
 export function QuoteBuilder({
   customers, templates, tiers, settings, defaultCustomerId, defaultPropertyId, defaultValues, onSubmit, isEdit,
-  autosaveKey, autosaveBaselineUpdatedAt,
+  autosaveKey, autosaveBaselineUpdatedAt, onCancel,
 }: QuoteBuilderProps) {
   const router = useRouter()
   const { register, handleSubmit, watch, setValue, getValues, reset, control, formState: { errors, isSubmitting } } =
@@ -195,15 +201,27 @@ export function QuoteBuilder({
   })
   // Which disclosure sections are open. Held here (not inside each Collapsible)
   // because a BLOCKED submit has to be able to open the one hiding the problem.
-  const [pricingOpen, setPricingOpen] = useState(false)
-  // The three sections nested INSIDE "Advanced Pricing" are controlled too.
-  // Opening only the outer section wasn't enough: a cleared crew_size lives two
-  // levels deep, so the blocked submit opened Advanced Pricing and the field was
-  // still hidden inside a closed "Labour calculator" — react-hook-form's focus
-  // then failed exactly the way §4.1 describes, one door further in.
-  const [laborOpen, setLaborOpen] = useState(false)
-  const [planOpen, setPlanOpen] = useState(false)
-  const [travelOpen, setTravelOpen] = useState(false)
+  // Labour / Plan pricing / Travel were three Collapsibles NESTED inside an
+  // "Advanced Pricing" Collapsible — two disclosure taps to the first labour
+  // field on every manually-priced quote, and (worse) with the outer section
+  // closed all three state summaries UNMOUNTED, so "Absorbing travel — no fee"
+  // vs "Charging travel fee" rode along unseen to Save. Flattened to top-level
+  // siblings (the pattern Additional services already follows), each CONTROLLED
+  // so the error handler can open the exact section hiding an invalid field
+  // (main's parallel pass made them controlled for the same reason — a cleared
+  // crew_size two doors deep defeated focus-on-error; the flatten removes the
+  // outer door entirely).
+  // Same content-starts-open rule as services/materials below: a saved quote's
+  // plan prices, travel fee and labour inputs start on screen when they exist.
+  const [laborOpen, setLaborOpen] = useState(
+    () => !!isEdit && (Number(defaultValues?.hours) > 0 || Number(defaultValues?.rate) > 0),
+  )
+  const [planOpen, setPlanOpen] = useState(
+    () => !!isEdit && (Number(defaultValues?.weekly_price) > 0 || Number(defaultValues?.biweekly_price) > 0 || Number(defaultValues?.monthly_price) > 0),
+  )
+  const [travelOpen, setTravelOpen] = useState(
+    () => !!isEdit && (Number(defaultValues?.travel_fee) > 0 || Number(defaultValues?.distance_km) > 0),
+  )
   // A section that ALREADY HAS content starts open. Opening a saved quote showed
   // "Additional services · 2 lines · $180" as one collapsed row, so the money most
   // likely to be wrong was the money you had to go looking for — and a quote can
@@ -216,12 +234,17 @@ export function QuoteBuilder({
     () => (defaultValues?.services || []).some(s => s?.kind === 'material'),
   )
 
-  // Fields that live inside "Advanced Pricing" — mapped to the NESTED section
-  // each lives in, so a validation error opens the exact door hiding the field,
-  // not just the outer one.
+  // Which section owns each pricing field — a validation error routes to (and
+  // opens) exactly the section holding the invalid input. Union of the three ==
+  // the old single PRICING_DETAIL_FIELDS list; no field orphaned.
   const LABOR_FIELDS = ['hours', 'crew_size', 'rate', 'overgrowth_multiplier']
   const PLAN_FIELDS = ['weekly_price', 'biweekly_price', 'monthly_price']
   const TRAVEL_FIELDS = ['travel_fee', 'distance_km']
+
+  // Armed by a Save attempt on a $0 first-visit total (see submit below) — flips
+  // both save buttons to "Save anyway" behind a persistent explanatory note, and
+  // disarms the moment a price exists.
+  const [zeroTotalArmed, setZeroTotalArmed] = useState(false)
 
   const submit = handleSubmit(
     // The draft is the owner's only copy until the row exists. It used to be
@@ -231,7 +254,19 @@ export function QuoteBuilder({
     // then refresh, and a quote that took minutes to build is gone. Clear it only
     // on a save that actually happened. Same rule handleOpenPdf already applies
     // to marking a quote Sent.
-    async v => { if (await onSubmit(v) !== false) autosave.clear() },
+    async v => {
+      // Warn-never-block on a $0 first-visit total. Saving it is LEGAL (a
+      // weekly-only pitch deliberately has no first-visit price) — but it saves
+      // as a quote that Send/PDF/invoice will hard-block one screen later as
+      // "no price", and the only cheap moment to say so is while the pricing
+      // fields are still on screen. First tap: don't save — arm a PERSISTENT
+      // note above both save buttons and relabel them "Save anyway" (a toast
+      // alone would make Save silently do nothing, this file's own documented
+      // bug DNA). Second tap saves unchanged. Arming resets the moment a price
+      // exists, so a fixed quote is back to one-tap Save.
+      if (effectiveTotal <= 0 && !zeroTotalArmed) { setZeroTotalArmed(true); return }
+      if (await onSubmit(v) !== false) autosave.clear()
+    },
     // Save used to fail SILENTLY. `crew_size` is required and lives inside a
     // collapsed section, so clearing it meant tapping Save did visibly nothing:
     // react-hook-form blocked the submit and then tried to focus a field that
@@ -239,9 +274,9 @@ export function QuoteBuilder({
     errs => {
       const keys = Object.keys(errs)
       if (!keys.length) return
-      if (keys.some(k => LABOR_FIELDS.includes(k))) { setPricingOpen(true); setLaborOpen(true) }
-      if (keys.some(k => PLAN_FIELDS.includes(k))) { setPricingOpen(true); setPlanOpen(true) }
-      if (keys.some(k => TRAVEL_FIELDS.includes(k))) { setPricingOpen(true); setTravelOpen(true) }
+      if (keys.some(k => LABOR_FIELDS.includes(k))) setLaborOpen(true)
+      if (keys.some(k => PLAN_FIELDS.includes(k))) setPlanOpen(true)
+      if (keys.some(k => TRAVEL_FIELDS.includes(k))) setTravelOpen(true)
       if (errs.services) {
         const bad = (errs.services as unknown[]).map((e, i) => (e ? i : -1)).filter(i => i >= 0)
         if (bad.some(i => kindAt(i) === 'material')) setMaterialsOpen(true)
@@ -368,6 +403,8 @@ export function QuoteBuilder({
   // (`watchedServices` is declared at the top of the component — see the note there.)
   const extras = useMemo(() => sumServiceLines(watchedServices), [watchedServices])
   const effectiveTotal = initialPrice + extras.net + Number(travelFee || 0)
+  // A price arriving disarms the $0-save warning — Save is one tap again.
+  useEffect(() => { if (zeroTotalArmed && effectiveTotal > 0) setZeroTotalArmed(false) }, [zeroTotalArmed, effectiveTotal])
 
   // Which pricing STRUCTURE this service uses — the one seam that decides which
   // engine recommends and which fields an Accept fills (lawn cadences vs area
@@ -840,17 +877,32 @@ export function QuoteBuilder({
   // `services` array, one totals engine). Rendered from both editors below so the
   // two can't drift, the same reason `previewBreakdown` exists. `i` is the real
   // field-array index the row registers against.
-  const lineDiscountRow = (i: number) => (
-    <div className="grid grid-cols-2 sm:grid-cols-[auto_auto_1fr] gap-3 items-end">
-      <Select label="Discount" placeholder="None"
-        options={[{ value: 'amount', label: '$ off' }, { value: 'percent', label: '% off' }]}
-        {...register(`services.${i}.discount_type` as const)} />
-      <Input label="Value" type="number" step="1" min="0"
-        {...register(`services.${i}.discount_value` as const, { min: 0 })} />
-      <Input label="Notes" placeholder="Optional"
-        {...register(`services.${i}.notes` as const)} />
-    </div>
-  )
+  const lineDiscountRow = (i: number) => {
+    // applyDiscount deliberately ignores a half-specified discount (a Value with
+    // no $/% picked, a type with no Value) — correct maths, silent trap: the
+    // owner promised "$20 off", the line kept charging full price, and the save
+    // dropped the orphan half without a trace. Say so in the moment instead —
+    // warn-never-block, and the lineEquation above confirms once it applies.
+    const dv = Number(watch(`services.${i}.discount_value`)) || 0
+    const dt = watch(`services.${i}.discount_type`)
+    const halfSpecified = dv > 0 && !dt
+      ? 'Pick “$ off” or “% off” — this discount isn’t applied yet.'
+      : dt && dv <= 0 ? 'Enter a discount amount — nothing is taken off yet.' : null
+    return (
+      <>
+        <div className="grid grid-cols-2 sm:grid-cols-[auto_auto_1fr] gap-3 items-end">
+          <Select label="Discount" placeholder="None"
+            options={[{ value: 'amount', label: '$ off' }, { value: 'percent', label: '% off' }]}
+            {...register(`services.${i}.discount_type` as const)} />
+          <Input label="Value" type="number" step="1" min="0"
+            {...register(`services.${i}.discount_value` as const, { min: 0 })} />
+          <Input label="Notes" placeholder="Optional"
+            {...register(`services.${i}.notes` as const)} />
+        </div>
+        {halfSpecified && <p className="text-[11px] text-amber-400">{halfSpecified}</p>}
+      </>
+    )
+  }
 
   // ── The price breakdown, defined ONCE ────────────────────────────────────────
   // Rendered by the desktop preview card AND the mobile sheet below. It used to
@@ -922,6 +974,13 @@ export function QuoteBuilder({
             No price yet — saving now creates a $0 quote. You can price it later.
           </p>
         )}
+        {/* Same predicate and promise as QuotePDF's "Plus GST (X%) — added on your
+            invoice". The owner's checking surface was the ONLY totals surface not
+            disclosing it — so a registered owner read "$180" here, said "$180
+            all-in" at the door, and the first invoice arrived at $189. */}
+        {Number(settings?.gst_percent) > 0 && effectiveTotal > 0 && (
+          <p className="text-xs text-ink-faint text-right">Plus GST ({Number(settings?.gst_percent)}%) — added on the invoice</p>
+        )}
       </div>
       {(weeklyPrice > 0 || biweeklyPrice > 0 || monthlyPrice > 0) && (
         <div className="border-t border-border pt-3 space-y-1.5">
@@ -933,6 +992,16 @@ export function QuoteBuilder({
       )}
     </>
   )
+
+  // The persistent $0-save note + relabeled button — rendered beside BOTH save
+  // controls, never a toast (a toast fades, and the withheld first save would
+  // read as Save silently doing nothing — this file's own documented bug DNA).
+  const zeroSaveNote = zeroTotalArmed && effectiveTotal <= 0 ? (
+    <p className="text-xs text-amber-400 font-medium">
+      No first-visit price — this saves as a draft, but it can&rsquo;t be sent, PDF&rsquo;d or invoiced until it has one.
+    </p>
+  ) : null
+  const saveLabel = zeroTotalArmed && effectiveTotal <= 0 ? 'Save anyway' : isEdit ? 'Update quote' : 'Save quote'
 
   return (
     <form onSubmit={submit} className="pb-24 lg:pb-0">
@@ -997,7 +1066,12 @@ export function QuoteBuilder({
               {showCustomerPicker && (
                 <Controller name="customer_id" control={control}
                   render={({ field }) => (
-                    <CustomerPicker label="Customer" customers={customers} value={field.value || ''} onChange={field.onChange} />
+                    <CustomerPicker label="Customer" customers={customers} value={field.value || ''} onChange={field.onChange}
+                      // The typed search IS the new customer's name — carry it into
+                      // the manual Name field instead of making the owner type it
+                      // twice. Fill-when-empty only (the file's own overwrite rule):
+                      // a name already entered is never replaced.
+                      onManual={typed => { if (typed && !String(getValues('customer_name') || '').trim()) setValue('customer_name', typed) }} />
                   )} />
               )}
               {showManualName && (
@@ -1377,8 +1451,15 @@ export function QuoteBuilder({
             </CardBody>
           </Card>
 
-          {/* ── Advanced Pricing — exact price + the full engine, collapsed until needed ── */}
-          <Collapsible title="Advanced Pricing" icon={SlidersHorizontal} summary="Exact price · labour · recurring · travel — full control" open={pricingOpen} onOpenChange={setPricingOpen}>
+          {/* ── The pricing engine sections — Labour · Plan pricing · Travel ────
+              These were three Collapsibles NESTED inside an "Advanced Pricing"
+              shell: two disclosure taps to the first labour field, and with the
+              shell closed (the default) all three live summaries — including
+              "Absorbing travel — no fee" vs "Charging travel fee" — were
+              unmounted entirely. Now top-level siblings like Additional services
+              below: one tap each, and every section's state is readable while
+              collapsed. The price FIELD stays in the fast path above; these
+              sections hold the engine that feeds it. ── */}
           {/* Saved measurement — the pricing source of truth for this property.
               Shown ONLY when there's no LIVE suggestion (same numbers, same
               engine — never two copies of the price list on screen).
@@ -1418,8 +1499,8 @@ export function QuoteBuilder({
             </div>
           )}
 
-          {/* The price field itself now lives in the fast path above — see the
-              note there. What stays here is the engine that FEEDS it. */}
+          {/* The price field itself lives in the fast path above — see the note
+              there. These sections hold the engine that FEEDS it. */}
 
           <Collapsible title="Labour calculator" icon={Calculator} summary={laborSummary} open={laborOpen} onOpenChange={setLaborOpen}>
             <p className="text-xs text-ink-faint">Hours × crew × rate — this is what the suggested price above is built from when there’s no measurement to price against.</p>
@@ -1530,9 +1611,8 @@ export function QuoteBuilder({
                 )} />
             </div>
           </Collapsible>
-          </Collapsible>
           {/* ── Additional services — a quote can hold one OR many services. Sits
-              right after Advanced Pricing so the primary flow reads Address →
+              right after the pricing sections so the primary flow reads Address →
               Measure → Recommended price → Accept → fine-tune → extras. Each line
               has qty × unit price − discount; totals sum via the one
               quote-services engine. The primary service above stays untouched. ── */}
@@ -1785,10 +1865,11 @@ export function QuoteBuilder({
             <CardBody className="space-y-3">
               {previewBreakdown}
               <div className="pt-2 space-y-2">
+                {zeroSaveNote}
                 <Button type="submit" className="w-full" size="lg" loading={isSubmitting}>
-                  {isEdit ? 'Update quote' : 'Save quote'}
+                  {saveLabel}
                 </Button>
-                <Button type="button" variant="ghost" className="w-full" onClick={() => router.back()}>Cancel</Button>
+                <Button type="button" variant="ghost" className="w-full" onClick={onCancel ?? (() => router.back())}>Cancel</Button>
               </div>
             </CardBody>
           </Card>
@@ -1796,22 +1877,25 @@ export function QuoteBuilder({
       </div>
 
       {/* Mobile sticky save bar — always reachable without scrolling */}
-      <StickyActionBar fixed className="lg:hidden flex items-center justify-between gap-3">
-        {/* The total is the handle for the breakdown on mobile — the desktop
-            preview card is the only other place it exists, and it's lg-only. */}
-        <button type="button" onClick={() => setShowPreview(true)}
-          className="leading-tight min-w-0 text-left rounded-lg -m-1 p-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          aria-label="Show the price breakdown">
-          <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1">
-            First visit total <ChevronUp className="w-3 h-3" />
-          </p>
-          {/* Matches the breakdown it opens: an unpriced quote reads "—", not a
-              confident $0.00 sitting where the price goes. */}
-          <p className="text-xl font-bold text-accent-text leading-none tabular-nums">{effectiveTotal > 0 ? formatCurrency(effectiveTotal) : '—'}</p>
-        </button>
-        <div className="flex items-center gap-2 shrink-0">
-          <Button type="button" variant="ghost" size="sm" onClick={() => router.back()}>Cancel</Button>
-          <Button type="submit" size="lg" loading={isSubmitting}>{isEdit ? 'Update quote' : 'Save quote'}</Button>
+      <StickyActionBar fixed className="lg:hidden">
+        {zeroSaveNote && <div className="pb-2">{zeroSaveNote}</div>}
+        <div className="flex items-center justify-between gap-3">
+          {/* The total is the handle for the breakdown on mobile — the desktop
+              preview card is the only other place it exists, and it's lg-only. */}
+          <button type="button" onClick={() => setShowPreview(true)}
+            className="leading-tight min-w-0 text-left rounded-lg -m-1 p-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            aria-label="Show the price breakdown">
+            <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1">
+              First visit total <ChevronUp className="w-3 h-3" />
+            </p>
+            {/* Matches the breakdown it opens: an unpriced quote reads "—", not a
+                confident $0.00 sitting where the price goes. */}
+            <p className="text-xl font-bold text-accent-text leading-none tabular-nums">{effectiveTotal > 0 ? formatCurrency(effectiveTotal) : '—'}</p>
+          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <Button type="button" variant="ghost" size="sm" onClick={onCancel ?? (() => router.back())}>Cancel</Button>
+            <Button type="submit" size="lg" loading={isSubmitting}>{saveLabel}</Button>
+          </div>
         </div>
       </StickyActionBar>
 

@@ -755,6 +755,11 @@ export default function QuoteDetailPage() {
         isEdit
         autosaveKey={`quote:${quote.id}`}
         autosaveBaselineUpdatedAt={quote.updated_at}
+        // Editing is a same-route state toggle — Cancel must return to the quote
+        // VIEW, exactly where Save lands. router.back() (the default) popped
+        // history out of the quote entirely: 2-3 taps to re-find it, plus a
+        // did-it-save beat of doubt.
+        onCancel={() => setEditing(false)}
       />
     </div>
   )

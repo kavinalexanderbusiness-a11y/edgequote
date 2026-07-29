@@ -19,6 +19,11 @@ interface CustomerPickerProps {
   value: string                 // selected customer id, '' (none), or '__manual'
   onChange: (value: string) => void
   allowManual?: boolean         // show the "+ Enter manually" row (default true)
+  /** Fires when the manual row is chosen, carrying whatever the owner had TYPED
+      into the search — the name they searched, found nobody by, and were then
+      forced to retype. Callers use it to seed their own name field (fill-when-
+      empty). Optional and additive: existing callers change nothing. */
+  onManual?: (typedQuery: string) => void
   placeholder?: string
   error?: string
   hint?: string
@@ -26,7 +31,7 @@ interface CustomerPickerProps {
 }
 
 export function CustomerPicker({
-  label, customers, value, onChange, allowManual = true, placeholder = 'Search customers…', error, hint, autoFocus,
+  label, customers, value, onChange, allowManual = true, onManual, placeholder = 'Search customers…', error, hint, autoFocus,
 }: CustomerPickerProps) {
   const selected = value && value !== MANUAL ? customers.find(c => c.id === value) ?? null : null
   const [query, setQuery] = useState('')
@@ -72,7 +77,10 @@ export function CustomerPicker({
   function choose(i: number) {
     const r = rows[i]
     if (!r) return
-    if (r.type === 'manual') { onChange(MANUAL); setQuery('') }
+    // Hand the typed search text to the caller BEFORE clearing it — it's the
+    // name they searched, found nobody by, and would otherwise retype verbatim
+    // into the manual Name field two lines below.
+    if (r.type === 'manual') { onChange(MANUAL); onManual?.(query.trim()); setQuery('') }
     else { onChange(r.c.id); setQuery(r.c.name) }
     setOpen(false)
   }
@@ -135,7 +143,9 @@ export function CustomerPicker({
               ) : (
                 <button key="manual" type="button" onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
                   className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 border-t border-border text-accent-text transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface')}>
-                  <Plus className="w-3.5 h-3.5 shrink-0" /> Enter manually
+                  {/* Name the action after what they typed — "Add 'Jane Smith' as a
+                      new customer" says the typed name is KEPT, not thrown away. */}
+                  <Plus className="w-3.5 h-3.5 shrink-0" /> {query.trim() ? <>Add &ldquo;{query.trim()}&rdquo; as a new customer</> : 'Enter manually'}
                 </button>
               )
             ))}
