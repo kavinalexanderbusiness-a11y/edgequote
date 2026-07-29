@@ -20,11 +20,17 @@ import { Users, MessageSquare, Mail, ShieldCheck, Info, Tag, X } from 'lucide-re
 interface CustomerFormProps {
   defaultValues?: Partial<CustomerFormValues>
   customers?: Customer[]
-  onSubmit: (values: CustomerFormValues) => Promise<void>
+  /** Resolve FALSE when the save didn't land, so the autosave draft survives a failed
+   *  save. Same contract QuoteBuilder's onSubmit already uses — void still means "clear",
+   *  so a caller that can't fail needs no change. */
+  onSubmit: (values: CustomerFormValues) => Promise<void | boolean>
   onCancel: () => void
   isEdit?: boolean
   /** Autosave key — defaults per add/edit; pass a precise one (e.g. `customer:${id}`). */
   autosaveKey?: string
+  /** The stored row's updated_at. A draft older than this is stale and never offered,
+   *  so restoring can't overwrite an edit made since the draft was abandoned. */
+  baselineUpdatedAt?: string | number | null
 }
 
 // Chip input for customer tags. Enter or comma commits the draft; Backspace on an
@@ -69,7 +75,7 @@ function TagsInput({ value, onChange }: { value: string[]; onChange: (tags: stri
   )
 }
 
-export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel, isEdit, autosaveKey }: CustomerFormProps) {
+export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel, isEdit, autosaveKey, baselineUpdatedAt }: CustomerFormProps) {
   const { register, handleSubmit, control, watch, setValue, reset, formState: { errors, isSubmitting } } = useForm<CustomerFormValues>({
     defaultValues: {
       acquisition_source: '',
@@ -90,9 +96,14 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
   const autosave = useAutosave<CustomerFormValues>({
     key: autosaveKey || `customer:${isEdit ? 'edit' : 'new'}`,
     value: formValues,
+    baselineUpdatedAt: baselineUpdatedAt ?? null,
     isEmpty: v => !v.name?.trim() && !v.email?.trim() && !v.phone?.trim(),
   })
-  const submit = handleSubmit(async v => { await onSubmit(v); autosave.clear() })
+  // Clear the draft only on a save that actually happened. It used to clear
+  // unconditionally, so a save that failed (offline, a server error) kept the form
+  // open to retry — correct — while silently destroying the localStorage draft behind
+  // it: close the tab and the edit was gone. Same rule QuoteBuilder applies.
+  const submit = handleSubmit(async v => { if (await onSubmit(v) !== false) autosave.clear() })
 
   // Live duplicate detection — reuses the ONE matching engine (phone/email
   // confident, name not). Only when creating, so we never warn a customer about
