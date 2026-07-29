@@ -128,6 +128,20 @@ export function CategoryManager({ sb, userId, categories, expenses, onChanged }:
               </tr>
             </thead>
             <tbody>
+              {/* Reachable from THIS table: archive the last category and the list
+                  is legitimately empty (listCategories excludes archived, and the
+                  seeder deliberately never resurrects an archived default). A bare
+                  header with no rows reads as broken — say what's true instead.
+                  Sibling VendorManager already does this. */}
+              {categories.length === 0 && (
+                <tr>
+                  <Td colSpan={4}>
+                    <p className="text-sm text-ink-muted py-3 text-center">
+                      No active categories — new expenses will be uncategorised. Add one above, or restore an archived category.
+                    </p>
+                  </Td>
+                </tr>
+              )}
               {categories.map(c => {
                 const u = usage.get(c.id)
                 return (

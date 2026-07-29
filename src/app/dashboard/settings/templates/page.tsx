@@ -14,6 +14,7 @@ import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
+import { Banner } from '@/components/ui/Banner'
 import { Toggle } from '@/components/ui/Toggle'
 import { useForm } from 'react-hook-form'
 import { formatServicePrice, priceInputLabel, priceInputStep, costBasisLabel } from '@/lib/servicePricing'
@@ -45,7 +46,7 @@ function parseCost(v: string | null | undefined): number | null {
 const costToField = (n: number | null | undefined): string => (n == null ? '' : String(n))
 
 export default function ServiceTemplatesPage() {
-  const { templates, loading, refresh } = useBusinessData()
+  const { templates, loading, error: loadError, refresh } = useBusinessData()
   const supabase = createClient()
 
   const [showForm, setShowForm] = useState(false)
@@ -128,33 +129,39 @@ export default function ServiceTemplatesPage() {
       unit_cost: parseCost(values.unit_cost),
       material_cost: parseCost(values.material_cost),
     }
-    if (editing) {
-      await supabase.from('service_templates').update(payload).eq('id', editing.id)
-    } else {
-      const nextOrder = templates.length + 1
-      await supabase.from('service_templates').insert({ ...payload, sort_order: nextOrder, user_id: user!.id })
-    }
+    // A failed save must not close the form as if it succeeded — the owner's
+    // edits stay on screen with an honest error instead of silently vanishing.
+    const { error } = editing
+      ? await supabase.from('service_templates').update(payload).eq('id', editing.id)
+      : await supabase.from('service_templates').insert({ ...payload, sort_order: templates.length + 1, user_id: user!.id })
+    if (error) { toast.error('Could not save the service: ' + error.message); return }
     setShowForm(false)
     setEditing(null)
     refresh()
   }
 
   async function toggleActive(t: ServiceTemplate) {
-    await supabase.from('service_templates').update({ is_active: !t.is_active }).eq('id', t.id)
+    const { error } = await supabase.from('service_templates').update({ is_active: !t.is_active }).eq('id', t.id)
+    if (error) { toast.error(`Could not ${t.is_active ? 'deactivate' : 'activate'} "${t.name}".`); return }
     refresh()
   }
 
   async function toggleFavorite(t: ServiceTemplate) {
-    await supabase.from('service_templates').update({ is_favorite: !t.is_favorite }).eq('id', t.id)
+    const { error } = await supabase.from('service_templates').update({ is_favorite: !t.is_favorite }).eq('id', t.id)
+    if (error) { toast.error('Could not update the favorite.'); return }
     refresh()
   }
 
   async function remove(t: ServiceTemplate) {
-    await supabase.from('service_templates').delete().eq('id', t.id)
+    // Verify the delete BEFORE announcing it — a failed delete with a cheery
+    // "Deleted" toast leaves the row alive while the owner believes it's gone.
+    const { error } = await supabase.from('service_templates').delete().eq('id', t.id)
+    if (error) { toast.error(`Could not delete "${t.name}": ` + error.message); return }
     refresh()
     // Reversible: re-insert the exact row (same id) on Undo.
     toast.undo(`Deleted "${t.name}"`, async () => {
-      await supabase.from('service_templates').insert(t)
+      const { error: rErr } = await supabase.from('service_templates').insert(t)
+      if (rErr) { toast.error(`Could not restore "${t.name}".`); return }
       refresh()
     })
   }
@@ -178,6 +185,17 @@ export default function ServiceTemplatesPage() {
   // primitives — no new control.
   const categoryOptions = [...allCategories.map(c => ({ value: c, label: c })), { value: NEW_CATEGORY, label: 'Other…' }]
   const pricingTypeOptions = PRICING_DISPLAY_TYPES.map(t => ({ value: t, label: PRICING_DISPLAY_TYPE_LABELS[t] }))
+
+  // A failed load must not render an EMPTY catalogue as fact — the owner would
+  // reasonably conclude their services are gone and start re-creating them.
+  if (loadError && templates.length === 0 && !loading) return (
+    <PageContainer width="narrow">
+      <PageHeader crumb={{ label: 'Settings', href: '/dashboard/settings' }} title="Service Templates" />
+      <Banner tone="danger" action={<Button size="sm" variant="secondary" onClick={() => refresh()}>Retry</Button>}>
+        Could not load your services — they are still there, this page just couldn’t reach them. ({loadError})
+      </Banner>
+    </PageContainer>
+  )
 
   if (loading) return (
     <PageContainer width="narrow">

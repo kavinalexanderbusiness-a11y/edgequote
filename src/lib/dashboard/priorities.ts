@@ -78,6 +78,17 @@ export interface PrioritiesInput {
 const TIER_GAP = 10_000
 const adder = (n: number) => Math.min(Math.max(n, 0), TIER_GAP - 1_000)
 
+// A "missed" visit: a still-open job whose day has passed. The dashboard counts
+// these ("Resolve missed jobs · N past due") and the schedule board now surfaces
+// and resolves them, so both MUST derive the set the same way — hence one exported
+// predicate, not two copies of the date comparison. Plain string-date '<' on
+// 'YYYY-MM-DD' (no Date parsing → no UTC-boundary drift); the null guard is inert
+// for the NOT-NULL jobs.scheduled_date and only widens the accepted input type.
+export function isMissed(job: { scheduled_date: string | null; status: string }, todayISO: string): boolean {
+  return job.scheduled_date != null && job.scheduled_date < todayISO
+    && (job.status === 'scheduled' || job.status === 'in_progress')
+}
+
 export function computePriorities(i: PrioritiesInput): Priority[] {
   const { quotes, invoices, jobs, recById, customers, conversations, leads, seasons, feeSettings, today } = i
   const next: Priority[] = []
@@ -131,7 +142,7 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
   }
 
   // 4) Missed visits — past-date jobs still open, customers falling behind.
-  const missed = jobs.filter(j => j.scheduled_date < today && (j.status === 'scheduled' || j.status === 'in_progress'))
+  const missed = jobs.filter(j => isMissed(j, today))
   if (missed.length > 0) {
     next.push({
       kind: 'missed', label: 'Resolve missed jobs', detail: `${missed.length} past due`,

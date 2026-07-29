@@ -120,7 +120,14 @@ export default function ImportCustomersPage() {
         .map((r, i) => ({ r, id: insertRows[i].id }))
         .filter(x => x.r.address)
         .map(x => ({ customer_id: x.id, user_id: user.id, address: x.r.address, city: x.r.city, province: x.r.province || 'AB', postal_code: x.r.postal_code, is_primary: true }))
-      if (props.length) await supabase.from('properties').insert(props)
+      // Checked like the customers insert above — a failed property insert used
+      // to vanish silently, importing every customer with NO address and no hint.
+      if (props.length) {
+        const { error: propErr } = await supabase.from('properties').insert(props)
+        if (propErr) {
+          setParseError(`Customers imported, but their addresses could not be saved (${propErr.message}). Add addresses from each customer's profile.`)
+        }
+      }
 
       // Audit every imported opt-in — paired by the SAME minted ids, so the
       // consent trail can't drift onto the wrong customer either (the old

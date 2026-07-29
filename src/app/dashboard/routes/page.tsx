@@ -49,6 +49,8 @@ export default function RoutesPage() {
     // Local session read — no auth round-trip before the data batch below.
     const { data: { session } } = await supabase.auth.getSession()
     const user = session?.user
+    // No session must not strand the skeleton forever.
+    if (!user) { setLoading(false); return }
     const [jRes, qRes, rRes, sRes, travel] = await Promise.all([
       supabase.from('jobs')
         .select('id, title, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, properties(id, address, lat, lng, city, postal_code, neighborhood)')

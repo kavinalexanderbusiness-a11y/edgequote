@@ -28,7 +28,7 @@ audit it cites) and the shipped code.
 - **Weekly review has a home** — a card links `/dashboard/review` from the
   dashboard; previously reachable only via the Grow hub.
 
-## In review (pushed, awaiting merge — do not re-implement)
+## Landed (merged to main in the 2026-07-26 merge train — do not re-implement)
 
 - `dash/status-clarity-2026-07-21` — ranking subtitle on Today's Priorities
   ("Most urgent and highest-value first"), so the queue reads as deliberately

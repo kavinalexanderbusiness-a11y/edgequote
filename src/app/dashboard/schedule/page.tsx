@@ -63,6 +63,8 @@ import { buildRoutingRoadDistance, RoadDist } from '@/lib/distance'
 import { analyzeScheduleHealth } from '@/lib/scheduleHealth'
 import type { HealthIssue, HealthJob } from '@/lib/scheduleHealth'
 import { ScheduleHealthCard } from '@/components/schedule/ScheduleHealthCard'
+import { MissedJobsCard } from '@/components/schedule/MissedJobsCard'
+import { isMissed } from '@/lib/dashboard/priorities'
 import { DayStatusMenu } from '@/components/schedule/DayStatusMenu'
 import { buildDayStatusMap, buildCapacityForDate, dayStartTime, isDayBlocked, loadDayStatuses, setDayStatus, setDayCapacity, clearDayStatus, DAY_STATUS_META, DAY_STATUS_SELECT, type DayStatusMap, type DayStatusRow, type DayStatus } from '@/lib/dayStatus'
 import { directionsUrl, estimateDayLoad } from '@/lib/route'
@@ -278,6 +280,10 @@ export default function SchedulePage() {
   )
 
   const visibleSuggestions = suggestions.filter(s => !dismissedSuggestions.has(s.id))
+  // Past-due visits still open — the same derivation the dashboard's "Resolve missed
+  // jobs" count uses (isMissed), so the board's card and that count can't disagree.
+  // The Day Ops board only renders the viewed day, so these were otherwise invisible.
+  const missedJobs = useMemo(() => jobs.filter(j => isMissed(j, localTodayISO())), [jobs])
 
   // Auto-propose optimization after a job is added (review-first — NEVER auto-
   // applies). CONTEXT-AWARE escalation, anchored on the new job's date:
@@ -2028,6 +2034,18 @@ export default function SchedulePage() {
           ))}
         </div>
       </div>
+
+      {/* Past-due visits — stranded open jobs from days already gone. Above Schedule
+          Health because unbilled work + a customer a cycle behind is money at risk now. */}
+      {!loading && missedJobs.length > 0 && (
+        <MissedJobsCard
+          jobs={missedJobs}
+          today={localTodayISO()}
+          onBringToToday={(job) => moveJobToDate(job, new Date())}
+          onComplete={(job) => { void completeJob(job) }}
+          onOpen={(job) => setEditing(job)}
+        />
+      )}
 
       {/* Schedule Health — catches mistakes before they reach Day Ops */}
       {!loading && (

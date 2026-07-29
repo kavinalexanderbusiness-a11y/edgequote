@@ -263,7 +263,8 @@ the loop (§1).*
 
 - **Wave 0 — Infrastructure (first, isolated).** Crons on (INF-1 — cadence
   reconciled; `CRON_SECRET` is the one remaining owner action); canonical SQL
-  reconciliation (INF-2 — work pushed, **not yet merged**). Unblocks the automated
+  reconciliation (INF-2 — **merged 2026-07-26**; the remaining ask is a
+  `verify:sql` single-definition guard, owner-gated). Unblocks the automated
   layer, defuses the portal landmine.
 - **Wave 1 — Launch blockers (parallel, disjoint sessions).** PAY-1, SCH-1, BK-1,
   MSG-1, RPT-1 + PERF-1. The quote critical path (MEAS-1 → PR-1 → QL-1 → QL-2)
