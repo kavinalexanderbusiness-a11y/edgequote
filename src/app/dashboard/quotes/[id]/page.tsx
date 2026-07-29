@@ -566,9 +566,12 @@ export default function QuoteDetailPage() {
       }).select().single()
 
       if (!error && data) {
-        // Copy the multi-service breakdown onto the duplicate.
+        // Copy the multi-service breakdown onto the duplicate — and say so if it
+        // fails. This insert was fire-and-forget, so a failed copy produced a
+        // duplicate whose TOTAL was right but whose lines were silently gone; the
+        // owner discovered it when the customer's PDF collapsed to one number.
         if (services.length) {
-          await supabase.from('quote_services').insert(services.map(s => ({
+          const { error: lineErr } = await supabase.from('quote_services').insert(services.map(s => ({
             user_id: user!.id, quote_id: data.id, sort_order: s.sort_order,
             service_type: s.service_type, service_template_id: s.service_template_id,
             quantity: s.quantity, unit: s.unit, unit_price: s.unit_price,
@@ -578,6 +581,7 @@ export default function QuoteDetailPage() {
             // a service — the copy would stop matching the quote it came from.
             kind: s.kind ?? 'service',
           })))
+          if (lineErr) toast.error('Duplicated the quote, but its service lines did not copy: ' + lineErr.message + ' — re-add them on the copy.')
         }
         try { window.sessionStorage.setItem('eq_quote_dup_from', quote.quote_number) } catch { /* ignore */ }
         router.push(`/dashboard/quotes/${data.id}`)
@@ -1029,7 +1033,11 @@ export default function QuoteDetailPage() {
             )}
             {/* Section label — same treatment as "Measurements" / "Ongoing
                 maintenance options" so the breakdown reads as a peer section. */}
-            <p className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide">Services</p>
+            {/* Say what's actually in the list — mulch under a "Services" heading
+                reads as labour to anyone skimming. */}
+            <p className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide">
+              {services.some(s => s.kind === 'material') ? 'Services & materials' : 'Services'}
+            </p>
             {services.length > 0 ? (
               // Multi-service breakdown — one row per line (rows are the source of
               // truth; quotes.initial_price is their summed net). Service NAME
@@ -1041,6 +1049,7 @@ export default function QuoteDetailPage() {
                     <div key={s.id} className="flex justify-between gap-3 text-sm">
                       <span className="min-w-0">
                         <span className="text-ink font-medium">{s.service_type}</span>
+                        {s.kind === 'material' && <span className="text-[10px] text-ink-faint uppercase tracking-wide"> · material</span>}
                         {Number(s.quantity) > 1 && <span className="text-ink-faint"> × {s.quantity}</span>}
                         {t.discountAmount > 0 && <span className="text-emerald-400 text-xs"> (−{formatCurrency(t.discountAmount)})</span>}
                         {s.notes && <span className="block text-xs text-ink-muted truncate">{s.notes}</span>}
