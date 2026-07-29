@@ -69,6 +69,18 @@ interface QuoteBuilderProps {
 //   manual    → the owner typed their own number (or we loaded a saved quote).
 type PriceOrigin = 'empty' | 'suggested' | 'applied' | 'manual'
 
+// Seeds an EMPTY input where a `0` seed painted a literal zero into every numeric
+// field of a fresh form — eight zeros posing as data, placeholders ("e.g. 5,000")
+// permanently hidden, and "type your price" meaning select-the-0-then-retype.
+// Typed as number to satisfy QuoteFormValues, but the cast only states the existing
+// runtime: react-hook-form number inputs hold STRINGS once touched ('' when the
+// owner clears one — a state every reader already survives today), and every
+// consumer normalizes via Number(...) / `|| 0`, where Number('') === 0 — so maths,
+// autosave and submitted writes are byte-identical to the 0 seed. NEVER swap this
+// for undefined: an untouched field would then submit NaN through the pages'
+// Number(values.x) wrappers, changing the DB write.
+const BLANK = '' as unknown as number
+
 // The cadences the owner can lead a quote with — the plan tiles and the "which one
 // did you pitch" highlight. Monthly is deliberately absent: it's off the standard
 // lawn menu (a month of growth is a rough cut) and never a picked lead, so it isn't
@@ -90,18 +102,24 @@ export function QuoteBuilder({
         address: '',
         service_type: '',
         service_template_id: '',
-        initial_price: 0,
-        weekly_price: 0,
-        biweekly_price: 0,
-        monthly_price: 0,
-        measured_sqft: 0,
+        // BLANK, not 0 (see the constant above): a fresh form must LOOK empty.
+        // Edit/lead/measurement flows spread real numbers over these via
+        // `...defaultValues` below, so only the untouched-field display changes.
+        // (Restored 2026-07-28 — this fix shipped in PR #60, then the 07-26
+        // 12-commit replay silently took the pre-fix side; the zeros returned.)
+        initial_price: BLANK,
+        weekly_price: BLANK,
+        biweekly_price: BLANK,
+        monthly_price: BLANK,
+        measured_sqft: BLANK,
+        // Not BLANK: never rendered as an input — hidden form data, 0 is its "none".
         suggested_price: 0,
         // ADR-002: null until an engine recommendation is applied. Never a default
         // grade — "nobody computed one" and "grade F" are different facts.
         value_grade: null,
         nearby_count: null,
         overgrowth_multiplier: 1,
-        distance_km: 0,
+        distance_km: BLANK,
         // Hours has NO default. It used to be 2 — a number nobody entered, about a
         // job nobody had described yet, which multiplied out into a fabricated
         // price the form then badged as confirmed. Unknown hours is not 2 hours.
@@ -109,7 +127,7 @@ export function QuoteBuilder({
         // that engine has real history for this service, and stays empty when it
         // doesn't. Empty hours ⇒ no labour recommendation ⇒ no price. That is the
         // correct behaviour, not a gap.
-        hours: 0,
+        hours: BLANK,
         // 1 is the structural floor, not a guess: crew_size has min=1, you cannot
         // send zero people, and with hours empty it multiplies into nothing anyway.
         // (business_settings.default_crew_size exists in the DB but is not in the
@@ -123,7 +141,7 @@ export function QuoteBuilder({
         // settings is always resolved before this form mounts. No settings ⇒ 0 ⇒
         // no labour recommendation, which is honest rather than invented.
         rate: Number(settings?.default_rate) || 0,
-        travel_fee: 0,
+        travel_fee: BLANK,
         notes: '',
         status: 'draft',
         services: [],
@@ -594,7 +612,9 @@ export function QuoteBuilder({
       setValue('initial_price', price)
       setPriceOrigin('suggested')
     } else if (priceOrigin === 'suggested') {
-      setValue('initial_price', 0)
+      // BLANK, not 0: 'empty' means the field LOOKS empty (its documented contract),
+      // not that it holds a zero the owner must delete before typing.
+      setValue('initial_price', BLANK)
       setPriceOrigin('empty')
     }
   }, [serviceRec, priceLocked, priceOrigin, pickedCadence, setValue])
@@ -636,8 +656,16 @@ export function QuoteBuilder({
       const data = await res.json()
       if (res.ok && typeof data.km === 'number') {
         setValue('distance_km', data.km)
-        const sugg = suggestTravelFee(data.km, tiers)
-        if (includeTravel && !sugg.isCustom && sugg.fee !== null) setValue('travel_fee', sugg.fee)
+        // Same rule as travelSuggestion above: with zero tiers, suggestTravelFee
+        // only has its fabricated { fee: 0 } fallback to offer, and auto-applying
+        // it here silently WIPED a typed or saved travel fee to $0 whenever the
+        // address changed (AddressAutocomplete onSelect calls this) — worst on
+        // edit, where the fee was already on the quote and the Travel section sat
+        // collapsed out of sight. (Restored 2026-07-28 — lost in the 07-26 replay.)
+        if (tiers.length > 0 && includeTravel) {
+          const sugg = suggestTravelFee(data.km, tiers)
+          if (!sugg.isCustom && sugg.fee !== null) setValue('travel_fee', sugg.fee)
+        }
         setCalcMsg({ text: `${data.km} km${data.durationText ? ` · ${data.durationText} drive` : ''}` })
       } else {
         setCalcMsg({ text: data.error || 'Could not calculate distance.', error: true })
@@ -653,7 +681,10 @@ export function QuoteBuilder({
     setIncludeTravel(on)
     if (!on) {
       setValue('travel_fee', 0)
-    } else if (distanceKm > 0) {
+    } else if (distanceKm > 0 && tiers.length > 0) {
+      // tiers.length gate completes the invariant: suggestTravelFee is never
+      // consulted without tiers anywhere in this file. (Here it was near-harmless —
+      // toggling off already zeroed the fee — but one rule beats three cases.)
       const s = suggestTravelFee(distanceKm, tiers)
       if (!s.isCustom && s.fee !== null) setValue('travel_fee', s.fee)
     }
