@@ -175,6 +175,9 @@ export default function SchedulePage() {
   const [automations, setAutomations] = useState<Automations>(() => resolveAutomations(null))
   const [showOptimize, setShowOptimize] = useState(false)
   const [showRainCenter, setShowRainCenter] = useState(false)
+  // The day the Weather hub should open on (e.g. a known rain day). null → its own
+  // default (tomorrow). Set when launching from the weather card or a live rain target.
+  const [rainCenterDay, setRainCenterDay] = useState<string | null>(null)
   // Pre-scoped launch from an auto-suggestion (vs. the manual Optimize button).
   const [optimizeLaunch, setOptimizeLaunch] = useState<{ scope: OptimizeScope; mode: OptimizeMode; anchorDate: string; autoRun: boolean } | null>(null)
   const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set())
@@ -1984,7 +1987,7 @@ export default function SchedulePage() {
         description={`${jobs.length} job${jobs.length !== 1 ? 's' : ''} on the calendar`}
         action={
           <div className="flex items-center gap-2">
-            <Button variant="secondary" onClick={() => setShowRainCenter(true)} title="Reschedule — move jobs (weather, equipment, absence, holiday, emergency) and notify customers">
+            <Button variant="secondary" onClick={() => { setRainCenterDay(rainTarget?.date ?? null); setShowRainCenter(true) }} title="Reschedule — move jobs (weather, equipment, absence, holiday, emergency) and notify customers">
               <CalendarClock className="w-4 h-4" /> Reschedule
             </Button>
             <Button variant="secondary" onClick={() => launchOptimizer()} title="Optimize your schedule — pick scope and goal">
@@ -2214,6 +2217,7 @@ export default function SchedulePage() {
           onDisableAndOptimize={() => { if (rainTarget) rainDisableAndOptimize(rainTarget.date) }}
           onDisableOnly={() => { if (rainTarget) rainDisableOnly(rainTarget.date) }}
           onOptimizeOnly={() => { if (rainTarget) rainOptimizeOnly(rainTarget.date) }}
+          onMoveAndNotify={rainTarget ? () => { setRainCenterDay(rainTarget.date); setShowRainCenter(true) } : undefined}
           onLater={() => { if (rainTarget) setDismissedRain(prev => new Set(prev).add(rainTarget.date)) }}
           onDismissSummary={() => setRainSummary(null)}
         />
@@ -2357,8 +2361,9 @@ export default function SchedulePage() {
           capacityHours={capacityHours}
           dayStatusMap={dayStatusMap}
           capacityForDate={optBaseOpts.capacityForDate}
+          initialDay={rainCenterDay ?? undefined}
           onApply={applyOptimization}
-          onClose={() => setShowRainCenter(false)}
+          onClose={() => { setShowRainCenter(false); setRainCenterDay(null) }}
         />
       )}
 
