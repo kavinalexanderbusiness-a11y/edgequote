@@ -372,9 +372,19 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
         {/* Sticky tab bar — a real WAI-ARIA tablist: arrow keys move between tabs
             (roving tabindex), each pill meets the 44px gloved-thumb target on
             touch (.tap-target-y, pointer-coarse gated), and the active tab is
-            kept scrolled into view so a deep link never lands it off-screen. */}
+            kept scrolled into view so a deep link never lands it off-screen.
+
+            It WRAPS rather than scrolling sideways: six pills measure ~615px against
+            ~343px of usable width on a 375px phone, so Messages and Requests — the two
+            whose "empty state IS the invitation" — sat past the right edge with no fade,
+            no chevron, nothing to suggest they existed. Someone who doesn't think to
+            swipe a nav row never discovers they can message their provider from here.
+            Two short rows show every section at once; the scroll-into-view below still
+            covers the deep-link case, and the arrow keys already move in both axes, so
+            wrapping costs the keyboard nothing (aria-orientation dropped for the same
+            reason — the row is no longer strictly one-dimensional). */}
         <div className="sticky top-0 z-10 -mx-4 px-4 py-2 bg-bg/90 backdrop-blur border-b border-border">
-          <div role="tablist" aria-label="Your account sections" aria-orientation="horizontal" className="flex gap-1.5 overflow-x-auto">
+          <div role="tablist" aria-label="Your account sections" className="flex flex-wrap gap-1.5">
             {TABS.map((t, i) => {
               const active = tab === t.key
               return (
