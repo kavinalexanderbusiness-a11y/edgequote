@@ -12,7 +12,7 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { DetailHeader } from '@/components/layout/DetailHeader'
 import { Banner } from '@/components/ui/Banner'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
-import { Button } from '@/components/ui/Button'
+import { Button, ButtonLink } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
@@ -48,6 +48,9 @@ export default function QuoteDetailPage() {
   const [duplicating, setDuplicating] = useState(false)
   const [extending, setExtending] = useState(false)
   const [showMessage, setShowMessage] = useState(false)
+  // The invoice this quote has already produced (newest, when several exist) —
+  // read on load so the toolbar can answer "has this been billed?" without a tap.
+  const [existingInvoiceNumber, setExistingInvoiceNumber] = useState<string | null>(null)
   const [savedCustomerMsg, setSavedCustomerMsg] = useState<string | null>(null)
   const [dupMsg, setDupMsg] = useState<string | null>(null)
 
@@ -87,13 +90,21 @@ export default function QuoteDetailPage() {
       // Local session read — no auth round-trip before the batch below.
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
-      const [qRes, svcRes, cRes, tRes, tierRes, sRes] = await Promise.all([
+      const [qRes, svcRes, cRes, tRes, tierRes, sRes, invRes] = await Promise.all([
         supabase.from('quotes').select('*').eq('id', id).eq('user_id', user!.id).single(),
         supabase.from('quote_services').select('*').eq('quote_id', id).order('sort_order'),
         supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
         supabase.from('service_templates').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('travel_fee_tiers').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('business_settings').select('*').eq('user_id', user!.id).maybeSingle(),
+        // Has this quote already been billed? The page never asked, so "Convert to
+        // invoice" stayed live (and PRIMARY on a completed quote) forever — including
+        // after completing a visit auto-drafted one — and the answer only ever arrived
+        // as a red error AFTER the tap. ORDERED, not just limit(1): a recurring quote
+        // legitimately accumulates invoices (the quote_id dedupe is skipped for
+        // recurring jobs), so name the NEWEST rather than an arbitrary row. Same
+        // select the convert guard already runs, so RLS is already proven.
+        supabase.from('invoices').select('invoice_number, issued_date').eq('quote_id', id).order('issued_date', { ascending: false }).limit(1),
       ])
       setQuote(qRes.data)
       setServices((svcRes.data as QuoteService[]) || []) // error/absent table → [] (legacy)
@@ -101,6 +112,7 @@ export default function QuoteDetailPage() {
       setTemplates(tRes.data || [])
       setTiers(tierRes.data || [])
       setSettings(sRes.data)
+      setExistingInvoiceNumber((invRes.data?.[0] as { invoice_number: string } | undefined)?.invoice_number ?? null)
       setLoading(false)
     }
     load()
@@ -509,6 +521,10 @@ export default function QuoteDetailPage() {
       if (error) {
         toast.error('Could not create invoice: ' + error.message)
       } else {
+        // Persist what just happened. The toast was the ONLY evidence, so a phone
+        // lock or a navigate-and-return left the owner re-tapping Convert to find
+        // out — and the answer came back as a red "already invoiced" error.
+        setExistingInvoiceNumber(invoiceNumber)
         toast(`Invoice ${invoiceNumber} created.`, {
           tone: 'success',
           action: { label: 'View invoice', run: () => router.push(`/dashboard/invoices?invoice=${encodeURIComponent(invoiceNumber)}`) },
@@ -818,13 +834,22 @@ export default function QuoteDetailPage() {
               <CalendarPlus className="w-3.5 h-3.5" /> Book another visit
             </Button>
           )}
-          {canInvoice && (
+          {/* Already billed → the action becomes the ANSWER. Replacement, not a
+              disabled button: the convert guard makes a second conversion genuinely
+              impossible, so offering it was offering a red error. Shown on ANY
+              status (not just canInvoice) — "has this been billed?" is worth
+              answering everywhere, and completing a visit auto-drafts one. */}
+          {existingInvoiceNumber ? (
+            <ButtonLink href={`/dashboard/invoices?invoice=${encodeURIComponent(existingInvoiceNumber)}`} variant="secondary" size="sm">
+              <FileText className="w-3.5 h-3.5" /> Invoice {existingInvoiceNumber}
+            </ButtonLink>
+          ) : canInvoice ? (
             // Completed = converting is THE stage action, so it takes the one
             // primary slot; other stages have their own primary elsewhere.
             <Button onClick={handleConvertToInvoice} variant={quote.status === 'completed' ? 'primary' : 'secondary'} size="sm" loading={converting}>
               <FileText className="w-3.5 h-3.5" /> Convert to invoice
             </Button>
-          )}
+          ) : null}
           <Button onClick={() => setEditing(true)} variant="ghost" size="sm">
             <Edit2 className="w-3.5 h-3.5" /> Edit
           </Button>
