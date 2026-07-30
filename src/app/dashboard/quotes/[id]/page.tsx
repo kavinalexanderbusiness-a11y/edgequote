@@ -663,6 +663,15 @@ export default function QuoteDetailPage() {
 
   const customerPhone = customers.find(c => c.id === quote.customer_id)?.phone || null
   const canInvoice = quote.status === 'accepted' || quote.status === 'scheduled' || quote.status === 'completed'
+  // THE send rule, from the one engine that owns it (lib/quoteStatus). The PDF
+  // action already asks it — but that path only hands a file to the OWNER'S OWN
+  // device, while the Send card below texts/emails the customer a portal link
+  // they can approve from. The dangerous path was the unguarded one: a $0 quote
+  // could be delivered and accepted, which is exactly what the engine's own
+  // comment forbids ("a quote in a customer's hands without a price is not a
+  // quote"). Asking the same function here enforces the existing rule on the
+  // path that needed it most — no new rule, no engine change.
+  const sendBlock = sendBlockedReason(quote)
 
   // Surface the quote's state in the header itself — a sent quote reads "Sent 3
   // days ago" (the follow-up clock), everything else the plain status label.
@@ -911,16 +920,31 @@ export default function QuoteDetailPage() {
               <p className="text-sm font-semibold text-ink">
                 {quote.status === 'draft' || quote.status === 'sent' ? 'Send this quote to the customer' : 'Resend this quote to the customer'}
               </p>
-              <p className="text-xs text-ink-muted mt-0.5">
-                {quote.status === 'draft' || quote.status === 'sent'
-                  ? <>Texts/emails a personalized message with a link to view &amp; accept it in their portal.</>
-                  : <>Texts/emails them a copy with a link to their portal.</>}
-              </p>
+              {/* Blocked → say why and hand over the door, instead of letting the
+                  owner open the composer and discover it mid-message (or worse,
+                  deliver a $0 quote the customer can approve). */}
+              {sendBlock ? (
+                <p className="text-xs text-amber-400 mt-0.5">{sendBlockedLabel(sendBlock)}</p>
+              ) : (
+                <p className="text-xs text-ink-muted mt-0.5">
+                  {quote.status === 'draft' || quote.status === 'sent'
+                    ? <>Texts/emails a personalized message with a link to view &amp; accept it in their portal.</>
+                    : <>Texts/emails them a copy with a link to their portal.</>}
+                </p>
+              )}
             </div>
-            {/* The REAL send is the primary action while the quote awaits delivery. */}
-            <Button variant={quote.status === 'draft' || quote.status === 'sent' ? 'primary' : 'secondary'} onClick={() => setShowMessage(true)}>
-              <MessageSquare className="w-4 h-4" /> {quote.status === 'draft' || quote.status === 'sent' ? 'Send quote' : 'Resend quote'}
-            </Button>
+            {/* The REAL send is the primary action while the quote awaits delivery.
+                Blocked → the button becomes the FIX ("Add a price"), which opens the
+                editor right here: one tap instead of hunting for Edit. */}
+            {sendBlock === 'no_price' ? (
+              <Button variant="secondary" onClick={() => setEditing(true)}>
+                <Edit2 className="w-4 h-4" /> Add a price
+              </Button>
+            ) : (
+              <Button variant={quote.status === 'draft' || quote.status === 'sent' ? 'primary' : 'secondary'} onClick={() => setShowMessage(true)}>
+                <MessageSquare className="w-4 h-4" /> {quote.status === 'draft' || quote.status === 'sent' ? 'Send quote' : 'Resend quote'}
+              </Button>
+            )}
           </CardBody>
           {/* vars.address is the quote's OWN address — the same string QuotePDF prints,
               so the message and the document it links to name the same place. Deliberately
