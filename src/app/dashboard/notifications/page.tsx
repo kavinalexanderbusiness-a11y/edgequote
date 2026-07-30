@@ -1,9 +1,10 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { PageContainer } from '@/components/layout/PageContainer'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { toast } from '@/lib/toast'
 import { AppNotification } from '@/components/notifications/NotificationBell'
 import { groupNotifications, notificationActionLabel, type NotifGroup } from '@/lib/notifications'
@@ -67,21 +68,32 @@ export default function NotificationsPage() {
     setItems(data || [])
     setLoading(false)
   }
+  // Bootstrap: resolve the session once, paint the first feed. The live
+  // subscription is the shared hook below, NOT a raw channel — see why there.
   useEffect(() => {
     let active = true
-    let channel: ReturnType<typeof supabase.channel> | null = null
     ;(async () => {
       const { data: { session } } = await supabase.auth.getSession()
-      const uid = session?.user?.id
-      if (!uid) { setLoading(false); return }
+      const id = session?.user?.id
+      if (!id) { if (active) setLoading(false); return }
       if (!active) return
-      await load(uid)
-      channel = supabase.channel(`notif-page:${uid}`)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${uid}` }, () => load(uid))
-        .subscribe()
+      setUid(id)
+      await load(id)
     })()
-    return () => { active = false; if (channel) supabase.removeChannel(channel) }
+    return () => { active = false }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // This used to be a raw supabase.channel() whose handler was a bare `load` —
+  // no debounce. "Archive read" / "Mark all read" write with a single
+  // `.in('id', ids)` statement, and Postgres emits ONE row event per id, so
+  // clearing an inbox of 99 read items fired 99 full 100-row refetches (and
+  // another 99 from the bell, which is mounted in the layout on every page).
+  // Every one of those responses is identical: logical decoding only emits
+  // after commit, so all N refetches see the same post-commit state.
+  // The shared hook collapses them into one — and brings the reconnect /
+  // tab-wake self-heal the raw channel never had.
+  const reload = useCallback(() => { if (uid) load(uid) }, [uid]) // eslint-disable-line react-hooks/exhaustive-deps
+  useRealtimeRefresh('notifications', uid ? `user_id=eq.${uid}` : null, reload)
 
   // Snoozed items (still active) drop out of the feed until their time passes.
   const nowMs = Date.now()

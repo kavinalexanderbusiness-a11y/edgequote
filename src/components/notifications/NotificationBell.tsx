@@ -67,6 +67,7 @@ const feedListeners = new Set<() => void>()
 let feedChannel: ReturnType<ReturnType<typeof createClient>['channel']> | null = null
 let feedRefs = 0
 let feedLoaded = false
+let feedTimer: ReturnType<typeof setTimeout> | null = null
 
 function emitFeed() { for (const l of Array.from(feedListeners)) l() }
 function subscribeFeed(cb: () => void) { feedListeners.add(cb); return () => { feedListeners.delete(cb) } }
@@ -125,7 +126,16 @@ export function NotificationBell() {
       if (!feedLoaded) { feedLoaded = true; await load(uid) }
       if (!feedChannel) {
         feedChannel = supabase.channel(`notif:${uid}`)
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${uid}` }, () => load(uid))
+          // Trailing debounce, matching useRealtimeRefresh's 250ms. Postgres
+          // emits ONE row event per id, so a bulk "Mark all read" over 99
+          // notifications used to fire 99 identical refetches from this
+          // always-mounted bell — on top of the page's own. All N responses
+          // are the same (logical decoding only emits post-commit), so
+          // collapsing them cannot change what is displayed.
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${uid}` }, () => {
+            if (feedTimer) clearTimeout(feedTimer)
+            feedTimer = setTimeout(() => { feedTimer = null; load(uid) }, 250)
+          })
           .subscribe()
       }
     })()
@@ -133,6 +143,7 @@ export function NotificationBell() {
       active = false
       feedRefs--
       if (feedRefs <= 0 && feedChannel) {
+        if (feedTimer) { clearTimeout(feedTimer); feedTimer = null }
         supabase.removeChannel(feedChannel)
         feedChannel = null
         feedLoaded = false

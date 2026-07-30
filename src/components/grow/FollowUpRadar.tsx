@@ -27,8 +27,24 @@ export function FollowUpRadar() {
     setLoading(false)
   }
   useEffect(() => { setLoading(true); load() }, [threshold]) // eslint-disable-line react-hooks/exhaustive-deps
-  useRealtimeRefresh('conversations', null, load)
-  useRealtimeRefresh('customers', null, load)
+
+  // These two passed a LITERAL null filter, and useRealtimeRefresh returns
+  // early on a falsy filter — so the radar has never been live: no channel, and
+  // (because the early return precedes it) no reconnect/tab-wake refetch
+  // either. A reply that arrives while Grow is open left the radar showing a
+  // customer as still waiting. Scoping to the signed-in user turns the
+  // subscriptions on and keeps them RLS-shaped like every other call site.
+  const [uid, setUid] = useState<string | null>(null)
+  useEffect(() => {
+    let active = true
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (active) setUid(session?.user?.id ?? null)
+    })
+    return () => { active = false }
+  }, [supabase])
+  const rtFilter = uid ? `user_id=eq.${uid}` : null
+  useRealtimeRefresh('conversations', rtFilter, load)
+  useRealtimeRefresh('customers', rtFilter, load)
 
   const awaiting = items.filter(i => i.unansweredInbound).length
   const quiet = items.length - awaiting

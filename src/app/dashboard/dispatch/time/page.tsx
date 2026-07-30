@@ -91,11 +91,19 @@ export default function TimesheetPage() {
   useEffect(() => { fetchAll() }, [fetchAll])
   useRealtimeRefresh('time_entries', uid ? `user_id=eq.${uid}` : null, fetchAll)
 
+  // Both handlers ADOPT the row the write returns instead of throwing it away
+  // and waiting on a refetch. The button's label comes from `entries`, not from
+  // `busy`, so clearing busy first re-enabled a button that still said "Clock
+  // in" — a second tap in that window hit the one-open-shift unique index and
+  // told the owner "already clocked in" for a tap that had just worked. Now the
+  // row lands and the button flips in the same commit. fetchAll still runs (it
+  // recomputes the day's totals), but nothing user-visible waits on it.
   async function doClockIn(t: Technician) {
     setBusy(t.id)
     const res = await clockIn(supabase, { userId: uid!, technician: t })
+    if (!res.ok) { setBusy(null); notify.error(res.error); return }
+    setEntries(prev => [res.entry, ...prev.filter(x => x.id !== res.entry.id)])
     setBusy(null)
-    if (!res.ok) { notify.error(res.error); return }
     notify.success(
       t.hourly_wage == null
         ? `${t.name} clocked in — no wage set, so this shift records hours only.`
@@ -107,8 +115,9 @@ export default function TimesheetPage() {
   async function doClockOut(t: Technician, entry: TimeEntry) {
     setBusy(t.id)
     const res = await clockOut(supabase, entry.id)
+    if (!res.ok) { setBusy(null); notify.error(res.error); fetchAll(); return }
+    setEntries(prev => prev.map(x => x.id === res.entry.id ? res.entry : x))
     setBusy(null)
-    if (!res.ok) { notify.error(res.error); fetchAll(); return }
     notify.success(`${t.name} clocked out — ${formatDuration(res.entry.minutes_worked ?? 0)} recorded.`)
     fetchAll()
   }

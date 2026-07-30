@@ -2,7 +2,7 @@ import {
   findCustomerMatch, addressMatches, normalizeAddressKey,
   type MatchInput, type CustomerMatch,
 } from '@/lib/customers'
-import { serviceKey } from '@/lib/labor'
+import { serviceKey } from '@/lib/serviceKey'
 import { haversineKm, type Coord } from '@/lib/geo'
 
 // ── THE unified duplicate-detection engine ────────────────────────────────────────
