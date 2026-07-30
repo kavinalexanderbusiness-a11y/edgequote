@@ -12,7 +12,7 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { DetailHeader } from '@/components/layout/DetailHeader'
 import { Banner } from '@/components/ui/Banner'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
-import { Button } from '@/components/ui/Button'
+import { Button, ButtonLink } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
@@ -48,6 +48,9 @@ export default function QuoteDetailPage() {
   const [duplicating, setDuplicating] = useState(false)
   const [extending, setExtending] = useState(false)
   const [showMessage, setShowMessage] = useState(false)
+  // The invoice this quote has already produced (newest, when several exist) —
+  // read on load so the toolbar can answer "has this been billed?" without a tap.
+  const [existingInvoiceNumber, setExistingInvoiceNumber] = useState<string | null>(null)
   const [savedCustomerMsg, setSavedCustomerMsg] = useState<string | null>(null)
   const [dupMsg, setDupMsg] = useState<string | null>(null)
 
@@ -87,13 +90,21 @@ export default function QuoteDetailPage() {
       // Local session read — no auth round-trip before the batch below.
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
-      const [qRes, svcRes, cRes, tRes, tierRes, sRes] = await Promise.all([
+      const [qRes, svcRes, cRes, tRes, tierRes, sRes, invRes] = await Promise.all([
         supabase.from('quotes').select('*').eq('id', id).eq('user_id', user!.id).single(),
         supabase.from('quote_services').select('*').eq('quote_id', id).order('sort_order'),
         supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
         supabase.from('service_templates').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('travel_fee_tiers').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('business_settings').select('*').eq('user_id', user!.id).maybeSingle(),
+        // Has this quote already been billed? The page never asked, so "Convert to
+        // invoice" stayed live (and PRIMARY on a completed quote) forever — including
+        // after completing a visit auto-drafted one — and the answer only ever arrived
+        // as a red error AFTER the tap. ORDERED, not just limit(1): a recurring quote
+        // legitimately accumulates invoices (the quote_id dedupe is skipped for
+        // recurring jobs), so name the NEWEST rather than an arbitrary row. Same
+        // select the convert guard already runs, so RLS is already proven.
+        supabase.from('invoices').select('invoice_number, issued_date').eq('quote_id', id).order('issued_date', { ascending: false }).limit(1),
       ])
       setQuote(qRes.data)
       setServices((svcRes.data as QuoteService[]) || []) // error/absent table → [] (legacy)
@@ -101,6 +112,7 @@ export default function QuoteDetailPage() {
       setTemplates(tRes.data || [])
       setTiers(tierRes.data || [])
       setSettings(sRes.data)
+      setExistingInvoiceNumber((invRes.data?.[0] as { invoice_number: string } | undefined)?.invoice_number ?? null)
       setLoading(false)
     }
     load()
@@ -509,6 +521,10 @@ export default function QuoteDetailPage() {
       if (error) {
         toast.error('Could not create invoice: ' + error.message)
       } else {
+        // Persist what just happened. The toast was the ONLY evidence, so a phone
+        // lock or a navigate-and-return left the owner re-tapping Convert to find
+        // out — and the answer came back as a red "already invoiced" error.
+        setExistingInvoiceNumber(invoiceNumber)
         toast(`Invoice ${invoiceNumber} created.`, {
           tone: 'success',
           action: { label: 'View invoice', run: () => router.push(`/dashboard/invoices?invoice=${encodeURIComponent(invoiceNumber)}`) },
@@ -663,6 +679,15 @@ export default function QuoteDetailPage() {
 
   const customerPhone = customers.find(c => c.id === quote.customer_id)?.phone || null
   const canInvoice = quote.status === 'accepted' || quote.status === 'scheduled' || quote.status === 'completed'
+  // THE send rule, from the one engine that owns it (lib/quoteStatus). The PDF
+  // action already asks it — but that path only hands a file to the OWNER'S OWN
+  // device, while the Send card below texts/emails the customer a portal link
+  // they can approve from. The dangerous path was the unguarded one: a $0 quote
+  // could be delivered and accepted, which is exactly what the engine's own
+  // comment forbids ("a quote in a customer's hands without a price is not a
+  // quote"). Asking the same function here enforces the existing rule on the
+  // path that needed it most — no new rule, no engine change.
+  const sendBlock = sendBlockedReason(quote)
 
   // Surface the quote's state in the header itself — a sent quote reads "Sent 3
   // days ago" (the follow-up clock), everything else the plain status label.
@@ -778,8 +803,14 @@ export default function QuoteDetailPage() {
               device and flips the status — it does NOT message the customer (the
               Send card below does that, and is the primary action for drafts). */}
           {quote.status === 'draft' ? (
-            <Button onClick={handleSendQuote} size="sm" variant={quote.customer_id ? 'secondary' : 'primary'} loading={pdfLoading}>
-              <FileDown className="w-3.5 h-3.5" /> Download PDF
+            <Button onClick={handleSendQuote} size="sm" variant={quote.customer_id ? 'secondary' : 'primary'} loading={pdfLoading}
+              title="Downloads the PDF to this device and marks the quote sent — it does not message the customer">
+              {/* The label names BOTH halves. It read "Download PDF" while the handler
+                  also ran markSentPatch — stamping sent_at + valid_until, starting the
+                  expiry clock and arming the follow-up cron — so the owner learned the
+                  status had moved only from the toast afterwards. Still distinct from
+                  the customer-facing "Send quote" card below. */}
+              <FileDown className="w-3.5 h-3.5" /> Download &amp; mark sent
             </Button>
           ) : (
             <Button onClick={handleOpenPdf} variant="secondary" size="sm" loading={pdfLoading}>
@@ -809,13 +840,22 @@ export default function QuoteDetailPage() {
               <CalendarPlus className="w-3.5 h-3.5" /> Book another visit
             </Button>
           )}
-          {canInvoice && (
+          {/* Already billed → the action becomes the ANSWER. Replacement, not a
+              disabled button: the convert guard makes a second conversion genuinely
+              impossible, so offering it was offering a red error. Shown on ANY
+              status (not just canInvoice) — "has this been billed?" is worth
+              answering everywhere, and completing a visit auto-drafts one. */}
+          {existingInvoiceNumber ? (
+            <ButtonLink href={`/dashboard/invoices?invoice=${encodeURIComponent(existingInvoiceNumber)}`} variant="secondary" size="sm">
+              <FileText className="w-3.5 h-3.5" /> Invoice {existingInvoiceNumber}
+            </ButtonLink>
+          ) : canInvoice ? (
             // Completed = converting is THE stage action, so it takes the one
             // primary slot; other stages have their own primary elsewhere.
             <Button onClick={handleConvertToInvoice} variant={quote.status === 'completed' ? 'primary' : 'secondary'} size="sm" loading={converting}>
               <FileText className="w-3.5 h-3.5" /> Convert to invoice
             </Button>
-          )}
+          ) : null}
           <Button onClick={() => setEditing(true)} variant="ghost" size="sm">
             <Edit2 className="w-3.5 h-3.5" /> Edit
           </Button>
@@ -911,16 +951,31 @@ export default function QuoteDetailPage() {
               <p className="text-sm font-semibold text-ink">
                 {quote.status === 'draft' || quote.status === 'sent' ? 'Send this quote to the customer' : 'Resend this quote to the customer'}
               </p>
-              <p className="text-xs text-ink-muted mt-0.5">
-                {quote.status === 'draft' || quote.status === 'sent'
-                  ? <>Texts/emails a personalized message with a link to view &amp; accept it in their portal.</>
-                  : <>Texts/emails them a copy with a link to their portal.</>}
-              </p>
+              {/* Blocked → say why and hand over the door, instead of letting the
+                  owner open the composer and discover it mid-message (or worse,
+                  deliver a $0 quote the customer can approve). */}
+              {sendBlock ? (
+                <p className="text-xs text-amber-400 mt-0.5">{sendBlockedLabel(sendBlock)}</p>
+              ) : (
+                <p className="text-xs text-ink-muted mt-0.5">
+                  {quote.status === 'draft' || quote.status === 'sent'
+                    ? <>Texts/emails a personalized message with a link to view &amp; accept it in their portal.</>
+                    : <>Texts/emails them a copy with a link to their portal.</>}
+                </p>
+              )}
             </div>
-            {/* The REAL send is the primary action while the quote awaits delivery. */}
-            <Button variant={quote.status === 'draft' || quote.status === 'sent' ? 'primary' : 'secondary'} onClick={() => setShowMessage(true)}>
-              <MessageSquare className="w-4 h-4" /> {quote.status === 'draft' || quote.status === 'sent' ? 'Send quote' : 'Resend quote'}
-            </Button>
+            {/* The REAL send is the primary action while the quote awaits delivery.
+                Blocked → the button becomes the FIX ("Add a price"), which opens the
+                editor right here: one tap instead of hunting for Edit. */}
+            {sendBlock === 'no_price' ? (
+              <Button variant="secondary" onClick={() => setEditing(true)}>
+                <Edit2 className="w-4 h-4" /> Add a price
+              </Button>
+            ) : (
+              <Button variant={quote.status === 'draft' || quote.status === 'sent' ? 'primary' : 'secondary'} onClick={() => setShowMessage(true)}>
+                <MessageSquare className="w-4 h-4" /> {quote.status === 'draft' || quote.status === 'sent' ? 'Send quote' : 'Resend quote'}
+              </Button>
+            )}
           </CardBody>
           {/* vars.address is the quote's OWN address — the same string QuotePDF prints,
               so the message and the document it links to name the same place. Deliberately
