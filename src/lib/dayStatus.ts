@@ -154,6 +154,31 @@ export function hasCapacityOverride(row: DayStatusRow | null | undefined): boole
   return !!(row && (row.crew_size != null || (row.starts_at && row.ends_at)))
 }
 
+// Does this row represent a DAY STATUS the owner set — something worth showing as
+// a badge and shading the day for?
+//
+// It is not enough to ask "is there a row". `status` is NOT NULL DEFAULT 'custom',
+// so Day Settings has to write SOME status to store a crew/hours override, and it
+// writes the placeholder 'custom' with blocks=false. That row is not a status: the
+// owner re-timed a working day, they did not mark it unavailable. Painting it with
+// the shared 'Custom 🚫' badge and the unavailable shade told them they had
+// disabled a day they had merely changed the hours of — indistinguishable on the
+// calendar from a real day off.
+//
+// A row is a real status when it BLOCKS (the authoritative flag this module is
+// built around), or when it says something a placeholder cannot: a status other
+// than 'custom' (a future non-blocking status like "Training" still shows), or a
+// free-text label the owner typed. Bare capacity overrides — and only those —
+// render as the ordinary working days they are.
+export function isCapacityOnlyRow(row: DayStatusRow | null | undefined): boolean {
+  return !!row && !row.blocks && row.status === 'custom' && !row.label?.trim()
+}
+
+// The inverse, for readability at call sites that decide whether to render status.
+export function showsDayStatus(row: DayStatusRow | null | undefined): boolean {
+  return !!row && !isCapacityOnlyRow(row)
+}
+
 // ── supabase helpers (shared by the scheduler UI + the Weather Ops loader) ──────
 export async function loadDayStatuses(supabase: SupabaseClient, userId: string): Promise<DayStatusRow[]> {
   const { data } = await supabase.from('day_statuses').select(DAY_STATUS_SELECT).eq('user_id', userId)

@@ -8,7 +8,7 @@ import {
 import { Job, JOB_STATUS_COLORS } from '@/types'
 import { ScheduleItem, ITEM_META } from '@/lib/scheduleItems'
 import { cn } from '@/lib/utils'
-import { DayStatusMap, dayStatusMeta, dayStatusLabel, isDayBlocked } from '@/lib/dayStatus'
+import { DayStatusMap, dayStatusMeta, dayStatusLabel, isDayBlocked, showsDayStatus } from '@/lib/dayStatus'
 import { estimateDayLoad, type EstimatedDayLoad } from '@/lib/route'
 import { toast } from '@/lib/toast'
 import { Repeat, Check } from 'lucide-react'
@@ -341,7 +341,10 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
             const shownItems = dayItems.slice(0, 2)
             const overflow = (dayJobs.length - shownJobs.length) + (dayItems.length - shownItems.length)
             const dateISO = format(day, 'yyyy-MM-dd')
-            const statusRow = dayStatusMap?.byDate[dateISO]
+            // Only a real day STATUS shades/badges the cell. A bare capacity
+            // override (Day Settings hours/crew) is an ordinary working day —
+            // see showsDayStatus in lib/dayStatus.
+            const statusRow = showsDayStatus(dayStatusMap?.byDate[dateISO]) ? dayStatusMap!.byDate[dateISO] : undefined
             const selected = !!selectedDays?.has(dateISO)
             return (
               // div[role=button], not <button> — the cell CONTAINS chip/Done
@@ -404,7 +407,10 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
             const dayItems = dayItemsFor(day)
             const today = isSameDay(day, new Date())
             const dateISO = format(day, 'yyyy-MM-dd')
-            const statusRow = dayStatusMap?.byDate[dateISO]
+            // Only a real day STATUS shades/badges the cell. A bare capacity
+            // override (Day Settings hours/crew) is an ordinary working day —
+            // see showsDayStatus in lib/dayStatus.
+            const statusRow = showsDayStatus(dayStatusMap?.byDate[dateISO]) ? dayStatusMap!.byDate[dateISO] : undefined
             const selected = !!selectedDays?.has(dateISO)
             return (
               // div[role=button] — the cell contains chip/Done buttons (see month grid).

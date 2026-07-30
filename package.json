@@ -31,6 +31,7 @@
     "verify:inventory": "tsx scripts/verify-inventory.ts",
     "verify:accounting": "tsx scripts/verify-accounting.ts",
     "verify:reports": "tsx scripts/verify-reports.ts",
+    "verify:day-settings": "tsx scripts/verify-day-settings.ts",
     "verify:recurrence": "tsx scripts/verify-recurrence.ts",
     "verify:dedup": "tsx scripts/verify-dedup.ts",
     "verify:dedup-contract": "tsx scripts/verify-dedup-contract.ts",
