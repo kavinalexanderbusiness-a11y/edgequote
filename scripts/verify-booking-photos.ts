@@ -18,6 +18,7 @@
 // Style follows the other verify scripts: deterministic, no network, no DB. These pin
 // CURRENT behavior — this is coverage, not a behavior change.
 
+import { readFileSync } from 'node:fs'
 import { extractBookingPhotos, bookingPhotoViews, bookingPhotosFromQuotes } from '../src/lib/bookingPhotos'
 
 let pass = 0
@@ -85,6 +86,22 @@ check('the first quote to carry a URL stamps its date (shared.jpg keeps 2026-07-
   flat.find(v => v.url === 'https://cdn.x/shared.jpg')?.taken_at, '2026-07-02')
 check('a quote with no lead_meta adds nothing (no throw)',
   bookingPhotosFromQuotes([{ lead_meta: null }, { lead_meta: undefined }]), [])
+
+// ═══════════════════════════════════════════════════════════════════════════
+H('5. schema.sql — booking-photo UPLOADS accept BOTH anon and authenticated')
+// The write side (RLS) is what the read side above depends on: no policy, no photo.
+// PROD BUG (2026-07-30): the booking-uploads INSERT policy was scoped to `anon`
+// only, so the browser client of any LOGGED-IN visitor — the owner testing their
+// own /book/[token] link, staff, or a signed-in customer — 403'd on the upload and
+// the booking arrived WITHOUT the photo (0 objects across 26 bookings). INSERT must
+// mirror SELECT: both roles. This guards schema.sql from silently reverting.
+// (RLS can't be unit-tested; pinning the canonical schema text is the closest guard.)
+const schema = readFileSync('supabase/schema.sql', 'utf8')
+const insertPolicy = schema.split('\n').find(l =>
+  /create\s+policy/i.test(l) && /booking_uploads/i.test(l) && /\binsert\b/i.test(l)) || ''
+check('a booking-uploads INSERT policy exists in schema.sql', insertPolicy !== '', true)
+check('...it grants anon (real logged-out customers)', /\banon\b/.test(insertPolicy), true)
+check('...it grants authenticated too (the fix — never anon-only again)', /\bauthenticated\b/.test(insertPolicy), true)
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)

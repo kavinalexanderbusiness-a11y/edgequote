@@ -120,17 +120,26 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
     const room = Math.max(0, 6 - photoUrls.length)
     const added: string[] = []
     let failed = 0
-    for (const f of files.slice(0, room)) {
-      const safe = f.name.replace(/[^a-zA-Z0-9.\-_]/g, '_')
-      const path = `${token}/${crypto.randomUUID()}-${safe}`
-      const { error: upErr } = await supabase.storage.from('booking-uploads').upload(path, f, { upsert: false })
-      if (!upErr) added.push(supabase.storage.from('booking-uploads').getPublicUrl(path).data.publicUrl)
-      else failed++
+    try {
+      for (const f of files.slice(0, room)) {
+        // Per-file guard: a thrown upload (network drop, a blocked request) counts as
+        // a failed photo — it must not abort the loop or, worse, escape this handler
+        // and leave uploadingPhotos stuck true. A spinner that never stops is itself a
+        // silent failure; the finally below guarantees the state resets.
+        try {
+          const safe = f.name.replace(/[^a-zA-Z0-9.\-_]/g, '_')
+          const path = `${token}/${crypto.randomUUID()}-${safe}`
+          const { error: upErr } = await supabase.storage.from('booking-uploads').upload(path, f, { upsert: false })
+          if (!upErr) added.push(supabase.storage.from('booking-uploads').getPublicUrl(path).data.publicUrl)
+          else failed++
+        } catch { failed++ }
+      }
+      setPhotoUrls(prev => [...prev, ...added])
+      if (failed > 0) setPhotoError(`Couldn't upload ${failed} photo${failed !== 1 ? 's' : ''} — you can try again, or just skip it.`)
+      else if (files.length > room) setPhotoError('You can attach up to 6 photos.')
+    } finally {
+      setUploadingPhotos(false)
     }
-    setPhotoUrls(prev => [...prev, ...added])
-    if (failed > 0) setPhotoError(`Couldn't upload ${failed} photo${failed !== 1 ? 's' : ''} — you can try again, or just skip it.`)
-    else if (files.length > room) setPhotoError('You can attach up to 6 photos.')
-    setUploadingPhotos(false)
   }
   function removePhoto(url: string) { setPhotoUrls(prev => prev.filter(u => u !== url)); setPhotoError(null) }
 

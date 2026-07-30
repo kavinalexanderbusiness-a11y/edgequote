@@ -1365,13 +1365,19 @@ grant execute on function public.submit_booking(text, text, text, text, text, te
 -- ════════════════════════════════════════════════════════════
 alter table public.quotes add column if not exists lead_meta jsonb;
 
--- Public upload bucket for booking photos (anon insert, public read). If your
+-- Public upload bucket for booking photos (public insert + read). If your
 -- project restricts storage DDL via SQL, create the bucket + these two policies
 -- in the Storage dashboard instead — the funnel degrades gracefully without it.
+-- INSERT must allow BOTH anon and authenticated: the /book/[token] page uses the
+-- browser client, which carries whatever session is present, so the owner testing
+-- their own link, staff, or a logged-in customer uploads as 'authenticated'. An
+-- anon-only insert policy 403'd every one of those and silently dropped the photo
+-- (booking still arrived) — see RUN-2026-07-30-booking-uploads-authenticated-insert.sql.
 insert into storage.buckets (id, name, public) values ('booking-uploads', 'booking-uploads', true)
   on conflict (id) do nothing;
 drop policy if exists "booking_uploads_anon_insert" on storage.objects;
-create policy "booking_uploads_anon_insert" on storage.objects for insert to anon with check (bucket_id = 'booking-uploads');
+drop policy if exists "booking_uploads_public_insert" on storage.objects;
+create policy "booking_uploads_public_insert" on storage.objects for insert to anon, authenticated with check (bucket_id = 'booking-uploads');
 drop policy if exists "booking_uploads_public_read" on storage.objects;
 create policy "booking_uploads_public_read" on storage.objects for select to anon, authenticated using (bucket_id = 'booking-uploads');
 
