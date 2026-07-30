@@ -803,8 +803,14 @@ export default function QuoteDetailPage() {
               device and flips the status — it does NOT message the customer (the
               Send card below does that, and is the primary action for drafts). */}
           {quote.status === 'draft' ? (
-            <Button onClick={handleSendQuote} size="sm" variant={quote.customer_id ? 'secondary' : 'primary'} loading={pdfLoading}>
-              <FileDown className="w-3.5 h-3.5" /> Download PDF
+            <Button onClick={handleSendQuote} size="sm" variant={quote.customer_id ? 'secondary' : 'primary'} loading={pdfLoading}
+              title="Downloads the PDF to this device and marks the quote sent — it does not message the customer">
+              {/* The label names BOTH halves. It read "Download PDF" while the handler
+                  also ran markSentPatch — stamping sent_at + valid_until, starting the
+                  expiry clock and arming the follow-up cron — so the owner learned the
+                  status had moved only from the toast afterwards. Still distinct from
+                  the customer-facing "Send quote" card below. */}
+              <FileDown className="w-3.5 h-3.5" /> Download &amp; mark sent
             </Button>
           ) : (
             <Button onClick={handleOpenPdf} variant="secondary" size="sm" loading={pdfLoading}>
