@@ -14,6 +14,7 @@ import {
   daysAwayLabel, dueSoonLabel, invoicePaymentNote, parsePortalDeepLink, tabNavTarget, buildVisitICS, visitToCalendarEvent,
   messageAboutDoc, primaryPortalAction, draftStorageKey, etransferReference, isSendChord,
   needsContactMethod, contactUpdateMessage, contactSentKey,
+  showDocFilters, DOC_FILTER_MIN,
   NO_PROPERTY, MAX_REQUEST_PRESETS,
   type PortalData, type PortalJob, type PortalProperty, type DocBlobRenderers,
 } from '../src/app/portal/[token]/model'
@@ -413,6 +414,22 @@ console.log('\nneedsContactMethod / contactUpdateMessage (the unreachable-custom
 
   check('sent-flag key is token-scoped', contactSentKey('tok-a') !== contactSentKey('tok-b'))
   check('sent-flag key never collides with a draft key', contactSentKey('t') !== draftStorageKey('t', 'message') && !contactSentKey('t').startsWith('eqp:draft:'))
+}
+
+// ── doc filters: finding tools only when there's something to find ──────────
+// A search box + sort toggle + count + category pills over a two-item list is
+// furniture. Measured on the live book: 46 portal customers, 2.2 documents on
+// average, 45 of them holding five or fewer. The threshold is what keeps the
+// controls from greeting almost everyone; pin it so a refactor can't quietly
+// re-show them (or, worse, hide them from the one customer who has a real list).
+{
+  check('an empty list needs no finding tools', showDocFilters(0) === false)
+  check('a single document needs no finding tools', showDocFilters(1) === false)
+  check('the typical portal (2-3 docs) shows no filters', showDocFilters(2) === false && showDocFilters(3) === false)
+  check('five documents — still scannable, still no filters', showDocFilters(5) === false)
+  check('at the threshold the filters appear', showDocFilters(DOC_FILTER_MIN) === true)
+  check('a long list keeps them', showDocFilters(25) === true)
+  check('the threshold is the documented 6', DOC_FILTER_MIN === 6, String(DOC_FILTER_MIN))
 }
 
 console.log(`\n${fail === 0 ? '✓' : '✗'} portal checks: ${pass} passed, ${fail} failed`)
