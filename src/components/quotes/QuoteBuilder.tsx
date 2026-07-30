@@ -99,7 +99,7 @@ export function QuoteBuilder({
   autosaveKey, autosaveBaselineUpdatedAt, onCancel,
 }: QuoteBuilderProps) {
   const router = useRouter()
-  const { register, handleSubmit, watch, setValue, getValues, reset, control, formState: { errors, isSubmitting } } =
+  const { register, handleSubmit, watch, setValue, getValues, reset, control, setFocus, formState: { errors, isSubmitting } } =
     useForm<QuoteFormValues>({
       defaultValues: {
         customer_id: defaultCustomerId || '',
@@ -1642,8 +1642,13 @@ export function QuoteBuilder({
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Service {n + 2}</p>
                       <div className="flex items-center gap-3">
                         <span className="text-sm font-semibold text-ink tabular-nums">{formatCurrency(net)}</span>
+                        {/* Was a bare 16px icon with no padding — a fraction of the
+                            44px the app's own .tap-target-y standard asks for, on a
+                            control that deletes a priced line instantly. Padding gives
+                            it a real hit area on a phone; the ring makes it reachable
+                            by keyboard like every other control here. */}
                         <button type="button" onClick={() => serviceLines.remove(i)} aria-label="Remove service"
-                          className="text-ink-faint hover:text-red-400 transition-colors">
+                          className="tap-target-y flex items-center justify-center -m-1 p-2 rounded-lg text-ink-faint hover:text-red-400 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
@@ -1696,7 +1701,16 @@ export function QuoteBuilder({
                   </div>
                 )
               })}
-              <Button type="button" variant="secondary" size="sm" onClick={() => serviceLines.append(emptyServiceLine())}>
+              {/* Land the cursor IN the new line's name field. Appending left focus on
+                  the button below the row, so every extra line cost a wasted tap — and
+                  on a phone a scroll-hunt before the keyboard even appeared. Focusing
+                  also scrolls the new card into view for free. */}
+              <Button type="button" variant="secondary" size="sm"
+                onClick={() => {
+                  const n = serviceLines.fields.length
+                  serviceLines.append(emptyServiceLine())
+                  requestAnimationFrame(() => setFocus(`services.${n}.service_type`))
+                }}>
                 <Plus className="w-3.5 h-3.5" /> Add service
               </Button>
               {materialIdx.length > 0 && (
@@ -1739,7 +1753,7 @@ export function QuoteBuilder({
                       <div className="flex items-center gap-3">
                         <span className="text-sm font-semibold text-ink tabular-nums">{formatCurrency(net)}</span>
                         <button type="button" onClick={() => serviceLines.remove(i)} aria-label="Remove material"
-                          className="text-ink-faint hover:text-red-400 transition-colors">
+                          className="tap-target-y flex items-center justify-center -m-1 p-2 rounded-lg text-ink-faint hover:text-red-400 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
@@ -1754,7 +1768,7 @@ export function QuoteBuilder({
                         under every filled line forever was pure noise, and the
                         datalist on the input still offers them while typing. */}
                     {!line?.service_type?.trim() && (
-                      <div className="flex flex-wrap gap-1.5">
+                      <div className="flex flex-wrap gap-2">
                         {MATERIAL_SUGGESTIONS.map(s => (
                           <button key={s.label} type="button"
                             onClick={() => {
@@ -1762,7 +1776,10 @@ export function QuoteBuilder({
                               setValue(`services.${i}.unit`, s.unit, { shouldDirty: true })
                             }}
                             title={s.hint}
-                            className="text-[11px] rounded-full border border-border px-2 py-0.5 text-ink-muted hover:text-ink hover:border-accent transition-colors">
+                            // tap-target-y is coarse-pointer-gated (globals.css), so the
+                            // desktop chip is unchanged while the phone gets a real 44px
+                            // target; the ring is the same one every other chip here uses.
+                            className="tap-target-y inline-flex items-center text-[11px] rounded-full border border-border px-2.5 py-1 text-ink-muted hover:text-ink hover:border-accent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                             {s.label}
                           </button>
                         ))}
@@ -1790,7 +1807,12 @@ export function QuoteBuilder({
               <datalist id="eq-material-suggestions">
                 {MATERIAL_SUGGESTIONS.map(s => <option key={s.label} value={s.label} />)}
               </datalist>
-              <Button type="button" variant="secondary" size="sm" onClick={() => serviceLines.append(emptyMaterialLine())}>
+              <Button type="button" variant="secondary" size="sm"
+                onClick={() => {
+                  const n = serviceLines.fields.length
+                  serviceLines.append(emptyMaterialLine())
+                  requestAnimationFrame(() => setFocus(`services.${n}.service_type`))
+                }}>
                 <Plus className="w-3.5 h-3.5" /> Add material
               </Button>
               {materialsSum.net > 0 && (

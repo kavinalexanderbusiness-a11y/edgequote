@@ -87,7 +87,11 @@ export function CustomerPicker({
   function clear() { onChange(''); setQuery(''); setOpen(false) }
 
   function onKeyDown(e: React.KeyboardEvent) {
-    if (!open && (e.key === 'ArrowDown' || e.key === 'Enter')) { setOpen(true); setHi(0); return }
+    // preventDefault on BOTH keys: with the menu closed this branch opened it but
+    // let the key keep going, so Enter also triggered the form's implicit submit —
+    // in the quote builder that saved a half-built quote from the customer field.
+    // A combobox owns Enter; the form gets it from the Save button.
+    if (!open && (e.key === 'ArrowDown' || e.key === 'Enter')) { e.preventDefault(); setOpen(true); setHi(0); return }
     if (e.key === 'ArrowDown') { e.preventDefault(); setHi(h => Math.min(h + 1, rows.length - 1)) }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setHi(h => Math.max(h - 1, 0)) }
     else if (e.key === 'Enter' && open) { e.preventDefault(); choose(hi) }
