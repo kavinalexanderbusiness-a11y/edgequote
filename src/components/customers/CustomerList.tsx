@@ -165,7 +165,11 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
     sel.clear()
     await onRefresh()
     notify.undo(`Archived ${ids.length} customer${ids.length !== 1 ? 's' : ''}`, async () => {
-      await supabase.from('customers').update({ archived_at: null }).in('id', ids); await onRefresh()
+      // A bulk restore that fails silently is the worst of the set: the owner has no
+      // per-row feedback to fall back on, so say it plainly and name the way back.
+      const { error: rErr } = await supabase.from('customers').update({ archived_at: null }).in('id', ids)
+      if (rErr) { notify.error(`Could not bring them back — all ${ids.length} are still archived. Restore them from the Archived list.`); return }
+      await onRefresh()
     })
   }
 

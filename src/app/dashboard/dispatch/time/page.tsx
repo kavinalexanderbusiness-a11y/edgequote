@@ -120,7 +120,10 @@ export default function TimesheetPage() {
     if (error) { notify.error('Could not delete: ' + error.message); return }
     setEntries(prev => prev.filter(x => x.id !== e.id))
     notify.undo('Shift deleted', async () => {
-      await supabase.from('time_entries').insert(row)
+      // Worked hours feed payroll: a restore that fails without saying so loses a
+      // crew member's shift for good, and the owner has no way to know it happened.
+      const { error: rErr } = await supabase.from('time_entries').insert(row)
+      if (rErr) { notify.error('Could not restore the shift: ' + rErr.message + ' — re-enter it by hand so payroll stays right.'); return }
       fetchAll()
     })
   }

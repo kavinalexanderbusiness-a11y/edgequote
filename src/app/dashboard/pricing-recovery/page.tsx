@@ -235,8 +235,13 @@ export default function PricingRecoveryPage() {
     // page exists so reports run on real revenue, so it must not inflate them itself.
     const { error: linkErr } = await supabase.from('jobs').update({ quote_id: q.id }).in('id', ids)
     if (linkErr) {
-      await supabase.from('quotes').delete().eq('id', q.id)
-      toast.error('Could not price these visits — please try again.')
+      // The rollback is the whole promise of the comment above, so it can't be the
+      // one write nobody checks: if it fails too, an accepted quote for real money is
+      // loose in the reports and only the owner can decide what to do about it.
+      const { error: rollbackErr } = await supabase.from('quotes').delete().eq('id', q.id)
+      toast.error(rollbackErr
+        ? 'Could not price these visits, and the draft quote it created could not be cleaned up — delete it from Quotes so your revenue reports stay right.'
+        : 'Could not price these visits — please try again.')
       setWorking(null); return
     }
     await load(); setWorking(null)
@@ -250,7 +255,10 @@ export default function PricingRecoveryPage() {
     const patch: Record<string, unknown> = { [field]: price }
     const q = quotes.find(x => x.id === quoteId)
     if (q && !(Number(q.initial_price) > 0)) patch.initial_price = price
-    await supabase.from('quotes').update(patch).eq('id', quoteId)
+    // load() re-shows the series as unpriced when this fails, which reads as "the
+    // button did nothing" — the one reading that makes an owner click it repeatedly.
+    const { error } = await supabase.from('quotes').update(patch).eq('id', quoteId)
+    if (error) { toast.error('Could not save that price — please try again.'); setWorking(null); return }
     await load(); setWorking(null)
   }
 
@@ -300,7 +308,8 @@ export default function PricingRecoveryPage() {
   // Link a customer's one-time unpriced jobs to an existing priced quote.
   async function linkJobs(key: string, jobIds: string[], quoteId: string) {
     setWorking(key)
-    await supabase.from('jobs').update({ quote_id: quoteId }).in('id', jobIds)
+    const { error } = await supabase.from('jobs').update({ quote_id: quoteId }).in('id', jobIds)
+    if (error) { toast.error('Could not link these visits to the quote — please try again.'); setWorking(null); return }
     await load(); setWorking(null)
   }
 

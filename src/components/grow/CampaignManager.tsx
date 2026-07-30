@@ -240,7 +240,10 @@ export function CampaignManager() {
     if (editingId === c.id) { setEditingId(null); setDraft(null) }
     load()
     toast.undo(`Deleted "${c.name}"`, async () => {
-      await supabase.from('crm_campaigns').update({ archived_at: null, enabled: wasEnabled }).eq('id', c.id)
+      const { error: rErr } = await supabase.from('crm_campaigns').update({ archived_at: null, enabled: wasEnabled }).eq('id', c.id)
+      // An automation the owner believes is back on, but isn't, stops reaching
+      // customers silently — the failure mode this whole surface exists to avoid.
+      if (rErr) { toast.error(`Could not restore "${c.name}" — it's still deleted: ` + rErr.message); return }
       load()
     })
   }
@@ -251,7 +254,9 @@ export function CampaignManager() {
     if (error) { toast.error('Could not remove the preset: ' + error.message); return }
     load()
     toast.undo(`Removed preset "${p.name}"`, async () => {
-      await supabase.from('crm_campaign_presets').insert(p); load()
+      const { error: rErr } = await supabase.from('crm_campaign_presets').insert(p)
+      if (rErr) { toast.error(`Could not restore the preset "${p.name}": ` + rErr.message); return }
+      load()
     })
   }
 

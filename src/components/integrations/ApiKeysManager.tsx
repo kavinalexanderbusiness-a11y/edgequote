@@ -69,7 +69,10 @@ export function ApiKeysManager({ userId }: { userId: string }) {
     }
     await load()
     toast.undo(`${k.name} revoked — requests with it now fail.`, async () => {
-      await supabase.from('api_keys').update({ revoked_at: null }).eq('id', k.id)
+      const { error: rErr } = await supabase.from('api_keys').update({ revoked_at: null }).eq('id', k.id)
+      // A key the owner thinks they un-revoked, but didn't, means every request using
+      // it keeps failing — and the failure shows up in someone else's system, not here.
+      if (rErr) { toast.error(`Could not un-revoke ${k.name} — requests with it still fail: ` + rErr.message); return }
       await load()
     })
   }

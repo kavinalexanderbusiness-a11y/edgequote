@@ -86,7 +86,11 @@ export function ReferralPanel({ customer, referrer, referredRevenue }: {
     const { error } = await supabase.from('referrals').delete().eq('id', id)
     if (error) { toast.error('Could not remove: ' + error.message); return }
     load()
-    if (row) toast.undo('Referral removed', async () => { await supabase.from('referrals').insert(row); load() })
+    if (row) toast.undo('Referral removed', async () => {
+      const { error: rErr } = await supabase.from('referrals').insert(row)
+      if (rErr) { toast.error('Could not restore the referral: ' + rErr.message); return }
+      load()
+    })
   }
 
   const joined = rows.filter(r => r.status === 'joined' || r.status === 'rewarded').length

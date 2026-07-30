@@ -189,10 +189,15 @@ export default function NeighborsPage() {
       const ensured = await ensureCustomerAndProperty(
         supabase, user!.id, { customerId: null, name: name.trim(), address: lead.address }, customers,
       )
-      await supabase.from('neighbor_leads').update({
+      // The customer now EXISTS; this write is what records that fact on the lead.
+      // Supabase resolves on a failed write rather than throwing, so the catch below
+      // never saw it: the lead stayed "new" forever while its customer was already
+      // created, and clicking Convert again looked like the fix. Say what happened.
+      const { error: linkErr } = await supabase.from('neighbor_leads').update({
         status: thenQuote ? 'quoted' : 'won',
         converted_customer_id: ensured.customerId,
       }).eq('id', lead.id)
+      if (linkErr) toast.error(`${name.trim()} was created as a customer, but this lead still shows as new — mark it converted by hand.`)
       if (thenQuote) router.push(`/dashboard/quotes/new?customer=${ensured.customerId}`)
       else await load()
     } catch (e) { toast.error('Could not convert: ' + (e instanceof Error ? e.message : 'error')) }
