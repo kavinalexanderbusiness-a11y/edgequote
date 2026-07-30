@@ -25,7 +25,7 @@ import { SendMessageDialog, type MessageRecipient } from '@/components/comms/Sen
 import {
   DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
   Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send, Receipt,
-  ChevronUp, ChevronDown, Wand2, MoreHorizontal, CalendarDays,
+  ChevronUp, ChevronDown, Wand2, MoreHorizontal, CalendarDays, StickyNote,
 } from 'lucide-react'
 
 export interface QuoteLite {
@@ -816,6 +816,18 @@ export function DayOpsPanel({
                       {/* Property address — a customer can have several properties;
                           the name alone never says which one this visit is at. */}
                       <VisitAddress address={job.properties?.address} className="mt-0.5" />
+
+                      {/* Access note (gate code, where to park, crew note) on the card
+                          face — it was only reachable via overflow → Quick edit, so the
+                          one thing you need before pulling into the driveway was two taps
+                          and a panel away. Read-only here; still edited in Quick edit. */}
+                      {job.notes?.trim() && (
+                        <div className="mt-1.5 flex items-start gap-1.5 rounded-md border border-border bg-bg-tertiary/60 px-2 py-1 text-xs text-ink-muted"
+                          title={job.notes.trim()}>
+                          <StickyNote className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-400/80" />
+                          <span className="line-clamp-2 whitespace-pre-wrap break-words">{job.notes.trim()}</span>
+                        </div>
+                      )}
 
                       {/* Clean price-only editor — first-class, opens inline */}
                       {priceId === job.id && (
