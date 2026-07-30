@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle2, ChevronRight, Clock, FileText, History, Home, Leaf, Loader2, MapPin, MessageSquare, MessageSquarePlus, Receipt, Wallet, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { confirm as confirmDialog } from '@/lib/confirm'
@@ -10,7 +10,8 @@ import { displayQuoteStatus } from '@/lib/quoteStatus'
 import type { QuoteStatus } from '@/types'
 import { renderPortalInvoiceBlob, renderPortalQuoteBlob } from '@/lib/portalPdf'
 import {
-  buildPortalView, needsContactMethod, normalizePortal, parsePortalDeepLink, primaryPortalAction, tabNavTarget,
+  buildPortalView, needsContactMethod, normalizePortal, parsePortalDeepLink, primaryPortalAction,
+  recentPaymentLanded, tabNavTarget,
   type PortalData, type SubmitRequestFn, type TabKey,
 } from './model'
 import type { PortalActions } from './components/shared'
@@ -34,6 +35,14 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   // Seeded from the server fetch → real content on first paint (no spinner). load()
   // below only runs as a fallback / for post-payment revalidation.
   const [data, setData] = useState<PortalData | null>(() => normalizePortal(initialData))
+  // Mirrors `data` for the handlers that must read the CURRENT payload without
+  // being re-created on every change (load()'s keep-what-we-have failure return,
+  // and the visibility refetch's staleness check).
+  const dataRef = useRef<PortalData | null>(null)
+  // When the payload we're showing was last fetched — throttles the on-return
+  // refetch below. Declared here (above load, which stamps it) rather than beside
+  // its effect, so there is no doubt it exists before the first call.
+  const lastLoadedAt = useRef(Date.now())
   const [loading, setLoading] = useState(initialData == null)
   const [tab, setTab] = useState<TabKey>('home')
   const [accepting, setAccepting] = useState<string | null>(null)
@@ -68,12 +77,31 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   // the card down — the whole point of persisting it.
   const [reviewDeclined, setReviewDeclined] = useState(() => !!normalizePortal(initialData)?.customer?.review_declined_at)
 
-  async function load() {
-    const { data: d } = await supabase.rpc('get_portal_data', { p_token: token })
+  // Refetch the ONE data source. Returns the payload, or null when the token is
+  // genuinely not valid — never on a network failure.
+  //
+  // This used to read only `data` and hand the result straight to setData. But
+  // supabase-js does not throw on a dead connection: it RESOLVES with
+  // { data: null, error }, so a flaky refetch was byte-identical to a revoked
+  // token — and setData(null) drops the whole portal for the full-screen "This
+  // link isn't valid. It may have expired." Every refetch path could trigger it
+  // (the post-payment reload most cruelly: pay, walk out of wifi range, and the
+  // portal tells you your link is dead seconds after taking your money). The
+  // discriminator is `error`: a bad token returns SQL null with NO error, so
+  // error != null means the network failed and the data we already have is still
+  // the best truth we hold. Keep it, say so, and let the next attempt heal it.
+  async function load(): Promise<PortalData | null> {
+    const { data: d, error } = await supabase.rpc('get_portal_data', { p_token: token })
+    setLoading(false)
+    if (error) {
+      setActionError('We couldn’t refresh your account just now — you’re seeing the last information we loaded. Check your connection and try again.')
+      return dataRef.current
+    }
     const pd = normalizePortal(d)
     setData(pd)
+    dataRef.current = pd
+    lastLoadedAt.current = Date.now()
     if (pd) setConsentState({ sms: !!pd.customer?.sms_opt_in, email: !!pd.customer?.email_opt_in })
-    setLoading(false)
     return pd
   }
 
@@ -106,8 +134,45 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     if (error || !ok) { setReviewDeclined(false); setActionError('We couldn’t save that — please try again.') }
   }
 
+  // Keep the ref in step with every setData (the optimistic accept patch included).
+  useEffect(() => { dataRef.current = data }, [data])
+
   // Server already provided initialData → no client fetch on first paint.
   useEffect(() => { if (initialData == null) load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Refetch when the customer comes BACK to the tab. The portal has no realtime
+  // subscription and no polling, and it was loaded exactly once — so a tab opened
+  // from a quote text and left alive (the normal phone pattern; the accept
+  // handler's own comment concedes tabs live "overnight (or for a week)") kept
+  // rendering the schedule, quotes and balances as they were the moment it
+  // opened. The owner reschedules Thursday's visit or records an e-transfer, and
+  // the customer's screen still shows the old date and an unpaid invoice with a
+  // live Pay button — which is how a portal costs trust rather than building it.
+  //
+  // Refetch on return, throttled so tab-flicking can't hammer the RPC, and only
+  // when the page is actually visible. Safe now that load() keeps what it has on
+  // a failed refetch — before that guard this same effect would have turned every
+  // backgrounded tab on a flaky connection into "This link isn't valid".
+  const REFETCH_AFTER_MS = 60_000
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const onWake = () => {
+      if (document.visibilityState !== 'visible') return
+      if (Date.now() - lastLoadedAt.current < REFETCH_AFTER_MS) return
+      lastLoadedAt.current = Date.now()
+      void load()
+    }
+    document.addEventListener('visibilitychange', onWake)
+    window.addEventListener('focus', onWake)
+    // pageshow fires on a bfcache restore (iOS Safari back-from-Stripe), where
+    // neither visibilitychange nor focus is guaranteed.
+    window.addEventListener('pageshow', onWake)
+    return () => {
+      document.removeEventListener('visibilitychange', onWake)
+      window.removeEventListener('focus', onWake)
+      window.removeEventListener('pageshow', onWake)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Payments availability + return-from-Stripe. ?paid=1 → the webhook marks the
   // invoice paid a beat later, so refetch shortly after.
@@ -119,29 +184,41 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       const sp = new URLSearchParams(window.location.search)
       if (sp.get('paid') === '1') {
         // ?paid=1 only means the customer reached Stripe's return URL — the WEBHOOK
-        // records the money, a beat later. "A beat" is sometimes several seconds,
-        // and a SINGLE check at 1.5s left a customer who genuinely paid staring at
-        // "confirming…" indefinitely — unable to answer the one question that
-        // matters most right after paying: did it work? Poll the ledger a handful
-        // of times over ~18s and flip to "confirmed" the instant the payment row
-        // lands. This only re-reads get_portal_data (the same call, retried) — it
-        // records nothing and changes no payment logic; the webhook stays the sole
-        // source of the money.
-        const before = data?.payments.length ?? 0
+        // records the money. Confirm against the LEDGER before claiming it.
+        //
+        // This was one refetch, 1.5s after landing, comparing row COUNTS. Both
+        // halves failed in production, in opposite directions:
+        // • Too slow: a webhook that takes longer than 1.5s (a retry, a cold start)
+        //   got no second look, so a customer who paid sat on "confirming…"
+        //   indefinitely — unable to answer the one question that matters right
+        //   after paying: did it work? A POLL fixes that half.
+        // • Too fast: the webhook usually BEATS our return trip, so the row is
+        //   already in the server-rendered payload the count is measured against.
+        //   It can never increase, and no amount of polling helps — the count-delta
+        //   test itself is what's wrong. Asking what the ledger HOLDS
+        //   (recentPaymentLanded — a recent completed payment) answers both
+        //   orderings with one question, and confirms on the FIRST paint when the
+        //   money is already there.
+        // Still strictly a ledger check: nothing here trusts the URL, and when the
+        // window closes with nothing it stays honestly on "confirming" rather than
+        // asserting a payment we cannot see.
         setJustPaid('confirming')
         window.history.replaceState({}, '', `/portal/${token}`)
-        let tries = 0
-        const MAX_TRIES = 9
-        const poll = async () => {
-          if (cancelled) return
-          const pd = await load()
-          if (cancelled) return
-          if ((pd?.payments.length ?? 0) > before) { setJustPaid('confirmed'); return }
-          // Not recorded yet — try again, or leave it 'confirming' (the banner
-          // already promises the receipt will appear here and not to pay again).
-          if (++tries < MAX_TRIES) paidTimer = setTimeout(poll, 2000)
+        if (recentPaymentLanded(data?.payments, Date.now())) setJustPaid('confirmed')
+        else {
+          let tries = 0
+          const MAX_TRIES = 9
+          const poll = async () => {
+            if (cancelled) return
+            const pd = await load()
+            if (cancelled) return
+            if (recentPaymentLanded(pd?.payments, Date.now())) { setJustPaid('confirmed'); return }
+            // Not recorded yet — try again, or leave it 'confirming' (the banner
+            // already promises the receipt will appear here and not to pay again).
+            if (++tries < MAX_TRIES) paidTimer = setTimeout(poll, 2000)
+          }
+          paidTimer = setTimeout(poll, 1500)
         }
-        paidTimer = setTimeout(poll, 1500)
       }
       // Back from the hosted card-setup page — the webhook saves the card a beat
       // later, so reload shortly to show it.
@@ -203,7 +280,32 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     // Approving commits the customer to a quote value — never ask someone to
     // approve an amount without showing it, and always say that approving isn't
     // paying (the thing they're most afraid of when they tap).
-    const q = data?.quotes.find(x => x.id === qid)
+    //
+    // Re-read the quote from the server FIRST. portal_accept_quote snapshots
+    // accepted_price from the row's CURRENT total, while this dialog quoted the
+    // payload the tab loaded — which for a tab left open is however old that tab
+    // is. An owner editing a still-'sent' quote (a supported flow that leaves the
+    // status alone) meant the customer was shown $500, tapped approve, and the
+    // business recorded consent to $800: the one number the whole screen exists to
+    // agree on, and the two sides disagreed. One refetch before the dialog closes
+    // that gap to a single round trip, and it also gives the expiry/status checks
+    // below current data to judge instead of a week-old snapshot.
+    setAccepting(qid)
+    const fresh = await load()
+    setAccepting(null)
+    const q = (fresh ?? data)?.quotes.find(x => x.id === qid)
+    if (!q) {
+      setActionError('We couldn’t find that quote just now — please refresh, or message us below and we’ll help.')
+      return
+    }
+    if (q.status !== 'sent') {
+      // Someone (or something) moved it while this tab watched the old state:
+      // already approved in another tab, or withdrawn by the business.
+      setActionError(q.status === 'accepted'
+        ? 'This quote is already approved — nothing more to do.'
+        : 'This quote is no longer open for approval — message us below and we’ll sort it out.')
+      return
+    }
     // Expiry is judged AT CLICK TIME, not at page load. The render path already
     // labels an expired quote via the shared engine — but a portal tab left open
     // overnight (or for a week) still shows yesterday's button, and this handler
@@ -238,7 +340,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     const plan = planBits.length > 1
       ? `Ongoing plan options: ${planBits.join(' · ')} — we'll confirm your schedule with you.`
       : planBits.length === 1 ? `Ongoing visits after that are ${planBits[0]}.` : null
-    const gst = Number(data?.business?.gst_percent) || 0
+    const gst = Number((fresh ?? data)?.business?.gst_percent) || 0
     const what = svc
       ? `${lineCount > 1 ? `${svc} + ${lineCount - 1} more service${lineCount > 2 ? 's' : ''}` : svc} for ${formatCurrency(amount)}`
       : formatCurrency(amount)
@@ -259,8 +361,25 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       setData(d => d ? { ...d, quotes: d.quotes.map(q => q.id === qid ? { ...q, status: 'accepted' } : q) } : d)
       // Close the loop — the customer must SEE their approval registered.
       setJustAccepted(true)
+    } else {
+      // A falsy result is NOT proof of failure. portal_accept_quote only matches a
+      // row still in 'sent', so it returns false both when nothing happened AND
+      // when the approval had already landed — the second tab of a link opened
+      // twice, or a double-tap whose first call won. Telling that customer "we
+      // couldn't record your approval — please try again" is the worst available
+      // answer: it is false, and it invites them to keep tapping an approval that
+      // already stands. Ask the server what is actually true before reporting.
+      const after = await load()
+      const now = after?.quotes.find(x => x.id === qid)
+      if (now && now.status !== 'sent') {
+        // It DID land (here or in the other tab) — say so, and let the refetched
+        // payload render the real status.
+        setJustAccepted(true)
+        setActionError(null)
+      } else {
+        setActionError('We couldn’t record your approval — please try again, or reply to any message from us and we’ll take care of it.')
+      }
     }
-    else setActionError('We couldn’t record your approval — please try again, or reply to any message from us and we’ll take care of it.')
     setAccepting(null)
   }
 
@@ -302,8 +421,19 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       })
       const d = await res.json().catch(() => ({}))
       if (res.ok && d.url) { window.location.href = d.url; return } // redirecting to Stripe — stay disabled
-      // Public portal: show a FIXED message — never render a server-provided string.
-      setActionError('We couldn’t start the payment — please try again in a moment, or contact us and we’ll sort it out.')
+      // 404/409 mean the server has decided this invoice is NOT payable — almost
+      // always because it is already settled (paid in another tab, or the owner
+      // recorded the e-transfer) and this tab is showing a stale balance. The
+      // generic "try again in a moment" sent that customer round a loop that could
+      // never succeed, still looking at an amount they no longer owe. Re-sync from
+      // the one data source and say what's true. Fixed copy either way — a
+      // server-provided string is never rendered in the public portal.
+      if (res.status === 404 || res.status === 409) {
+        await load()
+        setActionError('This invoice looks already settled — we’ve refreshed your billing below. If you think that’s wrong, message us and we’ll check.')
+      } else {
+        setActionError('We couldn’t start the payment — please try again in a moment, or contact us and we’ll sort it out.')
+      }
     } catch {
       setActionError('We couldn’t start the payment — please try again in a moment, or contact us and we’ll sort it out.')
     }
@@ -340,6 +470,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   const biz = data.business
   const actions: PortalActions = {
     token, accept, accepting, pay, payingId, paymentsEnabled,
+    paymentPending: justPaid === 'confirming',
     request: (message: string) => request(message),
     submitRequest, photoUrl, markInvoiceViewed, refresh: load,
     navigate: (t, opts) => {

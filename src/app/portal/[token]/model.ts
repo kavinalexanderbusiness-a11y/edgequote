@@ -228,6 +228,45 @@ export function needsContactMethod(customer: { phone: string | null; email: stri
   return !(customer.phone ?? '').trim() && !(customer.email ?? '').trim()
 }
 
+// Did real money land in the ledger just now? THE post-checkout confirmation test.
+//
+// `?paid=1` only means the customer reached Stripe's return URL, so the banner has
+// always been gated on the LEDGER rather than the query string. It used to make
+// that check by counting rows before and after a single refetch — which breaks in
+// the commonest direction: Stripe's webhook usually beats our return trip, so the
+// row is ALREADY in the server-rendered payload, the count never increases, and a
+// customer who genuinely paid is told "confirming your payment…" forever while
+// their invoice still shows a Pay button.
+//
+// Asking the ledger WHAT it holds instead of HOW MANY rows it has answers both
+// orderings with one question: a completed payment stamped within the last few
+// minutes is the money we just sent them to make. Still strictly a ledger check —
+// nothing here trusts the URL — and it stays honest when nothing landed, because
+// an empty or older ledger returns false and the banner keeps saying "confirming".
+//
+// Deliberately provider-agnostic: a portal checkout records `stripe` today and
+// `card` on the saved-card path, and a future provider must not silently stop
+// confirming. Refunds/credits are excluded — `kind` is only ever absent on a
+// payment (older rows predate the column), never on a reversal.
+const PAYMENT_LANDED_WINDOW_MS = 15 * 60 * 1000
+
+export function recentPaymentLanded(
+  payments: PortalPayment[] | null | undefined,
+  nowMs: number,
+  windowMs: number = PAYMENT_LANDED_WINDOW_MS,
+): boolean {
+  for (const p of payments || []) {
+    if (p.status !== 'paid') continue
+    if (p.kind != null && p.kind !== 'payment') continue
+    const stamp = Date.parse(p.paid_at || p.created_at || '')
+    if (!Number.isFinite(stamp)) continue
+    // A future-dated stamp (clock skew) still counts as "just now"; only an
+    // OLDER-than-window payment is somebody else's, earlier, story.
+    if (nowMs - stamp <= windowMs) return true
+  }
+  return false
+}
+
 // The request text for "add my contact details". Pure so verify pins that it
 // ALWAYS carries the typed value(s) — a message saying "update my contact info"
 // WITHOUT the info would make the owner ask for it, which is the exact

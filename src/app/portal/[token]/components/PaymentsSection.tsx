@@ -261,12 +261,26 @@ function AutoPayCard({ token, card: cardProp, autopayEnabled, onChanged }: {
   }
   async function toggle() {
     if (!card && !autopay) { setErr('Add a card first to use AutoPay.'); return }
+    if (busy) return
     const next = !autopay
-    setAutopay(next); setErr(null)   // optimistic
-    const res = await fetch('/api/portal/autopay', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, enabled: next }) })
-    const d = await res.json().catch(() => ({}))
-    if (!d.ok) { setAutopay(!next); setErr('Could not update AutoPay.'); return }
-    onChanged()
+    setAutopay(next); setErr(null); setBusy('autopay')   // optimistic
+    // The ONE handler in this card that used to run its fetch bare. An HTTP error
+    // was handled (the `d.ok` check rolls back) but a THROWN fetch — offline, a
+    // dropped connection, the phone switching cell to wifi mid-tap — skipped the
+    // rollback entirely: the switch kept the new position, no error appeared, and
+    // nothing in the portal ever refetches to correct it. So "AutoPay off" could
+    // sit there over a server that still had it ON and would charge the saved card
+    // after the next recurring visit — while this very card promises "turn AutoPay
+    // off … it takes effect right away". The rollback has to cover the throw too.
+    try {
+      const res = await fetch('/api/portal/autopay', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, enabled: next }) })
+      const d = await res.json().catch(() => ({}))
+      if (!d.ok) { setAutopay(!next); setErr('Could not update AutoPay — please check your connection and try again.'); return }
+      onChanged()
+    } catch {
+      setAutopay(!next)
+      setErr('Could not update AutoPay — please check your connection and try again.')
+    } finally { setBusy(null) }
   }
   const exp = cardExpLabel(card)
   const expState = cardExpiryState(card)
@@ -306,8 +320,8 @@ function AutoPayCard({ token, card: cardProp, autopayEnabled, onChanged }: {
       )}
       <div className="flex items-center justify-between gap-3 mt-3 rounded-lg border border-border bg-bg-tertiary px-3 py-2.5">
         <span className="text-sm text-ink flex items-center gap-2"><Zap className="w-4 h-4 text-accent-text" /> AutoPay recurring invoices</span>
-        <button onClick={toggle} disabled={!card && !autopay} aria-pressed={autopay} aria-label="AutoPay recurring invoices"
-          className={cn('relative w-11 h-6 rounded-full transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50', autopay ? 'bg-accent' : 'bg-border-strong', (!card && !autopay) && 'opacity-40 cursor-not-allowed')}>
+        <button onClick={toggle} disabled={(!card && !autopay) || busy === 'autopay'} aria-pressed={autopay} aria-label="AutoPay recurring invoices"
+          className={cn('relative w-11 h-6 rounded-full transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50', autopay ? 'bg-accent' : 'bg-border-strong', ((!card && !autopay) || busy === 'autopay') && 'opacity-40 cursor-not-allowed')}>
           <span className={cn('absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform', autopay && 'translate-x-5')} />
         </button>
       </div>

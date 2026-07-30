@@ -13,7 +13,7 @@ import {
   requestPresetsOf, resolveDocAddress, groupPhotos, orphanPhotos, liveStatusOf, visitDay,
   daysAwayLabel, dueSoonLabel, invoicePaymentNote, parsePortalDeepLink, tabNavTarget, buildVisitICS, visitToCalendarEvent,
   messageAboutDoc, primaryPortalAction, draftStorageKey, etransferReference, isSendChord,
-  needsContactMethod, contactUpdateMessage, contactSentKey,
+  needsContactMethod, contactUpdateMessage, contactSentKey, recentPaymentLanded,
   showDocFilters, DOC_FILTER_MIN,
   NO_PROPERTY, MAX_REQUEST_PRESETS,
   type PortalData, type PortalJob, type PortalProperty, type DocBlobRenderers,
@@ -430,6 +430,38 @@ console.log('\nneedsContactMethod / contactUpdateMessage (the unreachable-custom
   check('at the threshold the filters appear', showDocFilters(DOC_FILTER_MIN) === true)
   check('a long list keeps them', showDocFilters(25) === true)
   check('the threshold is the documented 6', DOC_FILTER_MIN === 6, String(DOC_FILTER_MIN))
+}
+
+// ── post-checkout confirmation (the ledger answers, never the URL) ────────────
+// The banner that tells a customer their money arrived. It must say yes ONLY on
+// evidence in the ledger, and it must not miss the common ordering where the
+// webhook lands before the page does (the old row-count test could never see it).
+console.log('\nrecentPaymentLanded (post-checkout confirmation):')
+{
+  const NOW = Date.parse('2026-07-28T18:00:00Z')
+  const pay = (over: Partial<Parameters<typeof recentPaymentLanded>[0] extends (infer P)[] | null | undefined ? P : never>) => ({
+    id: 'p1', amount: 100, status: 'paid', paid_at: '2026-07-28T17:59:00Z', provider: 'stripe',
+    invoice_id: 'inv-1', created_at: '2026-07-28T17:59:00Z', kind: 'payment', ...over,
+  })
+
+  check('a payment stamped a minute ago → confirmed', recentPaymentLanded([pay({})], NOW) === true)
+  check('nothing in the ledger → never confirmed', recentPaymentLanded([], NOW) === false)
+  check('null/undefined payload claims nothing', recentPaymentLanded(null, NOW) === false && recentPaymentLanded(undefined, NOW) === false)
+  // The whole point of the fix: the webhook beat the page, so the row is ALREADY
+  // in the first payload. A count-delta can never see it; recency can.
+  check('a row already present at first paint still confirms', recentPaymentLanded([pay({ paid_at: '2026-07-28T17:58:30Z' })], NOW) === true)
+  // …and the honesty half: an OLD payment is somebody else's earlier story.
+  check('last month’s payment does NOT confirm today’s checkout', recentPaymentLanded([pay({ paid_at: '2026-06-20T10:00:00Z', created_at: '2026-06-20T10:00:00Z' })], NOW) === false)
+  check('a payment just outside the window does not confirm', recentPaymentLanded([pay({ paid_at: '2026-07-28T17:44:00Z', created_at: '2026-07-28T17:44:00Z' })], NOW, 15 * 60 * 1000) === false)
+  check('an unpaid/pending row is not money', recentPaymentLanded([pay({ status: 'pending' })], NOW) === false)
+  check('a refund is not a payment', recentPaymentLanded([pay({ kind: 'refund' })], NOW) === false)
+  check('a legacy row with no kind still counts as a payment', recentPaymentLanded([pay({ kind: undefined })], NOW) === true)
+  // Provider-agnostic on purpose: portal checkout records 'stripe', the saved-card
+  // path 'card', and a future provider must not silently stop confirming.
+  check('provider-agnostic (card path confirms too)', recentPaymentLanded([pay({ provider: 'card' })], NOW) === true)
+  check('falls back to created_at when paid_at is null', recentPaymentLanded([pay({ paid_at: null })], NOW) === true)
+  check('an unparseable stamp is ignored, not trusted', recentPaymentLanded([pay({ paid_at: 'not-a-date', created_at: '' })], NOW) === false)
+  check('one recent payment among old ones still confirms', recentPaymentLanded([pay({ id: 'old', paid_at: '2026-01-01T00:00:00Z', created_at: '2026-01-01T00:00:00Z' }), pay({})], NOW) === true)
 }
 
 console.log(`\n${fail === 0 ? '✓' : '✗'} portal checks: ${pass} passed, ${fail} failed`)

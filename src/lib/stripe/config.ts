@@ -76,6 +76,17 @@ export async function createInvoiceCheckoutSession(
   } else if (opts.customerEmail) {
     form.set('customer_email', opts.customerEmail)
   }
+  // Expire the session at Stripe's 30-minute minimum instead of its 24-hour
+  // default. An abandoned session stays PAYABLE for its whole life, so a customer
+  // who tapped Pay, backed out, then paid on a second session could still return
+  // to the first one's tab (or its browser history) the next day and be charged a
+  // SECOND time for an invoice already settled — two real charges, both recorded
+  // by the webhook. Nothing here can make that impossible without tracking open
+  // sessions per invoice (a schema change in a frozen lane), but 30 minutes
+  // instead of a day removes the overnight version of it, which is the one that
+  // actually happens. The amount is re-derived from the live balance on every Pay
+  // tap, so a fresh session is always correct where a reused one could be stale.
+  form.set('expires_at', String(Math.floor(Date.now() / 1000) + 30 * 60))
   // The webhook reads this metadata to mark the invoice paid for the right owner.
   form.set('metadata[invoice_id]', invoice.id)
   form.set('metadata[user_id]', invoice.user_id)

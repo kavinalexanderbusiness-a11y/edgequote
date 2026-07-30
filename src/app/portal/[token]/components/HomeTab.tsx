@@ -75,7 +75,9 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
   // Pay inline only when Stripe is actually on AND one invoice is named — an
   // e-transfer/cash business has no checkout to send them to, and the Billing card
   // (with the Ways-to-pay block beneath it) is the honest destination there.
-  const canPayInline = !!oneInvoice && actions.paymentsEnabled && oneInvoice.balance > 0
+  // Hidden while a completed checkout is still confirming — see BillingTab's note:
+  // the balance shown is pre-payment, and a second tap is a second real charge.
+  const canPayInline = !!oneInvoice && actions.paymentsEnabled && !actions.paymentPending && oneInvoice.balance > 0
 
   // "Outstanding" is collections vocabulary — it lands like an accusation on the one
   // banner someone reads when they're already tense about money.

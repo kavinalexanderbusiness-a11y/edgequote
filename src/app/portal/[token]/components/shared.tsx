@@ -25,6 +25,11 @@ export interface PortalActions {
   pay: (invoiceId: string) => void
   payingId: string | null
   paymentsEnabled: boolean
+  /** A checkout just completed and the ledger hasn't confirmed it yet. Pay
+   *  affordances hide while this is true: the customer is looking at a balance
+   *  the webhook is about to clear, and a second Stripe session started here is a
+   *  second real charge. The banner above already tells them not to pay again. */
+  paymentPending: boolean
   /** Legacy free-text/preset request (portal_request_service). */
   request: (message: string, source: string) => Promise<boolean>
   /** Structured request (portal_submit_request) — reschedule/plan_change/appointment. */

@@ -235,7 +235,10 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
   // its Accept button here without a second expiry test.
   const canAccept = d.kind === 'quote' && d.status === 'sent'
   const isExpired = d.kind === 'quote' && d.status === 'expired'
-  const canPay = d.kind === 'invoice' && actions.paymentsEnabled && d.balance > 0 && d.status !== 'draft' && d.status !== 'cancelled'
+  // `!actions.paymentPending`: while a just-completed checkout is still being
+  // confirmed, this row's balance is the PRE-payment one and a second Pay tap
+  // starts a second real charge. The confirming banner already says not to.
+  const canPay = d.kind === 'invoice' && actions.paymentsEnabled && !actions.paymentPending && d.balance > 0 && d.status !== 'draft' && d.status !== 'cancelled'
   // Invoices get NO rail — an invoice's pill already says everything it can do.
   const steps = d.kind === 'quote' ? quoteJourney(d.status) : null
   // A deep link (?invoice=/?quote=) landed the customer here to look at THIS row —
