@@ -116,7 +116,11 @@ export default function EquipmentPage() {
       toast.error('Could not update: ' + error.message); return
     }
     toast.undo(`${eq.name} → ${STATUS_LABELS[status]}`, async () => {
-      await supabase.from('equipment').update({ status: prev }).eq('id', eq.id)
+      // Repaint only on a confirmed write. Unchecked, a failed revert still painted
+      // the old status on the card while the database held the new one — the list
+      // then disagreed with the truth until the next load, with nothing said.
+      const { error: rErr } = await supabase.from('equipment').update({ status: prev }).eq('id', eq.id)
+      if (rErr) { toast.error(`Could not put ${eq.name} back to ${STATUS_LABELS[prev]}: ` + rErr.message); return }
       setEquipment(list => list.map(e => e.id === eq.id ? { ...e, status: prev } : e))
     })
   }

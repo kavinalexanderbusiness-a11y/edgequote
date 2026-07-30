@@ -11,7 +11,7 @@
 
 import { useState } from 'react'
 import { format } from 'date-fns'
-import { Camera, CheckCircle2, Clock, History, MapPin, Receipt } from 'lucide-react'
+import { Camera, CheckCircle2, Clock, MapPin, Receipt } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { cn, parseLocalDate } from '@/lib/utils'
 import {
@@ -63,26 +63,30 @@ export function VisitsTab({ view, actions }: TabProps) {
         </div>
       )}
 
+      {/* No history yet? Say nothing. The wholly-empty tab above already carries this
+          exact sentence, so this card could ONLY appear when the page has content —
+          a first visit booked, or photos — and then it was a full dashed placeholder
+          telling someone their history is empty directly beneath the visit they just
+          booked. An empty section is worth a card when it's the whole story, not when
+          it's a footnote under real news. */}
+      {completed.length > 0 && (
       <div className={cn('animate-rise', upcoming.length > 0 && 'stagger-2')}>
         <PortalSection title="Visit history" sub="Every visit, with the photos to prove it">
-          {completed.length === 0 ? (
-            <Empty icon={History} text="Your visit history will appear here after your first visit." />
-          ) : (
-            <div className="space-y-3">
-              {completed.map(j => (
-                <VisitCard
-                  key={j.id}
-                  j={j}
-                  view={view}
-                  actions={actions}
-                  photos={view.photosByJob.get(j.id) ?? []}
-                  invoice={view.invoiceByJob.get(j.id) ?? null}
-                />
-              ))}
-            </div>
-          )}
+          <div className="space-y-3">
+            {completed.map(j => (
+              <VisitCard
+                key={j.id}
+                j={j}
+                view={view}
+                actions={actions}
+                photos={view.photosByJob.get(j.id) ?? []}
+                invoice={view.invoiceByJob.get(j.id) ?? null}
+              />
+            ))}
+          </div>
         </PortalSection>
       </div>
+      )}
 
       {loosePhotos.length > 0 && (
         <div className="animate-rise stagger-3">

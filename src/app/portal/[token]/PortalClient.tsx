@@ -112,19 +112,36 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   // Payments availability + return-from-Stripe. ?paid=1 → the webhook marks the
   // invoice paid a beat later, so refetch shortly after.
   useEffect(() => {
+    let cancelled = false
+    let paidTimer: ReturnType<typeof setTimeout> | undefined
     fetch('/api/payments/status').then(r => r.json()).then(d => setPaymentsEnabled(!!d.enabled)).catch(() => {})
     if (typeof window !== 'undefined') {
       const sp = new URLSearchParams(window.location.search)
       if (sp.get('paid') === '1') {
         // ?paid=1 only means the customer reached Stripe's return URL — the WEBHOOK
-        // records the money. Confirm against the reloaded ledger before claiming it.
+        // records the money, a beat later. "A beat" is sometimes several seconds,
+        // and a SINGLE check at 1.5s left a customer who genuinely paid staring at
+        // "confirming…" indefinitely — unable to answer the one question that
+        // matters most right after paying: did it work? Poll the ledger a handful
+        // of times over ~18s and flip to "confirmed" the instant the payment row
+        // lands. This only re-reads get_portal_data (the same call, retried) — it
+        // records nothing and changes no payment logic; the webhook stays the sole
+        // source of the money.
         const before = data?.payments.length ?? 0
         setJustPaid('confirming')
         window.history.replaceState({}, '', `/portal/${token}`)
-        setTimeout(async () => {
+        let tries = 0
+        const MAX_TRIES = 9
+        const poll = async () => {
+          if (cancelled) return
           const pd = await load()
-          setJustPaid((pd?.payments.length ?? 0) > before ? 'confirmed' : 'confirming')
-        }, 1500)
+          if (cancelled) return
+          if ((pd?.payments.length ?? 0) > before) { setJustPaid('confirmed'); return }
+          // Not recorded yet — try again, or leave it 'confirming' (the banner
+          // already promises the receipt will appear here and not to pay again).
+          if (++tries < MAX_TRIES) paidTimer = setTimeout(poll, 2000)
+        }
+        paidTimer = setTimeout(poll, 1500)
       }
       // Back from the hosted card-setup page — the webhook saves the card a beat
       // later, so reload shortly to show it.
@@ -153,6 +170,8 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
         }
       }
     }
+    // Stop the post-payment poll if the customer leaves before it resolves.
+    return () => { cancelled = true; if (paidTimer) clearTimeout(paidTimer) }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep the active tab pill scrolled into view when the row overflows on a
@@ -372,9 +391,19 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
         {/* Sticky tab bar — a real WAI-ARIA tablist: arrow keys move between tabs
             (roving tabindex), each pill meets the 44px gloved-thumb target on
             touch (.tap-target-y, pointer-coarse gated), and the active tab is
-            kept scrolled into view so a deep link never lands it off-screen. */}
+            kept scrolled into view so a deep link never lands it off-screen.
+
+            It WRAPS rather than scrolling sideways: six pills measure ~615px against
+            ~343px of usable width on a 375px phone, so Messages and Requests — the two
+            whose "empty state IS the invitation" — sat past the right edge with no fade,
+            no chevron, nothing to suggest they existed. Someone who doesn't think to
+            swipe a nav row never discovers they can message their provider from here.
+            Two short rows show every section at once; the scroll-into-view below still
+            covers the deep-link case, and the arrow keys already move in both axes, so
+            wrapping costs the keyboard nothing (aria-orientation dropped for the same
+            reason — the row is no longer strictly one-dimensional). */}
         <div className="sticky top-0 z-10 -mx-4 px-4 py-2 bg-bg/90 backdrop-blur border-b border-border">
-          <div role="tablist" aria-label="Your account sections" aria-orientation="horizontal" className="flex gap-1.5 overflow-x-auto">
+          <div role="tablist" aria-label="Your account sections" className="flex flex-wrap gap-1.5">
             {TABS.map((t, i) => {
               const active = tab === t.key
               return (

@@ -13,7 +13,7 @@ import {
 } from 'lucide-react'
 import { cn, formatCurrency, formatDate, localTodayISO } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
-import { dueSoonLabel, invoicePaymentNote, messageAboutDoc, NO_PROPERTY, quoteJourney, type DocItem, type DocKind } from '../model'
+import { dueSoonLabel, invoicePaymentNote, messageAboutDoc, NO_PROPERTY, quoteJourney, showDocFilters, type DocItem, type DocKind } from '../model'
 import {
   DocActions, Empty, InvoiceStatusPill, JourneyRail, PortalSection,
   QuoteStatusPill, StatCard, fmtMoney, type PortalActions, type TabProps,
@@ -147,34 +147,46 @@ function RecordsHub({ view, actions, initialCat, focusDocId }: TabProps & { init
     { key: 'invoice', label: 'Invoices', n: counts.invoice },
   ]
 
+  // Finding tools for a list you can already see whole are just more to read. Six
+  // controls (a count, a "showing" tally, three category pills, a search box and a
+  // sort toggle) stood over lists that hold 2.2 documents on average — 45 of the 46
+  // customers with a portal have five or fewer. Above the threshold they all come
+  // back, untouched. The deep-link category filter still works either way: it sets
+  // `cat` directly, so ?quote=/?invoice= lands filtered whether the pills render.
+  const showFilters = showDocFilters(docs.length)
+
   return (
     <div className="space-y-3">
-      {/* Count + category filters */}
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-sm font-semibold text-ink">{docs.length} document{docs.length === 1 ? '' : 's'}</p>
-        <p className="text-xs text-ink-faint">Showing {filtered.length}</p>
-      </div>
-      <div className="flex flex-wrap gap-1.5">
-        {CATS.map(c => (
-          <button key={c.key} onClick={() => setCat(c.key)} type="button"
-            className={cn('text-xs font-medium rounded-full px-3 py-1.5 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
-              cat === c.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
-            {c.label}{c.n > 0 && <span className="opacity-70 tabular-nums"> {c.n}</span>}
-          </button>
-        ))}
-      </div>
+      {showFilters && (
+        <>
+          {/* Count + category filters */}
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-ink">{docs.length} document{docs.length === 1 ? '' : 's'}</p>
+            <p className="text-xs text-ink-faint">Showing {filtered.length}</p>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {CATS.map(c => (
+              <button key={c.key} onClick={() => setCat(c.key)} type="button"
+                className={cn('text-xs font-medium rounded-full px-3 py-1.5 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
+                  cat === c.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
+                {c.label}{c.n > 0 && <span className="opacity-70 tabular-nums"> {c.n}</span>}
+              </button>
+            ))}
+          </div>
 
-      {/* Search + sort */}
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
-          <Search className="w-4 h-4 text-ink-faint absolute left-3 top-1/2 -translate-y-1/2" />
-          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search documents…" aria-label="Search documents"
-            className="w-full h-10 pl-9 pr-3 rounded-xl bg-bg-tertiary border border-border-strong text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
-        </div>
-        <Button variant="secondary" size="sm" className="shrink-0" onClick={() => setSort(s => s === 'newest' ? 'oldest' : 'newest')}>
-          <ArrowUpDown className="w-4 h-4 text-ink-muted" /> {sort === 'newest' ? 'Newest' : 'Oldest'}
-        </Button>
-      </div>
+          {/* Search + sort */}
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-ink-faint absolute left-3 top-1/2 -translate-y-1/2" />
+              <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search quotes and invoices…" aria-label="Search quotes and invoices"
+                className="w-full h-10 pl-9 pr-3 rounded-xl bg-bg-tertiary border border-border-strong text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+            </div>
+            <Button variant="secondary" size="sm" className="shrink-0" onClick={() => setSort(s => s === 'newest' ? 'oldest' : 'newest')}>
+              <ArrowUpDown className="w-4 h-4 text-ink-muted" /> {sort === 'newest' ? 'Newest' : 'Oldest'}
+            </Button>
+          </div>
+        </>
+      )}
 
       {/* List */}
       {filtered.length === 0 ? (

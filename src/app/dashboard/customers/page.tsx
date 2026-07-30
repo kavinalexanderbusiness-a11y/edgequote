@@ -207,8 +207,13 @@ export default function CustomersPage() {
     const { error } = await supabase.from('customers').update({ archived_at: new Date().toISOString() }).eq('id', id)
     if (error) { toast.error('Could not archive the customer: ' + error.message); return }
     await fetchCustomers()
+    // Undo is a promise, and an unchecked write can't keep it: every sibling write
+    // here reports its outcome, so a failed restore must too — otherwise the owner
+    // clicks Undo, the toast disappears, and the customer is still archived.
     toast.undo(`Archived ${name} — everything preserved`, async () => {
-      await supabase.from('customers').update({ archived_at: null }).eq('id', id); await fetchCustomers()
+      const { error: rErr } = await supabase.from('customers').update({ archived_at: null }).eq('id', id)
+      if (rErr) { toast.error(`Could not bring ${name} back — they're still archived. Restore from the Archived list.`); return }
+      await fetchCustomers()
     })
   }
 

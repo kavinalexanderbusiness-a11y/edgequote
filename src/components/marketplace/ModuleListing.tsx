@@ -68,7 +68,12 @@ function InstallControls({ m, compact }: { m: FeatureModule; compact?: boolean }
     setBusy(false)
     if (err) { toast.error(err); return }
     // Removal is navigation-level and fully reversible — offer the way back.
-    toast.undo(`${m.label} removed.`, async () => { await install(m.key) })
+    toast.undo(`${m.label} removed.`, async () => {
+      // doInstall reports install failures; the Undo path swallowed them, so a failed
+      // re-install left the module missing from the nav with no explanation.
+      const rErr = await install(m.key)
+      if (rErr) toast.error(`Could not put ${m.label} back: ` + rErr)
+    })
   }
 
   if (m.core) {

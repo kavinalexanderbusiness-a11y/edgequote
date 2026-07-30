@@ -555,6 +555,18 @@ export function invoicePaymentNote(d: DocItem): { due: string; paid: string } | 
   return { due: formatCurrency(d.balance), paid: formatCurrency(d.amount - d.balance) }
 }
 
+// Below this many documents, a search box and a sort toggle are furniture: you can
+// see everything at once, so the controls only add things to read and decide about.
+// Measured on the live book — 46 customers with a portal, 2.2 documents on average,
+// and 45 of them hold five or fewer. A homeowner accumulates a handful of quotes and
+// invoices in a lifetime with a lawn company, not a filing cabinet.
+export const DOC_FILTER_MIN = 6
+
+/** Is this list long enough that finding tools earn their space? */
+export function showDocFilters(docCount: number): boolean {
+  return docCount >= DOC_FILTER_MIN
+}
+
 // ── Progress (the journey rail) ─────────────────────────────────────────────
 // The quote's stored status ALREADY walks the whole journey — the owner-side
 // sync triggers advance it (accepted → scheduled → completed → paid) — so the

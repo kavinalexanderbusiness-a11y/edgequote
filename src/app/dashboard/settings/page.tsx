@@ -292,7 +292,13 @@ export default function SettingsPage() {
     }
     setLocalTiers(prev => prev.filter((_, i) => i !== idx))
     toast.undo('Travel fee tier removed', async () => {
-      if (t.id) await supabase.from('travel_fee_tiers').insert(t)
+      // The row goes back on screen only once the database has it again. Unchecked,
+      // a failed restore re-rendered the tier as though it were saved — and a tier
+      // that shows in the form but doesn't exist quietly changes what quotes charge.
+      if (t.id) {
+        const { error: rErr } = await supabase.from('travel_fee_tiers').insert(t)
+        if (rErr) { toast.error('Could not restore the fee tier: ' + rErr.message); return }
+      }
       setLocalTiers(prev => [...prev.slice(0, idx), t, ...prev.slice(idx)])
     })
   }

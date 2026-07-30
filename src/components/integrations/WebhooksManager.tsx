@@ -69,10 +69,13 @@ export function WebhooksManager({ userId }: { userId: string }) {
     await load()
     toast.undo('Endpoint removed (its delivery log too).', async () => {
       // Re-insert keeps the same secret so the consumer's verification still works.
-      await supabase.from('webhook_endpoints').insert({
+      const { error: rErr } = await supabase.from('webhook_endpoints').insert({
         id: ep.id, user_id: userId, url: ep.url, description: ep.description,
         secret: ep.secret, events: ep.events, source: ep.source, active: ep.active,
       })
+      // Say so: an integration the owner believes they restored, but which is really
+      // gone, fails silently forever afterwards — on the far side of their system.
+      if (rErr) { toast.error('Could not restore the endpoint: ' + rErr.message); return }
       await load()
     })
   }

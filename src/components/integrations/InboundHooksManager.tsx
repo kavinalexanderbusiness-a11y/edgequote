@@ -90,9 +90,12 @@ export function InboundHooksManager({ userId }: { userId: string }) {
     }
     await load()
     toast.undo(`${h.name} removed — its URL stopped working.`, async () => {
-      await supabase.from('inbound_webhooks').insert({
+      const { error: rErr } = await supabase.from('inbound_webhooks').insert({
         id: h.id, user_id: userId, name: h.name, token: h.token, action: h.action, active: h.active,
       })
+      // The URL the sender posts to is what's at stake: if the restore didn't land,
+      // that URL stays dead and the owner needs to know now, not weeks of leads later.
+      if (rErr) { toast.error(`Could not restore ${h.name} — its URL is still off: ` + rErr.message); return }
       await load()
     })
   }

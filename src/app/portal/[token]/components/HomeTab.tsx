@@ -14,7 +14,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import {
-  CalendarClock, Check, CheckCircle2, CreditCard, FileText, Globe,
+  CalendarClock, Check, CheckCircle2, ChevronDown, CreditCard, FileText, Globe,
   Image as ImageIcon, Loader2, Mail, MessageSquare, MessageSquarePlus,
   Navigation, PauseCircle, Phone, Receipt, Repeat, SkipForward, Star,
   UserRound, XCircle,
@@ -657,9 +657,21 @@ export function ConsentCard({ token, consent, onSave }: { token: string; consent
     onSave(consent, next)
   }
 
+  // COLLAPSED by default. This card renders on every visit (consent is non-null
+  // whenever the payload loaded), and once either channel is on it opens to SEVEN
+  // toggle rows — so a first-time quote recipient, whose Home is otherwise just the
+  // provider card and their quote, met a settings panel as the second-biggest thing
+  // on the page. Settings are something you go looking for, not something that greets
+  // you. One summary line, everything still one tap away; the prefs fetch above is
+  // unchanged, so the rows are ready the moment they open it.
   return (
-    <div className="rounded-card border border-border bg-bg-secondary p-4 mt-3">
-      <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><MessageSquare className="w-4 h-4 text-accent-text" /> Message preferences</p>
+    <details className="group rounded-card border border-border bg-bg-secondary mt-3">
+      <summary className="tap-target-y list-none cursor-pointer p-4 flex items-center gap-1.5 rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+        <MessageSquare className="w-4 h-4 text-accent-text shrink-0" />
+        <span className="text-sm font-semibold text-ink">Message preferences</span>
+        <ChevronDown className="w-4 h-4 text-ink-faint ml-auto shrink-0 transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="px-4 pb-4">
       <p className="text-xs text-ink-muted mt-0.5 mb-3">Choose how we can reach you — you can change this anytime. Message &amp; data rates may apply to texts.</p>
       <div className="space-y-2">
         <PrefRow label="Text messages (SMS)" icon={MessageSquare} on={consent.sms} onChange={v => onSave({ ...consent, sms: v })} />
@@ -673,7 +685,8 @@ export function ConsentCard({ token, consent, onSave }: { token: string; consent
           ))}
         </div>
       )}
-    </div>
+      </div>
+    </details>
   )
 }
 

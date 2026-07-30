@@ -195,7 +195,11 @@ export default function AccountingPage() {
     if (error) { toast.error(error); return }
     if (userId) await fetchExpenses(userId)
     toast.undo(`Removed ${formatCurrency(Number(e.amount))} — receipt kept`, async () => {
-      await restoreExpense(supabase, e.id)
+      // archiveExpense's outcome is checked above; the restore's was not, so a failed
+      // Undo left the expense out of every figure on this page with nothing said —
+      // and a cost missing from the books reads as profit.
+      const { error: rErr } = await restoreExpense(supabase, e.id)
+      if (rErr) { toast.error(`Could not restore the ${formatCurrency(Number(e.amount))} expense: ` + rErr); return }
       if (userId) await fetchExpenses(userId)
     })
   }
