@@ -813,6 +813,17 @@ export function QuoteBuilder({
   }, [])
   const unitOptions = useMemo(() => units.map(u => ({ value: u.code, label: u.label })), [units])
 
+  // Template options for an EXTRA line: active services only, priced exactly like
+  // the primary picker (formatServicePrice — the same "starting from / per unit"
+  // vocabulary), plus whichever template this line already points at, so editing
+  // an older quote never blanks its own selection just because the service was
+  // retired since. The Select renders its own placeholder option, so this list
+  // holds real templates only and `.length > 0` means "there is something to pick".
+  const lineTemplateOptions = (currentId?: string | null) => {
+    const own = currentId ? templates.filter(t => t.id === currentId && !t.is_active) : []
+    return [...activeTemplates, ...own].map(t => ({ value: t.id, label: `${t.name} — ${formatServicePrice(t)}` }))
+  }
+
   // ── Line-pricing clarity (Additional services + Materials) ───────────────────
   // The Qty field wears the UNIT's name. A static "Qty" made hourly pricing
   // invisible: picking a "$95/hr" template filled Unit price and flipped the unit
@@ -1641,9 +1652,18 @@ export function QuoteBuilder({
                       <Input label="Service *" placeholder="e.g. Hedge Trimming"
                         error={errors.services?.[i]?.service_type ? 'Service is required' : undefined}
                         {...register(`services.${i}.service_type` as const, { required: true })} />
-                      {templates.length > 0 && (
+                      {/* The RAW template list offered RETIRED services (is_active
+                          false) and named them without a price, so one tap could drop a
+                          switched-off service and its stale rate into the total — while
+                          the PRIMARY service picker above has always been active-only
+                          with prices. Same list, same labels, one behaviour.
+                          A line already pointing at a retired template keeps it as an
+                          option (otherwise editing an old quote would silently blank the
+                          picker), and onChange still resolves against the raw list so a
+                          stored retired id still fills correctly. */}
+                      {lineTemplateOptions(line?.service_template_id).length > 0 && (
                         <Select label="From template" placeholder="Select a template…"
-                          options={templates.map(t => ({ value: t.id, label: t.name }))}
+                          options={lineTemplateOptions(line?.service_template_id)}
                           value={watch(`services.${i}.service_template_id`) || ''}
                           onChange={e => {
                             const t = templates.find(x => x.id === e.target.value)
