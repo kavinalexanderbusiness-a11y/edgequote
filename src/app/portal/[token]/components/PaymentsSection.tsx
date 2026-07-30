@@ -17,9 +17,10 @@ import { Button } from '@/components/ui/Button'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { downloadBlob, renderPortalReceiptBlob } from '@/lib/portalPdf'
 import { receiptNumberFor } from '@/lib/payments/ledger'
+import { ledgerRowType } from '@/lib/payments/analytics'
 import { cardExpLabel, cardExpiryState } from '@/lib/payments/card'
 import { Empty, type TabProps } from './shared'
-import { etransferReference, type PortalCard, type PortalInvoice, type PortalPayment } from '../model'
+import { etransferReference, refundedTotal, type PortalCard, type PortalInvoice, type PortalPayment } from '../model'
 
 // ── Payment history ──
 function paymentMethodLabel(provider: string): string {
@@ -67,10 +68,12 @@ export function PaymentsSection({ view, actions }: TabProps) {
   const receipts = payments.filter(p => p.kind !== 'credit')
   // Refunds are negative rows in the ledger, and they stay NAMED rather than netted:
   // pay $500, get refunded $500, and a netted headline would read "$0.00 paid" above a
-  // row showing the $500 that was actually paid. (The "total paid" tile this rule was
-  // written for now lives once, in Billing's money strip above — the refund line it
-  // qualified is still here, on the history it describes.)
-  const refunded = Math.abs(receipts.filter(p => Number(p.amount) < 0).reduce((s, p) => s + Number(p.amount), 0))
+  // row showing the $500 that was actually paid. Only REAL cash-out refunds count —
+  // refundedTotal runs each row through the ledger's cashAmountOf, so an overpayment
+  // MOVED to credit (provider='credit', also negative) isn't double-counted here AND
+  // as Available credit below. Typing a refund by the sign of the amount did exactly
+  // that; ledgerRowType is the one classifier that tells the two apart.
+  const refunded = refundedTotal(payments)
   const availableCredit = Math.round(payments.filter(p => p.kind === 'credit').reduce((s, p) => s + Number(p.amount || 0), 0) * 100) / 100
 
   // ── Ways to pay ── copy-to-clipboard for the e-transfer details. The recipient
@@ -193,18 +196,32 @@ export function PaymentsSection({ view, actions }: TabProps) {
         <Empty icon={Receipt} text="No payments yet — once you pay an invoice, your receipts will live here." />
       ) : receipts.map(p => {
         const inv = p.invoice_id ? invById.get(p.invoice_id) : null
+        // ONE classifier (ledgerRowType) decides what a row IS — never the sign of
+        // the amount, which called an overpayment-moved-to-credit a "Refund". Only a
+        // real cash-out refund gets the refund label, badge, red tone and "refund
+        // receipt" wording; a credit move reads as what it is.
+        const rt = ledgerRowType(p)
+        const isRefund = rt === 'Refund'
+        const rowLabel = rt === 'Payment' ? paymentMethodLabel(p.provider)
+          : rt === 'Overpayment to credit' ? 'Moved to credit'
+          : rt === 'Settled from credit' ? 'Settled from credit'
+          : 'Refund'
+        const badge = isRefund ? 'Refunded'
+          : rt === 'Overpayment to credit' ? 'To credit'
+          : rt === 'Settled from credit' ? 'From credit'
+          : 'Paid'
         return (
           <div key={p.id} className="rounded-card border border-border bg-bg-secondary p-4 flex flex-col sm:flex-row sm:items-center gap-3 animate-rise">
             {/* Details + status — the badge stays with the details on every width. */}
             <div className="flex items-center justify-between gap-3 min-w-0 flex-1">
               <div className="flex items-center gap-3 min-w-0">
-                <div className={cn('w-9 h-9 rounded-lg border flex items-center justify-center shrink-0', Number(p.amount) < 0 ? 'border-red-500/25 bg-red-500/10' : 'border-emerald-500/25 bg-emerald-500/10')}><CheckCircle2 className={cn('w-4 h-4', Number(p.amount) < 0 ? 'text-red-400' : 'text-emerald-400')} /></div>
+                <div className={cn('w-9 h-9 rounded-lg border flex items-center justify-center shrink-0', isRefund ? 'border-red-500/25 bg-red-500/10' : 'border-emerald-500/25 bg-emerald-500/10')}><CheckCircle2 className={cn('w-4 h-4', isRefund ? 'text-red-400' : 'text-emerald-400')} /></div>
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-ink tabular-nums">{Number(p.amount) < 0 ? '−' : ''}{formatCurrency(Math.abs(Number(p.amount)))}</p>
-                  <p className="text-xs text-ink-muted truncate">{p.paid_at ? formatDate(p.paid_at) : formatDate(p.created_at)}{inv ? ` · ${inv.invoice_number}` : ''} · {Number(p.amount) < 0 ? 'Refund' : paymentMethodLabel(p.provider)}</p>
+                  <p className="text-xs text-ink-muted truncate">{p.paid_at ? formatDate(p.paid_at) : formatDate(p.created_at)}{inv ? ` · ${inv.invoice_number}` : ''} · {rowLabel}</p>
                 </div>
               </div>
-              <span className={cn('shrink-0 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', Number(p.amount) < 0 ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>{Number(p.amount) < 0 ? 'Refunded' : 'Paid'}</span>
+              <span className={cn('shrink-0 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', isRefund ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>{badge}</span>
             </div>
             {/* Receipt download — a quiet utility action (the paid status is the
                 story), full-width on mobile, right-aligned on desktop. */}
@@ -212,7 +229,7 @@ export function PaymentsSection({ view, actions }: TabProps) {
               <div className="w-full sm:w-auto shrink-0">
                 <Button size="sm" variant="secondary" className="w-full sm:w-auto"
                   onClick={() => downloadReceipt(p, inv)} loading={receiptBusy === p.id}>
-                  <Download className="w-4 h-4" /> Download {Number(p.amount) < 0 ? 'refund ' : ''}receipt
+                  <Download className="w-4 h-4" /> Download {isRefund ? 'refund ' : ''}receipt
                 </Button>
                 {receiptErr === p.id && <p className="text-xs text-red-400 mt-1 sm:text-right">Couldn&rsquo;t build the receipt — please try again.</p>}
               </div>

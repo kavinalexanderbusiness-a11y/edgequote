@@ -15,6 +15,7 @@ import { buildServicePlans, type ServicePlan } from '@/lib/recurrence'
 import { jobVisitValue } from '@/lib/invoicing'
 import { settingsToSeasons } from '@/lib/seasons'
 import { invoiceTotals } from '@/lib/invoiceTotals'
+import { cashAmountOf } from '@/lib/payments/analytics'
 import { serviceLineTotals } from '@/lib/quoteServices'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
 import { formatCurrency, parseLocalDate } from '@/lib/utils'
@@ -652,6 +653,19 @@ export function moneySummary(invoices: PortalInvoice[], business: PortalData['bu
   }
   const r = (n: number) => Math.round(n * 100) / 100
   return { invoiced: r(invoiced), paid: r(paid), due: r(due), owingCount }
+}
+
+// Real cash refunded to the customer across these rows — a NEGATIVE cash movement
+// the ledger classifies as a refund, NOT an overpayment moved to their credit
+// balance (that money is shown ONCE, as Available credit). Typing a refund by the
+// SIGN of the amount — which the PaymentsTab total and the Home timeline both did —
+// counts the provider='credit' overpayment leg as a refund, so a single $50
+// overpayment reads as BOTH "$50 refunded" and "$50 available credit". cashAmountOf
+// (via isCashRow) returns 0 for the credit leg, so this sums only real cash out —
+// the same rows summarizeTransactions().refunded counts.
+export function refundedTotal(payments: PortalPayment[]): number {
+  const out = payments.reduce((s, p) => s + Math.min(0, cashAmountOf(p)), 0)
+  return Math.abs(Math.round(out * 100) / 100)
 }
 
 // ── The one thing that needs the customer (a cross-tab convenience) ──────────

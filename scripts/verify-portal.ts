@@ -9,7 +9,7 @@
 
 import {
   normalizePortal, buildDerived, buildDocItems, buildPortalView,
-  quoteJourney, moneySummary, buildPropertyModels, customerSinceYear,
+  quoteJourney, moneySummary, refundedTotal, buildPropertyModels, customerSinceYear,
   requestPresetsOf, resolveDocAddress, groupPhotos, orphanPhotos, liveStatusOf, visitDay,
   daysAwayLabel, dueSoonLabel, invoicePaymentNote, parsePortalDeepLink, tabNavTarget, buildVisitICS, visitToCalendarEvent,
   messageAboutDoc, primaryPortalAction, draftStorageKey, etransferReference, isSendChord,
@@ -175,6 +175,21 @@ console.log('\nmoneySummary:')
   check('paid capped per-invoice at its total (overpay ≠ inflation)', Math.abs(m.paid - 163) < 0.01, String(m.paid))
   check('due matches derived.outstanding', Math.abs(m.due - 215) < 0.01)
   check('owingCount counts invoices with balance', m.owingCount === 2)
+}
+
+// ── refundedTotal: a refund is cash OUT, never an overpayment moved to credit ──
+console.log('\nrefundedTotal (the money shows once):')
+{
+  const pmt = (o: Record<string, unknown>) => ({ id: 'x', amount: 0, status: 'paid', paid_at: '2026-05-01T00:00:00Z', provider: 'stripe', invoice_id: 'i-paid', created_at: '2026-05-01T00:00:00Z', kind: 'payment', ...o }) as never
+  const payment = pmt({ id: 'p1', amount: 100 })
+  const refund = pmt({ id: 'p2', amount: -30, provider: 'refund' })            // real cash out
+  const toCredit = pmt({ id: 'p3', amount: -50, provider: 'credit' })          // overpayment MOVED to credit — not cash
+  const creditGrant = pmt({ id: 'p4', amount: 50, kind: 'credit', provider: 'credit' })
+  // The bug: sign-based math counted the -50 credit move as a refund → |−30−50| = 80,
+  // the SAME $50 also shown as Available credit. The classifier counts only real cash out.
+  check('refundedTotal counts only the real cash refund (30), not the credit move', refundedTotal([payment, refund, toCredit, creditGrant]) === 30, String(refundedTotal([payment, refund, toCredit, creditGrant])))
+  check('an overpayment-to-credit leg alone is $0 refunded (it is Available credit)', refundedTotal([toCredit, creditGrant]) === 0)
+  check('no negative rows → nothing refunded', refundedTotal([payment]) === 0)
 }
 
 // ── properties ──────────────────────────────────────────────────────────────

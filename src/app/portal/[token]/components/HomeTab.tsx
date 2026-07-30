@@ -23,6 +23,7 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
+import { ledgerRowType } from '@/lib/payments/analytics'
 import {
   contactSentKey, contactUpdateMessage, daysAwayLabel, liveStatusOf, primaryPortalAction, visitToCalendarEvent, visitDay,
   type Derived, type PortalJob, type PortalView, type SubmitRequestFn,
@@ -570,17 +571,22 @@ function useRecentActivity(view: PortalView): TLEvent[] {
         sub: `${formatCurrency(d.amount)}${settled ? ' · Paid' : d.status === 'cancelled' ? ' · Cancelled' : ' · Due'}`,
       })
     }
-    // The PaymentsTab keeps credits out of the receipt list and renders negatives as
-    // "Refund" — the timeline did neither, so a $200 refund read as a green "Payment
-    // received · -$200.00" and an account credit read as money we'd taken. No refunds
-    // exist yet; this is the day-one behaviour when one does.
+    // Classify by the ONE ledger classifier, never the sign of the amount: a $200
+    // refund and a $200 overpayment MOVED to credit are both negative, but only the
+    // first is a refund — the second is money the customer keeps as credit. Sign
+    // alone read both as "Refund issued"; ledgerRowType tells them apart. (Credit-
+    // ledger rows are skipped — availableCredit already tells that story.)
     for (const p of data.payments) {
       if (p.kind === 'credit') continue
-      const refund = Number(p.amount) < 0
+      const rt = ledgerRowType(p)
+      const isRefund = rt === 'Refund'
       ev.push({
         id: 'p' + p.id, at: p.paid_at || p.created_at, icon: CreditCard,
-        tone: refund ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
-        title: refund ? 'Refund issued' : `Payment received · ${paymentMethodLabel(p.provider)}`,
+        tone: isRefund ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
+        title: isRefund ? 'Refund issued'
+          : rt === 'Overpayment to credit' ? 'Overpayment moved to credit'
+          : rt === 'Settled from credit' ? 'Settled from account credit'
+          : `Payment received · ${paymentMethodLabel(p.provider)}`,
         sub: formatCurrency(Math.abs(Number(p.amount))),
       })
     }

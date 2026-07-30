@@ -33,7 +33,7 @@ export type LedgerRowType =
   | 'Payment' | 'Refund' | 'Settled from credit' | 'Overpayment to credit'
   | 'Credit issued' | 'Credit applied'
 
-export function ledgerRowType(r: Pick<Payment, 'kind' | 'provider' | 'amount'>): LedgerRowType {
+export function ledgerRowType(r: { kind?: string | null; provider?: string | null; amount?: number | null }): LedgerRowType {
   const amt = Number(r.amount) || 0
   // The credit LEDGER — the liability side. Never cash.
   if (r.kind === 'credit') return amt >= 0 ? 'Credit issued' : 'Credit applied'
@@ -52,7 +52,7 @@ export function ledgerRowType(r: Pick<Payment, 'kind' | 'provider' | 'amount'>):
  * CSV column built from this ties to the dashboard tile by construction rather
  * than by coincidence, and a bookkeeper who sums it cannot invent revenue.
  */
-export function cashAmountOf(r: Pick<Payment, 'kind' | 'provider' | 'amount' | 'status'>): number {
+export function cashAmountOf(r: { kind?: string | null; provider?: string | null; amount?: number | null; status?: string | null }): number {
   return isCashRow(r) ? round2(Number(r.amount) || 0) : 0
 }
 
