@@ -44,11 +44,9 @@ import { resolveAutomations, Automations } from '@/lib/comms/automations'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { StickyActionBar } from '@/components/ui/StickyActionBar'
-import { VisitAddress } from '@/components/schedule/VisitAddress'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Skeleton, SkeletonRows } from '@/components/ui/Skeleton'
 import { cn, minutesBetween, localTodayISO } from '@/lib/utils'
-import { orderDayStops, nextFieldStop } from '@/lib/fieldStops'
 import { toast } from '@/lib/toast'
 import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays, parseISO, getDay } from 'date-fns'
 import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info, Phone, MessageSquare, Navigation, User as UserIcon, FileText, Receipt, CheckCircle2, Play } from 'lucide-react'
@@ -127,10 +125,6 @@ export default function SchedulePage() {
   // In-flight guard for the field bar's primary (it shares startJob/completeJob
   // with the cards, which keep their own `acting` guard inside the panel).
   const [fieldActing, setFieldActing] = useState(false)
-  // The stop order the day board actually rendered, reported by DayOpsPanel.
-  // The field bar reads THIS rather than re-deriving an order of its own — see
-  // fieldNext below and lib/fieldStops.
-  const [boardStopOrder, setBoardStopOrder] = useState<{ date: string; ids: string[] } | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Job | null>(null)
   const [formDate, setFormDate] = useState<string>('')
@@ -1964,14 +1958,6 @@ export default function SchedulePage() {
 
   const viewButtons: CalendarView[] = ['month', 'week', 'day']
 
-  // The displayed day and its visits, memoised. Both the settings bar and the
-  // day board took `jobs.filter(...)` inline, so every unrelated re-render (a
-  // toast, the live minute tick) handed the board a brand-new array — which the
-  // board counts as "props refreshed" when deciding it may drop an optimistic
-  // stop order. One stable array per day, changing only when the jobs actually do.
-  const dayISO = format(cursor, 'yyyy-MM-dd')
-  const dayJobs = useMemo(() => jobs.filter(j => j.scheduled_date === dayISO), [jobs, dayISO])
-
   const pendingVerb = pendingAction?.type === 'delete' ? 'Delete'
     : pendingAction?.type === 'move' ? 'Move'
     : pendingAction?.type === 'price' ? 'Update price for' : 'Save changes to'
@@ -1980,32 +1966,22 @@ export default function SchedulePage() {
   // still to do — in the same route order the cards are listed in, so the bar and
   // the board can never disagree about what's next. Undefined once the day's done,
   // which is what hides the bar.
-  //
-  // That last claim used to be false. This sorted by jobs.route_order, which is
-  // written ONLY by a manual drag and is null on virtually every day, while the
-  // board lists stops in the RESOLVED route order (optimizer output when no
-  // manual sequence exists). With route_order and start_time both null the sort
-  // did nothing at all, so "next stop" was just the first row of the fetch —
-  // UUID order — and its one big button started that job. Now the board reports
-  // the order it actually rendered (onStopOrder) and both read lib/fieldStops.
-  // The rank falls back to the same rule the board uses before the route
-  // resolves, so they agree during loading too.
   const fieldNext = useMemo(() => {
-    const rank = boardStopOrder?.date === dayISO
-      ? new Map(boardStopOrder.ids.map((id, i) => [id, i]))
-      : null
-    return nextFieldStop(orderDayStops(dayJobs, rank))
-  }, [dayJobs, dayISO, boardStopOrder])
+    const dayISO = format(cursor, 'yyyy-MM-dd')
+    const open = jobs
+      .filter(j => j.scheduled_date === dayISO && (j.status === 'in_progress' || j.status === 'scheduled'))
+      .sort((a, b) => {
+        const oa = a.route_order ?? 999, ob = b.route_order ?? 999
+        if (oa !== ob) return oa - ob
+        return (a.start_time || '').localeCompare(b.start_time || '')
+      })
+    return open.find(j => j.status === 'in_progress') ?? open[0]
+  }, [jobs, cursor])
 
   return (
     // Reserve the field bar's height on phones so the last job card can still be
     // scrolled clear of it — a fixed bar is out of flow and would sit on top of it.
-    // The reserve carries the home-indicator inset explicitly: the bar pays that
-    // inset itself (it is positioned against the viewport, not <body>), so a flat
-    // rem reserve fell short by exactly the inset on notched phones — and the
-    // address line now in the bar spends the slack a flat 6rem used to have.
-    <div className={cn('max-w-6xl mx-auto space-y-6',
-      view === 'day' && fieldNext && 'pb-[calc(7rem+env(safe-area-inset-bottom))] lg:pb-0')}>
+    <div className={cn('max-w-6xl mx-auto space-y-6', view === 'day' && fieldNext && 'pb-24 lg:pb-0')}>
       <PageHeader
         title="Schedule"
         description={`${jobs.length} job${jobs.length !== 1 ? 's' : ''} on the calendar`}
@@ -2257,22 +2233,21 @@ export default function SchedulePage() {
       ) : view === 'day' ? (
         <>
         <DaySettingsBar
-          date={dayISO}
-          jobs={dayJobs}
-          row={dayStatusMap?.byDate[dayISO] ?? null}
+          date={format(cursor, 'yyyy-MM-dd')}
+          jobs={jobs.filter(j => j.scheduled_date === format(cursor, 'yyyy-MM-dd'))}
+          row={dayStatusMap?.byDate[format(cursor, 'yyyy-MM-dd')] ?? null}
           defaultCrew={defaultCrew}
           capacityHours={capacityHours}
           workStartTime={workStartTime}
-          busy={rainBusy === dayISO}
-          onSetCapacity={(patch) => saveDayCapacity(dayISO, patch)}
-          onResetCapacity={() => resetDayCapacity(dayISO)}
-          onToggleDisable={() => toggleDisableDay(dayISO)}
+          busy={rainBusy === format(cursor, 'yyyy-MM-dd')}
+          onSetCapacity={(patch) => saveDayCapacity(format(cursor, 'yyyy-MM-dd'), patch)}
+          onResetCapacity={() => resetDayCapacity(format(cursor, 'yyyy-MM-dd'))}
+          onToggleDisable={() => toggleDisableDay(format(cursor, 'yyyy-MM-dd'))}
         />
         <DayOpsPanel
-          date={dayISO}
+          date={format(cursor, 'yyyy-MM-dd')}
           dateLabel={format(cursor, 'EEEE, MMMM d, yyyy')}
-          jobs={dayJobs}
-          onStopOrder={setBoardStopOrder}
+          jobs={jobs.filter(j => j.scheduled_date === format(cursor, 'yyyy-MM-dd'))}
           quotesById={quotesById}
           recurrences={recurrences}
           baseCoord={baseCoord}
@@ -2291,7 +2266,7 @@ export default function SchedulePage() {
           addonTemplates={addonTemplates}
           workStartTime={dayView.start}
           capacityHours={dayView.laborHours}
-          onRainDelay={() => rainDelayDay(dayISO)}
+          onRainDelay={() => rainDelayDay(format(cursor, 'yyyy-MM-dd'))}
           onAddJob={() => openNewJob(cursor)}
           onQuickSave={quickSaveJob}
         />
@@ -2431,12 +2406,6 @@ export default function SchedulePage() {
                 {fieldNext.status === 'in_progress' ? 'In progress' : 'Next stop'}
               </p>
               <p className="text-sm font-semibold text-ink truncate">{fieldNext.customers?.name || fieldNext.title}</p>
-              {/* WHERE, on the one control a phone user actually reaches. A name
-                  alone doesn't say which property — the same reason the cards
-                  carry the address — and this bar is often all that's on screen
-                  once you've scrolled. Same component, so it renders identically
-                  and disappears when there's no address on file. */}
-              <VisitAddress address={fieldNext.properties?.address} />
             </div>
             <Button
               size="lg"

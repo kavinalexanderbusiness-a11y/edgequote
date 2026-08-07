@@ -12,7 +12,6 @@ import { buildRoadDistance } from '@/lib/distance'
 import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
 import { addonsTotal } from '@/lib/jobPricing'
 import { formatCurrency, cn, localTodayISO } from '@/lib/utils'
-import { orderDayStops } from '@/lib/fieldStops'
 import { scrollBehavior } from '@/lib/motion'
 import { Button } from '@/components/ui/Button'
 import { Menu } from '@/components/ui/Menu'
@@ -71,10 +70,6 @@ interface Props {
   // Quick-add chips for the add-on editor, resolved from the business's trade
   // pack by the page — passed through untouched.
   addonTemplates: AddonTemplate[]
-  // Reports the day's RESOLVED stop order (this list's order, by job id) so the
-  // page's field bar can name the same next stop. Optional: the board renders
-  // identically without it.
-  onStopOrder?: (order: { date: string; ids: string[] }) => void
 }
 
 export interface QuickPatch {
@@ -90,7 +85,6 @@ export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
   onOpenJob, onStartJob, onMarkDone, onMove, onContinue, onSetPrice, workStartTime, capacityHours, onRainDelay, onAddJob, onQuickSave,
   addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons, addonTemplates,
-  onStopOrder,
 }: Props) {
   const supabase = createClient()
   // Guards Start/Complete against a double-tap (which would double-stamp the job
@@ -365,19 +359,12 @@ export function DayOpsPanel({
   const mapsCapped = navStops.length > MAX_MAPS_WAYPOINTS
 
   const orderByJobId = new Map(effOrdered.map(s => [s.jobId, s.order]))
-  // ONE ordering rule (lib/fieldStops), shared with the phone field bar — which
-  // used to sort the same day by raw jobs.route_order and therefore named a
-  // different "next stop" than the card list below. See fieldStops.ts.
-  const sortedJobs = orderDayStops(active, orderByJobId)
-
-  // Publish the RESOLVED order so page-level field affordances point at the same
-  // stop this list puts first. The board owns this value — it is the only place
-  // the manual sequence and the optimizer's output are reconciled — so it hands
-  // the answer out rather than letting a second surface re-derive it.
-  const stopOrderKey = sortedJobs.map(j => j.id).join('|')
-  useEffect(() => {
-    onStopOrder?.({ date, ids: stopOrderKey ? stopOrderKey.split('|') : [] })
-  }, [date, stopOrderKey, onStopOrder])
+  const sortedJobs = [...active].sort((a, b) => {
+    const oa = orderByJobId.get(a.id) ?? 999
+    const ob = orderByJobId.get(b.id) ?? 999
+    if (oa !== ob) return oa - ob
+    return (a.start_time || '').localeCompare(b.start_time || '')
+  })
   const stats = (manualRoute || route) && locatedCoords.length > 0 ? routeStats(locatedCoords, effTotalKm, travel) : null
 
   // Reorder: swap instantly (optimistic), then persist the whole day's sequence.

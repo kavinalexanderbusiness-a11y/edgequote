@@ -245,8 +245,30 @@ export const CREW_SELECT = 'id, created_at, updated_at, user_id, name, color, da
 // believes the field exists (e.g. every wage silently becoming "not set").
 export const TECHNICIAN_SELECT = 'id, created_at, updated_at, user_id, crew_id, name, phone, email, role, status, status_changed_at, is_active, hourly_wage, hired_on, ended_on, pto_annual_hours, archived_at'
 
+// ⚠️ THE READER CONTRACT FOR THIS FILE: a failed query is NOT an empty result.
+//
+// All three readers below used to destructure `{ data }` and drop `error`, so a
+// request that never reached Postgres — dead signal in a truck, an expired token,
+// an RLS denial — returned `[]`, which every caller then rendered as a FACT:
+//   • dispatch board  → zero crews, so partitionByCrew put EVERY visit in the
+//     "Unassigned" lane: the crew reads the board mid-shift and their whole day
+//     looks like nobody's job;
+//   • dispatch board  → zero dispatch_notes, silently ERASING the gate codes and
+//     yard reminders the manager wrote for that crew, that day;
+//   • payroll/timesheet/PTO → zero technicians, i.e. "nobody works here" on the
+//     surfaces that draft pay (the exact failure loadTechnicians' own warning
+//     below exists to prevent).
+// This is the same root class as the portal audit: "couldn't reach the server"
+// treated as an ANSWER.
+//
+// Throwing is the whole fix, and it needs nothing new: every one of the eight call
+// sites ALREADY wraps its load in try/catch → setLoadError → a Banner with a Retry
+// button. That handling was simply unreachable for this class of failure. Throwing
+// also means the caller's `Promise.all` rejects before any setter runs, so the last
+// known-good data stays on screen instead of being replaced by a confident blank.
 export async function loadCrews(supabase: SupabaseClient, userId: string): Promise<Crew[]> {
-  const { data } = await supabase.from('crews').select(CREW_SELECT).eq('user_id', userId).order('sort_order').order('created_at')
+  const { data, error } = await supabase.from('crews').select(CREW_SELECT).eq('user_id', userId).order('sort_order').order('created_at')
+  if (error) throw new Error(error.message)
   return (data as Crew[] | null) ?? []
 }
 
@@ -268,7 +290,11 @@ export async function loadTechnicians(
 ): Promise<Technician[]> {
   let q = supabase.from('technicians').select(TECHNICIAN_SELECT).eq('user_id', userId)
   if (!opts.includeArchived) q = q.is('archived_at', null)
-  const { data } = await q.order('created_at')
+  const { data, error } = await q.order('created_at')
+  // See the reader contract above loadCrews. A dropped request must not read as an
+  // empty roster — on the pay surfaces that is the same silent underpay the
+  // includeArchived warning describes, arrived at by a different route.
+  if (error) throw new Error(error.message)
   return (data as Technician[] | null) ?? []
 }
 
@@ -288,8 +314,13 @@ export async function archiveTechnician(
   return error?.message ?? null
 }
 
+// Dispatch notes ARE the manager's written instructions to a crew for a day, so a
+// failed read reading as "no note" is the worst shape this bug takes: the board
+// shows an empty note box where a gate code used to be, and the crew has no way to
+// tell "nothing was written" from "we couldn't ask". See the contract above loadCrews.
 export async function loadDispatchNotes(supabase: SupabaseClient, userId: string, dateISO: string): Promise<DispatchNote[]> {
-  const { data } = await supabase.from('dispatch_notes').select('*').eq('user_id', userId).eq('date', dateISO)
+  const { data, error } = await supabase.from('dispatch_notes').select('*').eq('user_id', userId).eq('date', dateISO)
+  if (error) throw new Error(error.message)
   return (data as DispatchNote[] | null) ?? []
 }
 

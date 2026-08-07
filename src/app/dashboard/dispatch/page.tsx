@@ -182,7 +182,16 @@ export default function DispatchPage() {
         supabase.from('business_settings').select('base_lat, base_lng, work_start_time, daily_capacity_hours, automations').eq('user_id', user.id).maybeSingle(),
         loadDispatchNotes(supabase, user.id, date),
       ])
-      if (jRes.error) { setLoadError('Could not load the day: ' + jRes.error.message); return }
+      // Every read is checked, not just the visits. `dRes` is the day's status —
+      // the "this day is rained out, capacity is zero" banner below reads it, and
+      // an unchecked failure silently CLEARED it, so a blocked day rendered as a
+      // normal working day on the crew's board. `eRes` (assigned vehicles) and
+      // `sRes` (work start, capacity, base, automations) fail the same way. A load
+      // that couldn't answer must say so and keep the last known-good on screen —
+      // never substitute a confident default. (`maybeSingle` gives data:null with
+      // error:null for "no row", so this only trips on a REAL failure.)
+      const readErr = jRes.error ?? eRes.error ?? dRes.error ?? sRes.error
+      if (readErr) { setLoadError('Could not load the day: ' + readErr.message); return }
       setLoadError(null)
       setJobs((jRes.data as Job[]) || [])
       setCrews(cRes)
@@ -211,6 +220,15 @@ export default function DispatchPage() {
   useRealtimeRefresh('crews', rtFilter, fetchAll)
   useRealtimeRefresh('technicians', rtFilter, fetchAll)
   useRealtimeRefresh('dispatch_notes', rtFilter, fetchAll)
+  // day_statuses too. The board RENDERS this table (the blocked-day banner) and
+  // COMPUTES from it (crewCapacityMinutes → 0 when blocked, crewDayStart for a late
+  // frost start) — but it was the one input with no subscription. So the manager
+  // marking today rained-out reached the calendar instantly and never reached the
+  // board already open in the truck: it kept showing a full-capacity normal day
+  // until something ELSE changed or the tab was refocused. Same hook, same filter,
+  // same fetchAll — runCoalesced dedupes it against the four subs above, so this
+  // adds a signal, not a refetch.
+  useRealtimeRefresh('day_statuses', rtFilter, fetchAll)
 
   // Geocode once per day-load: any stop with an address but no coords gets
   // located (and written back to its property by the shared helper), then the
@@ -943,10 +961,14 @@ export default function DispatchPage() {
     if (err) notify.error('Could not update status: ' + err); else fetchAll()
   }, [supabase, fetchAll])
 
-  const saveLaneNote = useCallback(async (laneId: string, body: string) => {
-    if (!uid) return
+  // Returns the failure (null = it landed) so NoteBox can only claim "Saved" once
+  // the row is actually written — see NoteBox's header.
+  const saveLaneNote = useCallback(async (laneId: string, body: string): Promise<string | null> => {
+    if (!uid) return 'not signed in'
     const err = await saveDispatchNote(supabase, uid, date, laneId === UNASSIGNED_ID ? null : laneId, body)
-    if (err) notify.error('Could not save the note: ' + err); else fetchAll()
+    if (err) { notify.error('Could not save the note: ' + err); return err }
+    fetchAll()
+    return null
   }, [uid, supabase, date, fetchAll])
 
   // ── One-tap visit status (▶ start / ✓ complete) through THE shared seam ──
@@ -1340,9 +1362,11 @@ export default function DispatchPage() {
             value={dayNote?.body ?? ''}
             updatedAt={dayNote?.updated_at ?? null}
             onSave={async body => {
-              if (!uid) return
+              if (!uid) return 'not signed in'
               const err = await saveDispatchNote(supabase, uid, date, null, body)
-              if (err) notify.error('Could not save the note: ' + err); else fetchAll()
+              if (err) { notify.error('Could not save the note: ' + err); return err }
+              fetchAll()
+              return null
             }}
           />
 
@@ -1629,7 +1653,7 @@ const CrewLaneCard = memo(function CrewLaneCard({
   onBestOrder: (laneId: string) => void
   optimizing: boolean
   onSetTechStatus: (t: Technician, s: TechnicianStatus) => void
-  onSaveNote: (laneId: string, body: string) => void
+  onSaveNote: (laneId: string, body: string) => Promise<string | null>
   statusBusy: Set<string>
   onQuickStart: (j: Job) => void
   onQuickComplete: (j: Job) => void
@@ -2020,20 +2044,39 @@ const CrewLaneCard = memo(function CrewLaneCard({
 // Cmd/Ctrl+Enter still flush immediately), then shows a quiet "Saved ✓" — a gate
 // code jotted mid-phone-call must not depend on remembering to click away.
 // Clearing the text deletes the row. Controlled locally so realtime refreshes
-// never eat keystrokes; a failed save is toasted by the page and refetched over.
+// never eat keystrokes.
+//
+// ⚠️ "Saved" MEANS SAVED. This used to call onSave() without awaiting it, advance
+// lastSaved, and flash the green ✓ in the same tick — so a write that failed still
+// showed "Saved", and because lastSaved had already moved to the unsaved text
+// nothing ever retried it. A gate code typed for a crew simply never left the
+// device while the board said it had. onSave now RETURNS the error (null = landed)
+// and every transition waits on it:
+//   • in flight        → "Saving…", never ✓
+//   • landed           → lastSaved advances, ✓
+//   • failed           → 'error' phase, lastSaved does NOT advance, the text stays
+//                        in the box, and the next blur/edit retries it for real.
+// Leaving lastSaved behind on failure is what makes the re-seed effect below
+// correct too: draft !== lastSaved, so an incoming realtime refresh knows the box
+// is mid-edit and won't overwrite the words that haven't landed yet.
 function NoteBox({ value, onSave, placeholder, compact, icon: Icon, updatedAt }: {
   value: string
-  onSave: (body: string) => void
+  onSave: (body: string) => Promise<string | null>
   placeholder: string
   compact?: boolean
   icon: typeof StickyNote
   updatedAt?: string | null
 }) {
   const [draft, setDraft] = useState(value)
-  const [phase, setPhase] = useState<'idle' | 'dirty' | 'saved'>('idle')
+  const [phase, setPhase] = useState<'idle' | 'dirty' | 'saving' | 'saved' | 'error'>('idle')
   const lastSaved = useRef(value)
   const debounceT = useRef<ReturnType<typeof setTimeout> | null>(null)
   const savedT = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // The exact text currently in flight. Blur fires while the debounced save is
+  // still awaiting, and without this the same note would be written twice.
+  const inFlight = useRef<string | null>(null)
+  const alive = useRef(true)
+  useEffect(() => () => { alive.current = false }, [])
 
   useEffect(() => {
     // Adopt remote changes only when the box isn't mid-edit.
@@ -2046,10 +2089,19 @@ function NoteBox({ value, onSave, placeholder, compact, icon: Icon, updatedAt }:
     if (savedT.current) clearTimeout(savedT.current)
   }, [])
 
-  const commit = (text: string) => {
+  const commit = async (text: string) => {
     if (debounceT.current) { clearTimeout(debounceT.current); debounceT.current = null }
-    if (text === lastSaved.current) { setPhase('idle'); return }
-    onSave(text)
+    if (text === lastSaved.current) { setPhase(p => (p === 'error' ? p : 'idle')); return }
+    if (inFlight.current === text) return          // already writing exactly this
+    inFlight.current = text
+    setPhase('saving')
+    let err: string | null
+    try { err = await onSave(text) }
+    catch (e) { err = e instanceof Error ? e.message : 'save failed' }
+    finally { if (inFlight.current === text) inFlight.current = null }
+    if (!alive.current) return
+    // Persistence confirmed — only now is the ✓ true and the baseline allowed to move.
+    if (err) { setPhase('error'); return }
     lastSaved.current = text
     setPhase('saved')
     if (savedT.current) clearTimeout(savedT.current)
@@ -2069,8 +2121,8 @@ function NoteBox({ value, onSave, placeholder, compact, icon: Icon, updatedAt }:
       <textarea
         value={draft}
         onChange={e => onChange(e.target.value)}
-        onBlur={() => commit(draft)}
-        onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); commit(draft) } }}
+        onBlur={() => { void commit(draft) }}
+        onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void commit(draft) } }}
         placeholder={placeholder}
         rows={draft.length > 80 || draft.includes('\n') ? 2 : 1}
         aria-label={placeholder}
@@ -2078,6 +2130,19 @@ function NoteBox({ value, onSave, placeholder, compact, icon: Icon, updatedAt }:
         className="flex-1 resize-none bg-transparent text-xs text-ink placeholder:text-ink-faint outline-none border-b border-transparent focus:border-border-strong transition-colors py-1"
       />
       {phase === 'dirty' && <span className="text-[10px] text-ink-faint shrink-0 mt-1.5 animate-fade">…</span>}
+      {phase === 'saving' && (
+        <span className="inline-flex items-center gap-0.5 text-[10px] text-ink-faint shrink-0 mt-1.5 animate-fade">
+          <Loader2 className="w-3 h-3 animate-spin" aria-hidden /> Saving…
+        </span>
+      )}
+      {/* The crew reads this box for their instructions, so an unsaved note has to
+          look unsaved — and say what to do about it — rather than sit there in the
+          textarea looking exactly like one that landed. */}
+      {phase === 'error' && (
+        <span role="status" className="inline-flex items-center gap-0.5 text-[10px] text-red-400 shrink-0 mt-1.5 animate-fade">
+          <AlertTriangle className="w-3 h-3" aria-hidden /> Not saved — retry
+        </span>
+      )}
       {phase === 'saved' && (
         <span className="inline-flex items-center gap-0.5 text-[10px] text-emerald-400 shrink-0 mt-1.5 animate-fade">
           <Check className="w-3 h-3" aria-hidden /> Saved
