@@ -52,7 +52,8 @@
     "verify:booking-photos": "tsx scripts/verify-booking-photos.ts",
     "verify:booking-link": "tsx scripts/verify-booking-link.ts",
     "verify:review-audience": "tsx scripts/verify-review-audience.ts",
-    "verify:property-label": "tsx scripts/verify-property-label.ts"
+    "verify:property-label": "tsx scripts/verify-property-label.ts",
+    "verify:field-stops": "tsx scripts/verify-field-stops.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",
