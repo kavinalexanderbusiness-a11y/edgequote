@@ -16,10 +16,28 @@
 //     next one. Pricing history off the live wage would silently rewrite every
 //     past shift's cost the moment someone gets a raise.
 
+import { format, isSameDay } from 'date-fns'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { TimeEntry, Technician } from '@/types'
 
 // ── Duration ─────────────────────────────────────────────────────────────────
+
+/**
+ * Minutes between two instants, EXACTLY as Postgres computes them for
+ * `time_entries.minutes_worked`:
+ *
+ *   (extract(epoch from (clock_out - clock_in)) / 60)::integer
+ *
+ * The `::integer` cast on a numeric ROUNDS (half away from zero) — it does not
+ * truncate. Flooring here instead, as this once did, made the running timer and
+ * the shift preview disagree with the value Postgres actually stores by a minute
+ * on roughly half of all shifts: a shift watched ticking to "7h 30m" saved as
+ * "7h 31m" the moment it closed. The timer must not describe a different shift
+ * from the one the database records.
+ */
+export function spanMinutes(fromMs: number, toMs: number): number {
+  return Math.round((toMs - fromMs) / 60_000)
+}
 
 /**
  * Paid minutes for an entry.
@@ -36,7 +54,7 @@ import type { TimeEntry, Technician } from '@/types'
  */
 export function entryMinutes(e: TimeEntry, now: Date = new Date()): number {
   if (e.clock_out) return e.minutes_worked ?? 0
-  const elapsed = Math.floor((now.getTime() - new Date(e.clock_in).getTime()) / 60_000)
+  const elapsed = spanMinutes(new Date(e.clock_in).getTime(), now.getTime())
   return Math.max(0, elapsed - (e.break_minutes || 0))
 }
 
@@ -65,6 +83,29 @@ export function decimalHours(minutes: number): number {
 
 export function isOpen(e: TimeEntry): boolean {
   return e.clock_out == null
+}
+
+/**
+ * "since 8:14 AM" for a shift started today — "since Tue Aug 4, 8:14 AM" for one
+ * that wasn't.
+ *
+ * A forgotten clock-out is the most common way a time clock goes wrong, and a
+ * bare "on the clock since 8:14 AM" reads as THIS MORNING on every surface that
+ * shows it. Someone who forgot to clock out on Monday looked, on Thursday, like
+ * they had started an early shift today. The duration beside it said 66h, but two
+ * facts that contradict each other are not a warning — they are a puzzle.
+ *
+ * Lives here, next to the duration engine, so the timesheet and the workforce
+ * page cannot describe the same open shift differently.
+ */
+export function openSinceLabel(clockInISO: string, now: Date = new Date()): string {
+  const at = new Date(clockInISO)
+  return isSameDay(at, now) ? format(at, 'h:mm a') : format(at, 'EEE MMM d, h:mm a')
+}
+
+/** True when an open shift did not start today — a probable forgotten clock-out. */
+export function isStaleOpen(e: TimeEntry, now: Date = new Date()): boolean {
+  return isOpen(e) && !isSameDay(new Date(e.clock_in), now)
 }
 
 /** The tech's open shift, if any. The DB permits at most one (partial unique index). */

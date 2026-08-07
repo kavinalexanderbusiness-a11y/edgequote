@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react'
 import { format } from 'date-fns'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { TimeEntry } from '@/types'
-import { updateTimeEntry, formatDuration } from '@/lib/timeTracking'
+import { updateTimeEntry, formatDuration, spanMinutes } from '@/lib/timeTracking'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
@@ -51,7 +51,10 @@ export function TimeEntryEditor({ open, entry, technicianName, supabase, onClose
   const [rate, setRate] = useState(entry.hourly_rate == null ? '' : String(Number(entry.hourly_rate)))
   const [saving, setSaving] = useState(false)
 
-  // Same shape as the generated column: greatest(0, span - break).
+  // Same shape AND the same arithmetic as the generated column:
+  // greatest(0, span_minutes - break). spanMinutes rounds because Postgres'
+  // numeric->integer cast rounds; flooring here made this box promise a minute
+  // less than the row it was about to write on roughly half of all edits.
   const preview = useMemo(() => {
     const inMs = new Date(clockIn).getTime()
     const outMs = clockOut ? new Date(clockOut).getTime() : NaN
@@ -60,7 +63,7 @@ export function TimeEntryEditor({ open, entry, technicianName, supabase, onClose
     if (!clockOut) return { error: null, minutes: null }
     if (!Number.isFinite(outMs)) return { error: 'Enter a valid end time.', minutes: null }
     if (outMs <= inMs) return { error: 'The shift has to end after it starts.', minutes: null }
-    return { error: null, minutes: Math.max(0, Math.floor((outMs - inMs) / 60_000) - brk) }
+    return { error: null, minutes: Math.max(0, spanMinutes(inMs, outMs) - brk) }
   }, [clockIn, clockOut, breakMin])
 
   const rateNum = rate.trim() === '' ? null : Number(rate)

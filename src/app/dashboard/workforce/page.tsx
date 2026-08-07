@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { addDays, format, startOfWeek, endOfWeek, subMonths, startOfMonth } from 'date-fns'
+import { addDays, format, startOfDay, startOfWeek, endOfWeek, subMonths, startOfMonth } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import type { BusinessSettings, Crew, PayRun, PtoEntry, Technician, TimeEntry, WageHistoryEntry } from '@/types'
@@ -64,7 +64,18 @@ export default function WorkforcePage() {
       const from = startOfMonth(subMonths(new Date(), 12))
       const [sRes, t, c, e, pRes, rRes, wRes] = await Promise.all([
         supabase.from('business_settings').select('*').eq('user_id', user.id).maybeSingle(),
-        loadTechnicians(supabase, user.id),
+        // includeArchived, like every other surface that reads paid time. The
+        // roster list does NOT gate the money — payrollSummary groups by the
+        // technician_id on each shift, so gross is the same either way, and
+        // archiving can never underpay anyone. What it gates is IDENTITY: whoever
+        // is missing from this list is rendered as "Removed technician" and loses
+        // their crew. On this page that showed up as an overtime-watch row for an
+        // unnamed person, and as a departed employee's hours attributed to "No
+        // crew" in crew utilization.
+        //
+        // `roster` below re-filters for everything that DISPLAYS people, so nobody
+        // who has left reappears on the availability list. See lib/crews.
+        loadTechnicians(supabase, user.id, { includeArchived: true }),
         loadCrews(supabase, user.id),
         loadTimeEntries(supabase, user.id, { fromISO: from.toISOString(), toISO: addDays(new Date(), 1).toISOString() }),
         supabase.from('pto_entries').select('*').eq('user_id', user.id).gte('date', format(from, 'yyyy-MM-dd')),
@@ -88,6 +99,9 @@ export default function WorkforcePage() {
   useRealtimeRefresh('time_entries', uid ? `user_id=eq.${uid}` : null, fetchAll)
 
   const rules = useMemo(() => payrollRules(settings), [settings])
+  // The people still ON the roster. Money reads `techs` (everyone who ever
+  // worked); anything that shows a list of people reads this.
+  const roster = useMemo(() => techs.filter(t => t.archived_at == null), [techs])
   const ctx = useMemo(
     () => buildLaborContext({ jobs: [], customers: [], technicians: techs, crews }),
     [techs, crews],
@@ -102,35 +116,41 @@ export default function WorkforcePage() {
   const weekStart = useMemo(() => startOfWeek(new Date(), { weekStartsOn: rules.weekStartsOn }), [rules.weekStartsOn])
   const weekEnd = useMemo(() => endOfWeek(new Date(), { weekStartsOn: rules.weekStartsOn }), [rules.weekStartsOn])
 
+  // Roster-only: "who's working today" is a list of people, and someone who left
+  // in March is not an answer to it.
   const availability = useMemo(
-    () => availabilityToday({ technicians: techs, entries, ptoEntries, ctx }),
-    [techs, entries, ptoEntries, ctx],
+    () => availabilityToday({ technicians: roster, entries, ptoEntries, ctx }),
+    [roster, entries, ptoEntries, ctx],
   )
   const otInsight = useMemo(
     () => overtimeInsight({ technicians: techs, entries, rules, weekStart, weekEnd }),
     [techs, entries, rules, weekStart, weekEnd],
   )
+  // The same exact-seven-days window overtimeInsight uses — endOfWeek() is the
+  // last millisecond of the week, so the +1 goes on startOfDay(weekEnd) or the
+  // window quietly runs to eight days.
   const weekEntries = useMemo(
     () => entries.filter(e => {
       const t = new Date(e.clock_in).getTime()
-      return t >= weekStart.getTime() && t < addDays(weekEnd, 1).getTime()
+      return t >= weekStart.getTime() && t < addDays(startOfDay(weekEnd), 1).getTime()
     }),
     [entries, weekStart, weekEnd],
   )
-  const balance = useMemo(() => workloadBalance(weekEntries, techs, ctx), [weekEntries, techs, ctx])
+  const balance = useMemo(() => workloadBalance(weekEntries, roster, ctx), [weekEntries, roster, ctx])
   const crewUtil = useMemo(() => crewUtilization(weekEntries, ctx), [weekEntries, ctx])
   const trend = useMemo(
     () => laborTrend({ entries, ptoEntries, technicians: techs, rules, periods: 6 }),
     [entries, ptoEntries, techs, rules],
   )
   const forecast = useMemo(() => forecastNextPeriod(trend), [trend])
-  const pto = useMemo(() => ptoAnalytics(ptoEntries, techs, new Date().getFullYear()), [ptoEntries, techs])
-  const wages = useMemo(() => wageTrends({ technicians: techs, history: wageHistory }), [techs, wageHistory])
+  // Allowances and "set a wage" nudges are about people you still employ.
+  const pto = useMemo(() => ptoAnalytics(ptoEntries, roster, new Date().getFullYear()), [ptoEntries, roster])
+  const wages = useMemo(() => wageTrends({ technicians: roster, history: wageHistory }), [roster, wageHistory])
   const runStats = useMemo(() => payRunStats(runs, rules), [runs, rules])
 
   const onClock = availability.filter(a => a.state === 'on_clock')
   const offToday = availability.filter(a => a.state === 'time_off')
-  const activeTechs = techs.filter(t => t.is_active)
+  const activeTechs = roster.filter(t => t.is_active)
 
   if (loading) {
     return (

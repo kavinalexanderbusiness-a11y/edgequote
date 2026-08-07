@@ -20,7 +20,7 @@
 
 import { addDays, differenceInCalendarDays, format, startOfDay } from 'date-fns'
 import type { PayRun, PtoEntry, Technician, TimeEntry, WageHistoryEntry } from '@/types'
-import { entryCost, entryMinutes, isOpen } from '@/lib/timeTracking'
+import { entryCost, entryMinutes, isOpen, openSinceLabel } from '@/lib/timeTracking'
 import {
   payPeriodFor, shiftPayPeriod, splitRegularOvertime, type OvertimeRules, type PayPeriod,
 } from '@/lib/payroll'
@@ -90,12 +90,16 @@ export function availabilityToday(args: {
     // the detail says both rather than hiding the contradiction.
     if (open) {
       const mins = entryMinutes(open, now)
+      // openSinceLabel names the DAY when the shift didn't start today. "Since
+      // 8:14 AM" beside a 66-hour duration described a shift nobody worked; the
+      // sentence has to carry the same fact the number does.
+      const since = openSinceLabel(open.clock_in, now)
       return {
         technicianId: t.id, name: t.name, crewName,
         state: 'on_clock' as const,
         detail: off
-          ? `On the clock since ${format(new Date(open.clock_in), 'h:mm a')} — despite ${off.kind} booked today`
-          : `On the clock since ${format(new Date(open.clock_in), 'h:mm a')}`,
+          ? `On the clock since ${since} — despite ${off.kind} booked today`
+          : `On the clock since ${since}`,
         onClockMinutes: mins, timeOffKind: off?.kind ?? null,
         timeOffHours: off ? Number(off.hours) : null,
       }
@@ -162,11 +166,18 @@ export function overtimeInsight(args: {
   technicians: Technician[]
   entries: TimeEntry[]
   rules: OvertimeRules
+  /** Start of the OT week. */
   weekStart: Date
+  /** The week's LAST day. Any time on that day — callers pass endOfWeek(). */
   weekEnd: Date
 }): OvertimeInsight {
   const { technicians, entries, rules, weekStart, weekEnd } = args
-  const from = weekStart.getTime(), to = addDays(weekEnd, 1).getTime()
+  // startOfDay before the +1: `addDays(endOfWeek(...), 1)` is 23:59:59.999 of the
+  // day AFTER the week, which is an EIGHT-day window that swallows the next
+  // week's first day. Harmless while the caller only ever asks about the current
+  // week (tomorrow's shifts don't exist yet) and wrong the moment anyone asks
+  // about a past one — so it is exact here rather than accidentally safe.
+  const from = startOfDay(weekStart).getTime(), to = addDays(startOfDay(weekEnd), 1).getTime()
 
   const byTech = new Map<string, TimeEntry[]>()
   for (const e of entries) {
@@ -243,10 +254,15 @@ export function workloadBalance(entries: TimeEntry[], technicians: Technician[],
   for (const e of costable(entries)) {
     byTech.set(e.technician_id, (byTech.get(e.technician_id) ?? 0) + entryMinutes(e))
   }
-  const totalMinutes = Array.from(byTech.values()).reduce((s, m) => s + m, 0)
   const active = technicians.filter(t => t.is_active)
   // Only people who actually worked can hold a share of the work.
   const participants = active.filter(t => (byTech.get(t.id) ?? 0) > 0)
+  // The denominator is the minutes of the people LISTED, not of every entry in
+  // the window. Summing all entries while listing only active people made the
+  // shares of a week containing a departed employee's shifts add up to less than
+  // 100% — every remaining person's share silently understated, with nothing on
+  // screen to explain the missing slice.
+  const totalMinutes = participants.reduce((s, t) => s + (byTech.get(t.id) ?? 0), 0)
   const people = participants.length
   const evenSharePct = people > 0 ? round1(100 / people) : null
 

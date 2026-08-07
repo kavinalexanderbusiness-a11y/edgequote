@@ -5,11 +5,12 @@ import Link from 'next/link'
 import { format, startOfWeek, endOfWeek, startOfDay, endOfDay } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
-import { Technician, TimeEntry } from '@/types'
+import { BusinessSettings, Technician, TimeEntry } from '@/types'
 import { loadTechnicians } from '@/lib/crews'
+import { payrollRules, type WeekDay } from '@/lib/payroll'
 import {
   loadTimeEntries, clockIn, clockOut, openEntryFor, entryMinutes, entryCost,
-  formatDuration, decimalHours, totals, isOpen,
+  formatDuration, decimalHours, totals, isOpen, openSinceLabel, isStaleOpen,
 } from '@/lib/timeTracking'
 import { TimeEntryEditor } from '@/components/dispatch/TimeEntryEditor'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -40,7 +41,14 @@ export default function TimesheetPage() {
   const [entries, setEntries] = useState<TimeEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // Set when the sweep for open shifts started BEFORE the window failed. Kept
+  // apart from loadError because the rest of the page still loaded — but "nobody
+  // is on the clock" must never be inferred from a query that never answered.
+  const [openSweepError, setOpenSweepError] = useState<string | null>(null)
   const [period, setPeriod] = useState<Period>('today')
+  // The OT work week the owner set in Settings → Payroll. Until settings land we
+  // assume nothing and simply don't offer the week view — see `range`.
+  const [weekStartsOn, setWeekStartsOn] = useState<WeekDay | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [editing, setEditing] = useState<TimeEntry | null>(null)
   // Open shifts have no DB duration yet, so their elapsed time is computed live.
@@ -51,12 +59,25 @@ export default function TimesheetPage() {
     return () => window.clearInterval(h)
   }, [])
 
+  // "This week" is the WORK WEEK — the boundary lib/payroll judges overtime
+  // against (business_settings.pay_week_starts_on), not a hardcoded Monday.
+  //
+  // It was hardcoded to Monday. An owner who set the work week to Sunday in
+  // Settings → Payroll got a timesheet totalling Mon–Sun while payroll charged
+  // overtime on Sun–Sat: the one screen you check to answer "has Dave hit 44 yet"
+  // was counting a different seven days from the screen that decides what he's
+  // paid, and the two disagreed by a whole shift at each end.
+  //
+  // Exposed as ISO strings because the fetch keys on them — a fresh Date object
+  // every render would refetch the timesheet on every unrelated state change.
   const range = useMemo(() => {
     const base = new Date()
-    return period === 'today'
-      ? { from: startOfDay(base), to: endOfDay(base) }
-      : { from: startOfWeek(base, { weekStartsOn: 1 }), to: endOfWeek(base, { weekStartsOn: 1 }) }
-  }, [period])
+    const wk = weekStartsOn ?? 1
+    const from = period === 'today' ? startOfDay(base) : startOfWeek(base, { weekStartsOn: wk })
+    const to = period === 'today' ? endOfDay(base) : endOfWeek(base, { weekStartsOn: wk })
+    return { from, to, fromISO: from.toISOString(), toISO: to.toISOString() }
+  }, [period, weekStartsOn])
+  const { fromISO, toISO } = range
 
   const fetchAll = useCallback(async () => {
     try {
@@ -64,18 +85,31 @@ export default function TimesheetPage() {
       const user = session?.user
       if (!user) { setLoadError('Session expired — sign in again.'); return }
       setUid(user.id)
-      const [t, e] = await Promise.all([
+      const [sRes, t, e] = await Promise.all([
+        supabase.from('business_settings').select('*').eq('user_id', user.id).maybeSingle(),
         // includeArchived: this is the paid-time LEDGER. Shifts worked by someone
         // who has since left still have to render with their name and wage —
         // that is the payroll record PAY-1 exists to preserve.
         loadTechnicians(supabase, user.id, { includeArchived: true }),
-        loadTimeEntries(supabase, user.id, { fromISO: range.from.toISOString(), toISO: range.to.toISOString() }),
+        loadTimeEntries(supabase, user.id, { fromISO, toISO }),
       ])
+      // THE payroll engine decides what a work week is. Reading the column
+      // directly here would be a second interpretation of the same setting.
+      setWeekStartsOn(payrollRules(sRes.data as BusinessSettings | null).weekStartsOn)
       // An open shift started before this window still needs its Clock out
       // button, or it becomes unstoppable from the screen that owns it.
-      const open = await loadTimeEntries(supabase, user.id, {})
-        .then(all => all.filter(isOpen))
-        .catch(() => [] as TimeEntry[])
+      //
+      // A FAILURE HERE IS NOT AN ANSWER. Swallowing it into an empty list — as
+      // this used to — made a network blip render as "On the clock: 0 · Nobody
+      // clocked in", with a Clock in button beside a person who was already on
+      // the clock. The page now says it couldn't check instead of saying no.
+      let open: TimeEntry[] = []
+      try {
+        open = (await loadTimeEntries(supabase, user.id, {})).filter(isOpen)
+        setOpenSweepError(null)
+      } catch (err) {
+        setOpenSweepError(err instanceof Error ? err.message : 'the request failed')
+      }
       const merged = [...e]
       for (const o of open) if (!merged.some(x => x.id === o.id)) merged.push(o)
       setTechs(t)
@@ -86,7 +120,7 @@ export default function TimesheetPage() {
     } finally {
       setLoading(false)
     }
-  }, [supabase, range.from, range.to])
+  }, [supabase, fromISO, toISO])
 
   useEffect(() => { fetchAll() }, [fetchAll])
   useRealtimeRefresh('time_entries', uid ? `user_id=eq.${uid}` : null, fetchAll)
@@ -146,6 +180,9 @@ export default function TimesheetPage() {
   )
   const sum = useMemo(() => totals(inRange, now), [inRange, now])
   const openCount = useMemo(() => entries.filter(isOpen).length, [entries])
+  // Open shifts that didn't start today — almost always a forgotten clock-out,
+  // and the reason someone's "hours" can read as three days.
+  const staleOpen = useMemo(() => entries.filter(e => isStaleOpen(e, now)), [entries, now])
   const unpaidRated = useMemo(() => inRange.some(e => e.hourly_rate == null), [inRange])
   const techById = useMemo(() => Object.fromEntries(techs.map(t => [t.id, t])), [techs])
   const active = useMemo(() => techs.filter(t => t.is_active), [techs])
@@ -155,7 +192,9 @@ export default function TimesheetPage() {
       <div className="max-w-5xl space-y-5">
         <PageHeader crumb={{ label: 'Workforce', href: '/dashboard/workforce' }} title="Timesheet"
           description="Clock your people in and out, and see what the hours cost." />
-        <SkeletonTiles count={3} className="grid-cols-3 lg:grid-cols-3" />
+        {/* Same breakpoints as the loaded row, so the tiles land where their
+            placeholder was instead of jumping a column on a phone. */}
+        <SkeletonTiles count={3} className="grid-cols-2 sm:grid-cols-3 lg:grid-cols-3" />
         <SkeletonRows count={4} />
       </div>
     )
@@ -186,20 +225,55 @@ export default function TimesheetPage() {
         </Banner>
       )}
 
-      <div className="grid grid-cols-3 gap-3">
+      {!loadError && openSweepError && (
+        <Banner tone="warn" icon={AlertTriangle}
+          action={<Button size="sm" variant="secondary" onClick={() => fetchAll()}>Retry</Button>}>
+          Couldn’t check for shifts left open from earlier days ({openSweepError}). Anyone still on
+          the clock from before today may show here as clocked out — retry before trusting this screen.
+        </Banner>
+      )}
+
+      {!openSweepError && staleOpen.length > 0 && (
+        <Banner tone="warn" icon={AlertTriangle}>
+          {staleOpen.length === 1
+            ? `${techById[staleOpen[0].technician_id]?.name ?? 'Someone'} has been on the clock since ${openSinceLabel(staleOpen[0].clock_in, now)}`
+            : `${staleOpen.length} shifts have been open since before today`}
+          {' '}— almost certainly a missed clock-out. An open shift is never paid, so fix the end
+          time with Edit and those hours reach payroll.
+        </Banner>
+      )}
+
+      {/* Two across on a phone, three from sm. At 375px the dashboard's p-4 leaves
+          343px, so three tiles get 78px of content each — narrower than
+          "$2,000.00" or "80h 30m" at text-xl. Grid items don't shrink below their
+          content, so the row pushed the whole page into a sideways scroll on the
+          screen most likely to be read one-handed in a truck. */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <StatTile label={period === 'today' ? 'Hours today' : 'Hours this week'} icon={Clock}
           value={formatDuration(sum.minutes)} sub={`${decimalHours(sum.minutes)} h · ${sum.entries} shift${sum.entries !== 1 ? 's' : ''}`} />
         <StatTile label="Labour cost" icon={DollarSign} value={formatCurrency(sum.cost)}
           sub={unpaidRated ? 'Some shifts have no wage' : 'From each shift’s own rate'} accent />
-        <StatTile label="On the clock" icon={HardHat} value={String(openCount)}
-          sub={openCount ? 'Counting up now' : 'Nobody clocked in'} tone={openCount ? 'success' : undefined} tonedSurface={openCount > 0} />
+        {/* When the open-shift sweep failed we know about today's shifts and
+            nothing older, so this refuses to state a count rather than claim a
+            zero it cannot support. */}
+        <StatTile label="On the clock" icon={HardHat}
+          value={openSweepError ? '—' : String(openCount)}
+          sub={openSweepError ? 'Couldn’t check' : openCount ? 'Counting up now' : 'Nobody clocked in'}
+          tone={openSweepError ? undefined : openCount ? 'success' : undefined}
+          tonedSurface={!openSweepError && openCount > 0} />
       </div>
 
       <div className="flex items-center gap-1.5">
         <FilterPill active={period === 'today'} onClick={() => setPeriod('today')}>Today</FilterPill>
         <FilterPill active={period === 'week'} onClick={() => setPeriod('week')}>This week</FilterPill>
-        <span className="ml-auto text-[11px] text-ink-faint tabular-nums">
-          {format(range.from, 'MMM d')}{period === 'week' ? ` – ${format(range.to, 'MMM d')}` : ''}
+        {/* Weekdays are spelled out in the week view so the work-week boundary is
+            visible: this has to be the same seven days payroll charges overtime
+            against, and an owner can only check that if they can see it. */}
+        <span className="ml-auto text-[11px] text-ink-faint tabular-nums"
+          title={period === 'week' ? 'Your work week, set in Settings → Payroll' : undefined}>
+          {period === 'week'
+            ? `${format(range.from, 'EEE MMM d')} – ${format(range.to, 'EEE MMM d')}`
+            : format(range.from, 'MMM d')}
         </span>
       </div>
 
@@ -227,7 +301,7 @@ export default function TimesheetPage() {
                       {t.hourly_wage == null
                         ? 'No wage set — hours only'
                         : `${formatCurrency(Number(t.hourly_wage))}/hr`}
-                      {open && ` · on the clock since ${format(new Date(open.clock_in), 'h:mm a')}`}
+                      {open && ` · on the clock since ${openSinceLabel(open.clock_in, now)}`}
                     </p>
                   </div>
                   {open && (
