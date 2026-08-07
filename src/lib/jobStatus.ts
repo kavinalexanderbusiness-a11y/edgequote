@@ -19,15 +19,70 @@
 // silently revert an edit the office made while the field was offline
 // (the same optimistic-concurrency contract every schedule call site passes).
 //
-// NOTE: the schedule page carries a pre-existing inline copy of this flow from
+// NOTE: the schedule page carries a pre-existing inline copy of this FLOW from
 // before it was frozen (scheduling freeze @ 1d4ef66) — when that page unfreezes
-// it should adopt this seam. Until then this file is the one OTHER surfaces use.
+// it should adopt this seam wholesale. It already shares the piece that was
+// actually drifting: `completionPatch` below is imported by all three of its
+// completion doors, so what "completed" WRITES has one definition even while the
+// orchestration around it stays duplicated.
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { Job } from '@/types'
 import { queueOrRun } from '@/lib/offline/outbox'
 import { createDraftInvoiceForCompletedJob, AutoInvoiceResult } from '@/lib/invoicing'
 import { minutesBetween } from '@/lib/utils'
+
+// ── THE completion stamp ─────────────────────────────────────────────────────
+// "status → completed" is never just a status. The row must also carry WHEN it
+// finished and HOW LONG it took, because both are read as canonical downstream:
+//   • lib/dispatchOps buildActivityFeed emits a "completed" event ONLY when
+//     completed_at is set — a completion without it never reaches the manager's
+//     board at all;
+//   • the customer portal's visit history and lib/timeline date the completion
+//     from it (timeline falls back to updated_at, so an unstamped visit re-dates
+//     itself every time anyone edits the row months later);
+//   • the job.completed integration event ships completed_at/actual_minutes
+//     straight from NEW.* to every connected webhook;
+//   • actual_minutes is THE timing value profitability, route learning and
+//     pricing calibration read.
+//
+// It was being composed by hand at four call sites, and only two of them wrote
+// the timestamp: completing from the Day Ops quick-edit dropdown or from the job
+// form set the status alone. Production carried 7 of 72 completed visits with
+// completed_at NULL. So the stamp lives here, once, and every door uses it.
+//
+// actual_minutes ACCUMULATES rather than overwrites: a visit continued onto
+// another day banks that session's minutes and clears started_at
+// (continueJobAnotherDay), so the final check-out must ADD the last session to
+// the banked total or the earlier day's hours are silently destroyed. A
+// single-day visit is unchanged — actual_minutes is null from Start until here,
+// so (null || 0) + this session == this session.
+export interface CompletionStamp {
+  status: 'completed'
+  completed_at: string
+  actual_minutes: number | null
+}
+
+export function completionPatch(
+  job: Pick<Job, 'started_at' | 'actual_minutes'>,
+  opts?: {
+    /** Test seam / caller-supplied clock. Defaults to now. */
+    now?: string
+    /** An explicit figure the owner typed (the job form's "actual" field). When
+     *  given it wins — a human correcting the clock outranks the derived value.
+     *  Blank/0 means "not stated", so the derivation below still applies. */
+    actualMinutes?: number | null
+  },
+): CompletionStamp {
+  const now = opts?.now ?? new Date().toISOString()
+  const stated = opts?.actualMinutes
+  const actual = stated != null && stated > 0
+    ? stated
+    : job.started_at
+      ? (job.actual_minutes || 0) + minutesBetween(job.started_at, now)
+      : job.actual_minutes ?? null
+  return { status: 'completed', completed_at: now, actual_minutes: actual }
+}
 
 export interface VisitStatusResult {
   ok: boolean
@@ -68,9 +123,7 @@ export async function completeVisit(
   opts: { notify: boolean },
 ): Promise<VisitStatusResult> {
   const prev = { status: job.status, completed_at: job.completed_at, actual_minutes: job.actual_minutes }
-  const now = new Date().toISOString()
-  const actual = job.started_at ? minutesBetween(job.started_at, now) : job.actual_minutes
-  const patch = { status: 'completed' as const, completed_at: now, actual_minutes: actual }
+  const patch = completionPatch(job)
   const completed = { ...job, ...patch }
   const notify = opts.notify && !!job.customer_id
   let invoice: AutoInvoiceResult | null = null

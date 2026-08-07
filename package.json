@@ -54,7 +54,8 @@
     "verify:review-audience": "tsx scripts/verify-review-audience.ts",
     "verify:property-label": "tsx scripts/verify-property-label.ts",
     "verify:field-stops": "tsx scripts/verify-field-stops.ts",
-    "verify:workforce": "tsx scripts/verify-workforce.ts"
+    "verify:workforce": "tsx scripts/verify-workforce.ts",
+    "verify:job-completion": "tsx scripts/verify-job-completion.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

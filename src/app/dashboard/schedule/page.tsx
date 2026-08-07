@@ -17,6 +17,9 @@ import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel 
 import type { JobRecurrence } from '@/types'
 import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts, uncompleteJob } from '@/lib/invoicing'
 import { queueOrRun } from '@/lib/offline/outbox'
+// THE completion stamp. Every door on this page that moves a visit to
+// "completed" writes the same three fields through it — see lib/jobStatus.
+import { completionPatch } from '@/lib/jobStatus'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 
 // ── The offline field bundle ──────────────────────────────────────────────────
@@ -1067,10 +1070,18 @@ export default function SchedulePage() {
       price: Number(values.price) > 0 ? Number(values.price) : null,
     }
     // Status and actual time belong ONLY to the edited visit, never its siblings.
-    const perVisit = {
-      status: values.status,
-      actual_minutes: values.actual_minutes ? Number(values.actual_minutes) : null,
-    }
+    // The third door onto COMPLETING (Complete button, quick-edit dropdown, this
+    // form) — and the one that used to write the status with no completed_at at
+    // all, leaving a finished visit the dispatch feed, the portal and the
+    // job.completed webhook all read as un-timed. Same stamp as the other two;
+    // a figure typed into the form's "actual" field still wins over the derived
+    // one. Only on the TRANSITION, so re-saving a finished job months later
+    // never re-dates its completion.
+    const completing = values.status === 'completed' && job.status !== 'completed'
+    const stated = values.actual_minutes ? Number(values.actual_minutes) : null
+    const perVisit = completing
+      ? completionPatch(job, { actualMinutes: stated })
+      : { status: values.status, actual_minutes: stated }
     // The third door onto un-completing (undo toast, quick-edit dropdown, and this
     // full form). It runs BEFORE the status write for the same reason uncomplete()
     // deletes first: a reopened visit carrying a live invoice bills for work the
@@ -1091,8 +1102,11 @@ export default function SchedulePage() {
     const failed = results.find(r => r.error)
     if (failed?.error) setBanner('Could not save the job: ' + failed.error.message)
 
-    if (values.status === 'completed' && job.status !== 'completed') {
-      const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
+    if (completing) {
+      // Draft from the job AS EDITED (fields + the completion stamp), not the
+      // pre-edit row — a save that prices the visit and completes it in one go
+      // would otherwise bill the old amount and lean on the re-price below.
+      const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, ...fields, ...perVisit })
       if (res.created) draftInvoiceToast(res.invoiceNumber, `Draft invoice ${res.invoiceNumber} created from the completed job.`)
       else if (res.reason === 'exists') setBanner('That job already has an invoice.')
       else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
@@ -1369,14 +1383,10 @@ export default function SchedulePage() {
   // Also the calendar's one-tap Done (works without a check-in — no actual then).
   async function completeJob(job: Job) {
     const prev = { status: job.status, completed_at: job.completed_at, actual_minutes: job.actual_minutes }
-    const now = new Date().toISOString()
-    // Accumulate, don't overwrite. A job continued across days banks each session's
-    // minutes into actual_minutes (see continueJobAnotherDay); the final complete then
-    // ADDS the last session to that banked total, so a two-day job records both days.
-    // Single-day jobs are unchanged: actual_minutes is null from Start until here, so
-    // (null || 0) + this session == this session, exactly as before.
-    const actual = job.started_at ? (job.actual_minutes || 0) + minutesBetween(job.started_at, now) : job.actual_minutes
-    const patch = { status: 'completed' as const, completed_at: now, actual_minutes: actual }
+    // THE completion stamp (lib/jobStatus) — status + completed_at + accumulated
+    // actual_minutes. Shared with the quick-edit dropdown, the job form and the
+    // dispatch board so "completed" can't mean four slightly different rows.
+    const patch = completionPatch(job)
     const completed = { ...job, ...patch }
     const notify = !!(automations.job_complete && job.customer_id)
 
@@ -1463,6 +1473,7 @@ export default function SchedulePage() {
   // completing the job → 'job.complete' (patch + draft invoice); a plain edit →
   // 'job.update', carrying a price change through to an existing draft.
   async function quickSaveJob(job: Job, patch: QuickPatch) {
+    const completing = patch.status === 'completed' && job.status !== 'completed'
     const fields = {
       start_time: patch.start_time,
       crew_size: patch.crew_size,
@@ -1470,8 +1481,14 @@ export default function SchedulePage() {
       status: patch.status,
       notes: patch.notes,
       price: patch.price,
+      // Moving the dropdown to Done is the SAME transition as tapping Complete,
+      // so it has to write the same row. It used to write the status alone: no
+      // completed_at, no time on site. The visit then never appeared as a
+      // completion on the dispatch activity feed (which keys on completed_at),
+      // the portal showed no worked time, and the job.completed webhook shipped
+      // a null timestamp. Same stamp, one definition.
+      ...(completing ? completionPatch(job) : {}),
     }
-    const completing = patch.status === 'completed' && job.status !== 'completed'
     // The other door onto un-completing: the dropdown moving a finished visit back
     // to scheduled/in-progress. Same money consequence as the undo toast, so it
     // takes the same path rather than a plain patch that would strand the invoice.
@@ -1481,9 +1498,9 @@ export default function SchedulePage() {
 
     // Un-completing carries an invoice with it, so it goes through the one engine
     // that removes the draft too — never the plain patch below. `completed_at` is
-    // cleared explicitly: `fields` doesn't carry it, and a visit that reads
-    // "scheduled" while still stamped complete is invisible to the un-invoiced
-    // queue — un-billable and un-findable at the same time.
+    // cleared explicitly (this branch never sets it, and it may already be on the
+    // row): a visit that reads "scheduled" while still stamped complete is
+    // invisible to the un-invoiced queue — un-billable and un-findable at once.
     if (uncompleting) { await uncomplete(job, { ...fields, completed_at: null }); return }
 
     let outcome: 'ran' | 'queued'
@@ -1496,7 +1513,11 @@ export default function SchedulePage() {
           const { error } = await supabase.from('jobs').update(fields).eq('id', job.id)
           if (error) throw new Error(error.message)
           if (completing) {
-            const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
+            // `completed` (job + this edit), not the pre-edit row: the offline
+            // replay already drafts from it, and a quick-edit that sets the price
+            // AND completes in one save would otherwise draft yesterday's amount
+            // and rely on the re-price below to correct it.
+            const res = await createDraftInvoiceForCompletedJob(supabase, completed)
             if (res.created) draftInvoiceToast(res.invoiceNumber, `Saved — draft invoice ${res.invoiceNumber} created.`)
             else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
             // The quick-edit dropdown completes a job through the same transition as the Complete
