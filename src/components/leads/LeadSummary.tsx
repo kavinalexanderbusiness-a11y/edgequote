@@ -1,7 +1,9 @@
 import type { ReactNode } from 'react'
 import { WebsiteLead } from '@/lib/leads'
 import { formatCurrency } from '@/lib/utils'
-import { Globe, Ruler, Sparkles, MapPin, Phone, Mail, Repeat, DollarSign, CalendarClock, MessageCircle } from 'lucide-react'
+import { extractBookingPhotos, bookingPhotoViews } from '@/lib/bookingPhotos'
+import { JobPhotos } from '@/components/photos/JobPhotos'
+import { Globe, Ruler, Sparkles, MapPin, Phone, Mail, Repeat, DollarSign, CalendarClock, MessageCircle, Camera, AlertTriangle } from 'lucide-react'
 
 const FREQ_LABEL: Record<string, string> = { weekly: 'Weekly', biweekly: 'Bi-weekly', monthly: 'Monthly', one_time: 'One-time' }
 
@@ -47,6 +49,13 @@ export function LeadSummary({ lead, footer, className }: { lead: WebsiteLead; fo
   const recurring = !!freq && !!FREQ_LABEL[freq] && freq !== 'one_time'
   const isFresh = submitted ? (Date.now() - new Date(submitted).getTime()) < 48 * 3600 * 1000 : false
   const yardCond = yardConditionLabel(lead.yard_condition)
+  // Photos the customer attached to the form. Read through the SAME adapter the
+  // booking door's photos use (raw_submission.photos is the identical canonical
+  // shape as quotes.lead_meta.photos), so there is one gallery, not two.
+  const photos = bookingPhotoViews(extractBookingPhotos(rawSub), submitted)
+  // Never let a storage failure look like "they sent nothing" — intake preserves the
+  // originals and counts them here so the owner knows to ask.
+  const photosFailed = Number(rawSub?.photos_failed) || 0
 
   return (
     <div className={`rounded-card border border-accent/30 bg-accent/[0.06] p-3.5 ${className || ''}`}>
@@ -94,6 +103,24 @@ export function LeadSummary({ lead, footer, className }: { lead: WebsiteLead; fo
       )}
 
       {lead.notes && <p className="text-xs text-ink-muted mt-2.5 whitespace-pre-wrap border-l-2 border-accent/30 pl-2">{lead.notes}</p>}
+
+      {/* Customer photos — the whole point of "helps us quote faster". Same
+          read-only gallery/lightbox as booking photos and job photos. */}
+      {photos.length > 0 && (
+        <div className="mt-3">
+          <p className="text-[11px] font-semibold text-ink-muted flex items-center gap-1.5 mb-1.5">
+            <Camera className="w-3.5 h-3.5 text-accent-text" />
+            {photos.length} photo{photos.length !== 1 ? 's' : ''} from the customer
+          </p>
+          <JobPhotos propertyId={null} variant="gallery" readOnly initialPhotos={photos} />
+        </div>
+      )}
+      {photosFailed > 0 && (
+        <p className="text-[11px] text-amber-400 flex items-start gap-1.5 mt-2">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+          {photosFailed} photo{photosFailed !== 1 ? 's' : ''} couldn&rsquo;t be stored — the customer believes {photosFailed === 1 ? 'it was' : 'they were'} sent. Ask them to resend.
+        </p>
+      )}
 
       {footer && <div className="mt-3">{footer}</div>}
     </div>
