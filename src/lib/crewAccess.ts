@@ -43,6 +43,11 @@ export const OWNER_ROOT = '/dashboard'
 /** Where an employee redeems a join code. Deliberately OUTSIDE the crew gate:
  *  the whole point is that the person is signed in but not yet linked. */
 export const CREW_JOIN = '/crew/join'
+/** Where an owner-provisioned employee sets their first password. Reached from a
+ *  one-time token in the query string, BEFORE any session exists — so it has to
+ *  be reachable signed-out, and the gate must not bounce it to /login. Holding
+ *  no valid token, the page does nothing except say the link has expired. */
+export const CREW_WELCOME = '/crew/welcome'
 
 export function isOwnerPath(pathname: string): boolean {
   return pathname === OWNER_ROOT || pathname.startsWith(OWNER_ROOT + '/')
@@ -52,6 +57,9 @@ export function isCrewPath(pathname: string): boolean {
 }
 export function isJoinPath(pathname: string): boolean {
   return pathname === CREW_JOIN || pathname.startsWith(CREW_JOIN + '/')
+}
+export function isWelcomePath(pathname: string): boolean {
+  return pathname === CREW_WELCOME || pathname.startsWith(CREW_WELCOME + '/')
 }
 
 /**
@@ -70,8 +78,15 @@ export function isJoinPath(pathname: string): boolean {
  *
  * /crew/join is always allowed to a signed-in user — it is how 'none' stops
  * being 'none', so gating it behind a role would be a deadlock.
+ *
+ * /crew/welcome is allowed to EVERYONE, signed in or not. An owner-provisioned
+ * employee arrives there holding a one-time token and no session at all; a gate
+ * that bounced them to /login would make the invite impossible to accept. The
+ * page itself is inert without a valid token — it can only set a password for
+ * whoever the token already identifies.
  */
 export function routeFor(role: AppRole, pathname: string, signedIn: boolean): string | null {
+  if (isWelcomePath(pathname)) return null
   const isPrivate = isOwnerPath(pathname) || isCrewPath(pathname)
   if (!signedIn) return isPrivate ? '/login' : null
   if (isJoinPath(pathname)) return role === 'owner' ? OWNER_ROOT : null

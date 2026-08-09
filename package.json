@@ -58,6 +58,7 @@
     "verify:workforce": "tsx scripts/verify-workforce.ts",
     "verify:job-completion": "tsx scripts/verify-job-completion.ts",
     "verify:crew-access": "tsx scripts/verify-crew-access.ts",
+    "verify:crew-invite": "tsx scripts/verify-crew-invite.ts",
     "verify:deposit": "tsx scripts/verify-deposit.ts",
     "verify:deposit-documents": "tsx scripts/verify-deposit-documents.ts"
   },

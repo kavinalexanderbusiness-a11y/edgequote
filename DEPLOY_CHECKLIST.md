@@ -113,6 +113,11 @@ rebuild from `main` creates it.)
 NEXT_PUBLIC_SUPABASE_URL
 NEXT_PUBLIC_SUPABASE_ANON_KEY
 SUPABASE_SERVICE_ROLE_KEY            # server-only — NEVER prefix NEXT_PUBLIC_
+                                     # ALSO gates Crew Mode invites: /api/crew/invite creates the
+                                     # employee's auth account through the Admin API. Without it the
+                                     # button returns a clear "not configured" and the owner falls back
+                                     # to a join code (which only works for an existing login).
+                                     # Check with: GET /api/health → checks.config.ok
 GOOGLE_MAPS_API_KEY                  # server-side (geocode/distance/route proxies)
 NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY  # restrict by HTTP referrer
 NEXT_PUBLIC_APP_URL                  # e.g. https://app.example.com (builds portal links in server-sent messages)

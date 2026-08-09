@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Crew, Technician, TECHNICIAN_STATUS_LABELS } from '@/types'
 import { CREW_PALETTE, crewPalette, nextCrewColor, TECH_STATUS_META, archiveTechnician } from '@/lib/crews'
@@ -12,6 +12,7 @@ import { Toggle } from '@/components/ui/Toggle'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { WageHistoryDialog } from '@/components/dispatch/WageHistoryDialog'
 import { CrewAccessControl } from '@/components/dispatch/CrewAccessControl'
+import type { CrewAccessRow } from '@/lib/crewInvite'
 import { History } from 'lucide-react'
 import { toast as notify } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
@@ -45,6 +46,26 @@ export function CrewManager({ open, onClose, crews, technicians, equipment, onCh
   const [newTech, setNewTech] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [wageHistoryFor, setWageHistoryFor] = useState<Technician | null>(null)
+
+  // App-access state for the whole roster in ONE call. Whether somebody has ever
+  // actually signed in lives in auth.users, which no owner client can read — so
+  // it comes back through crew_access_states(), a DEFINER read scoped to the
+  // caller's own roster. Re-read whenever the roster changes (accessTick) so a
+  // fresh invite flips the badge without a page reload.
+  const [accessById, setAccessById] = useState<Record<string, CrewAccessRow>>({})
+  const [accessTick, setAccessTick] = useState(0)
+  useEffect(() => {
+    if (!open) return
+    let alive = true
+    supabase.rpc('crew_access_states').then(({ data, error }) => {
+      // A failed read leaves the previous map in place rather than blanking every
+      // badge to "No access" — claiming somebody has no login when they do is the
+      // one wrong answer here.
+      if (!alive || error || !data) return
+      setAccessById(data as Record<string, CrewAccessRow>)
+    })
+    return () => { alive = false }
+  }, [open, supabase, accessTick, technicians])
 
   const crewOptions = [
     { value: '', label: 'No crew' },
@@ -234,7 +255,7 @@ export function CrewManager({ open, onClose, crews, technicians, equipment, onCh
               </p>
               {/* Crew Mode: a login for this person, granted and revoked from the
                   same row as the switches that already control them. */}
-              <CrewAccessControl tech={t} onChanged={onChanged} />
+              <CrewAccessControl tech={t} access={accessById[t.id] ?? null} onChanged={() => { setAccessTick(x => x + 1); onChanged() }} />
             </div>
           ))}
           <div className="flex items-end gap-2">

@@ -351,6 +351,10 @@ export interface Technician {
   /** One-time join code the owner hands out; cleared the instant it is redeemed. */
   invite_code?: string | null
   invite_expires_at?: string | null
+  /** When the owner last generated a setup link (owner-provisioned invite).
+   *  Whether they have ARRIVED is auth.users.last_sign_in_at, which no owner
+   *  client can read — see the crew_access_states() RPC. */
+  invite_sent_at?: string | null
 }
 
 // ── Paid time ────────────────────────────────────────────────────────────────
