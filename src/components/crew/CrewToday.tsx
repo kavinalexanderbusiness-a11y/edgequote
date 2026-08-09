@@ -11,8 +11,9 @@ import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { StickyActionBar } from '@/components/ui/StickyActionBar'
 import {
-  CheckCircle2, Play, Navigation, Phone, StickyNote, Users, Check, Clock, AlertTriangle,
+  CheckCircle2, Play, Navigation, Phone, StickyNote, Users, Check, Clock, AlertTriangle, Megaphone,
 } from 'lucide-react'
+import { CrewStopPhotos } from '@/components/crew/CrewStopPhotos'
 
 // ── Today ────────────────────────────────────────────────────────────────────
 // The six questions a worker has, answered in the order they ask them:
@@ -45,30 +46,62 @@ export function CrewToday() {
   const [loading, setLoading] = useState(true)
   const [loadFailed, setLoadFailed] = useState(false)
   const [revoked, setRevoked] = useState(false)
+  // When a REFRESH fails, the day already on screen stays (it is still the best
+  // truth held) — but the screen says so, with the time it was loaded, instead
+  // of quietly posing as current. Cleared by the next successful load.
+  const [staleAsOf, setStaleAsOf] = useState<number | null>(null)
   const [acting, setActing] = useState<string | null>(null)
   const today = localTodayISO()
   const alive = useRef(true)
+  const dayRef = useRef<CrewDay | null>(null)
+  useEffect(() => { dayRef.current = day }, [day])
+  const loadedAt = useRef<number>(Date.now())
 
+  // loadCrewDay reports THREE outcomes, and this screen must keep them apart:
+  //   ok      → the day, as truth (and the refresh timestamp advances)
+  //   revoked → the DATABASE said this account is off the roster — the only
+  //             time the "access turned off" message may render
+  //   error   → the request never got an answer. Dead signal must never read
+  //             as revocation OR as an empty day: with data on screen it keeps
+  //             it and says it's stale; with none it says "couldn't load".
   const load = useCallback(async () => {
-    const data = await loadCrewDay(supabase, today)
+    const res = await loadCrewDay(supabase, today)
     if (!alive.current) return
-    if (data === null) {
-      // crew_day returns NULL only for someone who is not an ACTIVE linked crew
-      // member. That is different from "nothing booked", and must never be shown
-      // as an empty day — the honest message is that access is gone.
-      setRevoked(true)
-    } else {
-      setDay(data)
+    if (res.kind === 'ok') {
+      setDay(res.day)
       setRevoked(false)
+      setLoadFailed(false)
+      setStaleAsOf(null)
+      loadedAt.current = Date.now()
+    } else if (res.kind === 'revoked') {
+      setRevoked(true)
+      setLoadFailed(false)
+    } else {
+      if (dayRef.current) setStaleAsOf(loadedAt.current)
+      else setLoadFailed(true)
     }
-    setLoadFailed(false)
     setLoading(false)
   }, [supabase, today])
 
   useEffect(() => {
     alive.current = true
-    load().catch(() => { if (alive.current) { setLoadFailed(true); setLoading(false) } })
-    return () => { alive.current = false }
+    load()
+    // The board changes while the phone rides in the truck: the dispatcher
+    // reassigns a stop, reschedules a visit, writes a gate code. Crew Mode has
+    // no realtime channel BY DESIGN (a crew session holds no table access, and
+    // postgres_changes needs it) — so this screen re-asks the RPC when the tab
+    // comes back to the foreground, when the connection returns, and every few
+    // minutes while open. A failed refresh keeps the current day + says stale.
+    const onWake = () => { if (document.visibilityState === 'visible') load() }
+    window.addEventListener('online', onWake)
+    document.addEventListener('visibilitychange', onWake)
+    const t = setInterval(onWake, 5 * 60_000)
+    return () => {
+      alive.current = false
+      window.removeEventListener('online', onWake)
+      document.removeEventListener('visibilitychange', onWake)
+      clearInterval(t)
+    }
   }, [load])
 
   // The live minute tick — an on-the-clock stop shows how long it has been
@@ -154,6 +187,38 @@ export function CrewToday() {
           {day.teammates.length === 0 && day.crew?.name && <span>· on your own today</span>}
         </p>
       </header>
+
+      {/* A refresh that couldn't reach the server: the day below is still the
+          best truth held, but it stops posing as live. */}
+      {staleAsOf != null && (
+        <div className="rounded-card border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2 flex items-center justify-between gap-2" role="status">
+          <p className="text-[11px] text-ink-muted">
+            Couldn’t refresh — showing your board from{' '}
+            {new Date(staleAsOf).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}.
+          </p>
+          <Button size="sm" variant="secondary" onClick={() => load()}>Retry</Button>
+        </div>
+      )}
+
+      {/* What the office wrote for today — the dispatch board's day + crew notes
+          (gate codes, weather calls), which used to render only on the one
+          screen a worker cannot open. The crew's own note first: specific beats
+          general when both exist. */}
+      {(day.crew_note?.trim() || day.day_note?.trim()) && (
+        <div className="rounded-card border border-accent/30 bg-accent/[0.07] p-3.5">
+          <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-accent-text">
+            <Megaphone className="w-3.5 h-3.5" aria-hidden /> From the office
+          </p>
+          {day.crew_note?.trim() && (
+            <p className="mt-1.5 text-sm text-ink whitespace-pre-wrap break-words">{day.crew_note.trim()}</p>
+          )}
+          {day.day_note?.trim() && (
+            <p className={cn('text-xs text-ink-muted whitespace-pre-wrap break-words', day.crew_note?.trim() ? 'mt-2 pt-2 border-t border-border/60' : 'mt-1.5')}>
+              {day.day_note.trim()}
+            </p>
+          )}
+        </div>
+      )}
 
       {stops.length === 0 && (
         <Notice tone="neutral" icon={Check} title="No stops on the board">
@@ -243,6 +308,11 @@ export function CrewToday() {
                     </Button>
                   )}
                 </div>
+
+                {/* Photograph the work — 'before' until it starts, 'after' once
+                    on the clock or done. Uploads go through /api/crew/photos,
+                    which re-verifies this visit belongs to this worker's crew. */}
+                <CrewStopPhotos jobId={stop.id} status={stop.status} />
               </div>
             </div>
           </section>

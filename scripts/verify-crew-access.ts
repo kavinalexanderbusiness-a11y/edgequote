@@ -253,6 +253,78 @@ check('every identity helper requires an ACTIVE, unarchived roster row',
   (sql.match(/t\.is_active\s*\n?\s*and t\.archived_at is null/g) || []).length >= 3,
   'crew_employer / crew_technician_id / crew_crew_id must each re-check the roster switches')
 
+// ── The workday contracts (2026-08-09 pass) ──────────────────────────────────
+console.log('\n═══ The workday is honest and complete ═══')
+
+// The manager's instructions reach the worker. dispatch_notes is the box the
+// dispatch board labels "gate codes, yard reminders, weather calls" — until this
+// pass it rendered only on the owner's board, the one screen a worker can't open.
+check('crew_day carries the office day note', /'day_note'/.test(crewDayBody),
+  'the dispatch day note never reaches the worker without it')
+check('crew_day carries the crew note', /'crew_note'/.test(crewDayBody),
+  'the crew-specific gate codes never reach the worker without it')
+check('…and reads only the note BODY from dispatch_notes',
+  (crewDayBody.match(/from public\.dispatch_notes/g) || []).length === 2 &&
+  (crewDayBody.match(/select d\.body from public\.dispatch_notes/g) || []).length === 2,
+  'the notes subqueries must project body only')
+
+// Dead signal is not a firing notice. supabase-js RESOLVES with { error } on a
+// dead connection, so "couldn't ask" and "the DB answered null" arrive as
+// different fields — the seam must keep three outcomes apart, and the Today
+// screen may show "access turned off" ONLY for the revoked kind.
+const ACCESS = read('src/lib/crewAccess.ts')
+check('loadCrewDay reports error / revoked / ok as distinct outcomes',
+  /if \(error\) return \{ kind: 'error'/.test(ACCESS) && /if \(!data\) return \{ kind: 'revoked' \}/.test(ACCESS),
+  'folding error into null is how a worker in a dead zone gets told they were fired')
+check('loadCrewUpcoming keeps the same three outcomes',
+  (ACCESS.match(/kind: 'error', message: error\.message/g) || []).length >= 2)
+const TODAY_SRC = read('src/components/crew/CrewToday.tsx')
+check('CrewToday shows revoked ONLY for the revoked kind',
+  /res\.kind === 'revoked'/.test(TODAY_SRC) && !/data === null[\s\S]{0,120}setRevoked\(true\)/.test(TODAY_SRC))
+check('a failed REFRESH keeps the day on screen and says stale',
+  /staleAsOf/.test(TODAY_SRC) && /dayRef\.current\) setStaleAsOf/.test(TODAY_SRC),
+  'a refresh error must neither clear the board nor pose as current')
+
+// The board self-heals without realtime (a crew session has no table access, and
+// postgres_changes needs it): foreground return, connection return, slow tick.
+check('CrewToday refetches when the tab returns / signal returns',
+  /addEventListener\('online'/.test(TODAY_SRC) && /addEventListener\('visibilitychange'/.test(TODAY_SRC),
+  'a phone left open in the truck must not show the morning’s board all day')
+
+// ── Crew photos: verify-then-derive, never trust the client ──────────────────
+console.log('\n═══ A worker’s photo files under the owner, for the verified job only ═══')
+const PHOTO_ROUTE = 'src/app/api/crew/photos/route.ts'
+check('the crew photo route exists', existsSync(join(ROOT, PHOTO_ROUTE)))
+if (existsSync(join(ROOT, PHOTO_ROUTE))) {
+  const R = read(PHOTO_ROUTE)
+  check('the route requires the crew role from the DATABASE',
+    /resolveAppRole/.test(R) && /role !== 'crew'/.test(R))
+  check('the technician is resolved by the roster switches',
+    /\.eq\('auth_user_id', user\.id\)\.eq\('is_active', true\)\.is\('archived_at', null\)/.test(R),
+    'a deactivated worker must fail here mid-shift, unexpired JWT and all')
+  check('the job is proven to belong to this worker’s employer AND crew',
+    /\.eq\('id', jobId\)\.eq\('user_id', t\.user_id\)\.eq\('crew_id', t\.crew_id\)/.test(R))
+  check('a cancelled visit takes no photos', /\.neq\('status', 'cancelled'\)/.test(R))
+  check('photo identity comes from the VERIFIED JOB ROW, never the form',
+    /user_id: j\.user_id/.test(R) && /customer_id: j\.customer_id/.test(R) && /property_id: j\.property_id/.test(R) &&
+    !/form\.get\('customerId'\)/.test(R) && !/form\.get\('propertyId'\)/.test(R) && !/form\.get\('userId'\)/.test(R),
+    'a crafted customer/property/user id in the form data must have nowhere to go')
+  check('kind is whitelisted and the size is capped',
+    /KINDS\.has\(kind\)/.test(R) && /file\.size > MAX_BYTES/.test(R))
+  check('a failed catalogue insert rolls the stored file back',
+    /storage\.from\(PHOTO_BUCKET\)\.remove\(\[path\]\)/.test(R),
+    'storage must never drift from the catalogue (uploadPhoto’s own rule)')
+  check('no service key → the door stays shut',
+    /if \(!admin\) return/.test(R), 'never fall back to a weaker check')
+  check('a failed technician/job read refuses, never guesses',
+    /if \(techErr\) return/.test(R) && /if \(jobErr\) return/.test(R),
+    '"couldn’t check" must never be treated as "checked out fine"')
+}
+const CAPTURE = read('src/components/crew/CrewStopPhotos.tsx')
+check('the capture UI never claims an upload the server didn’t confirm',
+  /if \(!res\.ok \|\| !d\.ok\) throw/.test(CAPTURE) && /state: 'failed'/.test(CAPTURE),
+  'a failed shot must turn into a visible Retry, not a quiet success')
+
 console.log('\n── Summary ────────────────────────────────────────────────────')
 if (failures) {
   console.log(`\n❌ verify:crew-access — ${failures} failure${failures === 1 ? '' : 's'}\n`)

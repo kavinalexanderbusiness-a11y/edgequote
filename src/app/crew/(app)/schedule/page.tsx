@@ -13,12 +13,23 @@ export default async function CrewSchedulePage() {
   const supabase = await createClient()
   const now = new Date()
   const fromISO = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-  const days = await loadCrewUpcoming(supabase, fromISO, 14)
+  const res = await loadCrewUpcoming(supabase, fromISO, 14)
 
-  // null = not an active crew member (the RPC's own answer), which the layout
-  // will already have redirected on. Anything else here is a failed read, and a
-  // failed read must never render as an empty, believable calendar.
-  if (days === null) {
+  // Three outcomes, kept apart (the seam's rule): a failed READ renders as
+  // "couldn't load" — never as an empty, believable calendar — and a revoked
+  // account is told so plainly (the layout normally redirects first; this is
+  // the honest answer if the page is reached anyway).
+  if (res.kind === 'revoked') {
+    return (
+      <div className="rounded-card border border-amber-500/30 bg-amber-500/[0.06] p-4">
+        <p className="flex items-center gap-2 text-sm font-semibold text-ink">
+          <AlertTriangle className="w-4 h-4 text-amber-300" aria-hidden /> Your access has been turned off
+        </p>
+        <p className="mt-1 text-xs text-ink-muted">Your account is no longer active on this crew. Ask your manager to switch it back on.</p>
+      </div>
+    )
+  }
+  if (res.kind === 'error') {
     return (
       <div className="rounded-card border border-amber-500/30 bg-amber-500/[0.06] p-4">
         <p className="flex items-center gap-2 text-sm font-semibold text-ink">
@@ -28,6 +39,7 @@ export default async function CrewSchedulePage() {
       </div>
     )
   }
+  const days = res.days
 
   const byDate = new Map(days.map(d => [d.date, d]))
   const upcoming = Array.from({ length: 14 }, (_, i) => {

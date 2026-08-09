@@ -13,7 +13,10 @@ export const metadata = { title: 'Me — EdgeQuote' }
 export default async function CrewProfilePage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  const day = await loadCrewDay(supabase, localTodayISO())
+  // Identity only — a failed read renders the em-dash fallbacks below rather
+  // than an error screen; the header still shows who is signed in.
+  const res = await loadCrewDay(supabase, localTodayISO())
+  const day = res.kind === 'ok' ? res.day : null
 
   return (
     <div className="space-y-3">

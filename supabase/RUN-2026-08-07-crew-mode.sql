@@ -298,6 +298,20 @@ begin
       where t.user_id = v_employer and t.crew_id = v_crew
         and t.is_active and t.archived_at is null and t.id is distinct from v_tech
     ), '[]'::jsonb),
+    -- The manager's written instructions for the day (added 2026-08-09, re-applied
+    -- in place — this file stays THE definition). dispatch_notes is exactly the
+    -- box the dispatch board labels "gate codes, yard reminders, weather calls":
+    -- the day-wide note (crew_id null) and this crew's own note. Until now they
+    -- rendered ONLY on the owner's board — the one screen a worker cannot open —
+    -- so the gate code lived on the wrong side of the door. Body text only.
+    'day_note', (
+      select d.body from public.dispatch_notes d
+      where d.user_id = v_employer and d.date = p_date and d.crew_id is null
+    ),
+    'crew_note', (
+      select d.body from public.dispatch_notes d
+      where d.user_id = v_employer and d.date = p_date and d.crew_id = v_crew
+    ),
     -- The day's stops, in the order the route is run: the owner's manual
     -- sequence first (route_order), then committed time, then creation — the
     -- same precedence lib/crews.laneSequence uses on the dispatch board, so the

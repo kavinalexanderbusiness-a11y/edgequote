@@ -14,11 +14,12 @@
 // into Crew Mode by a stray link.
 //
 // ⚠️ THIS IS NOT THE SECURITY BOUNDARY. Route gating is UX and defence in depth;
-// the boundary is RLS. A crew session that talked its way past every check here
-// still reads exactly the rows the `jobs: crew reads assigned` policy allows —
-// zero customers, zero invoices, zero quotes, zero settings — and can still only
-// move a visit's status, because a BEFORE UPDATE trigger rejects every other
-// column. Deleting this file would leak navigation, not data.
+// the boundary is the RPC surface. A crew session has NO table grants at all —
+// a crew RLS policy on `jobs` was written, tested over real HTTP, and REMOVED,
+// because RLS is row-level: granting the row granted `price` with it. Everything
+// a worker reads arrives through crew_day/crew_upcoming (column-limited DEFINER
+// RPCs) and everything they write goes through crew_set_visit_status (typed
+// parameters). Deleting this file would leak navigation, not data.
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -137,27 +138,53 @@ export interface CrewDay {
   crew: { id: string; name: string; color: string; day_start: string | null } | null
   business: { name: string | null; phone: string | null; work_start_time: string | null } | null
   teammates: { id: string; name: string; role: string | null }[]
+  /** The manager's day-wide note from the dispatch board (gate codes, weather
+   *  calls) and this crew's own note — the written instructions that used to
+   *  render only on the one screen a worker cannot open. */
+  day_note: string | null
+  crew_note: string | null
   stops: CrewStop[]
 }
 
 export interface CrewDayCount { date: string; stops: number; done: number; minutes: number }
 
-/** One day's work. `null` means "you are not an active crew member" — which is
- *  what a revoked employee gets, and is deliberately distinct from a day with
- *  no stops. Callers must not collapse the two: "you no longer have access" and
- *  "nothing booked today" are opposite messages. */
-export async function loadCrewDay(supabase: SupabaseClient, dateISO: string): Promise<CrewDay | null> {
+// ── Read results ─────────────────────────────────────────────────────────────
+// THREE outcomes, and they must never be collapsed. supabase-js RESOLVES with
+// { error } on a dead connection — it does not throw — so "the request failed"
+// and "the RPC answered null" arrive on different fields of the same shape:
+//   · error set   → we couldn't ASK. The only honest render is "couldn't load,
+//                   retry" while keeping whatever was already on screen.
+//   · data null   → the database ANSWERED: this auth user is not an active crew
+//                   member. That is revocation, and it is the only time the
+//                   "your access has been turned off" message may appear.
+//   · data set    → the day, as truth.
+// Folding error into null is how a worker in a dead zone gets told they were
+// fired: the RPC never ran, null came back, and the revoked branch rendered.
+// (The same class of bug as the portal's "flaky refetch = revoked token".)
+export type CrewDayResult =
+  | { kind: 'ok'; day: CrewDay }
+  | { kind: 'revoked' }
+  | { kind: 'error'; message: string }
+
+export async function loadCrewDay(supabase: SupabaseClient, dateISO: string): Promise<CrewDayResult> {
   const { data, error } = await supabase.rpc('crew_day', { p_date: dateISO })
-  if (error || !data) return null
-  return data as CrewDay
+  if (error) return { kind: 'error', message: error.message }
+  if (!data) return { kind: 'revoked' }
+  return { kind: 'ok', day: data as CrewDay }
 }
+
+export type CrewUpcomingResult =
+  | { kind: 'ok'; days: CrewDayCount[] }
+  | { kind: 'revoked' }
+  | { kind: 'error'; message: string }
 
 export async function loadCrewUpcoming(
   supabase: SupabaseClient, fromISO: string, days = 7,
-): Promise<CrewDayCount[] | null> {
+): Promise<CrewUpcomingResult> {
   const { data, error } = await supabase.rpc('crew_upcoming', { p_from: fromISO, p_days: days })
-  if (error || !data) return null
-  return data as CrewDayCount[]
+  if (error) return { kind: 'error', message: error.message }
+  if (!data) return { kind: 'revoked' }
+  return { kind: 'ok', days: data as CrewDayCount[] }
 }
 
 // ── The next stop ────────────────────────────────────────────────────────────
