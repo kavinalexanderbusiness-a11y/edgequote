@@ -3,6 +3,8 @@ import { localTodayISO } from '@/lib/utils'
 import { effectiveFreq } from '@/lib/visitValue'
 import { serviceCategory, seasonForService, isWithinSeason, settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
 import { VIP_LTV, cadenceDays, churnRisk, daysBetween, isLapsed, lifetimeValue } from '@/lib/signals'
+import { invoiceBalance } from '@/lib/payments/ledger'
+import type { FeeSettings } from '@/lib/invoiceTotals'
 
 // ── Customer Health Score (Growth) ─────────────────────────────────────────────
 // ONE 0-100 number per customer that fuses the signals already scattered across
@@ -44,7 +46,14 @@ interface HJob {
 }
 interface HRec { freq: string | null; interval_unit: string | null; interval_count: number | null }
 interface HQuote { id: string }
-interface HInvoice { customer_id: string | null; status: string; amount: number | null }
+interface HInvoice {
+  customer_id: string | null
+  status: string
+  amount: number | null
+  amount_paid?: number | null
+  discount_type?: 'amount' | 'percent' | null
+  discount_value?: number | null
+}
 interface HCustomer { id: string; name: string; created_at: string }
 
 export function computeCustomerHealth(
@@ -55,6 +64,9 @@ export function computeCustomerHealth(
   invoices: HInvoice[],
   seasons: ServiceSeasons,
   today: string,
+  /** GST settings for invoiceBalance. Optional so the pure function stays
+   *  callable without settings — omitted = 0%, which only understates. */
+  fees?: FeeSettings | null,
 ): HealthRow[] {
   // Per-customer aggregates in one pass.
   const completed: Record<string, HJob[]> = {}
@@ -79,12 +91,27 @@ export function computeCustomerHealth(
     const prev = recByCust[j.customer_id]
     if (!prev || (active && !prev.active)) recByCust[j.customer_id] = { rec, cadence, active }
   }
+  // Who still owes money, and how much. Two rules, both from the ledger contract:
+  //
+  //  • 'partial' COUNTS. It used to not — so the moment a customer paid a deposit
+  //    (the trigger flips unpaid→partial), their entire remaining debt vanished
+  //    from the health score, the 'unpaid' flag and the reason line. Paying $2,000
+  //    of $4,000 read as healthier than paying nothing, and deposits make partial
+  //    the NORMAL state of a big invoice, not an edge case.
+  //  • the figure is the BALANCE (invoiceBalance: GST-inclusive total − paid),
+  //    not the raw ex-GST `amount` — an invoice 90% paid is $400 of risk, not
+  //    $4,000, and the number here must match what Invoices calls Outstanding.
   const unpaidByCust: Record<string, { count: number; amount: number }> = {}
   for (const inv of invoices) {
     if (!inv.customer_id) continue
-    if (inv.status === 'unpaid' || inv.status === 'sent') {
+    if (inv.status === 'unpaid' || inv.status === 'sent' || inv.status === 'partial') {
+      const { balance } = invoiceBalance(
+        { amount: Number(inv.amount) || 0, amount_paid: Number(inv.amount_paid) || 0, discount_type: inv.discount_type ?? null, discount_value: inv.discount_value ?? null },
+        fees,
+      )
+      if (balance <= 0.01) continue
       const e = (unpaidByCust[inv.customer_id] ||= { count: 0, amount: 0 })
-      e.count++; e.amount += Number(inv.amount || 0)
+      e.count++; e.amount += balance
     }
   }
 
@@ -167,8 +194,10 @@ export async function loadCustomerHealth(supabase: SupabaseClient): Promise<Heal
     supabase.from('jobs').select('customer_id, status, scheduled_date, service_type, recurrence_id, quote_id, price, is_initial_visit').eq('user_id', uid),
     supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', uid),
     supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', uid),
-    supabase.from('invoices').select('customer_id, status, amount').eq('user_id', uid),
-    supabase.from('business_settings').select('service_seasons').eq('user_id', uid).maybeSingle(),
+    // amount_paid + discount so the unpaid figure is the BALANCE, via the one
+    // ledger definition — not the raw ex-GST amount of a possibly-part-paid invoice.
+    supabase.from('invoices').select('customer_id, status, amount, amount_paid, discount_type, discount_value').eq('user_id', uid),
+    supabase.from('business_settings').select('service_seasons, gst_percent').eq('user_id', uid).maybeSingle(),
   ])
   const recurrences: Record<string, HRec> = {}
   for (const r of (rRes.data as (HRec & { id: string })[]) || []) recurrences[r.id] = r
@@ -182,5 +211,6 @@ export async function loadCustomerHealth(supabase: SupabaseClient): Promise<Heal
     (iRes.data as HInvoice[]) || [],
     settingsToSeasons((sRes.data as { service_seasons?: unknown } | null)?.service_seasons),
     localTodayISO(),
+    (sRes.data as { gst_percent?: number | null } | null),
   )
 }

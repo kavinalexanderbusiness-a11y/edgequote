@@ -143,7 +143,11 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
   const propByCust: Record<string, RIInput['properties'][number]> = {}
   for (const p of properties) if (p.customer_id && !propByCust[p.customer_id]) propByCust[p.customer_id] = p
   const unpaidByCust: Record<string, number> = {}
-  for (const inv of invoices) if (inv.customer_id && (inv.status === 'unpaid' || inv.status === 'sent')) unpaidByCust[inv.customer_id] = (unpaidByCust[inv.customer_id] || 0) + 1
+  // 'partial' counts: the trigger only lands there while a real balance remains
+  // (v_paid + 0.01 < v_total), and deposits make partial the NORMAL state of a
+  // big invoice. Without it, paying a deposit zeroed unpaidCount and scored the
+  // customer "pays reliably — a great auto-pay candidate" while they owed money.
+  for (const inv of invoices) if (inv.customer_id && (inv.status === 'unpaid' || inv.status === 'sent' || inv.status === 'partial')) unpaidByCust[inv.customer_id] = (unpaidByCust[inv.customer_id] || 0) + 1
   const referrers = new Set<string>()
   for (const c of customers) if (c.referred_by_customer_id) referrers.add(c.referred_by_customer_id)
 

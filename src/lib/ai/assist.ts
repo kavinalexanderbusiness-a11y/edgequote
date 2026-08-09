@@ -5,6 +5,8 @@ import { loadBusinessContext, contextLine, type BusinessContext } from '@/lib/ma
 import { MSG_VARIABLES } from '@/lib/comms/templates'
 import { serviceKey, serviceLabel } from '@/lib/labor'
 import { isQuoteExpired } from '@/lib/quoteStatus'
+import { invoiceBalance } from '@/lib/payments/ledger'
+import { depositChargeAmount } from '@/lib/payments/deposit'
 
 // ── The AI assist engine ──────────────────────────────────────────────────────
 // Server-only. ONE task registry for every in-app writing/summarizing assist:
@@ -167,6 +169,12 @@ const TEMPLATE_INTENT: Record<string, string> = {
   // messages that decide whether we get paid were the two written blind.
   quote: 'send the customer their quote: tell them it is ready, point them to the link to review it, and make accepting it feel easy — never restate or estimate the price, the quote itself carries it',
   invoice: 'send the customer their invoice: tell them it is ready, point them to the link to view and pay it, and keep it matter-of-fact and easy to act on — never dun or pressure them',
+  // The third money message. The invoice composer opens with this template while
+  // a deposit is outstanding, so without an intent it fell through to `custom` —
+  // a blind write on the message that decides whether the job gets booked. The
+  // amount discipline mirrors `quote`/`invoice`: the {{amount}} token carries the
+  // deposit figure, the model must never restate or recompute it.
+  deposit_request: 'ask for the deposit that books the job in: a friendly, confident request naming only the deposit amount (the {{amount}} token carries it — never restate or recompute a number), with the link to pay it, and make clear the remaining balance is due once the work is done',
   custom: 'whatever the owner needs — infer the intent from their draft and instruction',
 }
 
@@ -189,7 +197,11 @@ async function customerContext(supabase: SupabaseClient, userId: string, custome
     supabase.from('quotes').select('quote_number, service_type, status, total, created_at')
       .eq('user_id', userId).eq('customer_id', customerId)
       .order('created_at', { ascending: false }).limit(opts?.deep ? 10 : 4),
-    supabase.from('invoices').select('invoice_number, status, amount, amount_paid, due_date, created_at')
+    // discount + deposit columns ride along so every money fact below can come
+    // from the LEDGER's definitions (invoiceBalance / depositChargeAmount) —
+    // this context is the only thing the model knows, so a figure missing here
+    // is a figure the draft gets wrong.
+    supabase.from('invoices').select('invoice_number, status, amount, amount_paid, discount_type, discount_value, deposit_amount, deposit_requested_at, due_date, created_at')
       .eq('user_id', userId).eq('customer_id', customerId)
       .order('created_at', { ascending: false }).limit(opts?.deep ? 20 : 8),
     supabase.from('messages').select('direction, channel, body, created_at')
@@ -197,24 +209,48 @@ async function customerContext(supabase: SupabaseClient, userId: string, custome
       .order('created_at', { ascending: false }).limit(6),
     supabase.from('properties').select('address, neighborhood, lawn_sqft, notes')
       .eq('user_id', userId).eq('customer_id', customerId).limit(3),
-    supabase.from('business_settings').select('company_name').eq('user_id', userId).maybeSingle(),
+    supabase.from('business_settings').select('company_name, gst_percent').eq('user_id', userId).maybeSingle(),
   ])
   const c = custRes.data as { name: string; address: string | null; city: string | null; notes: string | null; tags: string[] | null; created_at: string; sms_opt_in: boolean; email_opt_in: boolean; last_contacted_at?: string | null; review_rating?: number | null; reviewed_at?: string | null; review_source?: string | null; review_requested_at?: string | null; review_declined_at?: string | null } | null
   if (!c) return null
   const jobs = (jobsRes.data as Array<{ title: string; service_type: string | null; scheduled_date: string; status: string; price: number | null; notes: string | null }> | null) || []
   const upcoming = (nextRes.data as Array<{ service_type: string | null; title: string; scheduled_date: string; start_time: string | null; status: string }> | null) || []
   const quotes = (quotesRes.data as Array<{ quote_number: string; service_type: string; status: string; total: number; created_at: string }> | null) || []
-  const invoices = (invRes.data as Array<{ invoice_number: string; status: string; amount: number; amount_paid: number | null; due_date: string | null; created_at: string }> | null) || []
+  const invoices = (invRes.data as Array<{ invoice_number: string; status: string; amount: number; amount_paid: number | null; discount_type: 'amount' | 'percent' | null; discount_value: number | null; deposit_amount: number | null; deposit_requested_at: string | null; due_date: string | null; created_at: string }> | null) || []
   const msgs = (msgRes.data as Array<{ direction: string; channel: string; body: string | null; created_at: string }> | null) || []
   const props = (propRes.data as Array<{ address: string | null; neighborhood: string | null; lawn_sqft: number | null; notes: string | null }> | null) || []
-  const company = (bizRes.data as { company_name: string | null } | null)?.company_name || 'the business'
+  const biz = bizRes.data as { company_name: string | null; gst_percent: number | null } | null
+  const company = biz?.company_name || 'the business'
+  const fees = { gst_percent: biz?.gst_percent ?? null }
 
   // Deterministic relationship math — stated to the model as ready-made facts.
+  //
+  // Every "owed" figure is the LEDGER's balance (invoiceBalance: GST-inclusive
+  // total − amount_paid). It used to be `amount − amount_paid`, which mixes the
+  // ex-GST net with the GST-inclusive rollup — so a $4,200 invoice with its
+  // $2,100 deposit paid was described as "$1,900 currently unpaid", and an
+  // invoice paid to within its GST was dropped from `open` entirely with real
+  // money still owing. The model states whatever it is handed; hand it the
+  // number the invoices page calls Outstanding.
   const done = jobs.filter(j => j.status === 'completed')
   const paidRevenue = invoices.reduce((s, i) => s + Number(i.amount_paid || 0), 0)
-  const open = invoices.filter(i => i.status !== 'paid' && i.status !== 'cancelled' && Number(i.amount) > Number(i.amount_paid || 0))
-  const openBalance = open.reduce((s, i) => s + (Number(i.amount) - Number(i.amount_paid || 0)), 0)
+  // Coerced once, the way the charge routes do — PostgREST numerics can be
+  // strings and amount_paid is NULL before the first payment.
+  const moneyShape = (i: (typeof invoices)[number]) => ({
+    amount: Number(i.amount) || 0, amount_paid: Number(i.amount_paid) || 0,
+    discount_type: i.discount_type, discount_value: i.discount_value,
+    deposit_amount: i.deposit_amount, deposit_requested_at: i.deposit_requested_at,
+  })
+  const balanceOf = (i: (typeof invoices)[number]) => invoiceBalance(moneyShape(i), fees).balance
+  const open = invoices.filter(i => i.status !== 'paid' && i.status !== 'cancelled' && i.status !== 'draft' && balanceOf(i) > 0.01)
+  const openBalance = open.reduce((s, i) => s + balanceOf(i), 0)
   const overdue = open.filter(i => i.due_date && i.due_date < today)
+  // The ask-now amounts. While a deposit request is outstanding, THAT is what a
+  // collection message should name — the same figure the portal Pay button and
+  // the owner's payment link charge (depositChargeAmount, clamped to balance).
+  const depositAsks = open
+    .map(i => ({ inv: i, due: depositChargeAmount(moneyShape(i), fees) }))
+    .filter(x => x.due.isDeposit)
 
   // Visit cadence — median gap between completed visits (newest-first list).
   // With ≥3 completed visits this is a real rhythm; fewer is just noise.
@@ -234,8 +270,14 @@ async function customerContext(supabase: SupabaseClient, userId: string, custome
   const sentQuotes = quotes.filter(q => q.status === 'sent')
   const signals: string[] = []
   if (overdue.length) {
-    const owed = overdue.reduce((s, i) => s + (Number(i.amount) - Number(i.amount_paid || 0)), 0)
+    const owed = overdue.reduce((s, i) => s + balanceOf(i), 0)
     signals.push(`PAST-DUE MONEY: ${money(owed)} past due (${overdue.map(i => `#${i.invoice_number}`).join(', ')}) — collect before selling anything new.`)
+  }
+  // A deposit ask outranks a generic chase for the same invoice: the owner asked
+  // for a specific figure, and a draft naming any other number contradicts the
+  // request already sitting in the customer's inbox.
+  for (const { inv, due } of depositAsks) {
+    signals.push(`DEPOSIT REQUESTED: #${inv.invoice_number} has a deposit request — the amount to ask for right now is ${money(due.amount)}${inv.deposit_requested_at ? ' (already sent to the customer)' : ' (not sent yet)'}; the remaining balance is due after the work.`)
   }
   for (const q of sentQuotes) {
     const age = daysBetween(q.created_at.slice(0, 10), today)
@@ -256,7 +298,7 @@ async function customerContext(supabase: SupabaseClient, userId: string, custome
   lines.push(`Customer: ${c.name}${c.city ? ` (${c.city})` : ''} — customer since ${c.created_at.slice(0, 10)}.`)
   if (c.tags?.length) lines.push(`Tags: ${c.tags.slice(0, 6).join(', ')}.`)
   if (c.notes) lines.push(`Owner's private notes: ${trunc(c.notes, 300)}`)
-  lines.push(`Relationship (computed): ${done.length} completed visit${done.length !== 1 ? 's' : ''}${done.length ? `, most recent ${done[0].scheduled_date}` : ''}${medianGap != null ? `, typically every ~${medianGap} days` : ''}${paidRevenue > 0 ? `; ${money(paidRevenue)} collected all-time` : ''}${openBalance > 0 ? `; ${money(openBalance)} currently unpaid${overdue.length ? ` of which ${money(overdue.reduce((s, i) => s + (Number(i.amount) - Number(i.amount_paid || 0)), 0))} is past due` : ''}` : '; nothing owing'}.`)
+  lines.push(`Relationship (computed): ${done.length} completed visit${done.length !== 1 ? 's' : ''}${done.length ? `, most recent ${done[0].scheduled_date}` : ''}${medianGap != null ? `, typically every ~${medianGap} days` : ''}${paidRevenue > 0 ? `; ${money(paidRevenue)} collected all-time` : ''}${openBalance > 0 ? `; ${money(openBalance)} currently unpaid${overdue.length ? ` of which ${money(overdue.reduce((s, i) => s + balanceOf(i), 0))} is past due` : ''}` : '; nothing owing'}.`)
   if (upcoming.length) lines.push(`Next scheduled visit: ${upcoming[0].scheduled_date}${upcoming[0].start_time ? ` at ${upcoming[0].start_time}` : ''} — ${upcoming[0].service_type || upcoming[0].title}.`)
   else lines.push('No future visit is scheduled.')
   if (c.last_contacted_at) lines.push(`Last outbound contact: ${String(c.last_contacted_at).slice(0, 10)}.`)
@@ -272,7 +314,10 @@ async function customerContext(supabase: SupabaseClient, userId: string, custome
     for (const j of jobs) lines.push(`  - ${j.scheduled_date} · ${j.service_type || j.title} · ${j.status}${j.price != null ? ` · $${j.price}` : ''}${j.notes ? ` · ${trunc(j.notes, 80)}` : ''}`)
   }
   if (quotes.length) lines.push(`Quotes: ${quotes.map(q => `#${q.quote_number} ${q.service_type} ${q.status} $${q.total}`).join('; ')}.`)
-  if (open.length) lines.push(`Open invoices: ${open.map(i => `#${i.invoice_number} ${i.status} ${money(Number(i.amount) - Number(i.amount_paid || 0))} outstanding${i.due_date ? `, due ${i.due_date}` : ''}`).join('; ')}.`)
+  if (open.length) lines.push(`Open invoices: ${open.map(i => {
+    const due = depositChargeAmount(moneyShape(i), fees)
+    return `#${i.invoice_number} ${i.status} ${money(balanceOf(i))} outstanding${due.isDeposit ? ` — a ${money(due.amount)} deposit is what's being asked for now` : ''}${i.due_date ? `, due ${i.due_date}` : ''}`
+  }).join('; ')}.`)
   if (msgs.length) {
     lines.push('Conversation — the most recent messages, NEWEST FIRST (reply to the newest inbound one if it asks something):')
     for (const m of msgs) lines.push(`  - [${m.created_at.slice(0, 10)}] ${m.direction === 'inbound' ? 'CUSTOMER' : 'US'} (${m.channel}): ${trunc(m.body, 140)}`)

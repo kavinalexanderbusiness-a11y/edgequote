@@ -33,6 +33,8 @@ import {
 } from '../src/lib/payments/deposit'
 import { invoiceBalance } from '../src/lib/payments/ledger'
 import { ledgerRowType } from '../src/lib/payments/analytics'
+import { computeCustomerHealth } from '../src/lib/customerHealth'
+import { settingsToSeasons } from '../src/lib/seasons'
 
 let failures = 0
 const ok = (name: string) => console.log(`  ✓ ${name}`)
@@ -326,6 +328,66 @@ console.log('\nThe schema change cannot corrupt existing invoices:')
   check('no trigger, status or payments-table change rides along',
     !/create trigger/i.test(mig) && !/on public\.payments/i.test(mig),
     'the deposit migration must not touch the payment ledger or the status engine')
+}
+
+// ── 10. Downstream: who-owes surfaces survive a deposit payment ──────────────
+// A deposit payment flips an invoice to 'partial'. Every downstream figure that
+// answers "who still owes me" must keep counting it — and must count the LEDGER
+// balance, not the raw ex-GST amount of a possibly-part-paid invoice.
+console.log('\nCustomer health keeps a part-paid customer on the books:')
+{
+  const seasons = settingsToSeasons(null)
+  const today = '2026-08-09'
+  const cust = [{ id: 'c1', name: 'Dana', created_at: '2025-01-01T00:00:00Z' }]
+  const health = (invoices: Parameters<typeof computeCustomerHealth>[4]) =>
+    computeCustomerHealth(cust, [], {}, {}, invoices, seasons, today, GST5)[0]
+
+  // No deposit, plain unpaid invoice: counted, at the GST-inclusive balance.
+  const plain = health([{ customer_id: 'c1', status: 'unpaid', amount: 4000, amount_paid: 0 }])
+  eq('an unpaid invoice counts once', plain.unpaidCount, 1)
+  eq('…at the payable balance, not the ex-GST amount', plain.unpaidAmount, 4200)
+  check('…and flags the customer', plain.flags.includes('unpaid'), 'the unpaid flag must be set')
+
+  // THE deposit case: $2,100 of $4,200 paid → status 'partial'. This used to
+  // vanish entirely (only 'unpaid'/'sent' were counted), so paying a deposit
+  // read as healthier than paying nothing.
+  const partial = health([{ customer_id: 'c1', status: 'partial', amount: 4000, amount_paid: 2100 }])
+  eq('a part-paid (deposit-paid) invoice still counts', partial.unpaidCount, 1)
+  eq('…for exactly the remaining balance', partial.unpaidAmount, 2100)
+  check('…and still flags the customer', partial.flags.includes('unpaid'), 'partial must keep the unpaid flag')
+
+  // Fully paid: gone. Refund reopening: back. The trigger writes the status;
+  // health only has to believe the ledger's arithmetic.
+  const paid = health([{ customer_id: 'c1', status: 'paid', amount: 4000, amount_paid: 4200 }])
+  eq('a paid invoice drops out', paid.unpaidCount, 0)
+  const reopened = health([{ customer_id: 'c1', status: 'partial', amount: 4000, amount_paid: 2100 - 2100 }])
+  eq('a refunded deposit reopens the full exposure', reopened.unpaidAmount, 4200)
+
+  // A stale status with no real balance must not invent debt: 'partial' with the
+  // money actually all in counts nothing (balance ≤ 0 guard).
+  const settled = health([{ customer_id: 'c1', status: 'partial', amount: 4000, amount_paid: 4200 }])
+  eq('a settled-but-stale row counts nothing', settled.unpaidCount, 0)
+}
+
+// ── 11. Downstream structural: the AI context speaks ledger, not arithmetic ──
+console.log('\nThe AI assist context derives money from the engines:')
+{
+  const assist = read('src/lib/ai/assist.ts')
+  check('assist imports invoiceBalance', /import \{ invoiceBalance \} from '@\/lib\/payments\/ledger'/.test(assist),
+    'src/lib/ai/assist.ts must read balances from the ledger engine')
+  check('assist imports depositChargeAmount', /depositChargeAmount/.test(assist),
+    'the ask-now figure must come from the deposit engine')
+  check('assist selects the deposit columns', /deposit_amount, deposit_requested_at/.test(assist),
+    'customerContext cannot state a deposit ask it never loaded')
+  check('no inline amount-minus-paid arithmetic survives',
+    !/Number\(i\.amount\)\s*-\s*Number\(i\.amount_paid/.test(assist),
+    '`amount − amount_paid` mixes the ex-GST net with the GST-inclusive rollup — use invoiceBalance')
+  check('the deposit_request template has a stated intent',
+    /deposit_request:\s*'ask for the deposit/.test(assist),
+    'without a TEMPLATE_INTENT entry the deposit ask falls through to `custom` — a blind write on a money message')
+  check('…which forbids restating the number',
+    /deposit_request:[^']*'[^']*never restate or recompute/.test(assist),
+    'the {{amount}} token carries the deposit figure; the model must not name its own')
 }
 
 if (failures) {
