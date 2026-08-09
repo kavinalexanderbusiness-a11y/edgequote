@@ -59,6 +59,7 @@
     "verify:property-remove": "tsx scripts/verify-property-remove.ts",
     "verify:field-stops": "tsx scripts/verify-field-stops.ts",
     "verify:workforce": "tsx scripts/verify-workforce.ts",
+    "verify:team": "tsx scripts/verify-team.ts",
     "verify:job-completion": "tsx scripts/verify-job-completion.ts",
     "verify:crew-access": "tsx scripts/verify-crew-access.ts",
     "verify:crew-invite": "tsx scripts/verify-crew-invite.ts",

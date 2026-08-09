@@ -458,7 +458,7 @@ export default function LaborPage() {
             techs.length === 0 ? (
               <EmptyState icon={HardHat} className="py-12" title="No one on the roster yet"
                 description="Add the people who work for you, then clock them in — their cost shows up here."
-                action={{ label: 'Add your people', href: '/dashboard/dispatch?roster=1' }} />
+                action={{ label: 'Add your people', href: '/dashboard/workforce' }} />
             ) : (
               <EmptyState icon={BarChart3} className="py-12" title="No labour yet"
                 description="Clock someone in on the timesheet — once shifts are closed, their cost shows up here." />

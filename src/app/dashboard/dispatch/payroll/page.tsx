@@ -303,7 +303,7 @@ export default function PayrollPage() {
             techs.length === 0 ? (
               <EmptyState icon={HardHat} className="py-12" title="No one on the roster yet"
                 description="Add your people to the roster, then clock them in — their hours and pay show up here."
-                action={{ label: 'Open the roster', href: '/dashboard/dispatch?roster=1' }} />
+                action={{ label: 'Open your team', href: '/dashboard/workforce' }} />
             ) : (
               <InlineEmpty icon={Clock}>No hours in this pay period.</InlineEmpty>
             )

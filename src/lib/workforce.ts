@@ -27,6 +27,7 @@ import {
 import { buildDraftPayRun } from '@/lib/payRun'
 import { costable, type LaborContext } from '@/lib/laborCost'
 import { parseDateOnly } from '@/lib/pto'
+import { FORMER_EMPLOYEE_NAME } from '@/lib/workforceTeam'
 
 const round2 = (n: number) => Math.round(n * 100) / 100
 const round1 = (n: number) => Math.round(n * 10) / 10
@@ -197,7 +198,7 @@ export function overtimeInsight(args: {
     const thresholdMin = rules.weeklyHours == null ? null : rules.weeklyHours * 60
     watch.push({
       technicianId,
-      name: nameOf.get(technicianId) ?? 'Removed technician',
+      name: nameOf.get(technicianId) ?? FORMER_EMPLOYEE_NAME,
       minutesSoFar,
       otMinutesSoFar: split.otMinutes,
       minutesToThreshold: thresholdMin == null ? null : Math.max(0, thresholdMin - minutesSoFar),
@@ -560,7 +561,7 @@ export function wageTrends(args: {
     averageRaisePct: raisePcts.length ? round1(raisePcts.reduce((s, v) => s + v, 0) / raisePcts.length) : null,
     lastChange: newest
       ? {
-          name: nameOf.get(newest.technician_id) ?? 'Removed technician',
+          name: nameOf.get(newest.technician_id) ?? FORMER_EMPLOYEE_NAME,
           from: newest.old_wage == null ? null : Number(newest.old_wage),
           to: newest.new_wage == null ? null : Number(newest.new_wage),
           at: newest.created_at,

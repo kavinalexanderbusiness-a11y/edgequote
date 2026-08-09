@@ -16,6 +16,10 @@ import {
   availabilityToday, overtimeInsight, workloadBalance, crewUtilization,
   laborTrend, forecastNextPeriod, ptoAnalytics, wageTrends, payRunStats,
 } from '@/lib/workforce'
+import { TeamPanel } from '@/components/workforce/TeamPanel'
+import { EmployeeEditor } from '@/components/workforce/EmployeeEditor'
+import { WageHistoryDialog } from '@/components/dispatch/WageHistoryDialog'
+import type { CrewAccessRow } from '@/lib/crewInvite'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button, ButtonLink } from '@/components/ui/Button'
@@ -53,6 +57,16 @@ export default function WorkforcePage() {
   const [wageHistory, setWageHistory] = useState<WageHistoryEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // ── Team management, on the page named after the team ──────────────────────
+  // Editing a person used to mean leaving for a modal behind ?roster=1 on the
+  // dispatch board. One editor, opened from here; `editing === null` while the
+  // dialog is open means "add somebody new".
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [editing, setEditing] = useState<Technician | null>(null)
+  const [wageHistoryFor, setWageHistoryFor] = useState<Technician | null>(null)
+  // App-access state for the whole roster in ONE call — "has this person ever
+  // signed in" lives in auth.users, which no owner client can read.
+  const [accessById, setAccessById] = useState<Record<string, CrewAccessRow>>({})
 
   const fetchAll = useCallback(async () => {
     try {
@@ -68,7 +82,7 @@ export default function WorkforcePage() {
         // roster list does NOT gate the money — payrollSummary groups by the
         // technician_id on each shift, so gross is the same either way, and
         // archiving can never underpay anyone. What it gates is IDENTITY: whoever
-        // is missing from this list is rendered as "Removed technician" and loses
+        // is missing from this list is rendered as FORMER_EMPLOYEE_NAME and loses
         // their crew. On this page that showed up as an overtime-watch row for an
         // unnamed person, and as a departed employee's hours attributed to "No
         // crew" in crew utilization.
@@ -84,6 +98,11 @@ export default function WorkforcePage() {
       ])
       setSettings(sRes.data as BusinessSettings | null)
       setTechs(t); setCrews(c); setEntries(e)
+      // Best-effort and separate: a failed access read leaves the previous
+      // badges standing rather than claiming nobody has a login.
+      supabase.rpc('crew_access_states').then(({ data, error }) => {
+        if (!error && data) setAccessById(data as Record<string, CrewAccessRow>)
+      })
       setPtoEntries((pRes.data as PtoEntry[]) ?? [])
       setRuns((rRes.data as PayRun[]) ?? [])
       setWageHistory((wRes.data as WageHistoryEntry[]) ?? [])
@@ -155,22 +174,53 @@ export default function WorkforcePage() {
   if (loading) {
     return (
       <div className="max-w-6xl space-y-5">
-        <PageHeader title="Workforce" description="Your people: hours, pay, time off and what the crew costs." />
+        <PageHeader title="Workforce" description="Who works here — their crew, their app access, their hours and pay." />
         <SkeletonTiles count={4} />
         <SkeletonRows count={5} />
       </div>
     )
   }
 
+  // The team panel below carries its own empty state AND the button that fixes
+  // it, so an empty roster no longer replaces the whole page with a dead end
+  // pointing at another module.
+  const teamEditor = (
+    <>
+      <EmployeeEditor
+        open={editorOpen}
+        onClose={() => setEditorOpen(false)}
+        employee={editing}
+        crews={crews}
+        access={editing ? accessById[editing.id] : null}
+        userId={uid ?? ''}
+        onSaved={fetchAll}
+        onShowWageHistory={t => { setEditorOpen(false); setWageHistoryFor(t) }}
+      />
+      {wageHistoryFor && (
+        <WageHistoryDialog
+          technician={wageHistoryFor}
+          supabase={supabase}
+          onClose={() => setWageHistoryFor(null)}
+        />
+      )}
+    </>
+  )
+  const teamPanel = (
+    <TeamPanel
+      technicians={techs}
+      crews={crews}
+      accessById={accessById}
+      onAdd={() => { setEditing(null); setEditorOpen(true) }}
+      onOpen={t => { setEditing(t); setEditorOpen(true) }}
+    />
+  )
+
   if (activeTechs.length === 0) {
     return (
       <div className="max-w-6xl space-y-5">
-        <PageHeader title="Workforce" description="Your people: hours, pay, time off and what the crew costs." />
-        <Card>
-          <EmptyState icon={HardHat} className="py-16" title="No one on the roster yet"
-            description="Add the people who work for you. Once they're on the roster you can clock them in, track time off, and run payroll."
-            action={{ label: 'Add your people', href: '/dashboard/dispatch?roster=1' }} />
-        </Card>
+        <PageHeader title="Workforce" description="Who works here — their crew, their app access, their hours and pay." />
+        {teamPanel}
+        {teamEditor}
       </div>
     )
   }
@@ -179,7 +229,7 @@ export default function WorkforcePage() {
     <div className="max-w-6xl space-y-5">
       <PageHeader
         title="Workforce"
-        description="Your people: hours, pay, time off and what the crew costs."
+        description="Who works here — their crew, their app access, their hours and pay."
         action={
           <div className="flex items-center gap-2">
             {/* ButtonLink, not <Link><Button/></Link> — a button inside an anchor is
@@ -197,6 +247,12 @@ export default function WorkforcePage() {
           {loadError}
         </Banner>
       )}
+
+      {/* ── Who works here ── the page's subject, so it comes first. Hours and
+          pay are ABOUT these people; you should not have to scroll past the
+          money to find out who it belongs to. */}
+      {teamPanel}
+      {teamEditor}
 
       {/* ── The KPI row: this pay period ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -224,7 +280,10 @@ export default function WorkforcePage() {
       )}
       {wages.missingWage.length > 0 && (
         <Banner tone="warn" icon={AlertTriangle}
-          action={<Link href="/dashboard/dispatch?roster=1" className="shrink-0 text-xs font-semibold underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Set wages</Link>}>
+          action={<Button size="sm" variant="secondary" className="shrink-0" onClick={() => {
+            const first = roster.find(t => t.is_active && t.hourly_wage == null)
+            if (first) { setEditing(first); setEditorOpen(true) }
+          }}>Set wages</Button>}>
           {wages.missingWage.join(', ')} {wages.missingWage.length !== 1 ? 'have' : 'has'} no wage set, so their hours record time
           but cost $0.
         </Banner>
@@ -576,7 +635,7 @@ export default function WorkforcePage() {
           <Button variant="secondary" size="sm"><History className="w-3.5 h-3.5" /> Payroll history</Button>
         </Link>
         <Link href="/dashboard/dispatch?roster=1">
-          <Button variant="secondary" size="sm"><HardHat className="w-3.5 h-3.5" /> Roster &amp; crews</Button>
+          <Button variant="secondary" size="sm"><HardHat className="w-3.5 h-3.5" /> Crews &amp; vehicles</Button>
         </Link>
         <Link href="/dashboard/settings#payroll">
           <Button variant="secondary" size="sm"><CalendarDays className="w-3.5 h-3.5" /> Payroll settings</Button>

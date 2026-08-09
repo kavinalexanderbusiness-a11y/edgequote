@@ -282,7 +282,7 @@ export default function TimesheetPage() {
         <Card>
           <EmptyState icon={HardHat} title="No one on the roster yet"
             description="Add the people who work for you, then you can clock them in here."
-            action={{ label: 'Add your people', href: '/dashboard/dispatch?roster=1' }} />
+            action={{ label: 'Add your people', href: '/dashboard/workforce' }} />
         </Card>
       ) : (
         <div className="space-y-2">
@@ -343,7 +343,7 @@ export default function TimesheetPage() {
                 return (
                   <div key={e.id} className="px-5 py-3 flex flex-wrap items-center gap-3">
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-ink truncate">{t?.name ?? 'Removed technician'}</p>
+                      <p className="text-sm font-medium text-ink truncate">{t?.name ?? 'Former employee'}</p>
                       <p className="text-[11px] text-ink-faint tabular-nums">
                         {format(new Date(e.clock_in), 'MMM d, h:mm a')} → {e.clock_out ? format(new Date(e.clock_out), 'h:mm a') : 'now'}
                         {e.break_minutes > 0 && ` · ${e.break_minutes}m break`}
@@ -383,7 +383,7 @@ export default function TimesheetPage() {
         <TimeEntryEditor
           open
           entry={editing}
-          technicianName={techById[editing.technician_id]?.name ?? 'this technician'}
+          technicianName={techById[editing.technician_id]?.name ?? 'this employee'}
           supabase={supabase}
           onClose={() => setEditing(null)}
           onSaved={fetchAll}

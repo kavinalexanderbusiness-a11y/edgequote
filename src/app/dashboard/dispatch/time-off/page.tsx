@@ -134,7 +134,7 @@ export default function TimeOffPage() {
   function exportEntries() {
     if (!yearEntries.length) { notify.error('No time off to export.'); return }
     exportRowsToCsv(`time-off-${year}`, yearEntries, [
-      { label: 'Employee', value: e => techById[e.technician_id]?.name ?? 'Removed technician' },
+      { label: 'Employee', value: e => techById[e.technician_id]?.name ?? 'Former employee' },
       { label: 'Date', value: e => e.date.slice(0, 10) },
       { label: 'Kind', value: e => PTO_KIND_LABELS[e.kind] },
       { label: 'Hours', value: e => Number(e.hours) },
@@ -186,7 +186,7 @@ export default function TimeOffPage() {
         <Card>
           <EmptyState icon={HardHat} className="py-12" title="No one on the roster yet"
             description="Add the people who work for you, then you can book their time off here."
-            action={{ label: 'Add your people', href: '/dashboard/dispatch?roster=1' }} />
+            action={{ label: 'Add your people', href: '/dashboard/workforce' }} />
         </Card>
       ) : (
         <>
@@ -271,7 +271,7 @@ export default function TimeOffPage() {
                       <div key={e.id} className="px-5 py-3 flex items-center gap-3">
                         <div className="min-w-0 flex-1">
                           <p className="text-sm font-medium text-ink truncate">
-                            {techById[e.technician_id]?.name ?? 'Removed technician'}
+                            {techById[e.technician_id]?.name ?? 'Former employee'}
                             <span className="text-[11px] font-normal text-ink-faint"> · {PTO_KIND_LABELS[e.kind]}</span>
                             {!e.is_paid && <span className="text-[11px] font-normal text-amber-400"> · unpaid</span>}
                           </p>

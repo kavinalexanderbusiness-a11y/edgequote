@@ -26,7 +26,7 @@
 //     THEIR NAME. Gross is grouped off each shift's technician_id, so the roster
 //     list cannot underpay — that invariant is pinned here so nobody "optimises"
 //     payrollSummary into reading the roster instead. The list DOES decide
-//     identity: anyone missing from it renders as "Removed technician" and loses
+//     identity: anyone missing from it renders as the FORMER_EMPLOYEE_NAME placeholder and loses
 //     their crew, which is why every paid-time surface loads it archived-inclusive.
 //
 //  4. A FORGOTTEN CLOCK-OUT MUST LOOK LIKE ONE. "On the clock since 8:14 AM" read
@@ -51,6 +51,7 @@ import { entryMinutes, spanMinutes, openSinceLabel, isStaleOpen, formatDuration 
 import { payrollRules } from '../src/lib/payroll'
 import { buildDraftPayRun } from '../src/lib/payRun'
 import { overtimeInsight, workloadBalance } from '../src/lib/workforce'
+import { FORMER_EMPLOYEE_NAME } from '../src/lib/workforceTeam'
 
 let failures = 0
 const ok = (name: string) => console.log(`  ✓ ${name}`)
@@ -215,10 +216,10 @@ console.log('\nArchiving someone changes their name on the sheet, never their pa
   // What the list DOES decide. This is the whole reason for includeArchived.
   check('the full roster names the departed employee',
     whole.lines.some(l => l.technicianName === 'Sam'),
-    'a pay stub for "Removed technician" is not a pay stub')
+    'a pay stub for the former-employee placeholder is not a pay stub')
   check('an active-only roster loses their name',
-    rosterOnly.lines.some(l => l.technicianName === 'Removed technician'),
-    'omitting an archived technician must degrade their name — if it no longer does, this test has stopped proving anything')
+    rosterOnly.lines.some(l => l.technicianName === FORMER_EMPLOYEE_NAME),
+    'omitting an archived employee must degrade their name — if it no longer does, this test has stopped proving anything')
 
   // Every surface that turns hours into money must load the archived-inclusive
   // roster. Checked over the source because the flag is a call-site decision that

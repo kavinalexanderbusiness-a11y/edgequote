@@ -3,21 +3,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Crew, Technician, TECHNICIAN_STATUS_LABELS } from '@/types'
-import { CREW_PALETTE, crewPalette, nextCrewColor, TECH_STATUS_META, archiveTechnician } from '@/lib/crews'
+import { CREW_PALETTE, crewPalette, nextCrewColor, TECH_STATUS_META } from '@/lib/crews'
 import { Modal } from '@/components/ui/Modal'
-import { Button } from '@/components/ui/Button'
+import { Button, ButtonLink } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Toggle } from '@/components/ui/Toggle'
 import { InlineEmpty } from '@/components/ui/EmptyState'
-import { WageHistoryDialog } from '@/components/dispatch/WageHistoryDialog'
-import { CrewAccessControl } from '@/components/dispatch/CrewAccessControl'
-import type { CrewAccessRow } from '@/lib/crewInvite'
-import { History } from 'lucide-react'
+import { CREW_ACCESS_LABEL, type CrewAccessRow } from '@/lib/crewInvite'
+import { toTeamMember } from '@/lib/workforceTeam'
 import { toast as notify } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { cn } from '@/lib/utils'
-import { Users, Plus, Trash2, Truck, HardHat, UserMinus } from 'lucide-react'
+import { Users, Plus, Trash2, Truck, HardHat } from 'lucide-react'
 
 // Slim equipment view for vehicle assignment — vehicles ARE equipment rows
 // (one fleet system); dispatch only sets equipment.crew_id.
@@ -43,9 +41,7 @@ export function CrewManager({ open, onClose, crews, technicians, equipment, onCh
 }) {
   const supabase = useMemo(() => createClient(), [])
   const [newCrew, setNewCrew] = useState('')
-  const [newTech, setNewTech] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
-  const [wageHistoryFor, setWageHistoryFor] = useState<Technician | null>(null)
 
   // App-access state for the whole roster in ONE call. Whether somebody has ever
   // actually signed in lives in auth.users, which no owner client can read — so
@@ -94,54 +90,21 @@ export function CrewManager({ open, onClose, crews, technicians, equipment, onCh
     if (ok) setNewCrew('')
   }
 
-  async function addTech() {
-    const name = newTech.trim()
-    if (!name) return
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session?.user) return
-    const ok = await run('add-tech', () => supabase.from('technicians').insert({
-      user_id: session.user.id, name,
-    }).then(r => ({ error: r.error })), `${name} added.`)
-    if (ok) setNewTech('')
-  }
-
   async function deleteCrew(crew: Crew) {
     const ok = await confirmDialog({
       title: `Delete ${crew.name}?`,
-      message: 'Jobs and technicians assigned to this crew become unassigned. Nothing else is deleted.',
+      message: 'Jobs and people assigned to this crew become unassigned. Nothing else is deleted.',
       destructive: true, confirmLabel: 'Delete crew', icon: Users,
     })
     if (!ok) return
     await run(`del-${crew.id}`, () => supabase.from('crews').delete().eq('id', crew.id).then(r => ({ error: r.error })), `${crew.name} deleted.`)
   }
 
-  // Removing someone ARCHIVES them — it never deletes. This replaced a hard
-  // `.delete()`, which CASCADE-removed their time_entries, wage_history and
-  // pto_entries: the hours they worked and the wage they were paid, records with
-  // a statutory retention period (~3yr). The old dialog promised "Job history is
-  // untouched" while the database was erasing exactly that.
-  // Goes through lib/crews' archiveTechnician — the same engine every other
-  // technician mutation uses, not a second write path.
-  async function archiveTech(t: Technician) {
-    const ok = await confirmDialog({
-      title: `Remove ${t.name} from the roster?`,
-      message: 'They stop appearing on the board, in pickers and on new pay runs. Their timesheets, wage history and time off are kept — payroll records have to be.',
-      confirmLabel: 'Remove from roster', icon: HardHat,
-    })
-    if (!ok) return
-    // archiveTechnician returns a message string; `run` speaks Supabase's error
-    // shape. Adapt here rather than widening the engine's return type.
-    await run(`arch-${t.id}`, async () => {
-      const msg = await archiveTechnician(supabase, t.id)
-      return { error: msg ? { message: msg } : null }
-    }, `${t.name} removed from the roster.`)
-  }
-
   const vehicles = [...equipment].sort((a, b) =>
     (a.category === 'vehicle' ? 0 : 1) - (b.category === 'vehicle' ? 0 : 1) || a.name.localeCompare(b.name))
 
   return (
-    <Modal open={open} onClose={onClose} title="Crews & roster" icon={Users} size="lg">
+    <Modal open={open} onClose={onClose} title="Crews & vehicles" icon={Users} size="lg">
       <div className="space-y-6">
 
         {/* ── Crews ── */}
@@ -201,70 +164,50 @@ export function CrewManager({ open, onClose, crews, technicians, equipment, onCh
           </div>
         </section>
 
-        {/* ── Technicians ── */}
+        {/* ── The team ──────────────────────────────────────────────────────
+            READ-ONLY here, on purpose. This section used to be six inline
+            fields per person, each saving itself on blur — and because those
+            inputs were UNCONTROLLED (defaultValue + onBlur), a save that FAILED
+            left the typed value sitting on screen looking saved, with no
+            refetch able to correct it. It was also the app's second employee
+            editor, so "where do I change someone's crew" had two answers that
+            could drift apart.
+            People now live on Workforce, the page named after them. This is the
+            glance you want while looking at the board, plus the way through.
+            Crews and vehicles stay here — they are board furniture. */}
         <section className="space-y-2.5 border-t border-border pt-5">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Technicians</p>
-          {technicians.length === 0 && (
-            <InlineEmpty icon={HardHat}>No technicians yet — add your people below.</InlineEmpty>
-          )}
-          {technicians.map(t => (
-            <div key={t.id} className={cn('rounded-card border border-border p-3', !t.is_active && 'opacity-70 bg-bg-tertiary')}>
-              <div className="grid grid-cols-1 sm:grid-cols-[1.1fr_1fr_1fr_1fr_0.9fr_auto] gap-2.5 items-end">
-                <Input label="Name" defaultValue={t.name} fieldSize="sm"
-                  onBlur={e => { const v = e.target.value.trim(); if (v && v !== t.name) run(`tname-${t.id}`, () => supabase.from('technicians').update({ name: v }).eq('id', t.id).then(r => ({ error: r.error }))) }} />
-                <Input label="Phone" type="tel" defaultValue={t.phone ?? ''} fieldSize="sm"
-                  onBlur={e => { const v = e.target.value.trim() || null; if (v !== t.phone) run(`tphone-${t.id}`, () => supabase.from('technicians').update({ phone: v }).eq('id', t.id).then(r => ({ error: r.error }))) }} />
-                <Select label="Crew" fieldSize="sm" value={t.crew_id ?? ''} options={crewOptions}
-                  onChange={e => run(`tcrew-${t.id}`, () => supabase.from('technicians').update({ crew_id: e.target.value || null }).eq('id', t.id).then(r => ({ error: r.error })))} />
-                {/* Job title only. App access is granted below, by linking a
-                    login — this field grants nothing and never has. */}
-                <Input label="Role" placeholder="e.g. Crew lead" defaultValue={t.role ?? ''} fieldSize="sm"
-                  title="A job title for your own records — it does not grant access to anything. Use App access below to give someone a login."
-                  onBlur={e => { const v = e.target.value.trim() || null; if (v !== t.role) run(`trole-${t.id}`, () => supabase.from('technicians').update({ role: v }).eq('id', t.id).then(r => ({ error: r.error }))) }} />
-                {/* Default rate for the NEXT clock-in only — past shifts keep the
-                    rate they were stamped with, so a raise never rewrites history. */}
-                <Input label="Wage $/hr" type="number" min="0" step="0.25" fieldSize="sm"
-                  defaultValue={t.hourly_wage ?? ''}
-                  title="Used for shifts started from now on. Past shifts keep the rate they were clocked in at."
-                  onBlur={e => {
-                    const raw = e.target.value.trim()
-                    const v = raw === '' ? null : Number(raw)
-                    if (v != null && (!Number.isFinite(v) || v < 0)) { notify.error('Wage must be 0 or more.'); e.target.value = String(t.hourly_wage ?? ''); return }
-                    if (v !== t.hourly_wage) run(`twage-${t.id}`, () => supabase.from('technicians').update({ hourly_wage: v }).eq('id', t.id).then(r => ({ error: r.error })))
-                  }} />
-                <div className="flex items-center gap-2 pb-1">
-                  <Toggle checked={t.is_active} ariaLabel={`${t.name} active`}
-                    onChange={v => run(`tact-${t.id}`, () => supabase.from('technicians').update({ is_active: v }).eq('id', t.id).then(r => ({ error: r.error })))} />
-                  {/* Every wage change is logged by a DB trigger, so this reads a
-                      complete trail no matter where the change came from. */}
-                  <Button variant="ghost" size="sm" type="button" onClick={() => setWageHistoryFor(t)}
-                    title={`${t.name}'s wage history`} aria-label={`${t.name}'s wage history`}>
-                    <History className="w-3.5 h-3.5" />
-                  </Button>
-                  {/* Archive, not delete — so this is no longer a destructive
-                      action and must not wear the destructive affordance. */}
-                  <Button variant="ghost" size="sm" type="button" onClick={() => archiveTech(t)}
-                    loading={busy === `arch-${t.id}`} title="Remove from roster" aria-label={`Remove ${t.name} from the roster`}>
-                    <UserMinus className="w-3.5 h-3.5" />
-                  </Button>
-                </div>
-              </div>
-              <p className="text-[11px] text-ink-faint mt-1.5 flex items-center gap-1.5">
-                <span className={cn('w-1.5 h-1.5 rounded-full', TECH_STATUS_META[t.status].dot)} />
-                {TECHNICIAN_STATUS_LABELS[t.status]} — set day-of status from the board
-              </p>
-              {/* Crew Mode: a login for this person, granted and revoked from the
-                  same row as the switches that already control them. */}
-              <CrewAccessControl tech={t} access={accessById[t.id] ?? null} onChanged={() => { setAccessTick(x => x + 1); onChanged() }} />
-            </div>
-          ))}
-          <div className="flex items-end gap-2">
-            <div className="flex-1"><Input label="New technician" placeholder="e.g. Sam Torres" value={newTech} fieldSize="sm"
-              onChange={e => setNewTech(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTech() } }} /></div>
-            <Button type="button" size="sm" onClick={addTech} loading={busy === 'add-tech'} disabled={!newTech.trim()}>
-              <Plus className="w-3.5 h-3.5" /> Add technician
-            </Button>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Team</p>
+            <ButtonLink href="/dashboard/workforce" variant="secondary" size="sm">
+              <HardHat className="w-3.5 h-3.5" /> Manage team
+            </ButtonLink>
           </div>
+          {technicians.length === 0 ? (
+            <InlineEmpty icon={HardHat}>Nobody on the team yet — add your people from Workforce.</InlineEmpty>
+          ) : (
+            <ul className="rounded-card border border-border divide-y divide-border overflow-hidden">
+              {technicians.map(t => {
+                const m = toTeamMember(t, crews, accessById[t.id])
+                return (
+                  <li key={t.id} className={cn('px-3 py-2 flex items-center gap-2.5 flex-wrap', !t.is_active && 'opacity-60')}>
+                    <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', TECH_STATUS_META[t.status].dot)} aria-hidden />
+                    <span className="text-sm font-medium text-ink truncate">{t.name}</span>
+                    <span className="text-[11px] text-ink-faint truncate">
+                      {m.crewName ?? 'No crew'} · {TECHNICIAN_STATUS_LABELS[t.status]}
+                    </span>
+                    {!t.is_active && (
+                      <span className="text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border border-border bg-bg-tertiary text-ink-faint">
+                        Inactive
+                      </span>
+                    )}
+                    <span className="ml-auto text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
+                      {CREW_ACCESS_LABEL[m.access]}
+                    </span>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
         </section>
 
         {/* ── Vehicles & equipment ── */}
@@ -292,10 +235,6 @@ export function CrewManager({ open, onClose, crews, technicians, equipment, onCh
           <p className="text-[11px] text-ink-faint">Manage the fleet itself in the Equipment module — dispatch only decides who takes what.</p>
         </section>
       </div>
-
-      {wageHistoryFor && (
-        <WageHistoryDialog technician={wageHistoryFor} supabase={supabase} onClose={() => setWageHistoryFor(null)} />
-      )}
     </Modal>
   )
 }

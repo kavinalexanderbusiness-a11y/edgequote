@@ -47,6 +47,7 @@ import {
 } from 'date-fns'
 import type { BusinessSettings, PayPeriodKind, Technician, TimeEntry } from '@/types'
 import { entryMinutes, isOpen } from '@/lib/timeTracking'
+import { FORMER_EMPLOYEE_NAME } from '@/lib/workforceTeam'
 
 export type WeekDay = 0 | 1 | 2 | 3 | 4 | 5 | 6
 
@@ -312,7 +313,7 @@ export function payrollSummary(
 
     rows.push({
       technicianId,
-      name: nameOf.get(technicianId) ?? 'Removed technician',
+      name: nameOf.get(technicianId) ?? FORMER_EMPLOYEE_NAME,
       regularMinutes: s.regularMinutes,
       otMinutes: s.otMinutes,
       totalMinutes,

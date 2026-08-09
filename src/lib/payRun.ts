@@ -31,6 +31,7 @@ import { format } from 'date-fns'
 import type { PayRun, PayRunLine, PtoEntry, Technician, TimeEntry } from '@/types'
 import { payrollSummary, type OvertimeRules, type PayPeriod } from '@/lib/payroll'
 import { ptoTotalsFor } from '@/lib/pto'
+import { FORMER_EMPLOYEE_NAME } from '@/lib/workforceTeam'
 
 const round2 = (n: number) => Math.round(n * 100) / 100
 const iso = (d: Date) => format(d, 'yyyy-MM-dd')
@@ -111,7 +112,7 @@ export function buildDraftPayRun(args: {
     const otPay = w?.otPay ?? 0
     lines.push({
       technicianId: id,
-      technicianName: w?.name ?? t?.name ?? 'Removed technician',
+      technicianName: w?.name ?? t?.name ?? FORMER_EMPLOYEE_NAME,
       technicianRole: t?.role ?? null,
       regularMinutes: w?.regularMinutes ?? 0,
       otMinutes: w?.otMinutes ?? 0,

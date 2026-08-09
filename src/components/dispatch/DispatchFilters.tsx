@@ -100,7 +100,7 @@ export function DispatchFilters({ value, onChange, crews, technicians, equipment
             value.technicianId,
             id => onChange({ ...value, technicianId: id }),
             technicians.filter(t => t.is_active).map(t => ({ value: t.id, label: t.name })),
-            'Any technician', 'Filter by technician',
+            'Anyone', 'Filter by person',
           )}
         </>
       )}

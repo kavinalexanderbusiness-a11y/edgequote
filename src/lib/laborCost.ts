@@ -37,6 +37,7 @@
 import { format, startOfDay } from 'date-fns'
 import type { Crew, Technician, TimeEntry } from '@/types'
 import { entryCost, entryMinutes, isOpen } from '@/lib/timeTracking'
+import { FORMER_EMPLOYEE_NAME } from '@/lib/workforceTeam'
 
 const round2 = (n: number) => Math.round(n * 100) / 100
 
@@ -241,7 +242,7 @@ export function technicianUtilization(entries: TimeEntry[], ctx: LaborContext): 
       const crewId = t?.crew_id ?? null
       return {
         technicianId,
-        name: t?.name ?? 'Removed technician',
+        name: t?.name ?? FORMER_EMPLOYEE_NAME,
         crewName: crewId ? ctx.crewNames.get(crewId) ?? null : null,
         totalMinutes: a.total,
         jobMinutes: a.job,
@@ -412,7 +413,7 @@ export function technicianPerformance(entries: TimeEntry[], ctx: LaborContext): 
 
       return {
         technicianId,
-        name: t?.name ?? 'Removed technician',
+        name: t?.name ?? FORMER_EMPLOYEE_NAME,
         crewName: crewId ? ctx.crewNames.get(crewId) ?? null : null,
         totalMinutes: a.total,
         jobMinutes: a.job,
