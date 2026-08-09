@@ -29,6 +29,13 @@ export interface PortalPdfInvoice {
   issued_date: string | null; due_date: string | null; notes: string | null; address: string | null
   line_items: { description: string; amount: number; kind: string }[] | null; created_at: string
   amount_paid?: number | null; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null
+  // get_portal_data's invoice projection carries these, so the customer's OWN copy
+  // shows the same "Due Now (Deposit)" the owner's copy and the Pay button do.
+  // Without them the portal PDF printed the FULL total as due while the deposit
+  // request in their inbox asked for half — the one document they'd act on
+  // disagreeing with the message that reached them. Optional: an older cached
+  // payload resolves to null, which is exactly "no deposit requested".
+  deposit_amount?: number | null; deposit_requested_at?: string | null
 }
 export interface PortalPdfBusiness {
   company_name: string | null; phone: string | null; email_primary: string | null
@@ -80,6 +87,10 @@ function portalInvoiceToInvoice(inv: PortalPdfInvoice, customerName: string, fal
     amount_paid: num(inv.amount_paid ?? 0),
     discount_type: inv.discount_type ?? null,
     discount_value: inv.discount_value ?? null,
+    // Same reason as amount_paid above: the deposit ask has to survive the mapping
+    // or the customer's PDF asks for the full total the owner didn't request yet.
+    deposit_amount: inv.deposit_amount ?? null,
+    deposit_requested_at: inv.deposit_requested_at ?? null,
     status: inv.status,
     issued_date: inv.issued_date,
     due_date: inv.due_date,

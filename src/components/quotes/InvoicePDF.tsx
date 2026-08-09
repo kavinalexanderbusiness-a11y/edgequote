@@ -5,6 +5,7 @@ import {
 } from '@react-pdf/renderer'
 import type { Invoice, BusinessSettings } from '@/types'
 import { invoiceTotals, gstRegistrationNumber } from '@/lib/invoiceTotals'
+import { depositChargeAmount, depositState } from '@/lib/payments/deposit'
 import { pdfLogoUrl } from '@/lib/photos'
 
 const COLORS = {
@@ -192,6 +193,80 @@ export function InvoiceDocument({ invoice, settings }: InvoicePDFProps) {
           // double payment). Balance = the one ledger definition.
           const paidToDate = Number(invoice.amount_paid) || 0
           const balanceDue = Math.max(0, Math.round((t.total - paidToDate) * 100) / 100)
+
+          // ── The deposit block ──────────────────────────────────────────────
+          // When the owner has asked for money up front, this document is the one
+          // place the customer treats as authoritative — and it used to print
+          // "Total Due $4,000" in the biggest type on the page while the request
+          // they were sent said $2,000. Two numbers, both presented as what to pay.
+          //
+          // Both figures come from the canonical deposit engine, never recomputed
+          // here: `depositChargeAmount` is the SAME rule the Stripe charge routes
+          // use (so the document can't name a figure the Pay button won't take,
+          // and a request outliving an edited-down invoice is clamped to the real
+          // balance), and `remainingAfter` is depositState's own arithmetic.
+          //
+          // Only while a deposit is actually outstanding. Once it's paid — or when
+          // there is no deposit at all — every branch below is byte-for-byte the
+          // document that shipped before this, because at that point the balance
+          // IS the whole story.
+          const charge = depositChargeAmount(invoice, settings)
+          const dep = depositState(invoice, settings)
+          const depositRows = charge.isDeposit ? (
+            <View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginLeft: 'auto', width: '50%', marginTop: 2 }}>
+                <Text style={styles.bodyText}>Deposit requested</Text>
+                <Text style={styles.bodyText}>{money(dep.requested ?? charge.amount)}</Text>
+              </View>
+              <View style={styles.grandRow}>
+                <Text style={styles.grandLabel}>Due Now (Deposit)</Text>
+                <Text style={styles.grandValue}>{money(charge.amount)}</Text>
+              </View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginLeft: 'auto', width: '50%', marginTop: 2 }}>
+                <Text style={styles.bodyText}>Remaining afterward</Text>
+                <Text style={styles.bodyText}>{money(dep.remainingAfter)}</Text>
+              </View>
+            </View>
+          ) : null
+
+          // With a deposit outstanding the totals stack reads
+          //   Invoice Total → [Paid to date] → Deposit requested → DUE NOW → Remaining
+          // so there is exactly ONE bold number and it is the one to pay today.
+          if (depositRows) return (
+            <View wrap={false}>
+              {t.hasDiscount || t.hasGst ? (
+                <>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12, marginLeft: 'auto', width: '50%' }}>
+                    <Text style={styles.bodyText}>Subtotal</Text>
+                    <Text style={styles.bodyText}>{money(t.subtotal)}</Text>
+                  </View>
+                  {t.hasDiscount ? (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginLeft: 'auto', width: '50%', marginTop: 2 }}>
+                      <Text style={styles.bodyText}>Discount{t.discountLabel ? ` (${t.discountLabel})` : ''}</Text>
+                      <Text style={styles.bodyText}>-{money(t.discountAmount)}</Text>
+                    </View>
+                  ) : null}
+                  {t.hasGst ? (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginLeft: 'auto', width: '50%', marginTop: 2 }}>
+                      <Text style={styles.bodyText}>GST ({t.gstPercent}%)</Text>
+                      <Text style={styles.bodyText}>{money(t.gstAmount)}</Text>
+                    </View>
+                  ) : null}
+                </>
+              ) : null}
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: t.hasDiscount || t.hasGst ? 2 : 12, marginLeft: 'auto', width: '50%' }}>
+                <Text style={styles.bodyText}>Invoice Total</Text>
+                <Text style={styles.bodyText}>{money(t.total)}</Text>
+              </View>
+              {paidToDate > 0.005 ? (
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginLeft: 'auto', width: '50%', marginTop: 2 }}>
+                  <Text style={styles.bodyText}>Paid to date</Text>
+                  <Text style={styles.bodyText}>-{money(paidToDate)}</Text>
+                </View>
+              ) : null}
+              {depositRows}
+            </View>
+          )
           const paidRows = paidToDate > 0.005 ? (
             <View>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginLeft: 'auto', width: '50%', marginTop: 2 }}>

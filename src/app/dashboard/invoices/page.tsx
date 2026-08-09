@@ -760,14 +760,35 @@ export default function InvoicesPage() {
       {!loading && !loadError && paymentsEnabled && invoices.length > 0 && <ReconcilePanel />}
 
       {/* ONE shared Send Message dialog — sending marks the invoice sent. The amount
-          is what's actually OWED (the ledger balance), never the original total: a
-          customer who has already part-paid must never be asked for the full amount. */}
-      {msgInvoice?.customer_id && (
-        <SendMessageDialog open onClose={() => setMsgInvoice(null)}
-          customerId={msgInvoice.customer_id} customerName={msgInvoice.customer_name}
-          defaultTemplate="invoice" vars={{ amount: formatCurrency(invoiceBalance(msgInvoice, settings).balance) }}
-          onSent={() => markSent(msgInvoice)} />
-      )}
+          is what's actually DUE NOW, never the original total: a customer who has
+          already part-paid must never be asked for the full amount, and neither
+          must one who was asked for a deposit.
+          depositChargeAmount is the SAME rule the Pay button and the invoice PDF
+          use, so the message, the document and the checkout can't name three
+          different figures. While a deposit is outstanding the composer also opens
+          on the deposit template — "your invoice for $2,000" would misdescribe a
+          $4,000 invoice, where "a deposit of $2,000" is exactly true. The owner can
+          still switch template in the dialog. */}
+      {msgInvoice?.customer_id && (() => {
+        const due = depositChargeAmount(msgInvoice, settings)
+        return (
+          <SendMessageDialog open onClose={() => setMsgInvoice(null)}
+            customerId={msgInvoice.customer_id} customerName={msgInvoice.customer_name}
+            defaultTemplate={due.isDeposit ? 'deposit_request' : 'invoice'}
+            vars={{ amount: formatCurrency(due.amount) }}
+            onSent={async () => {
+              await markSent(msgInvoice)
+              // Sending the deposit ask from THIS door is still the deposit ask —
+              // it must stamp the request, or the panel keeps saying "Not sent"
+              // about a message the customer already has.
+              if (due.isDeposit) {
+                const res = await markDepositRequestSent(supabase, msgInvoice.id)
+                if (res.error) notify.error('Sent, but couldn’t record it as sent — the deposit will still show as “Not sent”.')
+                fetchInvoices()
+              }
+            }} />
+        )
+      })()}
 
       {/* The deposit ASK — the SAME dialog and pipeline as the invoice send, with
           three deliberate differences: the template names the amount as a deposit

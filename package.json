@@ -48,7 +48,6 @@
     "verify:lead-intake": "tsx scripts/verify-lead-intake.ts",
     "verify:quote-status": "tsx scripts/verify-quote-status.ts",
     "verify:invoice-status": "tsx scripts/verify-invoice-status.ts",
-    "verify:dedup-contract": "tsx scripts/verify-dedup-contract.ts",
     "verify:followup": "tsx scripts/verify-followup.ts",
     "verify:booking-photos": "tsx scripts/verify-booking-photos.ts",
     "verify:booking-link": "tsx scripts/verify-booking-link.ts",
@@ -57,8 +56,9 @@
     "verify:field-stops": "tsx scripts/verify-field-stops.ts",
     "verify:workforce": "tsx scripts/verify-workforce.ts",
     "verify:job-completion": "tsx scripts/verify-job-completion.ts",
+    "verify:crew-access": "tsx scripts/verify-crew-access.ts",
     "verify:deposit": "tsx scripts/verify-deposit.ts",
-    "verify:crew-access": "tsx scripts/verify-crew-access.ts"
+    "verify:deposit-documents": "tsx scripts/verify-deposit-documents.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

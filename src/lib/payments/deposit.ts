@@ -163,7 +163,11 @@ export function depositState(
   if (requested == null) {
     return {
       total, requested: null, percent: null, paid,
-      outstanding: 0, remainingAfter: round2(total - paid),
+      // Floored for the same reason as the requested branch below: an OVERPAID
+      // invoice (paid > total) would report a negative "remaining", which on any
+      // customer-facing surface reads as money owed back. Overpayment has its own
+      // honest reporting — invoiceBalance().overpaid — and is not this field's job.
+      outstanding: 0, remainingAfter: Math.max(0, round2(total - paid)),
       status: 'none', exceedsTotal: false,
     }
   }
@@ -179,7 +183,14 @@ export function depositState(
     percent: depositPercentOf(total, requested),
     paid,
     outstanding: covered ? 0 : outstanding,
-    remainingAfter: round2(total - Math.max(requested, paid)),
+    // What is still to bill once the deposit is settled. Floored at zero: a
+    // request left over from before the invoice was edited DOWN would otherwise
+    // compute negative (ask $1,500, invoice now $1,000 → −$500), and this figure
+    // is printed on the customer's invoice PDF and in the owner's panel — "Remaining
+    // afterward −$500.00" reads as money owed BACK. Nothing remains after a deposit
+    // that covers the whole invoice; the mismatch itself is reported by
+    // `exceedsTotal`, which is the field that exists to say so.
+    remainingAfter: Math.max(0, round2(total - Math.max(requested, paid))),
     status: covered ? 'paid' : (inv.deposit_requested_at ? 'sent' : 'draft'),
     exceedsTotal: requested > round2(total) + 0.005,
   }

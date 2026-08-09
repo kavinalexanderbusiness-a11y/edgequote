@@ -7,6 +7,7 @@ import { loadOwnerContext, type OwnerContext } from '@/lib/automation/owner'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { dueForAutoReminder, resolveReminderPolicy, type ReminderPolicy, type RemindableInvoice } from '@/lib/payments/dunning'
 import { invoiceBalance } from '@/lib/payments/ledger'
+import { depositChargeAmount } from '@/lib/payments/deposit'
 import { formatCurrency, localTodayISO } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
@@ -74,7 +75,9 @@ export async function GET(req: NextRequest) {
   // ledger, not by this query — the filter is just to keep the scan small.
   // Longest-overdue first, so a truncated scan still holds the stalest money. One
   // row over the cap is how truncation is detected without paying for a count query.
-  const sel = 'id, user_id, customer_id, invoice_number, status, due_date, amount, amount_paid, discount_type, discount_value, viewed_at, last_reminded_at, reminder_count, customers(name, phone, email, sms_opt_in, email_opt_in, message_prefs)'
+  // deposit_* ride along so an automated chase asks for the figure the customer
+  // was actually sent — see the amount in `render` below.
+  const sel = 'id, user_id, customer_id, invoice_number, status, due_date, amount, amount_paid, discount_type, discount_value, deposit_amount, deposit_requested_at, viewed_at, last_reminded_at, reminder_count, customers(name, phone, email, sms_opt_in, email_opt_in, message_prefs)'
   const { data: rows, error } = await supabase.from('invoices').select(sel).in('status', ['unpaid', 'sent', 'partial'])
     .order('due_date', { ascending: true })
     .limit(MAX_PER_RUN + 1)
@@ -136,12 +139,18 @@ export async function GET(req: NextRequest) {
     },
     render: async (inv, ctx) => {
       const token = await ensurePortalToken(supabase, inv.user_id, inv.customer_id!)
+      // Chase what the customer was ASKED for, not the whole invoice. With a
+      // deposit outstanding the balance is the full total — so an automated
+      // reminder used to demand $4,000 from someone whose only request said
+      // $2,000, contradicting it in the same inbox and over the owner's name.
+      // Same engine as the PDF, the composer and the Pay button.
       const { balance } = invoiceBalance(inv, ctx.fees)
+      const due = depositChargeAmount(inv, ctx.fees)
       const msg = renderMessage('payment_reminder', ctx.templates, {
         firstName: inv.customers!.name,
         businessName: ctx.name,
         invoiceLink: token ? portalUrl(token) : undefined,
-        amount: formatCurrency(balance),
+        amount: formatCurrency(due.amount),
         logoUrl: ctx.logoUrl || undefined,
         website: ctx.website || undefined,
         directPhone: ctx.phone || undefined,
