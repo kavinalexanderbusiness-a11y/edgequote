@@ -572,8 +572,15 @@ export function buildDocItems(opts: {
     }
   })
 
-  // A DRAFT invoice is the owner's unfinished work — private until sent, the
-  // precedent quotes set (get_portal_data filters draft quotes server-side).
+  // A DRAFT invoice is the owner's unfinished work — private until sent.
+  // ⚠️ This filter is DEFENCE IN DEPTH, not the privacy boundary. It used to be the
+  // only thing standing between a customer and the owner's unsent bill: the RPC
+  // returned every invoice and this line merely declined to render the draft, which
+  // left it fully readable in the payload (devtools). The boundary now lives in
+  // get_portal_data — `and status <> 'draft'`, the same predicate it already applied
+  // to quotes — so a draft never leaves the database
+  // (RUN-2026-08-09-portal-hide-draft-invoices.sql, pinned by verify:portal-rpc).
+  // Keep this line anyway: it costs nothing and a payload is not ours to trust.
   const inv: DocItem[] = invoices.filter(ii => ii.status !== 'draft').map(ii => {
     // THE dashboard's balance engine, not a copy of it: discounted+GST total −
     // payments recorded. Clamped at 0 for display — an overpaid invoice owes
