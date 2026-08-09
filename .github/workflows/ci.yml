@@ -74,3 +74,24 @@ jobs:
       # Each guard's rationale lives in its own script header — one home, not two.
       - name: Verify suite (all guards + parity)
         run: npm run verify
+
+      # ── Lint and Build — the two stages this job has been NAMED for since it
+      # was created, and never actually ran. The file ended at `verify`, so
+      # "typecheck · lint · build" promised two gates that did not exist: a lint
+      # error or a broken `next build` could land on main with a green check.
+      # (Nobody noticed because setup-node was failing before any step ran — see
+      # the lockfile note above. Fixing the install is what made the gap visible.)
+      #
+      # Lint before build: it is the faster of the two, and a build failure after
+      # a 90-second compile tells you less than the lint line that caused it.
+      # `next lint` exits 0 on warnings and non-zero on errors, which is the
+      # behaviour we want — the repo carries a handful of long-standing warnings
+      # and gating on those would be a rule change, not a CI fix.
+      - name: Lint
+        run: npm run lint
+
+      # The real production compile, with the placeholder env from the job block
+      # above. This is the gate that catches a page which only breaks when it is
+      # actually rendered — the class tsc cannot see.
+      - name: Build
+        run: npm run build
