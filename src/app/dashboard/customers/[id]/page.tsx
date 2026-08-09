@@ -16,7 +16,7 @@ import { WebsiteLead } from '@/lib/leads'
 import { LeadSummary } from '@/components/leads/LeadSummary'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { bookingPhotosFromQuotes } from '@/lib/bookingPhotos'
-import { normalizeTags, propertyLabel } from '@/lib/customers'
+import { normalizeTags, propertyLabel, propertyLinks, describePropertyLinks, deleteProperty } from '@/lib/customers'
 import { PropertySelect } from '@/components/ui/PropertySelect'
 import { buildTimeline } from '@/lib/timeline'
 import {
@@ -56,7 +56,7 @@ import {
   Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
   FileText, Send, RotateCw, Receipt, DollarSign, Sparkles, Users,
   Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet, Timer, CalendarClock,
-  Link2, Check, Cake, PartyPopper, Camera, History, Globe, Plus, Home, Tag,
+  Link2, Check, Cake, PartyPopper, Camera, History, Globe, Plus, Home, Tag, Trash2,
 } from 'lucide-react'
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
@@ -192,6 +192,10 @@ export default function CustomerDetailPage() {
   const [editingPropPrefs, setEditingPropPrefs] = useState<string | null>(null)
   const [propPrefsDraft, setPropPrefsDraft] = useState<PrefsDraft>(EMPTY_DRAFT)
   const [savingPropPrefs, setSavingPropPrefs] = useState(false)
+  // Remove-property: which property is mid-check/mid-delete, and the "can't
+  // remove because…" explanation pinned to its card (cleared on retry/success).
+  const [removingProp, setRemovingProp] = useState<string | null>(null)
+  const [blockedProp, setBlockedProp] = useState<{ id: string; message: string } | null>(null)
 
   // Instant paint from a warm cache (hover prefetch on the list, or a prior
   // visit). The load effect below revalidates right after, so it's never stale-stuck.
@@ -440,6 +444,47 @@ export default function CustomerDetailPage() {
     }
     setProperties(prev => prev.map(p => p.id === propId ? { ...p, ...row } : p))
     setEditingPropPrefs(null)
+  }
+
+  // Remove a property — through THE seam (lib/customers.deleteProperty), which
+  // refuses unless NOTHING refers to the address. The live-DB rule it enforces:
+  // history FKs are SET NULL (a delete would strip identity off invoices/jobs/
+  // quotes) and job_photos CASCADE (a delete would destroy them) — so linked
+  // properties are blocked with the exact reasons, never archived (properties
+  // have no archive), never cascaded. "0 jobs" alone proves nothing: photos,
+  // measurements, quotes, invoices and leads are all checked too.
+  //
+  // Honest states, in order: checking (button busy) → blocked (inline reasons,
+  // property stays) → confirm (names the address) → removing → removed (row
+  // leaves the list ONLY after the delete PROVED a row went) → or failed
+  // (toast; property remains — nothing optimistic anywhere in this path).
+  async function removeProperty(p: Property) {
+    if (removingProp) return
+    setRemovingProp(p.id)
+    setBlockedProp(null)
+    try {
+      const { links, error } = await propertyLinks(supabase, p.id)
+      // A failed check is never an answer — refuse to open the confirm at all.
+      if (error) { toast.error('Could not check this property’s records: ' + error); return }
+      const held = links.filter(l => l.count > 0)
+      if (held.length > 0) { setBlockedProp({ id: p.id, message: describePropertyLinks(held) }); return }
+      const ok = await confirmDialog({
+        title: `Remove ${propertyLabel(p)}?`,
+        message: 'Nothing refers to this address — no visits, quotes, invoices, photos, measurements or leads. Removing it can’t be undone.',
+        confirmLabel: 'Remove property', destructive: true,
+      })
+      if (!ok) return
+      const res = await deleteProperty(supabase, { propertyId: p.id, customerId: customer!.id })
+      if (res.error) { toast.error('Could not remove the property: ' + res.error); return }
+      if (res.blocked) { setBlockedProp({ id: p.id, message: describePropertyLinks(res.blocked) }); return }
+      // Confirmed gone — only now does the UI let go of it (and the roll-up
+      // counts, which derive from this state, follow).
+      setProperties(prev => prev.map(x => res.promotedId && x.id === res.promotedId ? { ...x, is_primary: true } : x).filter(x => x.id !== p.id))
+      if (res.promoteError) toast(`Property removed — but the primary address couldn’t be reassigned (${res.promoteError}). Mark one of the remaining properties primary.`, { tone: 'error', duration: 12000 })
+      else toast.success(`Removed ${propertyLabel(p)}.`)
+    } finally {
+      setRemovingProp(null)
+    }
   }
 
   // Pause a schedule: cancel its FUTURE scheduled/in-progress visits (past visits
@@ -1167,6 +1212,28 @@ export default function CustomerDetailPage() {
                       </span>
                       <Edit2 className="w-3 h-3 shrink-0 ml-auto opacity-50" />
                     </button>
+                  )}
+                </div>
+
+                {/* Remove — deliberately the quietest thing on the card, below the
+                    fold of every routine action, so it cannot be hit reaching for
+                    Maps/Quote/Job. The seam refuses unless nothing refers to this
+                    address; when blocked, the reasons render right here instead of
+                    a toast that outlives the context. */}
+                <div className="mt-2 flex flex-col items-end gap-1">
+                  <button
+                    type="button"
+                    onClick={() => removeProperty(p)}
+                    disabled={removingProp !== null}
+                    className="inline-flex items-center gap-1 text-[11px] text-ink-faint hover:text-red-400 disabled:opacity-50 transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                  >
+                    <Trash2 className="w-3 h-3" aria-hidden />
+                    {removingProp === p.id ? 'Checking records…' : 'Remove property'}
+                  </button>
+                  {blockedProp?.id === p.id && (
+                    <p className="text-[11px] text-amber-400 text-right max-w-sm" role="status">
+                      {blockedProp.message}
+                    </p>
                   )}
                 </div>
               </div>

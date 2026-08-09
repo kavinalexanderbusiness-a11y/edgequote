@@ -303,3 +303,118 @@ export async function ensurePropertyForCustomer(
   // No usable address — fall back to the customer's primary property if any.
   return { propertyId: list.find(p => p.is_primary)?.id ?? list[0]?.id ?? null, createdProperty: false }
 }
+
+// ── Removing a property ──────────────────────────────────────────────────────
+// THE one seam for "can this property go, and if so, take it out" — the customer
+// page's Remove action calls this; nothing else may delete from `properties`.
+//
+// The rule, from the LIVE schema's actual FK behaviour (verified 2026-08-09):
+// NOTHING at the DB level protects history from a property delete. The history
+// tables are ON DELETE SET NULL (jobs, quotes, invoices, schedule_items,
+// measurements, labor_observations, marketing_assets, neighbor_leads) — a delete
+// would strip the address identity off financial and operational records that
+// resolveDocAddress/portal identity depend on — and job_photos is ON DELETE
+// CASCADE, so a delete would DESTROY the photo record outright. So the app rule
+// is: a property may be deleted only when NOTHING in the list below refers to
+// it; otherwise the delete is refused with the exact reasons. There is no
+// property archive (no archived_at column), deliberately — an address with
+// history simply stays; an address with none may leave.
+//
+// The property's OWN derived data (property_twin / property_intelligence /
+// property_observations / property_measurements) does NOT block: those rows are
+// facts ABOUT the property, they CASCADE by design, and they are meaningless
+// once their subject is gone. Everything customer- or business-shaped blocks.
+//
+// ⚠️ "0 jobs" is NOT proof of safety — a property can hold photos, measurement
+// records, quotes or invoices with zero jobs. Every entry below is checked.
+export const PROPERTY_LINK_CHECKS = [
+  { table: 'jobs', column: 'property_id', noun: 'visit', plural: 'visits' },
+  { table: 'quotes', column: 'property_id', noun: 'quote', plural: 'quotes' },
+  { table: 'invoices', column: 'property_id', noun: 'invoice', plural: 'invoices' },
+  { table: 'schedule_items', column: 'property_id', noun: 'schedule item', plural: 'schedule items' },
+  { table: 'job_photos', column: 'property_id', noun: 'photo', plural: 'photos' },
+  { table: 'measurements', column: 'property_id', noun: 'measurement record', plural: 'measurement records' },
+  { table: 'labor_observations', column: 'property_id', noun: 'labour record', plural: 'labour records' },
+  { table: 'marketing_assets', column: 'property_id', noun: 'marketing asset', plural: 'marketing assets' },
+  { table: 'neighbor_leads', column: 'source_property_id', noun: 'neighbour lead', plural: 'neighbour leads' },
+] as const
+
+export interface PropertyLink { noun: string; plural: string; count: number }
+
+/**
+ * What still refers to this property. A FAILED count is an ERROR, never a zero —
+ * treating "couldn't ask" as "nothing there" would greenlight deleting a
+ * property whose photos we simply failed to see (the exact failure class the
+ * crews/portal audits keep finding: a dropped request read as an answer).
+ */
+export async function propertyLinks(
+  supabase: Supa, propertyId: string,
+): Promise<{ links: PropertyLink[]; error?: string }> {
+  const results = await Promise.all(PROPERTY_LINK_CHECKS.map(c =>
+    supabase.from(c.table).select('id', { count: 'exact', head: true }).eq(c.column, propertyId),
+  ))
+  const links: PropertyLink[] = []
+  for (let i = 0; i < results.length; i++) {
+    const { count, error } = results[i]
+    if (error) return { links: [], error: `Could not check ${PROPERTY_LINK_CHECKS[i].plural}: ${error.message}` }
+    links.push({ noun: PROPERTY_LINK_CHECKS[i].noun, plural: PROPERTY_LINK_CHECKS[i].plural, count: count ?? 0 })
+  }
+  return { links }
+}
+
+/** The blocked explanation, in the owner's terms. Pure, so verify pins it. */
+export function describePropertyLinks(links: PropertyLink[]): string {
+  const held = links.filter(l => l.count > 0)
+  if (held.length === 0) return ''
+  const parts = held.map(l => `${l.count} ${l.count === 1 ? l.noun : l.plural}`)
+  const list = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0]
+  return `This address holds ${list}. EdgeQuote keeps history attached to its address, so a property with records can't be removed.`
+}
+
+/**
+ * Delete ONE genuinely-unused property.
+ *
+ *  • Re-checks the links itself — the caller's check is UX, this one is the rule
+ *    (defence in depth; the two are the same function so they cannot drift).
+ *  • Scoped to the CUSTOMER as well as the id, so a stale or crafted id can
+ *    never reach across customers; RLS scopes the user the same way it does for
+ *    every table.
+ *  • `.select('id')` — the delete must PROVE it removed a row. Zero rows back
+ *    (wrong customer, already gone, RLS refusal) is a failure the owner is told
+ *    about, never a silent "success" over an intact row.
+ *  • If the deleted property was the customer's primary and others remain, the
+ *    oldest survivor is promoted — every insert path sets "first property =
+ *    primary", and readers (displayAddress, the portal's singular `property`)
+ *    treat primary as the customer's identity, so the invariant is kept rather
+ *    than left dangling. A failed promotion is REPORTED (the delete itself
+ *    succeeded); it never claims silently.
+ */
+export async function deleteProperty(
+  supabase: Supa, p: { propertyId: string; customerId: string },
+): Promise<{ error?: string; blocked?: PropertyLink[]; promotedId?: string | null; promoteError?: string }> {
+  const { links, error: linkErr } = await propertyLinks(supabase, p.propertyId)
+  if (linkErr) return { error: linkErr }
+  const held = links.filter(l => l.count > 0)
+  if (held.length > 0) return { blocked: held }
+
+  // Know whether we're removing the primary BEFORE it's gone.
+  const { data: row, error: readErr } = await supabase.from('properties')
+    .select('id, is_primary').eq('id', p.propertyId).eq('customer_id', p.customerId).maybeSingle()
+  if (readErr) return { error: readErr.message }
+  if (!row) return { error: 'This property no longer exists on this customer.' }
+
+  const { data: gone, error: delErr } = await supabase.from('properties')
+    .delete().eq('id', p.propertyId).eq('customer_id', p.customerId).select('id')
+  if (delErr) return { error: delErr.message }
+  if (!gone || gone.length === 0) return { error: 'Nothing was removed — the property may have changed. Reload and try again.' }
+
+  if (!(row as { is_primary: boolean | null }).is_primary) return { promotedId: null }
+  const { data: rest, error: restErr } = await supabase.from('properties')
+    .select('id').eq('customer_id', p.customerId).order('created_at', { ascending: true }).limit(1)
+  if (restErr) return { promotedId: null, promoteError: restErr.message }
+  const heir = (rest as { id: string }[] | null)?.[0]
+  if (!heir) return { promotedId: null }   // sole property removed — nothing to promote
+  const { error: promErr } = await supabase.from('properties').update({ is_primary: true }).eq('id', heir.id)
+  if (promErr) return { promotedId: null, promoteError: promErr.message }
+  return { promotedId: heir.id }
+}

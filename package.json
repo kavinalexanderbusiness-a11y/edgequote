@@ -54,6 +54,7 @@
     "verify:booking-link": "tsx scripts/verify-booking-link.ts",
     "verify:review-audience": "tsx scripts/verify-review-audience.ts",
     "verify:property-label": "tsx scripts/verify-property-label.ts",
+    "verify:property-remove": "tsx scripts/verify-property-remove.ts",
     "verify:field-stops": "tsx scripts/verify-field-stops.ts",
     "verify:workforce": "tsx scripts/verify-workforce.ts",
     "verify:job-completion": "tsx scripts/verify-job-completion.ts",
