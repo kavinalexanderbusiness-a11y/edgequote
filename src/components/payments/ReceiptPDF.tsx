@@ -7,6 +7,7 @@ import type { Invoice, Payment, BusinessSettings } from '@/types'
 import { paymentMethodLabel } from '@/types'
 import { invoiceTotals, gstRegistrationNumber } from '@/lib/invoiceTotals'
 import { invoiceBalance, receiptNumberFor } from '@/lib/payments/ledger'
+import { pdfLogoUrl } from '@/lib/photos'
 
 // ── Payment receipt PDF ──────────────────────────────────────────────────────────
 // Same design language as InvoicePDF (one visual system: logo/company header, dark
@@ -112,7 +113,8 @@ export function ReceiptDocument({ payment, invoice, settings }: ReceiptPDFProps)
         <View style={styles.headerRow}>
           <View>
             {settings?.logo_url ? (
-              <Image src={settings.logo_url} style={{
+              // pdfLogoUrl — see InvoicePDF: a receipt carried the same 11 MB logo.
+              <Image src={pdfLogoUrl(settings.logo_url)} style={{
                 ...styles.logo,
                 width: Math.min(200, 130 * (((settings.logo_scale && settings.logo_scale >= 50 ? settings.logo_scale : 100)) / 100)),
                 height: Math.min(105, 70 * (((settings.logo_scale && settings.logo_scale >= 50 ? settings.logo_scale : 100)) / 100)),

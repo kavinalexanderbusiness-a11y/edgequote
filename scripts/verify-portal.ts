@@ -18,6 +18,8 @@ import {
   NO_PROPERTY, MAX_REQUEST_PRESETS,
   type PortalData, type PortalJob, type PortalProperty, type DocBlobRenderers,
 } from '../src/app/portal/[token]/model'
+// The PDF logo bound — the fix for the invoice a customer could list but not open.
+import { pdfLogoUrl, PDF_LOGO_MAX_PX } from '../src/lib/photos'
 
 let pass = 0
 let fail = 0
@@ -477,6 +479,88 @@ console.log('\nrecentPaymentLanded (post-checkout confirmation):')
   check('falls back to created_at when paid_at is null', recentPaymentLanded([pay({ paid_at: null })], NOW) === true)
   check('an unparseable stamp is ignored, not trusted', recentPaymentLanded([pay({ paid_at: 'not-a-date', created_at: '' })], NOW) === false)
   check('one recent payment among old ones still confirms', recentPaymentLanded([pay({ id: 'old', paid_at: '2026-01-01T00:00:00Z', created_at: '2026-01-01T00:00:00Z' }), pay({})], NOW) === true)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Invoice ACCESS — see it, open it, download it, and read the right number.
+//
+// A customer who cannot open their bill does not pay it, so this is a collections
+// path, not a convenience. The bug that closed it was invisible to tsc and to
+// every check above: the PDF logo. @react-pdf embeds whatever bytes `src`
+// resolves to, at full resolution, and the live branding logo is a 6144 × 4096
+// PNG weighing 10.8 MB — so every invoice PDF came out at 11.3 MB. On a phone
+// that is a stalled spinner or "Could not generate the PDF"; the invoice was
+// listed, priced and payable, and simply could not be opened.
+//
+// pdfLogoUrl is the bound. These checks pin it, plus the surrounding contract:
+// which invoices are the customer's, what each owes, and that an empty book is
+// distinguishable from a failed load.
+{
+  const view = buildPortalView(FULL, TODAY, renderers)
+  const invs = view.docItems.filter(d => d.kind === 'invoice')
+  const byNum = new Map(invs.map(d => [d.number, d]))
+
+  // 1. The authorized customer sees exactly their own non-draft invoices.
+  check('customer sees every issued invoice', invs.length === 3, `saw ${invs.length}`)
+  check('… and they are the payload\'s own invoices', invs.every(d => FULL.invoices.some(i => i.id === d.rawId)))
+  check('a DRAFT invoice is never shown (owner\'s unfinished work)', !byNum.has('INV-3'))
+
+  // 2. Nothing from another customer can appear. get_portal_data is token-scoped,
+  //    so the payload IS the authorization boundary — this pins that the model
+  //    never reaches beyond the payload it was handed.
+  const OTHER: PortalData = { ...FULL, customer: { ...FULL.customer, id: 'c2', name: 'Someone Else' },
+    invoices: [{ ...FULL.invoices[0], id: 'i-theirs', invoice_number: 'INV-999', amount: 999 }] }
+  const otherIds = new Set(buildPortalView(OTHER, TODAY, renderers).docItems.filter(d => d.kind === 'invoice').map(d => d.rawId))
+  check('another customer\'s invoice never leaks into this portal', invs.every(d => !otherIds.has(d.rawId)))
+  check('… and their own list is not empty either (the check can fail)', otherIds.size === 1 && otherIds.has('i-theirs'))
+
+  // 3 + 4. View and Download are both `getBlob()` + `filename` on the DocItem —
+  //        the only contract DocActions has. A missing/blank filename downloads
+  //        as "download" with no extension, which reads as a broken file.
+  const due = byNum.get('INV-1')!
+  check('View/Download has a document to fetch', typeof due.getBlob === 'function')
+  check('the PDF downloads under the invoice number', due.filename === 'INV-1.pdf', due.filename)
+  check('every invoice row can produce a document', invs.every(d => typeof d.getBlob === 'function' && /^INV-\d+\.pdf$/.test(d.filename)))
+
+  // 5. Paid / partially paid / unpaid stay accurate — GST 5% on the fixture.
+  check('unpaid: balance is the full GST-inclusive total', due.amount === 105 && due.balance === 105, `${due.amount}/${due.balance}`)
+  const late = byNum.get('INV-2')!
+  check('partially paid: balance is what is STILL owed', late.amount === 210 && late.balance === 110, `${late.amount}/${late.balance}`)
+  check('… and the row says due-vs-paid, not just the total', JSON.stringify(invoicePaymentNote(late)) === JSON.stringify({ due: '$110.00', paid: '$100.00' }))
+  check('past its due date, an owing invoice reads overdue', late.status === 'overdue')
+  const paid = byNum.get('INV-4')!
+  check('paid: balance is zero, never negative on an overpayment', paid.balance === 0 && paid.amount === 63)
+  check('a paid invoice is not presented as payable', !(paid.balance > 0))
+  // The portal must agree with the owner's screens to the cent — same engine.
+  check('money strip matches the rows it summarizes',
+    view.money.invoiced === 378 && view.money.paid === 163 && view.money.due === 215 && view.money.owingCount === 2,
+    JSON.stringify(view.money))
+
+  // 6. "We couldn't reach the server" must never render as "you have no invoices".
+  //    null = the load failed (PortalClient keeps the data it already had); an
+  //    EMPTY array is a real answer about a real customer. Two different states.
+  check('a failed load is null — not an empty portal', normalizePortal(null) === null)
+  const emptyBook = normalizePortal({ ...FULL, invoices: [] })
+  check('a customer with no invoices is an empty list, not a failure',
+    emptyBook !== null && Array.isArray(emptyBook.invoices) && emptyBook.invoices.length === 0)
+  check('… and that empty book renders zero invoice rows',
+    buildPortalView(emptyBook!, TODAY, renderers).docItems.filter(d => d.kind === 'invoice').length === 0)
+
+  // 7. THE root-cause guard. A logo the page draws at ≤200×105pt must not be
+  //    embedded at 6144px. Owner PDFs use the identical helper, so this pins both.
+  const LOGO = 'https://x.supabase.co/storage/v1/object/public/branding/u1/logo.png?t=1782204636636'
+  const sized = pdfLogoUrl(LOGO)
+  check('the PDF logo goes through the resizing endpoint', sized.includes('/storage/v1/render/image/public/'))
+  check('… bounded to PDF_LOGO_MAX_PX', sized.includes(`width=${PDF_LOGO_MAX_PX}`) && sized.includes(`height=${PDF_LOGO_MAX_PX}`))
+  // `cover` would CROP the logo — a mutilated brand on every document.
+  check('… fitted, never cropped', sized.includes('resize=contain') && !sized.includes('resize=cover'))
+  // The logo lives at ONE fixed path and is overwritten in place, so losing the
+  // cache-buster pins every future PDF to the old logo.
+  check('… and the cache-buster survives (logo.png is overwritten in place)', sized.includes('t=1782204636636'))
+  // 7b. Owner behaviour is unchanged for anything this helper can't resize.
+  check('a non-storage logo URL is passed through untouched', pdfLogoUrl('https://cdn.example.com/logo.png') === 'https://cdn.example.com/logo.png')
+  check('a data: URI logo is passed through untouched', pdfLogoUrl('data:image/png;base64,AAAA') === 'data:image/png;base64,AAAA')
+  check('no logo stays no logo (never the string "null")', pdfLogoUrl(null) === '' && pdfLogoUrl(undefined) === '')
 }
 
 console.log(`\n${fail === 0 ? '✓' : '✗'} portal checks: ${pass} passed, ${fail} failed`)

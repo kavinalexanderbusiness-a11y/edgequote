@@ -5,6 +5,7 @@ import {
 } from '@react-pdf/renderer'
 import type { Quote, QuoteService, BusinessSettings } from '@/types'
 import { serviceLineTotals } from '@/lib/quoteServices'
+import { pdfLogoUrl } from '@/lib/photos'
 
 const COLORS = {
   green: '#00C896',
@@ -121,7 +122,9 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
           <View>
             {settings?.logo_url ? (
               // Logo size honours the Branding setting (logo_scale %, capped for layout).
-              <Image src={settings.logo_url} style={{
+              // src goes through pdfLogoUrl — see InvoicePDF: the raw upload is drawn
+              // at thumbnail size but embedded whole.
+              <Image src={pdfLogoUrl(settings.logo_url)} style={{
                 ...styles.logo,
                 width: Math.min(200, 130 * (((settings.logo_scale && settings.logo_scale >= 50 ? settings.logo_scale : 100)) / 100)),
                 height: Math.min(105, 70 * (((settings.logo_scale && settings.logo_scale >= 50 ? settings.logo_scale : 100)) / 100)),

@@ -14,7 +14,13 @@
 import { buildServicePlans, type ServicePlan } from '@/lib/recurrence'
 import { jobVisitValue } from '@/lib/invoicing'
 import { settingsToSeasons } from '@/lib/seasons'
-import { invoiceTotals } from '@/lib/invoiceTotals'
+// THE balance engine (lib/payments/ledger) — the same call the owner's customer
+// page, the invoice-reminder cron and ReceiptPDF make. The portal used to re-derive
+// `total − amount_paid` inline in three places; identical arithmetic today, but a
+// fourth copy of the ledger's definition is exactly how a customer ends up reading a
+// different amount due than the owner. Costs nothing to import: ledger's only runtime
+// dependency is invoiceTotals, which this module already pulls.
+import { invoiceBalance } from '@/lib/payments/ledger'
 import { cashAmountOf } from '@/lib/payments/analytics'
 import { serviceLineTotals } from '@/lib/quoteServices'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
@@ -67,6 +73,18 @@ export interface PortalData {
   quotes: PortalQuote[]; invoices: PortalInvoice[]; jobs: PortalJob[]; recurrences: PortalRec[]; photos: PortalPhoto[]; payments: PortalPayment[]
   payment_method?: PortalCard | null
   services?: PortalService[] | null
+}
+
+// A PortalInvoice as the ledger's balance engine wants it. Only a type bridge: the
+// RPC's json_agg yields `null` for an absent amount_paid/discount where the Invoice
+// row type uses `undefined`. No arithmetic happens here — that is invoiceBalance's job.
+function forBalance(i: PortalInvoice) {
+  return {
+    amount: i.amount,
+    amount_paid: i.amount_paid ?? undefined,
+    discount_type: i.discount_type ?? null,
+    discount_value: i.discount_value ?? null,
+  }
 }
 
 export type TabKey = 'home' | 'property' | 'visits' | 'billing' | 'messages' | 'requests'
@@ -441,10 +459,8 @@ export function buildDerived(data: PortalData, todayISO: string): Derived {
   // invoices, so partial payments and discounts are reflected. Same engine as
   // the dashboard — never a second GST/discount computation here.
   const gstPct = Number(data.business?.gst_percent) || 0
-  const outstanding = (data.invoices || []).filter(i => i.status !== 'draft' && i.status !== 'cancelled').reduce((s, i) => {
-    const total = invoiceTotals(i.amount, { gst_percent: gstPct }, { type: i.discount_type, value: i.discount_value }).total
-    return s + Math.max(0, Math.round((total - (Number(i.amount_paid) || 0)) * 100) / 100)
-  }, 0)
+  const outstanding = (data.invoices || []).filter(i => i.status !== 'draft' && i.status !== 'cancelled').reduce(
+    (s, i) => s + Math.max(0, invoiceBalance(forBalance(i), { gst_percent: gstPct }).balance), 0)
   // Service plans come from THE shared engine — the exact function the owner's
   // customer page runs, so the two can never disagree about a plan. A series
   // with no future visits reports paused:true instead of disappearing.
@@ -559,9 +575,11 @@ export function buildDocItems(opts: {
   // A DRAFT invoice is the owner's unfinished work — private until sent, the
   // precedent quotes set (get_portal_data filters draft quotes server-side).
   const inv: DocItem[] = invoices.filter(ii => ii.status !== 'draft').map(ii => {
-    // Same balance math as the dashboard: discounted+GST total − payments recorded.
-    const total = invoiceTotals(ii.amount, { gst_percent: gstPct }, { type: ii.discount_type, value: ii.discount_value }).total
-    const balance = Math.max(0, Math.round((total - (Number(ii.amount_paid) || 0)) * 100) / 100)
+    // THE dashboard's balance engine, not a copy of it: discounted+GST total −
+    // payments recorded. Clamped at 0 for display — an overpaid invoice owes
+    // nothing, and the credit is the ledger's story (PaymentsTab tells it).
+    const { total, balance: signed } = invoiceBalance(forBalance(ii), { gst_percent: gstPct })
+    const balance = Math.max(0, signed)
     // 'overdue' is a DISPLAY overlay derived from due_date — never stored —
     // exactly the shape quoteStatus uses for expiry. The portal must tell the
     // customer they're late before a chasing text does.
@@ -643,9 +661,10 @@ export function moneySummary(invoices: PortalInvoice[], business: PortalData['bu
   let invoiced = 0, paid = 0, due = 0, owingCount = 0
   for (const i of invoices) {
     if (i.status === 'draft' || i.status === 'cancelled') continue
-    const total = invoiceTotals(i.amount, { gst_percent: gstPct }, { type: i.discount_type, value: i.discount_value }).total
-    const amtPaid = Math.min(Number(i.amount_paid) || 0, total)
-    const balance = Math.max(0, Math.round((total - (Number(i.amount_paid) || 0)) * 100) / 100)
+    const t = invoiceBalance(forBalance(i), { gst_percent: gstPct })
+    const total = t.total
+    const amtPaid = Math.min(t.paid, total)
+    const balance = Math.max(0, t.balance)
     invoiced += total
     paid += amtPaid
     due += balance

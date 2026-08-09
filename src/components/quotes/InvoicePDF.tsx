@@ -5,6 +5,7 @@ import {
 } from '@react-pdf/renderer'
 import type { Invoice, BusinessSettings } from '@/types'
 import { invoiceTotals, gstRegistrationNumber } from '@/lib/invoiceTotals'
+import { pdfLogoUrl } from '@/lib/photos'
 
 const COLORS = {
   green: '#00C896',
@@ -98,7 +99,9 @@ export function InvoiceDocument({ invoice, settings }: InvoicePDFProps) {
           <View>
             {settings?.logo_url ? (
               // Logo size honours the Branding setting (logo_scale %, capped for layout).
-              <Image src={settings.logo_url} style={{
+              // src goes through pdfLogoUrl: the box below is at most 200×105pt, and
+              // embedding the raw upload put an 11 MB logo in every invoice.
+              <Image src={pdfLogoUrl(settings.logo_url)} style={{
                 ...styles.logo,
                 width: Math.min(200, 130 * (((settings.logo_scale && settings.logo_scale >= 50 ? settings.logo_scale : 100)) / 100)),
                 height: Math.min(105, 70 * (((settings.logo_scale && settings.logo_scale >= 50 ? settings.logo_scale : 100)) / 100)),

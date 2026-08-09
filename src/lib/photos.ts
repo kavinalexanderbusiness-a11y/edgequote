@@ -34,6 +34,44 @@ export function thumbUrl(url: string, w = 480, h = 480): string {
   return `${base}?width=${w}&height=${h}&resize=cover&quality=72`
 }
 
+// ── The business logo, sized for a PDF ───────────────────────────────────────
+// Every PDF document (invoice, quote, receipt) draws the logo at a MAXIMUM of
+// 200 × 105 POINTS — about 2.8 inches. @react-pdf embeds whatever bytes the src
+// resolves to, at full resolution, inside every generated file.
+//
+// That is not a theoretical waste. The live branding logo is a 6144 × 4096 PNG
+// weighing 10.8 MB, so every invoice PDF came out at 11.3 MB — a $45 one-line
+// bill, 99.9% of it a logo scaled down to thumbnail size on the page. In the
+// customer portal that is the difference between a document and a broken
+// feature: the browser must first pull 10.8 MB (4.4s on desktop wifi, far worse
+// on a phone) before it can render, then hold an 11 MB blob in memory, and a
+// low-end phone drops the tab. The customer taps "Download PDF" and gets a
+// spinner, a stall, or "Could not generate the PDF" — which is exactly how a
+// bill becomes uncollectable.
+//
+// So bound it at the source: the same Supabase render endpoint thumbUrl uses,
+// which takes that logo to 63 KB. `contain` (never `cover`) because cropping a
+// logo mutilates a brand, and 600px keeps it ~216 DPI at full print width —
+// sharper than the page can show.
+//
+// Two rules this must not break:
+//  · A logo hosted anywhere but Supabase storage (or a data: URI) is returned
+//    UNCHANGED — a URL we can't resize is still a logo we must draw.
+//  · The `?t=` cache-buster is PRESERVED. Unlike a photo, the logo lives at one
+//    fixed path (<user_id>/logo.png) and is overwritten in place, so that stamp
+//    is the only thing distinguishing a new logo from the old one. thumbUrl can
+//    drop the query because each photo has its own unique path; here that would
+//    pin every PDF to a stale logo.
+export const PDF_LOGO_MAX_PX = 600
+
+export function pdfLogoUrl(url: string | null | undefined, max = PDF_LOGO_MAX_PX): string {
+  if (!url || !url.includes('/storage/v1/object/public/')) return url || ''
+  const [path, query] = url.split('?')
+  const base = path.replace('/storage/v1/object/public/', '/storage/v1/render/image/public/')
+  const stamp = new URLSearchParams(query || '').get('t')
+  return `${base}?width=${max}&height=${max}&resize=contain&quality=85${stamp ? `&t=${encodeURIComponent(stamp)}` : ''}`
+}
+
 function withUrl(supabase: SupabaseClient, rows: JobPhoto[]): JobPhotoView[] {
   return rows.map(r => ({ ...r, url: publicUrl(supabase, r.storage_path) }))
 }
