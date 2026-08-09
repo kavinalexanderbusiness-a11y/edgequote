@@ -133,6 +133,9 @@ export default function DispatchPage() {
   // state across Workforce/Payroll/Timesheet links here — previously they told
   // the owner to "add people under Crews & roster on the dispatch board" and left
   // them to find it, which is a dead end on the first screen a new owner sees.
+  // Session-sticky: once opened, the day-note box never collapses back — the one
+  // moment it must not vanish is right after the owner clears its text mid-edit.
+  const [dayNoteOpen, setDayNoteOpen] = useState(false)
   const [managerOpen, setManagerOpen] = useState(() => {
     if (typeof window === 'undefined') return false
     return new URLSearchParams(window.location.search).get('roster') === '1'
@@ -428,7 +431,11 @@ export default function DispatchPage() {
 
   // Move one visit to a crew (null = unassign). `beforeJobId` places it at a
   // specific slot in the target lane (undefined = end, the legacy behaviour).
-  const moveJob = useCallback(async (jobId: string, toCrewId: string | null, beforeJobId?: string | null) => {
+  // `silent` suppresses ONLY the success toast+undo — for the Escape put-back,
+  // which is itself a cancellation: announcing "→ Green crew · Undo" for undoing
+  // reads as a new move that now wants undoing in turn. Errors always toast, and
+  // every real move (drag, arrows, menu) stays loud with its undo.
+  const moveJob = useCallback(async (jobId: string, toCrewId: string | null, beforeJobId?: string | null, opts?: { silent?: boolean }) => {
     const job = jobs.find(j => j.id === jobId)
     if (!job || (job.crew_id ?? null) === toCrewId) return
     const prev = { crew_id: job.crew_id ?? null, route_order: job.route_order ?? null }
@@ -446,9 +453,18 @@ export default function DispatchPage() {
       const next = at >= 0 ? [...rest.slice(0, at), jobId, ...rest.slice(at)] : [...rest, jobId]
       applyLaneOrder(next)
     }
+    if (opts?.silent) return
     const toName = toCrewId ? crews.find(c => c.id === toCrewId)?.name ?? 'crew' : 'Unassigned'
     notify(`${job.customers?.name || job.title} → ${toName}`, {
-      undo: async () => { await supabase.from('jobs').update(prev).eq('id', jobId); fetchAll() },
+      // Branch on the write: a failed put-back that stays silent leaves the job
+      // on the wrong crew while the owner walks away believing it's home. (Same
+      // contract verify:undo-contract enforces — these `undo:` option callbacks
+      // are the one shape its `.undo(` scan can't see.)
+      undo: async () => {
+        const { error } = await supabase.from('jobs').update(prev).eq('id', jobId)
+        if (error) notify.error(`Could not put ${job.customers?.name || job.title} back: ${error.message}`)
+        fetchAll()
+      },
     })
   }, [jobs, crews, supabase, fetchAll, applyLaneOrder])
 
@@ -485,7 +501,16 @@ export default function DispatchPage() {
       if (r.ordered.length === 0) { if (!opts?.quiet) notify('No located stops to order in this lane.'); return }
       const orderedIds = r.ordered.map(s => s.jobId)
       const rest = route.seq.map(j => j.id).filter(id => !orderedIds.includes(id))
-      const idsAfter = [...orderedIds, ...rest]
+      // Membership is re-read AFTER the awaits (geocode + a real network round-trip
+      // to the optimizer). The snapshot above is from before them: a job dragged to
+      // another crew mid-optimize would still be in it, and applyLaneOrder's per-id
+      // writes carry no lane guard — the stale write would stamp a foreign lane's
+      // route_order onto it, injecting it mid-sequence over there. Jobs that LEFT
+      // are dropped; jobs that ARRIVED during the optimize keep their slot (nulls
+      // sort last, so they land at the end until the next optimize).
+      const nowInLane = new Set((laneRoutesRef.current[laneId]?.seq ?? []).map(j => j.id))
+      const idsAfter = [...orderedIds, ...rest].filter(id => nowInLane.has(id))
+      if (idsAfter.length === 0) { if (!opts?.quiet) notify('This lane changed while ordering — nothing to apply.'); return }
       applyLaneOrder(idsAfter)
       if (!opts?.quiet) {
         // Say what actually changed — the after picture run through the SAME
@@ -530,7 +555,9 @@ export default function DispatchPage() {
     fetchAll()
     notify(`Balanced — ${balancePlan.moves.length} visit${balancePlan.moves.length !== 1 ? 's' : ''} moved.`, {
       undo: async () => {
-        await Promise.all(snapshot.map(s => supabase.from('jobs').update({ crew_id: s.crew_id, route_order: s.route_order }).eq('id', s.id)))
+        const rs = await Promise.all(snapshot.map(s => supabase.from('jobs').update({ crew_id: s.crew_id, route_order: s.route_order }).eq('id', s.id)))
+        const bad = rs.filter(r => r.error).length
+        if (bad) notify.error(`${bad} visit${bad !== 1 ? 's' : ''} could not be put back — check the board.`)
         fetchAll()
       },
     })
@@ -551,7 +578,9 @@ export default function DispatchPage() {
     const toName = toCrewId ? crews.find(c => c.id === toCrewId)?.name ?? 'crew' : 'Unassigned'
     notify(`${targets.length} visit${targets.length !== 1 ? 's' : ''} → ${toName}`, {
       undo: async () => {
-        await Promise.all(snapshot.map(s => supabase.from('jobs').update({ crew_id: s.crew_id, route_order: s.route_order }).eq('id', s.id)))
+        const rs = await Promise.all(snapshot.map(s => supabase.from('jobs').update({ crew_id: s.crew_id, route_order: s.route_order }).eq('id', s.id)))
+        const bad = rs.filter(r => r.error).length
+        if (bad) notify.error(`${bad} visit${bad !== 1 ? 's' : ''} could not be put back — check the board.`)
         fetchAll()
       },
     })
@@ -603,8 +632,10 @@ export default function DispatchPage() {
       (skipped > 0 ? ` · ${skipped} in-progress/done left alone` : ''),
       {
         undo: async () => {
-          await Promise.all(snapshot.map(s => supabase.from('jobs').update({ scheduled_date: s.scheduled_date, route_order: s.route_order }).eq('id', s.id)))
+          const rs = await Promise.all(snapshot.map(s => supabase.from('jobs').update({ scheduled_date: s.scheduled_date, route_order: s.route_order }).eq('id', s.id)))
+          const bad = rs.filter(r => r.error).length
           fetchAll()
+          if (bad) { notify.error(`${bad} visit${bad !== 1 ? 's' : ''} could not be moved back — check the board.`); return }
           if (notified > 0) notify('Dates restored — the notices already sent can’t be recalled.')
         },
       },
@@ -842,7 +873,9 @@ export default function DispatchPage() {
       if (!g) return
       setKbGrab(null)
       ;(async () => {
-        if ((job.crew_id ?? null) !== g.homeCrewId) await moveJob(job.id, g.homeCrewId, null)
+        // silent: the put-back IS the cancellation — a "→ crew · Undo" toast for
+        // it would offer to undo an undo. The aria announcement carries the news.
+        if ((job.crew_id ?? null) !== g.homeCrewId) await moveJob(job.id, g.homeCrewId, null, { silent: true })
         applyLaneOrder(g.homeOrder)
         setAnnounce(`${title} put back.`)
         refocusGrip(job.id)
@@ -993,7 +1026,11 @@ export default function DispatchPage() {
     notify(`${job.customers?.name || job.title} started${res.outcome === 'queued' ? ' — will sync' : ''}`, {
       undo: async () => {
         setJobs(cur => cur.map(j => j.id === job.id ? { ...j, ...res.prev } : j))
-        await revertVisit(supabase, job.id, res.prev, `Undo start ${job.title || 'job'}`, { baseUpdatedAt: job.updated_at })
+        // revertVisit queues offline (that path is its own honesty mechanism);
+        // an ONLINE failure throws, and swallowing it would leave the optimistic
+        // repaint above lying about a start that is still stamped.
+        try { await revertVisit(supabase, job.id, res.prev, `Undo start ${job.title || 'job'}`, { baseUpdatedAt: job.updated_at }) }
+        catch (e) { notify.error('Could not undo the start: ' + (e instanceof Error ? e.message : 'write failed')) }
         fetchAll()
       },
     })
@@ -1046,9 +1083,12 @@ export default function DispatchPage() {
     if (failed > 0) notify.error(`${failed} visit${failed !== 1 ? 's' : ''} could not be completed.`)
     if (doneN > 0) notify(`${doneN} visit${doneN !== 1 ? 's' : ''} completed${invoices > 0 ? ` · ${invoices} draft invoice${invoices !== 1 ? 's' : ''}` : ''}`, {
       undo: async () => {
+        let bad = 0
         for (const r of reverts) {
-          await revertVisit(supabase, r.id, r.prev, 'Undo bulk complete', { baseUpdatedAt: r.base, deleteDraftInvoice: r.draft })
+          try { await revertVisit(supabase, r.id, r.prev, 'Undo bulk complete', { baseUpdatedAt: r.base, deleteDraftInvoice: r.draft }) }
+          catch { bad++ }
         }
+        if (bad) notify.error(`${bad} visit${bad !== 1 ? 's' : ''} could not be un-completed — check the board.`)
         fetchAll()
       },
     })
@@ -1253,8 +1293,20 @@ export default function DispatchPage() {
         </Banner>
       )}
 
+      {/* A blocked day told the owner what was needed ("anything still scheduled
+          needs a new day") and offered no way to do it — the only reschedule
+          door was three undiscoverable steps deep in the bulk bar. The banner
+          now IS the door: select everything still standing, open the same
+          dialog. Deliberately clobbers any in-progress selection — on a blocked
+          day, moving the day is the task. */}
       {dayRow?.blocks && (
-        <Banner tone="warn">
+        <Banner tone="warn"
+          action={activeJobs.some(j => j.status === 'scheduled') ? (
+            <Button size="sm" variant="secondary"
+              onClick={() => { if (!bulk.allSelected) bulk.toggleAll(); setReschedOpen(true) }}>
+              <CalendarDays className="w-3.5 h-3.5" /> Reschedule the day
+            </Button>
+          ) : undefined}>
           This day is marked {dayStatusLabel(dayRow)} — capacity is zero. Anything still scheduled needs a new day or an explicit exception.
         </Banner>
       )}
@@ -1355,24 +1407,41 @@ export default function DispatchPage() {
             <BulkActionBar count={bulk.count} actions={bulkActions} onClear={bulk.clear} busyKey={bulkBusy} />
           )}
 
-          {/* Day-level note */}
-          <NoteBox
-            icon={StickyNote}
-            placeholder="Day note for the whole operation — gate codes, yard reminders, weather calls…"
-            value={dayNote?.body ?? ''}
-            updatedAt={dayNote?.updated_at ?? null}
-            onSave={async body => {
-              if (!uid) return 'not signed in'
-              const err = await saveDispatchNote(supabase, uid, date, null, body)
-              if (err) { notify.error('Could not save the note: ' + err); return err }
-              fetchAll()
-              return null
-            }}
-          />
+          {/* Day-level note. An EMPTY note box was ~70px of chrome on every day
+              that had nothing to say — one of the reasons no job row was visible
+              at first paint on a laptop. Collapsed to one line until it has a
+              note or the owner opens it; `dayNoteOpen` is sticky for the session
+              so clearing the text mid-edit can't collapse the box underneath the
+              cursor. The NoteBox itself — and its awaited-save contract — is
+              untouched. */}
+          {dayNoteOpen || dayNote?.body ? (
+            <NoteBox
+              icon={StickyNote}
+              placeholder="Day note for the whole operation — gate codes, yard reminders, weather calls…"
+              value={dayNote?.body ?? ''}
+              updatedAt={dayNote?.updated_at ?? null}
+              autoFocus={dayNoteOpen && !dayNote?.body}
+              onSave={async body => {
+                if (!uid) return 'not signed in'
+                const err = await saveDispatchNote(supabase, uid, date, null, body)
+                if (err) { notify.error('Could not save the note: ' + err); return err }
+                fetchAll()
+                return null
+              }}
+            />
+          ) : (
+            <button type="button" onClick={() => setDayNoteOpen(true)}
+              className="flex items-center gap-1.5 text-[11px] text-ink-faint hover:text-ink transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              <StickyNote className="w-3.5 h-3.5" aria-hidden /> Add a day note — gate codes, yard reminders, weather calls
+            </button>
+          )}
 
-          {/* Mobile lane jumper — the lanes stack on a phone; this is the map of the stack. */}
+          {/* Lane jumper — the lanes stack single-column everywhere below lg
+              (the grid's first multi-column step), not just on phones; a tablet
+              owner scrolling a four-crew stack needs the map of the stack just
+              as much. Hidden from lg up, where lanes sit side by side. */}
           {visibleLanes.filter(l => (laneRoutes[l.laneId]?.seq.length ?? 0) > 0).length > 1 && (
-            <nav aria-label="Jump to crew" className="sm:hidden sticky top-0 z-20 -mx-1 px-1 py-1.5 bg-bg/85 backdrop-blur flex items-center gap-1.5 overflow-x-auto">
+            <nav aria-label="Jump to crew" className="lg:hidden sticky top-0 z-20 -mx-1 px-1 py-1.5 bg-bg/85 backdrop-blur flex items-center gap-1.5 overflow-x-auto">
               {visibleLanes.filter(l => (laneRoutes[l.laneId]?.seq.length ?? 0) > 0).map(lane => {
                 const badge = laneBadges[lane.laneId]
                 return (
@@ -1389,7 +1458,13 @@ export default function DispatchPage() {
             </nav>
           )}
 
-          <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3 items-start">
+          {/* Three-across waits for 2xl (~400px lanes). At xl (1280px — the modal
+              laptop) three tracks left ~30px for the customer's NAME on an
+              in-progress row: every fixed control (checkbox, grip, order chip,
+              status badge, start/complete, nudges, menu) kept its width and the
+              one flexible thing on the row absorbed the whole squeeze. The board
+              was WIDER per lane at 1024px than at 1280px. */}
+          <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3 items-start">
             {visibleLanes.map((lane, i) => (
               <CrewLaneCard
                 key={lane.laneId}
@@ -1728,7 +1803,9 @@ const CrewLaneCard = memo(function CrewLaneCard({
         {hasRunning && (
           <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse shrink-0" title="On a job right now" aria-label="On a job right now" />
         )}
-        <span className="text-[11px] text-ink-faint tabular-nums shrink-0">{seq.length} stop{seq.length !== 1 ? 's' : ''}</span>
+        <span className="text-[11px] text-ink-faint tabular-nums shrink-0">
+          {doneCount > 0 ? `${doneCount}/${seq.length} done` : `${seq.length} stop${seq.length !== 1 ? 's' : ''}`}
+        </span>
         {conflictBadge && (
           <span
             title={`${conflictBadge.count} conflict${conflictBadge.count !== 1 ? 's' : ''} in this lane`}
@@ -1748,9 +1825,25 @@ const CrewLaneCard = memo(function CrewLaneCard({
           </span>
         )}
         {route && seq.length > 0 && (
-          <span className="ml-auto text-[11px] text-ink-muted tabular-nums shrink-0">wraps ~{route.etas.finish}</span>
+          // Hidden on phones: the crew NAME is the scarce information there, and
+          // this chip's shrink-0 was what squeezed it to a few characters. The
+          // finish time survives in the RouteTimeline header right below.
+          <span className="ml-auto text-[11px] text-ink-muted tabular-nums shrink-0 hidden sm:inline">wraps ~{route.etas.finish}</span>
         )}
       </div>
+
+      {/* The crew's note, surfaced where eyes actually are. The editable NoteBox
+          sits at the BOTTOM of the card — below every stop — so on a long lane
+          the note a dispatcher most needs ("gate code 4482, dog in yard") was
+          reliably below the fold. Read-only here, from the SAVED body only
+          (never NoteBox's in-flight draft — that would tangle with its awaited-
+          save contract); the editor at the bottom stays the one writer. */}
+      {!isUnassigned && note?.body?.trim() && (
+        <p className="text-[11px] text-amber-300/90 flex items-start gap-1.5 min-w-0" title={note.body.trim()}>
+          <StickyNote className="w-3 h-3 shrink-0 mt-0.5" aria-hidden />
+          <span className="line-clamp-2 whitespace-pre-wrap break-words">{note.body.trim()}</span>
+        </p>
+      )}
 
       {/* Capacity meter */}
       {!isUnassigned && route && (
@@ -1772,16 +1865,12 @@ const CrewLaneCard = memo(function CrewLaneCard({
         </div>
       )}
 
-      {/* Route statistics — the ETA chain's totals, stated once. */}
-      {!isUnassigned && stats && (
-        <p className="text-[11px] text-ink-faint tabular-nums">
-          On-site {Math.round(stats.workMin / 60 * 10) / 10}h · Drive ~{stats.driveMin}m
-          {stats.utilizationPct != null && (
-            <> · Day used <span className={cn('font-semibold', stats.utilizationPct > 100 ? 'text-red-400' : stats.utilizationPct >= 90 ? 'text-amber-400' : 'text-ink-muted')}>{stats.utilizationPct}%</span></>
-          )}
-          {doneCount > 0 && <> · {doneCount}/{seq.length} done</>}
-        </p>
-      )}
+      {/* The route-stats line that used to sit here said work-vs-capacity (the
+          meter directly above already draws it), drive minutes (the timeline
+          directly below prints them) and "Day used %" — three consecutive
+          renderings of the same facts in every lane, costing ~44px each toward
+          a first paint where no actual job row was visible at 1280×800. Its one
+          non-duplicate fact, N/M done, moved into the lane header. */}
 
       {/* Roster chips: technicians (status menu) + vehicles */}
       {(technicians.length > 0 || vehicles.length > 0) && (
@@ -1920,13 +2009,34 @@ const CrewLaneCard = memo(function CrewLaneCard({
                         doesn't say which one this stop is at. */}
                     <VisitAddress address={job.properties?.address} />
                     <p className="text-[11px] text-ink-faint truncate tabular-nums">
-                      {eta ? `ETA ${eta.arrival}` : 'ETA —'}
-                      {promisedMin != null && (
+                      {/* A checked-in crew has no future arrival: the planned ETA
+                          is moot the moment they're on site, and showing it made
+                          the running stop read like one still being driven to.
+                          What the owner needs there is how long they've been on
+                          it, next to the estimate it's burning against. */}
+                      {/* nowMin-gated: only today's board ticks a live clock — on a
+                          past day a leftover in_progress row would render a huge
+                          stale figure that never updates. */}
+                      {job.status === 'in_progress' && job.started_at && nowMin != null
+                        ? <span className="text-sky-300">on site {Math.max(1, Math.round((Date.now() - new Date(job.started_at).getTime()) / 60000))}m</span>
+                        : eta ? `ETA ${eta.arrival}` : 'ETA —'}
+                      {promisedMin != null && job.status !== 'in_progress' && (
                         <span className={late ? 'text-red-400 font-semibold' : undefined}> · promised {minutesToTime12(promisedMin)}</span>
                       )}
                       {' '}· {job.duration_minutes || DEFAULT_JOB_MIN}m
                       {job.service_type ? ` · ${job.service_type}` : ''}
                     </p>
+                    {/* The gate code finally shows up where the truck is. job.notes
+                        was loaded (select *) and rendered NOWHERE on this board —
+                        access instructions lived one modal away from the person
+                        radioing them to a crew. Same line-clamp treatment as the
+                        schedule's day board. */}
+                    {job.notes?.trim() && (
+                      <p className="text-[11px] text-amber-300/90 flex items-start gap-1 min-w-0" title={job.notes.trim()}>
+                        <StickyNote className="w-3 h-3 shrink-0 mt-0.5" aria-hidden />
+                        <span className="line-clamp-1 whitespace-pre-wrap break-words">{job.notes.trim()}</span>
+                      </p>
+                    )}
                   </div>
                   {job.status !== 'scheduled' && (
                     <Badge tone={jobStatusTone[job.status]} className="shrink-0 !text-[9px]">{JOB_STATUS_LABELS[job.status]}</Badge>
@@ -2059,13 +2169,16 @@ const CrewLaneCard = memo(function CrewLaneCard({
 // Leaving lastSaved behind on failure is what makes the re-seed effect below
 // correct too: draft !== lastSaved, so an incoming realtime refresh knows the box
 // is mid-edit and won't overwrite the words that haven't landed yet.
-function NoteBox({ value, onSave, placeholder, compact, icon: Icon, updatedAt }: {
+function NoteBox({ value, onSave, placeholder, compact, icon: Icon, updatedAt, autoFocus }: {
   value: string
   onSave: (body: string) => Promise<string | null>
   placeholder: string
   compact?: boolean
   icon: typeof StickyNote
   updatedAt?: string | null
+  /** The collapsed "+ Add a day note" affordance expands INTO this box — focus
+   *  must land in the textarea or the tap did nothing visible. */
+  autoFocus?: boolean
 }) {
   const [draft, setDraft] = useState(value)
   const [phase, setPhase] = useState<'idle' | 'dirty' | 'saving' | 'saved' | 'error'>('idle')
@@ -2124,7 +2237,12 @@ function NoteBox({ value, onSave, placeholder, compact, icon: Icon, updatedAt }:
         onBlur={() => { void commit(draft) }}
         onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void commit(draft) } }}
         placeholder={placeholder}
-        rows={draft.length > 80 || draft.includes('\n') ? 2 : 1}
+        autoFocus={autoFocus}
+        // Grow with the note (to 4 rows) instead of clipping at 2. Gate codes and
+        // access instructions are exactly the notes that run several lines, and a
+        // resize-none textarea was silently hiding line three of them — the only
+        // reading surface these notes have.
+        rows={Math.min(4, Math.max(draft.split('\n').length, draft.length > 80 || draft.includes('\n') ? 2 : 1))}
         aria-label={placeholder}
         title={updatedAt ? `Last saved ${new Date(updatedAt).toLocaleString()}` : undefined}
         className="flex-1 resize-none bg-transparent text-xs text-ink placeholder:text-ink-faint outline-none border-b border-transparent focus:border-border-strong transition-colors py-1"

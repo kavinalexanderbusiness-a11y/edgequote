@@ -63,7 +63,8 @@
     "verify:crew-access": "tsx scripts/verify-crew-access.ts",
     "verify:crew-invite": "tsx scripts/verify-crew-invite.ts",
     "verify:deposit": "tsx scripts/verify-deposit.ts",
-    "verify:deposit-documents": "tsx scripts/verify-deposit-documents.ts"
+    "verify:deposit-documents": "tsx scripts/verify-deposit-documents.ts",
+    "verify:dispatch-board": "tsx scripts/verify-dispatch-board.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",
