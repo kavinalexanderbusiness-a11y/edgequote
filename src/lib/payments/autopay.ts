@@ -74,6 +74,18 @@ export async function attemptAutoPayCharge(
   const invoice = invRow as InvoiceRow | null
   if (!invoice) return { result: 'skipped', reason: 'no-invoice' }
   if (invoice.status === 'paid') return { result: 'skipped', reason: 'already-paid' }
+  // A CANCELLED invoice is the owner saying this money is not owed. It still has a
+  // balance — cancelling is only allowed when nothing has been paid — so every
+  // "is there something to collect?" test downstream passes, and this used to run
+  // all the way to a real off-session charge on the customer's saved card. Taking
+  // money for a bill you withdrew is the worst outcome on this path, and the only
+  // status the guard above excluded was 'paid'.
+  //
+  // Every sibling door already refuses: Send, Edit, Record payment and Request
+  // deposit all gate on 'cancelled', and the customer portal's canPay excludes it
+  // too — so the customer could not pay a cancelled invoice while the owner could
+  // charge one. Reactivate is the way back; it is one tap on the status pill.
+  if (invoice.status === 'cancelled') return { result: 'skipped', reason: 'cancelled' }
   if (!invoice.customer_id) return { result: 'skipped', reason: 'no-customer' }
 
   // AutoPay charges ONLY recurring invoices (job_id → a job with a recurrence).

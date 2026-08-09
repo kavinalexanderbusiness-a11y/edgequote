@@ -174,6 +174,10 @@ export default function InvoicesPage() {
       else if (d.result === 'declined') notify(`The card was declined for ${inv.invoice_number}. Try a payment link or ask the customer to update their card.`)
       else if (d.result === 'skipped' && d.reason === 'no-card') notify('That customer has no saved card on file.')
       else if (d.result === 'skipped' && d.reason === 'already-charged') notify('This invoice has already been charged.')
+      // The engine refuses a cancelled invoice. Without its own branch this fell to
+      // the generic "Could not charge" below — which reads as a failure to retry
+      // rather than a deliberate refusal, and hides the one-tap fix.
+      else if (d.result === 'skipped' && d.reason === 'cancelled') notify(`${inv.invoice_number} is cancelled — reactivate it first if this is still owed.`)
       else if (d.result === 'skipped' && d.reason === 'webhook-unconfigured') notify('Configure the Stripe webhook before charging saved cards.')
       else if (!res.ok) notify(d.error || 'Could not charge the saved card.')
       else notify('Could not charge the saved card for this invoice.')
@@ -583,8 +587,13 @@ export default function InvoicesPage() {
                               {INVOICE_STATUS_LABELS[ds]}
                               {/* "Overdue" collapses "never opened, nothing paid" and "part-paid,
                                   chase the rest" into one identical red word. Show what's LEFT so
-                                  the owner knows which conversation to have. */}
-                              {ds === 'overdue' && (Number(inv.amount_paid) || 0) > 0.01 && (
+                                  the owner knows which conversation to have.
+                                  "Partially Paid" has exactly the same gap and was not covered:
+                                  it says money arrived but never how much is still owed, while the
+                                  card's headline figure is the invoice TOTAL — so the one number
+                                  the owner is chasing appeared nowhere in the scannable row. Same
+                                  sentence, same ledger call, both states. */}
+                              {(ds === 'overdue' || ds === 'partial') && (Number(inv.amount_paid) || 0) > 0.01 && (
                                 <span className="normal-case font-medium opacity-90">· {formatCurrency(invoiceBalance(inv, settings).balance)} left</span>
                               )}
                               {clickable && <ChevronDown aria-hidden className="w-3 h-3 opacity-60" />}
@@ -599,7 +608,15 @@ export default function InvoicesPage() {
                         <AlertTriangle className="w-3 h-3" /> Review
                       </span>
                     )}
-                    {paymentsEnabled && inv.status !== 'draft' && invoiceBalance(inv, settings).balance > 0 && (() => {
+                    {/* `cancelled` is excluded for the same reason Send, Edit, Record
+                        payment and Request deposit all exclude it: the owner has said
+                        this money is not owed. Cancelling requires nothing to have been
+                        paid, so the balance is still the FULL total and every money test
+                        here passes — which is exactly why these two buttons kept
+                        offering to collect on a withdrawn bill while every sibling
+                        refused, and while the customer's own portal wouldn't let them
+                        pay it. Reactivate (status pill) is the way back. */}
+                    {paymentsEnabled && inv.status !== 'draft' && inv.status !== 'cancelled' && invoiceBalance(inv, settings).balance > 0 && (() => {
                       // The link charges what depositChargeAmount says — the
                       // outstanding deposit while one is unpaid, else the balance.
                       // The button must SAY which, or the owner quotes the wrong
@@ -614,8 +631,11 @@ export default function InvoicesPage() {
                         </Button>
                       )
                     })()}
-                    {/* Charge the saved card directly — recurring invoices, customer with a card on file. */}
-                    {paymentsEnabled && inv.customer_id && cardCustomers.has(inv.customer_id) && inv.job_id && invoiceBalance(inv, settings).balance > 0 && (
+                    {/* Charge the saved card directly — recurring invoices, customer with a
+                        card on file. Cancelled excluded (see the note above): this door
+                        moves real money off a card immediately, so it was the worst of
+                        the two to leave open on a withdrawn invoice. */}
+                    {paymentsEnabled && inv.customer_id && cardCustomers.has(inv.customer_id) && inv.job_id && inv.status !== 'cancelled' && invoiceBalance(inv, settings).balance > 0 && (
                       <Button
                         onClick={async () => {
                           // Presentation-level guard only — a real card charge deserves one

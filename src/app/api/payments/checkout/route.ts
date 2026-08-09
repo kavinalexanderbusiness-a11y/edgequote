@@ -31,6 +31,19 @@ export async function POST(req: NextRequest) {
     status: string; user_id: string; customer_id: string | null; customers?: { email: string | null } | null
   }
 
+  // A cancelled invoice is money the owner said is NOT owed. Cancelling is only
+  // permitted while nothing has been paid, so the balance is still the full total
+  // and every "is there something to collect?" test below passes — this route
+  // would happily mint a live Stripe link for a withdrawn bill, and the customer
+  // paying it would be entirely reasonable. The portal's own Pay button already
+  // excludes cancelled invoices; this is the owner-side half of the same rule.
+  if (invoice.status === 'cancelled') {
+    return NextResponse.json(
+      { error: 'This invoice is cancelled — reactivate it before taking payment.' },
+      { status: 409 },
+    )
+  }
+
   // How much to collect, from THE deposit engine (lib/payments/deposit) — which is
   // invoiceBalance plus one rule: while an unpaid deposit is outstanding, that is
   // what's due; otherwise it's the whole balance, clamped to it either way.
