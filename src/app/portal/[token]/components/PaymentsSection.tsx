@@ -87,10 +87,24 @@ export function PaymentsSection({ view, actions }: TabProps) {
   // Which invoice(s) an e-transfer should reference — exact number when there's
   // one owing invoice, generic guidance when several. Balance comes from the
   // prebuilt docItems (the same per-invoice balance the Billing rows show).
-  const owingNums = view.docItems.filter(d => d.kind === 'invoice' && d.balance > 0).map(d => d.number)
+  // Cancelled is excluded EXPLICITLY: buildDocItems computes balance from
+  // total − paid regardless of status, so a never-paid cancelled invoice still
+  // carries a positive balance — without the guard it would inflate this list,
+  // name a withdrawn bill in the memo hint, and demote the one-real-invoice
+  // case below to the generic total. Same predicate etransferReference uses.
+  const owingDocs = view.docItems.filter(d => d.kind === 'invoice' && d.balance > 0 && d.status !== 'cancelled' && d.status !== 'draft')
+  const owingNums = owingDocs.map(d => d.number)
   // The exact number to put in the e-transfer memo — only when it's
   // unambiguous (one owing invoice), so "Copy" never hands over the wrong ref.
   const etransferRef = etransferReference(view.docItems)
+  // What "Copy amount" hands to their bank app. With ONE owing invoice this is
+  // that row's payAmount — depositChargeAmount's answer, the same figure the Pay
+  // button and Stripe quote — so an e-transfer customer sends the $2,000 deposit,
+  // not the $4,000 the Pay button doesn't ask for either. Several owing invoices
+  // keep the honest total-outstanding (no single ask exists to quote).
+  const copyAsk = owingDocs.length === 1 && owingDocs[0].payAmount > 0
+    ? { amount: owingDocs[0].payAmount, isDeposit: owingDocs[0].payIsDeposit }
+    : { amount: outstanding, isDeposit: false }
   return (
     <div className="space-y-3">
       {/* ── Ways to pay — Card / E-transfer / Cash (cheque retired). E-transfer
@@ -125,9 +139,9 @@ export function PaymentsSection({ view, actions }: TabProps) {
               <Button size="sm" variant="secondary" onClick={() => copyText('email', etransferEmail)}>
                 {copied === 'email' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />} {copied === 'email' ? 'Copied' : 'Copy email'}
               </Button>
-              {outstanding > 0 && (
-                <Button size="sm" variant="secondary" onClick={() => copyText('amount', outstanding.toFixed(2))}>
-                  {copied === 'amount' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />} {copied === 'amount' ? 'Copied' : `Copy amount (${formatCurrency(outstanding)})`}
+              {copyAsk.amount > 0 && (
+                <Button size="sm" variant="secondary" onClick={() => copyText('amount', copyAsk.amount.toFixed(2))}>
+                  {copied === 'amount' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />} {copied === 'amount' ? 'Copied' : `Copy ${copyAsk.isDeposit ? 'deposit ' : ''}amount (${formatCurrency(copyAsk.amount)})`}
                 </Button>
               )}
               {/* The memo is the one field a customer had to read off the screen and

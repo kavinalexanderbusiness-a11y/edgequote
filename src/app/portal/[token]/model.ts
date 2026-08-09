@@ -21,6 +21,7 @@ import { settingsToSeasons } from '@/lib/seasons'
 // different amount due than the owner. Costs nothing to import: ledger's only runtime
 // dependency is invoiceTotals, which this module already pulls.
 import { invoiceBalance } from '@/lib/payments/ledger'
+import { depositState, depositChargeAmount } from '@/lib/payments/deposit'
 import { cashAmountOf } from '@/lib/payments/analytics'
 import { serviceLineTotals } from '@/lib/quoteServices'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
@@ -84,6 +85,18 @@ function forBalance(i: PortalInvoice) {
     amount_paid: i.amount_paid ?? undefined,
     discount_type: i.discount_type ?? null,
     discount_value: i.discount_value ?? null,
+  }
+}
+
+// The same bridge, widened for the deposit engine (lib/payments/deposit). Same
+// rule: types only, zero arithmetic — depositState/depositChargeAmount own every
+// number derived from these fields, here exactly as on the owner's screens and
+// in both charge routes, so no surface can disagree about what a deposit is.
+function forDeposit(i: PortalInvoice) {
+  return {
+    ...forBalance(i),
+    deposit_amount: i.deposit_amount ?? null,
+    deposit_requested_at: i.deposit_requested_at ?? null,
   }
 }
 
@@ -490,7 +503,19 @@ export function buildDerived(data: PortalData, todayISO: string): Derived {
 // DISPLAY status (lib/quoteStatus): an expired quote arrives as 'expired', which
 // is what removes the Accept button (canAccept tests 'sent') with no second
 // expiry check anywhere in the render path to forget or contradict.
-export interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; expiredOn?: string; validUntil?: string | null; dueDate?: string | null; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[]; explain?: string[]; propertyId?: string | null; address?: string | null }
+export interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; expiredOn?: string; validUntil?: string | null; dueDate?: string | null; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[]; explain?: string[]; propertyId?: string | null; address?: string | null
+  /**
+   * What the Pay button collects RIGHT NOW — depositChargeAmount's answer, the
+   * SAME engine call /api/portal/pay makes server-side. Carried on the row so
+   * the button can never quote money Stripe won't ask for: while a deposit is
+   * outstanding this is the deposit (payIsDeposit true), afterwards the
+   * ordinary balance. 0 on quotes and settled invoices.
+   */
+  payAmount: number
+  payIsDeposit: boolean
+  /** The deposit picture (engine's depositState), present only when one was requested. */
+  deposit?: { requested: number; percent: number | null; outstanding: number; remainingAfter: number; covered: boolean }
+}
 
 export interface DocBlobRenderers {
   quote: (q: PortalQuote) => Promise<Blob>
@@ -562,6 +587,7 @@ export function buildDocItems(opts: {
       validUntil: qq.valid_until,
       amount: Number(qq.total) || 0,
       amountNote: gstPct > 0 ? `+ GST (${gstPct}%) — added on your invoice` : undefined, balance: 0,
+      payAmount: 0, payIsDeposit: false,
       filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(qq), lines,
       // Identity, not decoration: the address tells a landlord which of their six
       // quotes this is. It never becomes the row's title — service_type is the
@@ -591,9 +617,25 @@ export function buildDocItems(opts: {
     // exactly the shape quoteStatus uses for expiry. The portal must tell the
     // customer they're late before a chasing text does.
     const overdue = balance > 0 && !!ii.due_date && ii.due_date < todayISO && ii.status !== 'cancelled'
+    // The deposit picture + what Pay collects now — BOTH straight from the
+    // engine /api/portal/pay answers to. The row quoting one figure while
+    // Stripe charges another is the disagreement this exists to prevent, so
+    // nothing here recomputes: an edited-down invoice's clamp, the covered-by-
+    // e-transfer case, the part-paid cap all arrive already decided. A request
+    // saved but not yet SENT still shows (the charge rule already honours it —
+    // hiding it would recreate the mismatch). Cancelled invoices ask for
+    // nothing regardless of any leftover request.
+    const cancelled = ii.status === 'cancelled'
+    const dep = cancelled ? null : depositState(forDeposit(ii), { gst_percent: gstPct })
+    const charge = cancelled ? null : depositChargeAmount(forDeposit(ii), { gst_percent: gstPct })
     return {
       id: 'i' + ii.id, rawId: ii.id, kind: 'invoice' as const, number: ii.invoice_number, title: ii.service_type || 'Invoice',
       date: ii.issued_date || ii.created_at, status: overdue ? 'overdue' : ii.status, dueDate: ii.due_date, amount: total, balance,
+      payAmount: charge?.amount ?? 0, payIsDeposit: charge?.isDeposit ?? false,
+      deposit: dep && dep.status !== 'none' ? {
+        requested: dep.requested ?? 0, percent: dep.percent, outstanding: dep.outstanding,
+        remainingAfter: dep.remainingAfter, covered: dep.status === 'paid',
+      } : undefined,
       // An invoice's headline is its total (GST already in it) — no note. The
       // partial-payment breakdown ("still due / paid") is derived on demand by
       // invoicePaymentNote so the amount OWED, not just the total, is legible.
@@ -618,6 +660,54 @@ export function buildDocItems(opts: {
 export function invoicePaymentNote(d: DocItem): { due: string; paid: string } | null {
   if (d.kind !== 'invoice' || !(d.balance > 0) || !(d.balance < d.amount)) return null
   return { due: formatCurrency(d.balance), paid: formatCurrency(d.amount - d.balance) }
+}
+
+// The deposit ask, in the customer's terms — the four numbers the message
+// promised the portal would show: what's asked NOW, what it's a share of, and
+// what will remain after. Only while the deposit is genuinely what the Pay
+// button collects (payIsDeposit — the engine's verdict, so an edited-down
+// invoice's clamped ask shows the CLAMPED figure); afterwards the ordinary
+// partial-payment note carries the story. Formatted here so verify can pin
+// that "due now" is the deposit and never the total. Pure.
+export function invoiceDepositNote(
+  d: DocItem,
+): { dueNow: string; percentLabel: string; ofTotal: string; after: string; paidSoFar: string | null } | null {
+  if (d.kind !== 'invoice' || !d.payIsDeposit || !(d.payAmount > 0) || !d.deposit) return null
+  // The percent may only describe money the button actually collects. It is
+  // derived from the STORED request, so the moment the ask diverges from it —
+  // clamped because the invoice was edited down (the engine's exceedsTotal
+  // case, where the raw figure reads "133.3% deposit"), or shrunk because a
+  // part-payment already covered some — the number would be a claim about a
+  // different amount than the headline. Divergence drops to the plain word.
+  const askIsRequested = Math.abs(d.payAmount - d.deposit.requested) <= 0.005
+  return {
+    dueNow: formatCurrency(d.payAmount),
+    percentLabel: askIsRequested && d.deposit.percent != null ? `${d.deposit.percent}% deposit` : 'Deposit',
+    ofTotal: formatCurrency(d.amount),
+    // After THIS payment lands: what's genuinely left on the bill. Derived from
+    // the row's own balance minus what the button collects — not remainingAfter,
+    // which describes the requested deposit even when the clamp shrank the ask.
+    after: formatCurrency(Math.max(0, Math.round((d.balance - d.payAmount) * 100) / 100)),
+    // Money already received stays visible — the deposit headline replaces the
+    // ordinary still-due/paid note, so without this line a $500 e-transfer
+    // would simply vanish from the row that asks for the rest.
+    paidSoFar: d.balance < d.amount ? formatCurrency(Math.round((d.amount - d.balance) * 100) / 100) : null,
+  }
+}
+
+// "Deposit paid" — said ONLY once the engine says the request is covered and
+// money is still owed on the rest of the bill. The moment the customer returns
+// from Stripe and the webhook's payment row lands, the refetched payload flips
+// this on: their receipt line ("Deposit paid: $2,000") plus the honest
+// remainder ("Remaining balance: $2,000") — the exact two numbers they need to
+// trust the thing worked.
+export function invoiceDepositPaidNote(d: DocItem): { paid: string; remaining: string } | null {
+  if (d.kind !== 'invoice' || !d.deposit?.covered || !(d.balance > 0)) return null
+  // `paid` is what has ACTUALLY been received (total − balance), not the
+  // requested figure — the two agree in the ordinary case, but a customer who
+  // sent more than the ask must see their real money, or the extra silently
+  // vanishes from the one row accounting for it.
+  return { paid: formatCurrency(Math.round((d.amount - d.balance) * 100) / 100), remaining: formatCurrency(d.balance) }
 }
 
 // Below this many documents, a search box and a sort toggle are furniture: you can
@@ -714,6 +804,16 @@ export interface PortalNextAction {
 export function primaryPortalAction(docItems: DocItem[], money: MoneySummary): PortalNextAction | null {
   const owing = docItems.filter(d => d.kind === 'invoice' && d.balance > 0 && d.status !== 'cancelled' && d.status !== 'draft')
   const oneOwing = owing.length === 1 ? owing[0].rawId : null
+  // When the ONE owing bill's ask is a deposit, the banner names the deposit —
+  // "Past due: $4,000" over a $2,000 upfront ask tells the customer the whole
+  // job is late and owed, which is neither. payIsDeposit is the engine's verdict
+  // (the same call the Pay button and the charge route make), so the headline
+  // figure is exactly what tapping through will collect. Several owing bills
+  // fall back to the honest sum — a single number can't speak for mixed asks.
+  if (owing.length === 1 && owing[0].payIsDeposit && owing[0].payAmount > 0) {
+    const d = owing[0]
+    return { key: `deposit:${d.payAmount}:${d.rawId}`, kind: 'pay', headline: `Deposit due: ${formatCurrency(d.payAmount)}`, docsCat: 'invoice', focusDocId: d.rawId }
+  }
   if (owing.some(d => d.status === 'overdue')) {
     return { key: `overdue:${money.due}:${owing.length}`, kind: 'pay', headline: `Past due: ${formatCurrency(money.due)}`, docsCat: 'invoice', focusDocId: oneOwing }
   }

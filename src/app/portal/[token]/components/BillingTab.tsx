@@ -13,7 +13,7 @@ import {
 } from 'lucide-react'
 import { cn, formatCurrency, formatDate, localTodayISO } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
-import { dueSoonLabel, invoicePaymentNote, messageAboutDoc, NO_PROPERTY, quoteJourney, showDocFilters, type DocItem, type DocKind } from '../model'
+import { dueSoonLabel, invoiceDepositNote, invoiceDepositPaidNote, invoicePaymentNote, messageAboutDoc, NO_PROPERTY, quoteJourney, showDocFilters, type DocItem, type DocKind } from '../model'
 import {
   DocActions, Empty, InvoiceStatusPill, JourneyRail, PortalSection,
   QuoteStatusPill, StatCard, fmtMoney, type PortalActions, type TabProps,
@@ -239,6 +239,9 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
   // confirmed, this row's balance is the PRE-payment one and a second Pay tap
   // starts a second real charge. The confirming banner already says not to.
   const canPay = d.kind === 'invoice' && actions.paymentsEnabled && !actions.paymentPending && d.balance > 0 && d.status !== 'draft' && d.status !== 'cancelled'
+  // The deposit ask (or null) — model-derived once, read by the headline AND the
+  // Pay button's sub-line so the two can never quote different figures.
+  const depAsk = invoiceDepositNote(d)
   // Invoices get NO rail — an invoice's pill already says everything it can do.
   const steps = d.kind === 'quote' ? quoteJourney(d.status) : null
   // A deep link (?invoice=/?quote=) landed the customer here to look at THIS row —
@@ -288,6 +291,33 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
               wasn't the answer, with the real one at 11px beneath it. Same two values
               from the same verify-pinned helper; only which one shouts changed. */}
           {(() => {
+            // A deposit ask OWNS the headline while it's what the Pay button
+            // collects: the biggest number on the row must be the money wanted
+            // NOW, with the total and the after-figure stepping down beside it —
+            // never the reverse, where "$4,000" shouts over a $2,000 ask. All
+            // four figures come off the DocItem the engine built; nothing here
+            // does arithmetic.
+            if (depAsk) return (
+              <>
+                <p className="text-sm font-bold text-amber-400 tabular-nums">{depAsk.dueNow}</p>
+                <p className="text-[11px] text-ink-faint mt-0.5 tabular-nums">
+                  {depAsk.percentLabel} of {depAsk.ofTotal} total · {depAsk.after} after{depAsk.paidSoFar ? ` · ${depAsk.paidSoFar} already paid` : ''}
+                </p>
+              </>
+            )
+            // Deposit satisfied, remainder open: say the deposit landed IN the
+            // same breath as what's left — the post-payment pair the customer
+            // came back to check ("Deposit paid: $2,000 · $2,000 remaining").
+            const depPaid = invoiceDepositPaidNote(d)
+            if (depPaid) return (
+              <>
+                <p className="text-sm font-bold text-amber-400 tabular-nums">{depPaid.remaining}</p>
+                <p className="text-[11px] text-emerald-400 mt-0.5 tabular-nums flex items-center justify-end gap-1">
+                  <Check className="w-3 h-3 shrink-0" aria-hidden /> Deposit paid · {depPaid.paid}
+                </p>
+                <p className="text-[11px] text-ink-faint mt-0.5 tabular-nums">remaining of {formatCurrency(d.amount)} total</p>
+              </>
+            )
             const pay = invoicePaymentNote(d)
             if (pay) return (
               <>
@@ -360,7 +390,20 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
           )}
           {canPay && (
             <>
-              <Button className="w-full sm:w-auto" onClick={() => actions.pay(d.rawId)} loading={actions.payingId === d.rawId}><CreditCard className="w-4 h-4" /> Pay {formatCurrency(d.balance)}</Button>
+              {/* The button quotes payAmount — depositChargeAmount's answer, the
+                  SAME engine call the pay route makes — so the figure on the
+                  button and the figure on Stripe's checkout are one number by
+                  construction. While a deposit is outstanding it says so
+                  ("Pay $2,000 deposit"), and the sub-line finishes the story:
+                  what remains, and that it isn't being charged today. */}
+              <Button className="w-full sm:w-auto" onClick={() => actions.pay(d.rawId)} loading={actions.payingId === d.rawId}>
+                <CreditCard className="w-4 h-4" /> Pay {formatCurrency(d.payAmount)}{d.payIsDeposit ? ' deposit' : ''}
+              </Button>
+              {depAsk && (
+                <p className="text-[11px] text-ink-faint mt-1.5 tabular-nums">
+                  This is the upfront deposit — the remaining {depAsk.after} is due after the work, not today.
+                </p>
+              )}
               <p className="text-[11px] text-ink-faint mt-1.5 flex items-center gap-1"><ShieldCheck className="w-3 h-3 text-emerald-400 shrink-0" /> Secure checkout by Stripe — you&rsquo;ll confirm on the next screen.</p>
             </>
           )}

@@ -11,7 +11,7 @@ import {
   normalizePortal, buildDerived, buildDocItems, buildPortalView,
   quoteJourney, moneySummary, refundedTotal, buildPropertyModels, customerSinceYear,
   requestPresetsOf, resolveDocAddress, groupPhotos, orphanPhotos, liveStatusOf, visitDay,
-  daysAwayLabel, dueSoonLabel, invoicePaymentNote, parsePortalDeepLink, tabNavTarget, buildVisitICS, visitToCalendarEvent,
+  daysAwayLabel, dueSoonLabel, invoiceDepositNote, invoiceDepositPaidNote, invoicePaymentNote, parsePortalDeepLink, tabNavTarget, buildVisitICS, visitToCalendarEvent,
   messageAboutDoc, primaryPortalAction, draftStorageKey, etransferReference, isSendChord,
   needsContactMethod, contactUpdateMessage, contactSentKey, recentPaymentLanded,
   showDocFilters, DOC_FILTER_MIN,
@@ -20,6 +20,8 @@ import {
 } from '../src/app/portal/[token]/model'
 // The PDF logo bound — the fix for the invoice a customer could list but not open.
 import { pdfLogoUrl, PDF_LOGO_MAX_PX } from '../src/lib/photos'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 let pass = 0
 let fail = 0
@@ -561,6 +563,137 @@ console.log('\nrecentPaymentLanded (post-checkout confirmation):')
   check('a non-storage logo URL is passed through untouched', pdfLogoUrl('https://cdn.example.com/logo.png') === 'https://cdn.example.com/logo.png')
   check('a data: URI logo is passed through untouched', pdfLogoUrl('data:image/png;base64,AAAA') === 'data:image/png;base64,AAAA')
   check('no logo stays no logo (never the string "null")', pdfLogoUrl(null) === '' && pdfLogoUrl(undefined) === '')
+}
+
+// 8. Deposits — the portal must quote EXACTLY what the charge routes collect.
+//    Every figure below flows from lib/payments/deposit (THE engine both
+//    /api/portal/pay and /api/payments/checkout call); these checks pin that the
+//    row, the button, the banner and Stripe can never name different money.
+{
+  const depInvoice = (over: Record<string, unknown>) => ({
+    id: 'i-dep', invoice_number: 'INV-9', service_type: 'Fence build', amount: 4000,
+    status: 'unpaid', issued_date: '2026-07-12', due_date: '2026-07-25', notes: null, address: null,
+    property_id: PROP_A.id, line_items: null, job_id: null, created_at: '2026-07-12T10:00:00Z',
+    discount_type: null, discount_value: null, amount_paid: 0,
+    deposit_amount: 2100, deposit_requested_at: '2026-07-12T11:00:00Z', ...over,
+  })
+  // GST-free business so the $4,000/50% example reads exactly as the spec's.
+  const noGst = { ...FULL.business!, gst_percent: 0 }
+  const viewOf = (inv: Record<string, unknown>) =>
+    buildPortalView(normalizePortal({ ...FULL, business: noGst, quotes: [], invoices: [inv] })!, TODAY, renderers)
+
+  // 8a. The round-trip tripwire — the payload keys must survive normalize (the
+  //     services bug shipped exactly this way).
+  const norm = normalizePortal({ ...FULL, invoices: [depInvoice({})] })!
+  check('deposit payload keys survive normalizePortal',
+    Number(norm.invoices[0].deposit_amount) === 2100 && norm.invoices[0].deposit_requested_at === '2026-07-12T11:00:00Z')
+
+  // 8b. The $4,000 / 50% walk from the owner's own example.
+  const v = viewOf(depInvoice({ deposit_amount: 2000 }))
+  const row = v.docItems.find(d => d.number === 'INV-9')!
+  check('deposit outstanding: the button collects the deposit, not the total',
+    row.payAmount === 2000 && row.payIsDeposit === true, `payAmount=${row.payAmount}`)
+  check('… while the row still knows total and full balance', row.amount === 4000 && row.balance === 4000)
+  check('… and the deposit picture is the engine’s', JSON.stringify(row.deposit) ===
+    JSON.stringify({ requested: 2000, percent: 50, outstanding: 2000, remainingAfter: 2000, covered: false }))
+  const note = invoiceDepositNote(row)!
+  check('the ask reads: due now / % / of total / after',
+    JSON.stringify(note) === JSON.stringify({ dueNow: '$2,000.00', percentLabel: '50% deposit', ofTotal: '$4,000.00', after: '$2,000.00', paidSoFar: null }),
+    JSON.stringify(note))
+  check('no deposit-paid claim while it is still owed', invoiceDepositPaidNote(row) === null)
+  const act = primaryPortalAction(v.docItems, v.money)!
+  check('the banner asks for the deposit — never "Past due: $4,000" over a $2,000 ask',
+    act.headline === 'Deposit due: $2,000.00' && act.focusDocId === 'i-dep', act.headline)
+
+  // 8c. A request saved but NOT yet sent still gates the portal (the charge rule
+  //     already honours it — hiding it would recreate the display/charge split).
+  const draftReq = viewOf(depInvoice({ deposit_amount: 2000, deposit_requested_at: null })).docItems.find(d => d.number === 'INV-9')!
+  check('an unsent request still quotes the deposit (display mirrors the charge rule)',
+    draftReq.payAmount === 2000 && draftReq.payIsDeposit === true)
+
+  // 8d. After the webhook's payment row lands: deposit covered, remainder open.
+  const paidV = viewOf(depInvoice({ deposit_amount: 2000, amount_paid: 2000, status: 'partial' }))
+  const paidRow = paidV.docItems.find(d => d.number === 'INV-9')!
+  check('deposit paid: the button now collects the REMAINDER, unlabelled',
+    paidRow.payAmount === 2000 && paidRow.payIsDeposit === false && paidRow.balance === 2000)
+  check('… the ask note is gone (no second prompt to pay the deposit)', invoiceDepositNote(paidRow) === null)
+  check('… and the paid pair is exactly "Deposit paid $2,000 · $2,000 remaining"',
+    JSON.stringify(invoiceDepositPaidNote(paidRow)) === JSON.stringify({ paid: '$2,000.00', remaining: '$2,000.00' }))
+  check('… the banner returns to the ordinary balance',
+    primaryPortalAction(paidV.docItems, paidV.money)!.headline === 'Balance due: $2,000.00')
+
+  // 8e. Covered by ANY method — an e-transfer that covers the ask satisfies it.
+  const partly = viewOf(depInvoice({ deposit_amount: 1000, amount_paid: 1500, status: 'partial' })).docItems.find(d => d.number === 'INV-9')!
+  check('a deposit covered by other payments never re-asks', partly.payIsDeposit === false && partly.payAmount === 2500)
+
+  // 8f. Invoice edited DOWN below the request: the ask clamps to the live
+  //     balance (the engine's rule) and the copy quotes the CLAMPED figure.
+  const clamped = viewOf(depInvoice({ amount: 1500, deposit_amount: 2000 })).docItems.find(d => d.number === 'INV-9')!
+  check('an edited-down invoice can never ask for more than is owed',
+    clamped.payAmount === 1500 && invoiceDepositNote(clamped)!.dueNow === '$1,500.00' && invoiceDepositNote(clamped)!.after === '$0.00')
+
+  // 8g. Fully paid: nothing left to ask, no stale CTA.
+  const settled = viewOf(depInvoice({ deposit_amount: 2000, amount_paid: 4000, status: 'paid' })).docItems.find(d => d.number === 'INV-9')!
+  check('a settled invoice asks for nothing', settled.payAmount === 0 && settled.balance === 0 && invoiceDepositPaidNote(settled) === null)
+
+  // 8h. A cancelled invoice with a leftover request asks for nothing.
+  const cancelled = viewOf(depInvoice({ status: 'cancelled' })).docItems.find(d => d.number === 'INV-9')!
+  check('a cancelled invoice with a leftover request asks for nothing',
+    cancelled.payAmount === 0 && cancelled.payIsDeposit === false && cancelled.deposit === undefined)
+
+  // 8i. GST-inclusive: with 5% GST a $4,000 invoice totals $4,200 — the stored
+  //     deposit_amount is ALREADY the GST-inclusive figure the customer was told.
+  const gstV = buildPortalView(normalizePortal({ ...FULL, quotes: [], invoices: [depInvoice({ deposit_amount: 2100 })] })!, TODAY, renderers)
+  const gstRow = gstV.docItems.find(d => d.number === 'INV-9')!
+  check('GST: the ask is the stored inclusive figure and percent derives from the inclusive total',
+    gstRow.payAmount === 2100 && gstRow.deposit!.percent === 50 && gstRow.amount === 4200)
+
+  // 8j. Ordinary invoices are untouched by all of this.
+  const plain = viewOf(depInvoice({ deposit_amount: null, deposit_requested_at: null })).docItems.find(d => d.number === 'INV-9')!
+  check('no deposit: payAmount is simply the balance', plain.payAmount === 4000 && plain.payIsDeposit === false && plain.deposit === undefined)
+
+  // 8k. THE ADVERSARIAL-REVIEW PINS — each of these reproduces a confirmed
+  //     defect from the review pass; every figure shown must describe the ask
+  //     the button actually collects, and money already received must stay
+  //     visible on the row.
+  // The percent describes the STORED request, so the moment the ask diverges
+  // (clamped, or shrunk by a part-payment) it must drop to the plain word —
+  // never "133.3% deposit", never "50%" over a $1,500 headline.
+  check('clamped ask: no percent claim (never "133.3% deposit")',
+    invoiceDepositNote(clamped)!.percentLabel === 'Deposit', invoiceDepositNote(clamped)!.percentLabel)
+  const partPaidAsk = viewOf(depInvoice({ deposit_amount: 2000, amount_paid: 500, status: 'partial' })).docItems.find(d => d.number === 'INV-9')!
+  const ppNote = invoiceDepositNote(partPaidAsk)!
+  check('part-paid ask: residual deposit, no stale percent, and the $500 stays visible',
+    partPaidAsk.payAmount === 1500 && ppNote.percentLabel === 'Deposit' && ppNote.paidSoFar === '$500.00' && ppNote.after === '$2,000.00',
+    JSON.stringify(ppNote))
+  // Paid figures are ACTUAL money, not the requested figure — an overpay beyond
+  // the ask must not vanish.
+  const overAsk = viewOf(depInvoice({ deposit_amount: 2000, amount_paid: 2500, status: 'partial' })).docItems.find(d => d.number === 'INV-9')!
+  check('deposit-paid pair quotes real money received, not the request',
+    JSON.stringify(invoiceDepositPaidNote(overAsk)) === JSON.stringify({ paid: '$2,500.00', remaining: '$1,500.00' }))
+}
+
+// 9. Structural pins for the surfaces the pure suite can't execute — the same
+//    defects, asserted over the real source so they cannot quietly return.
+{
+  const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8')
+  // 9a. The portal pay route must never answer a failed deposit read with "no
+  //     deposit" — that charges the FULL balance behind a button that said
+  //     "Pay $2,000 deposit" (the review's P1).
+  const payRoute = read('src/app/api/portal/pay/route.ts')
+  check('pay route branches on the deposit read error (a failed read is never an answer)',
+    /error:\s*depErr/.test(payRoute) && /if\s*\(depErr\)\s*return/.test(payRoute))
+  check('pay route refuses when the service role is unavailable rather than guessing the ask',
+    /if\s*\(!url\s*\|\|\s*!svc\)/.test(payRoute))
+  // 9b. Home's inline quick-pay quotes the engine's ask, never the raw balance.
+  const homeTab = read('src/app/portal/[token]/components/HomeTab.tsx')
+  check('Home quick-pay button quotes payAmount (the engine), not balance',
+    homeTab.includes('Pay {formatCurrency(oneInvoice.payAmount)}') && !homeTab.includes('Pay {formatCurrency(oneInvoice.balance)}'))
+  // 9c. The e-transfer "one owing invoice" rule excludes cancelled invoices
+  //     (their DocItem balance is positive by construction).
+  const paySection = read('src/app/portal/[token]/components/PaymentsSection.tsx')
+  check('e-transfer owing filter excludes cancelled/draft invoices',
+    /owingDocs = view\.docItems\.filter\([^)]*status !== 'cancelled'[^)]*\)/.test(paySection))
 }
 
 console.log(`\n${fail === 0 ? '✓' : '✗'} portal checks: ${pass} passed, ${fail} failed`)

@@ -75,6 +75,8 @@ export async function POST(req: NextRequest) {
     cancelUrl: `${base}/dashboard/invoices`,
     customerEmail: invoice.customers?.email ?? null,
     chargeCents: Math.round(charge.amount * 100),
+    // Same labelling rule as the portal route: a deposit charge names itself.
+    chargeLabel: charge.isDeposit ? `Deposit — Invoice ${invoice.invoice_number}` : null,
     stripeCustomerId,
     // Only offer the save when we know who to save it against.
     offerSaveCard: !!stripeCustomerId,

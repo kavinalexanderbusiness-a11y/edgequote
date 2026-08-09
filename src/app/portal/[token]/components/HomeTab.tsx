@@ -90,12 +90,30 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-9 h-9 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0"><Receipt className="w-4 h-4" /></div>
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-ink">
-                Amount due · <span className="tabular-nums text-amber-400">{formatCurrency(view.money.due)}</span>
-              </p>
-              <p className="text-xs text-ink-muted">
-                {view.money.owingCount === 1 ? '1 invoice' : `${view.money.owingCount} invoices`} — view and pay whenever you&rsquo;re ready
-              </p>
+              {/* When the ONE named invoice's ask is a deposit, the landing card must
+                  say so — "Amount due · $4,000" over a button that charges $2,000 is
+                  the display-vs-charge split all over again, on the exact surface the
+                  deposit_request text links to. payIsDeposit/payAmount are the
+                  engine's verdict (the same depositChargeAmount the pay route runs). */}
+              {oneInvoice?.payIsDeposit ? (
+                <>
+                  <p className="text-sm font-semibold text-ink">
+                    Deposit due · <span className="tabular-nums text-amber-400">{formatCurrency(oneInvoice.payAmount)}</span>
+                  </p>
+                  <p className="text-xs text-ink-muted">
+                    of {formatCurrency(oneInvoice.amount)} total — the rest is due after the work
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-semibold text-ink">
+                    Amount due · <span className="tabular-nums text-amber-400">{formatCurrency(view.money.due)}</span>
+                  </p>
+                  <p className="text-xs text-ink-muted">
+                    {view.money.owingCount === 1 ? '1 invoice' : `${view.money.owingCount} invoices`} — view and pay whenever you&rsquo;re ready
+                  </p>
+                </>
+              )}
             </div>
           </div>
           <span className="text-xs font-semibold text-amber-400 shrink-0">View →</span>
@@ -104,7 +122,9 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
       {canPayInline && oneInvoice && (
         <div className="px-4 pb-4">
           <Button className="w-full" onClick={() => actions.pay(oneInvoice.rawId)} loading={actions.payingId === oneInvoice.rawId}>
-            <CreditCard className="w-4 h-4" /> Pay {formatCurrency(oneInvoice.balance)}
+            {/* payAmount, never balance — the engine's answer, identical to what the
+                checkout will actually ask for (BillingTab's button says the same). */}
+            <CreditCard className="w-4 h-4" /> Pay {formatCurrency(oneInvoice.payAmount)}{oneInvoice.payIsDeposit ? ' deposit' : ''}
           </Button>
           <p className="text-[11px] text-ink-faint mt-1.5 text-center">Secure checkout by Stripe — you&rsquo;ll confirm on the next screen.</p>
         </div>

@@ -41,18 +41,32 @@ export async function POST(req: NextRequest) {
   let depositRequestedAt: string | null = null
   {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL, svc = process.env.SUPABASE_SERVICE_ROLE_KEY
-    if (url && svc) {
-      const admin = createClient(url, svc)
-      if (!Number.isFinite(gst)) {
-        const { data: bs } = await admin.from('business_settings').select('gst_percent').eq('user_id', invoice.user_id).maybeSingle()
-        gst = Number((bs as { gst_percent?: number | null } | null)?.gst_percent) || 0
-      }
-      const { data: dep } = await admin.from('invoices')
-        .select('deposit_amount, deposit_requested_at').eq('id', invoice.id).eq('user_id', invoice.user_id).maybeSingle()
-      const d = dep as { deposit_amount: number | string | null; deposit_requested_at: string | null } | null
-      depositAmount = d?.deposit_amount == null ? null : Number(d.deposit_amount)
-      depositRequestedAt = d?.deposit_requested_at ?? null
+    // The deposit columns are what decide HOW MUCH this session charges, and the
+    // portal has just shown the customer that figure. So a read we cannot
+    // complete is a session we must not build: "couldn't check the deposit"
+    // answered as "no deposit" would charge the FULL balance behind a button
+    // that said "Pay $2,000 deposit" — the exact display-vs-charge split this
+    // route exists to prevent, reachable by nothing more than a transient
+    // failure on this one query. Refuse (502) and let the customer tap again;
+    // the client already shows "couldn't start the payment — try again" for
+    // exactly this status. (Same contract as a missing service key: we cannot
+    // know the ask, so we do not guess it.)
+    if (!url || !svc) {
+      console.error('[portal/pay] missing Supabase service-role env — cannot resolve the deposit ask')
+      return NextResponse.json({ error: 'Payments are temporarily unavailable — please try again shortly.' }, { status: 502 })
     }
+    const admin = createClient(url, svc)
+    if (!Number.isFinite(gst)) {
+      const { data: bs, error: bsErr } = await admin.from('business_settings').select('gst_percent').eq('user_id', invoice.user_id).maybeSingle()
+      if (bsErr) return NextResponse.json({ error: 'We couldn’t start the payment — please try again in a moment.' }, { status: 502 })
+      gst = Number((bs as { gst_percent?: number | null } | null)?.gst_percent) || 0
+    }
+    const { data: dep, error: depErr } = await admin.from('invoices')
+      .select('deposit_amount, deposit_requested_at').eq('id', invoice.id).eq('user_id', invoice.user_id).maybeSingle()
+    if (depErr) return NextResponse.json({ error: 'We couldn’t start the payment — please try again in a moment.' }, { status: 502 })
+    const d = dep as { deposit_amount: number | string | null; deposit_requested_at: string | null } | null
+    depositAmount = d?.deposit_amount == null ? null : Number(d.deposit_amount)
+    depositRequestedAt = d?.deposit_requested_at ?? null
   }
   if (!Number.isFinite(gst)) gst = 0
 
@@ -98,6 +112,10 @@ export async function POST(req: NextRequest) {
     successUrl: `${base}/portal/${token}?paid=1`,
     cancelUrl: `${base}/portal/${token}`,
     chargeCents: Math.round(charge.amount * 100),
+    // Stripe's page is where the customer decides the smaller number is right —
+    // name the charge as the deposit it is, or $2,000 against a $4,000 invoice
+    // reads as an error at the exact moment their card is out.
+    chargeLabel: charge.isDeposit ? `Deposit — Invoice ${invoice.invoice_number}` : null,
     stripeCustomerId,
     offerSaveCard: !!stripeCustomerId,
   })

@@ -46,6 +46,13 @@ export async function createInvoiceCheckoutSession(
     // unticked IS the opt-out. We never set setup_future_usage ourselves; doing so
     // would save the card silently, which is the thing we're refusing to do.
     offerSaveCard?: boolean
+    // What the ONE line item is called on Stripe's checkout page, receipt email
+    // and statement history. Default "Invoice <number>" — callers collecting a
+    // DEPOSIT pass "Deposit — Invoice <number>", because a $2,000 charge labelled
+    // only "Invoice INV-7" against a $4,000 bill reads as the wrong amount, and
+    // the checkout page is the one surface where our own copy can't add context.
+    // Cosmetic by design: the amount stays chargeCents, server-derived.
+    chargeLabel?: string | null
   },
 ): Promise<CheckoutResult> {
   if (!stripeEnabled()) return { ok: false, error: 'Payments are not set up yet.' }
@@ -62,7 +69,7 @@ export async function createInvoiceCheckoutSession(
   form.set('line_items[0][quantity]', '1')
   form.set('line_items[0][price_data][currency]', 'cad')
   form.set('line_items[0][price_data][unit_amount]', String(cents))
-  form.set('line_items[0][price_data][product_data][name]', `Invoice ${invoice.invoice_number}`)
+  form.set('line_items[0][price_data][product_data][name]', opts.chargeLabel || `Invoice ${invoice.invoice_number}`)
   if (invoice.service_type) form.set('line_items[0][price_data][product_data][description]', invoice.service_type.slice(0, 200))
   // `customer` and `customer_email` are mutually exclusive — sending both is a
   // Stripe 400. Prefer the Customer: it's the only shape a card can be saved to,
