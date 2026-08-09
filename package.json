@@ -40,6 +40,7 @@
     "verify:route-characterization": "tsx scripts/verify-route-characterization.ts",
     "verify:customer-health": "tsx scripts/verify-customer-health.ts",
     "verify:invoice-totals": "tsx scripts/verify-invoice-totals.ts",
+    "verify:invoice-search": "tsx scripts/verify-invoice-search.ts",
     "verify:signals": "tsx scripts/verify-signals.ts",
     "verify:sms-segments": "tsx scripts/verify-sms-segments.ts",
     "verify:customer-v2": "tsx scripts/verify-customer-v2.ts",

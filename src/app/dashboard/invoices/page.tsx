@@ -9,7 +9,8 @@ import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Invoice, InvoiceStatus, InvoiceDisplayStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, BusinessSettings, Payment, paymentMethodLabel } from '@/types'
 import { InvoicePaymentControls } from '@/components/payments/InvoicePaymentControls'
 import { DepositRequestPanel } from '@/components/payments/DepositRequestPanel'
-import { markDepositRequestSent, depositChargeAmount } from '@/lib/payments/deposit'
+import { markDepositRequestSent, depositChargeAmount, depositState } from '@/lib/payments/deposit'
+import { buildInvoiceSearchIndex, queryTokens, entryMatches } from '@/lib/invoiceSearch'
 import { invoiceBalance, displayInvoiceStatus, cancelInvoice, reactivateInvoice, assertCurrent } from '@/lib/payments/ledger'
 import { isAutoPayHeld } from '@/lib/payments/autopay'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -19,6 +20,7 @@ import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { Banner } from '@/components/ui/Banner'
 import { Button } from '@/components/ui/Button'
 import { FilterPill } from '@/components/ui/FilterPill'
+import { SearchInput } from '@/components/ui/SearchInput'
 import { Menu } from '@/components/ui/Menu'
 import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
@@ -67,7 +69,11 @@ export default function InvoicesPage() {
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [cancellingId, setCancellingId] = useState<string | null>(null)
-  const [filter, setFilter] = useState<'' | InvoiceDisplayStatus>('')
+  // 'deposit' is not a stored status — it is the "I asked for money up front and it
+  // hasn't landed" view, which was previously unreachable: those invoices sit in
+  // Unpaid/Sent/Partial alongside everything else with nothing to tell them apart.
+  const [filter, setFilter] = useState<'' | InvoiceDisplayStatus | 'deposit'>('')
+  const [query, setQuery] = useState('')
   // Deep-link focus: /dashboard/invoices?invoice=INV-0042 or ?job=<job id> shows
   // exactly that invoice (from a Convert toast or a completed job's Invoice link).
   const [focus, setFocus] = useState<{ invoice?: string; job?: string } | null>(() => {
@@ -353,9 +359,43 @@ export default function InvoicesPage() {
   const focused = focus
     ? invoices.filter(i => (focus.invoice && i.invoice_number === focus.invoice) || (focus.job && i.job_id === focus.job))
     : null
-  const visible = focused && focused.length > 0 ? focused : filter
-    ? invoices.filter(i => displayInvoiceStatus(i, settings, today) === filter || (filter !== 'cancelled' && i.status === filter))
-    : invoices.filter(i => i.status !== 'cancelled')
+  // Status first, exactly as before — search NARROWS the chosen status, it does not
+  // replace it. (A search box that silently drops back to "All" is how an owner
+  // concludes an invoice is missing when it is merely paid.)
+  const byStatus = focused && focused.length > 0 ? focused
+    : filter === 'deposit'
+      // "Asked for money up front and it hasn't landed" — draft (not yet sent) or
+      // sent (awaiting payment). 'paid' deposits are done and 'none' never asked.
+      // depositState is the canonical engine; nothing is recomputed here.
+      ? invoices.filter(i => {
+          const d = depositState(i, settings)
+          return (d.status === 'draft' || d.status === 'sent') && i.status !== 'cancelled'
+        })
+      : filter
+        ? invoices.filter(i => displayInvoiceStatus(i, settings, today) === filter || (filter !== 'cancelled' && i.status === filter))
+        : invoices.filter(i => i.status !== 'cancelled')
+  // Built once per data change, not per keystroke — the whole book is already in
+  // memory (see lib/invoiceSearch), so a keystroke is a substring scan, not a query.
+  // How many deposits are still waiting on money — gates the pill's existence and
+  // labels it, so the owner can see the size of the ask without opening the filter.
+  const depositWaitingCount = invoices.filter(i => {
+    if (i.status === 'cancelled') return false
+    const d = depositState(i, settings)
+    return d.status === 'draft' || d.status === 'sent'
+  }).length
+  const searchEntries = useMemo(() => {
+    const m = new Map<string, { text: string; ident: string }>()
+    for (const e of buildInvoiceSearchIndex(invoices)) m.set(e.item.id, { text: e.text, ident: e.ident })
+    return m
+  }, [invoices])
+  const tokens = queryTokens(query)
+  const searching = tokens.length > 0
+  // Plain derivation, not a memo: byStatus is rebuilt every render anyway, so a memo
+  // over it would either recompute regardless or need a dependency lie. The scan is
+  // a Map lookup + substring test per row over prepared strings.
+  const visible = searching
+    ? byStatus.filter(i => { const e = searchEntries.get(i.id); return !!e && entryMatches(e, tokens) })
+    : byStatus
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -431,12 +471,51 @@ export default function InvoicesPage() {
       {!loading && !loadError && invoices.length > 0 && (
         // One scrollable row on phones (the quotes-list idiom) — 9 pills used to
         // wrap into a 2-3 row wall between the KPIs and the first invoice.
-        <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto no-scrollbar pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0">
-          {FILTERS.map(f => (
-            <FilterPill key={f.value} active={filter === f.value} onClick={() => setFilter(f.value)}>
-              {f.label}{f.value === 'draft' && drafts.length > 0 ? ` (${drafts.length})` : ''}
-            </FilterPill>
-          ))}
+        <div className="space-y-2">
+          <SearchInput
+            value={query}
+            onChange={e => {
+              setQuery(e.target.value)
+              // A deep link (?invoice=/?job=) pins the list to ONE row. Typing is an
+              // explicit "show me something else", so the pin is released — otherwise
+              // search appears broken: you type and the same single invoice stays put.
+              if (e.target.value && focus) {
+                setFocus(null)
+                if (typeof window !== 'undefined') window.history.replaceState({}, '', '/dashboard/invoices')
+              }
+            }}
+            placeholder="Search invoice #, customer, address or service"
+            aria-label="Search invoices"
+          />
+          <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto no-scrollbar pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0">
+            {FILTERS.map(f => (
+              <FilterPill key={f.value} active={filter === f.value} onClick={() => setFilter(f.value)}>
+                {f.label}{f.value === 'draft' && drafts.length > 0 ? ` (${drafts.length})` : ''}
+              </FilterPill>
+            ))}
+            {/* Only for businesses that actually take deposits — a dead pill on every
+                other book is clutter, and this list is already nine pills wide. */}
+            {depositWaitingCount > 0 && (
+              <FilterPill active={filter === 'deposit'} onClick={() => setFilter(filter === 'deposit' ? '' : 'deposit')}>
+                Deposit due ({depositWaitingCount})
+              </FilterPill>
+            )}
+          </div>
+          {/* Says what the list is showing WITHOUT making you count rows, and gives
+              the one-tap way back. Only while searching — silence when it's just the list. */}
+          {searching && (
+            <p className="text-[11px] text-ink-faint flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <span>
+                {visible.length === 0
+                  ? 'No matches'
+                  : `${visible.length} of ${byStatus.length} ${byStatus.length === 1 ? 'invoice' : 'invoices'}`}
+                {filter ? ` in ${filter === 'deposit' ? 'deposit due' : filter}` : ''}
+              </span>
+              <button type="button" onClick={() => setQuery('')} className="font-semibold text-accent-text hover:underline">
+                Clear search
+              </button>
+            </p>
+          )}
         </div>
       )}
       {/* Deep-link focus (from a Convert toast / completed-job Invoice link) —
@@ -463,7 +542,19 @@ export default function InvoicesPage() {
         <EmptyState icon={FileText} title="No invoices yet"
           description={<>Completing a recurring visit drafts one automatically — or open an accepted quote and click <span className="font-medium text-ink">Convert to Invoice</span>.</>} />
       ) : visible.length === 0 ? (
-        <InlineEmpty>{filter ? `No ${filter} invoices.` : 'No invoices to show.'}</InlineEmpty>
+        // Three different nothings, said differently — "no results for what you typed"
+        // is a dead end if it reads the same as "you have no unpaid invoices".
+        <InlineEmpty>
+          {searching ? (
+            <>
+              Nothing matches <span className="font-semibold text-ink">“{query.trim()}”</span>
+              {filter ? ` in ${filter === 'deposit' ? 'deposit due' : filter}` : ''}.{' '}
+              <button type="button" onClick={() => setQuery('')} className="font-semibold text-accent-text hover:underline">Clear search</button>
+              {filter ? <> or <button type="button" onClick={() => setFilter('')} className="font-semibold text-accent-text hover:underline">search all invoices</button></> : null}
+            </>
+          ) : filter === 'deposit' ? 'No deposits are waiting on payment.'
+            : filter ? `No ${filter} invoices.` : 'No invoices to show.'}
+        </InlineEmpty>
       ) : (
         <div className="space-y-3">
           {visible.map((inv, i) => (
