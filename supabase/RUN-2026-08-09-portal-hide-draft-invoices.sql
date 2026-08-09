@@ -24,10 +24,12 @@
 -- predicate, mirroring the quotes idiom exactly. Paid / unpaid / partial / overpaid
 -- behaviour is untouched, and NO new field is exposed.
 --
--- ⚠️  get_portal_data is a FROZEN surface: seven files in this repo define it, all
--- stale, and only the LIVE definition is authoritative (see the migration-audit and
--- prod-schema-exceeds-main notes — re-running an older copy would silently revert
--- fields that were added in place). So this migration does NOT restate the body.
+-- ⚠️  get_portal_data has exactly ONE definition in this repo —
+-- supabase/CANONICAL-get_portal_data.sql (INF-2 collapsed the nine that used to
+-- exist; the rest are tombstones). That file is a SNAPSHOT of a live object, so it
+-- can lag production, and it is applied LAST on a reset — meaning a stale copy wins
+-- and silently reverts. `npm run verify:portal-canonical` now fails the build on
+-- exactly that drift. So this migration does NOT restate the body.
 -- It reads the live definition, rewrites the ONE invoice FROM-clause, and re-executes
 -- it — every other byte is carried across untouched, by construction. If the anchor
 -- is ever absent or ambiguous it raises instead of guessing.

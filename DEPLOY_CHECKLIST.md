@@ -54,6 +54,25 @@ Running it **last** is what makes the order safe: whatever the dated files did o
 way past, the canonical body wins. **Skip step 3 and `get_portal_data` will not exist
 at all** — the portal RPC 404s and every customer portal page comes back empty.
 
+> ### ⛔ Run `npm run verify:portal-canonical` BEFORE step 3
+>
+> "The canonical body wins" is a loaded gun pointed at production when that body is
+> **stale**. The file is a snapshot of an object that keeps moving, so it rots by
+> default — and because it wins, a stale snapshot does not fail, it silently rolls
+> the function backward. No error, no stack trace: just fields missing from a
+> customer's screen, or a security predicate gone.
+>
+> This is not hypothetical. On 2026-08-09 the file had already drifted by one line,
+> and that line carried both the draft-invoice privacy predicate (a confirmed data
+> exposure, fixed in `06a50db`) and the deposit fields. Applying it as written here
+> would have re-opened the exposure.
+>
+> `npm run verify:portal-canonical` is the check that makes step 3 safe. It fails the
+> build if the file has lost a required predicate or field, if a tombstoned migration
+> has regained a runnable body, or — with database credentials present — if the live
+> function returns anything this file no longer builds. **If it fails, resync the file
+> from production before deploying; do not apply it.**
+
 `schema.sql` creates the 7 base tables (`business_settings, service_templates,
 travel_fee_tiers, properties, job_recurrences, jobs, invoices`) + RLS policies +
 indexes, then every dated migration **through 2026-06-25 only**, including the

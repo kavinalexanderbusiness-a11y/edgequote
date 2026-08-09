@@ -8,6 +8,26 @@
 -- Verified at capture: 6026 chars · 12 top-level keys · SECURITY DEFINER ·
 -- search_path pinned to 'public'.
 --
+-- ── 2026-08-09 — RESYNCED, and the drift it caught ──────────────────────────
+-- This file had gone STALE against production by exactly one line, and that line
+-- was load-bearing twice over. Live had moved 6026 → 6086 chars:
+--   +22  ` and status <> 'draft'`               (privacy fix, commit 06a50db)
+--   +38  `, deposit_amount, deposit_requested_at` (deposit surface)
+-- 22 + 38 = 60 = the whole delta, so the single `'invoices',` line below was the
+-- only difference; it is now byte-identical to live (388 bytes, diffed).
+--
+-- That is the real hazard this file exists to prevent, caught in the act. Nothing
+-- was broken YET — because nobody had re-run the file. But DEPLOY_CHECKLIST step 3
+-- runs CANONICAL-*.sql LAST precisely so it wins, so the next reset/restore would
+-- have re-opened a confirmed customer data exposure and dropped the deposit fields,
+-- silently, with no migration error.
+--
+-- ⛔ A SNAPSHOT OF A MOVING OBJECT ROTS BY DEFAULT. Documentation asking the next
+-- person to "query production first" did not survive two same-day changes. So the
+-- drift is now MACHINE-CHECKED: `npm run verify:portal-canonical` fails the build
+-- when this file's contract diverges from the live function's shape, and pins the
+-- predicates below that must never disappear. Run it after ANY edit here.
+--
 -- ✅ PROVEN IDENTICAL TO LIVE, without touching the live function. The body below
 -- was created under a throwaway name and its pg_get_functiondef diffed against the
 -- real one:
@@ -108,7 +128,13 @@ begin
       from public.quotes qt where qt.customer_id = v_customer and qt.status <> 'draft') q), '[]'::json),
     -- property_id (NEW): same reason. NULL is the honest answer for a combined
     -- invoice spanning properties — do not infer one.
-    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, amount_paid, status, issued_date, due_date, notes, address, property_id, line_items, job_id, created_at, discount_type, discount_value from public.invoices where customer_id = v_customer) i), '[]'::json),
+    -- ⛔ `and status <> 'draft'` IS A PRIVACY PREDICATE, NOT A FILTER PREFERENCE.
+    -- A draft is the owner's unfinished, unsent bill. Without this clause it was
+    -- serialized into the customer's payload and read straight out of devtools —
+    -- the portal only declined to RENDER it. Same predicate the quotes select
+    -- above has always carried. Deleting it re-opens a confirmed data exposure.
+    -- deposit_amount / deposit_requested_at: the deposit surface reads these.
+    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, amount_paid, status, issued_date, due_date, notes, address, property_id, line_items, job_id, created_at, discount_type, discount_value, deposit_amount, deposit_requested_at from public.invoices where customer_id = v_customer and status <> 'draft') i), '[]'::json),
     'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, kind, invoice_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
     -- property_id, quote_id, price, is_initial_visit: buildServicePlans groups by
     -- property and uses jobVisitValue to separate initial from recurring price.
