@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { createInvoiceCheckoutSession, stripeEnabled } from '@/lib/stripe/config'
 import { ensureStripeCustomerId, type CardCustomer } from '@/lib/payments/cards'
-import { invoiceTotals } from '@/lib/invoiceTotals'
+import { depositChargeAmount } from '@/lib/payments/deposit'
 
 export const dynamic = 'force-dynamic'
 
@@ -28,19 +28,53 @@ export async function POST(req: NextRequest) {
   // recorded). The RPC doesn't return gst_percent, so resolve it from the owner's
   // business_settings server-side (service role — anon can't read settings); a
   // GST-registered business must charge tax on portal payments too.
+  // The RPC also predates deposits, so the deposit columns come from the same
+  // service-role read as the GST rate. WITHOUT this the portal charges the full
+  // balance while the owner's payment link charges the deposit — the two surfaces
+  // asking one customer for different money for the same invoice, which is the
+  // exact disagreement depositChargeAmount exists to prevent. Resolved here rather
+  // than by widening portal_invoice_for_payment: that RPC sits in a chain of
+  // `create or replace` definitions where re-issuing an older link silently rolls
+  // back get_portal_data (see the migration audit).
   let gst = Number(invoice.gst_percent)
-  if (!Number.isFinite(gst)) {
-    gst = 0
+  let depositAmount: number | null = null
+  let depositRequestedAt: string | null = null
+  {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL, svc = process.env.SUPABASE_SERVICE_ROLE_KEY
     if (url && svc) {
       const admin = createClient(url, svc)
-      const { data: bs } = await admin.from('business_settings').select('gst_percent').eq('user_id', invoice.user_id).maybeSingle()
-      gst = Number((bs as { gst_percent?: number | null } | null)?.gst_percent) || 0
+      if (!Number.isFinite(gst)) {
+        const { data: bs } = await admin.from('business_settings').select('gst_percent').eq('user_id', invoice.user_id).maybeSingle()
+        gst = Number((bs as { gst_percent?: number | null } | null)?.gst_percent) || 0
+      }
+      const { data: dep } = await admin.from('invoices')
+        .select('deposit_amount, deposit_requested_at').eq('id', invoice.id).eq('user_id', invoice.user_id).maybeSingle()
+      const d = dep as { deposit_amount: number | string | null; deposit_requested_at: string | null } | null
+      depositAmount = d?.deposit_amount == null ? null : Number(d.deposit_amount)
+      depositRequestedAt = d?.deposit_requested_at ?? null
     }
   }
-  const total = invoiceTotals(invoice.amount, { gst_percent: gst }).total
-  const balance = Math.round((total - (Number(invoice.amount_paid) || 0)) * 100) / 100
-  if (balance <= 0) return NextResponse.json({ error: 'This invoice is already paid.' }, { status: 409 })
+  if (!Number.isFinite(gst)) gst = 0
+
+  // THE one collection rule, shared with the owner's checkout route: an outstanding
+  // deposit is what's due, otherwise the whole balance — clamped to the balance
+  // either way. The customer NEVER names an amount; it is derived from the invoice
+  // the owner controls.
+  //
+  // Discount columns aren't in the RPC's projection and don't need to be: a discount
+  // is already inside the stored `amount`, and invoiceTotals only reads it to
+  // reconstruct the pre-discount subtotal for DISPLAY — `.total` is identical either
+  // way. (The dashboard route passes them because it renders that breakdown.)
+  const charge = depositChargeAmount(
+    {
+      amount: Number(invoice.amount) || 0,
+      amount_paid: Number(invoice.amount_paid) || 0,
+      discount_type: null, discount_value: null,
+      deposit_amount: depositAmount, deposit_requested_at: depositRequestedAt,
+    },
+    { gst_percent: gst },
+  )
+  if (!(charge.amount > 0)) return NextResponse.json({ error: 'This invoice is already paid.' }, { status: 409 })
 
   // The customer paying their own invoice is the ONE moment they already have the
   // card out — so it's the only moment worth offering to keep it. Needs a Stripe
@@ -63,7 +97,7 @@ export async function POST(req: NextRequest) {
   const result = await createInvoiceCheckoutSession(invoice, {
     successUrl: `${base}/portal/${token}?paid=1`,
     cancelUrl: `${base}/portal/${token}`,
-    chargeCents: Math.round(balance * 100),
+    chargeCents: Math.round(charge.amount * 100),
     stripeCustomerId,
     offerSaveCard: !!stripeCustomerId,
   })

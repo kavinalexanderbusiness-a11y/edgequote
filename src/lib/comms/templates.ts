@@ -8,6 +8,11 @@
 export type MsgType =
   | 'on_my_way' | 'running_late' | 'arrived' | 'job_complete' | 'thanks'
   | 'review_request' | 'reminder' | 'quote' | 'invoice'
+  // Upfront deposit asked for BEFORE the work — a partial payment of an existing
+  // invoice, so it is an invoice-category (transactional) message. Deliberately
+  // NOT the 'invoice' template: that one says "your invoice for {{amount}} is
+  // ready", which would name the deposit as the whole bill.
+  | 'deposit_request'
   // Scheduler communication actions.
   | 'eta' | 'rain_delay' | 'rescheduled' | 'early_arrival' | 'confirm'
   // Follow-up / reminder templates.
@@ -40,6 +45,7 @@ export const MSG_LABELS: Record<MsgType, string> = {
   reminder: 'Day-before reminder',
   quote: 'Send quote',
   invoice: 'Send invoice',
+  deposit_request: 'Request deposit',
   eta: 'ETA / arrival window',
   rain_delay: 'Weather delay',
   rescheduled: 'Rescheduled',
@@ -242,6 +248,20 @@ You can securely view and pay it anytime using the link below:
 
 Thank you for choosing {{business_name}}. We appreciate your business!`,
 
+  // The deposit ASK. {{amount}} is the deposit, not the invoice total — the words
+  // have to say so, or the customer reads their $1,500 deposit as the whole job.
+  // The portal link shows the full invoice (total, deposit paid, what's left), so
+  // the message stays short and the complete picture is one tap away.
+  deposit_request: `Hi {{first_name}},
+
+Thanks for choosing {{business_name}}! To get your job booked in, we ask for a deposit of **{{amount}}** up front.
+
+You can pay it securely using the link below:
+
+{{portal_link}}
+
+The balance is due once the work is finished. If you have any questions, just reply to this message.`,
+
   estimate_reminder: `Hi {{first_name}},
 
 This is a reminder from {{business_name}} about your upcoming estimate on **{{date}}**.
@@ -370,6 +390,7 @@ const SUBJECTS: Record<MsgType, string> = {
   on_my_way: 'On my way', running_late: 'Running a little behind', arrived: "We've arrived",
   job_complete: 'Your service is complete', thanks: 'Thank you!', review_request: 'How did we do?',
   reminder: 'Service reminder', quote: 'Your quote', invoice: 'Your invoice',
+  deposit_request: 'Deposit to get you booked in',
   eta: 'Your upcoming service', rain_delay: 'Weather reschedule', rescheduled: 'Your service has been rescheduled',
   early_arrival: 'We can come earlier today', confirm: 'Confirming your service',
   estimate_reminder: 'Your upcoming estimate', payment_reminder: 'Invoice reminder', estimate_followup: 'Following up on your quote',
@@ -566,7 +587,10 @@ export const MSG_CATEGORY_LABELS: Record<MsgCategory, string> = {
 // the build on an unhandled MsgType and forces the choice to be made here.
 export function msgCategory(t: MsgType): MsgCategory | null {
   switch (t) {
-    case 'invoice': case 'payment_reminder': case 'receipt': return 'invoices'
+    // A deposit request is money owed on a real invoice for work the customer
+    // asked for — transactional, same category as the invoice itself. It must
+    // never ride the marketing preference.
+    case 'invoice': case 'deposit_request': case 'payment_reminder': case 'receipt': return 'invoices'
     case 'quote': case 'estimate_reminder': case 'estimate_followup': return 'estimates'
     // review_chase is the BULK campaign sweep — a list-segmented solicitation
     // asking customers to publicly promote the business, sent with no visit

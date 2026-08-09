@@ -480,6 +480,21 @@ alter table public.invoices add column if not exists discount_type  text;
 alter table public.invoices add column if not exists discount_value numeric(10,2);
 -- Owner-hand-edited-breakdown pin (idempotent — mirrors RUN-2026-07-28-invoice-line-items-edited.sql).
 alter table public.invoices add column if not exists line_items_edited boolean not null default false;
+-- Deposit / upfront request (idempotent — mirrors RUN-2026-08-09-invoice-deposit-request.sql).
+-- A deposit is a PARTIAL PAYMENT of this invoice, never a second invoice; only the
+-- REQUEST lives here. deposit_amount is GST-INCLUSIVE (the number the customer is
+-- told, and the convention every charge path already uses). The percentage is
+-- DERIVED, never stored, so it can't drift from the invoice total.
+alter table public.invoices add column if not exists deposit_amount numeric;
+alter table public.invoices add column if not exists deposit_requested_at timestamptz;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'invoices_deposit_amount_positive') then
+    alter table public.invoices add constraint invoices_deposit_amount_positive
+      check (deposit_amount is null or deposit_amount > 0);
+  end if;
+end $$;
+create index if not exists idx_invoices_deposit_outstanding
+  on public.invoices (user_id, deposit_requested_at) where deposit_amount is not null;
 do $$ begin
   if not exists (select 1 from pg_constraint where conname = 'invoices_discount_type_check') then
     alter table public.invoices add constraint invoices_discount_type_check

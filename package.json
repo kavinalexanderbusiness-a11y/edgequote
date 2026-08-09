@@ -55,7 +55,8 @@
     "verify:property-label": "tsx scripts/verify-property-label.ts",
     "verify:field-stops": "tsx scripts/verify-field-stops.ts",
     "verify:workforce": "tsx scripts/verify-workforce.ts",
-    "verify:job-completion": "tsx scripts/verify-job-completion.ts"
+    "verify:job-completion": "tsx scripts/verify-job-completion.ts",
+    "verify:deposit": "tsx scripts/verify-deposit.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

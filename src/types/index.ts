@@ -655,6 +655,15 @@ export interface Invoice {
   // syncDraftInvoiceAmounts then leaves the draft alone, so a later job-price
   // change can't silently overwrite the owner's line_items/amount. Defaults false.
   line_items_edited?: boolean
+  // ── Deposit / upfront request ──────────────────────────────────────────────
+  // The GST-INCLUSIVE amount asked for up front. A deposit is a PARTIAL PAYMENT
+  // of THIS invoice — there is no second invoice and no new kind of money row —
+  // so only the request is stored. The percentage is derived from the live total
+  // (lib/payments/deposit), never stored, so it can't drift. null = none asked.
+  deposit_amount?: number | null
+  // When the request was SUCCESSFULLY sent. null = asked for but not yet sent,
+  // so the UI can never claim "sent" for a delivery that failed.
+  deposit_requested_at?: string | null
   // How it was paid (set on mark-paid / by the Stripe webhook). null = unpaid.
   payment_method?: 'stripe' | 'etransfer' | 'cash' | 'cheque' | null
   paid_at?: string | null

@@ -8,6 +8,8 @@ import { usePaymentsStatus } from '@/hooks/usePaymentsStatus'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Invoice, InvoiceStatus, InvoiceDisplayStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, BusinessSettings, Payment, paymentMethodLabel } from '@/types'
 import { InvoicePaymentControls } from '@/components/payments/InvoicePaymentControls'
+import { DepositRequestPanel } from '@/components/payments/DepositRequestPanel'
+import { markDepositRequestSent, depositChargeAmount } from '@/lib/payments/deposit'
 import { invoiceBalance, displayInvoiceStatus, cancelInvoice, reactivateInvoice, assertCurrent } from '@/lib/payments/ledger'
 import { isAutoPayHeld } from '@/lib/payments/autopay'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -84,6 +86,10 @@ export default function InvoicesPage() {
   })
   // The ONE shared Send Message dialog, opened for a specific invoice's customer.
   const [msgInvoice, setMsgInvoice] = useState<Invoice | null>(null)
+  // The deposit ASK, going through the SAME dialog — separate state because the
+  // template, the amount and the on-success stamp are all different from a
+  // full-invoice send (see the dialog at the bottom of the page).
+  const [depositMsg, setDepositMsg] = useState<{ invoice: Invoice; amount: number } | null>(null)
   const { enabled: paymentsEnabled, webhook: webhookReady } = usePaymentsStatus()
   const [payingId, setPayingId] = useState<string | null>(null)
   const [chargingId, setChargingId] = useState<string | null>(null)
@@ -593,11 +599,21 @@ export default function InvoicesPage() {
                         <AlertTriangle className="w-3 h-3" /> Review
                       </span>
                     )}
-                    {paymentsEnabled && inv.status !== 'draft' && invoiceBalance(inv, settings).balance > 0 && (
-                      <Button onClick={() => payNow(inv)} size="sm" loading={payingId === inv.id} title="Create a Stripe payment link for the balance">
-                        <CreditCard className="w-3.5 h-3.5" /> Take payment
-                      </Button>
-                    )}
+                    {paymentsEnabled && inv.status !== 'draft' && invoiceBalance(inv, settings).balance > 0 && (() => {
+                      // The link charges what depositChargeAmount says — the
+                      // outstanding deposit while one is unpaid, else the balance.
+                      // The button must SAY which, or the owner quotes the wrong
+                      // figure to the customer standing in front of them.
+                      const charge = depositChargeAmount(inv, settings)
+                      return (
+                        <Button onClick={() => payNow(inv)} size="sm" loading={payingId === inv.id}
+                          title={charge.isDeposit
+                            ? `Create a Stripe payment link for the ${formatCurrency(charge.amount)} deposit`
+                            : 'Create a Stripe payment link for the balance'}>
+                          <CreditCard className="w-3.5 h-3.5" /> {charge.isDeposit ? `Take deposit` : 'Take payment'}
+                        </Button>
+                      )
+                    })()}
                     {/* Charge the saved card directly — recurring invoices, customer with a card on file. */}
                     {paymentsEnabled && inv.customer_id && cardCustomers.has(inv.customer_id) && inv.job_id && invoiceBalance(inv, settings).balance > 0 && (
                       <Button
@@ -710,6 +726,16 @@ export default function InvoicesPage() {
                     on "issued" meant a contractor holding cash in the driveway had to
                     Send the invoice to their own customer before the app would let
                     them write the payment down. Recording a payment issues it (below). */}
+                {/* Upfront deposit — request part of this invoice before the work.
+                    The deposit is a PARTIAL PAYMENT of this invoice (no second
+                    invoice, no new money record); this panel only stores the ask
+                    and hands sending to the shared dialog below. */}
+                <DepositRequestPanel
+                  invoice={inv}
+                  settings={settings}
+                  onChanged={fetchInvoices}
+                  onSendRequest={(invoice, amount) => setDepositMsg({ invoice, amount })}
+                />
                 {uid && (
                   <InvoicePaymentControls
                     invoice={inv}
@@ -741,6 +767,34 @@ export default function InvoicesPage() {
           customerId={msgInvoice.customer_id} customerName={msgInvoice.customer_name}
           defaultTemplate="invoice" vars={{ amount: formatCurrency(invoiceBalance(msgInvoice, settings).balance) }}
           onSent={() => markSent(msgInvoice)} />
+      )}
+
+      {/* The deposit ASK — the SAME dialog and pipeline as the invoice send, with
+          three deliberate differences: the template names the amount as a deposit
+          (not "your invoice for…"), {{amount}} is the deposit still to collect
+          (never the total), and success stamps deposit_requested_at — which is the
+          ONLY writer of that stamp, and it runs ONLY after the dialog confirms a
+          delivery (or a persisted scheduled send — the same contract markSent
+          already accepts). A failed send stamps nothing and the panel keeps
+          reading "Not sent". Sending the ask also issues a draft (markSent): the
+          message points the customer at the portal, where the invoice is now
+          visible — same one-intent-one-action rule as sending the invoice. */}
+      {depositMsg?.invoice.customer_id && (
+        <SendMessageDialog open onClose={() => setDepositMsg(null)}
+          customerId={depositMsg.invoice.customer_id} customerName={depositMsg.invoice.customer_name}
+          title={`Request deposit — ${depositMsg.invoice.invoice_number}`}
+          defaultTemplate="deposit_request" templates={['deposit_request', 'custom']}
+          vars={{ amount: formatCurrency(depositMsg.amount) }}
+          onSent={async () => {
+            const inv = depositMsg.invoice
+            await markSent(inv)
+            const res = await markDepositRequestSent(supabase, inv.id)
+            // The message reached the customer but the stamp didn't land: say so
+            // honestly — the panel will still read "Not sent", and re-sending is
+            // harmless (same amount, same idempotent pipeline).
+            if (res.error) notify.error('Sent, but couldn’t record it as sent — the deposit will still show as “Not sent”.')
+            fetchInvoices()
+          }} />
       )}
     </div>
   )
