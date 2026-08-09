@@ -57,7 +57,8 @@
     "verify:field-stops": "tsx scripts/verify-field-stops.ts",
     "verify:workforce": "tsx scripts/verify-workforce.ts",
     "verify:job-completion": "tsx scripts/verify-job-completion.ts",
-    "verify:deposit": "tsx scripts/verify-deposit.ts"
+    "verify:deposit": "tsx scripts/verify-deposit.ts",
+    "verify:crew-access": "tsx scripts/verify-crew-access.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

@@ -339,6 +339,18 @@ export interface Technician {
    *  CASCADED all three away. Distinct from `is_active`, which is a temporary
    *  "not working right now" toggle; archiving is "no longer employed here". */
   archived_at?: string | null
+  // ── Crew Mode (RUN-2026-08-07-crew-mode) ──────────────────────────────────
+  /** The Supabase auth user this employee signs in as, or NULL for records-only
+   *  (which is every technician until an owner grants app access). Unique across
+   *  the whole project: one login is one employee of one business, which is what
+   *  keeps `crew_employer()` single-valued.
+   *  ⚠️ Being linked is NOT enough to get in — crew_employer() also requires
+   *  is_active AND archived_at IS NULL, re-checked on every query. The roster
+   *  switches ARE the access control. */
+  auth_user_id?: string | null
+  /** One-time join code the owner hands out; cleared the instant it is redeemed. */
+  invite_code?: string | null
+  invite_expires_at?: string | null
 }
 
 // ── Paid time ────────────────────────────────────────────────────────────────

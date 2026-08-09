@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { Suspense, useEffect, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
@@ -9,7 +9,17 @@ import { Banner } from '@/components/ui/Banner'
 import { Zap } from 'lucide-react'
 
 export default function LoginPage() {
+  // useSearchParams needs a Suspense boundary in the app router.
+  return <Suspense fallback={null}><LoginForm /></Suspense>
+}
+
+function LoginForm() {
   const router = useRouter()
+  // Where the middleware was sending them before it bounced them here. Same-path
+  // only — an absolute or protocol-relative value would be an open redirect, and
+  // this parameter is attacker-controllable.
+  const rawNext = useSearchParams().get('next')
+  const next = rawNext && rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : null
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -39,7 +49,10 @@ export default function LoginPage() {
       return
     }
 
-    router.push('/dashboard')
+    // Middleware decides where an account actually belongs (owner → /dashboard,
+    // crew → /crew, neither → /crew/join or /setup), so this only has to hand it
+    // a plausible destination — or the one they were originally heading for.
+    router.push(next ?? '/dashboard')
     router.refresh()
   }
 

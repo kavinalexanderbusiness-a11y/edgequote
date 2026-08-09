@@ -1,0 +1,295 @@
+'use client'
+
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { createClient } from '@/lib/supabase/client'
+import { loadCrewDay, nextCrewStop, type CrewDay, type CrewStop } from '@/lib/crewAccess'
+import { crewStartVisit, crewCompleteVisit, crewRevertVisit, type VisitState } from '@/lib/crewJob'
+import { localTodayISO, cn } from '@/lib/utils'
+import { directionsUrl } from '@/lib/route'
+import { toast } from '@/lib/toast'
+import { Button } from '@/components/ui/Button'
+import { Skeleton } from '@/components/ui/Skeleton'
+import { StickyActionBar } from '@/components/ui/StickyActionBar'
+import {
+  CheckCircle2, Play, Navigation, Phone, StickyNote, Users, Check, Clock, AlertTriangle,
+} from 'lucide-react'
+
+// ── Today ────────────────────────────────────────────────────────────────────
+// The six questions a worker has, answered in the order they ask them:
+//   Where am I going?      → the next stop's address, first thing on the screen
+//   What is the work?      → service + duration + the access note
+//   Who is with me?        → the crew line
+//   What state is it in?   → one badge per stop, from the canonical status
+//   What do I do next?     → ONE button, pinned in the thumb zone
+//   Did that save?         → the button reports the write; a failure says so and
+//                            the row does not move
+//
+// State is re-read from the database after every write. There is no optimistic
+// paint here on purpose: this screen exists to be TRUE, and the alternative
+// (paint first, reconcile later) is exactly how a field app ends up showing a
+// job as done that the server never accepted.
+
+function timeLabel(t: string | null): string | null {
+  if (!t) return null
+  const [h, m] = t.split(':')
+  const hh = Number(h)
+  return `${((hh + 11) % 12) + 1}:${m} ${hh < 12 ? 'am' : 'pm'}`
+}
+function elapsedMin(iso: string): number {
+  return Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000))
+}
+
+export function CrewToday() {
+  const supabase = createClient()
+  const [day, setDay] = useState<CrewDay | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [revoked, setRevoked] = useState(false)
+  const [acting, setActing] = useState<string | null>(null)
+  const today = localTodayISO()
+  const alive = useRef(true)
+
+  const load = useCallback(async () => {
+    const data = await loadCrewDay(supabase, today)
+    if (!alive.current) return
+    if (data === null) {
+      // crew_day returns NULL only for someone who is not an ACTIVE linked crew
+      // member. That is different from "nothing booked", and must never be shown
+      // as an empty day — the honest message is that access is gone.
+      setRevoked(true)
+    } else {
+      setDay(data)
+      setRevoked(false)
+    }
+    setLoadFailed(false)
+    setLoading(false)
+  }, [supabase, today])
+
+  useEffect(() => {
+    alive.current = true
+    load().catch(() => { if (alive.current) { setLoadFailed(true); setLoading(false) } })
+    return () => { alive.current = false }
+  }, [load])
+
+  // The live minute tick — an on-the-clock stop shows how long it has been
+  // running, and that number has to keep moving.
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => setTick(x => x + 1), 60000)
+    return () => clearInterval(t)
+  }, [])
+
+  const stops = day?.stops ?? []
+  const next = nextCrewStop(stops)
+  const done = stops.filter(s => s.status === 'completed').length
+
+  async function act(stop: CrewStop, kind: 'start' | 'complete') {
+    if (acting) return
+    setActing(stop.id)
+    try {
+      const prev: VisitState = {
+        status: stop.status, started_at: stop.started_at,
+        completed_at: stop.completed_at, actual_minutes: stop.actual_minutes,
+      }
+      const res = kind === 'start'
+        ? await crewStartVisit(supabase, stop)
+        : await crewCompleteVisit(supabase, stop)
+      if (!res.ok) { toast.error(res.error || 'That didn’t save. Try again.'); await load(); return }
+      const who = stop.customer?.name || stop.title
+      toast.undo(kind === 'start' ? `Started ${who}` : `${who} — done`, async () => {
+        const r = await crewRevertVisit(supabase, { ...stop, updated_at: res.nextUpdatedAt ?? stop.updated_at }, prev)
+        if (!r.ok) toast.error(r.error || 'Couldn’t undo that.')
+        await load()
+      })
+      await load()
+    } finally {
+      if (alive.current) setActing(null)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="space-y-3">
+        <Skeleton className="h-20 rounded-card" />
+        <Skeleton className="h-24 rounded-card" />
+        <Skeleton className="h-24 rounded-card" />
+      </div>
+    )
+  }
+
+  if (revoked) {
+    return (
+      <Notice tone="amber" icon={AlertTriangle} title="Your access has been turned off">
+        Your account is no longer active on this crew. Ask your manager to switch it back on.
+      </Notice>
+    )
+  }
+
+  if (loadFailed || !day) {
+    return (
+      <Notice tone="amber" icon={AlertTriangle} title="Couldn’t load today">
+        We couldn’t reach the server. Check your signal and try again — nothing on this screen is out of date, because nothing loaded.
+        <div className="mt-3"><Button size="sm" variant="secondary" onClick={() => { setLoading(true); load() }}>Try again</Button></div>
+      </Notice>
+    )
+  }
+
+  return (
+    <div className={cn('space-y-3', next && 'pb-24')}>
+      {/* Who and where I am today */}
+      <header className="pb-1">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">
+          {new Date(today + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}
+        </p>
+        <h1 className="text-xl font-bold tracking-tight text-ink">
+          {stops.length === 0 ? 'Nothing booked today' : `${stops.length - done} of ${stops.length} to go`}
+        </h1>
+        <p className="mt-0.5 text-xs text-ink-muted flex items-center gap-1.5 flex-wrap">
+          {day.crew?.name && <span className="font-medium text-ink">{day.crew.name}</span>}
+          {day.teammates.length > 0 && (
+            <span className="inline-flex items-center gap-1">
+              <Users className="w-3.5 h-3.5" aria-hidden /> with {day.teammates.map(t => t.name).join(', ')}
+            </span>
+          )}
+          {day.teammates.length === 0 && day.crew?.name && <span>· on your own today</span>}
+        </p>
+      </header>
+
+      {stops.length === 0 && (
+        <Notice tone="neutral" icon={Check} title="No stops on the board">
+          Nothing is assigned to your crew today. Check the Week tab for what’s coming.
+        </Notice>
+      )}
+
+      {stops.map((stop, i) => {
+        const isNext = next?.id === stop.id
+        const finished = stop.status === 'completed'
+        const running = stop.status === 'in_progress'
+        return (
+          <section
+            key={stop.id}
+            aria-current={isNext ? 'step' : undefined}
+            className={cn(
+              'rounded-card border p-3.5 transition-colors',
+              finished ? 'border-border bg-bg-tertiary/60 opacity-60'
+                : running ? 'border-sky-400/40 bg-sky-400/10'
+                : isNext ? 'border-accent/40 bg-accent/5'
+                : 'border-border bg-bg-secondary',
+            )}
+          >
+            <div className="flex items-start gap-2.5">
+              <span className={cn(
+                'mt-0.5 w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-xs font-bold',
+                finished ? 'bg-emerald-500/20 text-emerald-300'
+                  : running ? 'bg-sky-400 text-black'
+                  : 'bg-accent text-black',
+              )}>
+                {finished ? <Check className="w-4 h-4" aria-hidden /> : running ? <Play className="w-3.5 h-3.5 fill-current" aria-hidden /> : i + 1}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className={cn('text-sm font-semibold text-ink truncate', finished && 'line-through opacity-80')}>
+                  {stop.customer?.name || stop.title}
+                </p>
+                {/* WHERE. The single most important line on a worker's screen. */}
+                {stop.property?.address && (
+                  <p className="text-xs text-ink-muted truncate">{stop.property.address}</p>
+                )}
+                <p className="mt-0.5 text-[11px] text-ink-faint flex items-center gap-1.5 flex-wrap">
+                  {stop.service_type && <span className="text-ink-muted">{stop.service_type}</span>}
+                  {timeLabel(stop.start_time) && <span>· {timeLabel(stop.start_time)}</span>}
+                  {stop.duration_minutes ? <span>· {stop.duration_minutes} min</span> : null}
+                  {running && stop.started_at && (
+                    <span className="font-semibold text-sky-300 inline-flex items-center gap-1">
+                      · <Clock className="w-3 h-3" aria-hidden /> {elapsedMin(stop.started_at)}m on site
+                    </span>
+                  )}
+                  {finished && stop.actual_minutes != null && <span className="text-emerald-400">· {stop.actual_minutes}m</span>}
+                </p>
+
+                {/* WHAT THE WORK IS — the access note, on the card face. */}
+                {stop.notes?.trim() && (
+                  <div className="mt-2 flex items-start gap-1.5 rounded-md border border-border bg-bg-tertiary/60 px-2 py-1.5 text-xs text-ink-muted">
+                    <StickyNote className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-400/80" aria-hidden />
+                    <span className="whitespace-pre-wrap break-words">{stop.notes.trim()}</span>
+                  </div>
+                )}
+
+                <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
+                  <a
+                    href={directionsUrl({ lat: stop.property?.lat ?? null, lng: stop.property?.lng ?? null, address: stop.property?.address }, null)}
+                    target="_blank" rel="noopener noreferrer"
+                    className="tap-target h-10 px-3 rounded-lg border border-border text-xs font-medium text-ink-muted flex items-center justify-center gap-1.5 hover:text-ink hover:border-border-strong transition-colors"
+                  >
+                    <Navigation className="w-3.5 h-3.5" aria-hidden /> Directions
+                  </a>
+                  {stop.customer?.phone && (
+                    <a
+                      href={`tel:${stop.customer.phone}`}
+                      className="tap-target h-10 px-3 rounded-lg border border-border text-xs font-medium text-ink-muted flex items-center justify-center gap-1.5 hover:text-ink hover:border-border-strong transition-colors"
+                    >
+                      <Phone className="w-3.5 h-3.5" aria-hidden /> Call
+                    </a>
+                  )}
+                  {!finished && (
+                    <Button
+                      size="sm"
+                      variant={running ? 'primary' : 'secondary'}
+                      className="tap-target h-10"
+                      loading={acting === stop.id}
+                      disabled={acting !== null && acting !== stop.id}
+                      onClick={() => act(stop, running ? 'complete' : 'start')}
+                    >
+                      {running ? <><CheckCircle2 className="w-4 h-4" aria-hidden /> Finish</> : <><Play className="w-4 h-4" aria-hidden /> Start</>}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
+        )
+      })}
+
+      {/* THE next action, in the thumb zone. Restates the same button the card
+          shows and calls the same writer — reach, not a second way to do it. */}
+      {next && (
+        <StickyActionBar fixed>
+          <div className="mx-auto flex max-w-lg items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
+                {next.status === 'in_progress' ? 'On the clock' : 'Next stop'}
+              </p>
+              <p className="text-sm font-semibold text-ink truncate">{next.customer?.name || next.title}</p>
+              {next.property?.address && <p className="text-[11px] text-ink-muted truncate">{next.property.address}</p>}
+            </div>
+            <Button
+              size="lg"
+              className="shrink-0 tap-target"
+              loading={acting === next.id}
+              disabled={acting !== null && acting !== next.id}
+              onClick={() => act(next, next.status === 'in_progress' ? 'complete' : 'start')}
+            >
+              {next.status === 'in_progress'
+                ? <><CheckCircle2 className="w-4 h-4" aria-hidden /> Finish</>
+                : <><Play className="w-4 h-4" aria-hidden /> Start</>}
+            </Button>
+          </div>
+        </StickyActionBar>
+      )}
+    </div>
+  )
+}
+
+function Notice({ tone, icon: Icon, title, children }: {
+  tone: 'amber' | 'neutral'; icon: typeof Check; title: string; children: React.ReactNode
+}) {
+  return (
+    <div className={cn('rounded-card border p-4',
+      tone === 'amber' ? 'border-amber-500/30 bg-amber-500/[0.06]' : 'border-border bg-bg-secondary')}>
+      <p className="flex items-center gap-2 text-sm font-semibold text-ink">
+        <Icon className={cn('w-4 h-4 shrink-0', tone === 'amber' ? 'text-amber-300' : 'text-ink-muted')} aria-hidden />
+        {title}
+      </p>
+      <div className="mt-1 text-xs text-ink-muted">{children}</div>
+    </div>
+  )
+}

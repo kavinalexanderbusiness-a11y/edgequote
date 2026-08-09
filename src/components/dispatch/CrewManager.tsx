@@ -11,6 +11,7 @@ import { Select } from '@/components/ui/Select'
 import { Toggle } from '@/components/ui/Toggle'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { WageHistoryDialog } from '@/components/dispatch/WageHistoryDialog'
+import { CrewAccessControl } from '@/components/dispatch/CrewAccessControl'
 import { History } from 'lucide-react'
 import { toast as notify } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
@@ -194,10 +195,10 @@ export function CrewManager({ open, onClose, crews, technicians, equipment, onCh
                   onBlur={e => { const v = e.target.value.trim() || null; if (v !== t.phone) run(`tphone-${t.id}`, () => supabase.from('technicians').update({ phone: v }).eq('id', t.id).then(r => ({ error: r.error }))) }} />
                 <Select label="Crew" fieldSize="sm" value={t.crew_id ?? ''} options={crewOptions}
                   onChange={e => run(`tcrew-${t.id}`, () => supabase.from('technicians').update({ crew_id: e.target.value || null }).eq('id', t.id).then(r => ({ error: r.error })))} />
-                {/* Job title only — EdgeQuote has no permissions system and
-                    technicians don't log in, so this grants nothing. */}
+                {/* Job title only. App access is granted below, by linking a
+                    login — this field grants nothing and never has. */}
                 <Input label="Role" placeholder="e.g. Crew lead" defaultValue={t.role ?? ''} fieldSize="sm"
-                  title="A job title for your own records — it does not grant access to anything."
+                  title="A job title for your own records — it does not grant access to anything. Use App access below to give someone a login."
                   onBlur={e => { const v = e.target.value.trim() || null; if (v !== t.role) run(`trole-${t.id}`, () => supabase.from('technicians').update({ role: v }).eq('id', t.id).then(r => ({ error: r.error }))) }} />
                 {/* Default rate for the NEXT clock-in only — past shifts keep the
                     rate they were stamped with, so a raise never rewrites history. */}
@@ -231,6 +232,9 @@ export function CrewManager({ open, onClose, crews, technicians, equipment, onCh
                 <span className={cn('w-1.5 h-1.5 rounded-full', TECH_STATUS_META[t.status].dot)} />
                 {TECHNICIAN_STATUS_LABELS[t.status]} — set day-of status from the board
               </p>
+              {/* Crew Mode: a login for this person, granted and revoked from the
+                  same row as the switches that already control them. */}
+              <CrewAccessControl tech={t} onChanged={onChanged} />
             </div>
           ))}
           <div className="flex items-end gap-2">

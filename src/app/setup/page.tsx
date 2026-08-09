@@ -181,6 +181,19 @@ export default function SetupPage() {
           }} className="text-sm text-ink-faint hover:text-ink transition-colors">Skip for now</button>
         )}
       </div>
+      {/* The escape hatch for an EMPLOYEE who landed here. This page is reached
+          by any signed-in account with no business_settings row — which is a new
+          owner, but also a new worker who signed in before redeeming their join
+          code. Setting up a business is the one thing they must not do, and
+          without this the only visible path does exactly that. */}
+      {!configured && (
+        <p className="mt-6 text-center text-xs text-ink-faint">
+          Joining a crew instead?{' '}
+          <Link href="/crew/join" className="font-medium text-accent-text underline-offset-2 hover:underline">
+            Enter your code
+          </Link>
+        </p>
+      )}
     </Shell>
   )
 }
