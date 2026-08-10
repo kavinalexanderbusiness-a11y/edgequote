@@ -83,16 +83,27 @@ const run = async () => {
     !/ for \$180/.test(balance.sms),
     `the fragment is back: ${JSON.stringify(balance.sms)}`)
 
-  // The two built-in templates depended on the fragment; they now carry the
-  // connective themselves. These are the money messages — they must read right.
+  // The two built-in money templates depended on the fragment; they now carry the
+  // connective themselves. Asserted as a CONTRACT rather than a sentence: these
+  // get reworded (they were shortened for SMS segment cost), and a byte-exact
+  // match would fail on a rewrite that is perfectly correct — which teaches the
+  // next person to delete the check instead of reading it. What must hold is that
+  // the amount arrives as a bare VALUE inside a well-formed sentence.
+  const wellFormed = (line: string | undefined, amount: string) =>
+    !!line
+    && line.includes(amount)          // the figure is actually there
+    && !/ for\s+for /.test(line)      // no doubled connective
+    && !/\s{2,}/.test(line)           // no gap where a fragment used to sit
+    && !new RegExp(`(is|of|for)\\s+(is|of|for)\\s*\\${amount[0]}`).test(line)
+
   const inv = renderBody(DEFAULT_TEMPLATES.invoice, vars({ amount: '$180' }), 'x')
-  check('invoice template still reads correctly',
-    inv.sms.includes('Your invoice from Acme for $180 is ready.'),
-    `got: ${JSON.stringify(inv.sms.split('\n').find(l => l.includes('invoice from')))}`)
+  const invLine = inv.sms.split('\n').find(l => l.includes('$180'))
+  check('the invoice template states the amount in a well-formed sentence',
+    wellFormed(invLine, '$180'), `got: ${JSON.stringify(invLine)}`)
   const rcpt = renderBody(DEFAULT_TEMPLATES.receipt, vars({ amount: '$180' }), 'x')
-  check('receipt template still reads correctly',
-    rcpt.sms.includes("we've received your payment of $180."),
-    `got: ${JSON.stringify(rcpt.sms.split('\n').find(l => l.includes('received')))}`)
+  const rcptLine = rcpt.sms.split('\n').find(l => l.includes('$180'))
+  check('the receipt template states the amount in a well-formed sentence',
+    wellFormed(rcptLine, '$180'), `got: ${JSON.stringify(rcptLine)}`)
 
   console.log('\n── Tier 0: tokens are only offered when they will resolve ──────')
 

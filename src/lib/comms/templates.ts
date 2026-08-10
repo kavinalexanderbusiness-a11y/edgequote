@@ -87,41 +87,23 @@ export const MSG_VARIABLES: { key: string; hint: string }[] = [
 
 // Professional, friendly defaults. **bold** → <strong> in email, stripped for SMS.
 export const DEFAULT_TEMPLATES: Record<MsgType, string> = {
-  confirm: `Hi {{first_name}},
+  confirm: `Hi {{first_name}}, confirming your booking with {{business_name}} on **{{date}}**.
 
-Just confirming your scheduled service with {{business_name}} on **{{date}}**.
+Need to change anything? Just reply. See you then!`,
 
-If you have any questions or need to make any changes before your appointment, simply reply to this message and we'll be happy to help.
+  reminder: `Hi {{first_name}}, a reminder that {{business_name}} is booked for **{{date}}** at {{address}}.
 
-Thank you—we look forward to seeing you!`,
+If anything changes, just reply. See you then!`,
 
-  reminder: `Hi {{first_name}},
+  introduction: `Hi {{first_name}}, this is {{business_name}} — please save this number.
 
-This is a friendly reminder that {{business_name}} is scheduled to service your property on **{{date}}**.
+We'll use it for reminders, arrival updates, invoices and receipts. You can call or text us here any time on {{direct_phone}}.
 
-If anything changes before then, simply reply to this message.
+Thanks for choosing us!`,
 
-We look forward to seeing you then!`,
+  eta: `Hi {{first_name}}, {{business_name}} here. We're booked for **{{date}}**, arriving between **{{time_window}}**.
 
-  introduction: `Hi {{first_name}},
-
-This is {{business_name}}.
-
-Please save this number to your contacts. We'll send appointment reminders, scheduling updates, on-the-way notifications, weather delays, invoices, receipts, and other service updates from this number.
-
-If you ever need to reach us directly, please call or text us at {{direct_phone}}.
-
-Thank you for choosing {{business_name}}!`,
-
-  eta: `Hi {{first_name}},
-
-Your service with {{business_name}} is scheduled for **{{date}}**.
-
-Our estimated arrival window is **{{time_window}}**.
-
-If anything changes with our schedule, we'll keep you updated.
-
-See you soon!`,
+We'll let you know if anything changes. See you then!`,
 
   on_my_way: `Hi {{first_name}},
 
@@ -131,23 +113,13 @@ See you soon!
 
 — {{business_name}}`,
 
-  running_late: `Hi {{first_name}},
+  running_late: `Hi {{first_name}}, {{business_name}} here — running a little behind today. We should be with you in about **{{eta}} minutes**.
 
-This is {{business_name}} — I just wanted to let you know I'm running a little behind schedule today.
+Thanks for your patience!`,
 
-My updated arrival time is approximately **{{eta}} minutes**.
+  arrived: `Hi {{first_name}}, this is {{business_name}} — we've arrived and are getting started.
 
-Thank you for your patience—I appreciate your understanding and I'll be there as soon as possible.
-
-— {{business_name}}`,
-
-  arrived: `Hi {{first_name}},
-
-This is {{business_name}} — I've just arrived at your property and will be getting started shortly.
-
-If there's anything you'd like me to know before I begin, just let me know.
-
-Thanks!`,
+If there's anything we should know first, just reply.`,
 
   early_arrival: `Hi {{first_name}},
 
@@ -157,35 +129,17 @@ If it works for you, I can arrive earlier than originally planned.
 
 Just reply to this message and let me know.`,
 
-  rescheduled: `Hi {{first_name}},
+  rescheduled: `Hi {{first_name}}, your visit from {{business_name}} has moved to **{{date}}**.
 
-Your service with {{business_name}} has been rescheduled to **{{date}}**.
+If that doesn't suit, just reply and we'll find another time.`,
 
-If this new date doesn't work for you, simply reply to this message and we'll be happy to arrange another time.
+  rain_delay: `Hi {{first_name}}, the weather has forced {{business_name}} to move your visit from **{{old_date}}** to **{{date}}**.
 
-Thank you for your understanding!
+If that doesn't suit, just reply and we'll find another time. Thanks for your patience!`,
 
-— {{business_name}}`,
+  job_complete: `Hi {{first_name}}, we've finished up at {{address}} — thanks for choosing {{business_name}}.
 
-  rain_delay: `Hi {{first_name}},
-
-Due to the weather forecast and current conditions, we've had to adjust our schedule to ensure we can provide the highest quality service safely.
-
-Your service has been rescheduled from **{{old_date}}** to **{{date}}**.
-
-If the new date doesn't work for you, simply reply to this message and we'll be happy to arrange another time.
-
-Thank you for your patience and understanding.
-
-— {{business_name}}`,
-
-  job_complete: `Hi {{first_name}},
-
-Your service has now been completed.
-
-Thank you for choosing {{business_name}}. We appreciate your business, and we're here whenever you need us.
-
-Have a great day!`,
+Anything not right? Just reply and we'll sort it out.`,
 
   thanks: `Hi {{first_name}},
 
@@ -195,17 +149,12 @@ We appreciate the opportunity to work with you and look forward to helping you a
 
 Have a wonderful day!`,
 
-  review_request: `Hi {{first_name}},
+  review_request: `Hi {{first_name}}, thanks for choosing {{business_name}}!
 
-Thank you for choosing {{business_name}}!
-
-If you were happy with your recent service, we'd really appreciate a quick review.
-
-Your feedback helps our small business grow, and helps other people choose a company they can trust.
-
+If you were happy with the work, a quick review would mean a lot to a small business:
 {{review_link}}
 
-Thank you again—we truly appreciate your support!`,
+Thank you!`,
 
   // The BULK chase (the `review` campaign). Deliberately NOT tied to a recent
   // visit — it sweeps up customers who never reviewed — which is exactly why
@@ -228,39 +177,30 @@ No worries at all if you'd rather not. Thank you either way!`,
   // threaded through SendMessageDialog and the scheduled-message cron; only the quote
   // template never asked for it. Degrades to "your property" when unset (templates.ts's
   // resolver), which reads correctly rather than leaving a dangling "for ".
-  quote: `Hi {{first_name}},
+  quote: `Hi {{first_name}}, your quote from {{business_name}} for {{address}} is ready.
 
-Your quote from {{business_name}} for {{address}} is ready.
-
-You can view and approve it anytime using the secure link below:
-
+View and approve it here:
 {{portal_link}}
 
-If you have any questions about the quote, simply reply to this message and we'll be happy to help.`,
+Questions? Just reply.`,
 
-  invoice: `Hi {{first_name}},
+  invoice: `Hi {{first_name}}, your invoice from {{business_name}} for {{amount}} is ready.
 
-Your invoice from {{business_name}} for {{amount}} is ready.
-
-You can securely view and pay it anytime using the link below:
-
+View and pay it securely here:
 {{portal_link}}
 
-Thank you for choosing {{business_name}}. We appreciate your business!`,
+Thanks for your business!`,
 
   // The deposit ASK. {{amount}} is the deposit, not the invoice total — the words
   // have to say so, or the customer reads their $1,500 deposit as the whole job.
   // The portal link shows the full invoice (total, deposit paid, what's left), so
   // the message stays short and the complete picture is one tap away.
-  deposit_request: `Hi {{first_name}},
+  deposit_request: `Hi {{first_name}}, thanks for choosing {{business_name}}! To get you booked in we ask for a deposit of **{{amount}}**.
 
-Thanks for choosing {{business_name}}! To get your job booked in, we ask for a deposit of **{{amount}}** up front.
-
-You can pay it securely using the link below:
-
+Pay it securely here:
 {{portal_link}}
 
-The balance is due once the work is finished. If you have any questions, just reply to this message.`,
+The balance is due once the work is done. Questions? Just reply.`,
 
   estimate_reminder: `Hi {{first_name}},
 
@@ -276,29 +216,19 @@ We look forward to meeting with you. If you need to reschedule, simply reply to 
   // the cron always passes it, MessageTemplateEditor's preview passes a sample,
   // and payment_reminder is deliberately not in SendMessageDialog's DEFAULT_SET.
   // A future caller that adds it there must pass `amount` too.
-  payment_reminder: `Hi {{first_name}},
+  payment_reminder: `Hi {{first_name}}, a reminder from {{business_name}} — {{amount}} is still outstanding on your invoice.
 
-A friendly reminder from {{business_name}} — {{amount}} is still outstanding on your invoice.
-
-You can view and pay it securely here:
-
+View and pay it here:
 {{invoice_link}}
 
-If you've already paid, please ignore this message. Thank you!
+Already paid? Please ignore this. Thank you!`,
 
-— {{business_name}}`,
+  estimate_followup: `Hi {{first_name}}, just checking in on the quote we sent you.
 
-  estimate_followup: `Hi {{first_name}},
-
-Just checking in regarding the quote we recently sent.
-
-If you have any questions or would like to discuss any part of it, we're happy to help.
-
-Whenever you're ready, you can view and accept your quote here:
-
+Happy to answer anything, or you can approve it here whenever you're ready:
 {{quote_link}}
 
-Thank you for considering {{business_name}}.`,
+Thanks for considering {{business_name}}.`,
 
   // Sent to the CUSTOMER the instant they book online. Until this existed the booking
   // funnel's only send went to the OWNER's inbox, so a homeowner who closed the tab was
@@ -306,34 +236,23 @@ Thank you for considering {{business_name}}.`,
   // address and photos. That is the shape of being ghosted, and it was thirty seconds
   // after the happiest moment in the funnel. Deliberately does NOT promise a price: the
   // booking captures an estimate, and the owner confirms the real number.
-  booking_received: `Hi {{first_name}},
+  booking_received: `Hi {{first_name}}, thanks for booking with **{{business_name}}**.
 
-Thanks for booking with **{{business_name}}** — this is just so you have it in writing.
+We've got your request for **{{address}}** — your confirmation number is **{{confirmation_number}}**.
 
-We've got your request for **{{address}}**, and your confirmation number is **{{confirmation_number}}**.
+We'll be in touch within one business day to confirm your price and pick a day. Nothing is charged until you say yes.
 
-A real person here will review it and get in touch to confirm your price and pick a day that suits you — usually within one business day. Nothing is charged until you say yes.
-
-Need us sooner, or want to change something? Call or text {{direct_phone}} and quote your confirmation number.
-
-— {{business_name}}`,
+To change anything, call or text {{direct_phone}} and quote that number.`,
 
   // NOTE: this template is sent by sendPaymentReceipt(), which knows the amount but NOT
   // the remaining balance — so it must not assert one. It used to say "paid in full"
   // unconditionally; if that's ever wrong it's the worst kind of wrong, because the
   // customer stops thinking about the bill and turns up overdue on money they were told
   // they didn't owe. receiptMessageBody() below takes balanceRemaining and CAN say it.
-  receipt: `Hi {{first_name}},
+  receipt: `Hi {{first_name}}, thanks — {{business_name}} has received your payment of {{amount}}.
 
-Thank you — we've received your payment of {{amount}}.
-
-Your receipt and up-to-date balance are always here:
-
-{{portal_link}}
-
-We appreciate your business!
-
-— {{business_name}}`,
+Your receipt and current balance:
+{{portal_link}}`,
 
   birthday: `Hi {{first_name}},
 
@@ -465,14 +384,54 @@ function interpolate(tpl: string, v: MsgVars): string {
   return tpl.replace(/\{\{\s*([a-z_]+)\s*\}\}/g, (_m, key: string) => (key in sub ? sub[key] : '')).replace(/[ \t]{2,}/g, ' ').trim()
 }
 
+// ── GSM-7 typography flattening, SMS ONLY ────────────────────────────────────
+// An SMS is GSM-7 only if EVERY character is in that alphabet; ONE stray
+// character forces the WHOLE message to UCS-2, which cuts a segment from 160
+// characters to 70. A single em dash therefore costs real money on every send:
+// `on_my_way` is 139 characters — comfortably one GSM-7 segment — and its
+// "— {{business_name}}" sign-off made it THREE. Fifteen of the app's defaults
+// were paying that tax, and it is the most-sent message in the product.
+//
+// These substitutions are lossless in a text message: an em dash and a hyphen
+// read the same on a phone, and nobody has ever noticed a straight apostrophe in
+// an SMS. Email keeps the real punctuation, because there it costs nothing and
+// looks better — which is exactly why this lives on the SMS branch of renderBody
+// rather than in the templates.
+//
+// ⚠️ This runs on OWNER-AUTHORED copy too (campaigns, edited sends), which is
+// where it earns the most: text pasted from Word or Google Docs arrives full of
+// smart quotes and would silently double the owner's bill with no visible cause.
+//
+// Emoji are deliberately NOT stripped. They also force UCS-2, but an owner who
+// typed one chose it — removing content is not this function's job, and the
+// composer already shows the segment count and cost before sending.
+const SMS_TYPOGRAPHY: [RegExp, string][] = [
+  [/[‘’‚‛]/g, "'"],      // ' ' ‚ ‛  → '
+  [/[“”„‟]/g, '"'],      // " " „ ‟  → "
+  [/[‐-―]/g, '-'],                 // ‐ ‑ ‒ – — ― → -
+  [/[•·‧]/g, '-'],            // • · ‧      → -
+  [/…/g, '...'],                        // …
+  [/→/g, '->'],                         // →
+  [/⁄/g, '/'],                          // ⁄
+  [/[     ]/g, ' '],// non-breaking / thin spaces
+  [/[​‌‍️]/g, ''],       // zero-width joiners + emoji variation selector
+]
+export function smsSafe(s: string): string {
+  let out = s
+  for (const [re, to] of SMS_TYPOGRAPHY) out = out.replace(re, to)
+  return out
+}
+
 // Render an arbitrary body string (a default template OR owner-authored campaign
 // copy) into the per-channel shapes. Interpolation, **bold** handling and the
 // email wrapper are identical to renderMessage, so manual and automated sends
 // look the same in the customer's thread/inbox.
 export function renderBody(rawBody: string, vars: MsgVars, subject: string, template?: MsgType): RenderedMessage {
   const raw = interpolate(rawBody, vars)
-  // SMS/plain: strip the **bold** markers. Email: render them as <strong>.
-  const sms = raw.replace(/\*\*(.+?)\*\*/g, '$1')
+  // SMS/plain: strip the **bold** markers, then flatten typographic punctuation
+  // to its GSM-7 equivalent. Email: render the markers as <strong> and KEEP the
+  // real punctuation — see smsSafe for why the two channels diverge here.
+  const sms = smsSafe(raw.replace(/\*\*(.+?)\*\*/g, '$1'))
   const htmlBody = raw
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     // Bare URLs (portal / quote / review links) become real, tappable links —
