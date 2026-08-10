@@ -120,7 +120,15 @@ export function Modal({ open, onClose, title, icon: Icon, children, footer, size
 
   return (
     <div
-      className="fixed inset-0 z-overlay flex items-end sm:items-center justify-center bg-black/50 p-4 animate-fade"
+      // ── Two viewport rules the rest of the app already follows ──────────────
+      // This overlay is `fixed`, so — exactly as StickyActionBar documents for its
+      // own fixed bar — it is positioned against the VIEWPORT and never receives
+      // the safe-area padding globals.css puts on <body>. With a bare p-4 the
+      // mobile bottom sheet's footer (Save/Delete) sat 16px off the viewport
+      // bottom, i.e. UNDER the iPhone home indicator in the installed app. Pay the
+      // inset here, taking whichever is larger so nothing changes on a device
+      // without an inset.
+      className="fixed inset-0 z-overlay flex items-end sm:items-center justify-center bg-black/50 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] animate-fade"
       onClick={dismissable ? onClose : undefined}
     >
       <div
@@ -132,7 +140,14 @@ export function Modal({ open, onClose, title, icon: Icon, children, footer, size
         aria-label={!title ? 'Dialog' : undefined}
         onClick={e => e.stopPropagation()}
         className={cn(
-          'w-full bg-surface border border-border-strong rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] focus:outline-none animate-panel',
+          // `vh` on a phone is the LARGE viewport — the height with the URL bar
+          // HIDDEN. While the bar is showing (the normal state) 90vh is taller
+          // than what you can actually see, so the panel's bottom — where the
+          // footer buttons live — sits behind the browser chrome and cannot be
+          // tapped or scrolled to, because the panel scrolls its BODY, not itself.
+          // `dvh` is the live viewport; globals.css already uses it for
+          // .min-h-screen-safe. vh stays as the fallback for anything without dvh.
+          'w-full bg-surface border border-border-strong rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] supports-[max-height:1dvh]:max-h-[90dvh] focus:outline-none animate-panel',
           SIZES[size],
           className
         )}
@@ -168,7 +183,11 @@ export function Modal({ open, onClose, title, icon: Icon, children, footer, size
             )}
           </div>
         )}
-        <div className="overflow-y-auto p-5">{children}</div>
+        {/* overscroll-contain: without it, flicking past the end of a long dialog
+            body hands the scroll to the page behind. Body scroll is locked, so on
+            iOS that shows as the whole sheet rubber-banding — which reads as the
+            dialog being dragged away and makes people stop scrolling mid-form. */}
+        <div className="overflow-y-auto overscroll-contain p-5">{children}</div>
         {footer && (
           <div className="px-5 py-4 border-t border-border shrink-0 flex items-center justify-end gap-2">{footer}</div>
         )}
