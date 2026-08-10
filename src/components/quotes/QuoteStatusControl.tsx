@@ -64,6 +64,30 @@ export function QuoteStatusControl({ quoteId, status, followUpCount, sentAt, val
       })
       if (!ok) return   // controlled select snaps back to `current` on its own
     }
+    // ── Overriding a state the app normally derives ───────────────────────────
+    // completed and paid are advanced by DATABASE TRIGGERS from real events:
+    // sync_quote_on_job_complete fires when the job completes (only from
+    // accepted/scheduled), sync_quote_on_invoice_paid when the invoice is paid
+    // (only from completed). Because each trigger advances FROM an expected prior
+    // state, a hand-set value is never re-derived — mark a quote Paid today and the
+    // invoice actually being paid tomorrow will NOT correct it. It stays wrong, and
+    // it is wrong about money.
+    //
+    // Repair is still allowed — a genuinely stuck row needs it — but it stops being
+    // an everyday click. Same confirmDialog this control already uses for Scheduled
+    // and Declined, so nothing new is introduced; the message just names what the
+    // app would have done and that it won't do it later.
+    if (isSystemAdvancedQuoteStatus(s) && s !== 'scheduled' && current !== s) {
+      const ok = await confirmDialog({
+        title: `Set this quote to ${STATUS_LABELS[s]} by hand?`,
+        message: s === 'paid'
+          ? 'EdgeQuote marks a quote Paid on its own when the invoice is paid. Setting it here does NOT record a payment, and it will not be corrected when real money arrives — the quote will simply say Paid. Only do this to fix a quote that is already wrong.'
+          : 'EdgeQuote marks a quote Completed on its own when the work is finished. Setting it here does NOT complete any visit, and it will not be corrected later. Only do this to fix a quote that is already wrong.',
+        confirmLabel: `Set ${STATUS_LABELS[s]} anyway`,
+        destructive: true,
+      })
+      if (!ok) return   // controlled select snaps back to `current` on its own
+    }
     // A declined quote is lost — confirm before committing the transition.
     if (s === 'declined' && current !== 'declined') {
       const ok = await confirmDialog({

@@ -145,6 +145,31 @@ check('sent is NOT system-advanced — the owner sends', isSystemAdvancedQuoteSt
     control.includes('You set these') && control.includes('Set automatically'), true)
 }
 
+
+// ── Overriding a system-derived status must be deliberate ────────────────────
+// scheduled/completed/paid are advanced by triggers from real events, and because
+// each trigger only advances FROM an expected prior state, a hand-set value is
+// never re-derived: mark a quote Paid and the invoice actually being paid later
+// will NOT correct it. Repair stays possible (a stuck row needs it) but must not
+// be an everyday click, so each of the three is confirm-gated — the same
+// confirmDialog the control already used for Scheduled and Declined.
+console.log('\n── overriding a system-derived status ──')
+{
+  const control = readFileSync('src/components/quotes/QuoteStatusControl.tsx', 'utf8')
+  check('every system-advanced status is confirm-gated before it is written',
+    /isSystemAdvancedQuoteStatus\(s\)[\s\S]{0,140}confirmDialog/.test(control), true)
+  check('… Scheduled keeps its own "this only changes the label" confirm',
+    /s === 'scheduled'[\s\S]{0,220}confirmDialog/.test(control), true)
+  check('… and Declined keeps its confirm', /s === 'declined'[\s\S]{0,220}confirmDialog/.test(control), true)
+  // The warning must say the thing that actually bites: it will not self-correct.
+  check('the Paid warning says it will NOT be corrected later',
+    control.includes('will not be corrected when real money arrives'), true)
+  check('the Completed warning says it does not complete a visit',
+    control.includes('does NOT complete any visit'), true)
+  // Repair capability must survive: gated, never removed.
+  check('overriding is still POSSIBLE (gated, not blocked)', control.includes('anyway`'), true)
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)
 if (fail > 0) process.exit(1)
