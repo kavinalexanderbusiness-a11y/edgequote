@@ -849,6 +849,72 @@ console.log('\nAgainst production: the refactored Revenue & GST report reproduce
   eq('...with its value shown', withDraft.excludedDrafts.total, 500)
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FINANCIAL TRUTH — two repairs a pure-function test cannot protect
+//
+// Both defects had a CORRECT engine and a WRONG caller, so the only useful
+// assertion is about the WIRING. An earlier version of these checks lived in
+// verify-analytics — the wrong home, since that file's own header says it makes no
+// claim about metric VALUES — and it turned CI red on Ubuntu/Node 20 while passing
+// on Windows/Node 24 (every path case-exact, content platform-identical; the cause
+// was never isolated from the outside because job logs need admin).
+//
+// So these are deliberately DULL: plain substring tests over source, no regex, no
+// multi-token patterns, nothing that a reformat, a line ending or a platform can
+// move. A guard that cannot be debugged from CI output must not be clever.
+console.log('\nFinancial truth — the caller must use the seam, and say what it rests on:')
+{
+  const readSrc = (p: string) => readFileSync(p, 'utf8')
+  // Comment lines are stripped: these files now name the trap in prose, and prose
+  // ABOUT a column must never fail a check about READING it.
+  const codeOf = (p: string) => readSrc(p).split('\n')
+    .filter(l => { const t = l.trim(); return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*') || t.startsWith('{/*')) })
+    .join('\n')
+
+  // ── 1. No document may read the fabricated subtotal ────────────────────────
+  // `quotes.subtotal` is `generated always as (hours * crew_size * rate)` — the
+  // fabrication RUN-2026-07-16e removed from `quotes.total` after it priced real
+  // customer work, then left alive as a FALLBACK in two customer-facing documents
+  // and one owner screen. On the live book it disagrees with initial_price on 84 of
+  // 93 quotes and is non-zero on 61, so this is a loaded gun, not a spent one.
+  for (const [label, path] of [
+    ['quote PDF', 'src/components/quotes/QuotePDF.tsx'],
+    ['portal PDF mapper', 'src/lib/portalPdf.ts'],
+    ['quote detail', 'src/app/dashboard/quotes/[id]/page.tsx'],
+  ] as [string, string][]) {
+    const code = codeOf(path)
+    check(`${label} never falls back to the legacy quotes.subtotal`,
+      !code.includes('?? quote.subtotal') && !code.includes('?? q.subtotal'),
+      'a document is reading hours x crew_size x rate as a price')
+  }
+  // The portal mapper must not merely stop PREFERRING it — it must not name it.
+  check('the portal PDF maps subtotal from the real price',
+    codeOf('src/lib/portalPdf.ts').includes('subtotal: num(q.initial_price ?? q.total)'))
+
+  // ── 2. A partly-modelled profit must not present as measured ───────────────
+  // grossProfitYTD's cost is minutes x crew rate, and laborMinOf resolves minutes
+  // as actual || estimated || a 45-minute constant. Live at the time of the fix: of
+  // 71 YTD completed jobs only 35 (49%) had observed check-in/check-out time, and
+  // the figure was rendered "Gross profit YTD" with no qualifier.
+  const bi = readSrc('src/lib/businessIntelligence.ts')
+  check('the profit engine reports the labour basis behind gross profit',
+    bi.includes('laborBasis') && bi.includes('observedJobs') && bi.includes('assumedJobs'),
+    'the caller cannot tell modelled from measured')
+  check('a year summary carries whether its labour was assumed',
+    bi.includes('profitEstimated') && bi.includes('hasLaborData'),
+    'reuses the profit engine\'s existing confidence flag rather than a new signal')
+  // The wiring half: the surface must USE the basis, not merely receive it.
+  const page = readSrc('src/app/dashboard/intelligence/page.tsx')
+  check('the Intelligence page labels gross profit as an estimate when it is one',
+    page.includes('laborBasis') && page.includes('Gross profit YTD (est.)'),
+    'the basis is computed but the screen still claims a measured figure')
+  check('…and labels the yearly profit from profitEstimated',
+    page.includes('profitEstimated') && page.includes('Profit this year (est.)'))
+  // Arithmetic must NOT have moved — this lane repaired claims, not numbers.
+  check('gross profit arithmetic is untouched', bi.includes('grossProfit += p'))
+}
+
 console.log(
   failures === 0
     ? '\n✅ accounting verified — every figure above was derived by hand and matched.\n'
