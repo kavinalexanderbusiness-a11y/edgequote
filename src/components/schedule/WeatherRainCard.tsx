@@ -98,7 +98,9 @@ export function WeatherRainCard(props: Props) {
             <p className="text-[11px] text-ink-faint mt-1.5">Recommendation: mark this day unavailable due to rain and move the work to the best open days.</p>
           </div>
         </div>
-        <button onClick={props.onLater} aria-label="Decide later" title="Decide later" className="shrink-0 text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
+        {/* 16×16 measured on a phone. `.tap-target` (44×44, coarse-pointer only) so
+            dismissing a rain decision isn't a precision tap in the field. */}
+        <button onClick={props.onLater} aria-label="Decide later" title="Decide later" className="tap-target inline-flex items-center justify-center shrink-0 text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
       </div>
 
       <div className="flex flex-wrap items-center gap-2 mt-3.5">
@@ -116,7 +118,11 @@ export function WeatherRainCard(props: Props) {
             type="button"
             onClick={props.onMoveAndNotify}
             disabled={busy}
-            className="text-xs font-medium text-sky-300 hover:text-sky-200 inline-flex items-center gap-1 disabled:opacity-50 disabled:pointer-events-none">
+            // Measured 160×16 on a phone: wide but only 16px TALL, and it moves jobs
+            // AND texts customers. `.tap-target-y` is the app's rule for inline text
+            // controls — vertical hit area only, so the label isn't stretched into a
+            // slab. Coarse-pointer gated, so desktop is unchanged.
+            className="tap-target-y text-xs font-medium text-sky-300 hover:text-sky-200 inline-flex items-center gap-1 disabled:opacity-50 disabled:pointer-events-none">
             Move &amp; notify customers <ArrowRight className="w-3.5 h-3.5" />
           </button>
         )}

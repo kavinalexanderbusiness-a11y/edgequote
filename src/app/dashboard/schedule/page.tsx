@@ -2166,8 +2166,13 @@ export default function SchedulePage() {
                   </div>
                 )}
               </div>
+              {/* Measured at 14×14 on a phone — the bare icon WAS the hit area, and it
+                  sits beside the "Rebalance …" CTA, so a thumb aiming at the action
+                  dismissed the suggestion instead. `.tap-target` is the app's own 44×44
+                  minimum and is gated on `pointer: coarse`, so desktop density is
+                  unchanged; only the touch hit area grows. */}
               <button onClick={() => setDismissedSuggestions(prev => new Set(prev).add(s.id))}
-                className="text-ink-faint hover:text-ink shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" title="Dismiss" aria-label="Dismiss suggestion">
+                className="tap-target inline-flex items-center justify-center text-ink-faint hover:text-ink shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" title="Dismiss" aria-label="Dismiss suggestion">
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
@@ -2183,12 +2188,18 @@ export default function SchedulePage() {
           <CardHeader className="flex items-center justify-between">
             <h2 id="job-form-title" className="text-sm font-semibold text-ink">{editing ? 'Edit Job' : 'New Job'}</h2>
             <div className="flex items-center gap-2">
+              {/* Both measured at 16×16 with only gap-2 between them — and one of them
+                  DELETES THE JOB. Two 16px targets 8px apart put an irreversible action
+                  a thumb-width from "close the dialog". `.tap-target` gives each the
+                  app's 44×44 minimum on touch (desktop is untouched), which also pushes
+                  their centres ~52px apart instead of 24px. Confirmation on delete is
+                  unchanged — this only makes the two hard to confuse for each other. */}
               {editing && (
-                <button onClick={handleDelete} className="text-red-400/70 hover:text-red-400 transition-colors" title="Delete job" aria-label="Delete job">
+                <button onClick={handleDelete} className="tap-target inline-flex items-center justify-center text-red-400/70 hover:text-red-400 transition-colors" title="Delete job" aria-label="Delete job">
                   <Trash2 className="w-4 h-4" />
                 </button>
               )}
-              <button onClick={closeForm} className="text-ink-faint hover:text-ink transition-colors" aria-label="Close">
+              <button onClick={closeForm} className="tap-target inline-flex items-center justify-center text-ink-faint hover:text-ink transition-colors" aria-label="Close">
                 <X className="w-4 h-4" />
               </button>
             </div>
