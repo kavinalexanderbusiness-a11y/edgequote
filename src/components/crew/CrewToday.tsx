@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { loadCrewDay, nextCrewStop, type CrewDay, type CrewStop } from '@/lib/crewAccess'
+import { loadCrewDay, nextCrewStop, partitionCrewStops, type ActiveCrewStop, type CrewDay } from '@/lib/crewAccess'
 import { crewStartVisit, crewCompleteVisit, crewRevertVisit, type VisitState } from '@/lib/crewJob'
 import { localTodayISO, cn } from '@/lib/utils'
 import { directionsUrl } from '@/lib/route'
@@ -112,11 +112,15 @@ export function CrewToday() {
     return () => clearInterval(t)
   }, [])
 
-  const stops = day?.stops ?? []
-  const next = nextCrewStop(stops)
-  const done = stops.filter(s => s.status === 'completed').length
+  // ONE partition decides what counts as work: the header tally, the card list
+  // and the cancelled line all read it, so a stop can't be counted on one side
+  // and rendered on the other. Cancelled stops never enter `active`, never
+  // become `next` (nextCrewStop skips them anyway), and get no buttons.
+  const { active, cancelled } = partitionCrewStops(day?.stops ?? [])
+  const next = nextCrewStop(active)
+  const done = active.filter(s => s.status === 'completed').length
 
-  async function act(stop: CrewStop, kind: 'start' | 'complete') {
+  async function act(stop: ActiveCrewStop, kind: 'start' | 'complete') {
     if (acting) return
     setActing(stop.id)
     try {
@@ -175,7 +179,7 @@ export function CrewToday() {
           {new Date(today + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}
         </p>
         <h1 className="text-xl font-bold tracking-tight text-ink">
-          {stops.length === 0 ? 'Nothing booked today' : `${stops.length - done} of ${stops.length} to go`}
+          {active.length === 0 ? 'Nothing booked today' : `${active.length - done} of ${active.length} to go`}
         </h1>
         <p className="mt-0.5 text-xs text-ink-muted flex items-center gap-1.5 flex-wrap">
           {day.crew?.name && <span className="font-medium text-ink">{day.crew.name}</span>}
@@ -220,13 +224,21 @@ export function CrewToday() {
         </div>
       )}
 
-      {stops.length === 0 && (
-        <Notice tone="neutral" icon={Check} title="No stops on the board">
-          Nothing is assigned to your crew today. Check the Week tab for what’s coming.
-        </Notice>
+      {active.length === 0 && (
+        // "Nothing assigned" and "everything you saw got cancelled" are
+        // different mornings — say which one it is.
+        cancelled.length > 0 ? (
+          <Notice tone="neutral" icon={Check} title="Nothing left to do today">
+            Today’s work was cancelled by the office — the stops are listed below. Check the Week tab for what’s coming.
+          </Notice>
+        ) : (
+          <Notice tone="neutral" icon={Check} title="No stops on the board">
+            Nothing is assigned to your crew today. Check the Week tab for what’s coming.
+          </Notice>
+        )
       )}
 
-      {stops.map((stop, i) => {
+      {active.map((stop, i) => {
         const isNext = next?.id === stop.id
         const finished = stop.status === 'completed'
         const running = stop.status === 'in_progress'
@@ -318,6 +330,29 @@ export function CrewToday() {
           </section>
         )
       })}
+
+      {/* What the office CANCELLED today — the server's own record, from the
+          same payload as the work (no client memory of "what was seen" to
+          drift). A stop a worker watched all morning must move HERE when it's
+          pulled, not silently vanish between refetches. Deliberately compact:
+          one struck-through line each, no buttons, no notes, no photos — this
+          is a "don't go", not a job card — and it never persists beyond the
+          day it happened on. */}
+      {cancelled.length > 0 && (
+        <section aria-label="Cancelled today" className="rounded-card border border-border bg-bg-tertiary/40 p-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">
+            Cancelled today — don’t go
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {cancelled.map(stop => (
+              <li key={stop.id} className="text-xs text-ink-faint line-through truncate">
+                {stop.customer?.name || stop.title}
+                {stop.property?.address ? ` — ${stop.property.address}` : ''}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {/* THE next action, in the thumb zone. Restates the same button the card
           shows and calls the same writer — reach, not a second way to do it. */}

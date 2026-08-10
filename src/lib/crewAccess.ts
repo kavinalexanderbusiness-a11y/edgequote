@@ -120,7 +120,11 @@ export interface CrewStop {
   start_time: string | null
   duration_minutes: number | null
   crew_size: number
-  status: 'scheduled' | 'in_progress' | 'completed'
+  // 'cancelled' arrives too (since 2026-08-09): a visit the office cancels
+  // mid-morning must MOVE to a visible cancelled line, not silently vanish
+  // between refetches. It is display-only — nextCrewStop never picks it and
+  // crew_set_visit_status refuses to touch it.
+  status: 'scheduled' | 'in_progress' | 'completed' | 'cancelled'
   started_at: string | null
   completed_at: string | null
   actual_minutes: number | null
@@ -193,9 +197,30 @@ export async function loadCrewUpcoming(
 // committed time, then creation: the SAME precedence lib/crews.laneSequence
 // uses for the dispatch lane). The RPC does the ordering so the worker's list
 // and the dispatcher's lane can never disagree about what is next.
-export function nextCrewStop(stops: CrewStop[]): CrewStop | undefined {
-  const open = stops.filter(s => s.status === 'scheduled' || s.status === 'in_progress')
+export function nextCrewStop(stops: CrewStop[]): ActiveCrewStop | undefined {
+  const open = stops.filter((s): s is ActiveCrewStop => s.status === 'scheduled' || s.status === 'in_progress')
   return open.find(s => s.status === 'in_progress') ?? open[0]
+}
+
+/** A stop a worker may act on — the type itself proves 'cancelled' can't reach
+ *  a Start/Finish handler or the photo capture. */
+export type ActiveCrewStop = CrewStop & { status: 'scheduled' | 'in_progress' | 'completed' }
+
+/**
+ * The day's stops split for display: real work (in route order, as returned)
+ * and what the office CANCELLED. One partition with one definition, so the
+ * header count, the card list and the cancelled line can never disagree about
+ * which side a stop is on. Cancelled is server truth from the same payload —
+ * there is deliberately no client-side "I saw this earlier" memory to drift.
+ */
+export function partitionCrewStops(stops: CrewStop[]): { active: ActiveCrewStop[]; cancelled: CrewStop[] } {
+  const active: ActiveCrewStop[] = []
+  const cancelled: CrewStop[] = []
+  for (const s of stops) {
+    if (s.status === 'cancelled') cancelled.push(s)
+    else active.push(s as ActiveCrewStop)   // status checked on the line above
+  }
+  return { active, cancelled }
 }
 
 /** What the one big button does at this stage of a visit. */

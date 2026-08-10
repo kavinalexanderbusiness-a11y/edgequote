@@ -22,7 +22,7 @@
 // is asserted as behaviour, and the rest is asserted over the real source and
 // the real migration.
 
-import { routeFor, isOwnerPath, isCrewPath, isJoinPath, nextCrewStop, stopPrimaryAction, type AppRole, type CrewStop } from '../src/lib/crewAccess'
+import { routeFor, isOwnerPath, isCrewPath, isJoinPath, nextCrewStop, partitionCrewStops, stopPrimaryAction, type AppRole, type CrewStop } from '../src/lib/crewAccess'
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -324,6 +324,61 @@ const CAPTURE = read('src/components/crew/CrewStopPhotos.tsx')
 check('the capture UI never claims an upload the server didn’t confirm',
   /if \(!res\.ok \|\| !d\.ok\) throw/.test(CAPTURE) && /state: 'failed'/.test(CAPTURE),
   'a failed shot must turn into a visible Retry, not a quiet success')
+
+// ── Cancelled work is told, not vanished (2026-08-09 clarity pass) ──────────
+console.log('\n═══ A cancelled stop moves to a visible line — it never silently vanishes ═══')
+
+// crew_day now RETURNS cancelled stops for the day (the server's own record of
+// the change — no client "what was seen" memory to drift)…
+check('crew_day no longer filters cancelled out of the day',
+  !/status <> 'cancelled'/.test(crewDayBody),
+  'a stop cancelled mid-morning must move to the cancelled line, not disappear between refetches')
+// …while the Week counts still count only real work.
+const crewUpcomingBody = sql.slice(sql.indexOf('function public.crew_upcoming'), sql.indexOf('function public.crew_set_visit_status'))
+check('crew_upcoming still excludes cancelled (Week counts real work)',
+  /status <> 'cancelled'/.test(crewUpcomingBody))
+
+// The partition is the ONE rule for which side a stop is on, and the type
+// system proves a cancelled stop can't reach Start/Finish or the camera.
+const mk = (id: string, status: CrewStop['status'], order: number): CrewStop => ({
+  id, title: id, service_type: null, scheduled_date: '2026-08-09', start_time: null,
+  duration_minutes: 30, crew_size: 1, status, started_at: null, completed_at: null,
+  actual_minutes: null, on_my_way_at: null, route_order: order, updated_at: 'v1', notes: null,
+  customer: null, property: null,
+})
+// (No bare block after the arrow-object above: `=> ({…})` followed by `{` is an
+// ASI trap tsc re-parses catastrophically while esbuild shrugs — unique names
+// instead of a scope.)
+const dayStops = [mk('a', 'cancelled', 1), mk('b', 'scheduled', 2), mk('c', 'completed', 3), mk('d', 'cancelled', 4)]
+const daySplit = partitionCrewStops(dayStops)
+check('partitionCrewStops splits exactly on status',
+  daySplit.active.map(s => s.id).join() === 'b,c' && daySplit.cancelled.map(s => s.id).join() === 'a,d')
+check('a cancelled stop is never the next stop — even listed first',
+  nextCrewStop(dayStops)?.id === 'b',
+  'the one big button must never name work the office pulled')
+const allCancelledDay = partitionCrewStops([mk('x', 'cancelled', 1)])
+check('a fully-cancelled day has zero active work', allCancelledDay.active.length === 0 && allCancelledDay.cancelled.length === 1)
+
+// Today renders the split honestly: counts from active, a compact struck-through
+// cancelled group, and a distinct empty-state when the whole day was pulled.
+const TODAY_SRC2 = read('src/components/crew/CrewToday.tsx')
+check('Today counts progress over ACTIVE stops only',
+  /active\.length - done\} of \$\{active\.length\}/.test(TODAY_SRC2))
+check('Today shows the cancelled line', /Cancelled today — don’t go/.test(TODAY_SRC2))
+check('“everything cancelled” reads differently from “nothing assigned”',
+  /Nothing left to do today/.test(TODAY_SRC2) && /No stops on the board/.test(TODAY_SRC2))
+check('cancelled rows get no photos and no actions',
+  !/cancelled\.map\([\s\S]{0,400}(CrewStopPhotos|act\()/.test(TODAY_SRC2))
+
+// The Week page orients first-time eyes: today and tomorrow always present.
+const WEEK_SRC = read('src/app/crew/(app)/schedule/page.tsx')
+check('Week pins today and tomorrow even when empty', /x\.row \|\| x\.i < 2/.test(WEEK_SRC),
+  '"am I working tomorrow" must never be answered by an absent row')
+const WEEKDAY_SRC = read('src/components/crew/CrewWeekDay.tsx')
+check('a Week day expands to a READ-ONLY preview (no Start on future days)',
+  /loadCrewDay/.test(WEEKDAY_SRC) && !/crewStartVisit|crewCompleteVisit/.test(WEEKDAY_SRC))
+check('a failed day preview says so — never an empty believable day',
+  /detailFailed/.test(WEEKDAY_SRC) && /Couldn’t load this day/.test(WEEKDAY_SRC))
 
 console.log('\n── Summary ────────────────────────────────────────────────────')
 if (failures) {

@@ -354,7 +354,13 @@ begin
         where j.user_id = v_employer
           and j.crew_id = v_crew
           and j.scheduled_date = p_date
-          and j.status <> 'cancelled'
+          -- Cancelled stops are INCLUDED (changed 2026-08-09, re-applied in
+          -- place): a visit a worker saw at 8am and the office cancelled at
+          -- 10am must move to a visible "cancelled — don't go" line, not
+          -- silently vanish from the board. This is the SERVER's own record of
+          -- the change — no client-side memory of "what was seen" to drift.
+          -- crew_upcoming still excludes cancelled (Week counts real work),
+          -- and crew_set_visit_status still refuses to touch a cancelled row.
       ) x
     ), '[]'::jsonb)
   ) into v_out;

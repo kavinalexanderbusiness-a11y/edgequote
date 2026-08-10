@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { loadCrewUpcoming } from '@/lib/crewAccess'
 import { CalendarDays, AlertTriangle } from 'lucide-react'
+import { CrewWeekDay } from '@/components/crew/CrewWeekDay'
 
 export const metadata = { title: 'Week — EdgeQuote' }
 
@@ -42,54 +43,53 @@ export default async function CrewSchedulePage() {
   const days = res.days
 
   const byDate = new Map(days.map(d => [d.date, d]))
+  // Today and tomorrow are ALWAYS shown, worked or not — "am I working today /
+  // tomorrow" is the question this page exists for, and an absent row answers
+  // it with silence a worker can't tell apart from "didn't load". Days further
+  // out appear only when they hold work (fourteen rows of nothing is noise).
   const upcoming = Array.from({ length: 14 }, (_, i) => {
     const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i)
     const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-    return { iso, d, row: byDate.get(iso) }
-  }).filter(x => x.row)
+    return { iso, d, i, row: byDate.get(iso) }
+  }).filter(x => x.row || x.i < 2)
 
   return (
     <div className="space-y-3">
       <header>
         <h1 className="text-xl font-bold tracking-tight text-ink">Your next two weeks</h1>
+        {/* The summary counts only days that HOLD work — today/tomorrow are
+            pinned below for orientation even when empty, and an empty pinned
+            day is not a workday. */}
         <p className="mt-0.5 text-xs text-ink-muted">
-          {upcoming.length === 0 ? 'Nothing booked yet.' : `${upcoming.reduce((s, x) => s + (x.row?.stops ?? 0), 0)} stops across ${upcoming.length} day${upcoming.length === 1 ? '' : 's'}`}
+          {(() => {
+            const worked = upcoming.filter(x => (x.row?.stops ?? 0) > 0)
+            const totalStops = worked.reduce((s, x) => s + (x.row?.stops ?? 0), 0)
+            return worked.length === 0 ? 'Nothing booked yet.' : `${totalStops} stops across ${worked.length} day${worked.length === 1 ? '' : 's'}`
+          })()}
         </p>
       </header>
 
-      {upcoming.length === 0 ? (
-        <div className="rounded-card border border-border bg-bg-secondary p-6 text-center">
+      {upcoming.every(x => (x.row?.stops ?? 0) === 0) && (
+        <div className="rounded-card border border-border bg-bg-secondary p-4 text-center">
           <CalendarDays className="mx-auto w-6 h-6 text-ink-faint" aria-hidden />
           <p className="mt-2 text-sm font-semibold text-ink">No work booked</p>
           <p className="mt-1 text-xs text-ink-muted">Nothing is assigned to your crew for the next two weeks.</p>
         </div>
-      ) : (
+      )}
+      {(
         <ul className="space-y-2">
-          {upcoming.map(({ iso, d, row }) => {
-            const hours = Math.round(((row?.minutes ?? 0) / 60) * 10) / 10
-            const allDone = (row?.done ?? 0) === (row?.stops ?? 0)
-            return (
-              <li key={iso} className="rounded-card border border-border bg-bg-secondary px-3.5 py-3 flex items-center gap-3">
-                <div className="w-11 shrink-0 text-center">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
-                    {d.toLocaleDateString(undefined, { weekday: 'short' })}
-                  </p>
-                  <p className="text-lg font-bold tabular-nums text-ink leading-none">{d.getDate()}</p>
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-ink">
-                    {row?.stops} stop{row?.stops === 1 ? '' : 's'}
-                    <span className="ml-1.5 font-normal text-ink-muted">· ~{hours}h</span>
-                  </p>
-                  {(row?.done ?? 0) > 0 && (
-                    <p className={`text-[11px] ${allDone ? 'text-emerald-400' : 'text-ink-faint'}`}>
-                      {allDone ? 'All done' : `${row?.done} done`}
-                    </p>
-                  )}
-                </div>
-              </li>
-            )
-          })}
+          {upcoming.map(({ iso, d, i, row }) => (
+            <CrewWeekDay
+              key={iso}
+              iso={iso}
+              relLabel={i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : null}
+              weekday={d.toLocaleDateString(undefined, { weekday: 'short' })}
+              dayNum={d.getDate()}
+              stops={row?.stops ?? 0}
+              doneCount={row?.done ?? 0}
+              hours={Math.round(((row?.minutes ?? 0) / 60) * 10) / 10}
+            />
+          ))}
         </ul>
       )}
     </div>
