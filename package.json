@@ -84,7 +84,8 @@
     "verify:dispatch-board": "tsx scripts/verify-dispatch-board.ts",
     "verify:lead-journey": "tsx scripts/verify-lead-journey.ts",
     "verify:back-office": "tsx scripts/verify-back-office.ts",
-    "verify:invoice-list": "tsx scripts/verify-invoice-list.ts"
+    "verify:invoice-list": "tsx scripts/verify-invoice-list.ts",
+    "verify:customer-comms": "tsx scripts/verify-customer-comms.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

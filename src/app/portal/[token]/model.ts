@@ -503,7 +503,21 @@ export function buildDerived(data: PortalData, todayISO: string): Derived {
 // DISPLAY status (lib/quoteStatus): an expired quote arrives as 'expired', which
 // is what removes the Accept button (canAccept tests 'sent') with no second
 // expiry check anywhere in the render path to forget or contradict.
-export interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; expiredOn?: string; validUntil?: string | null; dueDate?: string | null; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[]; explain?: string[]; propertyId?: string | null; address?: string | null
+export interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; expiredOn?: string; validUntil?: string | null; dueDate?: string | null; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>
+  /** Additive breakdown — these SUM to `amount`. The scope being approved. */
+  lines?: { label: string; amount: number }[]
+  /**
+   * Ongoing per-visit rates. These are ALTERNATIVES to one another and are NOT
+   * part of `amount` — kept out of `lines` because the two answer different
+   * questions and a customer cannot tell them apart once they share one list.
+   * Flattened together, a real quote showed a $50 total with "Bi-weekly plan
+   * $50" directly beneath it — the same number meaning two different things —
+   * above rows that summed to $95 against a $50 quote.
+   * Approving does NOT choose one (portal_accept_quote snapshots the quote
+   * total, never a cadence), so the UI must not present them as selectable.
+   */
+  planOptions?: { label: string; amount: number }[]
+  explain?: string[]; propertyId?: string | null; address?: string | null
   /**
    * What the Pay button collects RIGHT NOW — depositChargeAmount's answer, the
    * SAME engine call /api/portal/pay makes server-side. Carried on the row so
@@ -554,13 +568,17 @@ export function buildDocItems(opts: {
     // "(per visit)" is NOT optional: "Monthly plan · $260" without it says
     // $260/month all-in — at 4 visits/month that's a 4× misread the customer
     // only discovers on their first bill.
-    const planLines = [
-      Number(qq.weekly_price) > 0 ? { label: 'Weekly plan (per visit)', amount: Number(qq.weekly_price) } : null,
-      Number(qq.biweekly_price) > 0 ? { label: 'Bi-weekly plan (per visit)', amount: Number(qq.biweekly_price) } : null,
-      Number(qq.monthly_price) > 0 ? { label: 'Monthly plan (per visit)', amount: Number(qq.monthly_price) } : null,
+    // Ongoing rates are a CHOICE, so they leave the additive breakdown entirely
+    // (see DocItem.planOptions). "(per visit)" stays: "Monthly · $260" without it
+    // says $260/month all-in — at 4 visits/month a 4× misread the customer only
+    // discovers on their first bill.
+    const planOptionRows = [
+      Number(qq.weekly_price) > 0 ? { label: 'Every week', amount: Number(qq.weekly_price) } : null,
+      Number(qq.biweekly_price) > 0 ? { label: 'Every 2 weeks', amount: Number(qq.biweekly_price) } : null,
+      Number(qq.monthly_price) > 0 ? { label: 'Every month', amount: Number(qq.monthly_price) } : null,
     ].filter((l): l is { label: string; amount: number } => l !== null)
-    const allLines = [...svcLines, ...planLines]
-    const lines = allLines.length > 0 ? allLines : undefined
+    const planOptions = planOptionRows.length > 0 ? planOptionRows : undefined
+    const lines = svcLines.length > 0 ? svcLines : undefined
     const manHours = Number(qq.hours) > 0 && Number(qq.crew_size) > 0 ? Number(qq.hours) * Number(qq.crew_size) : 0
     const fmtHrs = (h: number) => h < 1 ? `${Math.round(h * 60)} minutes` : h === 1 ? '1 hour' : `${Number(h.toFixed(1))} hours`
     const explainBits = [
@@ -575,7 +593,7 @@ export function buildDocItems(opts: {
         ? `About ${fmtHrs(manHours)} of work${Number(qq.crew_size) > 1 ? `, with a crew of ${Number(qq.crew_size)}` : ''}.`
         : null,
       Number(qq.travel_fee) > 0 ? `Includes a ${formatCurrency(Number(qq.travel_fee))} travel charge to reach your property.` : null,
-      planLines.length > 0 ? 'Your first visit is priced above; ongoing visits are charged at the plan rate shown.' : null,
+      planOptionRows.length > 0 ? 'This price is for the visit above. If you want us back regularly, the ongoing rates are listed separately — you can pick one with us later.' : null,
       'Nothing is charged when you approve — you’ll get an invoice once the work is done.',
     ].filter((s): s is string => !!s)
     // THE shared expiry engine — the same call the owner's screens make.
@@ -588,7 +606,7 @@ export function buildDocItems(opts: {
       amount: Number(qq.total) || 0,
       amountNote: gstPct > 0 ? `+ GST (${gstPct}%) — added on your invoice` : undefined, balance: 0,
       payAmount: 0, payIsDeposit: false,
-      filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(qq), lines,
+      filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(qq), lines, planOptions,
       // Identity, not decoration: the address tells a landlord which of their six
       // quotes this is. It never becomes the row's title — service_type is the
       // real disambiguator for same-property customers.

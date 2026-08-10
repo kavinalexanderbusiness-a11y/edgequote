@@ -140,7 +140,23 @@ check('count = quotes + non-draft invoices', docs.length === 4 + 3, String(docs.
   check('sent quote: display status sent', sent.status === 'sent')
   check('sent quote: measured-area claim uses ITS OWN property', sent.explain?.some(s => s.includes('4,200')) === true)
   check('sent quote: GST amountNote present', sent.amountNote?.includes('GST') === true)
-  check('sent quote: plan line says (per visit)', sent.lines?.some(l => l.label.includes('(per visit)')) === true)
+  // Ongoing rates are ALTERNATIVES to each other, so they left `lines` — which is
+  // additive and reconciles to `amount` — for `planOptions`. What this check has
+  // always protected is unchanged and now stronger: a customer must never be able
+  // to read an ongoing rate as part of what they are approving. The per-visit UNIT
+  // that prevents the "$260/month all-in" 4× misread moved to the renderer with
+  // them, and is pinned by verify:customer-comms.
+  // Asserted on VALUES, not labels: a label check written against today's wording
+  // ("Weekly plan (per visit)") silently stops catching anything the moment the
+  // wording changes, which is exactly how a flattened list would creep back.
+  // Two independent ways to fail: a rate appearing among the additive lines, or
+  // the additive lines no longer reconciling to the figure being approved.
+  const planAmts = new Set((sent.planOptions ?? []).map(o => o.amount))
+  const lineSum = (sent.lines ?? []).reduce((s, l) => s + l.amount, 0)
+  check('sent quote: ongoing rates are choices, never additive lines',
+    (sent.planOptions?.length ?? 0) > 0
+    && !(sent.lines ?? []).some(l => planAmts.has(l.amount))
+    && (sent.lines === undefined || Math.abs(lineSum - sent.amount) < 0.005))
   check('sent quote: nothing-charged promise present', sent.explain?.some(s => s.startsWith('Nothing is charged')) === true)
   check('sent quote: canonical address wins over stale copy', sent.address === PROP_A.address)
   const legacy = byId.get('q-legacy')!

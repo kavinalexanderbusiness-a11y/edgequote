@@ -183,7 +183,7 @@ Thank you for your patience and understanding.
 
 Your service has now been completed.
 
-Thank you for choosing {{business_name}}. We truly appreciate your business and look forward to helping you keep your property looking its best.
+Thank you for choosing {{business_name}}. We appreciate your business, and we're here whenever you need us.
 
 Have a great day!`,
 
@@ -201,7 +201,7 @@ Thank you for choosing {{business_name}}!
 
 If you were happy with your recent service, we'd really appreciate a quick review.
 
-Your feedback helps our small business grow and helps other homeowners choose a company they can trust.
+Your feedback helps our small business grow, and helps other people choose a company they can trust.
 
 {{review_link}}
 
@@ -268,15 +268,23 @@ This is a reminder from {{business_name}} about your upcoming estimate on **{{da
 
 We look forward to meeting with you. If you need to reschedule, simply reply to this message.`,
 
+  // {{amount}} is what is ACTUALLY collectable right now: its only sender
+  // (api/cron/invoice-reminders) fills it from depositChargeAmount(), never a raw
+  // invoice total. It already computed that figure — this template simply never
+  // printed it, so the reminder asked for money without naming the sum.
+  // ⚠️ The token is inline in the sentence, so it must always be supplied. It is:
+  // the cron always passes it, MessageTemplateEditor's preview passes a sample,
+  // and payment_reminder is deliberately not in SendMessageDialog's DEFAULT_SET.
+  // A future caller that adds it there must pass `amount` too.
   payment_reminder: `Hi {{first_name}},
 
-This is a friendly reminder from {{business_name}} that your invoice is still outstanding.
+A friendly reminder from {{business_name}} — {{amount}} is still outstanding on your invoice.
 
-You can securely view and pay it here:
+You can view and pay it securely here:
 
 {{invoice_link}}
 
-If you've already made payment, please disregard this message. Thank you!
+If you've already paid, please ignore this message. Thank you!
 
 — {{business_name}}`,
 
@@ -337,13 +345,13 @@ We hope you have a wonderful day. Thank you for being a valued customer—we tru
 
 We just wanted to say thank you. It's been a real pleasure looking after your property as a customer of {{business_name}}.
 
-We appreciate your continued trust and look forward to many more seasons of keeping things looking their best.
+We appreciate your continued trust, and we look forward to working with you for a long time yet.
 
 If there's ever anything we can do for you, just reply to this message.`,
 
   win_back: `Hi {{first_name}},
 
-It's been a little while, and we'd love to help keep your property looking its best again.
+It's been a little while, and we'd be glad to help with your property again.
 
 If you'd like to book a visit or have any questions, simply reply to this message—we're always happy to help.
 
@@ -363,7 +371,7 @@ Thank you for being a valued customer!`,
 
 It's been a pleasure looking after your property, and we're glad you're happy with the work.
 
-If you know a neighbour who could use a hand with theirs, we'd be grateful if you passed our name along. Most of our work comes from customers kind enough to do exactly that.
+If you know a neighbour who could use the same, we'd be grateful if you passed our name along. Most of our work comes from customers kind enough to do exactly that.
 
 Just reply to this message and we'll take good care of them.
 

@@ -343,6 +343,7 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
       {/* Where this quote is on its way to being done — direct display of the
           stored status, between the header and the price breakdown. */}
       {steps !== null && <JourneyRail steps={steps} />}
+      {/* The additive breakdown — these add up to the figure above. */}
       {d.lines && d.lines.length > 0 && (
         <div className="mt-3 pt-2.5 border-t border-border/60 space-y-1">
           {d.lines.map((l, i) => (
@@ -351,6 +352,31 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
               <span className="text-ink shrink-0 tabular-nums">{formatCurrency(l.amount)}</span>
             </div>
           ))}
+        </div>
+      )}
+      {/* Ongoing rates — a CHOICE between alternatives, not part of the total.
+          These used to sit in the same unlabelled list as the breakdown above, so
+          a $50 quote showed "$50" as its total and "Bi-weekly plan $50" beneath
+          it, over rows that summed to $95. Same rows, but now they say what they
+          are: a price list for later, one of which the customer picks with the
+          owner. Deliberately NOT selectable — approving snapshots the quote
+          total, never a cadence, and a tappable tile would promise otherwise. */}
+      {d.planOptions && d.planOptions.length > 0 && (
+        <div className="mt-3 pt-2.5 border-t border-border/60">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">
+            If you’d like us back regularly
+          </p>
+          <p className="text-[11px] text-ink-muted mt-0.5 mb-1.5">
+            Price per visit{d.planOptions.length > 1 ? ' — choose a schedule with us after you approve' : ' — set this up with us after you approve'}. Not included in the total above.
+          </p>
+          <div className="space-y-1">
+            {d.planOptions.map((l, i) => (
+              <div key={i} className="flex items-center justify-between gap-3 text-xs rounded-lg bg-bg-tertiary/50 px-2 py-1.5">
+                <span className="text-ink-muted truncate">{l.label}</span>
+                <span className="text-ink shrink-0 tabular-nums">{formatCurrency(l.amount)} <span className="text-ink-faint">/ visit</span></span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
       {/* What's behind the number. Shown on the quote the customer is deciding on — a
