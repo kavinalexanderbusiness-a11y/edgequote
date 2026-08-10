@@ -74,13 +74,13 @@ export function BestDaySuggestions({ coord, address, excludeJobId, onPick, onTop
   }, [suggestions[0]?.date, suggestions[0]?.nearbyCount])
 
   if (loading || geocoding) {
-    return <p className="text-xs text-ink-faint flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Analyzing your schedule for nearby jobs…</p>
+    return <p className="text-xs text-ink-faint flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Analyzing your schedule for nearby visits…</p>
   }
   if (!target) {
-    return <p className="text-xs text-ink-faint">Add a located address to see the best days to schedule near existing jobs.</p>
+    return <p className="text-xs text-ink-faint">Add a located address to see the best days to schedule near existing visits.</p>
   }
   if (suggestions.length === 0) {
-    return <p className="text-xs text-ink-faint">No nearby jobs scheduled in the next 3 weeks — this would start a new area.</p>
+    return <p className="text-xs text-ink-faint">No nearby visits scheduled in the next 3 weeks — this would start a new area.</p>
   }
 
   const [best, ...alts] = suggestions
@@ -88,7 +88,7 @@ export function BestDaySuggestions({ coord, address, excludeJobId, onPick, onTop
   return (
     <div className="space-y-2.5">
       {onPick && (
-        <p className="text-xs text-ink-faint">Recommended based on nearby jobs — you can still pick any date.</p>
+        <p className="text-xs text-ink-faint">Recommended based on nearby visits — you can still pick any date.</p>
       )}
 
       {/* Recommended (suggestion only — applies via the explicit button) */}

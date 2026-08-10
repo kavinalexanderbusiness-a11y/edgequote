@@ -360,7 +360,7 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
                     </div>
                   </div>
                 ) : (
-                  <p className="text-xs text-ink-muted">No customers to notify (the moved jobs aren&apos;t linked to a customer).</p>
+                  <p className="text-xs text-ink-muted">No customers to notify (the moved visits aren&apos;t linked to a customer).</p>
                 )}
                 <div className="flex items-center gap-2 pt-1">
                   <Button onClick={onClose}><Check className="w-4 h-4" /> Done</Button>
@@ -370,7 +370,7 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
             <>
             {/* Reason */}
             <div>
-              <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-1.5">Why are jobs moving?</p>
+              <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-1.5">Why are visits moving?</p>
               <div className="flex flex-wrap gap-1.5">
                 {DISRUPTION_REASONS.map(rk => (
                   <button key={rk} type="button" onClick={() => setReason(rk)}
@@ -397,7 +397,7 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
               </div>
             </div>
 
-            {invoicedIds === null && <p className="text-xs text-ink-faint text-center py-2 flex items-center justify-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking billed jobs…</p>}
+            {invoicedIds === null && <p className="text-xs text-ink-faint text-center py-2 flex items-center justify-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking billed visits…</p>}
 
             {invoicedIds !== null && dayJobs.length === 0 && (
               <p className="text-sm text-ink-muted text-center py-6">Nothing scheduled on {fmtLong(selectedDay)} — no move needed.</p>
@@ -523,7 +523,7 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
                       {/* Recipient selection */}
                       <div className="max-h-32 overflow-y-auto rounded-lg border border-border divide-y divide-border">
                         {recipients.length === 0 ? (
-                          <p className="px-3 py-2 text-[11px] text-ink-faint">Choose jobs to move to see who gets notified.</p>
+                          <p className="px-3 py-2 text-[11px] text-ink-faint">Choose visits to move to see who gets notified.</p>
                         ) : recipients.map(r => (
                           <label key={r.customerId} className="px-3 py-1.5 flex items-center gap-2 text-xs cursor-pointer hover:bg-surface/40">
                             <input type="checkbox" checked={recipientIds.has(r.customerId)} onChange={() => toggleRecipient(r.customerId)} className="accent-accent w-3.5 h-3.5" />

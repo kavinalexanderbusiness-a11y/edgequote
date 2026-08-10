@@ -60,13 +60,13 @@ function pushRecent(e: RecentEntry) {
 // Module destinations come from THE feature-module registry (lib/modules) —
 // same source and same per-business filtering as the sidebar, so the palette
 // never disagrees with navigation. Only non-module destinations live here.
-const EXTRA_NAV: { label: string; href: string; icon: Icon }[] = [
+const EXTRA_NAV: { label: string; href: string; icon: Icon; keywords?: string }[] = [
   { label: 'Marketplace', href: '/dashboard/marketplace', icon: Store },
   { label: 'API Docs', href: '/dashboard/integrations/docs', icon: BookOpen },
-  { label: 'Routes', href: '/dashboard/routes', icon: Navigation },
+  { label: 'Routes', href: '/dashboard/routes', icon: Navigation, keywords: 'driving distance travel stops' },
   { label: 'Measurement Accuracy', href: '/dashboard/measurements', icon: Eye },
   { label: 'Help', href: '/dashboard/help', icon: LifeBuoy },
-  { label: 'Settings', href: '/dashboard/settings', icon: Settings },
+  { label: 'Settings', href: '/dashboard/settings', icon: Settings, keywords: 'services templates business pricing tax booking modules' },
 ]
 
 // A leading verb turns the palette into a command: `call jane`, `text 5875550…`,
@@ -82,7 +82,10 @@ export function CommandPalette() {
   const router = useRouter()
   const { visible: moduleNav } = useModules()
   const NAV = useMemo(
-    () => [...moduleNav.map(m => ({ label: m.label, href: m.href, icon: m.icon as Icon })), ...EXTRA_NAV],
+    // keywords ride along from THE registry, so typing an owner's word finds
+    // the page: "jobs" or "visits" → Schedule, "payroll" → Workforce. Before this
+    // the filter saw only the label, and "jobs" matched nothing at all.
+    () => [...moduleNav.map(m => ({ label: m.label, href: m.href, icon: m.icon as Icon, keywords: m.keywords })), ...EXTRA_NAV],
     [moduleNav],
   )
   const [open, setOpen] = useState(false)
@@ -146,7 +149,7 @@ export function CommandPalette() {
         { id: 'a-studio', label: 'Marketing Studio', sub: 'AI posts from finished jobs', icon: Sparkles, run: () => go('/dashboard/grow/studio') },
       ],
     },
-    { title: 'Go to', items: NAV.map(n => ({ id: `n-${n.href}`, label: n.label, icon: n.icon, run: () => go(n.href) })) },
+    { title: 'Go to', items: NAV.map(n => ({ id: `n-${n.href}`, label: n.label, icon: n.icon, keywords: n.keywords, run: () => go(n.href) })) },
   ], [go, NAV])
   const emptySections = useMemo<Section[]>(() => {
     const ps = pageSection()

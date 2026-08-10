@@ -67,6 +67,12 @@ export interface FeatureModule {
   updatedAt: string
   /** Marketplace screenshots (public URLs). Empty/absent → the listing renders a styled placeholder. */
   screenshots?: string[]
+  /** The words an OWNER would type that are not in the label. ⌘K and the
+   *  Marketplace search both read these, so "jobs" finds Schedule and "payroll"
+   *  finds Workforce. Only needed where their word differs from ours —
+   *  typing "jobs" previously matched NOTHING, which is most of the reason
+   *  "where do my jobs live?" had no answer. */
+  keywords?: string
 }
 
 export const FEATURE_MODULES: FeatureModule[] = [
@@ -77,11 +83,13 @@ export const FEATURE_MODULES: FeatureModule[] = [
   { key: 'schedule',   label: 'Schedule',   href: '/dashboard/schedule',   icon: CalendarDays,
     category: 'operations', version: 1, updatedAt: '2026-07-09',
     description: 'Visits, routes, capacity and the day plan.',
-    permissions: ['jobs:read', 'jobs:write', 'customers:read', 'messages:send'] },
+    permissions: ['jobs:read', 'jobs:write', 'customers:read', 'messages:send'],
+    keywords: 'jobs visits calendar day plan route booked work' },
   { key: 'dispatch',   label: 'Dispatch',   href: '/dashboard/dispatch',   icon: Radio,
     category: 'operations', version: 1, updatedAt: '2026-07-15', requires: ['schedule'],
     description: 'Crews, technicians and the day\'s routes on one board.',
-    permissions: ['jobs:read', 'jobs:write', 'crews:read', 'crews:write', 'equipment:read', 'equipment:write'] },
+    permissions: ['jobs:read', 'jobs:write', 'crews:read', 'crews:write', 'equipment:read', 'equipment:write'],
+    keywords: 'crews stops route board today' },
   // Payroll lived three-to-five clicks deep inside Dispatch and appeared in NO
   // navigation and NO command palette — typing "payroll" into ⌘K returned nothing.
   // The thing that pays people has to be findable on payday. Registering it here
@@ -91,38 +99,46 @@ export const FEATURE_MODULES: FeatureModule[] = [
     category: 'operations', version: 1, updatedAt: '2026-07-16', requires: ['dispatch'],
     description: 'Your people: hours, pay, time off and what the crew costs.',
     whatsNew: 'Payroll, timesheets and time off now have a home of their own.',
-    permissions: ['crews:read', 'crews:write', 'payroll:read', 'payroll:write'] },
+    permissions: ['crews:read', 'crews:write', 'payroll:read', 'payroll:write'],
+    keywords: 'payroll employees staff team timesheet hours wages time off' },
   { key: 'customers',  label: 'Customers',  href: '/dashboard/customers',  icon: Users,
     category: 'customers', version: 1, updatedAt: '2026-07-15',
     description: 'Every customer, their history, and the conversation.',
-    permissions: ['customers:read', 'customers:write', 'messages:send'] },
+    permissions: ['customers:read', 'customers:write', 'messages:send'],
+    keywords: 'clients people contacts' },
   { key: 'properties', label: 'Properties', href: '/dashboard/properties', icon: Home,
     category: 'customers', version: 1, updatedAt: '2026-07-08', requires: ['customers'],
     description: 'Sites and service locations, with measurements and notes.',
-    permissions: ['properties:read', 'properties:write', 'customers:read'] },
+    permissions: ['properties:read', 'properties:write', 'customers:read'],
+    keywords: 'sites addresses locations measurements' },
   { key: 'quotes',     label: 'Quotes',     href: '/dashboard/quotes',     icon: FileText,
     category: 'money', version: 1, updatedAt: '2026-07-13', requires: ['customers'],
     description: 'Quote work, send it, and track it to a decision.',
-    permissions: ['quotes:read', 'quotes:write', 'customers:read', 'messages:send'] },
+    permissions: ['quotes:read', 'quotes:write', 'customers:read', 'messages:send'],
+    keywords: 'estimates proposals pricing' },
   { key: 'invoices',   label: 'Invoices',   href: '/dashboard/invoices',   icon: Receipt,
     category: 'money', version: 1, updatedAt: '2026-07-15', requires: ['customers'],
     description: 'Invoicing, receipts and what you\'re owed.',
-    permissions: ['invoices:read', 'invoices:write', 'customers:read', 'messages:send'] },
+    permissions: ['invoices:read', 'invoices:write', 'customers:read', 'messages:send'],
+    keywords: 'billing bills receivables owed' },
   { key: 'payments',   label: 'Payments',   href: '/dashboard/payments',   icon: Wallet,
     category: 'money', version: 1, updatedAt: '2026-07-15', requires: ['invoices'],
     description: 'The money ledger — every payment, refund and dispute.',
-    permissions: ['payments:read', 'payments:write', 'invoices:read'] },
+    permissions: ['payments:read', 'payments:write', 'invoices:read'],
+    keywords: 'money received refunds deposits' },
   // The money-OUT half. `requires: payments` is a real dependency, not shelf-order:
   // the P&L reads the payments ledger for its top line, so Accounting without
   // Payments would report cost with no revenue to weigh it against.
   { key: 'accounting', label: 'Accounting', href: '/dashboard/accounting', icon: Calculator,
     category: 'money', version: 1, updatedAt: '2026-07-16', requires: ['payments'],
     description: 'Expenses, vendors and what\'s actually left after the work.',
-    permissions: ['expenses:read', 'expenses:write', 'payments:read'] },
+    permissions: ['expenses:read', 'expenses:write', 'payments:read'],
+    keywords: 'expenses vendors profit p&l' },
   { key: 'messages',   label: 'Messages',   href: '/dashboard/messages',   icon: MessageSquare,
     category: 'customers', version: 1, updatedAt: '2026-07-09', requires: ['customers'],
     description: 'Two-way SMS and email with every customer, in one inbox.',
-    permissions: ['messages:read', 'messages:send', 'customers:read'] },
+    permissions: ['messages:read', 'messages:send', 'customers:read'],
+    keywords: 'inbox sms email texts leads conversations' },
   { key: 'equipment',  label: 'Equipment',  href: '/dashboard/equipment',  icon: Wrench,
     category: 'operations', version: 1, updatedAt: '2026-07-15',
     description: 'The gear that does the work — tracking and upkeep.',
@@ -130,7 +146,8 @@ export const FEATURE_MODULES: FeatureModule[] = [
   { key: 'grow',       label: 'Grow',       href: '/dashboard/grow',       icon: Sprout,
     category: 'growth', version: 1, updatedAt: '2026-07-14', featured: true,
     description: 'Analytics, marketing and the tools that win more work.',
-    permissions: ['customers:read', 'jobs:read', 'quotes:read', 'marketing:write'] },
+    permissions: ['customers:read', 'jobs:read', 'quotes:read', 'marketing:write'],
+    keywords: 'marketing analytics reports intelligence reviews referrals' },
   { key: 'automation', label: 'Automation', href: '/dashboard/automation', icon: Bot,
     category: 'growth', version: 1, updatedAt: '2026-07-15', featured: true, requires: ['messages'],
     description: 'Rules that watch the business and act (or ask) on your behalf.',
@@ -158,6 +175,7 @@ export function searchModules(query: string): FeatureModule[] {
     m.label.toLowerCase().includes(q) ||
     m.description.toLowerCase().includes(q) ||
     MODULE_CATEGORIES[m.category].toLowerCase().includes(q) ||
+    (m.keywords ?? '').toLowerCase().includes(q) ||
     m.permissions.some(p => p.includes(q)))
 }
 const NON_CORE_KEYS = FEATURE_MODULES.filter(m => !m.core).map(m => m.key)

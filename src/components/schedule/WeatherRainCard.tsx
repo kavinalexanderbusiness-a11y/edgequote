@@ -67,7 +67,7 @@ export function WeatherRainCard(props: Props) {
                   <p className="text-xs font-semibold text-emerald-300 pt-1">Revenue protected: <span className="tabular-nums">{formatCurrency(summary.revenueProtected)}</span></p>
                 </div>
               ) : (
-                <p className="text-xs text-ink-muted mt-1">No movable jobs needed relocating — the day is clear.</p>
+                <p className="text-xs text-ink-muted mt-1">No movable visits needed relocating — the day is clear.</p>
               )}
             </div>
           </div>

@@ -1084,7 +1084,7 @@ export function DayOpsPanel({
                             <JobPhotos propertyId={job.property_id} jobId={job.id} customerId={job.customer_id} variant="visit" />
                           </div>
                         ) : (
-                          <p className="mt-2 text-xs text-amber-400">Link a property to this job to attach photos.</p>
+                          <p className="mt-2 text-xs text-amber-400">Link a property to this visit to attach photos.</p>
                         )
                       )}
 

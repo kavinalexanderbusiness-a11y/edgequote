@@ -21,6 +21,9 @@ import { queueOrRun } from '@/lib/offline/outbox'
 // "completed" writes the same three fields through it — see lib/jobStatus.
 import { completionPatch } from '@/lib/jobStatus'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+// THE words for the work (lib/vocabulary): a `jobs` row is one VISIT, and this
+// page is where every job's visits live — the subtitle has to say both.
+import { scheduleSubtitle } from '@/lib/vocabulary'
 
 // ── The offline field bundle ──────────────────────────────────────────────────
 // Everything the day board needs to be TRUE with no signal, for the window a
@@ -2029,10 +2032,10 @@ export default function SchedulePage() {
       view === 'day' && fieldNext && 'pb-[calc(7rem+env(safe-area-inset-bottom))] lg:pb-0')}>
       <PageHeader
         title="Schedule"
-        description={`${jobs.length} job${jobs.length !== 1 ? 's' : ''} on the calendar`}
+        description={scheduleSubtitle(jobs.length)}
         action={
           <div className="flex items-center gap-2">
-            <Button variant="secondary" onClick={() => { setRainCenterDay(rainTarget?.date ?? null); setShowRainCenter(true) }} title="Reschedule — move jobs (weather, equipment, absence, holiday, emergency) and notify customers">
+            <Button variant="secondary" onClick={() => { setRainCenterDay(rainTarget?.date ?? null); setShowRainCenter(true) }} title="Reschedule — move visits (weather, equipment, absence, holiday, emergency) and notify customers">
               <CalendarClock className="w-4 h-4" /> Reschedule
             </Button>
             <Button variant="secondary" onClick={() => launchOptimizer()} title="Optimize your schedule — pick scope and goal">

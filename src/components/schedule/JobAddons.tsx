@@ -171,7 +171,7 @@ export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, prev
 
       {/* Total Job Value — always visible */}
       <div className="flex items-center justify-between border-t border-border pt-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Total job value</span>
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Total visit value</span>
         <span className="text-base font-bold text-accent-text">{formatCurrency(total)}</span>
       </div>
     </div>

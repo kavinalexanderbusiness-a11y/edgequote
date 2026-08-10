@@ -98,7 +98,7 @@ export function WeeklyScheduler({ coord, address, excludeJobId, targetHours, tar
 
   return (
     <div className="space-y-2.5">
-      <p className="text-xs text-ink-faint">Three ways to place this job across your work week — pick one.</p>
+      <p className="text-xs text-ink-faint">Three ways to place this job’s visits across your work week — pick one.</p>
       <div className="grid gap-2 sm:grid-cols-3">
         {cards.map(({ key, Icon, accent, title, plan, stat }) => {
           if (!plan) return null

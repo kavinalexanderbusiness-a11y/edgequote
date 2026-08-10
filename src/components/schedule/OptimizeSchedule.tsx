@@ -267,7 +267,7 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
               </div>
             </div>
 
-            {invoicedIds === null && <p className="text-xs text-ink-faint text-center py-2 flex items-center justify-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking billed jobs…</p>}
+            {invoicedIds === null && <p className="text-xs text-ink-faint text-center py-2 flex items-center justify-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking billed visits…</p>}
             {running && <p className="text-sm text-ink-muted text-center py-4 flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Optimizing {SCOPES.find(s => s.key === scope)?.label.toLowerCase()}…</p>}
 
             {result && !running && (
