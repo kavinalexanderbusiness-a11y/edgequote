@@ -112,5 +112,34 @@ for (const f of files) {
 }
 check('no owner-CRM <table> lacks a horizontal scroll container', unwrapped.length === 0, unwrapped.join(', '))
 
+// ── 4. Customer profile: current work before history ─────────────────────────
+// The profile is the screen an owner opens mid-conversation, and it had grown to
+// fourteen expanded sections — 6,649px, 7.9 phone screens (measured in Chromium at
+// 390×844). The half an owner actually came for ended around y=3,300; the rest was
+// consent settings, scheduling defaults, card-on-file, full event history and
+// referrals, all at equal weight. Those now sit behind one disclosure (4,213px,
+// 5.0 screens, 63→44 controls) — hidden by default, DELETED never.
+//
+// Two ways that regresses, both silent: a section gets moved back out to the top
+// level "just this one", or the disclosure is removed and the cards are dropped
+// with it. This pins both — the components must still be mounted, AND still be
+// inside the disclosure.
+console.log('\n── the customer profile leads with work, not history ──')
+const profile = readFileSync('src/app/dashboard/customers/[id]/page.tsx', 'utf8')
+const REFERENCE = ['CustomerComms', 'ReviewLifecycle', 'PaymentMethodCard', 'TimelineCard', 'ReferralPanel']
+check('the "More about this customer" disclosure still exists', /<MoreAboutCustomer>/.test(profile) && /function MoreAboutCustomer/.test(profile))
+check('… and is closed by default (history must not lead)', /function MoreAboutCustomer[\s\S]{0,400}useState\(false\)/.test(profile))
+const inner = profile.match(/<MoreAboutCustomer>([\s\S]*?)<\/MoreAboutCustomer>/)?.[1] ?? ''
+for (const comp of REFERENCE) {
+  const mounted = new RegExp(`<${comp}[\\s/>]`).test(profile)
+  check(`${comp} is still mounted, and behind the disclosure`, mounted && new RegExp(`<${comp}[\\s/>]`).test(inner),
+    mounted ? 'moved back out to the top level' : 'component was REMOVED — capability lost, not simplified')
+}
+// The things an owner opens the page FOR must stay above the fold-ish, i.e. NOT
+// swept into the same disclosure in a later "tidy up".
+for (const keep of ['Open Items', 'Upcoming Work', 'Properties']) {
+  check(`"${keep}" is still shown without opening anything`, profile.includes(keep) && !inner.includes(`>${keep}<`))
+}
+
 console.log(`\n${fail === 0 ? '✓' : '✗'} mobile shell checks: ${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

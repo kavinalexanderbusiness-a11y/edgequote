@@ -57,6 +57,7 @@ import {
   FileText, Send, RotateCw, Receipt, DollarSign, Sparkles, Users,
   Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet, Timer, CalendarClock,
   Link2, Check, Cake, PartyPopper, Camera, History, Globe, Plus, Home, Tag, Trash2,
+  ChevronDown,
 } from 'lucide-react'
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
@@ -1266,6 +1267,16 @@ export default function CustomerDetailPage() {
         </CardBody>
       </Card>
 
+      {/* ── Everything below is REFERENCE, not today's work ──────────────────
+          Measured on a phone before this: the profile ran 6,649px — 7.9 screens —
+          with fourteen sections all expanded at equal weight. The parts an owner
+          opens the page FOR (what's owed, what's booked, which properties) end
+          about halfway down; the rest is consent settings, scheduling defaults,
+          card-on-file, the full event history and referrals. Useful, but not what
+          you came for, and scrolling past all of it to re-find Open Items is the
+          friction. Behind one disclosure they cost a line instead of half the page,
+          and NOTHING is removed — one tap restores every card exactly as it was. */}
+      <MoreAboutCustomer>
       {/* Communication — consent + history */}
       <CustomerComms customerId={customer.id} smsOptIn={!!customer.sms_opt_in} emailOptIn={!!customer.email_opt_in}
         onChange={patch => setCustomer({ ...customer, ...patch })} />
@@ -1314,6 +1325,7 @@ export default function CustomerDetailPage() {
 
       {/* Referrals — advocates this customer brought in (with statuses + rewards) */}
       <ReferralPanel customer={customer} referrer={referrer} referredRevenue={referredRevenue} />
+      </MoreAboutCustomer>
 
       {/* Edit core details — the ONE shared customer form, in a modal (no page leave) */}
       <Modal open={editing} onClose={() => setEditing(false)} title="Edit customer" icon={Edit2} size="lg">
@@ -1411,6 +1423,45 @@ function ServicePlanRow({ plan, customerId, pausing, onPause }: {
           </ButtonLink>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── "More about this customer" ────────────────────────────────────────────────
+// A profile answers a short list of questions: who is this, how do I reach them,
+// what do they owe, what's booked, which property. Everything else — consent
+// settings, review state, scheduling defaults, card-on-file, the full event
+// history, referrals — is reference material the owner looks up occasionally and
+// scrolls past constantly. Measured before this existed: 6,649px on a phone,
+// fourteen expanded sections, and the actionable half ended around y=3,300.
+//
+// Deliberately a DISCLOSURE and not a deletion: every card inside still exists,
+// unchanged, one tap away. It is closed by default because the common case is
+// "check this customer", not "audit this customer" — and the collapsed label names
+// what is inside, so nothing becomes unfindable.
+//
+// Not the shared ui/Collapsible: that primitive draws its own bordered container,
+// and each child here already renders a full <Card>, which would nest two borders.
+function MoreAboutCustomer({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="space-y-6">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+        className="w-full flex items-center gap-2.5 px-4 py-3.5 text-left rounded-card border border-border bg-bg-secondary hover:bg-surface/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      >
+        <History className="w-4 h-4 text-ink-muted shrink-0" />
+        <span className="text-sm font-semibold text-ink shrink-0">More about this customer</span>
+        {!open && (
+          <span className="text-xs text-ink-faint truncate min-w-0 hidden sm:inline">
+            Messages &amp; consent · Review · Scheduling preferences · Payment method · History · Referrals
+          </span>
+        )}
+        <ChevronDown className={cn('w-4 h-4 text-ink-faint ml-auto shrink-0 transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && <div className="space-y-6 animate-fade">{children}</div>}
     </div>
   )
 }
