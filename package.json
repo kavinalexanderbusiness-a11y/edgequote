@@ -48,6 +48,7 @@
     "verify:invoice-search": "tsx scripts/verify-invoice-search.ts",
     "verify:signals": "tsx scripts/verify-signals.ts",
     "verify:sms-segments": "tsx scripts/verify-sms-segments.ts",
+    "verify:inbox": "tsx scripts/verify-inbox.ts",
     "verify:customer-v2": "tsx scripts/verify-customer-v2.ts",
     "verify:portal": "tsx scripts/verify-portal.ts",
     "verify:portal-rpc": "tsx scripts/verify-portal-rpc.ts",

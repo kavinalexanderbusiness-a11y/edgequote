@@ -592,13 +592,20 @@ export default function MessagesPage() {
   }, [query, selectMode, sel, list, helpOpen]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
+    // With a thread OPEN on a phone, everything above it is somebody else's job:
+    // header, search, pills and bulk chrome hide (hidden lg:*) and the thread
+    // takes the screen — inbox → open → read → reply → back, one surface at a
+    // time, instead of a desktop two-pane squeezed into 390px. Desktop keeps the
+    // two panes; the Back arrow in the thread header is the way home on mobile.
     <div className="max-w-6xl mx-auto space-y-6">
-      <PageHeader title="Messages" description="Texts, portal requests, and website leads — one inbox."
-        action={
-          <Button variant="secondary" onClick={openCompose}>
-            <Plus className="w-4 h-4" /> New message
-          </Button>
-        } />
+      <div className={cn(sel && 'hidden lg:block')}>
+        <PageHeader title="Messages" description="Texts, portal requests, and website leads — one inbox."
+          action={
+            <Button variant="secondary" onClick={openCompose}>
+              <Plus className="w-4 h-4" /> New message
+            </Button>
+          } />
+      </div>
 
       {/* Start a conversation without leaving the inbox: pick a customer → THE shared
           Send-Message dialog (same engine; the sent message threads into this list).
@@ -642,7 +649,7 @@ export default function MessagesPage() {
       </Modal>
 
       {/* Spotlight search */}
-      <div className="relative">
+      <div className={cn('relative', sel && 'hidden lg:block')}>
         <SearchInput ref={searchRef} fieldSize="sm" value={query} onChange={e => setQuery(e.target.value)} aria-label="Search conversations"
           placeholder="Search people, messages, quotes…"
           className="[&>input]:pr-9" />
@@ -652,7 +659,7 @@ export default function MessagesPage() {
       </div>
 
       {!searchResults && (
-        <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className={cn('flex items-center justify-between gap-2 flex-wrap', sel && 'hidden lg:flex')}>
           <div className="flex flex-wrap gap-1.5">
             {FILTERS.map(f => {
               // Snoozed earns its pill only while something IS snoozed — an empty
@@ -724,12 +731,20 @@ export default function MessagesPage() {
               description={loadError}
               action={{ label: 'Try again', onClick: () => { if (uidRef.current) loadPage(uidRef.current, filter, true) } }} />
           ) : list.length === 0 ? (
-            <EmptyState icon={Inbox} className="py-16"
+            // Each filter's emptiness means something DIFFERENT, and two of them
+            // are good news: an empty Needs-reply is a caught-up inbox, not an
+            // unused product — the generic "No conversations yet · everything
+            // lands here" onboarding copy in that spot read as a malfunction.
+            <EmptyState icon={filter === 'needs_reply' ? MailOpen : Inbox} className="py-16"
               title={searchResults ? 'No matches'
+                : filter === 'needs_reply' ? 'All caught up'
+                : filter === 'snoozed' ? 'Nothing snoozed'
                 : filter === 'archived' ? 'No archived chats'
                 : filter === 'website_lead' ? 'No new website leads'
                 : 'No conversations yet'}
               description={searchResults ? 'Try a name, address, service, or quote/invoice #.'
+                : filter === 'needs_reply' ? 'Nobody is waiting on a reply from you.'
+                : filter === 'snoozed' ? 'Snoozed conversations wait here until their time comes — or the customer replies.'
                 : filter === 'website_lead' ? 'Leads land here the moment your website form is submitted.'
                 : 'Inbound texts, portal requests and website leads all land here — replies go out from your business number.'} />
           ) : (
@@ -747,8 +762,17 @@ export default function MessagesPage() {
           )}
         </div>
 
-        {/* Thread */}
-        <div className={cn('rounded-card border border-border bg-bg-secondary p-4 flex-col', sel ? 'flex' : 'hidden lg:flex')}>
+        {/* Thread. The height is the whole ergonomic story: ConversationThread is
+            flex h-full with its own scrolling bubble box, but in a content-height
+            parent that structure never engages — the composer sat BELOW every
+            bubble, a full page-scroll away on a phone. Pinned to the viewport on
+            mobile (100dvh minus the app's fixed top bar and BottomNav) the
+            bubbles scroll and Reply is always on screen; desktop gets a cap so a
+            300-message thread can no longer stretch the page either. */}
+        <div className={cn('rounded-card border border-border bg-bg-secondary p-4 flex-col',
+          // overflow-y-auto is the escape hatch for the rare tall lead card: the
+          // pinned panel scrolls WITHIN itself to reach the composer, never the page.
+          sel ? 'flex h-[calc(100dvh-8.75rem)] overflow-y-auto lg:h-auto lg:max-h-[78vh] lg:overflow-visible' : 'hidden lg:flex')}>
           {sel ? (
             <>
               <div className="flex items-center justify-between gap-2 border-b border-border pb-2 mb-2">
@@ -943,9 +967,13 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
             {!isSearch && (c.last_direction === 'internal' ? 'Note: ' : c.last_direction && c.last_direction !== 'inbound' ? 'You: ' : '')}<Highlight text={preview} q={query} />
           </p>
           <div className="flex items-center gap-1.5 mt-0.5">
-            {(() => {
-              const Ch = c.last_channel === 'portal' ? Globe : c.last_channel === 'email' ? Mail : MessageSquare
-              const lbl = c.last_channel === 'portal' ? 'Portal' : c.last_channel === 'email' ? 'Email' : 'SMS'
+            {/* The channel glyph earns its pixels only as an EXCEPTION. SMS is the
+                default for a service business, so an SMS icon on essentially every
+                row was a decoration the eye had to skip 40 times per screen —
+                portal and email are the two that change how you'd answer. */}
+            {(c.last_channel === 'portal' || c.last_channel === 'email') && (() => {
+              const Ch = c.last_channel === 'portal' ? Globe : Mail
+              const lbl = c.last_channel === 'portal' ? 'Portal' : 'Email'
               return <span title={lbl} className="shrink-0 flex"><Ch className="w-3 h-3 text-ink-faint" aria-label={lbl} /></span>
             })()}
             <p className="text-[10px] text-ink-faint">{timeAgo(c.last_message_at)}</p>
