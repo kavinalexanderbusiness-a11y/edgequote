@@ -1575,10 +1575,18 @@ export const SERVICE_CATEGORIES = [
 // concludes the platform has a home industry.
 
 
+// THE owner-facing word for each stored status. Presentation only — the stored
+// values are unchanged, and this is the one place the wording lives so every
+// surface says the same thing.
+//
+// `accepted` reads "Approved" because that is literally what the row records: the
+// customer consenting. portal_accept_quote sets status='accepted' and snapshots
+// accepted_price at the instant of consent. "Accepted" is the database's word for
+// it; "Approved" is the owner's.
 export const STATUS_LABELS: Record<QuoteStatus, string> = {
   draft: 'Draft',
   sent: 'Sent',
-  accepted: 'Accepted',
+  accepted: 'Approved',
   scheduled: 'Scheduled',
   completed: 'Completed',
   paid: 'Paid',

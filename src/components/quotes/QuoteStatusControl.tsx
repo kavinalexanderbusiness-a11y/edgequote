@@ -6,7 +6,7 @@ import { queueOrRun } from '@/lib/offline/outbox'
 import { toast } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { QuoteStatus, STATUS_LABELS, STATUS_COLORS } from '@/types'
-import { markSentPatch } from '@/lib/quoteStatus'
+import { markSentPatch, isSystemAdvancedQuoteStatus, QUOTE_STATUS_MEANING } from '@/lib/quoteStatus'
 import { markWonPatch } from '@/lib/followup'
 import { localTodayISO } from '@/lib/utils'
 import { ChevronDown, Loader2 } from 'lucide-react'
@@ -113,11 +113,29 @@ export function QuoteStatusControl({ quoteId, status, followUpCount, sentAt, val
         title="Change status"
         className={`appearance-none cursor-pointer pl-2.5 pr-6 py-1 rounded-full text-xs font-semibold border uppercase tracking-wide outline-none focus-visible:ring-2 focus-visible:ring-accent/40 transition-opacity ${saving ? 'opacity-60' : ''} ${STATUS_COLORS[current]}`}
       >
-        {ALL.map(s => (
-          <option key={s} value={s} className="bg-bg-secondary text-ink normal-case">
-            {STATUS_LABELS[s]}
-          </option>
-        ))}
+        {/* Grouped, not filtered. Three of these seven are advanced by DATABASE
+            TRIGGERS from real events — a job being booked, work completing, an
+            invoice being paid (see SYSTEM_ADVANCED_QUOTE_STATUSES). Setting one by
+            hand asserts something the app cannot see, and because each trigger only
+            advances FROM an expected prior state, it is never re-derived later: a
+            hand-set "Paid" simply stays wrong. The owner keeps the ability to
+            correct a row — that is a real need — but the group heading says which
+            half of this list the app normally manages, which is the difference
+            between an informed correction and an accident. */}
+        <optgroup label="You set these" className="bg-bg-secondary text-ink normal-case">
+          {ALL.filter(s => !isSystemAdvancedQuoteStatus(s)).map(s => (
+            <option key={s} value={s} title={QUOTE_STATUS_MEANING[s]} className="bg-bg-secondary text-ink normal-case">
+              {STATUS_LABELS[s]}
+            </option>
+          ))}
+        </optgroup>
+        <optgroup label="Set automatically — override with care" className="bg-bg-secondary text-ink normal-case">
+          {ALL.filter(isSystemAdvancedQuoteStatus).map(s => (
+            <option key={s} value={s} title={QUOTE_STATUS_MEANING[s]} className="bg-bg-secondary text-ink normal-case">
+              {STATUS_LABELS[s]}
+            </option>
+          ))}
+        </optgroup>
       </select>
       {saving
         ? <Loader2 className="w-3 h-3 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none animate-spin" />

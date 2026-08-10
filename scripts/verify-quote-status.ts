@@ -16,8 +16,12 @@ import {
   displayQuoteStatus, isQuoteExpired, daysUntilExpiry, isExpiringSoon,
   defaultValidUntil, markSentPatch, sendBlockedReason, canSendQuote, sendBlockedLabel,
   DEFAULT_QUOTE_VALID_DAYS, EXPIRING_SOON_DAYS,
+  SYSTEM_ADVANCED_QUOTE_STATUSES, isSystemAdvancedQuoteStatus, QUOTE_STATUS_MEANING,
   type ExpirableQuote,
 } from '../src/lib/quoteStatus'
+import { STATUS_LABELS } from '../src/types'
+import { readFileSync } from 'node:fs'
+const QUOTE_STATUSES_FOR_LABELS = ['draft','sent','accepted','scheduled','completed','paid','declined'] as const
 
 let pass = 0
 let fail = 0
@@ -106,6 +110,40 @@ check('the no_price label tells the owner what to DO', sendBlockedLabel('no_pric
 check('the no_customer label tells the owner what to DO', sendBlockedLabel('no_customer'), 'This quote has no customer linked — add one so it can be sent and followed up.')
 check('DEFAULT_QUOTE_VALID_DAYS is 30', DEFAULT_QUOTE_VALID_DAYS, 30)
 check('EXPIRING_SOON_DAYS is 5', EXPIRING_SOON_DAYS, 5)
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STATUS PRESENTATION — the words the owner reads, pinned to what the row means.
+//
+// These labels are not cosmetic; they were derived by reading the live contracts.
+// portal_accept_quote sets status='accepted' at the instant of CUSTOMER CONSENT and
+// snapshots accepted_price — so "Approved" is the honest owner-facing word for it.
+// resync_quote_on_job_recurring, sync_quote_on_job_complete and
+// sync_quote_on_invoice_paid are DATABASE TRIGGERS, so scheduled/completed/paid are
+// advanced by the app from real events rather than chosen by anyone.
+//
+// If a label is renamed back to the database's vocabulary, or a state is quietly
+// dropped out of the picker, this fails.
+console.log('\n── status presentation ──')
+check('accepted reads as the customer APPROVING (portal_accept_quote records consent)', STATUS_LABELS.accepted, 'Approved')
+check('draft stays plain', STATUS_LABELS.draft, 'Draft')
+check('sent stays plain (it is the only state that can expire)', STATUS_LABELS.sent, 'Sent')
+check('declined stays plain', STATUS_LABELS.declined, 'Declined')
+check('every stored status has an owner-facing label', QUOTE_STATUSES_FOR_LABELS.every(s => !!STATUS_LABELS[s]), true)
+check('every stored status explains what it MEANS', QUOTE_STATUSES_FOR_LABELS.every(s => !!QUOTE_STATUS_MEANING[s]), true)
+// Exactly the three the app advances itself — no more (which would strip the owner's
+// ability to correct a row) and no fewer (which would hide that the app manages it).
+check('exactly scheduled/completed/paid are system-advanced', SYSTEM_ADVANCED_QUOTE_STATUSES.slice().sort().join(','), 'completed,paid,scheduled')
+check('accepted is NOT system-advanced — a customer or the owner sets it', isSystemAdvancedQuoteStatus('accepted'), false)
+check('sent is NOT system-advanced — the owner sends', isSystemAdvancedQuoteStatus('sent'), false)
+// Capability guard: grouping the picker must never quietly become filtering it.
+{
+  const control = readFileSync('src/components/quotes/QuoteStatusControl.tsx', 'utf8')
+  const offersAll = QUOTE_STATUSES_FOR_LABELS.every(s => control.includes(`'${s}'`))
+  check('the picker still offers every stored status', offersAll, true)
+  check('… split into owner-set and automatic groups, not filtered away',
+    control.includes('You set these') && control.includes('Set automatically'), true)
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)
