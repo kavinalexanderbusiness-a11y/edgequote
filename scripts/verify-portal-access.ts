@@ -126,7 +126,9 @@ H('4. THE ROUTE — what may and may not cross the boundary')
   check('the matched path returns the same thing', /return ok\(\)\s*\n\}/.test(ROUTE), true)
 
   // The one thing that must never be in the reply.
-  const responses = [...ROUTE.matchAll(/NextResponse\.json\(([^;]*?)\)/gs)].map(m => m[1])
+  // [^;] already spans newlines, so no `s` flag is needed — and `s` would force an
+  // es2018 target that tsc and `next build` (which typecheck scripts/) reject.
+  const responses = [...ROUTE.matchAll(/NextResponse\.json\(([^;]*?)\)/g)].map(m => m[1])
   check('no response object mentions a token',
     responses.filter(r => /token/i.test(r)), [])
   // ("portal links" appears in the user-facing 503 copy — that is prose, not data.)
@@ -136,7 +138,7 @@ H('4. THE ROUTE — what may and may not cross the boundary')
   // Logging. Every console call is inspected: a reason may be logged, an identity
   // may not.
   {
-    const logs = [...ROUTE.matchAll(/console\.\w+\(([^;]*?)\)\n/gs)].map(m => m[1])
+    const logs = [...ROUTE.matchAll(/console\.\w+\(([^;]*?)\)\n/g)].map(m => m[1])
       // Only an INTERPOLATED value can leak. Quoted prose ("email provider not
       // configured") describes configuration and carries nothing about anyone.
       .map(l => l.replace(/'[^']*'|`[^`]*`|"[^"]*"/g, "''"))
