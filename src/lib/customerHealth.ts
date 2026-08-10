@@ -185,7 +185,23 @@ export function computeCustomerHealth(
   return rows.sort((a, b) => ((100 - b.score) * (1 + b.ltv / 1000)) - ((100 - a.score) * (1 + a.ltv / 1000)))
 }
 
-export async function loadCustomerHealth(supabase: SupabaseClient): Promise<HealthRow[]> {
+/**
+ * Load + score every customer.
+ *
+ * Returns NULL when a load-bearing read failed — never an empty list.
+ *
+ * supabase-js does not throw on a dead connection: it RESOLVES with
+ * { data: null, error }. Every read below used to be coerced with `|| []` and no
+ * error was ever inspected, so a failed customers query scored zero customers and
+ * the panel rendered a confident "nobody needs attention" — an all-clear about
+ * churn, produced by a network hiccup. A failed INVOICES read was quieter and
+ * worse: every customer's unpaid balance silently became $0, so the owner was
+ * told nobody owed them anything.
+ *
+ * The distinction is the same one the portal already draws: a read that FAILED is
+ * not an answer. The caller renders "couldn't load" instead of an all-clear.
+ */
+export async function loadCustomerHealth(supabase: SupabaseClient): Promise<HealthRow[] | null> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return []
   const uid = user.id
@@ -199,6 +215,14 @@ export async function loadCustomerHealth(supabase: SupabaseClient): Promise<Heal
     supabase.from('invoices').select('customer_id, status, amount, amount_paid, discount_type, discount_value').eq('user_id', uid),
     supabase.from('business_settings').select('service_seasons, gst_percent').eq('user_id', uid).maybeSingle(),
   ])
+  // The four reads every score depends on. A failure in any of them changes the
+  // ANSWER rather than trimming it: no customers → "all clear"; no jobs →
+  // everyone lapsed; no invoices → nobody owes anything; no settings → the wrong
+  // season and GST rate underneath every figure. Recurrences and quotes are
+  // enrichment (cadence label, quote-derived value) and degrade honestly, so they
+  // keep the tolerant `|| []`.
+  if (cRes.error || jRes.error || iRes.error || sRes.error) return null
+
   const recurrences: Record<string, HRec> = {}
   for (const r of (rRes.data as (HRec & { id: string })[]) || []) recurrences[r.id] = r
   const quotesById: Record<string, HQuote> = {}

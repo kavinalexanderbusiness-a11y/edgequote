@@ -79,7 +79,7 @@ export default function IntelligencePage() {
   if (loading && !bi) {
     return (
       <PageContainer width="wide">
-        <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" description="How your business is performing — and where to focus next." />
+        <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="How the business is doing" description="How your business is performing — and where to focus next." />
         <SkeletonTiles count={4} />
         <Skeleton className="h-32 w-full rounded-card" />
         <div className="grid md:grid-cols-3 gap-3">{[0, 1, 2].map(i => <Skeleton key={i} className="h-40 rounded-card" />)}</div>
@@ -90,7 +90,7 @@ export default function IntelligencePage() {
   // A failed load must not render a literally blank page — say so, offer retry.
   if (!bi) return (
     <PageContainer width="wide">
-      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" />
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="How the business is doing" />
       <p className="text-sm text-ink-muted">
         Could not load the report — check your connection and{' '}
         <button type="button" onClick={() => window.location.reload()} className="text-accent-text underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">try again</button>.
@@ -100,7 +100,7 @@ export default function IntelligencePage() {
 
   return (
     <PageContainer width="wide">
-      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" description={`How your business is performing — and where to focus. As of ${bi.generatedFor}.`} />
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="How the business is doing" description={`How your business is performing — and where to focus. As of ${bi.generatedFor}.`} />
 
       {/* Every section below is a workspace widget: arrangeable and hideable, but
           still rendered from the same BIReport, so customising the page can never

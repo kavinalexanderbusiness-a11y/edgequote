@@ -56,7 +56,7 @@ export default function RevenueIntelligencePage() {
   if (loading && !report) {
     return (
       <PageContainer>
-        <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Revenue Intelligence" description="Every customer scored for the moves that grow revenue — ranked by expected impact." />
+        <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Who to call next" description="Every customer scored for the moves that grow revenue — ranked by expected impact." />
         <SkeletonTiles count={4} />
         <Skeleton className="h-20 w-full rounded-card" />
         <SkeletonRows count={5} />
@@ -66,7 +66,7 @@ export default function RevenueIntelligencePage() {
   // A failed load must not render a literally blank page — say so, offer retry.
   if (!report) return (
     <PageContainer width="wide">
-      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Revenue Intelligence" />
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Who to call next" />
       <p className="text-sm text-ink-muted">
         Could not load revenue intelligence — check your connection and{' '}
         <button type="button" onClick={() => window.location.reload()} className="text-accent-text underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">try again</button>.
@@ -88,7 +88,7 @@ export default function RevenueIntelligencePage() {
 
   return (
     <PageContainer>
-      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Revenue Intelligence"
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Who to call next"
         description="Every customer scored for the moves that grow revenue — ranked by expected impact."
         action={<Link href="/dashboard/intelligence"><Button variant="secondary" size="sm">View BI dashboard <ArrowRight className="w-3.5 h-3.5" /></Button></Link>} />
 
