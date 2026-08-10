@@ -21,6 +21,7 @@
     "verify:offline-uncomplete": "tsx scripts/verify-offline-uncomplete.ts",
     "verify:seasons": "tsx scripts/verify-seasons.ts",
     "verify:modules": "tsx scripts/verify-modules.ts",
+    "verify:measure": "tsx scripts/verify-measure.ts",
     "verify:navigation": "tsx scripts/verify-navigation.ts",
     "verify:grow": "tsx scripts/verify-grow.ts",
     "verify:vocabulary": "tsx scripts/verify-vocabulary.ts",
