@@ -17,3 +17,7 @@ scripts/.repro.cjs
 supabase/.temp/
 # Local git worktrees used for parallel branch work
 .claude/worktrees/
+
+# Quote-builder measurement output (scripts/qb-cdp.mjs)
+.qb-before/
+.qb-after/

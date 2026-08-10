@@ -37,7 +37,7 @@ import type { MeasurementSnapshot, SavedRecommendation } from '@/types'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { PriceIntelligence } from '@/components/pricing/PriceIntelligence'
-import { Clock, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp, Package } from 'lucide-react'
+import { Clock, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp, ChevronDown, Package } from 'lucide-react'
 
 interface QuoteBuilderProps {
   customers: Customer[]
@@ -573,6 +573,32 @@ export function QuoteBuilder({
   const laborSummary = Number(hours) > 0 || Number(rate) > 0 || Number(crewSize) > 1
     ? `${Number(hours) || 0} hr · ${crewSize} crew · ${formatCurrency(Number(rate))}/hr`
     : 'Not estimated yet'
+
+  // ── Summaries for the three drawers that replaced seven ─────────────────────
+  // A closed drawer earns its place only by answering "is there anything in here
+  // for me?" without being opened. Seven doors each answering for one section was
+  // seven questions; three doors have to answer for the same content.
+  const pricingHelpSummary = [
+    Number(hours) > 0 || Number(rate) > 0 || Number(crewSize) > 1 ? laborSummary : null,
+    recSummary || null,
+  ].filter(Boolean).join(' · ') || 'Work out a price from hours or plans'
+  const linesSummary = serviceIdx.length + materialIdx.length > 0
+    ? [
+      serviceIdx.length ? `${serviceIdx.length} service${serviceIdx.length !== 1 ? 's' : ''}` : null,
+      materialIdx.length ? `${materialIdx.length} material${materialIdx.length !== 1 ? 's' : ''}` : null,
+    ].filter(Boolean).join(' · ') + ` · ${formatCurrency(serviceExtrasNet + materialsSum.net)}`
+    : 'Add cleanup, hedges, mulch…'
+  const moreSummary = [
+    Number(travelFee) > 0 ? `Travel ${formatCurrency(Number(travelFee))}` : null,
+    notes && String(notes).trim() ? 'Notes' : null,
+  ].filter(Boolean).join(' · ') || 'Travel, notes, best days'
+
+  // Each drawer now fronts more than one former section, so opening it must set
+  // every flag the invalid-handler and the edit-path seeding still write
+  // individually. Those callers are UNTOUCHED — `laborOpen || planOpen` reads
+  // them, so "open the section holding the error" keeps working unchanged.
+  const setPricingHelp = (o: boolean) => { setLaborOpen(o); setPlanOpen(o) }
+  const setLinesOpen = (o: boolean) => { setServicesOpen(o); setMaterialsOpen(o) }
 
   // What WE last auto-filled into the address. The rule everywhere else in this
   // file is "fill it when it's empty, never overwrite what the owner typed"; this
@@ -1425,7 +1451,14 @@ export function QuoteBuilder({
                         ? 'Applied from the recommendation. Type to override.'
                         : serviceRec
                           ? `Suggested ${formatCurrency(serviceRec.price)} — ${serviceRec.basis}. Type to override.`
-                          : 'No recommendation for this service yet — enter your price.'
+                          // The "No recommended price" card renders under exactly this
+                          // condition, immediately above the field. Two notices saying
+                          // the same thing, one either side of the input the owner came
+                          // here to fill, is the noise this pass exists to remove — so
+                          // only speak when the card is NOT already speaking.
+                          : (pricingKind === 'lawn_recurring' && measuredSqft > 0)
+                            ? 'No recommendation for this service yet — enter your price.'
+                            : undefined
                   }
                   {...register('initial_price', { min: 0, onChange: () => { setPriceOrigin('manual'); setPickedCadence(null) } })} />
                 {/* Only offer "use the recommendation" when one actually exists. */}
@@ -1513,8 +1546,21 @@ export function QuoteBuilder({
           {/* The price field itself lives in the fast path above — see the note
               there. These sections hold the engine that FEEDS it. */}
 
-          <Collapsible title="Labour calculator" icon={Calculator} summary={laborSummary} open={laborOpen} onOpenChange={setLaborOpen}>
-            <p className="text-xs text-ink-faint">Hours × crew × rate — this is what the suggested price above is built from when there’s no measurement to price against.</p>
+          {/* ── Pricing help — EdgeQuote working out a number, not the number ──
+              Labour and plan pricing were two of the seven drawers, ranked beside
+              Notes and Scheduling as if they were the same kind of decision. They
+              are not: they are the internal arithmetic BEHIND the customer price
+              that already sits in the fast path above. One drawer, two labelled
+              blocks — not nested collapsibles, which an earlier audit removed here
+              for good reason. ── */}
+          <Collapsible title="Pricing help" icon={Calculator} summary={pricingHelpSummary}
+            open={laborOpen || planOpen} onOpenChange={setPricingHelp}>
+            <p className="text-[11px] text-ink-faint">
+              This is how EdgeQuote works out a suggestion. The customer never sees any of it — they see the price above.
+            </p>
+            <div className="rounded-xl border border-border bg-bg-secondary p-3 space-y-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Labour</p>
+            <p className="text-xs text-ink-faint">Hours × crew × rate — what the suggested price is built from when there’s no measurement to price against.</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* NOT required, and no minimum. Unknown hours must be expressible —
                   it is the honest state of a job nobody has estimated yet, and
@@ -1557,9 +1603,10 @@ export function QuoteBuilder({
                 : 'Set a Default Labour Rate in Settings so quotes can suggest a labour price.'}
               error={errors.rate?.message}
               {...register('rate', { min: { value: 0, message: 'Rate cannot be negative' } })} />
-          </Collapsible>
+            </div>
 
-          <Collapsible title="Plan pricing" icon={Repeat} summary={recSummary || 'One-time quote'} open={planOpen} onOpenChange={setPlanOpen}>
+            <div className="rounded-xl border border-border bg-bg-secondary p-3 space-y-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Repeat plans</p>
             <p className="text-xs text-ink-faint">Fill any cadence you want to offer — they appear on the quote as options the customer can pick.</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {/* Typing a plan price is the same act of ownership as typing the
@@ -1573,62 +1620,16 @@ export function QuoteBuilder({
             </div>
             {/* The guardrail note moved up beside the price it judges (fast path).
                 One instance, so the two can't disagree about what's warned. */}
+            </div>
           </Collapsible>
 
-          <Collapsible title="Travel" icon={Car} summary={travelSummary} open={travelOpen} onOpenChange={setTravelOpen}>
-            <div className="flex justify-end">
-              <Button type="button" variant="secondary" size="sm" onClick={() => calculateDistance()} loading={calcLoading}>
-                <MapPin className="w-3.5 h-3.5" /> Calculate distance
-              </Button>
-            </div>
-            {calcMsg && (
-              <p className={cn('text-xs', calcMsg.error ? 'text-red-400' : 'text-accent-text')}>
-                {calcMsg.text}
-                {calcMsg.settingsLink && <> <Link href="/dashboard/settings" className="underline hover:text-ink">Open Settings →</Link></>}
-              </p>
-            )}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
-              <Input label="Distance (km)" type="number" step="0.1" min="0" {...register('distance_km', { min: 0 })} />
-              <Input label="Travel Fee ($)" type="number" step="5" min="0" {...register('travel_fee', { min: 0 })} />
-            </div>
-            {travelSuggestion && (
-              <div className="text-sm">
-                {travelSuggestion.isCustom ? (
-                  <span className="text-amber-400">{travelSuggestion.tierLabel}: custom fee required</span>
-                ) : (
-                  <span className="text-ink-muted">{travelSuggestion.tierLabel}: <span className="text-accent-text font-semibold">{formatCurrency(travelSuggestion.fee || 0)}</span></span>
-                )}
-              </div>
-            )}
-            {/* Gated on actually charging travel (§10.3): this kept demanding a
-                custom fee after the owner switched to "Absorbing travel — no fee". */}
-            {customTravelRequired && includeTravel && (
-              <Banner tone="warn" icon={AlertTriangle} className="text-xs">
-                Beyond your furthest travel tier — enter a custom travel fee above.
-              </Banner>
-            )}
-            {travelSuggestion && !travelSuggestion.isCustom && (
-              <Button type="button" variant="secondary" size="sm" onClick={applySuggestedTravel}>
-                <CheckCircle2 className="w-3.5 h-3.5" /> Apply suggested travel fee
-              </Button>
-            )}
-            <div className="pt-1 space-y-2">
-              <Toggle checked={includeTravel} onChange={toggleIncludeTravel}
-                label={includeTravel ? 'Charging travel fee' : 'Absorbing travel — no fee'} />
-              <Controller name="show_travel_separately" control={control}
-                render={({ field }) => (
-                  <Toggle checked={field.value} onChange={field.onChange}
-                    label={field.value ? 'Show travel as separate line on PDF' : 'Travel rolled into total on PDF'} />
-                )} />
-            </div>
-          </Collapsible>
           {/* ── Additional services — a quote can hold one OR many services. Sits
               right after the pricing sections so the primary flow reads Address →
               Measure → Recommended price → Accept → fine-tune → extras. Each line
               has qty × unit price − discount; totals sum via the one
               quote-services engine. The primary service above stays untouched. ── */}
-          <Collapsible title="Additional services" icon={Layers} open={servicesOpen} onOpenChange={setServicesOpen}
-            summary={serviceIdx.length ? `${serviceIdx.length} line${serviceIdx.length !== 1 ? 's' : ''} · ${formatCurrency(serviceExtrasNet)}` : 'One-service quote — add cleanup, hedges…'}>
+          <Collapsible title="Services & materials" icon={Layers} summary={linesSummary}
+            open={servicesOpen || materialsOpen} onOpenChange={setLinesOpen}>
             <div className="space-y-3">
               {serviceIdx.map(({ f, i }, n) => {
                 const line = watchedServices?.[i]
@@ -1682,7 +1683,7 @@ export function QuoteBuilder({
                           }} />
                       )}
                     </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="grid grid-cols-3 gap-3">
                       {/* The label follows the unit ("Hours: 3", "Square feet: 1,200")
                           and the step follows the unit's own granularity (0.25 hr). */}
                       <Input label={qtyLabelFor(line?.unit)} type="number" step={unitFor(line?.unit)?.step ?? 0.5} min="0"
@@ -1691,13 +1692,22 @@ export function QuoteBuilder({
                         {...register(`services.${i}.unit` as const)} />
                       <Input label="Unit price ($)" type="number" step="1" min="0"
                         {...register(`services.${i}.unit_price` as const, { min: 0 })} />
-                      <Input label="Duration (min)" type="number" step="5" min="0"
-                        {...register(`services.${i}.est_minutes` as const, { min: 0 })} />
                     </div>
                     {lineEquation(line) && (
                       <p className="text-[11px] text-ink-muted tabular-nums">{lineEquation(line)}</p>
                     )}
-                    {lineDiscountRow(i)}
+                    <details className="group/line">
+                      <summary className="tap-target-y flex items-center gap-1.5 cursor-pointer list-none text-[11px] font-medium text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">
+                        <ChevronDown className="w-3.5 h-3.5 transition-transform group-open/line:rotate-180" />
+                        Duration, discount &amp; notes
+                      </summary>
+                      <div className="pt-2 space-y-3">
+                        <Input label="Duration (min)" type="number" step="5" min="0"
+                          hint="Only affects scheduling — not the price."
+                          {...register(`services.${i}.est_minutes` as const, { min: 0 })} />
+                        {lineDiscountRow(i)}
+                      </div>
+                    </details>
                   </div>
                 )
               })}
@@ -1713,11 +1723,6 @@ export function QuoteBuilder({
                 }}>
                 <Plus className="w-3.5 h-3.5" /> Add service
               </Button>
-              {materialIdx.length > 0 && (
-                <p className="text-xs text-ink-faint">
-                  Materials are listed separately below.
-                </p>
-              )}
               {/* Service-only figures: `extras` sums materials too, so using it
                   here would file mulch under "Additional services total". */}
               {serviceExtras.net > 0 && (
@@ -1728,8 +1733,6 @@ export function QuoteBuilder({
                 </p>
               )}
             </div>
-          </Collapsible>
-
           {/* ── Materials — goods you SUPPLY, priced like any other line.
               This section knows what you CHARGE and deliberately nothing about
               what you PAY: no cost, no margin, no stock, no reservation. What a
@@ -1737,11 +1740,10 @@ export function QuoteBuilder({
               question (Pricing V2 Phase 1 / Inventory D1), and a cost field here
               would pre-empt it. Lines live in the SAME array as services and sum
               through the SAME engine — this is a view, not a second system. ── */}
-          <Collapsible title="Materials" icon={Package} open={materialsOpen} onOpenChange={setMaterialsOpen}
-            summary={materialIdx.length
-              ? `${materialIdx.length} material${materialIdx.length !== 1 ? 's' : ''} · ${formatCurrency(materialsSum.net)}`
-              : 'Mulch, gravel, sod, plants…'}>
-            <div className="space-y-3">
+            <div className="space-y-3 pt-1">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint flex items-center gap-1.5">
+                <Package className="w-3.5 h-3.5" /> Materials
+              </p>
               {materialIdx.map(({ f, i }, n) => {
                 const line = watchedServices?.[i]
                 const net = line ? serviceLineTotals(line).net : 0
@@ -1800,7 +1802,13 @@ export function QuoteBuilder({
                     {lineEquation(line) && (
                       <p className="text-[11px] text-ink-muted tabular-nums">{lineEquation(line)}</p>
                     )}
-                    {lineDiscountRow(i)}
+                    <details className="group/line">
+                      <summary className="tap-target-y flex items-center gap-1.5 cursor-pointer list-none text-[11px] font-medium text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">
+                        <ChevronDown className="w-3.5 h-3.5 transition-transform group-open/line:rotate-180" />
+                        Discount &amp; notes
+                      </summary>
+                      <div className="pt-2">{lineDiscountRow(i)}</div>
+                    </details>
                   </div>
                 )
               })}
@@ -1826,7 +1834,68 @@ export function QuoteBuilder({
           </Collapsible>
 
 
-          <Collapsible title="Notes" icon={FileText} summary={notes ? String(notes).slice(0, 40) : 'None'}>
+          {/* ── More options — the set-it-and-forget-it end of a quote ──
+              Travel, notes and scheduling were three separate drawers. Each is a
+              thing an owner touches on the occasional quote, and three shut doors
+              read as three unanswered questions. ── */}
+          <Collapsible title="More options" icon={FileText} summary={moreSummary}
+            open={travelOpen} onOpenChange={setTravelOpen}>
+            <div className="rounded-xl border border-border bg-bg-secondary p-3 space-y-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint flex items-center gap-1.5">
+              <Car className="w-3.5 h-3.5" /> Travel
+            </p>
+            <div className="flex justify-end">
+              <Button type="button" variant="secondary" size="sm" onClick={() => calculateDistance()} loading={calcLoading}>
+                <MapPin className="w-3.5 h-3.5" /> Calculate distance
+              </Button>
+            </div>
+            {calcMsg && (
+              <p className={cn('text-xs', calcMsg.error ? 'text-red-400' : 'text-accent-text')}>
+                {calcMsg.text}
+                {calcMsg.settingsLink && <> <Link href="/dashboard/settings" className="underline hover:text-ink">Open Settings →</Link></>}
+              </p>
+            )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
+              <Input label="Distance (km)" type="number" step="0.1" min="0" {...register('distance_km', { min: 0 })} />
+              <Input label="Travel Fee ($)" type="number" step="5" min="0" {...register('travel_fee', { min: 0 })} />
+            </div>
+            {travelSuggestion && (
+              <div className="text-sm">
+                {travelSuggestion.isCustom ? (
+                  <span className="text-amber-400">{travelSuggestion.tierLabel}: custom fee required</span>
+                ) : (
+                  <span className="text-ink-muted">{travelSuggestion.tierLabel}: <span className="text-accent-text font-semibold">{formatCurrency(travelSuggestion.fee || 0)}</span></span>
+                )}
+              </div>
+            )}
+            {/* Gated on actually charging travel (§10.3): this kept demanding a
+                custom fee after the owner switched to "Absorbing travel — no fee". */}
+            {customTravelRequired && includeTravel && (
+              <Banner tone="warn" icon={AlertTriangle} className="text-xs">
+                Beyond your furthest travel tier — enter a custom travel fee above.
+              </Banner>
+            )}
+            {travelSuggestion && !travelSuggestion.isCustom && (
+              <Button type="button" variant="secondary" size="sm" onClick={applySuggestedTravel}>
+                <CheckCircle2 className="w-3.5 h-3.5" /> Apply suggested travel fee
+              </Button>
+            )}
+            <div className="pt-1 space-y-2">
+              <Toggle checked={includeTravel} onChange={toggleIncludeTravel}
+                label={includeTravel ? 'Charging travel fee' : 'Absorbing travel — no fee'} />
+              <Controller name="show_travel_separately" control={control}
+                render={({ field }) => (
+                  <Toggle checked={field.value} onChange={field.onChange}
+                    label={field.value ? 'Show travel as separate line on PDF' : 'Travel rolled into total on PDF'} />
+                )} />
+            </div>
+
+            </div>
+
+            <div className="rounded-xl border border-border bg-bg-secondary p-3 space-y-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint flex items-center gap-1.5">
+              <FileText className="w-3.5 h-3.5" /> Notes
+            </p>
             <Textarea label="Notes" placeholder="Job-specific details, access instructions, gate codes…"
               {...register('notes')} />
             {aiScope.enabled === true && (
@@ -1871,14 +1940,18 @@ export function QuoteBuilder({
               )}
               </div>
             )}
-          </Collapsible>
 
           {/* Sparkles, not SlidersHorizontal: sharing Advanced Pricing's icon made
               the first and last sections in the stack wear the same glyph, so the
               icon column stopped working as a map. Sparkles already brands the
               best-days content inside. The summary line brings it in line with
               every other collapsed section (all the rest reveal their state). */}
-          <Collapsible title="Scheduling" icon={Sparkles} summary="Best days to schedule">
+            </div>
+
+            <div className="rounded-xl border border-border bg-bg-secondary p-3 space-y-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5" /> Best days to schedule
+            </p>
             <div className="pt-1">
               <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide flex items-center gap-2 mb-2">
                 <Sparkles className="w-3.5 h-3.5 text-accent-text" /> Best days to schedule
@@ -1892,6 +1965,7 @@ export function QuoteBuilder({
               ) : (
                 <BestDaySuggestions address={address} />
               )}
+            </div>
             </div>
           </Collapsible>
         </div>
