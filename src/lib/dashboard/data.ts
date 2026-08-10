@@ -139,7 +139,7 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     // full set, and the messages row filters unread>0 from it in memory. One read
     // instead of two overlapping ones.
     sb.from('conversations')
-      .select('id, customer_id, unread, lead_status, last_direction, last_message_at, created_at, customers(name)')
+      .select('id, customer_id, unread, lead_status, last_direction, last_message_at, created_at, snoozed_until, customers(name)')
       .eq('user_id', userId).is('archived_at', null),
     // Exactly the fields lib/comms/reach needs to answer "would a message to this
     // person actually go out" — so the follow-up row can tell the owner which

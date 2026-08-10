@@ -47,7 +47,12 @@ export function LeadSummary({ lead, footer, className }: { lead: WebsiteLead; fo
   const rawSub = lead.raw_submission
   const source = displaySource(rawSub && typeof rawSub.source === 'string' ? rawSub.source : '')
   const recurring = !!freq && !!FREQ_LABEL[freq] && freq !== 'one_time'
-  const isFresh = submitted ? (Date.now() - new Date(submitted).getTime()) < 48 * 3600 * 1000 : false
+  // NEW is a claim about STATE, not just recency: a lead already quoted (or
+  // dismissed) must never wear it, however fresh — on the customer profile the
+  // handled card is otherwise pixel-identical to an open one, and the owner
+  // re-answers a request they already answered.
+  const isOpen = lead.status === 'new'
+  const isFresh = isOpen && (submitted ? (Date.now() - new Date(submitted).getTime()) < 48 * 3600 * 1000 : false)
   const yardCond = yardConditionLabel(lead.yard_condition)
   // Photos the customer attached to the form. Read through the SAME adapter the
   // booking door's photos use (raw_submission.photos is the identical canonical
@@ -63,14 +68,34 @@ export function LeadSummary({ lead, footer, className }: { lead: WebsiteLead; fo
         <p className="text-xs font-bold uppercase tracking-wide text-accent-text flex items-center gap-1.5">
           <Globe className="w-3.5 h-3.5" /> {source} lead
           {isFresh && <span className="text-[9px] font-bold text-black bg-accent rounded-full px-1.5 py-px leading-none tracking-wider">NEW</span>}
+          {lead.status === 'quoted' && (
+            <span className="text-[9px] font-bold text-emerald-400 border border-emerald-500/40 bg-emerald-500/10 rounded-full px-1.5 py-px leading-none tracking-wider">QUOTED ✓</span>
+          )}
+          {lead.status === 'dismissed' && (
+            <span className="text-[9px] font-bold text-ink-faint border border-border rounded-full px-1.5 py-px leading-none tracking-wider">DISMISSED</span>
+          )}
         </p>
         {submitted && <span className="text-[10px] text-ink-faint">{timeAgo(submitted)}</span>}
       </div>
 
-      {/* Contact line */}
+      {/* Contact line — tappable. "How do I contact them?" is the card's first
+          job, and inert text made the answer a copy-paste. */}
       <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs">
-        {lead.phone && <span className="flex items-center gap-1 text-ink"><Phone className="w-3 h-3 text-ink-faint" /> {lead.phone}</span>}
-        {lead.email && <span className="flex items-center gap-1 text-ink"><Mail className="w-3 h-3 text-ink-faint" /> {lead.email}</span>}
+        {lead.phone && (
+          <a href={`tel:${lead.phone}`} className="flex items-center gap-1 text-ink hover:text-accent-text underline-offset-2 hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            <Phone className="w-3 h-3 text-ink-faint" /> {lead.phone}
+          </a>
+        )}
+        {lead.email && (
+          <a href={`mailto:${lead.email}`} className="flex items-center gap-1 text-ink hover:text-accent-text underline-offset-2 hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            <Mail className="w-3 h-3 text-ink-faint" /> {lead.email}
+          </a>
+        )}
+        {/* An unreachable lead must SAY so — an empty row reads as a render gap,
+            not as "this person gave no way to reach them". */}
+        {!lead.phone && !lead.email && (
+          <span className="flex items-center gap-1 text-amber-400"><AlertTriangle className="w-3 h-3" /> No phone or email — reply in this thread if they wrote in, or wait for them to follow up.</span>
+        )}
       </div>
 
       {/* Website estimate — the hero number for triaging a lead's value */}

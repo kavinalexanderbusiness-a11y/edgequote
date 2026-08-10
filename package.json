@@ -22,6 +22,7 @@
     "verify:seasons": "tsx scripts/verify-seasons.ts",
     "verify:modules": "tsx scripts/verify-modules.ts",
     "verify:navigation": "tsx scripts/verify-navigation.ts",
+    "verify:vocabulary": "tsx scripts/verify-vocabulary.ts",
     "verify:pricing": "tsx scripts/verify-pricing.ts",
     "verify:guardrails": "tsx scripts/verify-guardrails.ts",
     "verify:labor": "tsx scripts/verify-labor.ts",
@@ -68,7 +69,8 @@
     "verify:crew-invite": "tsx scripts/verify-crew-invite.ts",
     "verify:deposit": "tsx scripts/verify-deposit.ts",
     "verify:deposit-documents": "tsx scripts/verify-deposit-documents.ts",
-    "verify:dispatch-board": "tsx scripts/verify-dispatch-board.ts"
+    "verify:dispatch-board": "tsx scripts/verify-dispatch-board.ts",
+    "verify:lead-journey": "tsx scripts/verify-lead-journey.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

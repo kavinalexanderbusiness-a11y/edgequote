@@ -16,7 +16,7 @@ import { saveManual } from '@/lib/measure/data'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { applyFeeRecovery } from '@/lib/invoiceTotals'
 import { sumServiceLines } from '@/lib/quoteServices'
-import { LeadPrefillPayload, LEAD_PREFILL_KEY } from '@/lib/leads'
+import { LeadPrefillPayload, LEAD_PREFILL_KEY, closeOpenLeads } from '@/lib/leads'
 import { toast } from '@/lib/toast'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
 
@@ -71,12 +71,25 @@ export default function NewQuotePage() {
       try { setMeasurement(JSON.parse(raw) as MeasurementPayload) } catch { /* ignore */ }
       window.sessionStorage.removeItem('eq_measurement')
     }
-    // Consume a website-lead handoff (one-time) — opens the builder pre-filled from
-    // a website quote request (Build Quote in Messages).
+    // Adopt a website-lead handoff. NOT consumed on read any more: the destructive
+    // read meant a refresh (or back-nav) mid-build silently severed the lead
+    // linkage — the rebuilt page had the autosaved form but no leadId, so saving
+    // never stamped the lead 'quoted' and the phantom NEW badge survived its own
+    // answer. The key is cleared when the quote SAVES (with the lead close), and
+    // discarded here only when the owner arrived for a DIFFERENT customer
+    // (?customer=X that isn't the prefill's) — a stale handoff must not leak into
+    // an unrelated quote.
     const leadRaw = window.sessionStorage.getItem(LEAD_PREFILL_KEY)
     if (leadRaw) {
-      try { setLead(JSON.parse(leadRaw) as LeadPrefillPayload) } catch { /* ignore */ }
-      window.sessionStorage.removeItem(LEAD_PREFILL_KEY)
+      try {
+        const parsed = JSON.parse(leadRaw) as LeadPrefillPayload
+        const forCustomer = new URLSearchParams(window.location.search).get('customer')
+        if (forCustomer && parsed.customerId && forCustomer !== parsed.customerId) {
+          window.sessionStorage.removeItem(LEAD_PREFILL_KEY)
+        } else {
+          setLead(parsed)
+        }
+      } catch { window.sessionStorage.removeItem(LEAD_PREFILL_KEY) }
     }
   }, [])
 
@@ -133,7 +146,13 @@ export default function NewQuotePage() {
     try {
       const ensured = await ensureCustomerAndProperty(
         supabase, user!.id,
-        { customerId: values.customer_id, name: values.customer_name, address: values.address, phone: values.customer_phone, email: values.customer_email },
+        {
+          customerId: values.customer_id, name: values.customer_name, address: values.address,
+          phone: values.customer_phone, email: values.customer_email,
+          // The intake door captured these; a customer created at conversion must
+          // not be poorer than the lead they came from. Undefined off the manual path.
+          city: lead?.city, province: lead?.province, postal_code: lead?.postalCode,
+        },
         customers,
       )
       customerId = ensured.customerId
@@ -334,26 +353,48 @@ export default function NewQuotePage() {
             }
           }
 
-          // A website lead measured the boundary/place/travel once — persist them
-          // for any service. These aren't lawn_sqft, so the guard doesn't touch them.
-          if (lead) {
-            const geo: Record<string, unknown> = {}
-            if (lead.lawnPolygon) geo.lawn_polygon = lead.lawnPolygon
-            if (lead.placeId) geo.google_place_id = lead.placeId
-            if (lead.mapsUrl) geo.maps_url = lead.mapsUrl
-            if (lead.lat != null) geo.lat = lead.lat
-            if (lead.lng != null) geo.lng = lead.lng
-            if (lead.travelDistanceKm != null) geo.property_travel_distance_km = lead.travelDistanceKm
-            if (lead.travelFee != null) geo.property_travel_fee = lead.travelFee
-            if (Object.keys(geo).length) await supabase.from('properties').update(geo).eq('id', propertyId)
-          }
         }
       }
-      // Website lead: link it to the new quote + clear the open-lead badge so the
-      // conversation continues as a normal thread (SMS/portal/follow-ups).
-      if (lead) {
-        await supabase.from('website_leads').update({ status: 'quoted', quote_id: data.id }).eq('id', lead.leadId)
-        if (customerId) await supabase.from('conversations').update({ lead_status: null }).eq('user_id', user!.id).eq('customer_id', customerId)
+      // A website lead measured the boundary/place/travel once — persist them for
+      // any service. OUTSIDE the measured-sqft/size-changed nesting above, which
+      // its own comment never intended: buried there, a lead whose lawn size
+      // matched the saved one (or a lead with no measurement at all) silently
+      // dropped its polygon, place id and travel distance — the exact fields the
+      // website already computed and every later quote re-derives. These aren't
+      // lawn_sqft, so the MEAS-1 guard doesn't apply.
+      if (lead && propertyId) {
+        const geo: Record<string, unknown> = {}
+        if (lead.lawnPolygon) geo.lawn_polygon = lead.lawnPolygon
+        if (lead.placeId) geo.google_place_id = lead.placeId
+        if (lead.mapsUrl) geo.maps_url = lead.mapsUrl
+        if (lead.lat != null) geo.lat = lead.lat
+        if (lead.lng != null) geo.lng = lead.lng
+        if (lead.travelDistanceKm != null) geo.property_travel_distance_km = lead.travelDistanceKm
+        if (lead.travelFee != null) geo.property_travel_fee = lead.travelFee
+        if (Object.keys(geo).length) await supabase.from('properties').update(geo).eq('id', propertyId)
+      }
+      // Close the customer's open website leads — through THE close engine
+      // (lib/leads.closeOpenLeads), on EVERY door into this builder, not only the
+      // prefill one. The quote is the response whichever way the owner got here:
+      // profile "New quote", palette, quotes list — each used to leave the lead
+      // status='new' forever, a phantom badge demanding an answer already given.
+      // Keyed on both the resolved customer AND the prefill's (they can differ
+      // when the owner retargets the form); the precise lead row gets the
+      // quote_id link. Checked: a failed clear gets its own toast instead of
+      // hiding behind "Quote created".
+      {
+        const closed = await closeOpenLeads(supabase, {
+          userId: user!.id,
+          customerIds: [customerId, lead?.customerId],
+          status: 'quoted',
+          leadId: lead?.leadId ?? null,
+          quoteId: data.id as string,
+        })
+        if (!closed.ok) {
+          toast.error('Quote saved — but the lead badge didn’t clear (' + closed.error + '). The lead will still show as new until you retry.')
+        }
+        // The handoff is spent only now, when the save it existed for has landed.
+        if (lead && typeof window !== 'undefined') window.sessionStorage.removeItem(LEAD_PREFILL_KEY)
       }
       // Tell the next screen the lead became a customer (created or matched).
       if (typeof window !== 'undefined' && (createdCustomer || matchedBy)) {
@@ -427,6 +468,19 @@ export default function NewQuotePage() {
             <span className="font-semibold text-ink">From a website request{lead.customerName ? ` — ${lead.customerName}` : ''}</span>
             {lead.initialPrice > 0 ? <> · they were quoted <span className="font-semibold text-ink">{formatCurrency(lead.initialPrice)}</span></> : null}
             {lead.serviceType ? <> · {lead.serviceType}</> : null}. We pre-filled their contact, address and pricing below — review and adjust before saving.
+            {/* The customer's own words about money, timing and how to reach them.
+                These used to die at the handoff — the one screen where the owner
+                decides the price never saw the stated budget. Displayed only:
+                never a pricing input. */}
+            {(lead.budget || lead.preferredSchedule || lead.preferredContact) && (
+              <span className="block mt-1 text-xs text-ink-muted">
+                {[
+                  lead.budget ? `Budget: ${lead.budget}` : null,
+                  lead.preferredSchedule ? `Prefers: ${lead.preferredSchedule}` : null,
+                  lead.preferredContact ? `Contact by: ${lead.preferredContact}` : null,
+                ].filter(Boolean).join(' · ')}
+              </span>
+            )}
           </Banner>
         </>
       ) : (

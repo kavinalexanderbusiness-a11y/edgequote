@@ -266,7 +266,10 @@ export default function CustomerDetailPage() {
       })
 
       if (recRes.data) setRecurrences(recRes.data as JobRecurrence[])
-      setLead((lRes.data as WebsiteLead | null) ?? null)
+      // Same rule the customer read above states: a transient error must not
+      // render as an ANSWER. A failed lead read used to clobber the card into
+      // "never submitted a lead"; now it keeps the last-known-good lead.
+      if (!lRes.error) setLead((lRes.data as WebsiteLead | null) ?? null)
       setShape(shapeRes)
       setSeasons(settingsToSeasons((setRes.data as { service_seasons: unknown } | null)?.service_seasons))
       setGstPercent(Number((setRes.data as { gst_percent?: number | null } | null)?.gst_percent) || 0)

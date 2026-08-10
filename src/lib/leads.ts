@@ -1,3 +1,5 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
+
 // ── Website lead → Quote Builder mapping ─────────────────────────────────────
 // A website quote-form submission is stored (raw + structured) in public.website_leads
 // and folded into the Messages inbox as a conversation. When the owner clicks
@@ -53,6 +55,18 @@ export interface LeadPrefillPayload {
   customerPhone: string
   customerEmail: string
   address: string
+  /** City/province/postal ride along so a NEW customer created at conversion
+   *  keeps the location fields the intake door already captured — dropping them
+   *  made a lead-born property poorer than the lead it came from. */
+  city?: string | null
+  province?: string | null
+  postalCode?: string | null
+  /** The customer's own words about money/timing/how to reach them. Not price
+   *  inputs — shown to the owner in the builder so the three facts that shape
+   *  the CALL don't die at the handoff. */
+  budget?: string | null
+  preferredSchedule?: string | null
+  preferredContact?: string | null
   sqft: number
   sections?: Record<string, number> | null
   serviceType: string
@@ -73,6 +87,75 @@ export interface LeadPrefillPayload {
 }
 
 export const LEAD_PREFILL_KEY = 'eq_lead_prefill'
+
+// ── Closing a lead ───────────────────────────────────────────────────────────
+// THE one place an open website lead is closed. It was a pair of inline writes
+// in the Quote Builder, reachable only through the sessionStorage prefill door —
+// so quoting the same person from the customer profile, the quotes list, the
+// command palette, or any of the ~14 other Quote Builder entry points left the
+// lead status='new' FOREVER: the inbox chip, the Website-leads filter, the
+// dashboard "Respond to a new lead" priority and the LeadCard all kept demanding
+// a response the owner had already given. A phantom badge that never clears
+// trains the owner to ignore the one count that must be trusted.
+//
+// Closing is keyed on the CUSTOMER (every open lead for them), not the handoff:
+// the quote IS the response, whichever door it came through. When the precise
+// lead is known (the prefill path), its row also gets the quote_id link.
+//
+// 'dismissed' is the same close for a lead the owner won't quote (wrong area,
+// spam, changed their mind) — without it, Build-quote was the ONLY exit, and a
+// junk lead nagged forever. Deliberately NOT a pipeline: two terminal states,
+// one open state, nothing else.
+export type LeadCloseStatus = 'quoted' | 'dismissed'
+
+export interface CloseLeadsResult {
+  ok: boolean
+  /** Present when !ok — plain language, for a toast. */
+  error?: string
+}
+
+/**
+ * Close every open website lead for these customers, and clear their
+ * conversations' open-lead chip. Every write is CHECKED — a quote toast must
+ * never imply the lead badge cleared when the write failed.
+ */
+export async function closeOpenLeads(sb: SupabaseClient, p: {
+  userId: string
+  customerIds: (string | null | undefined)[]
+  status: LeadCloseStatus
+  /** The precise lead (prefill path) — also gets quote_id stamped. */
+  leadId?: string | null
+  quoteId?: string | null
+}): Promise<CloseLeadsResult> {
+  const ids = [...new Set(p.customerIds.filter((c): c is string => !!c))]
+  const errs: string[] = []
+
+  // The precise row first: it carries the quote link, and it may belong to a
+  // customer OUTSIDE `ids` (the owner retargeted the quote to someone else —
+  // the lead that prompted it is still answered).
+  if (p.leadId) {
+    const { error } = await sb.from('website_leads')
+      .update({ status: p.status, ...(p.quoteId ? { quote_id: p.quoteId } : {}) })
+      .eq('id', p.leadId).eq('user_id', p.userId)
+    if (error) errs.push(error.message)
+  }
+
+  if (ids.length) {
+    // Sweep: any OTHER still-open lead from these customers. `.eq('status','new')`
+    // keeps this from touching history — a quoted/dismissed lead is settled.
+    const { error: lErr } = await sb.from('website_leads')
+      .update({ status: p.status, ...(p.quoteId ? { quote_id: p.quoteId } : {}) })
+      .eq('user_id', p.userId).in('customer_id', ids).eq('status', 'new')
+    if (lErr) errs.push(lErr.message)
+
+    const { error: cErr } = await sb.from('conversations')
+      .update({ lead_status: null })
+      .eq('user_id', p.userId).in('customer_id', ids).eq('lead_status', 'new')
+    if (cErr) errs.push(cErr.message)
+  }
+
+  return errs.length ? { ok: false, error: errs[0] } : { ok: true }
+}
 
 function cadenceOf(freq: string | null | undefined): LeadCadence | null {
   const f = (freq || '').toLowerCase()
@@ -107,6 +190,12 @@ export function leadToPrefill(lead: WebsiteLead): LeadPrefillPayload {
     customerPhone: lead.phone || '',
     customerEmail: lead.email || '',
     address: lead.address || '',
+    city: lead.city,
+    province: lead.province,
+    postalCode: lead.postal_code,
+    budget: lead.budget,
+    preferredSchedule: lead.preferred_schedule,
+    preferredContact: lead.preferred_contact,
     sqft: Number(lead.lawn_sqft) || 0,
     sections: lead.sections || null,
     // Only what the lead actually asked for. When they stated nothing, leave it EMPTY

@@ -40,6 +40,10 @@ export interface LeadResponseReport {
 export type LeadConvRow = {
   id: string; customer_id: string | null; lead_status: string | null
   last_direction: string | null; last_message_at: string | null; created_at: string
+  /** Snoozed conversations are excluded — the inbox already hides them (the
+   *  `awake` predicate), and a count that keeps nagging about a lead the owner
+   *  deliberately parked contradicts the surface it links to. */
+  snoozed_until?: string | null
   customers: { name: string | null } | { name: string | null }[] | null
 }
 export type LeadQuoteRow = {
@@ -59,31 +63,49 @@ export interface LeadResponsePreloaded {
  * rather than making this re-read them — and its copies are PAGED, so the union
  * can't be computed from a silently truncated read.
  */
-export function computeLeadsNeedingResponse(pre: LeadResponsePreloaded): LeadResponseReport {
+export function computeLeadsNeedingResponse(pre: LeadResponsePreloaded, now: Date = new Date()): LeadResponseReport {
   const items: LeadNeedingResponse[] = []
   // A customer who both submitted the form and is awaiting a reply is ONE person
   // to call, not two — count them once, under the stronger signal (website lead).
   const seen = new Set<string>()
 
+  // Booking-draft customers, known up front: a fresh booking ALSO writes an
+  // inbound portal message into the conversation, so its conversation used to win
+  // the dedupe as a generic "reply" pointing at the bare inbox — every booking
+  // lead misfiled, and the item that actually answers the request (the draft
+  // quote, with the plan/photos/notes) never shown. The booking identity wins;
+  // an open WEBSITE lead (lead_status='new') still outranks it.
+  const bookingCustomers = new Set<string>()
+  for (const q of pre.quotes) {
+    if (q.status === 'draft' && q.lead_meta != null && q.customer_id) bookingCustomers.add(q.customer_id)
+  }
+
   for (const c of pre.conversations) {
+    // Snoozed = deliberately parked. The inbox hides it (`awake`); the dashboard
+    // nagging about it anyway sent the owner to a list where it isn't.
+    if (c.snoozed_until && new Date(c.snoozed_until).getTime() > now.getTime()) continue
     const nameRow = Array.isArray(c.customers) ? c.customers[0] : c.customers
     const name = nameRow?.name || 'New lead'
     const at = c.last_message_at || c.created_at
     const dedupe = c.customer_id || c.id
     if (c.lead_status === 'new') {
-      items.push({ key: `w-${c.id}`, source: 'website', name, at, customerId: c.customer_id, href: '/dashboard/messages?filter=website_lead' })
+      // ?f= — the key the Messages page actually reads. The old ?filter= was
+      // silently dropped and the #1 priority row landed on the unfiltered inbox.
+      items.push({ key: `w-${c.id}`, source: 'website', name, at, customerId: c.customer_id, href: '/dashboard/messages?f=website_lead' })
       seen.add(dedupe)
     } else if (c.last_direction === 'inbound') {
+      if (c.customer_id && bookingCustomers.has(c.customer_id)) continue // the booking item below carries the real door
       items.push({ key: `r-${c.id}`, source: 'reply', name, at, customerId: c.customer_id, href: '/dashboard/messages' })
       seen.add(dedupe)
     }
   }
 
-  // Door 3 — a booking arrives as a draft quote carrying lead_meta, nothing else.
+  // Door 3 — a booking arrives as a draft quote carrying lead_meta. Its item
+  // links to the DRAFT QUOTE, the one page that answers what they asked for.
   for (const q of pre.quotes) {
     if (q.status !== 'draft' || q.lead_meta == null) continue
     const dedupe = q.customer_id || q.id
-    if (seen.has(dedupe)) continue // already counted via their conversation
+    if (seen.has(dedupe)) continue // already counted via a stronger signal
     items.push({
       key: `b-${q.id}`, source: 'booking', name: q.customer_name || 'Online booking',
       at: q.created_at, customerId: q.customer_id, href: `/dashboard/quotes/${q.id}`,
