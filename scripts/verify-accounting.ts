@@ -856,13 +856,26 @@ console.log('\nAgainst production: the refactored Revenue & GST report reproduce
 // Both defects had a CORRECT engine and a WRONG caller, so the only useful
 // assertion is about the WIRING. An earlier version of these checks lived in
 // verify-analytics — the wrong home, since that file's own header says it makes no
-// claim about metric VALUES — and it turned CI red on Ubuntu/Node 20 while passing
-// on Windows/Node 24 (every path case-exact, content platform-identical; the cause
-// was never isolated from the outside because job logs need admin).
+// claim about metric VALUES. Rehoming them here (a01961d9) was right and stands.
 //
-// So these are deliberately DULL: plain substring tests over source, no regex, no
-// multi-token patterns, nothing that a reformat, a line ending or a platform can
-// move. A guard that cannot be debugged from CI output must not be clever.
+// ⚠️ THE REASON THEY WERE DULLED HAS SINCE BEEN DISPROVED — read before "simplifying"
+// any of them again. These checks were blamed for a red CI on Ubuntu/Node 20 that
+// passed on Windows/Node 24, and were deleted wholesale (d22d1e75) to isolate it.
+// They were innocent. The real cause was `localHour()` in lib/comms/governor.ts:
+// `hour12: false` lets ICU pick the h24 cycle, so midnight formats as "24", fails a
+// `<= 23` range test and returns 'unknown' — CI was red for exactly the one hour a
+// day it ran during the owner's midnight, and green every other hour. Fixed in
+// a5856666, which had ALREADY LANDED when these checks were removed for it.
+// Correlating the run's start time in the owner's timezone identifies this in
+// seconds; see the CI note in that commit.
+//
+// They stay DULL because a guard whose failure cannot be read from CI output has no
+// business being clever — but dull means WHITESPACE-INSENSITIVE, not toothless.
+// Every multi-token assertion below runs against a whitespace-collapsed view, so a
+// reformat cannot move it, and the tokens that carry the meaning are still there.
+// The narrowing that happened during the removal — asserting only the `??` spelling
+// of a defect rather than the contract itself — let real regressions back in and has
+// been undone.
 console.log('\nFinancial truth — the caller must use the seam, and say what it rests on:')
 {
   const readSrc = (p: string) => readFileSync(p, 'utf8')
@@ -871,6 +884,13 @@ console.log('\nFinancial truth — the caller must use the seam, and say what it
   const codeOf = (p: string) => readSrc(p).split('\n')
     .filter(l => { const t = l.trim(); return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*') || t.startsWith('{/*')) })
     .join('\n')
+  // Whitespace-collapsed view. The reason the checks below were dulled was a fear
+  // that a multi-token pattern could differ between two checkouts of identical
+  // bytes; normalising runs of whitespace to a single space removes that risk
+  // outright — reformatting, indentation and line endings all wash out — WITHOUT
+  // giving up the tokens that make an assertion mean something. Dull and complete
+  // are not opposites.
+  const flat = (s: string) => s.replace(/\s+/g, ' ')
 
   // ── 1. No document may read the fabricated subtotal ────────────────────────
   // `quotes.subtotal` is `generated always as (hours * crew_size * rate)` — the
@@ -884,8 +904,15 @@ console.log('\nFinancial truth — the caller must use the seam, and say what it
     ['quote detail', 'src/app/dashboard/quotes/[id]/page.tsx'],
   ] as [string, string][]) {
     const code = codeOf(path)
-    check(`${label} never falls back to the legacy quotes.subtotal`,
-      !code.includes('?? quote.subtotal') && !code.includes('?? q.subtotal'),
+    // ⚠️ Not just `?? q.subtotal`. The original guard asserted the column is not
+    // READ AT ALL, and narrowing it to the `??` spelling let every other spelling
+    // back in — `num(q.subtotal)`, `q.subtotal || total`, `const s = quote.subtotal`,
+    // even `??  q.subtotal` with two spaces. The fallback is only the shape the bug
+    // happened to take last time; the contract is that a customer-facing document
+    // never reads this column. One token, so there is nothing here for a reformat
+    // to move.
+    check(`${label} never reads the legacy quotes.subtotal`,
+      !/\bq(?:uote)?\.subtotal\b/.test(code),
       'a document is reading hours x crew_size x rate as a price')
   }
   // The portal mapper must not merely stop PREFERRING it — it must not name it.
@@ -898,9 +925,17 @@ console.log('\nFinancial truth — the caller must use the seam, and say what it
   // 71 YTD completed jobs only 35 (49%) had observed check-in/check-out time, and
   // the figure was rendered "Gross profit YTD" with no qualifier.
   const bi = readSrc('src/lib/businessIntelligence.ts')
+  const biFlat = flat(bi)
   check('the profit engine reports the labour basis behind gross profit',
     bi.includes('laborBasis') && bi.includes('observedJobs') && bi.includes('assumedJobs'),
     'the caller cannot tell modelled from measured')
+  // Naming the counters is not the contract — WHAT THEY COUNT is. Without this,
+  // `observedJobs++` could move to any branch (or count every job) and the screen
+  // would report a confident "35/71 timed" that measures nothing. It mirrors
+  // laborMinOf's own first branch, which is what makes "observed" mean observed.
+  check('…counted from actual_minutes, mirroring laborMinOf\'s own first branch',
+    biFlat.includes('if (Number(j.actual_minutes)) observedJobs++; else assumedJobs++'),
+    'the basis is reported but nothing pins what it is counting')
   check('a year summary carries whether its labour was assumed',
     bi.includes('profitEstimated') && bi.includes('hasLaborData'),
     'reuses the profit engine\'s existing confidence flag rather than a new signal')
@@ -909,10 +944,30 @@ console.log('\nFinancial truth — the caller must use the seam, and say what it
   check('the Intelligence page labels gross profit as an estimate when it is one',
     page.includes('laborBasis') && page.includes('Gross profit YTD (est.)'),
     'the basis is computed but the screen still claims a measured figure')
+  // "(est.)" alone says the figure is soft; it does not say HOW soft. 35 of 71
+  // timed and 70 of 71 timed both read "(est.)", and the owner cannot tell a
+  // number worth acting on from one worth ignoring.
+  check('…and says how much of it was actually timed',
+    page.includes('jobs timed'),
+    'an estimate with no stated basis is a shrug, not a disclosure')
   check('…and labels the yearly profit from profitEstimated',
     page.includes('profitEstimated') && page.includes('Profit this year (est.)'))
   // Arithmetic must NOT have moved — this lane repaired claims, not numbers.
-  check('gross profit arithmetic is untouched', bi.includes('grossProfit += p'))
+  // BOTH halves: the accumulator AND the cost formula. Pinning only the
+  // accumulator leaves the actual money maths — minutes to hours, times the crew
+  // rate — free to change under a guard that still reports green.
+  // The lookahead is doing real work: a plain substring test still matches when the
+  // formula GROWS — `* crewCost * 0.5` contains `* crewCost` — so it would report
+  // green while the margin silently halved. Asserting that no arithmetic operator
+  // follows is what makes this a pin rather than a prefix.
+  //
+  // ⚠️ The whitespace MUST live inside the lookahead. Written as `\s*(?![*/+\-%])`
+  // the check passes against the halved formula: `\s*` simply backtracks to
+  // zero-width, the lookahead then sees the space rather than the `*`, and succeeds.
+  // Mutation-testing caught that; reading it did not.
+  check('gross profit arithmetic is untouched (revenue − minutes × crew rate)',
+    /const cost = \(lm \/ 60\) \* crewCost(?!\s*[*/+\-%])/.test(biFlat) && bi.includes('grossProfit += p'),
+    'the cost side of the margin moved')
 }
 
 console.log(

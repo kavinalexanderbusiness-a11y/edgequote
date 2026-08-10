@@ -124,18 +124,43 @@ if (has(NOTIFY)) {
     /if \(!userId \|\| !quote\) return/.test(r),
     'falling through to a send with an unresolved quote reinstates the relay')
 
-  // Idempotency + ceiling: one alert per booking, and a floor under a flood.
-  check('the owner alert is deduped per quote through notification_log',
-    /\.eq\('template', OWNER_ALERT_TEMPLATE\)\.eq\('detail', quoteId\)/.test(r),
-    'a replayed request must be a no-op, not a second email')
-  check('a replay is refused rather than re-sent',
-    /if \(already && already\.length > 0\)/.test(r))
-  check('there is an hourly ceiling per business',
+  // ── Idempotency: BOTH sides, and reserved by the database ──────────────────
+  // The first version of this guard pinned a read-then-write `notification_log`
+  // lookup. Two simultaneous requests both read "not sent yet" and both sent, and
+  // the query was status-blind so a ceiling-skip row tombstoned the booking's alert
+  // permanently. Both are gone: lib/comms/idempotency claims a row whose composite
+  // PK (user_id, client_message_id) makes Postgres the serialization point.
+  check('both sends are reserved through the shared idempotency ledger',
+    /from '@\/lib\/comms\/idempotency'/.test(r)
+    && (r.match(/claimSend\(/g) || []).length >= 2,
+    'a read-then-write "have we sent yet?" check is not a lock — two concurrent replays pass it')
+  check('the owner alert will not send unless it wins its claim',
+    /!\(await claimSend\(admin, userId, alertKey, 'email'\)\)\.claimed/.test(r))
+  check('the customer confirmation will not send unless it wins its claim',
+    /await claimSend\(admin, userId!, confirmKey, 'multi'\)\)\.claimed/.test(r),
+    'this half had NO dedupe at all — every POST re-sent an SMS and an email to a real person')
+  check('the claim keys are DERIVED from the quote, never taken from the caller',
+    /alertKeyFor = \(quoteId: string\)/.test(r) && /confirmKeyFor = \(quoteId: string\)/.test(r)
+    && !/body\.(key|clientMessageId|idempotencyKey)/.test(r),
+    'a caller-chosen key lets an attacker pick a fresh one per request and replay forever')
+
+  // ── Ceilings: one per side, counted per business ───────────────────────────
+  check('there is an hourly ceiling on the owner alert',
     /OWNER_ALERT_HOURLY\s*=\s*\d+/.test(r) && />= OWNER_ALERT_HOURLY/.test(r),
     'even genuine bookings must not be turnable into a mail bomb')
-  check('a failed send still spends the booking’s one slot',
+  check('there is an hourly ceiling on the customer confirmation too',
+    /CONFIRM_HOURLY\s*=\s*\d+/.test(r) && />= CONFIRM_HOURLY/.test(r),
+    'the customer-facing half reaches a real phone — it needs the ceiling more, not less')
+  check('a ceiling-skip does NOT spend the booking’s claim',
+    (() => {
+      const cap = r.indexOf('>= OWNER_ALERT_HOURLY')
+      const claim = r.indexOf("claimSend(admin, userId, alertKey")
+      return cap > 0 && claim > cap
+    })(),
+    'claiming before the ceiling check tombstones a real lead that merely arrived during a flood')
+  check('a failed send is recorded rather than silently dropped',
     /status: r\.sent \? 'sent' : 'error'/.test(r),
-    'logging only successes leaves a retry loop open for anyone who can make the send fail')
+    'the owner must be able to see that an alert was attempted and failed')
 
   // It has to be VISIBLE. The original sent nothing to notification_log at all.
   check('the owner alert is written to the canonical comms log',

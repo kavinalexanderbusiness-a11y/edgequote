@@ -287,19 +287,26 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
       p_auto: autoResult?.sqft ?? null, p_accepted: sqft, p_building: autoResult?.buildingSqft ?? null, p_confidence: autoResult?.confidence ?? null,
     }).then(() => {}, () => {})
     // Best-effort owner alert AND the customer's confirmation (no-op if comms aren't
-    // configured). The customer's contact details go with it so they get something in
-    // writing — closing the tab must not leave them with nothing to prove they booked.
+    // configured), so closing the tab does not leave them with nothing to prove they
+    // booked.
+    //
+    // ⚠️ TWO FIELDS, AND THAT IS THE WHOLE CONTRACT. `token` says which business,
+    // `quoteId` says which booking — and submit_booking has already persisted every
+    // other value the two messages need, so the server reads them off that quote
+    // rather than believing us. This endpoint is PUBLIC: whatever this form can send,
+    // an attacker can send too, so a field that exists here is a field that has to be
+    // defended there. name / address / service / cadence / quoteNumber used to ride
+    // along, and they were exactly the payload of the mail-relay bug.
+    //
+    // Dropping them loses nothing: name, address, service and quote number are all
+    // columns on the quote this call names, and cadence never appeared in either
+    // message. If a message ever does want the chosen plan, PERSIST it — the column
+    // quotes.selected_cadence already exists and is unwritten (mind its CHECK: it
+    // takes a slug, not the 'Bi-weekly' label used here) — rather than re-opening
+    // this body.
     fetch('/api/booking/notify', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        token, name: name.trim(), address: parsed.formatted, service: bookedService ?? 'Service',
-        cadence: plan.label, quoteNumber: res.quote_number,
-        // The confirmation is sent to the customer submit_booking just created,
-        // resolved server-side from this quote. Contact details and a consent
-        // flag are deliberately NOT sent — the server must never take either
-        // from the request body (this endpoint is public). See the route.
-        quoteId: res.quote_id,
-      }),
+      body: JSON.stringify({ token, quoteId: res.quote_id }),
     }).catch(() => {})
     setStep('done')
   }
