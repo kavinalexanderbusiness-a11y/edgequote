@@ -31,7 +31,7 @@ import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
 import { ServiceSeasons, ServiceSeason, DEFAULT_SEASONS, settingsToSeasons, seasonLabel, LAWN_HINTS, SNOW_HINTS } from '@/lib/seasons'
 import { weekdayLong } from '@/lib/preferences'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
-import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin, LayoutGrid, Wallet, X, ArrowRight } from 'lucide-react'
+import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin, LayoutGrid, Wallet, X, ArrowRight, LayoutTemplate } from 'lucide-react'
 
 const SETTINGS_TABS: TabItem[] = [
   { key: 'business', label: 'Business', icon: Building2 },
@@ -487,6 +487,27 @@ export default function SettingsPage() {
               {...register('target_rev_per_hour')}
             />
             <Textarea label="PDF Terms & Conditions" rows={5} {...register('terms_text')} />
+          </CardBody>
+        </Card>
+
+        {/* Service templates — the services you sell and what they cost by
+            default. This page existed only as a PRIMARY sidebar item, ranked
+            beside Customers and Quotes, because Settings never linked it. It is
+            a settings page; it belongs with pricing, and the sidebar is now one
+            item shorter. */}
+        <Card className={cn('order-0', tab !== 'pricing' && 'hidden')}>
+          <CardBody>
+            <Link href="/dashboard/settings/templates"
+              className="group flex items-center gap-3.5 rounded-xl -m-2 p-2 transition-colors hover:bg-bg-tertiary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              <span className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
+                <LayoutTemplate aria-hidden className="w-5 h-5 text-accent-text" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-bold tracking-tight text-ink">Service templates</span>
+                <span className="block text-xs text-ink-muted mt-0.5">The services you sell and their default prices — what a new quote starts from.</span>
+              </span>
+              <ArrowRight aria-hidden className="w-4 h-4 shrink-0 text-accent-text transition-transform group-hover:translate-x-0.5" />
+            </Link>
           </CardBody>
         </Card>
 

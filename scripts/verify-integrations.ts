@@ -21,7 +21,7 @@ import {
 } from '../src/lib/integrations/keys'
 import { BACKOFF_MINUTES, MAX_ATTEMPTS, AUTO_DISABLE_AFTER, backoffDelayMinutes, RETENTION_DAYS, STUCK_PROCESSING_MINUTES } from '../src/lib/integrations/retry'
 import { normalizeInboundPayload } from '../src/lib/integrations/inboundActions'
-import { FEATURE_MODULES, moduleByKey } from '../src/lib/modules'
+import { FEATURE_MODULES, moduleByKey, MODULE_CATEGORIES } from '../src/lib/modules'
 
 let pass = 0
 let fail = 0
@@ -162,7 +162,9 @@ const mod = moduleByKey('integrations')
 check("module 'integrations' is registered", Boolean(mod))
 if (mod) {
   check('href points at the page', mod.href === '/dashboard/integrations')
-  check('category is valid', ['operations', 'customers', 'money', 'growth'].includes(mod.category))
+  // Reads the catalogue, not a copy of it: a hard-coded list here went stale
+  // the moment a category was added, failing on a correct registry.
+  check('category is valid', mod.category in MODULE_CATEGORIES)
   check('carries updatedAt (marketplace contract)', /^\d{4}-\d{2}-\d{2}$/.test(mod.updatedAt))
   check('permission manifest is honest (read + write + send)', mod.permissions.includes('customers:write') && mod.permissions.includes('webhooks:send'))
   check('no dependencies (platform module)', !mod.requires || mod.requires.length === 0)

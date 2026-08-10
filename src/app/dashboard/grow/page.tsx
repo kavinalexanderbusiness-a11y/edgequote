@@ -93,10 +93,10 @@ export default function GrowPage() {
 
       {/* Intelligence — the owner's command center: report (BI) + act (Revenue Intel). */}
       <div className="grid sm:grid-cols-2 gap-4 animate-rise stagger-2">
-        <FeatureCard href="/dashboard/intelligence" icon={BarChart3} title="Business Intelligence"
-          blurb="Revenue, profit, customers, sales, capacity & forecasts — how the business is performing." />
-        <FeatureCard href="/dashboard/revenue-intelligence" icon={TrendingUp} title="Revenue Intelligence"
-          blurb="Every customer scored for renewal, upsell, cross-sell, referral — ranked by $ impact." />
+        <FeatureCard href="/dashboard/intelligence" icon={BarChart3} title="How the business is doing"
+          blurb="Revenue, profit, customers, sales, capacity and forecasts — the whole picture on one page." />
+        <FeatureCard href="/dashboard/revenue-intelligence" icon={TrendingUp} title="Who to call next"
+          blurb="Every customer scored for renewal, upsell, cross-sell and referral — ranked by what it's worth." />
       </div>
 
       {/* Automations — reviews, referrals, follow-ups & campaigns. Same word as

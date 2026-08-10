@@ -3,19 +3,31 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState, useRef } from 'react'
-import { Settings, LogOut, Zap, LayoutTemplate, Menu, X, Search, LifeBuoy, MessageSquare } from 'lucide-react'
+import { Settings, LogOut, Zap, Menu, X, Search, LifeBuoy, MessageSquare } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
 import { useModules } from '@/hooks/useModules'
+import { CATEGORY_ORDER, MODULE_CATEGORIES } from '@/lib/modules'
 import { useUnread } from '@/hooks/useUnread'
 import { NotificationBell } from '@/components/notifications/NotificationBell'
 import { Kbd } from '@/components/ui/Kbd'
 
-// Everyday work up top; the analytics pages live behind one "Grow" hub
-// (/dashboard/grow) so the sidebar stays short — fewer navigation decisions.
-// The item list itself comes from THE feature-module registry (lib/modules) —
-// filtered per business by business_settings.enabled_modules (null = all).
+// ── The sidebar ───────────────────────────────────────────────────────────────
+// The item list comes from THE feature-module registry (lib/modules), filtered
+// per business by business_settings.enabled_modules (null = all), and the
+// analytics leaves live behind one "Grow" hub so this stays short.
+//
+// It is GROUPED by the registry's own `category`, in CATEGORY_ORDER: home, then
+// Operations → Customers → Money → Growth → Setup. Fifteen flat items read as a
+// pile of features and made the owner learn a list; the same fifteen under five
+// headings read as a business — run the day, look after customers, get paid,
+// grow, and the plumbing you set up once. Nothing was added or removed to
+// achieve that (Service Templates left for Settings, where it belongs).
+//
+// ⚠️ The grouping MUST stay sourced from the registry. A hand-kept list here is
+// how the sidebar, the Marketplace and the Modules manager start disagreeing
+// about what exists — verify:navigation fails the build for it.
 
 // Pages that live outside their hub's path still light up their parent nav item,
 // so the sidebar always answers "where am I" — even on Grow's analytics leaves
@@ -141,6 +153,27 @@ export function Sidebar() {
       active ? 'bg-accent/10 text-accent-text' : 'text-ink-muted hover:text-ink hover:bg-surface'
     )
 
+  // ONE renderer for a nav row, so the ungrouped home link and every grouped
+  // item stay identical (active state, unread badge, hit area).
+  function navLink({ label, href, icon: Icon }: { label: string; href: string; icon: typeof Settings }, onNavigate?: () => void) {
+    const section = Object.keys(sectionOf).find(p => pathname.startsWith(p))
+    const active = href === '/dashboard'
+      ? pathname === '/dashboard'
+      : pathname.startsWith(href) || (section != null && sectionOf[section] === href)
+    const badge = label === 'Messages' && unread > 0 ? unread : 0
+    return (
+      <Link key={href} href={href} onClick={onNavigate} aria-current={active ? 'page' : undefined} className={linkClass(active)}>
+        <Icon className="w-4 h-4" aria-hidden="true" />
+        <span className="flex-1">{label}</span>
+        {badge > 0 && (
+          <span aria-label={`${badge} unread`} className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-black text-[10px] font-bold flex items-center justify-center">
+            {badge > 9 ? '9+' : badge}
+          </span>
+        )}
+      </Link>
+    )
+  }
+
   function navBody(onNavigate?: () => void) {
     return (
       <>
@@ -152,22 +185,25 @@ export function Sidebar() {
             <span className="flex-1 text-left">Search</span>
             <Kbd className="hidden lg:inline">⌘K</Kbd>
           </button>
-          {navMain.map(({ label, href, icon: Icon }) => {
-            const section = Object.keys(sectionOf).find(p => pathname.startsWith(p))
-            const active = href === '/dashboard'
-              ? pathname === '/dashboard'
-              : pathname.startsWith(href) || (section != null && sectionOf[section] === href)
-            const badge = label === 'Messages' && unread > 0 ? unread : 0
+          {/* Home first and ungrouped — it is not a category, it is where you land. */}
+          {navMain.filter(m => m.href === '/dashboard').map(m => navLink(m, onNavigate))}
+
+          {/* …then the business, in the order you run it. Fifteen flat items read
+              as a pile of features; the same fifteen under headings read as
+              Operations / Customers / Money / Growth / Setup. The grouping is the
+              registry's own `category` (lib/modules) rather than a second list
+              here, so the sidebar, the Marketplace and the Modules manager can
+              never disagree about where something belongs. */}
+          {CATEGORY_ORDER.map(cat => {
+            const items = navMain.filter(m => m.category === cat && m.href !== '/dashboard')
+            if (items.length === 0) return null      // a module can be uninstalled
             return (
-              <Link key={href} href={href} onClick={onNavigate} aria-current={active ? 'page' : undefined} className={linkClass(active)}>
-                <Icon className="w-4 h-4" aria-hidden="true" />
-                <span className="flex-1">{label}</span>
-                {badge > 0 && (
-                  <span aria-label={`${badge} unread`} className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-black text-[10px] font-bold flex items-center justify-center">
-                    {badge > 9 ? '9+' : badge}
-                  </span>
-                )}
-              </Link>
+              <div key={cat} className="mt-3 first:mt-1">
+                <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">
+                  {MODULE_CATEGORIES[cat]}
+                </p>
+                <div className="flex flex-col gap-0.5">{items.map(m => navLink(m, onNavigate))}</div>
+              </div>
             )
           })}
         </nav>
@@ -185,12 +221,6 @@ export function Sidebar() {
             className={linkClass(pathname === '/dashboard/settings')}>
             <Settings className="w-4 h-4" aria-hidden="true" />
             Settings
-          </Link>
-          <Link href="/dashboard/settings/templates" onClick={onNavigate}
-            aria-current={pathname === '/dashboard/settings/templates' ? 'page' : undefined}
-            className={linkClass(pathname === '/dashboard/settings/templates')}>
-            <LayoutTemplate className="w-4 h-4" aria-hidden="true" />
-            Service Templates
           </Link>
           <button
             onClick={() => { onNavigate?.(); handleSignOut() }}

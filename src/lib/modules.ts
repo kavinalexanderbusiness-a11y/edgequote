@@ -22,14 +22,23 @@ import {
 // "Uninstall" is deliberately gentle: it hides the module from navigation.
 // Data, pages and deep links stay intact — reversible, safe, honest.
 
-export type ModuleCategory = 'operations' | 'money' | 'customers' | 'growth'
+// ── Categories ────────────────────────────────────────────────────────────────
+// These drive the Marketplace, the Modules manager AND (since this change) the
+// sidebar, which used to render the registry as one flat list of fifteen. A flat
+// fifteen reads as a pile of features; the same fifteen under four headings
+// reads as a business: run the day, look after customers, get paid, grow.
+//
+// `admin` exists so setup-and-plumbing stops competing with daily work for the
+// same visual weight. It is LAST in the order for the same reason.
+export type ModuleCategory = 'operations' | 'money' | 'customers' | 'growth' | 'admin'
 export const MODULE_CATEGORIES: Record<ModuleCategory, string> = {
   operations: 'Operations',
   money: 'Money',
   customers: 'Customers',
   growth: 'Growth',
+  admin: 'Setup',
 }
-export const CATEGORY_ORDER: ModuleCategory[] = ['operations', 'customers', 'money', 'growth']
+export const CATEGORY_ORDER: ModuleCategory[] = ['operations', 'customers', 'money', 'growth', 'admin']
 
 export interface FeatureModule {
   /** Stable id — stored in enabled_modules / module_meta; never rename. */
@@ -88,7 +97,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
     description: 'Every customer, their history, and the conversation.',
     permissions: ['customers:read', 'customers:write', 'messages:send'] },
   { key: 'properties', label: 'Properties', href: '/dashboard/properties', icon: Home,
-    category: 'operations', version: 1, updatedAt: '2026-07-08', requires: ['customers'],
+    category: 'customers', version: 1, updatedAt: '2026-07-08', requires: ['customers'],
     description: 'Sites and service locations, with measurements and notes.',
     permissions: ['properties:read', 'properties:write', 'customers:read'] },
   { key: 'quotes',     label: 'Quotes',     href: '/dashboard/quotes',     icon: FileText,
@@ -118,16 +127,16 @@ export const FEATURE_MODULES: FeatureModule[] = [
     category: 'operations', version: 1, updatedAt: '2026-07-15',
     description: 'The gear that does the work — tracking and upkeep.',
     permissions: ['equipment:read', 'equipment:write'] },
-  { key: 'automation', label: 'Automation', href: '/dashboard/automation', icon: Bot,
-    category: 'growth', version: 1, updatedAt: '2026-07-15', featured: true, requires: ['messages'],
-    description: 'Rules that watch the business and act (or ask) on your behalf.',
-    permissions: ['automations:read', 'automations:write', 'messages:send', 'customers:read'] },
   { key: 'grow',       label: 'Grow',       href: '/dashboard/grow',       icon: Sprout,
     category: 'growth', version: 1, updatedAt: '2026-07-14', featured: true,
     description: 'Analytics, marketing and the tools that win more work.',
     permissions: ['customers:read', 'jobs:read', 'quotes:read', 'marketing:write'] },
+  { key: 'automation', label: 'Automation', href: '/dashboard/automation', icon: Bot,
+    category: 'growth', version: 1, updatedAt: '2026-07-15', featured: true, requires: ['messages'],
+    description: 'Rules that watch the business and act (or ask) on your behalf.',
+    permissions: ['automations:read', 'automations:write', 'messages:send', 'customers:read'] },
   { key: 'integrations', label: 'Integrations', href: '/dashboard/integrations', icon: Plug,
-    category: 'operations', version: 1, updatedAt: '2026-07-16',
+    category: 'admin', version: 1, updatedAt: '2026-07-16',
     description: 'REST API, signed webhooks, Zapier and Make — connect EdgeQuote to everything else.',
     permissions: ['customers:read', 'quotes:read', 'jobs:read', 'invoices:read', 'payments:read', 'customers:write', 'webhooks:send'] },
 ]
