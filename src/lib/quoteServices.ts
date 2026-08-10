@@ -60,3 +60,29 @@ export function emptyServiceLine(): QuoteServiceInput {
 }
 
 function round2(n: number): number { return Math.round((Number(n) || 0) * 100) / 100 }
+
+// ── Which services does this business actually quote? ────────────────────────
+// Read back out of quotes they have already saved — `quotes.service_template_id`
+// is written by the builder on every catalogue-backed quote (81 of the 95 live
+// rows carry one). NOTHING is recorded to produce this: no click tracking, no
+// counter column, no schema. Which is the point — a "recent" list that needed a
+// new write would be a tracking feature wearing a convenience label.
+//
+// Newest first, de-duplicated, so the service someone quotes twenty times a month
+// is the first row of the picker and their whole catalogue is still one keystroke
+// away. A failed read returns [] and the picker simply opens into the catalogue —
+// this ranks a list, it never decides what is IN it, so degrading to "no Recent
+// block" costs the owner a scroll and nothing else.
+export function recentTemplateIdsFrom(
+  rows: { service_template_id: string | null }[] | null | undefined,
+  limit = 8,
+): string[] {
+  const out: string[] = []
+  for (const r of rows || []) {
+    const id = r?.service_template_id
+    if (!id || out.includes(id)) continue
+    out.push(id)
+    if (out.length >= limit) break
+  }
+  return out
+}

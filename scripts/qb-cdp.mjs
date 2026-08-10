@@ -97,8 +97,18 @@ const PROBE = `(function(){
   var typed = controls.filter(c => !['hidden','checkbox','radio','button','submit'].includes(c.type))
   var tap = q('button,[role=button],a[href],input[type=checkbox],select').filter(b => { var r=b.getBoundingClientRect(); return r.height>0 && r.height<40 })
   var overflow = Array.from(document.querySelectorAll('*')).filter(el => vis(el) && el.getBoundingClientRect().width > VW + 1)
+  // How big is the biggest list the owner has to walk? A native <select> shows
+  // ONE row until it is opened and then covers the screen with the rest, so its
+  // cost is invisible to a scroll-height measurement — which is exactly how a
+  // 23-option dropdown survived a pass that called this screen healthy.
+  var selects = q('select')
+  var optionCounts = selects.map(s => s.options.length)
   return JSON.stringify({
     viewport: VW,
+    selects: selects.length,
+    longestSelect: optionCounts.length ? Math.max.apply(null, optionCounts) : 0,
+    optionsBehindSelects: optionCounts.reduce((a, b) => a + b, 0),
+    comboboxes: q('[role=combobox]').length,
     scrollHeight: Math.round(document.documentElement.scrollHeight),
     screens: +(document.documentElement.scrollHeight/844).toFixed(2),
     visibleTypedFields: typed.length,

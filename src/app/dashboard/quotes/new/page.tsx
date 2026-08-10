@@ -15,7 +15,7 @@ import { servicePricingKind } from '@/lib/servicePricing'
 import { saveManual } from '@/lib/measure/data'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { applyFeeRecovery } from '@/lib/invoiceTotals'
-import { sumServiceLines } from '@/lib/quoteServices'
+import { sumServiceLines, recentTemplateIdsFrom } from '@/lib/quoteServices'
 import { LeadPrefillPayload, LEAD_PREFILL_KEY, closeOpenLeads } from '@/lib/leads'
 import { toast } from '@/lib/toast'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
@@ -55,6 +55,7 @@ export default function NewQuotePage() {
   const defaultPropertyId = searchParams.get('property') || undefined
   const [customers, setCustomers] = useState<Customer[]>([])
   const [templates, setTemplates] = useState<ServiceTemplate[]>([])
+  const [recentTemplateIds, setRecentTemplateIds] = useState<string[]>([])
   const [tiers, setTiers] = useState<TravelFeeTier[]>([])
   const [settings, setSettings] = useState<BusinessSettings | null>(null)
   const [measurement, setMeasurement] = useState<MeasurementPayload | null>(null)
@@ -98,16 +99,23 @@ export default function NewQuotePage() {
       // Local session read — no auth round-trip before the builder's data batch.
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
-      const [customersRes, templatesRes, tiersRes, settingsRes] = await Promise.all([
+      const [customersRes, templatesRes, tiersRes, settingsRes, recentRes] = await Promise.all([
         supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
         supabase.from('service_templates').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('travel_fee_tiers').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('business_settings').select('*').eq('user_id', user!.id).maybeSingle(),
+        // Which services this business actually quotes — ONE indexed column off
+        // rows they already saved, so the picker can open on their usual work
+        // instead of an alphabetised catalogue. Ranking only: a failed read costs
+        // the Recent block and nothing else (see recentTemplateIdsFrom).
+        supabase.from('quotes').select('service_template_id').eq('user_id', user!.id)
+          .not('service_template_id', 'is', null).order('created_at', { ascending: false }).limit(60),
       ])
       setCustomers(customersRes.data || [])
       setTemplates(templatesRes.data || [])
       setTiers(tiersRes.data || [])
       setSettings(settingsRes.data)
+      setRecentTemplateIds(recentTemplateIdsFrom(recentRes.data))
       setLoading(false)
     }
     load()
@@ -497,6 +505,7 @@ export default function NewQuotePage() {
       <QuoteBuilder
         customers={customers}
         templates={templates}
+        recentTemplateIds={recentTemplateIds}
         tiers={tiers}
         settings={settings}
         defaultCustomerId={lead?.customerId || measurement?.customerId || defaultCustomerId}

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Quote, Customer, QuoteFormValues, QuoteService, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, STATUS_LABELS } from '@/types'
-import { sumServiceLines, serviceLineTotals, splitServices } from '@/lib/quoteServices'
+import { sumServiceLines, serviceLineTotals, splitServices, recentTemplateIdsFrom } from '@/lib/quoteServices'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { extractBookingPhotos, bookingPhotoViews } from '@/lib/bookingPhotos'
@@ -38,6 +38,9 @@ export default function QuoteDetailPage() {
   const [services, setServices] = useState<QuoteService[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [templates, setTemplates] = useState<ServiceTemplate[]>([])
+  // Same picker, same ranking as the create door — a service list that reorders
+  // itself between "new quote" and "edit quote" is two controls wearing one name.
+  const [recentTemplateIds, setRecentTemplateIds] = useState<string[]>([])
   const [tiers, setTiers] = useState<TravelFeeTier[]>([])
   const [settings, setSettings] = useState<BusinessSettings | null>(null)
   const [editing, setEditing] = useState(false)
@@ -90,7 +93,7 @@ export default function QuoteDetailPage() {
       // Local session read — no auth round-trip before the batch below.
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
-      const [qRes, svcRes, cRes, tRes, tierRes, sRes, invRes] = await Promise.all([
+      const [qRes, svcRes, cRes, tRes, tierRes, sRes, invRes, recentRes] = await Promise.all([
         supabase.from('quotes').select('*').eq('id', id).eq('user_id', user!.id).single(),
         supabase.from('quote_services').select('*').eq('quote_id', id).order('sort_order'),
         supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
@@ -105,11 +108,16 @@ export default function QuoteDetailPage() {
         // recurring jobs), so name the NEWEST rather than an arbitrary row. Same
         // select the convert guard already runs, so RLS is already proven.
         supabase.from('invoices').select('invoice_number, issued_date').eq('quote_id', id).order('issued_date', { ascending: false }).limit(1),
+        // Ranking for the service picker, off rows that already exist. Nothing is
+        // recorded to build it — see recentTemplateIdsFrom.
+        supabase.from('quotes').select('service_template_id').eq('user_id', user!.id)
+          .not('service_template_id', 'is', null).order('created_at', { ascending: false }).limit(60),
       ])
       setQuote(qRes.data)
       setServices((svcRes.data as QuoteService[]) || []) // error/absent table → [] (legacy)
       setCustomers(cRes.data || [])
       setTemplates(tRes.data || [])
+      setRecentTemplateIds(recentTemplateIdsFrom(recentRes.data))
       setTiers(tierRes.data || [])
       setSettings(sRes.data)
       setExistingInvoiceNumber((invRes.data?.[0] as { invoice_number: string } | undefined)?.invoice_number ?? null)
@@ -744,6 +752,7 @@ export default function QuoteDetailPage() {
       <QuoteBuilder
         customers={customers}
         templates={templates}
+        recentTemplateIds={recentTemplateIds}
         tiers={tiers}
         settings={settings}
         defaultValues={{

@@ -37,6 +37,13 @@ export function Collapsible({
         {Icon && <Icon className="w-4 h-4 text-ink-muted shrink-0" />}
         <span className="text-sm font-semibold text-ink shrink-0">{title}</span>
         {badge}
+        {/* ⚠️ `truncate min-w-0` lets this SHRINK but does not stop it setting
+            the header row's MIN-CONTENT: Chrome still sums the un-wrapped text
+            (measured — neither min-width:0 nor a zero flex-basis changes it). So
+            a long summary can only be made safe by the CONTAINER it sits in
+            being allowed to go narrower than its content — see the `min-w-0` on
+            the quote builder's form column, and keep it on any other narrow
+            layout that hosts a Collapsible. */}
         {!open && summary && (
           <span className="text-xs text-ink-faint truncate min-w-0">{summary}</span>
         )}

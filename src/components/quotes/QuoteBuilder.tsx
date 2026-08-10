@@ -7,6 +7,7 @@ import Link from 'next/link'
 import { Input } from '@/components/ui/Input'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { CustomerPicker } from '@/components/ui/CustomerPicker'
+import { ServicePicker } from '@/components/ui/ServicePicker'
 import { useAutosave } from '@/hooks/useAutosave'
 import { AutosaveStatus, DraftRestoreBanner } from '@/components/ui/Autosave'
 import { QuoteMeasure } from '@/components/quotes/QuoteMeasure'
@@ -27,7 +28,10 @@ import { MATERIAL_SUGGESTIONS, emptyMaterialLine } from '@/lib/quoteMaterials'
 import { loadServiceUnits, SYSTEM_UNITS, type ServiceUnit } from '@/lib/units'
 import { formatCurrency, formatDate, suggestTravelFee, cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
-import { formatServicePrice, servicePricingKind, serviceRecommendation } from '@/lib/servicePricing'
+// formatServicePrice is no longer called here: pricing a catalogue row is the
+// picker's job now, through the same one seam. This file kept it only to build
+// the flattened <select> labels the picker replaced.
+import { servicePricingKind, serviceRecommendation } from '@/lib/servicePricing'
 import { laborSuggestion, pricingConfigFromSettings, latestSavedRecommendation, recommendationIsStale, pricingPackage } from '@/lib/pricing'
 import { evaluatePrice, PriceGuardrail } from '@/lib/priceGuardrails'
 import { PriceGuardrailNote } from '@/components/pricing/PriceGuardrailNote'
@@ -42,6 +46,11 @@ import { Clock, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles,
 interface QuoteBuilderProps {
   customers: Customer[]
   templates: ServiceTemplate[]
+  /** Template ids from the owner's most recent quotes, newest first — the "Recent"
+      block at the top of the service picker. Read back out of rows they already
+      saved (quotes.service_template_id); nothing new is recorded to produce it, and
+      an omitted prop simply means the picker opens straight into the catalogue. */
+  recentTemplateIds?: string[]
   tiers: TravelFeeTier[]
   settings?: BusinessSettings | null
   defaultCustomerId?: string
@@ -95,7 +104,7 @@ const BLANK = '' as unknown as number
 type PitchCadence = 'one_time' | 'weekly' | 'biweekly'
 
 export function QuoteBuilder({
-  customers, templates, tiers, settings, defaultCustomerId, defaultPropertyId, defaultValues, onSubmit, isEdit,
+  customers, templates, recentTemplateIds, tiers, settings, defaultCustomerId, defaultPropertyId, defaultValues, onSubmit, isEdit,
   autosaveKey, autosaveBaselineUpdatedAt, onCancel,
 }: QuoteBuilderProps) {
   const router = useRouter()
@@ -321,12 +330,11 @@ export function QuoteBuilder({
   // indistinguishable in the header badge.
   const priceLocked = priceOrigin === 'applied' || priceOrigin === 'manual'
   const [showBestDays, setShowBestDays] = useState(false)
-  // §2.3 — once a template has settled the Service Name, the required input
-  // collapses to a one-line "Customer reads X · Rename": two adjacent fields
-  // asking one question read as an unanswered required field. Renaming (or a
-  // validation error, or free-text) brings the real input back; the value is
-  // never unregistered, so nothing downstream changes.
-  const [renamingService, setRenamingService] = useState(false)
+  // Recurring plan prices are revealed, not presented. See the note on the
+  // "Offer recurring pricing" button in Pricing help below.
+  const [offerRecurring, setOfferRecurring] = useState(
+    () => Number(defaultValues?.weekly_price) > 0 || Number(defaultValues?.biweekly_price) > 0 || Number(defaultValues?.monthly_price) > 0,
+  )
   // §2.4 — the measured area renders as a full field only when it PRICES this
   // service (lawn cadence / per-area) or a figure already exists; for labour
   // trades it collapses to an opt-in link instead of a full-width input whose
@@ -411,12 +419,12 @@ export function QuoteBuilder({
   // rate vs labour). Template display type wins; else the serviceKey normalizer.
   const svcTemplate = templates.find(t => t.id === templateId) ?? null
   const pricingKind = servicePricingKind(watch('service_type'), svcTemplate)
-  // §2.3 — the name is "settled" while it still equals the template's own; any
-  // edit (a rename) makes it free text and the real input stays. Reset the
-  // rename mode when the template changes so the next pick collapses again.
+  // The name is "settled" while it still equals the adopted template's own. Any
+  // edit is a rename FOR THIS QUOTE — the template id deliberately survives it
+  // (it is what decides which engine may recommend), so the picker says so in
+  // words rather than silently showing a name its catalogue doesn't have.
   const serviceNameValue = watch('service_type')
   const nameSettledByTemplate = !!svcTemplate && serviceNameValue === svcTemplate.name
-  useEffect(() => { setRenamingService(false) }, [templateId])
   // §2.4 — does the measured area PRICE this service? (Everything else only
   // feeds the labour estimate, and gets the opt-in link instead of the field.)
   const areaPricesService = pricingKind === 'lawn_recurring' || pricingKind === 'per_area'
@@ -574,24 +582,40 @@ export function QuoteBuilder({
     ? `${Number(hours) || 0} hr · ${crewSize} crew · ${formatCurrency(Number(rate))}/hr`
     : 'Not estimated yet'
 
+  // The cadence inputs are on screen whenever they hold — or are about to hold —
+  // a real number, so the reveal can never hide money. A price arriving from ANY
+  // engine path (plan tile, measured lawn, saved quote, "Use measured prices")
+  // opens them by itself, because every one of those writes through setValue and
+  // these are the same watched values the breakdown reads.
+  const showPlanFields = offerRecurring || weeklyPrice > 0 || biweeklyPrice > 0 || monthlyPrice > 0
+    || !!(errors.weekly_price || errors.biweekly_price || errors.monthly_price)
+
   // ── Summaries for the three drawers that replaced seven ─────────────────────
   // A closed drawer earns its place only by answering "is there anything in here
   // for me?" without being opened. Seven doors each answering for one section was
   // seven questions; three doors have to answer for the same content.
+  // Empty reads as OPTIONAL, not as an unanswered question. "Work out a price
+  // from hours or plans" is an instruction, and an instruction on a shut door is
+  // a task; the price field above already works without any of this.
   const pricingHelpSummary = [
     Number(hours) > 0 || Number(rate) > 0 || Number(crewSize) > 1 ? laborSummary : null,
     recSummary || null,
-  ].filter(Boolean).join(' · ') || 'Work out a price from hours or plans'
+  ].filter(Boolean).join(' · ') || 'Optional — estimate from hours, or add repeat prices'
   const linesSummary = serviceIdx.length + materialIdx.length > 0
     ? [
       serviceIdx.length ? `${serviceIdx.length} service${serviceIdx.length !== 1 ? 's' : ''}` : null,
       materialIdx.length ? `${materialIdx.length} material${materialIdx.length !== 1 ? 's' : ''}` : null,
     ].filter(Boolean).join(' · ') + ` · ${formatCurrency(serviceExtrasNet + materialsSum.net)}`
     : 'Add cleanup, hedges, mulch…'
+  // Every part states where it stands, so a shut door reads as answered rather
+  // than as two more questions. "Best days to schedule" is deliberately NOT in
+  // here: it is a lookup, not a setting — nothing about it is stored on the
+  // quote, and listing it as "not specified" would invent a field that a reader
+  // would then go looking for on the saved row.
   const moreSummary = [
-    Number(travelFee) > 0 ? `Travel ${formatCurrency(Number(travelFee))}` : null,
-    notes && String(notes).trim() ? 'Notes' : null,
-  ].filter(Boolean).join(' · ') || 'Travel, notes, best days'
+    Number(travelFee) > 0 ? `Travel ${formatCurrency(Number(travelFee))}` : (includeTravel ? 'No travel fee' : 'Travel absorbed'),
+    notes && String(notes).trim() ? 'Notes added' : 'No notes',
+  ].join(' · ')
 
   // Each drawer now fronts more than one former section, so opening it must set
   // every flag the invalid-handler and the edit-path seeding still write
@@ -839,15 +863,16 @@ export function QuoteBuilder({
   }, [])
   const unitOptions = useMemo(() => units.map(u => ({ value: u.code, label: u.label })), [units])
 
-  // Template options for an EXTRA line: active services only, priced exactly like
-  // the primary picker (formatServicePrice — the same "starting from / per unit"
-  // vocabulary), plus whichever template this line already points at, so editing
-  // an older quote never blanks its own selection just because the service was
-  // retired since. The Select renders its own placeholder option, so this list
-  // holds real templates only and `.length > 0` means "there is something to pick".
+  // What an EXTRA line may pick from: active services only, plus whichever
+  // template this line already points at, so editing an older quote never blanks
+  // its own selection just because the service was retired since. The RAW list
+  // would offer switched-off services at stale rates, one tap from the total.
+  // Returns templates (not {value,label}) because the line's control is the same
+  // ServicePicker as the primary one — it prices each row through the same
+  // formatServicePrice seam, so there is nothing left to pre-format here.
   const lineTemplateOptions = (currentId?: string | null) => {
     const own = currentId ? templates.filter(t => t.id === currentId && !t.is_active) : []
-    return [...activeTemplates, ...own].map(t => ({ value: t.id, label: `${t.name} — ${formatServicePrice(t)}` }))
+    return [...activeTemplates, ...own]
   }
 
   // ── Line-pricing clarity (Additional services + Materials) ───────────────────
@@ -880,14 +905,9 @@ export function QuoteBuilder({
   }
 
   // (activeTemplates is declared above, before its first reader — see §1's TDZ rule.)
-  const templateOptions = useMemo(() => [
-    { value: '', label: 'Select a service...' },
-    ...activeTemplates.map(t => ({
-      // A native <select> can't render an icon, so the star carries the grouping.
-      value: t.id,
-      label: `${t.is_favorite ? '★ ' : ''}${t.name} — ${formatServicePrice(t)}`,
-    })),
-  ], [activeTemplates])
+  // The flattened `templateOptions` list a native <select> needed is gone with it:
+  // ServicePicker takes the templates themselves, so the star, the name and the
+  // price are three fields of a row instead of one concatenated string.
   // QL-1: there is no status dropdown here, on purpose. QuoteStatusControl (on the
   // quote detail page) is the ONE status writer — it routes sent→markSentPatch and
   // accepted→markWonPatch, so sent_at/valid_until and the acceptance snapshot are
@@ -1074,7 +1094,18 @@ export function QuoteBuilder({
         </div>
       )}
       <div className="grid lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-4">
+        {/* ⚠️ min-w-0 — a grid item defaults to `min-width: auto`, so this column
+            refuses to be narrower than its content's MIN-CONTENT, and the widest
+            min-content in here is a Collapsible header row: icon + title +
+            summary + chevron, with the summary counted UN-WRAPPED even though it
+            has `truncate min-w-0` (measured; a zero flex-basis doesn't change it
+            either). At 390px the page had no horizontal overflow only because
+            the longest summary happened to fit — lengthening one by seventeen
+            characters pushed this column to 423px inside a 390px viewport, and
+            the phone got a sideways scroll on the quote form. With min-w-0 the
+            column takes the viewport's width and the summary truncates, which is
+            what a truncating one-liner was always for. */}
+        <div className="lg:col-span-2 space-y-4 min-w-0">
           {/* ── FAST PATH — Customer → Property → Service → Price → Save ── */}
           <Card>
             <CardHeader className="flex items-center justify-between gap-2">
@@ -1166,67 +1197,56 @@ export function QuoteBuilder({
               {/* Service FIRST (owner directive) — measurement, suggested pricing,
                   intelligence, duration and profitability below are all specific to
                   the selected service. */}
-              {/* The catalogue picker is a SHORTCUT that auto-fills the name (and an
-                  hourly template's rate). With no active templates it can only ever
-                  read "Select a service…" — a dead dropdown a brand-new owner has to
-                  look past to reach the real field. Hidden until there's something to
-                  pick — the same rule the Additional-services template picker already
-                  follows. Service Name below stays the one required service input
-                  either way, so service_template_id is untouched (stays '') when this
-                  is hidden: presentation only, no pricing/logic change.
-                  §11.1 — at ≤6 active templates the OPTIONS become the control: a
-                  wrapped row of chips, one tap, each showing its own price. An
-                  owner-operator's whole catalogue fits on one screen, so a
-                  <select> costs a tap and hides everything behind the first. Past
-                  six the chip row is worse than the dropdown, and the dropdown
-                  returns. Same Controller, same field, same template effect —
-                  nothing downstream knows which control set it. */}
-              {activeTemplates.length > 0 && activeTemplates.length <= 6 ? (
-                <Controller name="service_template_id" control={control}
-                  render={({ field }) => (
-                    <div className="flex flex-col gap-1.5">
-                      <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Service</span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {activeTemplates.map(t => {
-                          const active = field.value === t.id
-                          return (
-                            <button key={t.id} type="button" aria-pressed={active}
-                              onClick={() => field.onChange(active ? '' : t.id)}
-                              className={cn('text-xs font-medium rounded-full border px-2.5 py-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-                                active ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink hover:border-border-strong')}>
-                              {t.is_favorite ? '★ ' : ''}{t.name}
-                              <span className={active ? 'opacity-70' : 'text-ink-faint'}> · {formatServicePrice(t)}</span>
-                            </button>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )} />
-              ) : activeTemplates.length > 0 ? (
-                <Controller name="service_template_id" control={control}
-                  render={({ field }) => (<Select label="Service" options={templateOptions} {...field} />)} />
-              ) : null}
-              {/* §2.3 — two fields for one answer: once a template settles the
-                  name, the required input reads as an EMPTY-looking field asking
-                  the question the chip above just answered. Collapse it to what
-                  the customer will actually read, with the way back one tap away.
-                  Free-text quotes, renames and validation errors keep the real
-                  field, and the value is never unregistered. */}
-              {nameSettledByTemplate && !renamingService && !errors.service_type ? (
-                <p className="text-sm text-ink-muted flex items-baseline gap-2">
-                  <span>Customer reads <span className="font-semibold text-ink">{serviceNameValue}</span></span>
-                  <button type="button" onClick={() => setRenamingService(true)}
-                    className="text-xs font-medium text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                    Rename
-                  </button>
-                </p>
+              {/* ── ONE service control ──────────────────────────────────────────
+                  This was two: a catalogue <select> (a wrapped chip row at ≤6
+                  services) and then "Service Name *" underneath, which the select
+                  auto-filled. Two labels, one question — and the required one is
+                  the one that looks unanswered. The select could only ever offer
+                  catalogue rows, which is the whole reason the second field had to
+                  exist: custom work has to be typeable somewhere.
+                  ServicePicker is that somewhere. It IS the service_type input —
+                  same register, same `required` rule, same errors, same setFocus
+                  target — with the catalogue hanging off it. Type to filter, pick
+                  a row to adopt a service, or type anything at all and it's a
+                  custom service that is already named. Nothing downstream knows
+                  which one happened.
+                  service_template_id moves to a hidden registered input for the
+                  same reason `services.${i}.kind` is one: an unregistered field is
+                  dropped at submit, and that id is what tells the pricing seam
+                  which engine may recommend. */}
+              <input type="hidden" {...register('service_template_id')} />
+              {activeTemplates.length > 0 ? (
+                <ServicePicker
+                  label="Service *"
+                  templates={activeTemplates}
+                  templateId={templateId}
+                  recentIds={recentTemplateIds}
+                  placeholder={`Search or type — e.g. ${activeTemplates[0]?.name || 'Weekly Service'}`}
+                  hint={svcTemplate && !nameSettledByTemplate
+                    ? <>Renamed on this quote — from your <span className="text-ink-muted">{svcTemplate.name}</span> service.</>
+                    : 'Pick one of yours, or type any name for custom work.'}
+                  error={errors.service_type?.message}
+                  onPick={t => {
+                    // The picker sets the ID and lets the template effect derive
+                    // name, rate and canned description — the ONE road in, the
+                    // same one QuoteMeasure's onServiceChange takes. Re-picking
+                    // the service you already have is how a rename is undone, and
+                    // that effect only fires on a CHANGE, so say the name here.
+                    const same = getValues('service_template_id') === t.id
+                    setValue('service_template_id', t.id)
+                    if (same) setValue('service_type', t.name)
+                  }}
+                  // Only the LINK is dropped — the name the owner typed is the
+                  // quote's, and clearing it would empty a required field. The
+                  // template effect returns early on an empty id, so nothing
+                  // refills behind this.
+                  onDetach={() => setValue('service_template_id', '')}
+                  {...register('service_type', { required: 'Service is required' })} />
               ) : (
-                // The example comes from THEIR catalogue, not ours. A lawn company
-                // with a "Lawn Mowing" template still reads "e.g. Lawn Mowing".
-                <Input label="Service Name *" placeholder={`e.g. ${activeTemplates[0]?.name || 'Weekly Service'}`}
-                  hint={activeTemplates.length > 0
-                    ? 'Auto-fills when you pick a service above — edit to rename it on the quote.'
-                    : 'The name of this service, as it appears on the quote.'}
+                // No catalogue yet — a picker with nothing to pick is a door onto a
+                // wall. The plain field, and a hint that names the page that fills it.
+                <Input label="Service *" placeholder="e.g. Weekly Service"
+                  hint="The name of this service, as it appears on the quote."
                   error={errors.service_type?.message}
                   {...register('service_type', { required: 'Service is required' })} />
               )}
@@ -1354,18 +1374,15 @@ export function QuoteBuilder({
               )}
 
               {/* ── Nothing honest to recommend ──────────────────────────────────
-                  The state the builder never had. Every path used to end in a
-                  number, because the labour fallback ran on invented defaults —
-                  so "we don't know yet" was unsayable, and the closest thing to it
-                  was a confident $100. Saying it plainly is the whole point: an
-                  owner can trust the numbers that ARE shown only if the product is
-                  willing to show none. */}
-              {!(pricingKind === 'lawn_recurring' && measuredSqft > 0) && !serviceRec && (
-                <div className="rounded-xl border border-border bg-bg-tertiary p-3 animate-fade">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">No recommended price</p>
-                  <p className="text-xs text-ink-muted mt-1">{noRecReason}</p>
-                </div>
-              )}
+                  Still said out loud — "we don't know yet" is the state this
+                  builder exists to be able to express, and an owner trusts the
+                  numbers that ARE shown only because the product is willing to
+                  show none. What changed is its WEIGHT. It was a bordered panel
+                  headed NO RECOMMENDED PRICE, sitting above the price field and
+                  shouting an absence; the same sentence now rides the price
+                  field's own hint line, where it reads as help for the box the
+                  owner is about to type in. Same words (noRecReason, unchanged),
+                  same links to the Settings page they name, one less panel. */}
 
               {/* Supporting cadence structure (lawn services) — Accept above fills
                   these together; tap one to lead with a different frequency. */}
@@ -1451,14 +1468,14 @@ export function QuoteBuilder({
                         ? 'Applied from the recommendation. Type to override.'
                         : serviceRec
                           ? `Suggested ${formatCurrency(serviceRec.price)} — ${serviceRec.basis}. Type to override.`
-                          // The "No recommended price" card renders under exactly this
-                          // condition, immediately above the field. Two notices saying
-                          // the same thing, one either side of the input the owner came
-                          // here to fill, is the noise this pass exists to remove — so
-                          // only speak when the card is NOT already speaking.
+                          // No recommendation. This used to be `undefined` because a
+                          // bordered "NO RECOMMENDED PRICE" panel above the field was
+                          // already saying it — two notices sandwiching the one input
+                          // the owner came here to fill. The panel is gone and the
+                          // reason moved here, next to the box it is about.
                           : (pricingKind === 'lawn_recurring' && measuredSqft > 0)
                             ? 'No recommendation for this service yet — enter your price.'
-                            : undefined
+                            : noRecReason
                   }
                   {...register('initial_price', { min: 0, onChange: () => { setPriceOrigin('manual'); setPickedCadence(null) } })} />
                 {/* Only offer "use the recommendation" when one actually exists. */}
@@ -1559,7 +1576,9 @@ export function QuoteBuilder({
               This is how EdgeQuote works out a suggestion. The customer never sees any of it — they see the price above.
             </p>
             <div className="rounded-xl border border-border bg-bg-secondary p-3 space-y-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Labour</p>
+            {/* "Labour" named the accounting concept; this names the job the block
+                does. Nothing under it changed — same fields, same engine. */}
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Estimate from hours</p>
             <p className="text-xs text-ink-faint">Hours × crew × rate — what the suggested price is built from when there’s no measurement to price against.</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* NOT required, and no minimum. Unknown hours must be expressible —
@@ -1594,10 +1613,15 @@ export function QuoteBuilder({
               value={hours > 0 ? Math.round(Number(hours) * 60) : null}
               onApply={(minutes) => setValue('hours', Math.round((minutes / 60) * 100) / 100)}
             />
-            <Input label="Adjustment Multiplier" type="number" step="0.05" min="0"
-              hint="Multiplies the rate. e.g. 0.75 (easy), 1.0 (standard), 1.25 (overgrown)."
+            {/* "Adjustment Multiplier" is the variable's name, not the owner's
+                question. The question is how hard this job is. Field name, stored
+                column and maths are untouched — `overgrowth_multiplier` is read in
+                the pricing engine, the guardrails and the measure tool, and this
+                is a label. */}
+            <Input label="How hard is this job?" type="number" step="0.05" min="0"
+              hint="Multiplies your rate for this quote. 0.75 easy · 1.0 standard · 1.25 overgrown."
               {...register('overgrowth_multiplier', { min: 0 })} />
-            <Input label="Base Rate ($/man-hour)" type="number" step="5" min="0"
+            <Input label="Your rate ($ per person, per hour)" type="number" step="5" min="0"
               hint={Number(settings?.default_rate) > 0
                 ? `Your Default Labour Rate from Settings (${formatCurrency(Number(settings?.default_rate))}/hr). Change it here for this quote only.`
                 : 'Set a Default Labour Rate in Settings so quotes can suggest a labour price.'}
@@ -1605,19 +1629,42 @@ export function QuoteBuilder({
               {...register('rate', { min: { value: 0, message: 'Rate cannot be negative' } })} />
             </div>
 
+            {/* ── Repeat plans — asked for, not presented ──────────────────────
+                Three cadence prices sat here permanently, so every one-visit
+                quote — hedge trim, mulch drop, a cleanup — opened this drawer to
+                three empty money fields about a schedule that will never exist.
+                Most quotes are one visit; a repeating one is a deliberate offer,
+                so make it a deliberate tap.
+                Nothing about the DATA moved: the three fields register exactly as
+                before, hold the same four cadence columns the portal reads, and
+                reveal themselves whenever any of them already carries a price —
+                a saved recurring quote, a plan tile, a measured lawn's Accept, or
+                a validation error on one of them. Off-screen only ever means all
+                three are empty, which is what saving one used to write anyway. */}
             <div className="rounded-xl border border-border bg-bg-secondary p-3 space-y-3">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Repeat plans</p>
-            <p className="text-xs text-ink-faint">Fill any cadence you want to offer — they appear on the quote as options the customer can pick.</p>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {/* Typing a plan price is the same act of ownership as typing the
-                  first-visit price, and only initial_price used to demote the
-                  origin — so hand-editing a weekly price left the header reading
-                  "✓ Applied" over numbers the engine no longer stands behind, and
-                  left the Monthly pill licensed to overwrite a typed monthly. */}
-              <Input label="Weekly ($/visit)" type="number" step="1" min="0" {...register('weekly_price', { min: 0, onChange: () => { setPriceOrigin('manual'); setPickedCadence(null) } })} />
-              <Input label="Bi-Weekly ($/visit)" type="number" step="1" min="0" {...register('biweekly_price', { min: 0, onChange: () => { setPriceOrigin('manual'); setPickedCadence(null) } })} />
-              <Input label="Monthly ($/visit)" type="number" step="1" min="0" {...register('monthly_price', { min: 0, onChange: () => { setPriceOrigin('manual'); setPickedCadence(null) } })} />
-            </div>
+            {showPlanFields ? (
+              <>
+                <p className="text-xs text-ink-faint">Fill any cadence you want to offer — they appear on the quote as options the customer can pick.</p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {/* Typing a plan price is the same act of ownership as typing the
+                      first-visit price, and only initial_price used to demote the
+                      origin — so hand-editing a weekly price left the header reading
+                      "✓ Applied" over numbers the engine no longer stands behind, and
+                      left the Monthly pill licensed to overwrite a typed monthly. */}
+                  <Input label="Weekly ($/visit)" type="number" step="1" min="0" {...register('weekly_price', { min: 0, onChange: () => { setPriceOrigin('manual'); setPickedCadence(null) } })} />
+                  <Input label="Bi-Weekly ($/visit)" type="number" step="1" min="0" {...register('biweekly_price', { min: 0, onChange: () => { setPriceOrigin('manual'); setPickedCadence(null) } })} />
+                  <Input label="Monthly ($/visit)" type="number" step="1" min="0" {...register('monthly_price', { min: 0, onChange: () => { setPriceOrigin('manual'); setPickedCadence(null) } })} />
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-xs text-ink-faint">This quote is for one visit. Add per-visit prices if you want the customer to be able to pick a repeating schedule instead.</p>
+                <Button type="button" variant="secondary" size="sm" onClick={() => setOfferRecurring(true)}>
+                  <Repeat className="w-3.5 h-3.5" /> Offer recurring pricing
+                </Button>
+              </>
+            )}
             {/* The guardrail note moved up beside the price it judges (fast path).
                 One instance, so the two can't disagree about what's warned. */}
             </div>
@@ -1654,35 +1701,36 @@ export function QuoteBuilder({
                         </button>
                       </div>
                     </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3">
+                    {/* Same one control as the primary service, for the same
+                        reason: "Service *" and "From template" were two fields
+                        asking one question, on every extra line, and the second
+                        one was a 24-option dropdown per line.
+                        A line already pointing at a RETIRED template keeps it in
+                        its own list (otherwise editing an old quote would blank
+                        the selection); everyone else sees active services only,
+                        so a switched-off service and its stale rate are no longer
+                        one tap from the total. */}
+                    <input type="hidden" {...register(`services.${i}.service_template_id` as const)} />
+                    {lineTemplateOptions(line?.service_template_id).length > 0 ? (
+                      <ServicePicker label="Service *" placeholder="Search or type — e.g. Hedge Trimming"
+                        templates={lineTemplateOptions(line?.service_template_id)}
+                        templateId={watch(`services.${i}.service_template_id`) || ''}
+                        recentIds={recentTemplateIds}
+                        error={errors.services?.[i]?.service_type ? 'Service is required' : undefined}
+                        onPick={t => {
+                          setValue(`services.${i}.service_template_id`, t.id)
+                          setValue(`services.${i}.service_type`, t.name)
+                          if (Number(t.default_rate) > 0) setValue(`services.${i}.unit_price`, Number(t.default_rate))
+                          const d = (t.pricing_display_type || '').toLowerCase()
+                          setValue(`services.${i}.unit`, d.includes('hour') ? 'hour' : d.includes('linear') ? 'linear_ft' : d.includes('sq') ? 'sqft' : 'each')
+                        }}
+                        onDetach={() => setValue(`services.${i}.service_template_id`, '')}
+                        {...register(`services.${i}.service_type` as const, { required: true })} />
+                    ) : (
                       <Input label="Service *" placeholder="e.g. Hedge Trimming"
                         error={errors.services?.[i]?.service_type ? 'Service is required' : undefined}
                         {...register(`services.${i}.service_type` as const, { required: true })} />
-                      {/* The RAW template list offered RETIRED services (is_active
-                          false) and named them without a price, so one tap could drop a
-                          switched-off service and its stale rate into the total — while
-                          the PRIMARY service picker above has always been active-only
-                          with prices. Same list, same labels, one behaviour.
-                          A line already pointing at a retired template keeps it as an
-                          option (otherwise editing an old quote would silently blank the
-                          picker), and onChange still resolves against the raw list so a
-                          stored retired id still fills correctly. */}
-                      {lineTemplateOptions(line?.service_template_id).length > 0 && (
-                        <Select label="From template" placeholder="Select a template…"
-                          options={lineTemplateOptions(line?.service_template_id)}
-                          value={watch(`services.${i}.service_template_id`) || ''}
-                          onChange={e => {
-                            const t = templates.find(x => x.id === e.target.value)
-                            setValue(`services.${i}.service_template_id`, e.target.value)
-                            if (t) {
-                              setValue(`services.${i}.service_type`, t.name)
-                              if (Number(t.default_rate) > 0) setValue(`services.${i}.unit_price`, Number(t.default_rate))
-                              const d = (t.pricing_display_type || '').toLowerCase()
-                              setValue(`services.${i}.unit`, d.includes('hour') ? 'hour' : d.includes('linear') ? 'linear_ft' : d.includes('sq') ? 'sqft' : 'each')
-                            }
-                          }} />
-                      )}
-                    </div>
+                    )}
                     <div className="grid grid-cols-3 gap-3">
                       {/* The label follows the unit ("Hours: 3", "Square feet: 1,200")
                           and the step follows the unit's own granularity (0.25 hr). */}

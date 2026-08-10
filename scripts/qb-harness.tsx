@@ -41,11 +41,57 @@ const tmpl = (id: string, name: string, category: string,
   default_description: null, notes: null, unit_cost: null, material_cost: null,
   ...extra,
 })
-const templates = [
-  tmpl('t1', 'Lawn Mowing', 'Lawn', 'starting_from', 65,
+// ⚠️⚠️ SCALE is part of the fixture. The first version of this file listed FOUR
+// services — under the builder's own `activeTemplates.length <= 6` branch, so
+// every number it ever produced was measured against a chip row, while the live
+// business has TWENTY-THREE active services and gets the native <select>. The
+// screen the owner complained about was never the screen being measured.
+// This list mirrors the real catalogue: 23 active + 4 retired, 5 categories.
+const CATALOGUE: [string, string, string, number][] = [
+  ['Lawn Mowing', 'Lawn Care', 'starting_from', 65],
+  ['Weekly Mowing', 'Lawn Care', 'starting_from', 55],
+  ['Bi-Weekly Mowing', 'Lawn Care', 'starting_from', 65],
+  ['One-Time Mowing', 'Lawn Care', 'starting_from', 85],
+  ['String Trimming', 'Lawn Care', 'hourly', 60],
+  ['Lawn Edging', 'Lawn Care', 'per_linear_ft', 1.5],
+  ['Spring Cleanup', 'Property Maintenance', 'starting_from', 240],
+  ['Fall Cleanup', 'Property Maintenance', 'starting_from', 240],
+  ['Yard Cleanup', 'Property Maintenance', 'hourly', 75],
+  ['Weed Removal', 'Property Maintenance', 'hourly', 65],
+  ['Weed Control', 'Property Maintenance', 'starting_from', 90],
+  ['Lawn Fertilization', 'Property Maintenance', 'per_sqft', 0.02],
+  ['Grass Seeding', 'Property Maintenance', 'per_sqft', 0.05],
+  ['Gravel Installation', 'Landscaping', 'starting_from_materials', 350],
+  ['Mulch Installation', 'Landscaping', 'starting_from_materials', 280],
+  ['Rock Installation', 'Landscaping', 'starting_from_materials', 400],
+  ['Landscape Bed Cleanup', 'Landscaping', 'hourly', 70],
+  ['General Landscaping', 'Landscaping', 'hourly', 85],
+  ['Fire Pit Area Preparation', 'Landscaping', 'starting_from_materials', 600],
+  ['Hedge Trimming', 'Tree & Shrub Care', 'hourly', 95],
+  ['Bush Shaping', 'Tree & Shrub Care', 'hourly', 85],
+  ['Pruning', 'Tree & Shrub Care', 'hourly', 90],
+  ['Small Branch Removal', 'Tree & Shrub Care', 'hourly', 110],
+]
+const RETIRED: [string, string, string, number][] = [
+  ['Snow Removal', 'Winter Services', 'starting_from', 120],
+  ['Sidewalk Clearing', 'Winter Services', 'starting_from', 60],
+  ['Ice Control', 'Winter Services', 'starting_from', 45],
+  ['Salting', 'Winter Services', 'starting_from', 40],
+]
+const fullCatalogue = [
+  ...CATALOGUE.map(([name, cat, kind, rate], i) =>
+    tmpl(`t${i + 1}`, name, cat, kind, rate,
+      i === 0 ? { default_description: 'Weekly mow, trim and blow.' } : {})),
+  ...RETIRED.map(([name, cat, kind, rate], i) => tmpl(`r${i + 1}`, name, cat, kind, rate, { is_active: false })),
+] as unknown as ServiceTemplate[]
+
+// The other real shape: a business that pruned its catalogue to what fits on one
+// screen. Kept so the ≤6 chip branch is still measured rather than assumed.
+const smallCatalogue = [
+  tmpl('t1', 'Lawn Mowing', 'Lawn Care', 'starting_from', 65,
     { default_description: 'Weekly mow, trim and blow.' }),
-  tmpl('t2', 'Hedge Trimming', 'Lawn', 'hourly', 95),
-  tmpl('t3', 'Spring Cleanup', 'Seasonal', 'starting_from', 240),
+  tmpl('t2', 'Hedge Trimming', 'Tree & Shrub Care', 'hourly', 95),
+  tmpl('t3', 'Spring Cleanup', 'Property Maintenance', 'starting_from', 240),
   tmpl('t4', 'Mulch Install', 'Landscaping', 'per_sqft', 3),
 ] as unknown as ServiceTemplate[]
 
@@ -60,6 +106,8 @@ const settings = {
 } as unknown as BusinessSettings
 
 const SCENARIOS: Record<string, Record<string, unknown>> = {
+  // The ≤6 chip branch, on the same blank form — measured, not assumed.
+  small: {},
   // A fresh quote — what an owner meets in a driveway.
   blank: {},
   // Straight off an existing customer card.
@@ -88,7 +136,7 @@ const html = `<!doctype html><html><head><meta charset="utf-8">
 </head><body class="bg-bg text-ink"><div id="root">${
   renderToStaticMarkup(
     React.createElement(QuoteBuilder, {
-      customers, templates, tiers, settings,
+      customers, templates: scenario === 'small' ? smallCatalogue : fullCatalogue, tiers, settings,
       defaultValues: SCENARIOS[scenario] ?? {},
       onSubmit: async () => undefined,
     } as never),
