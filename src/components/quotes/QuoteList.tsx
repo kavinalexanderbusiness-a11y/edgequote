@@ -18,13 +18,14 @@ import { Button } from '@/components/ui/Button'
 import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { SearchInput } from '@/components/ui/SearchInput'
 import { FilterPill } from '@/components/ui/FilterPill'
+import { Menu } from '@/components/ui/Menu'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
 import { useBulkSelect } from '@/hooks/useBulkSelect'
 import { BulkActionBar, SelectCheckbox, SelectAllToggle, type BulkAction } from '@/components/ui/BulkActions'
 import { exportRowsToCsv } from '@/lib/csv'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
-import { Trash2, Bell, Send, FileText, Copy, Download } from 'lucide-react'
+import { Trash2, Bell, Send, FileText, Copy, Download, MoreHorizontal } from 'lucide-react'
 
 interface QuoteListProps {
   quotes: Quote[]
@@ -463,18 +464,38 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
                     </td>
                     <td className="px-3 sm:px-5 py-3.5 text-ink-faint hidden lg:table-cell">{formatDate(q.created_at)}</td>
                     <td className="px-3 sm:px-5 py-3.5" onClick={e => e.stopPropagation()}>
+                      {/* ── Why this is a menu and not a red button ──────────────
+                          It used to be a bare `variant="danger"` Delete, and its
+                          `opacity-100 sm:opacity-0 sm:group-hover:opacity-100` meant
+                          desktop revealed it on hover — but a PHONE has no hover, so
+                          on mobile it was permanently visible AND the only per-row
+                          action on a row you open by tapping. A red button at the
+                          right edge of a list you scroll with your thumb, where the
+                          delete is not confirmed (it deletes optimistically and offers
+                          an Undo toast), meaning one stray tap loses a quote and the
+                          only way back expires with the toast.
+                          Behind a menu the row has ONE obvious action — tap it, open
+                          it — and destroying a quote takes two deliberate taps. Same
+                          `ui/Menu` + `danger` pattern the invoices list already uses.
+                          Nothing is removed and the undo still works. */}
                       <div className="flex items-center gap-1 justify-end">
-                        <Button
-                          variant="danger"
-                          size="sm"
-                          onClick={() => handleDelete(q.id)}
-                          loading={deleting === q.id}
-                          title="Delete quote"
-                          aria-label="Delete quote"
-                          className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
+                        <Menu align="end" width={180} ariaLabel="Quote actions" items={[
+                          { key: 'delete', label: 'Delete quote', icon: Trash2, danger: true, onSelect: () => handleDelete(q.id) },
+                        ]}>
+                          {({ toggle, triggerProps }) => (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={toggle}
+                              loading={deleting === q.id}
+                              title="Quote actions"
+                              aria-label="Quote actions"
+                              {...triggerProps}
+                            >
+                              <MoreHorizontal className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
+                        </Menu>
                         {/* No arrow button — the whole row navigates (one less
                             tap target squeezing phone rows). */}
                       </div>

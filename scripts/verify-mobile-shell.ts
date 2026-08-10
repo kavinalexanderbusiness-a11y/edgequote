@@ -141,5 +141,29 @@ for (const keep of ['Open Items', 'Upcoming Work', 'Properties']) {
   check(`"${keep}" is still shown without opening anything`, profile.includes(keep) && !inner.includes(`>${keep}<`))
 }
 
+// ── 5. A phone has no hover, so hover cannot be a safety mechanism ───────────
+// The quotes list guarded its per-row Delete with
+// `opacity-100 sm:opacity-0 sm:group-hover:opacity-100` — revealed on hover on
+// desktop, and therefore PERMANENTLY VISIBLE on a phone, where it was the only
+// per-row action on a row you open by tapping. Quote delete is not confirmed (it
+// deletes optimistically and offers an Undo toast), so one stray thumb at the edge
+// of a scrolling list lost a quote and the way back expired with the toast.
+// It now lives behind ui/Menu with `danger: true` — the pattern the invoices list
+// already uses. This pins that it stays there.
+console.log('\n── destructive row actions are not hover-gated ──')
+const quoteList = readFileSync('src/components/quotes/QuoteList.tsx', 'utf8')
+// The row's action cell, i.e. after the bulk-action block.
+check('deleting a quote from the list goes through a menu, not a bare button',
+  /ariaLabel="Quote actions"/.test(quoteList) && /key: 'delete'[^}]*danger: true/.test(quoteList))
+// No `s` flag: this project's tsconfig target predates it, and using it fails tsc
+// AND the build while every markup assertion still passes — a guard that breaks the
+// build is worse than the bug it guards. `[\s\S]` spans lines without the flag.
+check('… and no row-level delete is revealed only on hover',
+  !/aria-label="Delete quote"[\s\S]{0,200}group-hover:opacity-100/.test(quoteList)
+  && !/group-hover:opacity-100[\s\S]{0,200}aria-label="Delete quote"/.test(quoteList),
+  'a hover-revealed delete is always-visible on touch')
+check('the quote delete itself is still available (capability not removed)',
+  /onSelect: \(\) => handleDelete\(q\.id\)/.test(quoteList))
+
 console.log(`\n${fail === 0 ? '✓' : '✗'} mobile shell checks: ${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)
