@@ -21,6 +21,7 @@
 // It runs the REAL engines — no copies, no mocks. Deterministic, no network, no API
 // key, so it runs in CI beside the other verifiers.
 
+import { readFileSync } from 'node:fs'
 import type { Payment, BusinessSettings, ExpenseWithRelations, FixedAsset, Liability } from '../src/types'
 import {
   sumExpenses, expenseNet, parseMoney, validateExpense, expenseFromForm, blankExpense,
@@ -268,6 +269,28 @@ console.log('\nJob costing — a job with no receipts has an UNKNOWN cost, never
     seam[0].marginPercent !== null && Math.abs(seam[0].marginPercent - 38.5) < 0.1,
     `got ${seam[0].marginPercent}`)
   eq('the overridden job costs against its manual price', seam[1].revenue, 120)
+
+  // ── …and the CONSUMER must actually hand the seam over ──────────────────────
+  // Everything above tests the ENGINE, and the engine has been right since RPT-1.
+  // The bug survived anyway, for two years of book, because the ONLY caller of
+  // costJobs re-shaped its rows as `{ id, price }` and dropped `value` on the
+  // floor — so costing fell straight back down `j.value ?? j.price` to the manual
+  // override the seam exists to replace. Re-measured on the live book at the time
+  // of this fix: 137 of 231 jobs (59%) carry no manual price and 135 of those ARE
+  // quote-linked, i.e. the seam had a real number for every one of them and the
+  // page threw it away.
+  // A pure-function test could never catch that, so this asserts the wiring.
+  {
+    const page = readFileSync('src/app/dashboard/accounting/job-costing/page.tsx', 'utf8')
+    // The row shape handed to costJobs, wherever it sits in the file.
+    const rowShape = page.match(/jobs:\s*jobs\.map\([^\n]*\)/)?.[0] ?? ''
+    check('the Job Costing page calls costJobs at all', page.includes('costJobs('))
+    check('the Job Costing page passes `value` into costJobs, not just `price`',
+      /\bvalue:/.test(rowShape),
+      `the only consumer of costJobs is dropping the visit-value seam again — most of the book will value at $0. Row shape: ${rowShape || '(not found)'}`)
+    check('…and still passes `price` so a manual override is honoured',
+      /\bprice:/.test(rowShape), rowShape || '(not found)')
+  }
 
   // UNKNOWN STAYS UNKNOWN. The seam returns 0 when it has nothing to derive from;
   // that must reach costing as null, never as a $0 revenue — a 0 would report a

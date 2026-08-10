@@ -62,7 +62,15 @@ function build(data: AccountingData, period: Period) {
   const expenses = expensesInPeriod(data.expenses, period)
 
   const costings = costJobs({
-    jobs: jobs.map(j => ({ id: j.id, price: j.price })),
+    // `value` is the loader's answer to "what is this visit worth" — jobVisitValue
+    // resolved against the originating quote's cadence (lib/accounting/data.ts:209).
+    // `price` is ONLY the manual override, and on the live book 137 of 231 jobs
+    // (59%) carry none while 135 of those ARE quote-linked. Passing price alone
+    // sent every one of them into costJob as revenue = null, so the majority of the
+    // book showed no revenue and no margin on the one screen built to cost jobs.
+    // jobCosting already prefers `j.value ?? j.price` and its own comment calls
+    // price "a fallback for callers that bypassed the loader" — this was that caller.
+    jobs: jobs.map(j => ({ id: j.id, value: j.value, price: j.price })),
     expenses,
     registrant,
   })
