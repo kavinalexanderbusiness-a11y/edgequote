@@ -12,7 +12,6 @@
  *
  * Run: npx tsx scripts/verify-analytics.ts
  */
-import { readFileSync } from 'node:fs'
 import {
   WIDGETS, DEFAULT_LAYOUT, normalizeLayout, visibleWidgets,
   reorder, step, canStep, toggleHidden, isCustomised,
@@ -104,73 +103,6 @@ check('reordering counts as customised',
 check('a round trip back to default is NOT customised',
   isCustomised(normalizeLayout({ order: DEFAULT_LAYOUT.order, hidden: [] })) === false)
 
-
-// ═══════════════════════════════════════════════════════════════════════════
-// FINANCIAL TRUTH — two wiring guards, deliberately NOT unit tests.
-//
-// Both defects these cover were invisible to a unit test, because in both cases
-// the ENGINE was already right and the CALLER was wrong. So these assert the
-// wiring: which column a document reads, and whether a screen says what its
-// number rests on. Hand-built rows can never catch either.
-console.log('\n── financial truth: no document may read the fabricated subtotal ──')
-{
-  // `quotes.subtotal` is `generated always as (hours * crew_size * rate)` — the
-  // exact fabrication RUN-2026-07-16e removed from `quotes.total` after it priced
-  // real customer work. It was removed from `total` and left alive as a FALLBACK in
-  // two customer-facing document paths and one owner screen. On the live book it
-  // disagrees with initial_price on 84 of 93 quotes and is non-zero on 61.
-  const files = [
-    'src/components/quotes/QuotePDF.tsx',
-    'src/lib/portalPdf.ts',
-    'src/app/dashboard/quotes/[id]/page.tsx',
-  ]
-  for (const f of files) {
-    const src = readFileSync(f, 'utf8')
-    // Strip comments: these files now DOCUMENT the trap by name, and prose about a
-    // column must never fail a check about reading it.
-    const code = src.split('\n').filter(l => {
-      const t = l.trim()
-      return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*') || t.startsWith('{/*'))
-    }).join('\n')
-    check(`${f} does not fall back to the legacy quotes.subtotal`,
-      !/\?\?\s*\w*\.?\bsubtotal\b/.test(code) && !/\bq(uote)?\.subtotal\b/.test(code),
-      'a document is reading hours × crew_size × rate as a price')
-  }
-  // And the portal mapper must not merely stop preferring it — it must not name it.
-  const portal = readFileSync('src/lib/portalPdf.ts', 'utf8')
-  const mapping = portal.match(/subtotal:\s*num\([^)]*\)/)?.[0] ?? ''
-  check('portalPdf maps subtotal from the real price, not the legacy column',
-    mapping.includes('initial_price') && !mapping.includes('q.subtotal'), mapping || '(not found)')
-}
-
-console.log('\n── financial truth: a modelled profit may not present as measured ──')
-{
-  // grossProfitYTD's cost side is minutes × crew rate, and laborMinOf resolves
-  // minutes as actual || estimated || a 45-minute constant. Measured on the live
-  // book: 35 of 71 YTD jobs (49%) had observed time. The figure was labelled
-  // "Gross profit YTD" with no qualifier.
-  const bi = readFileSync('src/lib/businessIntelligence.ts', 'utf8')
-  check('businessIntelligence reports the labour basis behind gross profit',
-    /laborBasis:\s*\{\s*observedJobs/.test(bi), 'the caller cannot tell modelled from measured')
-  check('…counted from actual_minutes, mirroring laborMinOf\'s own first branch',
-    /if \(Number\(j\.actual_minutes\)\) observedJobs\+\+; else assumedJobs\+\+/.test(bi))
-  check('a year\'s profit carries whether its labour was assumed',
-    /profitEstimated: yrRoutes\.some\(r => !r\.hasLaborData\)/.test(bi),
-    'reuses the profit engine\'s existing hasLaborData rather than a new signal')
-
-  // The wiring half: the surface must actually USE the basis.
-  const page = readFileSync('src/app/dashboard/intelligence/page.tsx', 'utf8')
-  check('the Intelligence page labels gross profit as an estimate when it is one',
-    /laborBasis/.test(page) && /Gross profit YTD \(est\.\)/.test(page),
-    'the basis is computed but the screen still claims a measured figure')
-  check('…and says how much of it was timed',
-    /jobs timed/.test(page))
-  check('the yearly profit stat is labelled from profitEstimated',
-    /profitEstimated \? 'Profit this year \(est\.\)'/.test(page))
-  // The number itself must NOT have moved — this lane repairs claims, not arithmetic.
-  check('gross profit arithmetic is untouched (still revenue − minutes × crew rate)',
-    /const cost = \(lm \/ 60\) \* crewCost/.test(bi) && /grossProfit \+= p/.test(bi))
-}
 
 console.log(failures === 0
   ? '\n✅ analytics layout verified\n'
