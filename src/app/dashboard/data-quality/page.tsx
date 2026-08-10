@@ -25,7 +25,7 @@ import {
 import { loadBusinessShape, SHAPE_LOADING, type BusinessShape } from '@/lib/businessShape'
 import { GradeBadge } from '@/components/ui/GradeBadge'
 import {
-  ShieldCheck, UserPlus, Home, AlertTriangle, CheckCircle2, ArrowRight, DollarSign, Link2, Users, FileText, MapPin, Phone, Ruler, Copy,
+  ShieldCheck, UserPlus, Home, AlertTriangle, CheckCircle2, ArrowRight, DollarSign, Link2, Users, FileText, MapPin, Phone, Ruler, Copy, ChevronRight,
 } from 'lucide-react'
 
 interface QRow {
@@ -53,6 +53,9 @@ export default function DataQualityPage() {
   const [ctx, setCtx] = useState<ProfitContext>(EMPTY_CTX)
   // Whether this business does lawn work — derived, never asked (lib/businessShape).
   const [shape, setShape] = useState<BusinessShape>(SHAPE_LOADING)
+  // Supabase RESOLVES on failure. Without this, "we couldn't read your customers"
+  // and "you have no problems" are the same screen — and it's the green one.
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     const { data: { session } } = await supabase.auth.getSession()
@@ -72,6 +75,8 @@ export default function DataQualityPage() {
     ])
     setShape(shapeRes)
 
+    const readErr = cRes.error || qRes.error || jRes.error || rRes.error || pRes.error
+    setLoadError(readErr ? (readErr.message || 'Some records could not be read.') : null)
     setCustomers((cRes.data as Customer[]) || [])
 
     const qRows = ((qRes.data as Array<Record<string, any>>) || [])
@@ -158,13 +163,13 @@ export default function DataQualityPage() {
     const propCovered = (quotes.length - quotes.filter(q => !q.property_id).length) + (jobs.length - jobs.filter(j => !j.property_id).length)
 
     const rows: CoverageRow[] = [
-      { key: 'customer', label: 'Customer coverage', covered: custCovered, total: totalLinkables, pct: coveragePct(custCovered, totalLinkables), hint: 'Quotes & jobs linked to a real customer' },
-      { key: 'contact', label: 'Customer contact', covered: custReachable, total: customers.length, pct: coveragePct(custReachable, customers.length), hint: 'Customers reachable by phone or email' },
-      { key: 'property', label: 'Property coverage', covered: propCovered, total: totalLinkables, pct: coveragePct(propCovered, totalLinkables), hint: 'Quotes & jobs linked to a property' },
-      { key: 'located', label: 'Properties located', covered: located, total: locatable.length, pct: coveragePct(located, locatable.length), hint: 'Properties with map coordinates (drives routes & maps)' },
-      ...(auditsLawn ? [{ key: 'size', label: 'Property size', covered: sized, total: sizable.length, pct: coveragePct(sized, sizable.length), hint: 'Properties with a lawn size for pricing' } as CoverageRow] : []),
-      { key: 'quote', label: 'Job → quote linkage', covered: jobs.length - jobsNoQuote, total: jobs.length, pct: coveragePct(jobs.length - jobsNoQuote, jobs.length), hint: 'Jobs tied to a quote for pricing' },
-      { key: 'revenue', label: 'Revenue coverage', covered: jobsWithValue, total: activeJobs.length, pct: coveragePct(jobsWithValue, activeJobs.length), hint: 'Active jobs that produce a $ value' },
+      { key: 'customer', label: 'Work that knows who it’s for', covered: custCovered, total: totalLinkables, pct: coveragePct(custCovered, totalLinkables), hint: 'Quotes and jobs with no customer never become an invoice' },
+      { key: 'contact', label: 'Customers you can reach', covered: custReachable, total: customers.length, pct: coveragePct(custReachable, customers.length), hint: 'No phone and no email means no quote, reminder or invoice can be sent' },
+      { key: 'property', label: 'Work that knows where it is', covered: propCovered, total: totalLinkables, pct: coveragePct(propCovered, totalLinkables), hint: 'Without an address the visit can’t be routed or mapped' },
+      { key: 'located', label: 'Properties located', covered: located, total: locatable.length, pct: coveragePct(located, locatable.length), hint: 'The rest are skipped when planning your day' },
+      ...(auditsLawn ? [{ key: 'size', label: 'Properties measured', covered: sized, total: sizable.length, pct: coveragePct(sized, sizable.length), hint: 'Without a size we can’t suggest a price for the work' } as CoverageRow] : []),
+      { key: 'quote', label: 'Jobs that know their price', covered: jobs.length - jobsNoQuote, total: jobs.length, pct: coveragePct(jobs.length - jobsNoQuote, jobs.length), hint: 'A job with no quote behind it shows $0 in your revenue' },
+      { key: 'revenue', label: 'Jobs that count toward revenue', covered: jobsWithValue, total: activeJobs.length, pct: coveragePct(jobsWithValue, activeJobs.length), hint: 'Booked work carrying no money into your reports' },
     ]
     return {
       rows, score: overallScore(rows),
@@ -235,10 +240,13 @@ export default function DataQualityPage() {
   // One call also resolves the real community name.
   async function geocodeAllProperties() {
     setWorking('geo-all'); setProgress({ done: 0, total: m.propsUngeocoded.length })
+    let found = 0, missed = 0
     try {
       for (const p of m.propsUngeocoded) {
         const c = await geocodeAddressDetailed(p.address)
+        if (!c) missed++
         if (c) {
+          found++
           const patch: Record<string, unknown> = { lat: c.lat, lng: c.lng }
           if (c.neighborhood) patch.neighborhood = c.neighborhood
           const { error: upErr } = await supabase.from('properties').update(patch).eq('id', p.id)
@@ -246,25 +254,40 @@ export default function DataQualityPage() {
         }
         setProgress(pr => pr ? { ...pr, done: pr.done + 1 } : pr)
       }
-    } catch (e) { toast.error('Could not geocode properties: ' + (e instanceof Error ? e.message : 'error')) }
-    finally { await load().catch(() => {}); setWorking(null); setProgress(null) }
+    } catch (e) { toast.error('Could not locate those properties. ' + (e instanceof Error ? e.message : '')) }
+    finally {
+      if (found || missed) {
+        if (missed === 0) toast.success(`Located ${found} propert${found !== 1 ? 'ies' : 'y'}.`)
+        else toast.error(`Located ${found} of ${found + missed}. ${missed} address${missed !== 1 ? 'es' : ''} couldn't be found — check the spelling on those.`)
+      }
+      await load().catch(() => {}); setWorking(null); setProgress(null)
+    }
   }
 
   // Resolve real community names ("Queensland", not "T2J") for located properties.
   // Stored once on the property — every neighborhood surface reads it from there.
   async function nameAllNeighborhoods() {
     setWorking('name-all'); setProgress({ done: 0, total: m.propsUnnamed.length })
+    let found = 0, missed = 0
     try {
       for (const p of m.propsUnnamed) {
         const name = await reverseNeighborhood(p.lat as number, p.lng as number)
+        if (!name) missed++
         if (name) {
+          found++
           const { error: upErr } = await supabase.from('properties').update({ neighborhood: name }).eq('id', p.id)
           if (upErr) throw new Error(upErr.message)
         }
         setProgress(pr => pr ? { ...pr, done: pr.done + 1 } : pr)
       }
-    } catch (e) { toast.error('Could not resolve neighborhoods: ' + (e instanceof Error ? e.message : 'error')) }
-    finally { await load().catch(() => {}); setWorking(null); setProgress(null) }
+    } catch (e) { toast.error('Could not resolve those neighbourhoods. ' + (e instanceof Error ? e.message : '')) }
+    finally {
+      if (found || missed) {
+        if (missed === 0) toast.success(`Named ${found} neighbourhood${found !== 1 ? 's' : ''}.`)
+        else toast.error(`Named ${found} of ${found + missed}. No name is published for the other ${missed}.`)
+      }
+      await load().catch(() => {}); setWorking(null); setProgress(null)
+    }
   }
 
   async function repairJobCustomer(j: DQJob) {
@@ -295,7 +318,14 @@ export default function DataQualityPage() {
     </PageContainer>
   )
 
-  const allClean = m.quotesNoCustomer.length === 0 && m.quotesNoProperty.length === 0 && m.jobsNoCustomer.length === 0 && m.jobsNoPrice === 0 && m.jobsNoQuote === 0 && m.propsUngeocoded.length === 0 && m.propsUnnamed.length === 0
+  // Every section rendered below must be in this test. It used to omit contact,
+  // size, duplicates and orphan properties — so a book with 12 unreachable
+  // customers got the green "your data is clean" banner one scroll above them.
+  const allClean = m.quotesNoCustomer.length === 0 && m.quotesNoProperty.length === 0 && m.jobsNoCustomer.length === 0
+    && m.jobsNoPrice === 0 && m.jobsNoQuote === 0 && m.propsUngeocoded.length === 0 && m.propsUnnamed.length === 0
+    && m.customersNoContact.length === 0 && m.propsNoSize.length === 0 && m.dupes.length === 0 && m.propsNoCustomer === 0
+  // S9: an EMPTY book is not a clean book. Nothing has been graded.
+  const nothingToCheck = m.rows.every(r => r.total === 0)
 
   return (
     <PageContainer>
@@ -310,7 +340,22 @@ export default function DataQualityPage() {
           : ''}
       </span>
 
-      {/* Score hero */}
+      {loadError && (
+        <Banner tone="danger" icon={AlertTriangle}
+          action={<Button size="sm" variant="secondary" onClick={() => { setLoading(true); load() }}>Reload</Button>}>
+          We couldn’t read all of your records just now, so this isn’t a complete picture — don’t treat it as an all-clear.
+        </Banner>
+      )}
+
+      {/* Score hero — suppressed when the numbers underneath it can't be trusted. */}
+      {nothingToCheck && !loadError ? (
+        <Card>
+          <CardBody>
+            <p className="text-sm font-bold text-ink">Nothing to check yet</p>
+            <p className="text-xs text-ink-muted mt-0.5">Come back once you’ve added a few customers and booked some work — there’s nothing here to grade.</p>
+          </CardBody>
+        </Card>
+      ) : loadError ? null : (
       <Card>
         <CardBody className="flex items-center gap-4">
           <GradeBadge grade={grade} size="lg">{m.score}</GradeBadge>
@@ -319,21 +364,62 @@ export default function DataQualityPage() {
               <ShieldCheck className="w-4 h-4" style={{ color: DQ_GRADE_COLORS[grade] }} /> Data health: {scoreLabel(m.score)}
             </p>
             <p className="text-xs text-ink-muted mt-0.5">
-              Score is the average of the coverage dimensions below. Fix the gaps to raise it toward 100.
+              The share of your records that have everything the app needs to work.{allClean ? '' : ' Fix the gaps below to raise it.'}
             </p>
           </div>
         </CardBody>
       </Card>
+      )}
 
       {/* Coverage bars */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {m.rows.map(r => <CoverageCard key={r.key} row={r} />)}
       </div>
 
-      {allClean && (
+      {allClean && !loadError && !nothingToCheck && (
         <Banner tone="success" icon={CheckCircle2}>
-          Everything is linked and priced. Your data is clean — Saturation Map &amp; Neighbor Leads can trust it.
+          Everything is linked, reachable and priced. Your routes, reminders and invoices all have what they need.
         </Banner>
+      )}
+
+      {/* ── Ordered by consequence, not by table ──────────────────────────
+          Every section below used to render at identical weight, in an order
+          where a cosmetic map label outranked people who can never be sent an
+          invoice, and unbillable work sat second from last. Money first, then
+          identity, then routing, then cosmetics. */}
+      {/* Customers with no phone or email — unreachable by any channel */}
+      {m.customersNoContact.length > 0 && (
+        <Section icon={Phone} title={`${m.customersNoContact.length} customer${m.customersNoContact.length !== 1 ? 's' : ''} with no contact info`}
+          subtitle={`No phone or email — they can't receive quotes, reminders or invoices.`}>
+          {m.customersNoContact.slice(0, 40).map((c, i) => (
+            <Link key={c.id} href={`/dashboard/customers/${c.id}`} className={`flex items-center justify-between gap-2 rounded-card border border-border p-3 hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 animate-rise stagger-${Math.min(i + 1, 6)}`}>
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-ink truncate">{c.name}</p>
+                <p className="text-xs text-ink-muted truncate">{c.address || 'No address'}</p>
+              </div>
+              <span className="text-[11px] text-accent-text shrink-0 flex items-center gap-1">Add contact <ArrowRight className="w-3 h-3" /></span>
+            </Link>
+          ))}
+          {m.customersNoContact.length > 40 && <p className="text-xs text-ink-faint">+{m.customersNoContact.length - 40} more.</p>}
+        </Section>
+      )}
+
+      {/* Jobs missing a customer — derive from property/quote */}
+      {m.jobsNoCustomer.length > 0 && (
+        <Section icon={Users} title={`${m.jobsNoCustomer.length} job${m.jobsNoCustomer.length !== 1 ? 's' : ''} with no customer`}
+          subtitle="Backfill each job's customer from its property or linked quote.">
+          {m.jobsNoCustomer.slice(0, 40).map((j, i) => (
+            <div key={j.id} className={`flex items-center justify-between gap-2 rounded-card border border-border p-3 animate-rise stagger-${Math.min(i + 1, 6)}`}>
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-ink truncate">{j.title}</p>
+                <p className="text-xs text-ink-muted">{j.scheduled_date}</p>
+              </div>
+              <Button size="sm" variant="secondary" loading={working === j.id} onClick={() => repairJobCustomer(j)}>
+                <Link2 className="w-3.5 h-3.5" /> Link customer
+              </Button>
+            </div>
+          ))}
+        </Section>
       )}
 
       {/* Quotes missing a customer — manual review (identity matters) */}
@@ -375,12 +461,30 @@ export default function DataQualityPage() {
         </Section>
       )}
 
+      {/* Potential duplicate customers — share a phone, email or address */}
+      {m.dupes.length > 0 && (
+        <Section icon={Copy} title={`${m.dupes.length} potential duplicate${m.dupes.length !== 1 ? 's' : ''}`}
+          subtitle="These customer pairs share a phone, email or address. Open each to confirm and merge if they're the same person.">
+          {m.dupes.slice(0, 40).map((d, i) => (
+            <div key={i} className={`rounded-card border border-border p-3 animate-rise stagger-${Math.min(i + 1, 6)}`}>
+              <span className="text-[10px] uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded-full px-2 py-0.5">Same {d.reason}</span>
+              <div className="flex items-center justify-between gap-2 mt-2">
+                <Link href={`/dashboard/customers/${d.a.id}`} className="tap-target-y text-sm font-medium text-ink hover:text-accent-text truncate min-w-0 flex-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 inline-flex items-center">{d.a.name}</Link>
+                <Copy className="w-3.5 h-3.5 text-ink-faint shrink-0" />
+                <Link href={`/dashboard/customers/${d.b.id}`} className="tap-target-y text-sm font-medium text-ink hover:text-accent-text truncate min-w-0 flex-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 inline-flex items-center justify-end">{d.b.name}</Link>
+              </div>
+            </div>
+          ))}
+          {m.dupes.length > 40 && <p className="text-xs text-ink-faint">+{m.dupes.length - 40} more.</p>}
+        </Section>
+      )}
+
       {/* Quotes missing a property — safe bulk backfill (customer already exists) */}
       {m.quotesNoProperty.length > 0 && (
         <Section icon={Home} title={`${m.quotesNoProperty.length} quote${m.quotesNoProperty.length !== 1 ? 's' : ''} with no property`}
           subtitle="These have a customer but no property record — needed for the map, routes and saturation."
           action={
-            <Button size="sm" loading={working === 'all-props'} onClick={fixAllProperties}>
+            <Button size="sm" loading={working === 'all-props'} disabled={!!working && working !== 'all-props'} onClick={fixAllProperties}>
               <Home className="w-3.5 h-3.5" /> {working === 'all-props' && progress ? `Linking ${progress.done} of ${progress.total}` : `Link all ${m.quotesNoProperty.length}`}
             </Button>
           }>
@@ -403,54 +507,32 @@ export default function DataQualityPage() {
         <Section icon={MapPin} title={`${m.propsUngeocoded.length} propert${m.propsUngeocoded.length !== 1 ? 'ies' : 'y'} not located`}
           subtitle="No map coordinates — these vanish from routes, best-day suggestions and the saturation map."
           action={
-            <Button size="sm" loading={working === 'geo-all'} onClick={geocodeAllProperties}>
+            <Button size="sm" loading={working === 'geo-all'} disabled={!!working && working !== 'geo-all'} onClick={geocodeAllProperties}>
               <MapPin className="w-3.5 h-3.5" /> {working === 'geo-all' && progress ? `Locating ${progress.done} of ${progress.total}` : `Locate all ${m.propsUngeocoded.length}`}
             </Button>
           }>
-          {m.propsUngeocoded.slice(0, 40).map((p, i) => (
+          {m.propsUngeocoded.slice(0, 3).map((p, i) => (
             <div key={p.id} className={`flex items-center gap-2 rounded-card border border-border p-3 animate-rise stagger-${Math.min(i + 1, 6)}`}>
               <MapPin className="w-3.5 h-3.5 text-ink-faint shrink-0" />
               <p className="text-sm text-ink truncate">{p.address}</p>
             </div>
           ))}
-          {m.propsUngeocoded.length > 40 && <p className="text-xs text-ink-faint">+{m.propsUngeocoded.length - 40} more — all included in “Locate all”.</p>}
-        </Section>
-      )}
-
-      {/* Located properties without a real community name — analytics show the
-          postal prefix (T2J) instead of the neighborhood (Queensland) until fixed */}
-      {m.propsUnnamed.length > 0 && (
-        <Section icon={MapPin} title={`${m.propsUnnamed.length} propert${m.propsUnnamed.length !== 1 ? 'ies' : 'y'} without a neighborhood name`}
-          subtitle="Resolve real community names so the map and rankings say “Queensland”, not “T2J”."
-          action={
-            <Button size="sm" loading={working === 'name-all'} onClick={nameAllNeighborhoods}>
-              <MapPin className="w-3.5 h-3.5" /> {working === 'name-all' && progress ? `Naming ${progress.done} of ${progress.total}` : `Name all ${m.propsUnnamed.length}`}
-            </Button>
-          }>
-          {m.propsUnnamed.slice(0, 40).map((p, i) => (
-            <div key={p.id} className={`flex items-center gap-2 rounded-card border border-border p-3 animate-rise stagger-${Math.min(i + 1, 6)}`}>
-              <MapPin className="w-3.5 h-3.5 text-ink-faint shrink-0" />
-              <p className="text-sm text-ink truncate">{p.address}</p>
-            </div>
-          ))}
-          {m.propsUnnamed.length > 40 && <p className="text-xs text-ink-faint">+{m.propsUnnamed.length - 40} more — all included in “Name all”.</p>}
-        </Section>
-      )}
-
-      {/* Customers with no phone or email — unreachable by any channel */}
-      {m.customersNoContact.length > 0 && (
-        <Section icon={Phone} title={`${m.customersNoContact.length} customer${m.customersNoContact.length !== 1 ? 's' : ''} with no contact info`}
-          subtitle={`No phone or email — they can't receive quotes, reminders or invoices. (${m.customersNoPhone} missing a phone · ${m.customersNoEmail} missing an email in total.)`}>
-          {m.customersNoContact.slice(0, 40).map((c, i) => (
-            <Link key={c.id} href={`/dashboard/customers/${c.id}`} className={`flex items-center justify-between gap-2 rounded-card border border-border p-3 hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 animate-rise stagger-${Math.min(i + 1, 6)}`}>
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-ink truncate">{c.name}</p>
-                <p className="text-xs text-ink-muted truncate">{c.address || 'No address'}</p>
+          {m.propsUngeocoded.length > 3 && (
+            <details className="group">
+              <summary className="tap-target-y flex items-center gap-1.5 text-xs text-ink-muted hover:text-ink cursor-pointer list-none select-none">
+                <ChevronRight className="w-3.5 h-3.5 transition-transform group-open:rotate-90" />
+                Show the other {m.propsUngeocoded.length - 3} — all included in “Locate all”
+              </summary>
+              <div className="space-y-2 mt-2">
+                {m.propsUngeocoded.slice(3, 200).map(p => (
+                  <div key={p.id} className="flex items-center gap-2 rounded-card border border-border p-3">
+                    <MapPin className="w-3.5 h-3.5 text-ink-faint shrink-0" />
+                    <p className="text-sm text-ink truncate">{p.address}</p>
+                  </div>
+                ))}
               </div>
-              <span className="text-[11px] text-accent-text shrink-0 flex items-center gap-1">Add contact <ArrowRight className="w-3 h-3" /></span>
-            </Link>
-          ))}
-          {m.customersNoContact.length > 40 && <p className="text-xs text-ink-faint">+{m.customersNoContact.length - 40} more.</p>}
+            </details>
+          )}
         </Section>
       )}
 
@@ -470,39 +552,24 @@ export default function DataQualityPage() {
         </Section>
       )}
 
-      {/* Potential duplicate customers — share a phone, email or address */}
-      {m.dupes.length > 0 && (
-        <Section icon={Copy} title={`${m.dupes.length} potential duplicate${m.dupes.length !== 1 ? 's' : ''}`}
-          subtitle="These customer pairs share a phone, email or address. Open each to confirm and merge if they're the same person.">
-          {m.dupes.slice(0, 40).map((d, i) => (
-            <div key={i} className={`rounded-card border border-border p-3 animate-rise stagger-${Math.min(i + 1, 6)}`}>
-              <span className="text-[10px] uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded-full px-2 py-0.5">Same {d.reason}</span>
-              <div className="flex items-center justify-between gap-2 mt-2">
-                <Link href={`/dashboard/customers/${d.a.id}`} className="text-sm font-medium text-ink hover:text-accent-text truncate min-w-0 flex-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{d.a.name}</Link>
-                <Copy className="w-3.5 h-3.5 text-ink-faint shrink-0" />
-                <Link href={`/dashboard/customers/${d.b.id}`} className="text-sm font-medium text-ink hover:text-accent-text truncate min-w-0 flex-1 text-right rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{d.b.name}</Link>
-              </div>
+      {/* ── Below here only affects labels and pricing suggestions ── */}
+      {/* Located properties without a real community name — analytics show the
+          postal prefix (T2J) instead of the neighborhood (Queensland) until fixed */}
+      {m.propsUnnamed.length > 0 && (
+        <Section icon={MapPin} title={`${m.propsUnnamed.length} propert${m.propsUnnamed.length !== 1 ? 'ies' : 'y'} without a neighborhood name`}
+          subtitle="Resolve real community names so the map and rankings say “Queensland”, not “T2J”."
+          action={
+            <Button size="sm" loading={working === 'name-all'} disabled={!!working && working !== 'name-all'} onClick={nameAllNeighborhoods}>
+              <MapPin className="w-3.5 h-3.5" /> {working === 'name-all' && progress ? `Naming ${progress.done} of ${progress.total}` : `Name all ${m.propsUnnamed.length}`}
+            </Button>
+          }>
+          {m.propsUnnamed.slice(0, 3).map((p, i) => (
+            <div key={p.id} className={`flex items-center gap-2 rounded-card border border-border p-3 animate-rise stagger-${Math.min(i + 1, 6)}`}>
+              <MapPin className="w-3.5 h-3.5 text-ink-faint shrink-0" />
+              <p className="text-sm text-ink truncate">{p.address}</p>
             </div>
           ))}
-          {m.dupes.length > 40 && <p className="text-xs text-ink-faint">+{m.dupes.length - 40} more.</p>}
-        </Section>
-      )}
-
-      {/* Jobs missing a customer — derive from property/quote */}
-      {m.jobsNoCustomer.length > 0 && (
-        <Section icon={Users} title={`${m.jobsNoCustomer.length} job${m.jobsNoCustomer.length !== 1 ? 's' : ''} with no customer`}
-          subtitle="Backfill each job's customer from its property or linked quote.">
-          {m.jobsNoCustomer.slice(0, 40).map((j, i) => (
-            <div key={j.id} className={`flex items-center justify-between gap-2 rounded-card border border-border p-3 animate-rise stagger-${Math.min(i + 1, 6)}`}>
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-ink truncate">{j.title}</p>
-                <p className="text-xs text-ink-muted">{j.scheduled_date}</p>
-              </div>
-              <Button size="sm" variant="secondary" loading={working === j.id} onClick={() => repairJobCustomer(j)}>
-                <Link2 className="w-3.5 h-3.5" /> Link customer
-              </Button>
-            </div>
-          ))}
+          {m.propsUnnamed.length > 40 && <p className="text-xs text-ink-faint">+{m.propsUnnamed.length - 40} more — all included in “Name all”.</p>}
         </Section>
       )}
 
@@ -535,7 +602,7 @@ export default function DataQualityPage() {
 
       {/* Properties → customer (structural, FK-enforced) */}
       {m.propsNoCustomer === 0 ? (
-        <Banner tone="success" icon={CheckCircle2}>All {m.propertiesTotal} propert{m.propertiesTotal !== 1 ? 'ies are' : 'y is'} linked to a customer.</Banner>
+        <Banner tone="success" icon={CheckCircle2}>Every property belongs to a customer.</Banner>
       ) : (
         <Banner tone="warn" icon={AlertTriangle}>{m.propsNoCustomer} propert{m.propsNoCustomer !== 1 ? 'ies have' : 'y has'} no customer.</Banner>
       )}
@@ -544,7 +611,7 @@ export default function DataQualityPage() {
 }
 
 function CoverageCard({ row }: { row: CoverageRow }) {
-  const color = row.pct >= 95 ? '#10B981' : row.pct >= 70 ? '#F59E0B' : '#EF4444'
+  const color = DQ_GRADE_COLORS[scoreGrade(row.pct)]
   return (
     <Card className="p-4">
       <div className="flex items-center justify-between gap-2">
@@ -564,7 +631,7 @@ function Section({ icon: Icon, title, subtitle, action, children }: {
 }) {
   return (
     <Card>
-      <div className="px-4 py-3 border-b border-border flex items-start justify-between gap-3">
+      <div className="px-4 py-3 border-b border-border flex items-start justify-between gap-3 flex-wrap">
         <div className="flex items-start gap-2 min-w-0">
           <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
             <Icon className="w-3.5 h-3.5 text-accent-text" />
@@ -574,7 +641,7 @@ function Section({ icon: Icon, title, subtitle, action, children }: {
             <p className="text-xs text-ink-muted mt-0.5">{subtitle}</p>
           </div>
         </div>
-        {action}
+        <div className="shrink-0">{action}</div>
       </div>
       <CardBody className="space-y-2">{children}</CardBody>
     </Card>

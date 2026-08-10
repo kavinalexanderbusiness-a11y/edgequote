@@ -106,7 +106,11 @@ export function ServiceLogDialog({ open, userId, equipment, services, parts = []
     // or the next due-date silently computes from the wrong hours.
     if (meterStale) toast.error(`${serviceKindLabel(v.kind)} logged, but the hour meter didn’t update — edit ${equipment.name}'s hours by hand.`)
     else toast.success(`${serviceKindLabel(v.kind)} logged for ${equipment.name}.`)
+    // `picks` must clear on SUCCESS too, not only on the stock-error path above:
+    // logging a second service without closing the dialog re-ran consumeParts on
+    // the same still-selected parts, taking them off the shelf twice, silently.
     setV(s => ({ ...s, cost: '', notes: '' }))
+    setPicks({})
     onChanged()
   }
 

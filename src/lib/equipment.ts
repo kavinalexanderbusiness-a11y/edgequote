@@ -188,8 +188,24 @@ export function serviceStatus(eq: Equipment, todayISO: string): ServiceStatus {
     return { state: 'due_soon', reason: `Service soon — ${why}`, hoursRemaining, daysRemaining, tone: 'warn' }
   }
 
+  // A DAY interval with nothing to count from (no last service, no purchase date)
+  // left daysRemaining null while every due/soon test read false — so this line
+  // templated the null and the card announced "null days until next service" in
+  // GREEN. Reachable on a first run: the dialog needs only a name, and its own
+  // hint invites a 180-day interval. Say what's missing instead of a fake all-clear.
+  if (hoursRemaining == null && daysRemaining == null) {
+    return { state: 'untracked', reason: 'Add a purchase or last-service date to start the countdown', hoursRemaining, daysRemaining, tone: 'neutral' }
+  }
   const why = hoursRemaining != null ? `${hoursRemaining} h until next service` : `${daysRemaining} days until next service`
   return { state: 'ok', reason: why, hoursRemaining, daysRemaining, tone: 'success' }
+}
+
+// THE needs-service predicate. Both the fleet rollup and the page's filter call
+// this, so the "Needs service (N)" count can never disagree with the list it opens.
+export function needsService(eq: Equipment, todayISO: string): boolean {
+  if (eq.status === 'retired') return false
+  const s = serviceStatus(eq, todayISO).state
+  return s === 'due' || s === 'due_soon'
 }
 
 export type WarrantyState = 'covered' | 'expiring' | 'expired' | 'none'
