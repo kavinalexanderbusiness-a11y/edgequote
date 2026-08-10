@@ -1180,7 +1180,7 @@ export default function CustomerDetailPage() {
                   <Link href={`/dashboard/quotes/new?customer=${customer.id}&property=${p.id}`} title="New quote" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
                     <FilePlus className="w-3.5 h-3.5" /> Quote
                   </Link>
-                  <Link href={`/dashboard/schedule?customer=${customer.id}&property=${p.id}`} title="Schedule job" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
+                  <Link href={`/dashboard/schedule?customer=${customer.id}&property=${p.id}`} title="Schedule a visit" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
                     <CalendarPlus className="w-3.5 h-3.5" /> Job
                   </Link>
                   {showMeasure && (
