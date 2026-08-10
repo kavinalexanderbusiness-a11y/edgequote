@@ -34,6 +34,7 @@
     "verify:accounting": "tsx scripts/verify-accounting.ts",
     "verify:reports": "tsx scripts/verify-reports.ts",
     "verify:day-settings": "tsx scripts/verify-day-settings.ts",
+    "verify:settings-save": "tsx scripts/verify-settings-save.ts",
     "verify:crew-sync": "tsx scripts/verify-crew-sync.ts",
     "verify:recurrence": "tsx scripts/verify-recurrence.ts",
     "verify:dedup": "tsx scripts/verify-dedup.ts",

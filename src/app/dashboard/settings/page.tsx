@@ -58,9 +58,19 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false)
   const [localTiers, setLocalTiers] = useState<Partial<TravelFeeTier>[]>([])
   const [workDays, setWorkDays] = useState<number[]>(DEFAULT_WORK_DAYS)
-  const toggleDay = (i: number) => setWorkDays(prev => prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i])
   const [workStart, setWorkStart] = useState('08:00')
   const [capacityHours, setCapacityHours] = useState('8')
+  // Dirtiness OUTSIDE react-hook-form. Work days, start time, capacity, seasons
+  // and travel-tier values live in plain state, so rhf's isDirty knows nothing
+  // about them — which had two costs: the Save footer read "no changes" while
+  // these held unsaved edits, and the background revalidate below re-seeded
+  // straight over them. One flag, set by every out-of-form editor, cleared only
+  // by a successful Save; `dirty` (below the form hook) is THE one answer to
+  // "is anything on these tabs unsaved".
+  const [metaDirty, setMetaDirty] = useState(false)
+  const toggleDay = (i: number) => { setMetaDirty(true); setWorkDays(prev => prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i]) }
+  const editWorkStart = (v: string) => { setMetaDirty(true); setWorkStart(v) }
+  const editCapacityHours = (v: string) => { setMetaDirty(true); setCapacityHours(v) }
   const [themePref, setThemePref] = useState<ThemePref>('dark')
   const [logoScale, setLogoScale] = useState(100)
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
@@ -74,6 +84,7 @@ export default function SettingsPage() {
   const seasonsDirtyRef = useRef(false)
   const touchSeasons = (updater: (prev: ServiceSeasons) => ServiceSeasons) => {
     seasonsDirtyRef.current = true
+    setMetaDirty(true)   // seasons are out-of-form state too — the footer must light up
     setSeasons(updater)
   }
   const [tab, setTab] = useState<SettingsTab>('business')
@@ -97,7 +108,11 @@ export default function SettingsPage() {
     const prev = logoScale
     setLogoScale(v)
     const { data: { user } } = await supabase.auth.getUser()
-    const { error } = await supabase.from('business_settings').update({ logo_scale: v }).eq('user_id', user!.id)
+    // upsert, not update — the settings-lane rule: nothing else ever creates this
+    // row, so on an account without one `.update()` matches ZERO rows, reports NO
+    // error, and this slider would cache a scale the database never stored.
+    const { error } = await supabase.from('business_settings')
+      .upsert({ user_id: user!.id, logo_scale: v }, { onConflict: 'user_id' })
     // Same trap as the logo url: caching a scale the DB rejected would look right here
     // and wrong on every document + device, permanently.
     if (error) { setLogoScale(prev); toast.error('Could not save the logo size — please try again.'); return }
@@ -108,8 +123,19 @@ export default function SettingsPage() {
   const { register, handleSubmit, reset, control, formState: { isSubmitting, isDirty } } =
     useForm<BusinessSettingsFormValues>()
 
+  // The re-seed guard. useBusinessData paints from cache and ALWAYS background-
+  // revalidates, so this effect re-fires seconds after mount with a fresh
+  // `settings` identity. Seasons were already guarded; the FORM and the plain-
+  // state fields (work days, start time, capacity) were not — start unticking
+  // Saturday right after the page paints and the revalidate quietly ticked it
+  // back. While ANYTHING is unsaved, the owner's screen wins; the next
+  // successful Save calls refresh() with everything clean and the re-seed runs
+  // then, against data that matches what was just written.
+  const dirtyRef = useRef(false)
+
   useEffect(() => {
     if (settings) {
+      if (dirtyRef.current) return
       reset({
         company_name: settings.company_name || '',
         owner_name: settings.owner_name || '',
@@ -141,14 +167,26 @@ export default function SettingsPage() {
       setWorkStart(settings.work_start_time || '08:00')
       setCapacityHours(String(settings.daily_capacity_hours ?? 8))
       setLogoScale(settings.logo_scale && settings.logo_scale >= 50 ? settings.logo_scale : 100)
-      // Never clobber seasons the owner is mid-edit on. useBusinessData paints from
-      // cache and ALWAYS background-revalidates, so this effect re-fires seconds
-      // after mount with a fresh `settings` identity — and a just-added custom
-      // season exists only in local state until Save, so the unguarded reset made
-      // it vanish mid-keystroke. Once touched, local state wins until saved.
+      // (Seasons keep their own finer guard too: the dirtyRef above covers the
+      // revalidate; this also scopes what Save WRITES — see onSubmit.)
       if (!seasonsDirtyRef.current) setSeasons(settingsToSeasons(settings.service_seasons))
     }
   }, [settings, reset])
+
+  // ONE answer to "is anything unsaved on the form tabs" — the footer, the
+  // leave-guard and the re-seed guard all read it, so they can never disagree.
+  const dirty = isDirty || metaDirty
+  useEffect(() => { dirtyRef.current = dirty }, [dirty])
+
+  // Refresh/close with unsaved edits gets the browser's "leave site?" prompt.
+  // (In-app sidebar navigation can't be intercepted under the app router — the
+  // amber footer + enabled Save are the visible warning for that path.)
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault() }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
 
   useEffect(() => { if (tiers.length) setLocalTiers(tiers) }, [tiers])
 
@@ -172,9 +210,10 @@ export default function SettingsPage() {
     // The DB write is what quotes/invoices/other devices read. If it fails we must NOT
     // cache the url locally — that would show the logo correctly on this browser
     // forever while every document renders without it, with no way to notice.
+    // upsert, not update — same settings-lane rule as everywhere else on this
+    // page: a missing row must be a real save, never a 0-row silent no-op.
     const { error } = await supabase.from('business_settings')
-      .update({ logo_url: url })
-      .eq('user_id', user!.id)
+      .upsert({ user_id: user!.id, logo_url: url }, { onConflict: 'user_id' })
     if (error) {
       setLogoUrl(prevLogo)
       toast.error('Your logo uploaded but couldn’t be applied — please try again.')
@@ -255,15 +294,25 @@ export default function SettingsPage() {
     if (tierResults.some(r => r.error)) {
       // Return before refresh() so the owner's edited tiers stay on screen to retry —
       // re-syncing from the server here would erase what they just entered.
+      // metaDirty deliberately STAYS set: a tier is still unsaved, and the footer
+      // must keep saying so.
       toast.error('Your settings saved, but a travel-fee tier didn’t — please try again.')
       return
     }
+    // Everything the footer promises is now confirmed in the database — only
+    // now may the dirty state clear and the re-seed guard reopen. The form goes
+    // pristine against the values JUST WRITTEN (not a second later when
+    // refresh() lands) so the footer can never show an amber "unsaved" edge
+    // around a button that just said Saved.
+    reset(values)
+    setMetaDirty(false)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
     refresh()
   }
 
   function updateTier(idx: number, field: keyof TravelFeeTier, value: string) {
+    setMetaDirty(true)
     setLocalTiers(prev => prev.map((t, i) =>
       i === idx ? { ...t, [field]: value === '' ? null : Number(value) } : t
     ))
@@ -596,9 +645,9 @@ export default function SettingsPage() {
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input label="Work day start time" type="time" value={workStart} onChange={e => setWorkStart(e.target.value)}
+              <Input label="Work day start time" type="time" value={workStart} onChange={e => editWorkStart(e.target.value)}
                 hint="Arrival times for each stop and the estimated finish are computed from this." />
-              <Input label="Daily capacity (hours)" type="number" min="1" max="16" step="0.5" value={capacityHours} onChange={e => setCapacityHours(e.target.value)}
+              <Input label="Daily capacity (hours)" type="number" min="1" max="16" step="0.5" value={capacityHours} onChange={e => editCapacityHours(e.target.value)}
                 hint="Days past this show as overloaded; days with an hour+ spare show room for more jobs." />
             </div>
           </CardBody>
@@ -742,6 +791,7 @@ export default function SettingsPage() {
 
       {/* MESSAGING — templates second (the most-edited card); cost/usage below. */}
       <div className={cn('order-3 space-y-6', tab !== 'messaging' && 'hidden')}>
+        <SaveContract text="Switches on this tab save the moment you flip them. Message templates have their own Save button." />
         <AutomationToggles />
         <MessageTemplateEditor />
         <MessagingUsage />
@@ -750,21 +800,25 @@ export default function SettingsPage() {
 
       {/* PAYROLL — overtime rules + pay period, consumed by lib/payroll. */}
       <div className={cn('order-3 space-y-6', tab !== 'payroll' && 'hidden')}>
+        <SaveContract text="Nothing on this tab saves until you press its Save button." />
         <PayrollSettings />
       </div>
 
       {/* MODULES — compose which feature modules this business sees. */}
       <div className={cn('order-3 space-y-6', tab !== 'modules' && 'hidden')}>
+        <SaveContract text="Changes on this tab save the moment you make them." />
         <ModuleManager />
       </div>
 
       {/* NOTIFICATIONS */}
       <div className={cn('order-3 space-y-6', tab !== 'notifications' && 'hidden')}>
+        <SaveContract text="Changes on this tab save the moment you make them." />
         <PushNotificationSettings />
       </div>
 
       {/* BOOKING */}
       <div className={cn('order-3 space-y-6', tab !== 'booking' && 'hidden')}>
+        <SaveContract text="Changes on this tab save the moment you make them." />
         <WebsiteIntegration />
       </div>
 
@@ -782,20 +836,46 @@ export default function SettingsPage() {
           to win the stacking context.) */}
       {showSave && (
         <div className="order-4 sticky bottom-0 z-20 -mx-1 px-1">
+          {/* THE save contract, stated by state — three the owner can tell apart:
+                unsaved  → amber edge, "Unsaved changes", enabled glowing Save
+                saving   → the button's own spinner
+                saved    → "All changes saved", Save disabled (a button that can't
+                           do anything must not look like it can — and `dirty`
+                           covers work days/seasons/tiers too, not just the form)
+              A save that FAILS keeps `dirty` true and the amber footer up: the
+              error toast names it, and this bar refuses to relax. */}
           <div className={cn('rounded-card border bg-surface/95 backdrop-blur px-6 py-4 flex items-center justify-end gap-3 transition-colors',
-            isDirty ? 'border-accent/40' : 'border-border')}>
-            <span className="text-xs mr-auto text-ink-faint">
-              {isDirty ? 'You have unsaved changes.' : 'Saves all business, pricing & scheduling settings.'}
+            dirty ? 'border-amber-500/50' : 'border-border')}>
+            <span className={cn('text-xs mr-auto flex items-center gap-1.5', dirty ? 'text-amber-400 font-medium' : 'text-ink-faint')}>
+              {dirty && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" aria-hidden />}
+              {dirty ? 'Unsaved changes — nothing here saves until you press Save.'
+                : 'All changes saved. This one button saves everything on the Business, Pricing & Scheduling tabs.'}
             </span>
-            <Button type="submit" form="settings-form" loading={isSubmitting} className={cn(isDirty && 'pill-glow')}>
-              {saved ? <><Check className="w-4 h-4" /> Saved</> : isDirty ? 'Save changes' : 'Save settings'}
+            <Button type="submit" form="settings-form" loading={isSubmitting} disabled={!dirty}
+              className={cn(dirty && 'pill-glow')}>
+              {saved ? <><Check className="w-4 h-4" /> Saved</> : dirty ? 'Save changes' : 'Saved'}
             </Button>
             {/* Success is otherwise visual-only (the button label swaps for 2s). */}
-            <span role="status" aria-live="polite" className="sr-only">{saved ? 'Settings saved.' : ''}</span>
+            <span role="status" aria-live="polite" className="sr-only">{saved ? 'Settings saved.' : dirty ? 'You have unsaved changes.' : ''}</span>
           </div>
         </div>
       )}
     </div>
+  )
+}
+
+// ── The save contract, stated where it applies ───────────────────────────────
+// Settings deliberately runs TWO interaction patterns: the three form tabs save
+// through one explicit footer, everything else saves instantly (with rollback)
+// or through its own labelled Save. Both are correct for what they hold — what
+// was missing is the SENTENCE. One quiet line at the top of each non-form tab
+// says which pattern the owner is standing in, so nobody has to learn it by
+// losing an edit or hunting for a Save button that doesn't exist.
+function SaveContract({ text }: { text: string }) {
+  return (
+    <p className="text-[11px] text-ink-faint flex items-center gap-1.5">
+      <Check className="w-3 h-3 text-emerald-400/80 shrink-0" aria-hidden /> {text}
+    </p>
   )
 }
 
