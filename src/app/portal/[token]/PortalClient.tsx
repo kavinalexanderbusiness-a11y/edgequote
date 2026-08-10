@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CheckCircle2, ChevronRight, Clock, FileText, History, Home, Leaf, Loader2, MapPin, MessageSquare, MessageSquarePlus, Receipt, Wallet, X } from 'lucide-react'
+import { CheckCircle2, ChevronRight, Clock, FileText, History, Home, Leaf, Loader2, MapPin, MessageSquare, Receipt, Wallet, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { ConfirmHost } from '@/components/ui/ConfirmHost'
@@ -263,7 +263,12 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   // ONE place a tab change happens — keeps state and the URL in step so a refresh
   // or a bookmark lands on the same tab instead of bouncing to Home. Billing's
   // category resets to 'all' unless a caller pre-filters it (the Home signpost).
-  function goTab(next: TabKey, cat?: 'all' | 'quote' | 'invoice') {
+  function goTab(rawNext: TabKey, cat?: 'all' | 'quote' | 'invoice') {
+    // 'requests' is no longer its own destination — it folded into Contact. Old
+    // links (?tab=requests, Home's "Request a service") must still land somewhere
+    // real rather than on a tab that no longer exists, which would leave the panel
+    // blank with every pill unselected.
+    const next: TabKey = rawNext === 'requests' ? 'messages' : rawNext
     setTab(next)
     if (cat) setDocsCat(cat)
     else if (next === 'billing') setDocsCat('all')
@@ -497,8 +502,15 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     { key: 'billing', label: 'Billing', icon: Receipt, n: docCount, unit: 'documents' },
     { key: 'visits', label: 'Visits', icon: History, n: view.derived.completed.length + view.derived.upcoming.length, unit: 'visits' },
     { key: 'property', label: view.multiProperty ? 'Properties' : 'Property', icon: MapPin, n: view.multiProperty ? view.properties.length : undefined, unit: 'properties' },
-    { key: 'messages', label: 'Messages', icon: MessageSquare },
-    { key: 'requests', label: 'Requests', icon: MessageSquarePlus },
+    // ONE way to reach a human. "Messages" and "Requests" were two separate pills
+    // that both mean "talk to my provider" to a homeowner — one held the message
+    // thread, the other the service catalogue and a free-text ask, and nothing on
+    // either label said which was which. Six pills also wrapped onto two rows on a
+    // 375px phone (they measure ~615px against ~343px of usable width), so the nav
+    // itself was the second-biggest thing on the screen. They are one destination
+    // now: ask for a service, or just say something. `requests` still resolves here
+    // (see goTab) so existing deep links and Home's "Request a service" keep working.
+    { key: 'messages', label: 'Contact', icon: MessageSquare },
   ] as { key: TabKey; label: string; icon: typeof Home; n?: number; unit?: string }[]).filter(t =>
     t.key === 'billing' ? (docCount > 0 || data.payments.length > 0) :
     t.key === 'visits' ? (data.jobs.length > 0 || data.photos.length > 0) :
@@ -650,8 +662,17 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
             {tab === 'property' && <PropertyTab view={view} actions={actions} />}
             {tab === 'visits' && <VisitsTab view={view} actions={actions} />}
             {tab === 'billing' && <BillingTab view={view} actions={actions} initialCat={docsCat} focusDocId={focusDocId} />}
-            {tab === 'messages' && <MessagesTab view={view} actions={actions} initialDraft={composerPrefill} onDraftConsumed={() => setComposerPrefill(null)} />}
-            {tab === 'requests' && <RequestsTab view={view} actions={actions} />}
+            {/* Contact = ask for something, or say something. The catalogue leads
+                because "I want another service" is the commoner errand and it is
+                answerable without typing; the thread follows for everything else.
+                Both already send through the same portal_request_service /
+                portal_submit_request pipeline, so nothing about delivery changes. */}
+            {tab === 'messages' && (
+              <div className="space-y-3">
+                <RequestsTab view={view} actions={actions} />
+                <MessagesTab view={view} actions={actions} initialDraft={composerPrefill} onDraftConsumed={() => setComposerPrefill(null)} />
+              </div>
+            )}
           </div>
         </div>
 

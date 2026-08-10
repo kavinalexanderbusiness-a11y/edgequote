@@ -134,10 +134,7 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
 
   return (
     <div className="space-y-3">
-      {/* 1 · Who takes care of you — quiet trust card, not a pitch */}
-      <TrustCard view={view} />
-
-      {/* 2 · Needs your attention — no-pressure framing on purpose. Rendered in the
+      {/* 1 · Needs your attention — no-pressure framing on purpose. Rendered in the
           ranked order above; each card keeps its whole-surface tap AND, when it names
           one document, carries the real action so the decision happens right here. */}
       {payFirst && dueBanner}
@@ -309,6 +306,18 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
           </p>
         </div>
       )}
+
+      {/* 5 · Who takes care of you — a real name, tap-to-call, and how long you've
+          been a customer.
+          This used to be the FIRST thing on Home, in every single state. Rendered
+          against real portals it put eight lines — provider name, company, "Customer
+          since", and three contact buttons — above the customer's own situation: a
+          quote awaiting approval, or "$347.50 due", sat below the fold on a phone.
+          The header already carries the logo and company name, so the top of the
+          screen answered "who are you" (twice) before "what do I need to do".
+          It stays — a name and a number are what make an unfamiliar link feel safe —
+          but it belongs with the reassurance, after the answers. */}
+      <TrustCard view={view} />
 
       {/* 6 · Recent activity — the old Timeline tab, compacted to its last 5 rows */}
       {events.length > 0 && (
