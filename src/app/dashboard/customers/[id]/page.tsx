@@ -41,10 +41,12 @@ import { Banner } from '@/components/ui/Banner'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Button, ButtonLink } from '@/components/ui/Button'
+import { IconButton } from '@/components/ui/IconButton'
+import { Menu } from '@/components/ui/Menu'
 import { Textarea } from '@/components/ui/Textarea'
 import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { formatCurrency, formatDate, cn, localTodayISO } from '@/lib/utils'
-import { ensurePortalToken, portalUrl } from '@/lib/portal'
+import { ensurePortalToken, portalUrl, rotatePortalToken } from '@/lib/portal'
 import { CustomerComms } from '@/components/customers/CustomerComms'
 import { CommsHealth } from '@/components/customers/CommsHealth'
 import { ReviewLifecycle } from '@/components/customers/ReviewLifecycle'
@@ -57,7 +59,7 @@ import {
   FileText, Send, RotateCw, Receipt, DollarSign, Sparkles, Users,
   Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet, Timer, CalendarClock,
   Link2, Check, Cake, PartyPopper, Camera, History, Globe, Plus, Home, Tag, Trash2,
-  ChevronDown,
+  ChevronDown, MoreHorizontal,
 } from 'lucide-react'
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
@@ -131,6 +133,33 @@ export default function CustomerDetailPage() {
       if (!token) { toast.error('Could not create the portal link. Run the customer-portal migration first.'); return }
       const url = portalUrl(token)
       try { await navigator.clipboard.writeText(url) } catch { toast('Portal link (copy manually): ' + url, { duration: 20000 }) }
+      setPortalCopied(true); setTimeout(() => setPortalCopied(false), 2500)
+    } finally { setPortalBusy(false) }
+  }
+
+  // Turn the old link off and hand back a new one. The portal has no password —
+  // the link IS the credential — so when one gets forwarded to the wrong person,
+  // or a phone goes missing, this is the only answer. The database has enforced
+  // `revoked` all along; until now nothing could set it.
+  async function resetPortalLink() {
+    if (!customer) return
+    const ok = await confirmDialog({
+      title: 'Reset the portal link?',
+      message: `${customer.name}’s current link stops working immediately, including any copy of it already sent. You’ll get a new link to send them.`,
+      confirmLabel: 'Reset link', destructive: true,
+    })
+    if (!ok) return
+    setPortalBusy(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      const token = await rotatePortalToken(supabase, user.id, customer.id)
+      // A failed rotate leaves the OLD link live. Saying "done" here would tell
+      // the owner a leaked link was closed when it wasn't.
+      if (!token) { toast.error('Could not reset the link — the old one is still active. Try again.'); return }
+      const url = portalUrl(token)
+      try { await navigator.clipboard.writeText(url) } catch { toast('New portal link (copy manually): ' + url, { duration: 20000 }) }
+      toast.success('Old link is off. The new link is on your clipboard.')
       setPortalCopied(true); setTimeout(() => setPortalCopied(false), 2500)
     } finally { setPortalBusy(false) }
   }
@@ -722,6 +751,20 @@ export default function CustomerDetailPage() {
               onClick={copyPortalLink}>
               {portalCopied ? <><Check className="w-3.5 h-3.5" /> Link copied</> : <><Link2 className="w-3.5 h-3.5" /> Portal link</>}
             </Button>
+            {/* Tucked behind the overflow, not beside Copy: resetting is rare and
+                it breaks a link the customer may be using right now. */}
+            <Menu align="end" width={240} ariaLabel="More customer actions" items={[
+              {
+                key: 'reset-portal', label: 'Reset portal link', icon: RotateCw, danger: true,
+                description: 'Turns the current link off and issues a new one',
+                onSelect: resetPortalLink,
+              },
+            ]}>
+              {({ toggle, triggerProps }) => (
+                <IconButton icon={MoreHorizontal} label="More customer actions" size="sm"
+                  onClick={toggle} {...triggerProps} />
+              )}
+            </Menu>
           </div>
         }
       />

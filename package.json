@@ -74,6 +74,7 @@
     "verify:team": "tsx scripts/verify-team.ts",
     "verify:job-completion": "tsx scripts/verify-job-completion.ts",
     "verify:crew-access": "tsx scripts/verify-crew-access.ts",
+    "verify:public-edge": "tsx scripts/verify-public-edge.ts",
     "verify:tenant-boundary": "tsx scripts/verify-tenant-boundary.ts",
     "verify:crew-invite": "tsx scripts/verify-crew-invite.ts",
     "verify:deposit": "tsx scripts/verify-deposit.ts",
