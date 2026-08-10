@@ -110,16 +110,30 @@ export async function POST(req: NextRequest) {
   if (existingId && existingId === user.id) {
     return fail('own-account', 'That’s your own owner account. Use a different email for your employee.', 409)
   }
-  if (existingId) {
-    // Globally, not just on this roster: auth_user_id is unique across the whole
-    // project, so a link elsewhere would fail at the index anyway — better to say
-    // why. The admin client is required precisely because another owner's row is
-    // invisible to the caller's RLS.
-    const { data: bound } = await admin
-      .from('technicians').select('id, user_id').eq('auth_user_id', existingId).maybeSingle()
-    if (bound && bound.id !== tech.id) {
-      return fail('email-taken', 'That email already belongs to someone else’s EdgeQuote login.', 409)
-    }
+  // ⚠️ ACCOUNT-TAKEOVER GUARD (2026-08-10 tenant audit). Below this point the
+  // route LINKS the account and mints a `recovery` token for the address, and
+  // hands that token back to the caller. So binding a PRE-EXISTING account that
+  // isn't already this employee's is the whole attack: name any EdgeQuote user's
+  // email — another business's owner, say — and the response is a password-reset
+  // token for their account.
+  //
+  // The old check only refused when the address was already bound to a DIFFERENT
+  // technician. An owner's own auth account is not a technician at all, so it
+  // sailed through: link, then mint. (Reachable today because a crew member
+  // could self-promote to 'owner' with one business_settings INSERT — now
+  // blocked by the business_settings_no_crew_owner trigger — and, after that,
+  // by any signed-up owner against any other tenant.)
+  //
+  // The rule is now identity-tight: an existing account may only continue if it
+  // is ALREADY this technician's link, which is the "re-issue their setup link"
+  // case. That link can no longer be forged from a client either — the
+  // technicians_auth_link_guard trigger restricts auth_user_id writes to the
+  // invite/join flows. Every other existing account is refused and pointed at
+  // the Join code, which requires the person to sign in and consent themselves.
+  if (existingId && existingId !== tech.auth_user_id) {
+    return fail('email-taken',
+      'That email already has an EdgeQuote login. Ask them to sign in and enter a Join code instead — that way they accept the invite themselves.',
+      409)
   }
   if (tech.auth_user_id && tech.auth_user_id !== existingId) {
     // Re-pointing an employee at a different account silently would orphan the
