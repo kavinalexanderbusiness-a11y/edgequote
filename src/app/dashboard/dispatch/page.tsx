@@ -22,7 +22,7 @@ import {
 import { DayStatusRow, DAY_STATUS_SELECT, dayStatusLabel } from '@/lib/dayStatus'
 import {
   laneStats, LaneStats, detectDayConflicts, DispatchConflict, ConflictLaneInput, laneConflictSummary,
-  laneProgress, bestOrderSavingsKm, dayKpis, buildActivityFeed, ActivityItem,
+  laneProgress, nudgeAcrossVisible, bestOrderSavingsKm, dayKpis, buildActivityFeed, ActivityItem,
   itineraryText, suggestPromiseOrder, PromiseOrderSuggestion,
   DispatchSheet, SheetLane, sheetCsvRows, SHEET_CSV_COLUMNS, openPrintSheet,
 } from '@/lib/dispatchOps'
@@ -382,6 +382,61 @@ export default function DispatchPage() {
 
   const kpis = useMemo(() => dayKpis(laneInputs, nowMin), [laneInputs, nowMin])
 
+  // Running-behind lanes as ConflictPanel rows — today only. The KPI tile said
+  // "2 crews running behind" and each lane wore a chip, but the panel that
+  // gathers "where intervention is needed" never listed them: the one condition
+  // that most wants a human's eyes was the one the intervention list omitted.
+  // Same engine (laneProgress) and the same ≥10/≥30-minute thresholds as the
+  // lane chip, so the panel and the chip can never disagree.
+  //
+  // These rows are appended for the PANEL only. laneBadges stays on the
+  // detected (plan-defect) conflicts: the lane already wears its own dedicated
+  // "~Xm behind" chip, and counting the same fact into the triangle badge would
+  // double-signal it on the very lane the owner is already looking at.
+  const behindConflicts: DispatchConflict[] = useMemo(() => {
+    if (nowMin == null) return []
+    const out: DispatchConflict[] = []
+    for (const lane of lanes) {
+      if (lane.laneId === UNASSIGNED_ID) continue
+      const route = laneRoutes[lane.laneId]
+      if (!route || route.seq.length === 0) continue
+      const etaByJob = new Map(route.etas.stops.map(s => [s.jobId, s.arrivalMin]))
+      const p = laneProgress(nowMin, route.seq.map(j => ({
+        jobId: j.id,
+        arrivalMin: etaByJob.get(j.id) ?? null,
+        durMin: j.duration_minutes || DEFAULT_JOB_MIN,
+        status: j.status,
+      })))
+      if (p.behindMin >= 10) {
+        out.push({
+          kind: 'running_behind',
+          severity: p.behindMin >= 30 ? 'error' : 'warn',
+          laneId: lane.laneId,
+          laneName: lane.crew?.name ?? 'Unassigned',
+          jobId: p.nextJobId ?? undefined,
+          message: `${lane.crew?.name ?? 'This crew'} is ~${p.behindMin}m behind their own ETAs — check in before the promises downstream slip.`,
+        })
+      }
+    }
+    return out
+  }, [lanes, laneRoutes, nowMin])
+
+  const panelConflicts = useMemo(() => [...conflicts, ...behindConflicts], [conflicts, behindConflicts])
+
+  // Per-crew spare minutes for the Move-to menu — the SAME laneLoad the capacity
+  // meters draw, re-read (never recomputed) so the menu and the meter can't
+  // disagree. Reassigning used to be a blind pick from a name list; which crew
+  // had room lived in meters scattered across the other cards.
+  const crewSpareMin = useMemo(() => {
+    const out: Record<string, number> = {}
+    for (const lane of lanes) {
+      if (lane.laneId === UNASSIGNED_ID) continue
+      const r = laneRoutes[lane.laneId]
+      if (r) out[lane.laneId] = laneLoad(r.workMin, r.capacityMin).spareMin
+    }
+    return out
+  }, [lanes, laneRoutes])
+
   const laneBadges = useMemo(() => {
     const out: Record<string, { count: number; severity: 'error' | 'warn' | 'info' } | null> = {}
     for (const lane of lanes) out[lane.laneId] = laneConflictSummary(conflicts, lane.laneId)
@@ -478,15 +533,19 @@ export default function DispatchPage() {
     applyLaneOrder(next)
   }, [applyLaneOrder])
 
+  // Nudges hop the adjacent VISIBLE neighbour (lib/dispatchOps.nudgeAcrossVisible)
+  // — with a status filter on, the full-sequence neighbour can be a hidden row,
+  // and swapping with it persisted a real route_order change that looked like the
+  // button did nothing. No filter → identical to the old adjacent swap.
   const nudgeJob = useCallback((laneId: string, jobId: string, dir: -1 | 1) => {
-    const seq = laneRoutes[laneId]?.seq.map(j => j.id) ?? []
-    const i = seq.indexOf(jobId)
-    const target = i + dir
-    if (i < 0 || target < 0 || target >= seq.length) return
-    const next = [...seq]
-    ;[next[i], next[target]] = [next[target], next[i]]
-    applyLaneOrder(next)
-  }, [laneRoutes, applyLaneOrder])
+    const lane = laneRoutes[laneId]?.seq ?? []
+    const next = nudgeAcrossVisible(
+      lane.map(j => j.id),
+      lane.filter(statusVisible).map(j => j.id),
+      jobId, dir,
+    )
+    if (next) applyLaneOrder(next)
+  }, [laneRoutes, statusVisible, applyLaneOrder])
 
   // Per-lane route optimization: the SAME optimizeRoute (real-road first,
   // haversine fallback) the schedule uses, persisted as this lane's order.
@@ -1146,6 +1205,11 @@ export default function DispatchPage() {
       }
       case 'overrun':
         return settings.base ? { label: 'Optimize route', run: () => bestOrderLane(c.laneId) } : null
+      // Deliberately NO fix. Behind is a field reality, not a plan defect —
+      // "Optimize route" would re-sequence the day a crew is already driving
+      // and make nobody less late. The row's Jump is the whole offer: go look.
+      case 'running_behind':
+        return null
       case 'no_roster':
         return { label: 'Open roster', run: () => setManagerOpen(true) }
       default:
@@ -1383,7 +1447,7 @@ export default function DispatchPage() {
         </Banner>
       )}
 
-      <ConflictPanel conflicts={conflicts} onJump={jumpTo} fixFor={conflictFix} />
+      <ConflictPanel conflicts={panelConflicts} onJump={jumpTo} fixFor={conflictFix} />
 
       {view === 'map' ? (
         <div className="animate-rise">
@@ -1474,6 +1538,7 @@ export default function DispatchPage() {
                 vehicles={laneAux[lane.laneId]?.vehicles ?? []}
                 note={laneAux[lane.laneId]?.note ?? null}
                 crews={crews}
+                crewSpare={crewSpareMin}
                 nowMin={nowMin}
                 base={settings.base}
                 index={i}
@@ -1696,7 +1761,7 @@ export default function DispatchPage() {
 // memo()'d: with the drag ghost off React state, a pointer drag re-renders a
 // lane only when its own drop target changes — never per pointer move.
 const CrewLaneCard = memo(function CrewLaneCard({
-  lane, route, technicians, vehicles, note, crews, nowMin, base, index, conflictBadge, savingsKm, statusVisible,
+  lane, route, technicians, vehicles, note, crews, crewSpare, nowMin, base, index, conflictBadge, savingsKm, statusVisible,
   isDropTarget, dropOverload, dropAnchor, dragging, kbGrabbedId, flashJobId, selectedSet, onToggleSelect,
   onDragHandleDown, onGripKeyDown, onNudge, onMoveTo, onBestOrder, optimizing, onSetTechStatus, onSaveNote,
   statusBusy, onQuickStart, onQuickComplete, onPrintLane, onCopyItinerary,
@@ -1707,6 +1772,9 @@ const CrewLaneCard = memo(function CrewLaneCard({
   vehicles: AssignableEquipment[]
   note: DispatchNote | null
   crews: Crew[]
+  /** crew id → spare minutes today (laneLoad.spareMin) — the Move-to menu's
+   *  room labels. Other lanes' loads are otherwise invisible from this card. */
+  crewSpare: Record<string, number>
   nowMin?: number
   base: Coord | null
   index: number
@@ -1950,9 +2018,20 @@ const CrewLaneCard = memo(function CrewLaneCard({
               ...(job.status === 'scheduled' ? [{
                 key: 'done', label: 'Mark done (skip check-in)', icon: CheckCircle2, onSelect: () => onQuickComplete(job),
               } as MenuItem] : []),
-              ...crews.filter(c => c.is_active && c.id !== job.crew_id).map((c): MenuItem => ({
-                key: c.id, label: `Move to ${c.name}`, icon: Users, onSelect: () => onMoveTo(job.id, c.id),
-              })),
+              // Each destination carries its room: the job's own minutes against
+              // the crew's spare, from the same laneLoad the capacity meters
+              // draw. "Move to Green — 2.1h free" is an informed reassignment;
+              // a bare name list made the owner open other cards to find out.
+              ...crews.filter(c => c.is_active && c.id !== job.crew_id).map((c): MenuItem => {
+                const spare = crewSpare[c.id]
+                const room = spare == null ? ''
+                  : spare < 0 ? ` — over by ${Math.abs(spare)}m`
+                  : spare >= 60 ? ` — ${Math.round(spare / 60 * 10) / 10}h free`
+                  : ` — ${spare}m free`
+                return {
+                  key: c.id, label: `Move to ${c.name}${room}`, icon: Users, onSelect: () => onMoveTo(job.id, c.id),
+                }
+              }),
               ...(job.crew_id ? [{ key: 'unassign', label: 'Unassign', icon: UserMinus, onSelect: () => onMoveTo(job.id, null) } as MenuItem] : []),
               ...(job.properties?.address || (job.properties?.lat != null) ? [{
                 key: 'directions', label: 'Directions', icon: Navigation,
@@ -2065,11 +2144,16 @@ const CrewLaneCard = memo(function CrewLaneCard({
                     </button>
                   )}
                   <div className="flex flex-col shrink-0">
-                    <button type="button" onClick={() => onNudge(lane.laneId, job.id, -1)} disabled={i === 0}
+                    {/* Disabled on the VISIBLE index, matching what a nudge now
+                        does (hop the visible neighbour). Keying on the full-seq
+                        index left the first visible row's up-chevron enabled
+                        when everything above it was filtered out — a live
+                        button whose click did nothing an owner could see. */}
+                    <button type="button" onClick={() => onNudge(lane.laneId, job.id, -1)} disabled={vi === 0}
                       className="text-ink-faint hover:text-ink disabled:opacity-25 rounded p-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label="Move earlier">
                       <ChevronUp className="w-3.5 h-3.5" />
                     </button>
-                    <button type="button" onClick={() => onNudge(lane.laneId, job.id, 1)} disabled={i === seq.length - 1}
+                    <button type="button" onClick={() => onNudge(lane.laneId, job.id, 1)} disabled={vi === visibleSeq.length - 1}
                       className="text-ink-faint hover:text-ink disabled:opacity-25 rounded p-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label="Move later">
                       <ChevronDown className="w-3.5 h-3.5" />
                     </button>
@@ -2093,7 +2177,15 @@ const CrewLaneCard = memo(function CrewLaneCard({
         <p className="text-[11px] text-ink-faint">{hiddenCount} stop{hiddenCount !== 1 ? 's' : ''} hidden by filters — the timeline and totals still count them.</p>
       )}
       {cancelledCount > 0 && (
-        <p className="text-[11px] text-ink-faint">{cancelledCount} cancelled visit{cancelledCount !== 1 ? 's' : ''} hidden.</p>
+        // WHO was cancelled, not just how many. laneSequence strips cancelled
+        // rows from the route (correctly — they're not driven to), but a bare
+        // count made "did the Hendersons' cancellation actually land?" require
+        // leaving the board. The identities are already in lane.jobs; name them.
+        <p className="text-[11px] text-ink-faint"
+          title={lane.jobs.filter(j => j.status === 'cancelled').map(j => j.customers?.name || j.title).join(', ')}>
+          Cancelled today: {lane.jobs.filter(j => j.status === 'cancelled').slice(0, 3).map(j => j.customers?.name || j.title).join(', ')}
+          {cancelledCount > 3 ? ` +${cancelledCount - 3} more` : ''} — not on the route.
+        </p>
       )}
 
       {/* Lane footer: route actions + note */}

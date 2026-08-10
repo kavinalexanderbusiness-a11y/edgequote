@@ -79,6 +79,41 @@ export function bestOrderSavingsKm(base: { lat: number; lng: number }, stops: Ro
   return saved >= 1 && saved / currentKm >= 0.12 ? saved : 0
 }
 
+// ── Nudge (reorder one step) against what the owner can SEE ──────────────────
+// The chevrons move a stop "earlier/later" — and with a status filter active,
+// the row directly above on screen is NOT necessarily the row directly above in
+// the full sequence. The old swap-with-full-seq-neighbour could exchange a stop
+// with a HIDDEN completed row: route_order genuinely changed, the write landed,
+// and the board looked exactly the same. A control that visibly does nothing
+// after persisting something is worse than one that refuses.
+//
+// So the unit of a nudge is the adjacent VISIBLE neighbour: the job is placed
+// immediately before (dir −1) or after (dir +1) that neighbour in the FULL
+// sequence — hidden rows keep their own relative order and simply travel with
+// the side they were on. With no filter active, visible == full and this is
+// byte-identical to the old adjacent swap.
+//
+// Returns the new full-sequence order, or null when there is no visible
+// neighbour in that direction — which is exactly the chevron's disabled state,
+// so the button and the write can never disagree.
+export function nudgeAcrossVisible(
+  seqIds: string[],
+  visibleIds: string[],
+  jobId: string,
+  dir: -1 | 1,
+): string[] | null {
+  const vi = visibleIds.indexOf(jobId)
+  if (vi < 0) return null
+  const neighbour = visibleIds[vi + dir]
+  if (neighbour == null) return null
+  const rest = seqIds.filter(id => id !== jobId)
+  const at = rest.indexOf(neighbour)
+  if (at < 0) return null
+  const insertAt = dir === -1 ? at : at + 1
+  const next = [...rest.slice(0, insertAt), jobId, ...rest.slice(insertAt)]
+  return next.join() === seqIds.join() ? null : next
+}
+
 // ── Conflict detection ───────────────────────────────────────────────────────
 export type ConflictKind =
   | 'blocked_day'          // work still scheduled on a blocked day
@@ -89,6 +124,13 @@ export type ConflictKind =
   | 'appointment_overlap'  // two timed visits in the same lane collide
   | 'no_roster'            // a crew has stops but nobody available to run them
   | 'unassigned_work'      // visits without a crew while crews exist
+  // The clock is past the lane's own ETA chain — a FIELD reality (traffic, a job
+  // running long), not a defect in the plan. Deliberately its own kind so it can
+  // NEVER inherit a plan-repair action: "Optimize route" re-sequences a late
+  // crew's remaining day from base, which does not make anyone less late and
+  // scrambles the order the crew is already driving. The only sane offer is to
+  // LOOK (jump to the lane) — the fix switch must return null for this kind.
+  | 'running_behind'
 
 export type ConflictSeverity = 'error' | 'warn' | 'info'
 
