@@ -82,8 +82,20 @@ H('3. OLD LINKS STILL LAND — a folded tab must not blank the panel')
   // union instead, ?tab=requests would select a tab with no panel and no pill.
   check('?tab=requests still parses to a real tab rather than null',
     parsePortalDeepLink('?tab=requests').tab, 'requests')
-  check('…and goTab redirects it onto the Contact panel',
-    /rawNext === 'requests' \? 'messages'/.test(CLIENT), true)
+  check('the alias lives in ONE resolver, not inlined per call site',
+    /function resolveTab\(t: TabKey\): TabKey \{\s*return t === 'requests' \? 'messages' : t/.test(CLIENT), true)
+  // TWO places set the tab, and only one of them is goTab. The deep-link effect
+  // calls setTab DIRECTLY — it was missed on the first pass, which would have
+  // shipped a blank portal to exactly the people holding an old ?tab=requests
+  // link. Assert EVERY setTab that takes a variable goes through the resolver.
+  {
+    const sites = [...CLIENT.matchAll(/setTab\(([^)]*)\)/g)].map(m => m[1].trim())
+    const unresolved = sites.filter(a =>
+      !a.startsWith("'") && !a.startsWith('resolveTab(') && a !== 'next')
+    check('every setTab of a dynamic key is resolved (none bypass the alias)', unresolved, [])
+  }
+  check('goTab resolves its argument', /const next = resolveTab\(rawNext\)/.test(CLIENT), true)
+  check('the deep-link effect resolves too', /setTab\(resolveTab\(link\.tab\)\)/.test(CLIENT), true)
   check('a bogus tab still parses to null (unchanged)',
     parsePortalDeepLink('?tab=nonsense').tab, null)
   check('?tab=billing is untouched', parsePortalDeepLink('?tab=billing').tab, 'billing')

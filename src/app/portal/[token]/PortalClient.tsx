@@ -24,11 +24,21 @@ import { RequestsTab } from './components/RequestsTab'
 
 // ── Premium Customer Portal ─────────────────────────────────────────────────
 // Public, no-login, scoped to the token's customer via get_portal_data — still
-// THE only data source. The 2026-07 redesign reorganizes one story across six
-// surfaces (Home · Property · Visits · Billing · Messages · Requests) with all
-// derivation in ./model.ts and all presentation in ./components/*. Every
-// customer action remains a REQUEST that threads into the owner's ONE Messages
-// hub — the portal never mutates the schedule or a plan on its own.
+// THE only data source. One story across five surfaces
+// (Home · Visits · Billing · Property · Contact) with all derivation in
+// ./model.ts and all presentation in ./components/*. Every customer action
+// remains a REQUEST that threads into the owner's ONE Messages hub — the portal
+// never mutates the schedule or a plan on its own.
+
+// THE tab alias, in one place because two call sites set the tab: goTab (pills,
+// in-app navigation) and the deep-link effect, which calls setTab DIRECTLY.
+// 'requests' folded into Contact but stays a valid link key — every old
+// ?tab=requests link, and Home's own "Request a service" button, must resolve to
+// a destination that actually renders. Selecting a folded key would leave the
+// panel empty with no pill selected, which is a blank portal.
+function resolveTab(t: TabKey): TabKey {
+  return t === 'requests' ? 'messages' : t
+}
 
 export function PortalClient({ token, initialData }: { token: string; initialData: unknown }) {
   const supabase = useMemo(() => createClient(), [])
@@ -234,7 +244,11 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       // unscrolled — the link can't lie about a document the customer can't see.
       else {
         const link = parsePortalDeepLink(window.location.search)
-        if (link.tab) setTab(link.tab)
+        // resolveTab, not the raw key: this path sets the tab DIRECTLY rather than
+        // through goTab, so a link to a folded tab would select something with no
+        // pill and no panel — a blank portal for anyone holding an old
+        // ?tab=requests link, which is exactly the population this alias exists for.
+        if (link.tab) setTab(resolveTab(link.tab))
         if (link.docsCat) setDocsCat(link.docsCat)
         if (link.focusDocId) {
           setFocusDocId(link.focusDocId)
@@ -264,11 +278,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   // or a bookmark lands on the same tab instead of bouncing to Home. Billing's
   // category resets to 'all' unless a caller pre-filters it (the Home signpost).
   function goTab(rawNext: TabKey, cat?: 'all' | 'quote' | 'invoice') {
-    // 'requests' is no longer its own destination — it folded into Contact. Old
-    // links (?tab=requests, Home's "Request a service") must still land somewhere
-    // real rather than on a tab that no longer exists, which would leave the panel
-    // blank with every pill unselected.
-    const next: TabKey = rawNext === 'requests' ? 'messages' : rawNext
+    const next = resolveTab(rawNext)
     setTab(next)
     if (cat) setDocsCat(cat)
     else if (next === 'billing') setDocsCat('all')
