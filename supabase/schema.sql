@@ -901,6 +901,37 @@ create policy "portal_tokens: update own" on public.customer_portal_tokens for u
 create policy "portal_tokens: delete own" on public.customer_portal_tokens for delete using (auth.uid() = user_id);
 create index if not exists portal_tokens_customer_idx on public.customer_portal_tokens(user_id, customer_id);
 
+-- Public portal-link recovery (idempotent — mirrors RUN-2026-08-10-portal-access-requests.sql).
+-- Abuse ledger for /api/public/portal-access. email_key = sha256(lower(trim(email))),
+-- never the address: this counts attempts, it is not an address book. No customer_id,
+-- user_id or token by design. RLS on with NO policies — service-role only.
+create table if not exists public.portal_access_requests (
+  id          uuid primary key default uuid_generate_v4(),
+  email_key   text        not null,
+  created_at  timestamptz not null default now(),
+  matched     boolean     not null default false,
+  sent        boolean     not null default false
+);
+alter table public.portal_access_requests enable row level security;
+create index if not exists portal_access_requests_key_time_idx on public.portal_access_requests (email_key, created_at desc);
+create index if not exists portal_access_requests_time_idx on public.portal_access_requests (created_at desc);
+
+-- The recovery lookup. Normalises BOTH sides (PostgREST cannot trim() a column in
+-- a filter, and this database already holds padded values). REVOKED from anon and
+-- authenticated: if the public anon key could run it, it would be a
+-- customer-existence oracle — exactly what the endpoint's neutral answer denies.
+create or replace function public.find_portal_access_customers(p_email text)
+returns table (customer_id uuid, customer_name text, owner_id uuid)
+language sql security definer set search_path = public as $$
+  select c.id, c.name, c.user_id
+  from public.customers c
+  where c.archived_at is null and c.email is not null
+    and lower(trim(c.email)) = lower(trim(p_email))
+$$;
+revoke all on function public.find_portal_access_customers(text) from public;
+revoke all on function public.find_portal_access_customers(text) from anon;
+revoke all on function public.find_portal_access_customers(text) from authenticated;
+
 create table if not exists public.service_requests (
   id          uuid primary key default uuid_generate_v4(),
   created_at  timestamptz not null default now(),
