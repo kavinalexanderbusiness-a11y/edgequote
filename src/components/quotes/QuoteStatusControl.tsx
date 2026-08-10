@@ -6,7 +6,7 @@ import { queueOrRun } from '@/lib/offline/outbox'
 import { toast } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { QuoteStatus, STATUS_LABELS, STATUS_COLORS } from '@/types'
-import { markSentPatch } from '@/lib/quoteStatus'
+import { markSentPatch, isSystemAdvancedQuoteStatus, QUOTE_STATUS_MEANING } from '@/lib/quoteStatus'
 import { markWonPatch } from '@/lib/followup'
 import { localTodayISO } from '@/lib/utils'
 import { ChevronDown, Loader2 } from 'lucide-react'
@@ -64,6 +64,30 @@ export function QuoteStatusControl({ quoteId, status, followUpCount, sentAt, val
       })
       if (!ok) return   // controlled select snaps back to `current` on its own
     }
+    // ── Overriding a state the app normally derives ───────────────────────────
+    // completed and paid are advanced by DATABASE TRIGGERS from real events:
+    // sync_quote_on_job_complete fires when the job completes (only from
+    // accepted/scheduled), sync_quote_on_invoice_paid when the invoice is paid
+    // (only from completed). Because each trigger advances FROM an expected prior
+    // state, a hand-set value is never re-derived — mark a quote Paid today and the
+    // invoice actually being paid tomorrow will NOT correct it. It stays wrong, and
+    // it is wrong about money.
+    //
+    // Repair is still allowed — a genuinely stuck row needs it — but it stops being
+    // an everyday click. Same confirmDialog this control already uses for Scheduled
+    // and Declined, so nothing new is introduced; the message just names what the
+    // app would have done and that it won't do it later.
+    if (isSystemAdvancedQuoteStatus(s) && s !== 'scheduled' && current !== s) {
+      const ok = await confirmDialog({
+        title: `Set this quote to ${STATUS_LABELS[s]} by hand?`,
+        message: s === 'paid'
+          ? 'EdgeQuote marks a quote Paid on its own when the invoice is paid. Setting it here does NOT record a payment, and it will not be corrected when real money arrives — the quote will simply say Paid. Only do this to fix a quote that is already wrong.'
+          : 'EdgeQuote marks a quote Completed on its own when the work is finished. Setting it here does NOT complete any visit, and it will not be corrected later. Only do this to fix a quote that is already wrong.',
+        confirmLabel: `Set ${STATUS_LABELS[s]} anyway`,
+        destructive: true,
+      })
+      if (!ok) return   // controlled select snaps back to `current` on its own
+    }
     // A declined quote is lost — confirm before committing the transition.
     if (s === 'declined' && current !== 'declined') {
       const ok = await confirmDialog({
@@ -113,11 +137,29 @@ export function QuoteStatusControl({ quoteId, status, followUpCount, sentAt, val
         title="Change status"
         className={`appearance-none cursor-pointer pl-2.5 pr-6 py-1 rounded-full text-xs font-semibold border uppercase tracking-wide outline-none focus-visible:ring-2 focus-visible:ring-accent/40 transition-opacity ${saving ? 'opacity-60' : ''} ${STATUS_COLORS[current]}`}
       >
-        {ALL.map(s => (
-          <option key={s} value={s} className="bg-bg-secondary text-ink normal-case">
-            {STATUS_LABELS[s]}
-          </option>
-        ))}
+        {/* Grouped, not filtered. Three of these seven are advanced by DATABASE
+            TRIGGERS from real events — a job being booked, work completing, an
+            invoice being paid (see SYSTEM_ADVANCED_QUOTE_STATUSES). Setting one by
+            hand asserts something the app cannot see, and because each trigger only
+            advances FROM an expected prior state, it is never re-derived later: a
+            hand-set "Paid" simply stays wrong. The owner keeps the ability to
+            correct a row — that is a real need — but the group heading says which
+            half of this list the app normally manages, which is the difference
+            between an informed correction and an accident. */}
+        <optgroup label="You set these" className="bg-bg-secondary text-ink normal-case">
+          {ALL.filter(s => !isSystemAdvancedQuoteStatus(s)).map(s => (
+            <option key={s} value={s} title={QUOTE_STATUS_MEANING[s]} className="bg-bg-secondary text-ink normal-case">
+              {STATUS_LABELS[s]}
+            </option>
+          ))}
+        </optgroup>
+        <optgroup label="Set automatically — override with care" className="bg-bg-secondary text-ink normal-case">
+          {ALL.filter(isSystemAdvancedQuoteStatus).map(s => (
+            <option key={s} value={s} title={QUOTE_STATUS_MEANING[s]} className="bg-bg-secondary text-ink normal-case">
+              {STATUS_LABELS[s]}
+            </option>
+          ))}
+        </optgroup>
       </select>
       {saving
         ? <Loader2 className="w-3 h-3 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none animate-spin" />

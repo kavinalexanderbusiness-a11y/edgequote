@@ -138,3 +138,44 @@ export function sendBlockedLabel(r: SendBlock): string {
     ? 'This quote has no price yet — add one before sending it.'
     : 'This quote has no customer linked — add one so it can be sent and followed up.'
 }
+
+// ── Who actually moves a quote through its life ──────────────────────────────
+// Established by reading the live contracts, not by reading the words:
+//
+//   draft      owner. Being prepared; never went out.
+//   sent       owner (markSentPatch: status + sent_at + valid_until). It reached
+//              the customer and we are waiting on them — which is why `sent` is
+//              the ONLY status that can display as 'expired'.
+//   accepted   the CUSTOMER, via portal_accept_quote (status='accepted' +
+//              accepted_price snapshotted at the instant of consent) — or the
+//              owner recording an approval that arrived by phone or in person.
+//   declined   the customer's no, recorded from either side.
+//   scheduled  a TRIGGER: resync_quote_on_job_recurring.
+//   completed  a TRIGGER: sync_quote_on_job_complete — fires when the job is
+//              completed, and only from 'accepted'/'scheduled'.
+//   paid       a TRIGGER: sync_quote_on_invoice_paid — fires when the invoice is
+//              paid, and only from 'completed'.
+//
+// The last three are DERIVED FROM REALITY: a job got booked, work got done, money
+// arrived. They are still offered in the status picker because an owner sometimes
+// needs to correct a row — but they are labelled as automatic, because setting one
+// by hand asserts something the app cannot see and will not re-derive. The triggers
+// only ever advance FROM an expected prior state, so a hand-set 'paid' is never
+// corrected by the invoice actually being paid later: it just stays wrong.
+export const SYSTEM_ADVANCED_QUOTE_STATUSES: QuoteStatus[] = ['scheduled', 'completed', 'paid']
+
+/** Does the app normally set this itself, from a job or an invoice? */
+export function isSystemAdvancedQuoteStatus(s: QuoteStatus): boolean {
+  return SYSTEM_ADVANCED_QUOTE_STATUSES.includes(s)
+}
+
+/** One line explaining what each state MEANS, in the owner's terms. */
+export const QUOTE_STATUS_MEANING: Record<QuoteStatus, string> = {
+  draft: 'Still being prepared — the customer hasn’t seen it',
+  sent: 'With the customer — waiting on their answer',
+  accepted: 'The customer approved this price',
+  declined: 'The customer said no',
+  scheduled: 'Set automatically when the work is booked',
+  completed: 'Set automatically when the work is done',
+  paid: 'Set automatically when the invoice is paid',
+}
