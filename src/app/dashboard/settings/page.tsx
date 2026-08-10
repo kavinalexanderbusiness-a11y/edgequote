@@ -41,7 +41,7 @@ const SETTINGS_TABS: TabItem[] = [
   { key: 'notifications', label: 'Notifications', icon: Bell },
   { key: 'booking', label: 'Booking', icon: LinkIcon },
   { key: 'payroll', label: 'Payroll', icon: Wallet },
-  { key: 'modules', label: 'Modules', icon: LayoutGrid },
+  { key: 'modules', label: 'Features', icon: LayoutGrid },
 ]
 type SettingsTab = (typeof SETTINGS_TABS)[number]['key']
 

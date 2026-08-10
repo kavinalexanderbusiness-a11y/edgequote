@@ -4,7 +4,7 @@
 // key exists only in the create response; the list shows prefix + usage.
 
 import { useCallback, useEffect, useState } from 'react'
-import { KeyRound, Plus, ShieldOff, Trash2 } from 'lucide-react'
+import { AlertTriangle, KeyRound, Plus, ShieldOff, Trash2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
 import { formatDate } from '@/lib/utils'
@@ -15,6 +15,7 @@ import { Modal } from '@/components/ui/Modal'
 import { Input } from '@/components/ui/Input'
 import { Badge } from '@/components/ui/Badge'
 import { Toggle } from '@/components/ui/Toggle'
+import { Banner } from '@/components/ui/Banner'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { CodeBlock } from './CodeBlock'
@@ -22,6 +23,7 @@ import { CodeBlock } from './CodeBlock'
 export function ApiKeysManager({ userId }: { userId: string }) {
   const supabase = createClient()
   const [keys, setKeys] = useState<ApiKeyRow[] | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [name, setName] = useState('')
   const [writeScope, setWriteScope] = useState(false)
@@ -29,9 +31,11 @@ export function ApiKeysManager({ userId }: { userId: string }) {
   const [freshKey, setFreshKey] = useState<string | null>(null)
 
   const load = useCallback(async () => {
-    const { data } = await supabase.from('api_keys')
+    const { data, error } = await supabase.from('api_keys')
       .select('id, created_at, user_id, name, prefix, scopes, last_used_at, usage_count, revoked_at')
       .eq('user_id', userId).order('created_at', { ascending: false })
+    if (error) { setLoadError(error.message); return }
+    setLoadError(null)
     setKeys((data ?? []) as ApiKeyRow[])
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId])
@@ -99,7 +103,11 @@ export function ApiKeysManager({ userId }: { userId: string }) {
         </div>
       </CardHeader>
       <CardBody className="space-y-2">
-        {keys === null ? <SkeletonRows count={2} /> : keys.length === 0 ? (
+        {loadError ? (
+          <Banner tone="danger" icon={AlertTriangle}>
+            Couldn’t load your API keys — {loadError}. Nothing has changed; this is a display problem.
+          </Banner>
+        ) : keys === null ? <SkeletonRows count={2} /> : keys.length === 0 ? (
           <InlineEmpty icon={KeyRound}>No API keys yet. Create one to call the API or connect Zapier / Make.</InlineEmpty>
         ) : keys.map((k) => (
           <div key={k.id} className="flex items-center gap-3 rounded-lg border border-border p-3">

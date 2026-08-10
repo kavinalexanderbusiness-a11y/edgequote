@@ -192,8 +192,8 @@ export function Sidebar() {
               as a pile of features; the same fifteen under headings read as
               Operations / Customers / Money / Growth / Setup. The grouping is the
               registry's own `category` (lib/modules) rather than a second list
-              here, so the sidebar, the Marketplace and the Modules manager can
-              never disagree about where something belongs. */}
+              here, so the sidebar and Settings → Features can never disagree
+              about where something belongs. */}
           {CATEGORY_ORDER.map(cat => {
             const items = navMain.filter(m => m.category === cat && m.href !== '/dashboard')
             if (items.length === 0) return null      // a module can be uninstalled

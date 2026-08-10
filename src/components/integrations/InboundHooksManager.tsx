@@ -5,7 +5,7 @@
 // hook testable in one paste.
 
 import { useCallback, useEffect, useState } from 'react'
-import { ArrowDownToLine, ChevronDown, ChevronRight, Pause, Play, Plus, Trash2 } from 'lucide-react'
+import { AlertTriangle, ArrowDownToLine, ChevronDown, ChevronRight, Pause, Play, Plus, Trash2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { toast } from '@/lib/toast'
@@ -17,6 +17,7 @@ import { Modal } from '@/components/ui/Modal'
 import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Badge } from '@/components/ui/Badge'
+import { Banner } from '@/components/ui/Banner'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { CodeBlock, CopyRow } from './CodeBlock'
@@ -29,6 +30,7 @@ const ACTION_LABEL: Record<InboundWebhookRow['action'], string> = {
 export function InboundHooksManager({ userId }: { userId: string }) {
   const supabase = createClient()
   const [hooks, setHooks] = useState<InboundWebhookRow[] | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [receipts, setReceipts] = useState<InboundEventRow[]>([])
   const [createOpen, setCreateOpen] = useState(false)
   const [name, setName] = useState('')
@@ -46,6 +48,8 @@ export function InboundHooksManager({ userId }: { userId: string }) {
       supabase.from('inbound_webhooks').select('*').eq('user_id', userId).order('created_at', { ascending: false }),
       supabase.from('inbound_events').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(15),
     ])
+    if (h.error || r.error) { setLoadError((h.error ?? r.error)!.message); return }
+    setLoadError(null)
     setHooks((h.data ?? []) as InboundWebhookRow[])
     setReceipts((r.data ?? []) as InboundEventRow[])
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -113,7 +117,11 @@ export function InboundHooksManager({ userId }: { userId: string }) {
           </div>
         </CardHeader>
         <CardBody className="space-y-2">
-          {hooks === null ? <SkeletonRows count={2} /> : hooks.length === 0 ? (
+          {loadError ? (
+            <Banner tone="danger" icon={AlertTriangle}>
+              Couldn’t load your inbound URLs — {loadError}. Nothing has changed; this is a display problem.
+            </Banner>
+          ) : hooks === null ? <SkeletonRows count={2} /> : hooks.length === 0 ? (
             <InlineEmpty icon={ArrowDownToLine}>No inbound webhooks yet. Create one to pipe leads in from anywhere.</InlineEmpty>
           ) : hooks.map((h) => {
             const url = `${base}/api/hooks/in/${h.token}`

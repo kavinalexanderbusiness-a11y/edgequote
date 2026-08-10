@@ -34,6 +34,12 @@ import {
 interface ModulesSnapshot {
   enabled: unknown
   meta: ModuleMetaMap
+  /** The read that produced this snapshot failed, so `enabled` is the fail-open
+   *  default rather than this business's actual composition. Navigation is happy
+   *  with that — showing everything is the safe guess. A WRITE is not: install /
+   *  uninstall both compute the next set FROM the current one, so saving on top
+   *  of a guess would quietly re-install every module the owner had turned off. */
+  unknown?: boolean
 }
 
 let store: ModulesSnapshot | null = null
@@ -55,7 +61,14 @@ function loadModules(): Promise<void> {
       const { data: { session } } = await supabase.auth.getSession()
       const uid = session?.user?.id
       if (!uid) { store = store ?? { enabled: null, meta: {} }; emit(); return }
-      const { data } = await supabase.from('business_settings').select('enabled_modules, module_meta').eq('user_id', uid).maybeSingle()
+      const { data, error } = await supabase.from('business_settings').select('enabled_modules, module_meta').eq('user_id', uid).maybeSingle()
+      if (error) {
+        // Keep serving the last good snapshot if we have one; otherwise fail OPEN
+        // (every module visible) but remember that we are guessing.
+        store = store ?? { enabled: null, meta: {}, unknown: true }
+        emit()
+        return
+      }
       const d = data as { enabled_modules: unknown; module_meta: unknown } | null
       store = { enabled: d?.enabled_modules ?? null, meta: readMeta(d?.module_meta) }
       emit()
@@ -89,14 +102,25 @@ export function useModules() {
     nextMeta: ModuleMetaMap,
   ): Promise<string | null> => {
     const prev = store
+    // Never save on top of a guess — see ModulesSnapshot.unknown.
+    if (prev?.unknown) return 'Couldn’t load which features are on, so nothing was changed. Reload and try again.'
     store = { enabled: nextEnabled, meta: nextMeta }
     emit()
     const supabase = createClient()
     const { data: { session } } = await supabase.auth.getSession()
     const uid = session?.user?.id
     if (!uid) { store = prev; emit(); return 'Not signed in.' }
+    // UPSERT, not update. A bare .update() on a business that has no
+    // business_settings row yet matches ZERO rows and returns NO error — so the
+    // optimistic store above would keep the new composition, navigation would
+    // visibly change, and the toggle would look saved right up until the next
+    // reload put it back. Same trap ensureBookingToken documents, and the same
+    // fix: key on unique(user_id).
+    //
+    // ⚠️ This write is why `verify:settings-save` scanning ModuleManager.tsx was
+    // not enough — the Modules tab's save does not live in its component.
     const { error } = await supabase.from('business_settings')
-      .update({ enabled_modules: nextEnabled, module_meta: nextMeta }).eq('user_id', uid)
+      .upsert({ user_id: uid, enabled_modules: nextEnabled, module_meta: nextMeta }, { onConflict: 'user_id' })
     if (error) { store = prev; emit(); return error.message }
     window.dispatchEvent(new Event('eq:modules-changed'))
     return null

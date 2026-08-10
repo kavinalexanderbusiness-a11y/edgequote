@@ -61,8 +61,13 @@ function pushRecent(e: RecentEntry) {
 // same source and same per-business filtering as the sidebar, so the palette
 // never disagrees with navigation. Only non-module destinations live here.
 const EXTRA_NAV: { label: string; href: string; icon: Icon; keywords?: string }[] = [
-  { label: 'Marketplace', href: '/dashboard/marketplace', icon: Store },
-  { label: 'API Docs', href: '/dashboard/integrations/docs', icon: BookOpen },
+  // Was "Marketplace" → /dashboard/marketplace: an app store for features that
+  // are all included and all already on. It now points at the one surface that
+  // manages them, named for what an owner would actually be after.
+  { label: 'Turn features on or off', href: '/dashboard/settings#modules', icon: Store,
+    keywords: 'modules marketplace features hide tidy menu install uninstall' },
+  { label: 'API Docs', href: '/dashboard/integrations/docs', icon: BookOpen,
+    keywords: 'developer rest webhook zapier make integrate' },
   { label: 'Routes', href: '/dashboard/routes', icon: Navigation, keywords: 'driving distance travel stops' },
   { label: 'Measurement Accuracy', href: '/dashboard/measurements', icon: Eye },
   { label: 'Help', href: '/dashboard/help', icon: LifeBuoy },

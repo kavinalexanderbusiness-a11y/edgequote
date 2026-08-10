@@ -1,6 +1,5 @@
 'use client'
 
-import Link from 'next/link'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Toggle } from '@/components/ui/Toggle'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -13,14 +12,20 @@ import {
 import { toast } from '@/lib/toast'
 import { LayoutGrid, Star, ArrowUpCircle } from 'lucide-react'
 
-// ── Modules — the management surface over THE feature-module registry ─────────
-// Shaped like a marketplace on purpose: featured modules up top, the catalogue
-// grouped by category, and each listing carrying its pitch, version, what it
-// depends on, and the data it declares it touches. Install pulls dependencies
-// in atomically; uninstall is refused (with names) while other installed
-// modules need it. Everything is first-party code composed by config — no
-// runtime plugins. "Off" only tidies navigation: data, pages and deep links
-// stay intact, so it's always reversible and always safe.
+// ── Optional features — THE surface over the feature-module registry ──────────
+// It used to be shaped like a marketplace, and it had a matching storefront page
+// at /dashboard/marketplace. Both were describing fifteen first-party features
+// that ship with every account, cost nothing, and arrive switched on — so the
+// store shape was answering a question ("what should I install?") that no owner
+// of this product has. It was also two surfaces over one registry, which is how
+// they start disagreeing. The storefront is now a redirect here.
+//
+// What is left is the honest job: a list of what EdgeQuote can do, with a switch
+// beside each one for the parts a given business doesn't want cluttering its
+// menu. Dependencies come along atomically when something is switched ON, and a
+// switch OFF is refused (by name) while something else still needs it. "Off"
+// only tidies navigation — data, pages and deep links stay intact, so it is
+// always reversible and always safe.
 export function ModuleManager() {
   const { all, installed, meta, loaded, install, uninstall, acknowledgeUpdate, wouldInstall } = useModules()
   const on = new Set(installed)
@@ -29,8 +34,8 @@ export function ModuleManager() {
     if (next) {
       const extra = wouldInstall(m.key).map(k => moduleByKey(k)?.label).filter(Boolean)
       const err = await install(m.key)
-      if (err) toast.error('Could not install: ' + err)
-      else if (extra.length) toast.success(`${m.label} installed — brought along ${extra.join(', ')} (required).`)
+      if (err) toast.error('Could not turn that on: ' + err)
+      else if (extra.length) toast.success(`${m.label} is on — ${extra.join(', ')} came with it, because it needs ${extra.length === 1 ? 'it' : 'them'}.`)
     } else {
       const err = await uninstall(m.key)
       if (err) toast.error(err)
@@ -50,13 +55,11 @@ export function ModuleManager() {
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium text-ink flex items-center gap-1.5">
               {m.label}
-              {m.featured && <Star className="w-3 h-3 text-amber-400 fill-amber-400" aria-label="Featured" />}
             </p>
             <p className="text-xs text-ink-faint">{m.description}</p>
-            <p className="text-[10px] text-ink-faint mt-0.5 tabular-nums">
-              v{m.version}
-              {requires.length > 0 && <> · needs {requires.join(', ')}</>}
-              {' '}· uses {m.permissions.map(p => p.split(':')[0]).filter((v, i, a) => a.indexOf(v) === i).join(', ')}
+            <p className="text-[10px] text-ink-faint mt-0.5">
+              {requires.length > 0 && <>Needs {requires.join(', ')} · </>}
+              Uses your {m.permissions.map(p => p.split(':')[0]).filter((v, i, a) => a.indexOf(v) === i).join(', ')}
             </p>
           </div>
           {m.core ? (
@@ -87,18 +90,12 @@ export function ModuleManager() {
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><LayoutGrid className="w-4 h-4 text-accent-text" /> Modules</h2>
-            <p className="text-xs text-ink-faint mt-0.5">
-              Compose your EdgeQuote — install the parts your business uses. Removing a module only
-              tidies navigation: its data and links stay intact, and you can bring it back any time.
-            </p>
-          </div>
-          <Link href="/dashboard/marketplace"
-            className="shrink-0 text-xs font-semibold text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-            Browse the marketplace →
-          </Link>
+        <div>
+          <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><LayoutGrid className="w-4 h-4 text-accent-text" /> Optional features</h2>
+          <p className="text-xs text-ink-faint mt-0.5">
+            Everything below is included and already on. Switch off anything you don’t use and it leaves your
+            menu — nothing is deleted, and you can switch it back on whenever you like.
+          </p>
         </div>
       </CardHeader>
       <CardBody>
@@ -116,7 +113,7 @@ export function ModuleManager() {
             {featured.length > 0 && (
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5 flex items-center gap-1">
-                  <Star className="w-3 h-3 text-amber-400" aria-hidden="true" /> Featured — not installed
+                  <Star className="w-3 h-3 text-amber-400" aria-hidden="true" /> Switched off — worth a look
                 </p>
                 <div className="divide-y divide-border rounded-xl border border-accent/20 bg-accent/[0.03] px-3">
                   {featured.map(m => <Row key={m.key} m={m} />)}
