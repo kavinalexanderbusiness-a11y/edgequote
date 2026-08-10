@@ -101,7 +101,11 @@ export function WebsiteIntegration() {
       if (!t) { setEnabled(!v); setBusy(false); return }   // token mint failed — don't claim enabled
       setToken(t)
     }
-    const { error } = await supabase.from('business_settings').update({ booking_enabled: v }).eq('user_id', user.id)
+    // upsert, not update — on a missing settings row `.update()` matches zero
+    // rows with NO error, and this switch would claim a booking page the public
+    // endpoint gate never saw enabled.
+    const { error } = await supabase.from('business_settings')
+      .upsert({ user_id: user.id, booking_enabled: v }, { onConflict: 'user_id' })
     if (error) setEnabled(!v)   // revert — the Health card + endpoint gate read this
     setBusy(false)
   }
@@ -115,7 +119,9 @@ export function WebsiteIntegration() {
     // This is the rate limit gating the PUBLIC lead endpoint — an input that keeps
     // showing a limit the server never accepted is a security control that lies.
     // (toggleBooking above already reverts on error; this just missed the pattern.)
-    const { error } = await supabase.from('business_settings').update({ website_lead_hourly_limit: n }).eq('user_id', user.id)
+    // upsert, not update — same 0-row trap as the toggle above.
+    const { error } = await supabase.from('business_settings')
+      .upsert({ user_id: user.id, website_lead_hourly_limit: n }, { onConflict: 'user_id' })
     if (error) { setHourlyLimit(prev); toast.error('Could not save the hourly limit — please try again.') }
   }
 
