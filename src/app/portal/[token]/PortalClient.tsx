@@ -36,8 +36,13 @@ import { RequestsTab } from './components/RequestsTab'
 // ?tab=requests link, and Home's own "Request a service" button, must resolve to
 // a destination that actually renders. Selecting a folded key would leave the
 // panel empty with no pill selected, which is a blank portal.
-function resolveTab(t: TabKey): TabKey {
-  return t === 'requests' ? 'messages' : t
+// `multiProperty` decides one of them: a single-address customer's Property tab
+// folded into Visits (their address, measurements and provider note now open it),
+// so ?tab=property must land on Visits for them and stay put for a landlord.
+function resolveTab(t: TabKey, multiProperty: boolean): TabKey {
+  if (t === 'requests') return 'messages'
+  if (t === 'property' && !multiProperty) return 'visits'
+  return t
 }
 
 export function PortalClient({ token, initialData }: { token: string; initialData: unknown }) {
@@ -55,6 +60,16 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   const lastLoadedAt = useRef(Date.now())
   const [loading, setLoading] = useState(initialData == null)
   const [tab, setTab] = useState<TabKey>('home')
+  // Same fact model.ts derives as view.multiProperty (properties.length > 1), read
+  // straight off the payload so it is available to the effects and handlers ABOVE
+  // the view memo — the tab resolver needs it and runs in both places.
+  const multiProperty = (data?.properties?.length ?? 0) > 1
+  // THE tab actually shown. `tab` holds whatever was ASKED for — a pill, an in-app
+  // navigate, or a deep link naming a folded destination — and this resolves it
+  // against the payload. Resolving at render rather than at setTab time means the
+  // answer is never guessed from data that hadn't loaded yet, and there is exactly
+  // one place a folded key gets mapped.
+  const activeTab = resolveTab(tab, multiProperty)
   const [accepting, setAccepting] = useState<string | null>(null)
   const [paymentsEnabled, setPaymentsEnabled] = useState(false)
   const [payingId, setPayingId] = useState<string | null>(null)
@@ -244,11 +259,11 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       // unscrolled — the link can't lie about a document the customer can't see.
       else {
         const link = parsePortalDeepLink(window.location.search)
-        // resolveTab, not the raw key: this path sets the tab DIRECTLY rather than
-        // through goTab, so a link to a folded tab would select something with no
-        // pill and no panel — a blank portal for anyone holding an old
-        // ?tab=requests link, which is exactly the population this alias exists for.
-        if (link.tab) setTab(resolveTab(link.tab))
+        // The RAW key is stored; `activeTab` below resolves it at render, when the
+        // payload — and therefore multiProperty — is actually known. Resolving here
+        // would run before a non-SSR-seeded load returns, so a landlord deep-linked
+        // to ?tab=property would be redirected to Visits on a guess.
+        if (link.tab) setTab(link.tab)
         if (link.docsCat) setDocsCat(link.docsCat)
         if (link.focusDocId) {
           setFocusDocId(link.focusDocId)
@@ -271,14 +286,14 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   // scrolls only the pill row horizontally; block:'nearest' avoids a page jump.
   useEffect(() => {
     if (typeof document === 'undefined') return
-    document.getElementById(`porttab-${tab}`)?.scrollIntoView({ inline: 'nearest', block: 'nearest' })
-  }, [tab])
+    document.getElementById(`porttab-${activeTab}`)?.scrollIntoView({ inline: 'nearest', block: 'nearest' })
+  }, [activeTab])
 
   // ONE place a tab change happens — keeps state and the URL in step so a refresh
   // or a bookmark lands on the same tab instead of bouncing to Home. Billing's
   // category resets to 'all' unless a caller pre-filters it (the Home signpost).
   function goTab(rawNext: TabKey, cat?: 'all' | 'quote' | 'invoice') {
-    const next = resolveTab(rawNext)
+    const next = resolveTab(rawNext, multiProperty)
     setTab(next)
     if (cat) setDocsCat(cat)
     else if (next === 'billing') setDocsCat('all')
@@ -511,7 +526,12 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     { key: 'home', label: 'Home', icon: Home },
     { key: 'billing', label: 'Billing', icon: Receipt, n: docCount, unit: 'documents' },
     { key: 'visits', label: 'Visits', icon: History, n: view.derived.completed.length + view.derived.upcoming.length, unit: 'visits' },
-    { key: 'property', label: view.multiProperty ? 'Properties' : 'Property', icon: MapPin, n: view.multiProperty ? view.properties.length : undefined, unit: 'properties' },
+    // Properties is a destination only for a landlord, where grouping the work BY
+    // address is the whole information. A single-address customer's property
+    // details (address, measurements, provider note) now open Visits instead —
+    // one tab for "my place and what's been done to it" — so 50 of the 55 portals
+    // in production lose a pill and lose nothing else.
+    { key: 'property', label: 'Properties', icon: MapPin, n: view.properties.length, unit: 'properties' },
     // ONE way to reach a human. "Messages" and "Requests" were two separate pills
     // that both mean "talk to my provider" to a homeowner — one held the message
     // thread, the other the service catalogue and a free-text ask, and nothing on
@@ -524,7 +544,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   ] as { key: TabKey; label: string; icon: typeof Home; n?: number; unit?: string }[]).filter(t =>
     t.key === 'billing' ? (docCount > 0 || data.payments.length > 0) :
     t.key === 'visits' ? (data.jobs.length > 0 || data.photos.length > 0) :
-    t.key === 'property' ? view.hasProperty :
+    t.key === 'property' ? (view.hasProperty && view.multiProperty) :
     true)
 
   return (
@@ -558,7 +578,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
         <div className="sticky top-0 z-10 -mx-4 px-4 py-2 bg-bg/90 backdrop-blur border-b border-border">
           <div role="tablist" aria-label="Your account sections" className="flex flex-wrap gap-1.5">
             {TABS.map((t, i) => {
-              const active = tab === t.key
+              const active = activeTab === t.key
               return (
                 <button
                   key={t.key}
@@ -635,7 +655,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
               dismissible so it's a convenience, never a nag. One tap lands on the
               exact document via the same scroll a deep link uses. */}
           {(() => {
-            if (tab === 'home' || tab === 'billing') return null
+            if (activeTab === 'home' || activeTab === 'billing') return null
             const a = primaryPortalAction(view.docItems, view.money)
             if (!a || a.key === dismissedAction) return null
             return (
@@ -656,28 +676,28 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
           {/* The single live panel, labelled by the active tab — completes the
               tablist/tab/tabpanel relationship for assistive tech. Global status
               banners above stay outside it (they aren't tab content). */}
-          <div id="portal-panel" role="tabpanel" aria-labelledby={`porttab-${tab}`} tabIndex={-1} className="focus-visible:outline-none">
-            {tab === 'home' && <HomeTab view={view} actions={actions} suppressApproved={justAccepted} />}
+          <div id="portal-panel" role="tabpanel" aria-labelledby={`porttab-${activeTab}`} tabIndex={-1} className="focus-visible:outline-none">
+            {activeTab === 'home' && <HomeTab view={view} actions={actions} suppressApproved={justAccepted} />}
             {/* Reachability outranks the review ask: with no phone AND no email on
                 file, the owner literally cannot confirm a date or send the invoice.
                 Submitting goes through the same request pipeline as everything else
                 (portal_request_service) — the owner applies it to the file. */}
-            {tab === 'home' && needsContactMethod(data.customer) && (
+            {activeTab === 'home' && needsContactMethod(data.customer) && (
               <ContactMethodCard token={token} businessName={biz?.company_name ?? null} onSubmit={request} />
             )}
-            {tab === 'home' && biz?.review_url && view.derived.lastCompleted && !data.customer.reviewed_at && !reviewDeclined && (
+            {activeTab === 'home' && biz?.review_url && view.derived.lastCompleted && !data.customer.reviewed_at && !reviewDeclined && (
               <ReviewCard reviewUrl={biz.review_url} businessName={biz.company_name} reviewed={markedReviewed} onReviewed={markReviewed} onDecline={declineReview} />
             )}
-            {tab === 'home' && consent && <ConsentCard token={token} consent={consent} onSave={saveConsent} />}
-            {tab === 'property' && <PropertyTab view={view} actions={actions} />}
-            {tab === 'visits' && <VisitsTab view={view} actions={actions} />}
-            {tab === 'billing' && <BillingTab view={view} actions={actions} initialCat={docsCat} focusDocId={focusDocId} />}
+            {activeTab === 'home' && consent && <ConsentCard token={token} consent={consent} onSave={saveConsent} />}
+            {activeTab === 'property' && <PropertyTab view={view} actions={actions} />}
+            {activeTab === 'visits' && <VisitsTab view={view} actions={actions} />}
+            {activeTab === 'billing' && <BillingTab view={view} actions={actions} initialCat={docsCat} focusDocId={focusDocId} />}
             {/* Contact = ask for something, or say something. The catalogue leads
                 because "I want another service" is the commoner errand and it is
                 answerable without typing; the thread follows for everything else.
                 Both already send through the same portal_request_service /
                 portal_submit_request pipeline, so nothing about delivery changes. */}
-            {tab === 'messages' && (
+            {activeTab === 'messages' && (
               <div className="space-y-3">
                 <RequestsTab view={view} actions={actions} />
                 <MessagesTab view={view} actions={actions} initialDraft={composerPrefill} onDraftConsumed={() => setComposerPrefill(null)} />

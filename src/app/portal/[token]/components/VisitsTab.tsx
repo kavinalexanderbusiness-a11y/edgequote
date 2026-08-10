@@ -13,6 +13,7 @@ import { useState } from 'react'
 import { format } from 'date-fns'
 import { Camera, CheckCircle2, Clock, MapPin, Receipt } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
+import { PropertySummary } from './PropertyTab'
 import { cn, parseLocalDate } from '@/lib/utils'
 import {
   daysAwayLabel, liveStatusOf, resolveDocAddress, visitToCalendarEvent, visitDay,
@@ -32,16 +33,29 @@ export function VisitsTab({ view, actions }: TabProps) {
   // section they'd vanish until the job flipped to completed.
   const loosePhotos = view.orphanPhotos
 
+  // A single-property customer has no Property tab any more — their address,
+  // measurements and provider note open this one instead, so the page reads
+  // "here is your place" and then the work done on it. Multi-property customers
+  // keep their own tab (the per-address grouping IS the information) and get
+  // nothing here, so the two never both render.
+  const propertyLead = !view.multiProperty && view.hasProperty
+    ? <div className="animate-rise"><PropertySummary view={view} /></div>
+    : null
+
   if (upcoming.length === 0 && completed.length === 0 && loosePhotos.length === 0) {
     return (
-      <div className="animate-rise">
-        <Empty text="Your visit history will appear here after your first visit." />
+      <div className="space-y-4">
+        {propertyLead}
+        <div className="animate-rise">
+          <Empty text="Your visit history will appear here after your first visit." />
+        </div>
       </div>
     )
   }
 
   return (
     <div className="space-y-6">
+      {propertyLead}
       {upcoming.length > 0 && (
         <div className="animate-rise">
           <PortalSection

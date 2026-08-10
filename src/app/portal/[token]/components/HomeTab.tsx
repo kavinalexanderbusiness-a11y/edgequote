@@ -287,7 +287,7 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
           <div className="space-y-2.5">
             {derived.plans.map(p => (
               <div key={p.recurrenceId}>
-                <PlanRow p={p} />
+                <PlanRow p={p} heroDate={next?.scheduled_date ?? null} />
                 {/* The way out, on the plan itself. These SEND A REQUEST the owner
                     confirms — the plan doesn't change until a human says so, and the
                     copy says exactly that. Free-text "send us a message" stays below
@@ -384,8 +384,18 @@ function TrustCard({ view }: { view: PortalView }) {
 // no visits are booked — and put the way to ask right next to it. The old card
 // simply hid such a plan, which is how a customer on a live plan could open the
 // portal and be told nothing about it at all.
-function PlanRow({ p }: { p: Derived['plans'][number] }) {
+function PlanRow({ p, heroDate }: { p: Derived['plans'][number]; heroDate?: string | null }) {
   const perVisit = p.recurringPrice ?? p.initialPrice
+  // The next-service hero above already states this date, in larger type, with a
+  // "in 5 days" gloss and a status stepper. Printing it again three cards down
+  // reads as a second, separate appointment — the commonest customer here has ONE
+  // weekly plan, so "Aug 14, 2026" appeared twice on one screen.
+  // The plan card keeps everything the hero does NOT say (cadence, usual weekday,
+  // window, price per visit, how many are booked) and drops only the repeated
+  // date, so the two are complementary instead of redundant. A plan whose next
+  // visit ISN'T the hero's — a second plan, or a later one — still shows its own
+  // date, because then it is new information.
+  const echoesHero = !!heroDate && p.nextVisitDate === heroDate
   return (
     <div className="rounded-xl border border-border bg-bg-tertiary/40 px-3.5 py-3">
       <div className="flex items-start gap-2.5">
@@ -414,10 +424,17 @@ function PlanRow({ p }: { p: Derived['plans'][number] }) {
           </div>
           <p className="text-xs mt-1.5">
             {p.nextVisitDate ? (
-              <span className="text-ink">
-                Next visit <span className="font-semibold">{formatDate(p.nextVisitDate)}</span>
-                {p.remaining > 1 && <span className="text-ink-muted"> · {p.remaining} booked</span>}
-              </span>
+              echoesHero ? (
+                // The hero owns the date; this only adds what it doesn't cover.
+                p.remaining > 1
+                  ? <span className="text-ink-muted">{p.remaining} visits booked</span>
+                  : <span className="text-ink-muted">Next visit shown above</span>
+              ) : (
+                <span className="text-ink">
+                  Next visit <span className="font-semibold">{formatDate(p.nextVisitDate)}</span>
+                  {p.remaining > 1 && <span className="text-ink-muted"> · {p.remaining} booked</span>}
+                </span>
+              )
             ) : (
               <span className="text-ink-muted">No upcoming visits booked yet.</span>
             )}
@@ -552,10 +569,37 @@ function paymentMethodLabel(provider: string): string {
   }
 }
 
+// Recent activity is HISTORY — what has already happened. Anything still waiting
+// on the customer is the attention area's job, at the top of the page, with the
+// real button on it.
+//
+// They overlapped: a quote awaiting approval appeared as "Quote EPS-2026-0134
+// sent · Awaiting your approval" here AND as "3 quotes are ready for your review"
+// above, and an unpaid invoice appeared as "Invoice INV-0065 issued · Due" AND as
+// "Amount due · $347.50". On the 3-quote prospect the ENTIRE feed was the same
+// three quotes the card above already summarised — a second, weaker copy of the
+// call to action, phrased as a past event.
+//
+// Suppressing them costs no access: both are one tap away through the attention
+// card itself (it navigates to Billing, pre-filtered) and through the Billing
+// tab, which lists every document with its live status.
 function useRecentActivity(view: PortalView): TLEvent[] {
   return useMemo<TLEvent[]>(() => {
     const { data, photosByJob, docItems } = view
     const ev: TLEvent[] = []
+    // The exact sets the attention area is showing. `awaiting` mirrors HomeTab's
+    // own filter (docItems, kind quote, display status 'sent'); the due set is
+    // only suppressed when the banner is actually rendered (money.due > 0), so a
+    // document nothing is currently asking about stays in the history.
+    const awaitingQuoteIds = new Set(
+      docItems.filter(d => d.kind === 'quote' && d.status === 'sent').map(d => d.rawId),
+    )
+    const dueInvoiceIds = new Set(
+      view.money.due > 0
+        ? docItems.filter(d => d.kind === 'invoice' && d.balance > 0
+            && d.status !== 'paid' && d.status !== 'overpaid' && d.status !== 'cancelled').map(d => d.id)
+        : [],
+    )
     // Quote events read the DISPLAY status + GST-true totals off DocItem — the
     // exact figures the documents rows show — so this feed can never disagree
     // with the row it summarizes and never runs a second status/money engine.
@@ -567,6 +611,8 @@ function useRecentActivity(view: PortalView): TLEvent[] {
     // at this point on the line. Tone follows the same rule: amber means "this still
     // wants you", so a declined or lapsed quote must not wear it.
     for (const q of data.quotes) {
+      // Still waiting on them → it's the attention card's, not history's.
+      if (awaitingQuoteIds.has(q.id)) continue
       const st = quoteStatusByRaw.get(q.id) ?? q.status
       const outcome = st === 'accepted' ? 'Approved'
         : st === 'declined' ? 'Declined'
@@ -583,14 +629,23 @@ function useRecentActivity(view: PortalView): TLEvent[] {
       })
     }
     for (const j of data.jobs) {
-      if (j.completed_at || j.status === 'completed') ev.push({ id: 'jc' + j.id, at: j.completed_at || j.scheduled_date, icon: CheckCircle2, tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', title: `${j.service_type || j.title} completed`, sub: null })
-      else ev.push({ id: 'js' + j.id, at: j.scheduled_date, icon: CalendarClock, tone: 'text-sky-400 border-sky-500/30 bg-sky-500/10', title: `${j.service_type || j.title} scheduled`, sub: null })
+      if (j.completed_at || j.status === 'completed') { ev.push({ id: 'jc' + j.id, at: j.completed_at || j.scheduled_date, icon: CheckCircle2, tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', title: `${j.service_type || j.title} completed`, sub: null }); continue }
+      // A visit that hasn't happened yet is not recent ACTIVITY. The next-service
+      // hero states it in large type at the top of this very page, and the Visits
+      // tab lists every upcoming one — so "Weed Removal scheduled · Aug 11, 2026"
+      // down here was the third telling, and the second on one screen.
+      // A past date that never completed is different: that IS history (a visit
+      // that came and went), so it stays.
+      if (j.scheduled_date > view.todayISO) continue
+      ev.push({ id: 'js' + j.id, at: j.scheduled_date, icon: CalendarClock, tone: 'text-sky-400 border-sky-500/30 bg-sky-500/10', title: `${j.service_type || j.title} scheduled`, sub: null })
     }
     // Draft invoices are the owner's unfinished work and are filtered out of the
     // customer's documents list (buildDocItems does it) — iterating DocItems means
     // they cannot leak onto this feed either, and `amount` is already the
     // discounted+GST total those rows display.
     for (const d of docItems.filter(d => d.kind === 'invoice')) {
+      // Currently being asked for → the amount-due banner owns it.
+      if (dueInvoiceIds.has(d.id)) continue
       const settled = d.status === 'paid' || d.status === 'overpaid'
       ev.push({
         id: d.id, at: d.date, icon: Receipt,

@@ -124,6 +124,37 @@ export function PropertyTab({ view, actions }: TabProps) {
 
 // ── Pieces ──────────────────────────────────────────────────────────────────
 
+// ── The single-property summary, for the top of Visits ──────────────────────
+// A customer with ONE address had a whole navigation destination holding an
+// address, two measurements and a couple of counts — and the work at that
+// address lived somewhere else entirely. 50 of the 55 portals in production are
+// single-property, so that pill cost nearly everyone a tab to learn one fact
+// they already know (where they live).
+//
+// This renders the part worth keeping — the service address, the measurements
+// the provider took, and the provider's note — so Visits opens with "here is
+// your place" and continues into the work done on it. Deliberately WITHOUT the
+// plans block: Home already shows the same recurrences under "Your service
+// plan", and relocating a duplicate is not removing it.
+//
+// Multi-property customers keep the separate tab — see PropertyTab's own note.
+export function PropertySummary({ view, onPhotos }: { view: TabProps['view']; onPhotos?: () => void }) {
+  const m = view.propertyModels[0]
+  if (!view.hasProperty || !m) return null
+  const notes = view.data.property?.notes?.trim() || null
+  return (
+    <div className="rounded-card border border-border bg-bg-secondary p-4">
+      <PropertyHeader
+        property={m.property}
+        fallbackAddress={view.data.property?.address ?? null}
+        fallbackCity={view.data.property?.city ?? null}
+      />
+      <FactsRow model={m} onPhotos={onPhotos} className="mt-3" />
+      {notes && <div className="mt-3"><NotesCard notes={notes} /></div>}
+    </div>
+  )
+}
+
 function PropertyHeader({ property, fallbackAddress, fallbackCity }: { property: PortalProperty | null; fallbackAddress: string | null; fallbackCity: string | null }) {
   const address = property?.address?.trim() || fallbackAddress?.trim() || null
   const locality = [property?.city ?? fallbackCity, property?.province].filter(Boolean).join(', ')
@@ -150,7 +181,9 @@ function PropertyHeader({ property, fallbackAddress, fallbackCity }: { property:
 // The facts row: only facts that exist. `lawn_sqft` is a historical column NAME
 // holding a measured area of ANY kind (driveway, roof, deck) — the label is
 // "Measured area", never the word "lawn".
-function FactsRow({ model, onPhotos, className }: { model: PropertyModel; onPhotos: () => void; className?: string }) {
+// onPhotos is optional: inside Visits the photos are already on the same screen,
+// so the count is a fact rather than a link to where you already are.
+function FactsRow({ model, onPhotos, className }: { model: PropertyModel; onPhotos?: () => void; className?: string }) {
   const sqft = Number(model.property?.lawn_sqft) || 0
   const fence = Number(model.property?.fence_length) || 0
   return (
