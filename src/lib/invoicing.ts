@@ -9,6 +9,9 @@ type Supa = ReturnType<typeof createClient>
 export interface AutoInvoiceResult {
   created: boolean
   invoiceNumber?: string
+  /** Set when created — the crew completion route hands this to the AutoPay
+   *  engine directly (the browser fire-and-forget can't run server-side). */
+  invoiceId?: string
   reason?: 'not-recurring' | 'exists' | 'no-amount' | 'error'
 }
 
@@ -147,9 +150,22 @@ export async function syncDraftInvoiceAmounts(
 // its originating quote. Never sends. De-dupes by job_id so a visit can't be
 // double-invoiced, and (for one-time jobs) by quote_id so it can't collide with a
 // manual "Convert to Invoice". An unpriced job drafts nothing (never a $0 invoice).
-export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job): Promise<AutoInvoiceResult> {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { created: false, reason: 'error' }
+// `opts.ownerId` exists for exactly ONE caller: the crew completion route, which
+// runs this engine with the SERVICE role (a crew session may not touch invoices,
+// so the server acts for the owner it has already verified via the technician's
+// roster row). getUser() answers nobody on a service client, so the verified
+// owner id is passed in instead. Every owner-session caller keeps the default —
+// and the id must NEVER come from a request body, only from a server-side
+// technicians→user_id resolution.
+export async function createDraftInvoiceForCompletedJob(
+  supabase: Supa, job: Job, opts?: { ownerId?: string },
+): Promise<AutoInvoiceResult> {
+  let ownerId = opts?.ownerId ?? null
+  if (!ownerId) {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return { created: false, reason: 'error' }
+    ownerId = user.id
+  }
 
   // Prevent duplicates — one invoice per completed visit (job_id is the atomic key;
   // a partial unique index on invoices(job_id) is the race backstop further down).
@@ -205,14 +221,14 @@ export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job
   if (!customerName && quote) customerName = String(quote.customer_name || '')
   if (!address && quote) address = (quote.address as string) ?? null
 
-  const invoiceNumber = await nextInvoiceNumber(supabase, user.id)
+  const invoiceNumber = await nextInvoiceNumber(supabase, ownerId)
 
   // Local dates — evening completions must not stamp tomorrow (UTC) as issued.
   const today = localTodayISO()
   const dueISO = format(addDays(parseISO(today), 14), 'yyyy-MM-dd')
 
   const { data: created, error } = await supabase.from('invoices').insert({
-    user_id: user.id,
+    user_id: ownerId,
     quote_id: job.quote_id,
     customer_id: job.customer_id,
     property_id: job.property_id,
@@ -251,7 +267,7 @@ export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job
   // creation never depends on, or is blocked by, the charge.
   triggerAutoPay((created as { id: string }).id)
 
-  return { created: true, invoiceNumber }
+  return { created: true, invoiceNumber, invoiceId: (created as { id: string }).id }
 }
 
 // ── Un-completing a job — the exact inverse, as ONE operation ─────────────────

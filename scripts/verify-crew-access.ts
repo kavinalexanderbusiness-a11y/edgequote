@@ -380,6 +380,67 @@ check('a Week day expands to a READ-ONLY preview (no Start on future days)',
 check('a failed day preview says so — never an empty believable day',
   /detailFailed/.test(WEEKDAY_SRC) && /Couldn’t load this day/.test(WEEKDAY_SRC))
 
+// ── Completion → billing handoff (2026-08-09) ───────────────────────────────
+console.log('\n═══ Finished work bills the same no matter who pressed Complete ═══')
+
+const CREWJOB = read('src/lib/crewJob.ts')
+check('crew completion goes through /api/crew/complete, never the bare RPC',
+  /crewCompleteVisit[\s\S]{0,900}fetch\('\/api\/crew\/complete'/.test(CREWJOB),
+  'a bare-RPC completion silently skips the draft-invoice handoff the owner path always runs')
+check('…and the stamp is still completionPatch (one definition of done, every door)',
+  /crewCompleteVisit[\s\S]{0,500}completionPatch\(stop\)/.test(CREWJOB))
+check('undoing a completion has its own door (the draft must die with the status)',
+  /crewUncompleteVisit[\s\S]{0,600}action: 'undo'/.test(CREWJOB))
+check('CrewToday picks the completion-undo for a completed visit',
+  /kind === 'complete'\s*\n?\s*\? await crewUncompleteVisit/.test(read('src/components/crew/CrewToday.tsx')))
+
+const COMPLETE_ROUTE = 'src/app/api/crew/complete/route.ts'
+check('the completion route exists', existsSync(join(ROOT, COMPLETE_ROUTE)))
+if (existsSync(join(ROOT, COMPLETE_ROUTE))) {
+  const R = read(COMPLETE_ROUTE)
+  check('the route requires the crew role from the DATABASE',
+    /resolveAppRole/.test(R) && /role !== 'crew'/.test(R))
+  check('the worker is resolved by the roster switches',
+    /\.eq\('auth_user_id', user\.id\)\.eq\('is_active', true\)\.is\('archived_at', null\)/.test(R))
+  check('the visit is proven to belong to this worker’s employer AND crew, and not cancelled',
+    /\.eq\('id', jobId\)\.eq\('user_id', t\.user_id\)\.eq\('crew_id', t\.crew_id\)/.test(R) && /\.neq\('status', 'cancelled'\)/.test(R))
+  check('the owner’s identity comes ONLY from the verified roster row',
+    /const ownerId = t\.user_id/.test(R) &&
+    !/body\??\.\w*[Oo]wner/.test(R) && !/body\??\.\w*[Aa]mount/.test(R) && !/body\??\.\w*[Cc]ustomer/.test(R),
+    'a crafted owner/customer/amount in the body must have nowhere to go')
+  check('the status write STILL goes through the crew RPC on the CALLER’s session',
+    /supabase\.rpc\('crew_set_visit_status'/.test(R),
+    'the typed-parameter door (assignment + version re-check, refuses cancelled) must stay the only status writer')
+  check('the draft runs only AFTER the RPC confirmed the completion',
+    R.indexOf("rpc('crew_set_visit_status'") < R.indexOf('await createDraftInvoiceForCompletedJob('))
+  check('billing reuses THE engines — draft + AutoPay, no copies',
+    /createDraftInvoiceForCompletedJob\(admin, freshRow as Job, \{ ownerId \}\)/.test(R) &&
+    /attemptAutoPayCharge\(admin, \{ invoiceId: draft\.invoiceId, userId: ownerId, manual: false \}\)/.test(R))
+  check('the engine drafts from a RE-READ row, never a hand-assembled echo of the request',
+    /from\('jobs'\)\s*\n?\s*\.select\('\*'\)\.eq\('id', jobId\)\.eq\('user_id', ownerId\)/.test(R),
+    'drafting from client-echoed fields would let a stale or crafted body shape the invoice context')
+  check('AutoPay fires ONLY on a freshly-created draft',
+    /if \(draft\.created && draft\.invoiceId\)/.test(R),
+    "'exists' must never re-charge; a retried completion is a no-op")
+  check('a failed draft notifies the OWNER — never silently, never the worker',
+    /crew_complete_uninvoiced/.test(R) && /notifyOwner/.test(R))
+  check('undo runs uncompleteJob (draft dies FIRST, status second, sent/paid left alone)',
+    /uncompleteJob\(admin,/.test(R))
+  check('an already-sent invoice on un-done work notifies the owner',
+    /invoiceLocked/.test(R) && /crew_uncomplete_invoiced/.test(R))
+  check('owner notifications dedupe per (type, job) — retries stack no bells',
+    /\.eq\('type', p\.type\)\.eq\('entity_id', p\.jobId\)/.test(R))
+}
+
+// The engine’s new ownerId parameter is server-derivation only; every
+// owner-session caller keeps the getUser() default unchanged.
+const INVOICING = read('src/lib/invoicing.ts')
+check('the engine’s ownerId override falls back to getUser (owner callers unchanged)',
+  /opts\?\.ownerId \?\? null/.test(INVOICING) && /if \(!ownerId\) \{[\s\S]{0,200}auth\.getUser\(\)/.test(INVOICING))
+check('no owner-path call site passes ownerId',
+  !/createDraftInvoiceForCompletedJob\(supabase, [^)]*ownerId/.test(read('src/lib/jobStatus.ts')) &&
+  !/createDraftInvoiceForCompletedJob\([^)]*ownerId/.test(read('src/lib/offline/handlers.ts')))
+
 console.log('\n── Summary ────────────────────────────────────────────────────')
 if (failures) {
   console.log(`\n❌ verify:crew-access — ${failures} failure${failures === 1 ? '' : 's'}\n`)

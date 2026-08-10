@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { loadCrewDay, nextCrewStop, partitionCrewStops, type ActiveCrewStop, type CrewDay } from '@/lib/crewAccess'
-import { crewStartVisit, crewCompleteVisit, crewRevertVisit, type VisitState } from '@/lib/crewJob'
+import { crewStartVisit, crewCompleteVisit, crewRevertVisit, crewUncompleteVisit, type VisitState } from '@/lib/crewJob'
 import { localTodayISO, cn } from '@/lib/utils'
 import { directionsUrl } from '@/lib/route'
 import { toast } from '@/lib/toast'
@@ -134,7 +134,13 @@ export function CrewToday() {
       if (!res.ok) { toast.error(res.error || 'That didn’t save. Try again.'); await load(); return }
       const who = stop.customer?.name || stop.title
       toast.undo(kind === 'start' ? `Started ${who}` : `${who} — done`, async () => {
-        const r = await crewRevertVisit(supabase, { ...stop, updated_at: res.nextUpdatedAt ?? stop.updated_at }, prev)
+        // Undoing a COMPLETION goes through the server route: the draft invoice
+        // this completion just created must die WITH the status (only the
+        // server may touch invoices). Undoing a start is a plain field revert.
+        const reverted = { ...stop, updated_at: res.nextUpdatedAt ?? stop.updated_at }
+        const r = kind === 'complete'
+          ? await crewUncompleteVisit(supabase, reverted, prev)
+          : await crewRevertVisit(supabase, reverted, prev)
         if (!r.ok) toast.error(r.error || 'Couldn’t undo that.')
         await load()
       })

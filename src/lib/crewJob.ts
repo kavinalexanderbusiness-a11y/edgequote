@@ -93,16 +93,57 @@ export async function crewStartVisit(supabase: SupabaseClient, stop: CrewStop): 
   }, 'start it')
 }
 
-/** ✓ Check out, through the shared stamp. */
+/** ✓ Check out — through /api/crew/complete, NOT the bare RPC, because on every
+ *  owner door completing is status + the draft-invoice handoff, and the billing
+ *  outcome of finished work must not depend on who pressed the button. The
+ *  route runs the SAME RPC for the status (assignment + version re-checked
+ *  server-side) and then the SAME invoice engine with the owner's authority.
+ *  The stamp is still completionPatch — one definition of "done", every door.
+ *  Online-only like every crew write: a dead zone fails visibly, never queues. */
 export async function crewCompleteVisit(supabase: SupabaseClient, stop: CrewStop): Promise<CrewWriteResult> {
   if (stop.status === 'completed') return { ok: false, error: 'That visit is already finished.' }
   const stamp = completionPatch(stop)
-  return write(supabase, stop, {
-    status: stamp.status,
-    started_at: stop.started_at,          // the check-in stands; only the finish is new
-    completed_at: stamp.completed_at,
-    actual_minutes: stamp.actual_minutes,
-  }, 'finish it')
+  try {
+    const res = await fetch('/api/crew/complete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jobId: stop.id, action: 'complete', baseUpdatedAt: stop.updated_at,
+        next: {
+          status: stamp.status,
+          started_at: stop.started_at,      // the check-in stands; only the finish is new
+          completed_at: stamp.completed_at,
+          actual_minutes: stamp.actual_minutes,
+        },
+      }),
+    })
+    const d = await res.json().catch(() => ({}))
+    if (res.status === 409) return { ok: false, error: 'Couldn’t finish it — this visit changed. Refresh and try again.' }
+    if (!res.ok || !d.ok) return { ok: false, error: d.error || 'That didn’t save. Try again.' }
+    return { ok: true, nextUpdatedAt: d.updatedAt }
+  } catch {
+    return { ok: false, error: 'That didn’t save — check your signal and try again.' }
+  }
+}
+
+/** Undo a COMPLETION. Not the plain revert below: completing drafted an
+ *  invoice, so un-completing must remove that draft too — and only the server
+ *  may touch invoices. The route deletes the draft FIRST, then reverts the
+ *  status through the same RPC; a sent/paid invoice is left alone and the
+ *  OWNER is notified (money owing on un-done work is their call). */
+export async function crewUncompleteVisit(
+  supabase: SupabaseClient, stop: CrewStop, prev: VisitState,
+): Promise<CrewWriteResult> {
+  try {
+    const res = await fetch('/api/crew/complete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobId: stop.id, action: 'undo', baseUpdatedAt: stop.updated_at, prev }),
+    })
+    const d = await res.json().catch(() => ({}))
+    if (!res.ok || !d.ok) return { ok: false, error: d.error || 'Couldn’t undo that.' }
+    return { ok: true }
+  } catch {
+    return { ok: false, error: 'Couldn’t undo that — check your signal and try again.' }
+  }
 }
 
 /** Undo, for the mis-tap: put the four fields back exactly as they were. */
