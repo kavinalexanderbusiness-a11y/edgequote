@@ -343,7 +343,10 @@ export default function SettingsPage() {
     <div className="max-w-3xl mx-auto flex flex-col gap-6">
       <PageHeader title="Business Settings" description="Business info, pricing, scheduling, messaging, notifications and booking." />
 
-      <div className="sticky top-0 z-10 -mx-1 px-1 py-2 bg-bg/90 backdrop-blur">
+      {/* top-14 on mobile: the app header is `lg:hidden sticky top-0 z-40 h-14`, so a
+          top-0 strip here scrolled straight under it and the section switcher
+          vanished on the longest form in the app. */}
+      <div className="sticky top-14 lg:top-0 z-10 -mx-1 px-1 py-2 bg-bg/90 backdrop-blur">
         <Tabs tabs={SETTINGS_TABS} active={tab} onChange={(k) => pickTab(k as SettingsTab)} />
       </div>
 
@@ -723,11 +726,11 @@ export default function SettingsPage() {
           <Button variant="secondary" size="sm" onClick={addTier}><Plus className="w-3.5 h-3.5" /> Add tier</Button>
         </CardHeader>
         <CardBody className="space-y-3">
-          <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-3 text-xs font-semibold text-ink-faint uppercase tracking-wide px-1">
+          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] gap-3 text-xs font-semibold text-ink-faint uppercase tracking-wide px-1">
             <span>Min km</span><span>Max km</span><span>Fee ($)</span><span />
           </div>
           {localTiers.map((t, i) => (
-            <div key={t.id || i} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-3 items-center">
+            <div key={t.id || i} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] gap-3 items-center">
               <Input fieldSize="sm" type="number" value={t.min_km ?? ''} onChange={e => updateTier(i, 'min_km', e.target.value)} />
               <Input fieldSize="sm" type="number" value={t.max_km ?? ''} placeholder="inf" onChange={e => updateTier(i, 'max_km', e.target.value)} />
               <Input fieldSize="sm" type="number" value={t.fee ?? ''} placeholder="custom" onChange={e => updateTier(i, 'fee', e.target.value)} />
@@ -769,8 +772,16 @@ export default function SettingsPage() {
           Tiers too, which onSubmit also saves), so "saves everything" reads
           true and the bar stays pinned to the viewport bottom on every
           form-bearing tab. Submits the mounted form via form=. */}
+      {/* z-20 clears the mobile header/nav stack. The bar was `z-10` while
+          BottomNav is `fixed z-40`, so on a phone the "persistent Save footer"
+          rendered UNDERNEATH the navigation for the whole length of a very long
+          form — the owner scrolled a settings page with no visible way to save
+          it. (StickyActionBar is the app's answer for bars that need the nav to
+          step aside entirely; this one stays in flow because it must sit after
+          Travel Fee Tiers for "saves everything" to stay true, so it just needs
+          to win the stacking context.) */}
       {showSave && (
-        <div className="order-4 sticky bottom-0 z-10 -mx-1 px-1">
+        <div className="order-4 sticky bottom-0 z-20 -mx-1 px-1">
           <div className={cn('rounded-card border bg-surface/95 backdrop-blur px-6 py-4 flex items-center justify-end gap-3 transition-colors',
             isDirty ? 'border-accent/40' : 'border-border')}>
             <span className="text-xs mr-auto text-ink-faint">

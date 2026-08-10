@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
+import { toast } from '@/lib/toast'
 import { enablePush, disablePush, getPushState, isIos, isStandalone, type PushState } from '@/lib/push'
 import {
   Bell, BellRing, Check, MessageSquare, FileText, DollarSign, Globe, Star,
@@ -55,8 +56,14 @@ export function PushNotificationSettings() {
   async function toggle() {
     setBusy(true); setReason(null)
     if (state === 'subscribed') {
-      await disablePush()
-      setState('default')
+      // disablePush() returns { ok } and DOES fail (a serviceWorker.ready throw
+      // unsubscribes nothing). Discarding it and setting 'default' unconditionally
+      // told the owner notifications were off while alerts kept arriving on that
+      // device — the enable branch below has always checked, so this was an
+      // asymmetry, not a policy.
+      const r = await disablePush()
+      if (r.ok) setState('default')
+      else setReason('Could not turn notifications off on this device — try again.')
     } else {
       const r = await enablePush()
       setState(r.state)
@@ -70,9 +77,16 @@ export function PushNotificationSettings() {
     const next = { ...prefs, [key]: value }
     setPrefs(next)   // optimistic
     const { data: { user } } = await supabase.auth.getUser()
-    if (!user) { setPrefs(prev); return }
-    const { error } = await supabase.from('business_settings').update({ notif_prefs: next }).eq('user_id', user.id)
-    if (error) setPrefs(prev)   // revert on a failed write
+    if (!user) { setPrefs(prev); toast.error('Your session expired — sign in again to change notifications.'); return }
+    // upsert, not update: `.update()` on a row that doesn't exist yet matches zero
+    // rows and returns NO error, so the switch stayed where the owner put it while
+    // nothing was saved. A settings row can be absent (the dashboard's guard fails
+    // open on a read error), so this is reachable.
+    const { error } = await supabase.from('business_settings')
+      .upsert({ user_id: user.id, notif_prefs: next }, { onConflict: 'user_id' })
+    // The revert is truthful, but a switch that moves back on its own with no
+    // words reads as a glitch. Say what happened.
+    if (error) { setPrefs(prev); toast.error('Could not save that notification setting — try again.') }
   }
 
   const iosNeedsInstall = isIos() && !isStandalone()

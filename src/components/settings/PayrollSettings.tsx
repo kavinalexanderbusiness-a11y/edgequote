@@ -85,14 +85,19 @@ export function PayrollSettings() {
     setSaving(true)
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setSaving(false); return }
-    const { error } = await supabase.from('business_settings').update({
+    // upsert, not update. `.update()` on a missing settings row matches zero rows
+    // and returns NO error — so this toasted "Payroll settings saved." having
+    // saved nothing, and the owner's overtime rules silently stayed unset. These
+    // are the numbers that decide what people are paid.
+    const { error } = await supabase.from('business_settings').upsert({
+      user_id: user.id,
       pay_period: payPeriod,
       pay_period_anchor: anchor || null,
       pay_week_starts_on: Number(weekStart),
       ot_daily_hours: numOrNull(daily),
       ot_weekly_hours: numOrNull(weekly),
       ot_multiplier: mult,
-    }).eq('user_id', user.id)
+    }, { onConflict: 'user_id' })
     setSaving(false)
     if (error) { toast.error('Could not save payroll settings: ' + error.message); return }
     setSaved(true); setTimeout(() => setSaved(false), 2000)

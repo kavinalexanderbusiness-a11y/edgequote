@@ -25,8 +25,6 @@ import { Menu } from '@/components/ui/Menu'
 import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
-import { PaymentHistory } from '@/components/payments/PaymentHistory'
-import { ReconcilePanel } from '@/components/payments/ReconcilePanel'
 import { invoiceTotals, applyDiscount, type DiscountType } from '@/lib/invoiceTotals'
 import { toast as notify } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
@@ -331,7 +329,15 @@ export default function InvoicesPage() {
     if (error) notify.error('Could not delete: ' + error.message)
     else {
       setInvoices(prev => prev.filter(i => i.id !== inv.id))
-      const label = inv.status === 'paid' ? `Deleted PAID ${inv.invoice_number} (${formatCurrency(Number(inv.amount))})` : `Deleted ${inv.invoice_number}`
+      // Warn on MONEY COLLECTED, not on the word "paid". Gating on
+      // status === 'paid' missed 'partial' and 'overpaid' — the deposit states —
+      // so deleting an invoice that had already taken $2,000 showed the plain
+      // label and the owner lost the one cue that revenue was leaving the books.
+      // The figure is the ledger's, not the pre-GST `amount` the row never showed.
+      const collected = invoiceBalance(inv, settings).paid
+      const label = collected > 0.01
+        ? `Deleted ${inv.invoice_number} — ${formatCurrency(collected)} had been collected`
+        : `Deleted ${inv.invoice_number}`
       // Restoring a PAID invoice puts collected revenue back on the books. Unchecked, a
       // failed insert (invoice_number conflict, RLS, expired session) dismissed the toast,
       // fetchInvoices() re-rendered without the row, and the money left the books with no
@@ -345,14 +351,11 @@ export default function InvoicesPage() {
   }
 
   const drafts = invoices.filter(i => i.status === 'draft')
-  const draftsTotal = drafts.reduce((sum, i) => sum + Number(i.amount || 0), 0)
-  // Outstanding = the unpaid BALANCE across issued invoices (partial payments count);
-  // Collected = total actually received (amount_paid), so both reflect the ledger.
+  // Outstanding = the unpaid BALANCE across issued invoices (partial payments count).
   // Cancelled invoices are dead paper — excluded from money totals.
   const outstanding = invoices
     .filter(i => i.status !== 'draft' && i.status !== 'cancelled')
     .reduce((sum, i) => sum + Math.max(0, invoiceBalance(i, settings).balance), 0)
-  const paidTotal = invoices.reduce((sum, i) => sum + (Number(i.amount_paid) || 0), 0)
   const today = todayISO()
   // Filter on the DISPLAY status so the lifecycle states (Overdue, Viewed) are
   // filterable even though they're derived, not stored. Cancelled hides from All.
@@ -438,34 +441,24 @@ export default function InvoicesPage() {
         </Banner>
       )}
 
+      {/* ONE figure, because this page has one job: what is still owed.
+          Two tiles left with it and are not missed. "Drafts to review" was a
+          filter button dressed as a statistic, identical in appearance to two
+          inert cards beside it, and its count already rides on the Drafts pill
+          six pixels below — the same filter with two controls. "Collected" was
+          all-time lifetime revenue on the screen about UNPAID work; it lives on
+          Payments, which is the ledger. Removing them takes ~90px of chrome off
+          the top of the fold and deletes a duplicate control. */}
       {!loading && !loadError && invoices.length > 0 && (
-        <div className="grid grid-cols-3 gap-3">
-          {/* Drafts are the auto-invoiced recurring pipeline — they were invisible
-              (Outstanding only counts unpaid/sent) and silently went unsent. */}
-          <button onClick={() => setFilter(filter === 'draft' ? '' : 'draft')} aria-pressed={filter === 'draft'} className="text-left rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-            <Card className={cn(filter === 'draft' && 'border-accent/50')}>
-              <CardBody>
-                <p className="text-[10px] text-ink-faint uppercase tracking-wide font-semibold mb-1">Drafts to review</p>
-                <p className={cn('text-xl font-black tracking-tight tabular-nums', drafts.length ? 'text-sky-400' : 'text-ink-faint')}>{drafts.length ? formatCurrency(draftsTotal) : '—'}</p>
-                {drafts.length > 0 && <p className="text-[11px] text-ink-faint mt-0.5">{drafts.length} draft{drafts.length !== 1 ? 's' : ''} — tap to review</p>}
-              </CardBody>
-            </Card>
-          </button>
-          <Card>
-            <CardBody>
+        <Card>
+          <CardBody className="flex items-baseline justify-between gap-3 flex-wrap">
+            <div>
               <p className="text-[10px] text-ink-faint uppercase tracking-wide font-semibold mb-1">Outstanding</p>
               <p className="text-xl font-black tracking-tight tabular-nums text-amber-400">{formatCurrency(outstanding)}</p>
-              <p className="text-[11px] text-ink-faint mt-0.5">Billed, unpaid</p>
-            </CardBody>
-          </Card>
-          <Card>
-            <CardBody>
-              <p className="text-[10px] text-ink-faint uppercase tracking-wide font-semibold mb-1">Collected</p>
-              <p className="text-xl font-black tracking-tight tabular-nums text-emerald-400">{formatCurrency(paidTotal)}</p>
-              <p className="text-[11px] text-ink-faint mt-0.5">Payments received</p>
-            </CardBody>
-          </Card>
-        </div>
+            </div>
+            <p className="text-[11px] text-ink-faint">Billed and still owed — partial payments already deducted.</p>
+          </CardBody>
+        </Card>
       )}
 
       {!loading && !loadError && invoices.length > 0 && (
@@ -718,7 +711,14 @@ export default function InvoicesPage() {
                           title={charge.isDeposit
                             ? `Create a Stripe payment link for the ${formatCurrency(charge.amount)} deposit`
                             : 'Create a Stripe payment link for the balance'}>
-                          <CreditCard className="w-3.5 h-3.5" /> {charge.isDeposit ? `Take deposit` : 'Take payment'}
+                          {/* Says what it DOES, not a near-synonym of the cash
+                              recorder further down the card. "Take payment" and
+                              "Record payment" differed by one verb and did
+                              opposite things — this one opens a card link (and
+                              copies it), that one writes down money already in
+                              hand. Mis-tapping opened a browser tab and
+                              overwrote the clipboard. */}
+                          <CreditCard className="w-3.5 h-3.5" /> {charge.isDeposit ? 'Card link — deposit' : 'Card payment link'}
                         </Button>
                       )
                     })()}
@@ -865,10 +865,15 @@ export default function InvoicesPage() {
         </div>
       )}
 
-      {!loading && !loadError && invoices.length > 0 && <PaymentHistory settings={settings} />}
-      {/* Sits with the ledger it checks. Only offered once Stripe is connected —
-          without it there is no second set of books to compare against. */}
-      {!loading && !loadError && paymentsEnabled && invoices.length > 0 && <ReconcilePanel />}
+      {/* The page ends at the invoice list.
+          A recent-payments feed and the Stripe reconciliation panel used to hang
+          below it — both are LEDGER surfaces, and both already exist on Payments
+          in stronger form (search, kind filters, date ranges, CSV, credit
+          balances). Keeping a weaker copy here cost this page its answer to
+          "what do I still need to collect", and cost Payments its reason to
+          exist: the same word "Collected" appeared on both, scoped differently,
+          with neither saying so. Per-invoice receipts are untouched — they live
+          on the invoice card, which is where an invoice's own history belongs. */}
 
       {/* ONE shared Send Message dialog — sending marks the invoice sent. The amount
           is what's actually DUE NOW, never the original total: a customer who has

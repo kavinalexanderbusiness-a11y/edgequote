@@ -25,7 +25,7 @@ import { cn } from '@/lib/utils'
 import {
   Loader2, Inbox, User, ArrowLeft, MessageSquare, FileText, X, Plus,
   Archive, ArchiveRestore, Pin, PinOff, BellOff, Bell, MailOpen, Trash2, MoreVertical, Reply,
-  MapPin, Wrench, Receipt, Globe, Sparkles, Mail, AlarmClock, Tag, CalendarClock, UserCheck, Keyboard,
+  MapPin, Wrench, Receipt, Globe, Sparkles, Mail, AlarmClock, Tag, CalendarClock, UserCheck, Keyboard, AlertTriangle,
 } from 'lucide-react'
 
 // Apple-Messages-style inbox that stays a CRM. Archive is a FLAG — nothing is
@@ -69,11 +69,16 @@ function snoozeDate(k: 'tomorrow' | 'threedays' | 'nextweek'): Date {
 // Archived. Needs-reply is the triage view — every conversation whose last word
 // was the customer's — so "who's waiting on me?" is one tap, not a scan.
 type Filter = 'all' | 'needs_reply' | 'sms' | 'portal' | 'website_lead' | 'snoozed' | 'archived'
+// The pills are the STATE axis — where a conversation is in your day. The two
+// CHANNEL pills that used to sit here (SMS, Portal) were strict subsets of All:
+// for a small business "SMS" is All minus a handful of leads, so the owner had
+// to open both to learn they were nearly the same list. The channel isn't even a
+// partition — an `email` conversation had no pill at all and was reachable only
+// through All. `inFilter`/`loadPage` still understand both keys, so an existing
+// `?f=sms` deep link keeps working; they simply aren't a decision on the screen.
 const FILTERS: { key: Filter; label: string; icon: typeof Inbox }[] = [
   { key: 'all', label: 'All', icon: Inbox },
   { key: 'needs_reply', label: 'Needs reply', icon: Reply },
-  { key: 'sms', label: 'SMS', icon: MessageSquare },
-  { key: 'portal', label: 'Portal', icon: Globe },
   { key: 'website_lead', label: 'Website leads', icon: Sparkles },
   // Snoozed renders only while something IS snoozed (see the pill row) — an
   // empty state pill would be noise the other 95% of the time.
@@ -139,6 +144,8 @@ export default function MessagesPage() {
   const [hasMore, setHasMore] = useState(true)
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
+  // A failed inbox read must never wear the "nobody has messaged you" empty state.
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [counts, setCounts] = useState<Record<Filter, number>>({ all: 0, needs_reply: 0, sms: 0, portal: 0, website_lead: 0, snoozed: 0, archived: 0 })
   const [filter, setFilter] = useState<Filter>('all')
   const [sel, setSel] = useState<Convo | null>(null)
@@ -192,11 +199,23 @@ export default function MessagesPage() {
     else if (f === 'website_lead') qb = qb.is('archived_at', null).or(awake).eq('lead_status', 'new')
     else if (f === 'snoozed') qb = qb.is('archived_at', null).gt('snoozed_until', nowIso)
     else qb = qb.not('archived_at', 'is', null)
-    const { data } = await qb
+    const { data, error } = await qb
       .order('pinned_at', { ascending: false, nullsFirst: false }).order('last_message_at', { ascending: false })
       .range(from, from + PAGE - 1)
     loadingRef.current = false
     if (mySeq !== loadSeq.current) return // a newer load (filter switch / refetch) won — discard this one, it owns the flags
+    // Supabase RESOLVES on failure. Without this branch `data: null` became `[]`,
+    // which rendered the friendliest screen in the app — "No conversations yet ·
+    // Inbound texts, portal requests and website leads all land here" — for an
+    // owner whose inbox simply failed to load. It also set hasMore=false, which
+    // disarmed the refetch that would have healed it. The rows already on screen
+    // are kept; only the empty state changes its words.
+    if (error) {
+      setLoadError('Couldn’t load your conversations — check your connection.')
+      setLoading(false); setLoadingMore(false)
+      return
+    }
+    setLoadError(null)
     const got = (data as unknown as Convo[]) || []
     setRows(prev => reset ? got : mergeUnique(prev, got))
     setHasMore(got.length === PAGE)
@@ -305,21 +324,49 @@ export default function MessagesPage() {
   const actions = {
     // Archive acts instantly but is fully reversible — the shared Undo toast restores
     // it in one tap (recovering from the Archived filter costs 4+ clicks otherwise).
+    // `unread: 0` rides along: archiving IS dismissing. Without it the row left
+    // every active view while its unread count lived on forever in the sidebar
+    // and bottom-nav badges — and the one control that clears them ("All read")
+    // is gated on a VISIBLE unread row, so the phantom could never be cleared
+    // from anywhere in the app.
     archive: async (c: Convo) => {
-      const now = new Date().toISOString(); mutate(c, { archived_at: now })
-      const { error } = await supabase.from('conversations').update({ archived_at: now }).eq('id', c.id)
-      if (error) { mutate(c, { archived_at: c.archived_at }); toast.error('Could not archive this conversation.'); return }
+      const now = new Date().toISOString(); mutate(c, { archived_at: now, unread: 0 })
+      const { error } = await supabase.from('conversations').update({ archived_at: now, unread: 0 }).eq('id', c.id)
+      if (error) { mutate(c, { archived_at: c.archived_at, unread: c.unread }); toast.error('Could not archive this conversation.'); return }
       toast.undo(`Archived conversation with ${nameOf(c)}`, async () => {
         const { error: rErr } = await supabase.from('conversations').update({ archived_at: null }).eq('id', c.id)
         if (rErr) { toast.error('Could not unarchive this conversation.'); return }
         if (uid) loadPage(uid, filterRef.current, true)
       })
     },
-    unarchive: async (c: Convo) => { mutate(c, { archived_at: null }); await supabase.from('conversations').update({ archived_at: null }).eq('id', c.id) },
-    pin: async (c: Convo) => { const now = new Date().toISOString(); mutate(c, { pinned_at: now }); await supabase.from('conversations').update({ pinned_at: now }).eq('id', c.id) },
-    unpin: async (c: Convo) => { mutate(c, { pinned_at: null }); await supabase.from('conversations').update({ pinned_at: null }).eq('id', c.id) },
-    markUnread: async (c: Convo) => { const u = Math.max(c.unread, 1); patch(c.id, { unread: u }); if (uid) loadCounts(uid); await supabase.from('conversations').update({ unread: u }).eq('id', c.id) },
-    toggleMute: async (c: Convo) => { patch(c.id, { muted: !c.muted }); await supabase.from('conversations').update({ muted: !c.muted }).eq('id', c.id) },
+    // These four persist, so they branch on the write. `markUnread` is the one
+    // that costs real work when it fails silently: the owner marks a thread
+    // unread precisely to keep it in the queue, and a dropped write drops it.
+    unarchive: async (c: Convo) => {
+      mutate(c, { archived_at: null })
+      const { error } = await supabase.from('conversations').update({ archived_at: null }).eq('id', c.id)
+      if (error) { mutate(c, { archived_at: c.archived_at }); toast.error('Could not unarchive this conversation.') }
+    },
+    pin: async (c: Convo) => {
+      const now = new Date().toISOString(); mutate(c, { pinned_at: now })
+      const { error } = await supabase.from('conversations').update({ pinned_at: now }).eq('id', c.id)
+      if (error) { mutate(c, { pinned_at: c.pinned_at }); toast.error('Could not pin this conversation.') }
+    },
+    unpin: async (c: Convo) => {
+      mutate(c, { pinned_at: null })
+      const { error } = await supabase.from('conversations').update({ pinned_at: null }).eq('id', c.id)
+      if (error) { mutate(c, { pinned_at: c.pinned_at }); toast.error('Could not unpin this conversation.') }
+    },
+    markUnread: async (c: Convo) => {
+      const u = Math.max(c.unread, 1); patch(c.id, { unread: u }); if (uid) loadCounts(uid)
+      const { error } = await supabase.from('conversations').update({ unread: u }).eq('id', c.id)
+      if (error) { patch(c.id, { unread: c.unread }); if (uid) loadCounts(uid); toast.error('Could not mark this unread — it may drop out of your queue.') }
+    },
+    toggleMute: async (c: Convo) => {
+      patch(c.id, { muted: !c.muted })
+      const { error } = await supabase.from('conversations').update({ muted: !c.muted }).eq('id', c.id)
+      if (error) { patch(c.id, { muted: c.muted }); toast.error('Could not change notifications for this conversation.') }
+    },
     del: async (c: Convo) => {
       const ok = await confirmDialog({
         title: `Delete conversation with ${nameOf(c)}?`,
@@ -350,9 +397,22 @@ export default function MessagesPage() {
         if (uid) loadPage(uid, filterRef.current, true)
       })
     },
-    unsnooze: async (c: Convo) => { mutate(c, { snoozed_until: null }); await supabase.from('conversations').update({ snoozed_until: null }).eq('id', c.id) },
+    unsnooze: async (c: Convo) => {
+      mutate(c, { snoozed_until: null })
+      const { error } = await supabase.from('conversations').update({ snoozed_until: null }).eq('id', c.id)
+      if (error) { mutate(c, { snoozed_until: c.snoozed_until }); toast.error('Could not un-snooze this conversation.') }
+    },
     toggleLabel: async (c: Convo, key: string) => {
-      const next = c.labels?.includes(key) ? (c.labels || []).filter(l => l !== key) : [...(c.labels || []), key]
+      // Read the CURRENT labels before rewriting them. `search_conversations`
+      // does not return `labels`, so on a search-result row `c.labels` is
+      // undefined — and the old spread turned that into `[key]`, silently
+      // DELETING every other label the conversation had. A whole-array write
+      // must never be computed from a field the row might not carry.
+      const { data: cur, error: readErr } = await supabase
+        .from('conversations').select('labels').eq('id', c.id).maybeSingle()
+      if (readErr || !cur) { toast.error('Could not update labels — try again.'); return }
+      const have = ((cur as { labels: string[] | null }).labels) || []
+      const next = have.includes(key) ? have.filter(l => l !== key) : [...have, key]
       mutate(c, { labels: next })
       const { error } = await supabase.from('conversations').update({ labels: next }).eq('id', c.id)
       if (error) { mutate(c, { labels: c.labels }); toast.error('Could not update labels.') }
@@ -362,20 +422,14 @@ export default function MessagesPage() {
       const { error } = await supabase.from('conversations').update({ assigned_to: techId }).eq('id', c.id)
       if (error) { mutate(c, { assigned_to: c.assigned_to }); toast.error('Could not update the assignment.') }
     },
-    // Reminder through THE scheduling engine (schedule_items) — the same shape the
-    // ConversationInfo "Follow up" menu writes; no separate reminder system.
-    remind: async (c: Convo) => {
-      if (!uid) return
-      const d = new Date(); d.setDate(d.getDate() + 1)
-      const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-      const { error } = await supabase.from('schedule_items').insert({
-        user_id: uid, type: 'reminder', title: `Follow up with ${nameOf(c)}`, customer_id: c.customer_id,
-        scheduled_date: date, status: 'scheduled', due_at: new Date(date + 'T09:00:00').toISOString(),
-      })
-      if (error) toast.error('Could not create the reminder.')
-      else toast.success('Reminder set for tomorrow, 9 AM — it’s on your schedule.')
-    },
   }
+  // REMOVED — "Remind me tomorrow". It inserted into `schedule_items`, and that
+  // table has writers but NO READERS: Calendar accepts a `scheduleItems` prop
+  // that the schedule page never passes, and no cron, RPC or widget queries it.
+  // So the toast "it's on your schedule" was false, and the owner who trusted it
+  // stopped keeping their own list. Snooze is the honest version of the same
+  // intent — it has an expiry, the inbox reads it, and a customer reply clears
+  // it — so the affordance is removed rather than reinvented.
 
   // Technicians for conversation assignment — loaded once, only if the crew
   // module has any. Solo operators never see the Assign menu at all.
@@ -458,13 +512,17 @@ export default function MessagesPage() {
       setSearchResults(rs => rs ? rs.filter(c => !selectedIds.has(c.id)) : rs)
     } else {
       const now = new Date().toISOString()
-      const p: Partial<Convo> = op === 'archive' ? { archived_at: now } : op === 'unarchive' ? { archived_at: null }
+      // Bulk archive clears unread for the same reason the single-row action does.
+      const p: Partial<Convo> = op === 'archive' ? { archived_at: now, unread: 0 } : op === 'unarchive' ? { archived_at: null }
         : op === 'read' ? { unread: 0 } : op === 'unread' ? { unread: 1 } : op === 'mute' ? { muted: true } : op === 'unmute' ? { muted: false } : { pinned_at: now }
       const prevRows = rows
+      const prevSearch = searchResults
       setRows(cs => sortConvos(cs.map(c => selectedIds.has(c.id) ? { ...c, ...p } : c).filter(c => inFilter(c, filter))))
       setSearchResults(rs => rs ? rs.map(c => selectedIds.has(c.id) ? { ...c, ...p } : c) : rs)
       const { error } = await supabase.from('conversations').update(p).in('id', ids)
-      if (error) { setRows(prevRows); toast.error('Could not update these conversations: ' + error.message); return }
+      // Roll BOTH back: the search overlay was patched too, so restoring only
+      // `rows` left the overlay showing a change that never happened.
+      if (error) { setRows(prevRows); setSearchResults(prevSearch); toast.error('Could not update these conversations: ' + error.message); return }
     }
     if (uid) loadCounts(uid)
     exitSelect()
@@ -659,17 +717,20 @@ export default function MessagesPage() {
                 </div>
               ))}
             </div>
+          ) : list.length === 0 && loadError ? (
+            // "Couldn't reach the server" is not "nobody has messaged you".
+            <EmptyState icon={AlertTriangle} className="py-16"
+              title="Couldn’t load your conversations"
+              description={loadError}
+              action={{ label: 'Try again', onClick: () => { if (uidRef.current) loadPage(uidRef.current, filter, true) } }} />
           ) : list.length === 0 ? (
             <EmptyState icon={Inbox} className="py-16"
               title={searchResults ? 'No matches'
                 : filter === 'archived' ? 'No archived chats'
                 : filter === 'website_lead' ? 'No new website leads'
-                : filter === 'portal' ? 'No portal messages yet'
-                : filter === 'sms' ? 'No text conversations yet'
                 : 'No conversations yet'}
               description={searchResults ? 'Try a name, address, service, or quote/invoice #.'
                 : filter === 'website_lead' ? 'Leads land here the moment your website form is submitted.'
-                : filter === 'portal' ? 'Requests customers send from their portal show up here.'
                 : 'Inbound texts, portal requests and website leads all land here — replies go out from your business number.'} />
           ) : (
             <div ref={scrollRef} onScroll={onScroll} className="overflow-y-auto" style={{ maxHeight: '72vh' }}>
@@ -770,7 +831,7 @@ interface RowActions {
   snooze: (c: Convo, until: Date) => void; unsnooze: (c: Convo) => void
   toggleLabel: (c: Convo, key: string) => void
   assign: (c: Convo, techId: string | null) => void
-  remind: (c: Convo) => void
+
 }
 
 function ConversationRow({ c, selected, actions, query, selectMode, checked, onToggleSelect, techs }: { c: Convo; selected: boolean; actions: RowActions; query: string; selectMode: boolean; checked: boolean; onToggleSelect: () => void; techs: { id: string; name: string }[] }) {
@@ -830,7 +891,6 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
       key: `asg-${t.id}`, label: `${c.assigned_to === t.id ? '✓ ' : ''}Assign to ${t.name}`, icon: UserCheck,
       onSelect: () => actions.assign(c, c.assigned_to === t.id ? null : t.id),
     })),
-    { key: 'remind', label: 'Remind me tomorrow', icon: CalendarClock, onSelect: () => actions.remind(c) },
     { key: 'customer', label: 'View customer', icon: User, onSelect: () => router.push(`/dashboard/customers/${c.customer_id}`) },
   ]
   // Permanent delete only for ARCHIVED conversations — archive is the safe default.

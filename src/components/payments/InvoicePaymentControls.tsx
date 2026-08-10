@@ -233,23 +233,28 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
                   <span className="text-ink-faint"> · {negative ? 'Refund' : paymentMethodLabel(p.method || p.provider)} · {new Date(p.paid_at || p.created_at).toLocaleDateString()}</span>
                   <span className="block font-mono text-[10px] text-ink-faint mt-0.5">{receiptNumberFor(p.id)}</span>
                 </div>
-                <div className="flex items-center gap-1 shrink-0">
+                {/* `.tap-target` (44px, coarse-pointer only) + gap-2. These three
+                    were 26×26 with 4px between them, and the right-hand one
+                    REVERTS A PAYMENT — a destructive action a thumb-width from
+                    "text the receipt to the customer". Desktop density is
+                    unchanged; the utility is `pointer: coarse`-gated. */}
+                <div className="flex items-center gap-2 shrink-0">
                   <button onClick={() => downloadRowReceipt(p)} disabled={rowBusy === p.id}
-                    className="p-1.5 text-ink-faint hover:text-accent-text transition-colors"
+                    className="tap-target inline-flex items-center justify-center p-1.5 text-ink-faint hover:text-accent-text transition-colors"
                     aria-label={negative ? 'Download refund receipt' : 'Download receipt'}
                     title={`Download ${negative ? 'refund receipt' : 'receipt'} ${receiptNumberFor(p.id)}`}>
                     <FileDown className="w-3.5 h-3.5" />
                   </button>
                   {invoice.customers?.phone && (
                     <button onClick={() => sendReceipt(p, 'sms')} disabled={rowBusy === p.id || sendingReceipt !== null}
-                      className="p-1.5 text-ink-faint hover:text-accent-text transition-colors"
+                      className="tap-target inline-flex items-center justify-center p-1.5 text-ink-faint hover:text-accent-text transition-colors"
                       aria-label="Text this receipt to the customer" title={`Text ${negative ? 'refund receipt' : 'receipt'} ${receiptNumberFor(p.id)} to the customer`}>
                       <MessageSquare className="w-3.5 h-3.5" />
                     </button>
                   )}
                   {revertable && (
                     <button onClick={() => revertPayment(p)} disabled={rowBusy === p.id}
-                      className="p-1.5 ml-1 pl-1 border-l border-border text-red-400/70 hover:text-red-400 transition-colors"
+                      className="tap-target inline-flex items-center justify-center p-1.5 ml-1 pl-1 border-l border-border text-red-400/70 hover:text-red-400 transition-colors"
                       aria-label="Revert payment" title="Revert this payment (undoable) — the invoice recalculates from the ledger">
                       <RotateCcw className="w-3.5 h-3.5" />
                     </button>
@@ -351,8 +356,12 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
       {/* Actions */}
       {canRecord && (
         <div className="flex flex-wrap items-center gap-2">
+          {/* Names the money it takes. "Record payment" sat a few pixels from
+              "Take payment" (the Stripe link) and an owner holding cash had to
+              guess which was theirs — this one writes down money already in
+              hand and moves nothing. */}
           <Button size="sm" variant="secondary" onClick={() => { setAmount(balance > 0 ? String(balance) : ''); setOpen(o => !o) }}>
-            <Plus className="w-3.5 h-3.5" /> Record payment
+            <Plus className="w-3.5 h-3.5" /> Record cash / cheque / e-transfer
           </Button>
           {applyable > 0 && (
             <Button size="sm" variant="secondary" loading={busy}
@@ -381,13 +390,13 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
             </label>
             <label className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Method
               <select value={method} onChange={e => setMethod(e.target.value)}
-                className="w-full mt-1 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm font-normal text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20">
+                className="w-full mt-1 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2.5 text-base sm:text-sm font-normal text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20">
                 {PAYMENT_METHODS.filter(m => m.value !== 'credit').map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
               </select>
             </label>
             <label className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Date
               <input type="date" value={date} onChange={e => setDate(e.target.value)}
-                className="w-full mt-1 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm font-normal text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+                className="w-full mt-1 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2.5 text-base sm:text-sm font-normal text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
             </label>
           </div>
           <label className="block text-xs font-semibold uppercase tracking-wide text-ink-muted">Note

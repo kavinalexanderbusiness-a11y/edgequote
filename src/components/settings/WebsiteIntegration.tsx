@@ -214,7 +214,7 @@ export function WebsiteIntegration() {
             <CheckRow ok={lastTest ? (lastTest.ok ? true : false) : 'none'} label="Last failed test"
               detail={!lastTest ? 'None' : lastTest.ok ? `None since last success (${formatDistanceToNow(new Date(lastTest.at), { addSuffix: true })})` : `${lastTest.error} · ${formatDistanceToNow(new Date(lastTest.at), { addSuffix: true })}`} />
           </div>
-          <p className="text-[11px] text-ink-faint">Successful submissions are read from your leads. A visitor whose browser never reaches the endpoint can’t be logged here — the “endpoint responding” check and the stale-submission warning are what catch a broken site. Want server-side logging of every failed attempt? I can add it.</p>
+          <p className="text-[11px] text-ink-faint">Successful submissions are read from your leads. A visitor whose browser never reaches the endpoint can’t be logged here — the “endpoint responding” check and the stale-submission warning are what catch a broken site.</p>
         </CardBody>
       </Card>
 

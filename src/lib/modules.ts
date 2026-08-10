@@ -142,7 +142,11 @@ export const FEATURE_MODULES: FeatureModule[] = [
   { key: 'equipment',  label: 'Equipment',  href: '/dashboard/equipment',  icon: Wrench,
     category: 'operations', version: 1, updatedAt: '2026-07-15',
     description: 'The gear that does the work — tracking and upkeep.',
-    permissions: ['equipment:read', 'equipment:write'] },
+    permissions: ['equipment:read', 'equipment:write'],
+    // ⌘K searched label + keywords, and this entry had none — so "mower",
+    // "maintenance", "service" and "parts" all found nothing, and only the
+    // literal word "equipment" reached it. The owner's words, not ours.
+    keywords: 'mower trailer truck fleet maintenance service hours parts vehicle' },
   { key: 'grow',       label: 'Grow',       href: '/dashboard/grow',       icon: Sprout,
     category: 'growth', version: 1, updatedAt: '2026-07-14', featured: true,
     description: 'Analytics, marketing and the tools that win more work.',

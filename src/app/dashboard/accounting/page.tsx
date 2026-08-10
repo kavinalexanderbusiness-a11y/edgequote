@@ -218,29 +218,50 @@ export default function AccountingPage() {
 
       {/* The statements. This page is CAPTURE; everything read-only lives behind
           these. Without the rail the reports exist and are unreachable, which is the
-          same as not shipping them. */}
-      <div className="flex flex-wrap gap-2 mb-5">
+          same as not shipping them.
+
+          GROUPED, because eleven identical pills in one row told the owner nothing
+          about which of them belong to a Tuesday and which belong to their
+          accountant in April. Nothing was removed or moved — the same eleven
+          destinations, sorted by HOW OFTEN YOU TOUCH THEM. Three relabels come
+          with it: "Dashboard" collided with the app's own home (and hid the only
+          triage list in the module), "Expenses"/"Vendors" pointed at REPORTS while
+          identically-named tabs on this very page are the editors, and "Setup" is
+          specifically the balance-sheet opening position — an owner hunting the
+          GST rate went there and it lives in Settings. */}
+      <div className="space-y-2 mb-5">
         {[
-          { href: '/dashboard/accounting/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-          { href: '/dashboard/accounting/pnl', label: 'Profit & Loss', icon: Wallet },
-          { href: '/dashboard/accounting/cash-flow', label: 'Cash Flow', icon: Waves },
-          { href: '/dashboard/accounting/balance-sheet', label: 'Balance Sheet', icon: Scale },
-          { href: '/dashboard/accounting/job-costing', label: 'Job Costing', icon: Briefcase },
-          { href: '/dashboard/accounting/expenses-report', label: 'Expenses', icon: Receipt },
-          { href: '/dashboard/accounting/vendors', label: 'Vendors', icon: Store },
-          { href: '/dashboard/accounting/trends', label: 'Trends', icon: TrendingUp },
-          { href: '/dashboard/accounting/gst', label: 'GST', icon: Landmark },
-          { href: '/dashboard/accounting/export', label: 'Export', icon: Download },
-          { href: '/dashboard/accounting/setup', label: 'Setup', icon: Settings },
-        ].map(l => (
-          <Link
-            key={l.href}
-            href={l.href}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-line text-sm text-ink-muted hover:border-accent hover:text-ink transition-colors"
-          >
-            <l.icon className="w-3.5 h-3.5" />
-            {l.label}
-          </Link>
+          { title: 'Day to day', links: [
+            { href: '/dashboard/accounting/dashboard', label: 'Overview', icon: LayoutDashboard },
+            { href: '/dashboard/accounting/expenses-report', label: 'Spending report', icon: Receipt },
+            { href: '/dashboard/accounting/vendors', label: 'Vendor spend', icon: Store },
+            { href: '/dashboard/accounting/job-costing', label: 'Job costs', icon: Briefcase },
+          ] },
+          { title: 'Month end', links: [
+            { href: '/dashboard/accounting/pnl', label: 'Profit & Loss', icon: Wallet },
+            { href: '/dashboard/accounting/cash-flow', label: 'Cash Flow', icon: Waves },
+            { href: '/dashboard/accounting/trends', label: 'Trends', icon: TrendingUp },
+          ] },
+          { title: 'Quarterly & your accountant', links: [
+            { href: '/dashboard/accounting/gst', label: 'GST', icon: Landmark },
+            { href: '/dashboard/accounting/balance-sheet', label: 'Balance Sheet', icon: Scale },
+            { href: '/dashboard/accounting/export', label: 'Export', icon: Download },
+            { href: '/dashboard/accounting/setup', label: 'Balance sheet setup', icon: Settings },
+          ] },
+        ].map(group => (
+          <div key={group.title} className="flex flex-wrap items-center gap-2">
+            <span className="text-[10px] uppercase tracking-wide font-semibold text-ink-faint w-full sm:w-44 shrink-0">{group.title}</span>
+            {group.links.map(l => (
+              <Link
+                key={l.href}
+                href={l.href}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-line text-sm text-ink-muted hover:border-accent hover:text-ink transition-colors"
+              >
+                <l.icon className="w-3.5 h-3.5" />
+                {l.label}
+              </Link>
+            ))}
+          </div>
         ))}
       </div>
 

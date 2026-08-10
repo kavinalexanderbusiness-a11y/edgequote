@@ -95,9 +95,10 @@ export function MessagingUsage() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
     setSaving(true); setErr(null)
-    const { error } = await supabase.from('business_settings').update({ sms_pricing: pricing }).eq('user_id', user.id)
+    // upsert: '.update()' on a missing settings row saves nothing and reports no error.
+    const { error } = await supabase.from('business_settings').upsert({ user_id: user.id, sms_pricing: pricing }, { onConflict: 'user_id' })
     setSaving(false)
-    if (error) { setErr('Could not save — run the sms_pricing migration first.'); return }
+    if (error) { setErr('Could not save your messaging rates — please try again.'); return }
     invalidateSmsPricing(pricing)
     setSaved(true); setTimeout(() => setSaved(false), 2000)
   }

@@ -6,6 +6,7 @@ import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Toggle } from '@/components/ui/Toggle'
 import { Input } from '@/components/ui/Input'
 import { Skeleton } from '@/components/ui/Skeleton'
+import { toast } from '@/lib/toast'
 import { resolveAutomations, Automations, AUTOMATION_LABELS } from '@/lib/comms/automations'
 import { resolveFollowUpPolicy, type FollowUpPolicy } from '@/lib/followup'
 import { resolveReminderPolicy } from '@/lib/payments/dunning'
@@ -78,20 +79,30 @@ export function AutomationToggles() {
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // One writer for the column — merges into the raw blob so nothing is dropped.
+  // upsert, not update: on a missing settings row `.update()` matches nothing and
+  // reports no error, so the toggle would sit "on" while the cron never saw it.
   async function persist(patch: Record<string, unknown>): Promise<boolean> {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return false
     const next = { ...raw, ...patch }
-    const { error } = await supabase.from('business_settings').update({ automations: next }).eq('user_id', user.id)
+    const { error } = await supabase.from('business_settings')
+      .upsert({ user_id: user.id, automations: next }, { onConflict: 'user_id' })
     if (error) return false
     setRaw(next)
     return true
   }
 
+  // The revert is honest, but a switch that slides back by itself in silence
+  // reads as a UI glitch — and these switches decide whether EdgeQuote texts the
+  // owner's customers. Say what happened. (persist() also returns false on an
+  // expired session, which looked identical to a write failure and equally mute.)
   async function toggle(key: keyof Automations, value: boolean) {
     const prev = auto
     setAuto({ ...auto, [key]: value })   // optimistic
-    if (!await persist({ [key]: value })) setAuto(prev)   // revert — never show a toggle the cron won't honor
+    if (!await persist({ [key]: value })) {
+      setAuto(prev)   // revert — never show a toggle the cron won't honor
+      toast.error('Could not save that — it has been switched back. Check your connection and try again.')
+    }
   }
 
   async function savePolicy(key: keyof Automations, patch: Partial<FollowUpPolicy>) {
@@ -101,7 +112,7 @@ export function AutomationToggles() {
     const next = { ...policies[key], ...patch }
     setPolicies({ ...policies, [key]: next })   // optimistic
     const ok = await persist({ [cfg.delayKey]: next.delayDays, [cfg.maxKey]: next.maxCount })
-    if (!ok) setPolicies(prev)
+    if (!ok) { setPolicies(prev); toast.error('Could not save that follow-up setting — it has been put back.') }
   }
 
   return (

@@ -38,21 +38,25 @@ interface Info {
 
 interface TLEvent { at: string; icon: typeof FileText; label: string }
 
-const FOLLOWUPS: { key: string; label: string; type: string; title: string; when: (today: string) => string }[] = [
-  { key: 'call_tmrw', label: 'Call tomorrow', type: 'callback', title: 'Call customer', when: t => format(addDays(parseISO(t + 'T00:00:00'), 1), 'yyyy-MM-dd') },
-  { key: 'quote_fri', label: 'Send quote Friday', type: 'task', title: 'Send quote', when: t => format(nextFriday(parseISO(t + 'T00:00:00')), 'yyyy-MM-dd') },
-  { key: 'checkin_wk', label: 'Check in next week', type: 'reminder', title: 'Check in with customer', when: t => format(addDays(parseISO(t + 'T00:00:00'), 7), 'yyyy-MM-dd') },
-]
+// REMOVED — the "Follow up" menu (Call tomorrow / Send quote Friday / Check in
+// next week). All three inserted into `schedule_items`, a table with writers and
+// NO readers: Calendar takes a `scheduleItems` prop the schedule page never
+// passes, and no cron or RPC queries it. The button flipped to "Added ✓" for a
+// reminder that existed nowhere. Snooze (in the inbox) is the honest version of
+// the same intent, so this is removed rather than rebuilt.
 
 export function ConversationInfo({ customerId }: Props) {
   const supabase = useMemo(() => createClient(), [])
   const [info, setInfo] = useState<Info | null>(null)
   const [open, setOpen] = useState(false)
-  const [followDone, setFollowDone] = useState<string | null>(null)
-  const [busy, setBusy] = useState<string | null>(null)
   // Pending "send later" messages for THIS customer — visible in context, so a
   // scheduled follow-up can't silently overlap the conversation you're having.
   const [scheduled, setScheduled] = useState<{ id: string; send_at: string }[]>([])
+  // Set when the money reads failed. Without it a failed invoice query produced
+  // an EMPTY invoice list, which this panel rendered as the reassuring money fact
+  // "Paid up" — a positive claim about someone's account manufactured from a
+  // request that never answered. The same class the reliability audit named.
+  const [moneyUnavailable, setMoneyUnavailable] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -72,6 +76,10 @@ export function ConversationInfo({ customerId }: Props) {
         supabase.from('payments').select('amount, paid_at, kind, provider, status').eq('customer_id', customerId).eq('status', 'paid'),
       ])
       if (!active) return
+      // Supabase RESOLVES on failure, so `data: null` is indistinguishable from
+      // "no rows" unless the error is read. For the money reads that difference
+      // is the whole meaning of the panel, so it is read.
+      setMoneyUnavailable(!!iv.error || !!pa.error)
       setInfo({
         customer: cu.data as Info['customer'],
         property: (pr.data as Info['property'][])?.[0] ?? null,
@@ -119,23 +127,6 @@ export function ConversationInfo({ customerId }: Props) {
     }
   }, [info])
 
-  async function addFollowUp(f: typeof FOLLOWUPS[number]) {
-    const { data: { session } } = await supabase.auth.getSession()
-    const uid = session?.user?.id
-    if (!uid) return
-    setBusy(f.key)
-    const date = f.when(localTodayISO())
-    const { error } = await supabase.from('schedule_items').insert({
-      user_id: uid, type: f.type, title: f.title, customer_id: customerId,
-      scheduled_date: date, status: 'scheduled',
-      due_at: (f.type === 'reminder' || f.type === 'task') ? new Date(date + 'T09:00:00').toISOString() : null,
-    })
-    setBusy(null)
-    if (error) return   // don't flip to "Added" if the reminder wasn't actually created
-    setFollowDone(f.key)
-    setTimeout(() => setFollowDone(null), 2500)
-  }
-
   if (!info || !derived) return (
     <div className="border-b border-border pb-2 mb-2 space-y-2">
       <div className="flex gap-2"><Skeleton className="h-5 w-28 rounded-full" /><Skeleton className="h-5 w-32 rounded-full" /><Skeleton className="h-5 w-24 rounded-full" /></div>
@@ -146,22 +137,8 @@ export function ConversationInfo({ customerId }: Props) {
 
   return (
     <div className="border-b border-border pb-2 mb-2 space-y-2">
-      {/* Quick row: follow-up + key facts + expand */}
+      {/* Quick row: the customer's key facts + expand */}
       <div className="flex items-center gap-2 flex-wrap text-[11px]">
-        <Menu align="start" width={220} ariaLabel="Follow up"
-          items={FOLLOWUPS.map((f, i) => ({
-            key: f.key, label: f.label, icon: CalendarClock,
-            description: i === 0 ? 'Creates a schedule item' : undefined,
-            disabled: busy !== null,
-            onSelect: () => addFollowUp(f),
-          }))}>
-          {({ toggle, triggerProps }) => (
-            <button type="button" onClick={toggle} {...triggerProps}
-              className="h-7 px-2.5 rounded-lg border border-accent/30 bg-accent/10 text-accent-text font-medium flex items-center gap-1 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-              {followDone ? <><Check className="w-3 h-3" /> Added</> : <><Plus className="w-3 h-3" /> Follow up</>}
-            </button>
-          )}
-        </Menu>
         {derived.lifetime > 0 && <Fact icon={DollarSign} text={`${formatCurrency(derived.lifetime)} lifetime`} />}
         {derived.nextVisit && <Fact icon={CalendarClock} text={`Next ${format(parseISO(derived.nextVisit.scheduled_date + 'T00:00:00'), 'MMM d')}`} />}
         {derived.unpaid.length > 0 && <Fact icon={Receipt} text={`${formatCurrency(derived.unpaidTotal)} owing`} tone="text-amber-400" />}
@@ -205,7 +182,8 @@ export function ConversationInfo({ customerId }: Props) {
             {/* One open quote → jump straight to it (it's almost certainly the one being discussed). */}
             <Cell label="Active quotes">{derived.activeQuotes.length ? <Link href={derived.activeQuotes.length === 1 ? `/dashboard/quotes/${derived.activeQuotes[0].id}` : `/dashboard/customers/${c?.id}`} className="text-accent-text hover:underline">{derived.activeQuotes.length} open</Link> : <span className="text-ink-faint">None</span>}</Cell>
             <Cell label="Open jobs">{derived.openJobs ? <span className="text-ink">{derived.openJobs}</span> : <span className="text-ink-faint">None</span>}</Cell>
-            <Cell label="Invoices owing">{derived.unpaid.length ? <Link href={`/dashboard/customers/${c?.id}`} className="text-amber-400 hover:underline">{formatCurrency(derived.unpaidTotal)}</Link> : <span className="text-ink-faint">Paid up</span>}</Cell>
+            {/* "Paid up" is a claim, so it is only made from a read that answered. */}
+            <Cell label="Invoices owing">{moneyUnavailable ? <span className="text-ink-faint">Couldn’t check</span> : derived.unpaid.length ? <Link href={`/dashboard/customers/${c?.id}`} className="text-amber-400 hover:underline">{formatCurrency(derived.unpaidTotal)}</Link> : <span className="text-ink-faint">Paid up</span>}</Cell>
             <Cell label="Last service">{derived.lastService ? <span className="text-ink">{derived.lastService.service_type || 'Service'} · {format(parseISO((derived.lastService.completed_at || derived.lastService.scheduled_date).slice(0, 10) + 'T00:00:00'), 'MMM d')}</span> : <span className="text-ink-faint">—</span>}</Cell>
           </div>
           {/* Activity timeline — reference info, tucked in here instead of topping every thread */}

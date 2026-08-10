@@ -251,9 +251,14 @@ export default function PaymentsPage() {
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
+      {/* Says what this page IS, in the one place the owner reads first. The
+          same sentence used to sit at the very BOTTOM, under the transaction
+          list and the fold — so the screen that answers "how is this different
+          from Invoices?" answered it last. Invoices = what is still owed;
+          Payments = every movement of money that actually happened. */}
       <PageHeader
         title="Payments"
-        description={loading ? 'Loading…' : `${visible.length} transaction${visible.length !== 1 ? 's' : ''} · ${RANGE_LABEL[range].toLowerCase()}`}
+        description={loading ? 'Loading…' : `Every payment, refund and credit — money that actually moved. ${visible.length} transaction${visible.length !== 1 ? 's' : ''} · ${RANGE_LABEL[range].toLowerCase()}.`}
         action={
           <div className="flex items-center gap-2">
             <Button size="sm" variant="secondary" onClick={() => setDepOpen(o => !o)}>
@@ -328,7 +333,8 @@ export default function PaymentsPage() {
               {k === 'all' ? 'All' : k.charAt(0).toUpperCase() + k.slice(1)}
             </FilterPill>
           ))}
-          <span className="ml-auto flex items-center gap-2">
+          {/* flex-wrap: these four pills carry unshrinkable whitespace-nowrap labels (~344px) in a 343px track at 375px, and the parent's wrap could not help a child that never wrapped — the whole page scrolled sideways. */}
+          <span className="ml-auto flex items-center gap-2 flex-wrap">
             {(['30', '90', '365', 'all'] as Range[]).map(r => (
               <FilterPill key={r} active={range === r} onClick={() => setRange(r)}>{RANGE_LABEL[r]}</FilterPill>
             ))}
