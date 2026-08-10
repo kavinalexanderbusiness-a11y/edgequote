@@ -29,7 +29,7 @@ import { invoiceTotals, applyDiscount, type DiscountType } from '@/lib/invoiceTo
 import { toast as notify } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
-import { FileText, User, Check, FileDown, Trash2, CreditCard, Zap, AlertTriangle, Pencil, Percent, DollarSign, X, MessageSquare, MoreHorizontal, ChevronDown, Plus } from 'lucide-react'
+import { FileText, User, Check, FileDown, Trash2, CreditCard, Zap, AlertTriangle, Pencil, Percent, DollarSign, X, MessageSquare, MoreHorizontal, ChevronDown, ChevronRight, ArrowLeft, Plus } from 'lucide-react'
 import { NewInvoiceDialog } from '@/components/payments/NewInvoiceDialog'
 
 const FILTERS: { value: '' | InvoiceDisplayStatus; label: string }[] = [
@@ -72,8 +72,19 @@ export default function InvoicesPage() {
   // Unpaid/Sent/Partial alongside everything else with nothing to tell them apart.
   const [filter, setFilter] = useState<'' | InvoiceDisplayStatus | 'deposit'>('')
   const [query, setQuery] = useState('')
-  // Deep-link focus: /dashboard/invoices?invoice=INV-0042 or ?job=<job id> shows
-  // exactly that invoice (from a Convert toast or a completed job's Invoice link).
+  // ── Focus IS the detail surface ────────────────────────────────────────────
+  // `?invoice=INV-0042` / `?job=<id>` already narrowed the page to one invoice
+  // (a Convert toast, a completed job's Invoice link). That mechanism was doing
+  // half of a list/detail split already — the missing half was that the LIST rows
+  // rendered the same full control set as the focused one, so every row of the
+  // book was a stacked detail page: identity, money breakdown, status menu, card
+  // link, charge-card, send, overflow, the deposit panel and the payment
+  // controls, ~418px and 6–8 decisions each, on every invoice.
+  //
+  // So: focused → the full detail. Not focused → a summary row whose ONE action
+  // is to open it. No new route, no second data path (the list already holds
+  // every invoice, its ledger rows and the customer's credit), no new financial
+  // maths — the same canonical calls, rendered in two densities.
   const [focus, setFocus] = useState<{ invoice?: string; job?: string } | null>(() => {
     if (typeof window === 'undefined') return null
     const p = new URLSearchParams(window.location.search)
@@ -81,6 +92,32 @@ export default function InvoicesPage() {
     const job = p.get('job') || undefined
     return invoice || job ? { invoice, job } : null
   })
+  // Opening pushes history, so the phone's Back gesture closes the detail instead
+  // of leaving Invoices entirely — and the URL stays the shareable deep link it
+  // has always been.
+  const openInvoice = (inv: Invoice) => {
+    setFocus({ invoice: inv.invoice_number })
+    if (typeof window !== 'undefined') {
+      window.history.pushState({ eqInvoice: inv.invoice_number }, '', `/dashboard/invoices?invoice=${encodeURIComponent(inv.invoice_number)}`)
+      window.scrollTo({ top: 0 })
+    }
+  }
+  const closeInvoice = () => {
+    setFocus(null)
+    if (typeof window !== 'undefined') window.history.pushState({}, '', '/dashboard/invoices')
+  }
+  // Back/forward re-read the URL — the same parse the initial state uses, so a
+  // deep link, a click and a history entry can never disagree about what's open.
+  useEffect(() => {
+    const onPop = () => {
+      const p = new URLSearchParams(window.location.search)
+      const invoice = p.get('invoice') || undefined
+      const job = p.get('job') || undefined
+      setFocus(invoice || job ? { invoice, job } : null)
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
   // `?pay=1` — the field "Get paid" tap on a completed job card. Lands on that one
   // invoice with the record-payment form already open, so collecting in the driveway
   // is one tap from the schedule instead of a hunt through the invoice list.
@@ -399,6 +436,11 @@ export default function InvoicesPage() {
   const visible = searching
     ? byStatus.filter(i => { const e = searchEntries.get(i.id); return !!e && entryMatches(e, tokens) })
     : byStatus
+  // Detail when the page is focused on a specific invoice (or a job's invoices —
+  // `?job=` can legitimately match more than one, and each of those deserves the
+  // full surface). Everything else is the list. Derived from the SAME `focused`
+  // set `byStatus` already uses, so the two can't disagree about what's open.
+  const detailMode = !!focus && focused !== null && focused.length > 0
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -511,13 +553,22 @@ export default function InvoicesPage() {
           )}
         </div>
       )}
-      {/* Deep-link focus (from a Convert toast / completed-job Invoice link) —
-          always show the way back to the full list. */}
+      {/* The way out of the detail. Reads as a back control now that focus IS the
+          detail surface, not just a deep-link filter. */}
       {focus && (
-        <div className="flex items-center gap-2 text-xs text-ink-muted">
-          <span>Showing {focus.invoice ? `invoice ${focus.invoice}` : 'the invoice for that job'}</span>
-          <button onClick={() => { setFocus(null); if (typeof window !== 'undefined') window.history.replaceState({}, '', '/dashboard/invoices') }}
-            className="font-semibold text-accent-text hover:underline">Show all</button>
+        <div className="flex items-center gap-3 flex-wrap">
+          <button type="button" onClick={closeInvoice}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 tap-target-y">
+            <ArrowLeft className="w-3.5 h-3.5" aria-hidden /> All invoices
+          </button>
+          {/* A link to an invoice that has since been deleted used to fall through
+              to the full list with a lone "Show all" — indistinguishable from
+              having opened the list on purpose. Say which one is missing. */}
+          {!loading && !detailMode && (
+            <span className="text-xs text-ink-faint">
+              {focus.invoice ? `${focus.invoice} isn’t here any more` : 'That job has no invoice yet'} — showing everything instead.
+            </span>
+          )}
         </div>
       )}
 
@@ -525,7 +576,7 @@ export default function InvoicesPage() {
           otherwise (tap the status pill on a row to flip between them). */}
       {!loading && !loadError && (filter === 'unpaid' || filter === 'sent') && (
         <p className="text-[11px] text-ink-faint -mt-3">
-          Unpaid = issued but not yet sent to the customer · Sent = delivered, awaiting payment. Tap an invoice&apos;s status pill to switch.
+          Unpaid = issued but not yet sent to the customer · Sent = delivered, awaiting payment. Open an invoice to switch.
         </p>
       )}
 
@@ -550,7 +601,7 @@ export default function InvoicesPage() {
         </InlineEmpty>
       ) : (
         <div className="space-y-3">
-          {visible.map((inv, i) => (
+          {visible.map((inv, i) => detailMode ? (
             <Card key={inv.id} className={`card-lift animate-rise stagger-${Math.min(i + 1, 6)}`}>
               <CardBody>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
@@ -861,6 +912,67 @@ export default function InvoicesPage() {
                 )}
               </CardBody>
             </Card>
+          ) : (
+            /* ── The LIST row ──────────────────────────────────────────────────
+               Answers "which invoice?" and nothing else: number, customer, what
+               state it's in, the figure that matters, and one way in. Every
+               other control this invoice has lives one tap away, in the detail.
+
+               The money figure is the BALANCE once anything has been paid — that
+               is the number an owner is chasing, and it used to render at
+               text-[10px] inside the status pill while the invoice TOTAL (a
+               historical fact) took the 18px slot. Both come from invoiceBalance;
+               nothing new is computed. */
+            (() => {
+              const ds = displayInvoiceStatus(inv, settings, today)
+              const bal = invoiceBalance(inv, settings)
+              const partPaid = bal.paid > 0.01 && bal.balance > 0.01
+              const dep = depositState(inv, settings)
+              const depositDue = dep.status === 'draft' || dep.status === 'sent'
+              return (
+                <button
+                  key={inv.id}
+                  type="button"
+                  onClick={() => openInvoice(inv)}
+                  aria-label={`Open ${inv.invoice_number} for ${inv.customer_name || 'this customer'}`}
+                  className={`w-full text-left rounded-card border border-border bg-surface hover:border-border-strong active:scale-[0.997] transition-all px-4 py-3.5 flex items-center gap-3 animate-rise stagger-${Math.min(i + 1, 6)} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
+                >
+                  <div className="min-w-0 flex-1">
+                    {/* flex-wrap: an invoice can carry BOTH a status pill and the
+                        deposit chip ("Partially Paid" + "Deposit due" ≈ 248px of
+                        shrink-0 content in the ~198px this column gets at 390px),
+                        and the identity must never be the thing that gets clipped. */}
+                    <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                      <span className="text-sm font-semibold text-ink shrink-0">{inv.invoice_number}</span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full border uppercase tracking-wide font-semibold shrink-0 ${INVOICE_STATUS_COLORS[ds]}`}>
+                        {INVOICE_STATUS_LABELS[ds]}
+                      </span>
+                      {/* The one state the status vocabulary can't express: money
+                          was ASKED FOR up front and hasn't arrived. Same engine
+                          the Deposit-due filter counts. */}
+                      {depositDue && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full border border-accent/30 bg-accent/10 text-accent-text uppercase tracking-wide font-semibold shrink-0">
+                          Deposit due
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-ink-muted truncate mt-0.5">
+                      {inv.customer_name || 'No customer'}
+                      <span className="text-ink-faint"> · {formatDate(inv.issued_date || inv.created_at)}</span>
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <span className="text-base font-bold text-ink tabular-nums">
+                      {formatCurrency(partPaid ? bal.balance : bal.total)}
+                    </span>
+                    <p className="text-[10px] text-ink-faint tabular-nums">
+                      {partPaid ? `left of ${formatCurrency(bal.total)}` : bal.balance <= 0.01 && bal.total > 0 ? 'paid' : 'total'}
+                    </p>
+                  </div>
+                  <ChevronRight aria-hidden className="w-4 h-4 text-ink-faint shrink-0" />
+                </button>
+              )
+            })()
           ))}
         </div>
       )}

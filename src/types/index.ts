@@ -712,7 +712,12 @@ export const INVOICE_STATUS_COLORS: Record<InvoiceDisplayStatus, string> = {
   unpaid:    'bg-amber-500/10 text-amber-400 border-amber-500/20',
   sent:      'bg-blue-500/10 text-blue-400 border-blue-500/20',
   viewed:    'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
-  partial:   'bg-sky-500/10 text-sky-400 border-sky-500/20',
+  // TEAL, not a third blue. sent/viewed/partial were blue-400/cyan-400/sky-400 —
+  // three adjacent hues at 10px, where the one that differs by MONEY HAVING
+  // ARRIVED was the least distinguishable. The list now leans on this pill to
+  // answer "which invoice?", so the axis reads as money: amber issued → blue/cyan
+  // delivered → teal part-paid → emerald paid → violet overpaid → red overdue.
+  partial:   'bg-teal-500/15 text-teal-300 border-teal-500/30',
   paid:      'bg-emerald-500/15 text-emerald-400 border-emerald-500/25',
   overpaid:  'bg-violet-500/10 text-violet-400 border-violet-500/20',
   overdue:   'bg-red-500/10 text-red-400 border-red-500/20',
