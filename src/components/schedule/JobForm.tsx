@@ -63,6 +63,12 @@ interface JobFormProps {
   }) => string[]
   onSubmit: (values: JobFormValues, recurrence: Recurrence, meta?: SuggestionMeta, opts?: { addAnother?: boolean }) => Promise<void>
   onCancel: () => void
+  /** Whether anything has been typed that would be LOST on dismissal. The page
+   *  owning this modal closes on a backdrop tap, on Escape and on the X; it asks
+   *  first when this is true. Reported rather than inferred, because only the
+   *  form knows — and unlike QuoteBuilder/CustomerForm there is no autosave here
+   *  to fall back on. */
+  onDirtyChange?: (dirty: boolean) => void
   isEdit?: boolean
 }
 
@@ -133,7 +139,7 @@ function recurrenceToUi(r?: Recurrence) {
   }
 }
 
-export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, allowAddAnother, suggestedPrice, warnFor, onSubmit, onCancel, isEdit }: JobFormProps) {
+export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, allowAddAnother, suggestedPrice, warnFor, onSubmit, onCancel, onDirtyChange, isEdit }: JobFormProps) {
   const supabase = createClient()
   const [properties, setProperties] = useState<Property[]>([])
   const addAnotherRef = useRef(false)
@@ -151,7 +157,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   const [propSeries, setPropSeries] = useState<{ id: string; service_type: string | null; unit: string | null; count: number | null }[]>([])
   const [dupAck, setDupAck] = useState(false) // owner chose "create anyway"
 
-  const { register, handleSubmit, watch, setValue, control, formState: { errors, isSubmitting } } =
+  const { register, handleSubmit, watch, setValue, control, formState: { errors, isSubmitting, isDirty } } =
     useForm<JobFormValues>({
       defaultValues: {
         customer_id: '',
@@ -170,6 +176,11 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         ...defaultValues,
       },
     })
+
+  // Tell the owner of this modal whether there is anything to lose. react-hook-form's
+  // isDirty is the honest signal: it is false for a freshly-opened form and for one
+  // whose values were only PREFILLED, and true the moment a human types.
+  useEffect(() => { onDirtyChange?.(isDirty) }, [isDirty, onDirtyChange])
 
   // Quick-add default service is LEARNED, not assumed: the owner's most frequent
   // recent service, else their first service template. A lawn company keeps its

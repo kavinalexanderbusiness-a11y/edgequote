@@ -56,6 +56,7 @@ import { Skeleton, SkeletonRows } from '@/components/ui/Skeleton'
 import { cn, minutesBetween, localTodayISO } from '@/lib/utils'
 import { orderDayStops, nextFieldStop } from '@/lib/fieldStops'
 import { toast } from '@/lib/toast'
+import { confirm } from '@/lib/confirm'
 import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays, parseISO, getDay } from 'date-fns'
 import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info, Phone, MessageSquare, Navigation, User as UserIcon, FileText, Receipt, CheckCircle2, Play } from 'lucide-react'
 import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
@@ -911,6 +912,7 @@ export default function SchedulePage() {
     setShowForm(false)
     setEditing(null)
     setFormDate('')
+    formDirty.current = false
     if (quoteCtx || customerPrefill) {
       setQuoteCtx(null)
       setQuotePrefill(null)
@@ -920,10 +922,39 @@ export default function SchedulePage() {
     }
   }
 
+  // ── Dismissing the editor must not eat what was typed ───────────────────────
+  // This overlay closes on a backdrop tap, on Escape and on the X — and it used
+  // to do so unconditionally, with no autosave behind it. A half-entered job
+  // (customer, property, price, times, a whole recurrence) vanished to a brushed
+  // thumb, and on a phone the backdrop is most of the screen.
+  //
+  // The app's other two create forms already protect this: QuoteBuilder and
+  // CustomerForm both run useAutosave. JobForm does not, and adopting autosave
+  // here is a redesign of a frozen surface. So this is the small, honest half —
+  // ASK before discarding, and only when there is something to lose. Nothing
+  // about saving, scheduling or recurrence changes.
+  //
+  // A successful save calls closeForm() DIRECTLY, not this: the row is already
+  // written, react-hook-form still reads dirty, and asking there would be
+  // nonsense. Only the three dismissal paths route through the question.
+  const formDirty = useRef(false)
+  async function requestCloseForm() {
+    if (!formDirty.current) { closeForm(); return }
+    const ok = await confirm({
+      title: 'Discard this job?',
+      message: 'You’ve started filling this in. Closing now throws it away — nothing is saved until you tap Save.',
+      confirmLabel: 'Discard',
+      cancelLabel: 'Keep editing',
+      destructive: true,
+      icon: Trash2,
+    })
+    if (ok) closeForm()
+  }
+
   // Editor modal: lock background scroll + close on Escape while it's open.
   useEffect(() => {
     if (!showForm && !editing) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeForm() }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') requestCloseForm() }
     document.addEventListener('keydown', onKey)
     const prevOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
@@ -2042,7 +2073,7 @@ export default function SchedulePage() {
               <Rocket className="w-4 h-4" /> Optimize
             </Button>
             <Button onClick={() => openNewJob(cursor)}>
-              <Plus className="w-4 h-4" /> Add Job
+              <Plus className="w-4 h-4" /> Add job
             </Button>
           </div>
         }
@@ -2185,7 +2216,7 @@ export default function SchedulePage() {
 
       {/* Edit/New job — modal overlay so Open always brings the correct job into view */}
       {(showForm || editing) && (
-        <div className="fixed inset-0 z-overlay overflow-y-auto bg-black/50" onClick={closeForm}>
+        <div className="fixed inset-0 z-overlay overflow-y-auto bg-black/50" onClick={requestCloseForm}>
           <div className="min-h-full flex items-start justify-center p-4 sm:p-6">
             <Card role="dialog" aria-modal="true" aria-labelledby="job-form-title" className="w-full max-w-2xl my-2 shadow-2xl" onClick={e => e.stopPropagation()}>
           <CardHeader className="flex items-center justify-between">
@@ -2202,7 +2233,7 @@ export default function SchedulePage() {
                   <Trash2 className="w-4 h-4" />
                 </button>
               )}
-              <button onClick={closeForm} className="tap-target inline-flex items-center justify-center text-ink-faint hover:text-ink transition-colors" aria-label="Close">
+              <button onClick={requestCloseForm} className="tap-target inline-flex items-center justify-center text-ink-faint hover:text-ink transition-colors" aria-label="Close">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -2255,7 +2286,8 @@ export default function SchedulePage() {
                   ) || undefined
                 : undefined}
               onSubmit={editing ? handleEdit : handleAdd}
-              onCancel={closeForm}
+              onDirtyChange={d => { formDirty.current = d }}
+              onCancel={requestCloseForm}
               isEdit={!!editing}
               warnFor={formMoveWarnings}
             />

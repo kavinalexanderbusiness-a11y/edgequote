@@ -484,7 +484,7 @@ export default function NewQuotePage() {
           </Banner>
         </>
       ) : (
-        <PageHeader title="New Quote" description="Build and save a new service quote." />
+        <PageHeader title="New quote" description="Build and save a new service quote." />
       )}
       <QuoteBuilder
         customers={customers}
