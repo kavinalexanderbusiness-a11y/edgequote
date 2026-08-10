@@ -63,7 +63,11 @@ function portalQuoteToQuote(q: PortalPdfQuote, customerName: string): Quote {
     hours: num(q.hours),
     crew_size: num(q.crew_size, 1) || 1,
     travel_fee: num(q.travel_fee),
-    subtotal: num(q.subtotal ?? q.initial_price ?? q.total),
+    // Ordering fixed: this PREFERRED the stale generated column
+    // (hours * crew_size * rate) over the real price, on the CUSTOMER's own copy of
+    // their quote. `initial_price` is the price the owner actually set; `total` adds
+    // travel. The legacy column is not consulted at all — see the note in QuotePDF.
+    subtotal: num(q.initial_price ?? q.total),
     total: num(q.total),
     initial_price: q.initial_price,
     weekly_price: q.weekly_price,

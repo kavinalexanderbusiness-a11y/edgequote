@@ -1157,7 +1157,9 @@ export default function QuoteDetailPage() {
             ) : (
               <div className="flex justify-between text-sm">
                 <span className="text-ink font-medium">First visit</span>
-                <span className="text-ink font-medium tabular-nums">{formatCurrency(quote.initial_price ?? quote.subtotal)}</span>
+                {/* Not `?? quote.subtotal` — that column is the legacy
+                    hours × crew_size × rate fabrication (see QuotePDF). */}
+                <span className="text-ink font-medium tabular-nums">{formatCurrency(Number(quote.initial_price ?? 0))}</span>
               </div>
             )}
             {quote.travel_fee > 0 && (

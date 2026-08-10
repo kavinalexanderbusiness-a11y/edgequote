@@ -188,7 +188,13 @@ export default function IntelligencePage() {
           <Stat label="Jobs this year" value={String(bi.yearly.thisYear.jobs)}
             delta={bi.yearly.jobsDeltaPct} deltaLabel="vs last year to date"
             sub={bi.yearly.lastYear ? `${bi.yearly.lastYear.jobs} at this point last season` : 'season to date'} />
-          <Stat label="Profit this year" value={bi.yearly.thisYear.profit != null ? formatCurrency(bi.yearly.thisYear.profit) : '—'} sub="season to date" accent />
+          {/* Same basis problem as Gross profit YTD: this is visitEconomics over
+              route labour minutes, and a route prices assumed minutes when a visit
+              was never timed. `profitEstimated` comes off the profit engine's own
+              hasLaborData flag. Figure unchanged — only the claim it makes. */}
+          <Stat label={bi.yearly.thisYear.profitEstimated ? 'Profit this year (est.)' : 'Profit this year'}
+            value={bi.yearly.thisYear.profit != null ? formatCurrency(bi.yearly.thisYear.profit) : '—'}
+            sub={bi.yearly.thisYear.profitEstimated ? 'season to date · partly from estimated time' : 'season to date'} accent />
         </div>
         {bi.yearly.lastYear ? (
           <YearMonthList byMonth={bi.yearly.byMonth} thisYear={bi.yearly.thisYear.year} lastYear={bi.yearly.lastYear.year} />
@@ -204,7 +210,26 @@ export default function IntelligencePage() {
       <Section id="profitability" title="Profitability" icon={Gauge}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat label="Revenue / labor hour" value={`$${bi.profitability.revenuePerLaborHour}`} />
-          <Stat label="Gross profit YTD" value={formatCurrency(bi.profitability.grossProfitYTD)} sub={`${bi.profitability.grossMarginPct}% margin`} />
+          {/* The cost behind this profit is minutes × crew rate, and `laborMinOf`
+              resolves those minutes as actual || estimated || a 45-minute constant.
+              Only the first is observed. Measured when this was written: 35 of 71
+              YTD jobs (49%) had real check-in/check-out time — so calling the result
+              "Gross profit" flat was presenting a half-modelled number as a measured
+              one. The FIGURE is unchanged; it now says what it rests on, and only
+              claims to be estimated when some of it actually is. */}
+          {(() => {
+            const b = bi.profitability.laborBasis
+            const estimated = b.assumedJobs > 0
+            return (
+              <Stat
+                label={estimated ? 'Gross profit YTD (est.)' : 'Gross profit YTD'}
+                value={formatCurrency(bi.profitability.grossProfitYTD)}
+                sub={estimated
+                  ? `${bi.profitability.grossMarginPct}% margin · ${b.observedJobs}/${b.totalJobs} jobs timed`
+                  : `${bi.profitability.grossMarginPct}% margin`}
+              />
+            )
+          })()}
           <Stat label="Crew efficiency" value={bi.profitability.crewEfficiencyPct != null ? `${bi.profitability.crewEfficiencyPct}%` : '—'} sub={bi.profitability.crewEfficiencyPct != null ? (bi.profitability.crewEfficiencyPct <= 100 ? 'at/under estimate' : 'over estimate') : 'time more jobs'} />
           <Stat label="Route $/km" value={`$${bi.profitability.routeRevPerKm}`} sub={bi.profitability.avgGrade ? `avg grade ${bi.profitability.avgGrade}` : undefined} />
         </div>

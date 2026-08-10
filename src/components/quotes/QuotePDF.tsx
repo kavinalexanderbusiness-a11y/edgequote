@@ -96,7 +96,17 @@ interface QuotePDFProps {
 }
 
 export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
-  const initialPrice = quote.initial_price ?? quote.subtotal
+  // ⛔ NEVER fall back to quotes.subtotal. That column is `generated always as
+  // (hours * crew_size * rate)` — the exact fabrication RUN-2026-07-16e ripped out
+  // of quotes.total after it reached real customers ("When no price was entered,
+  // the DATABASE made one up… Four rows priced this way; TWO are completed").
+  // It was removed from `total` and left alive here. On the live book it disagrees
+  // with initial_price on 84 of 93 quotes, and 61 quotes carry a NON-ZERO value for
+  // it — so the day a quote has hours but no price, this line prints an invented
+  // number on the customer's document. A priceless quote is worth 0 here, which is
+  // what it already renders today and what the send gate (quoteStatus.sendBlockedReason
+  // → 'no_price') already refuses to send.
+  const initialPrice = Number(quote.initial_price ?? 0)
   const hasMaintenance = !!(quote.weekly_price || quote.biweekly_price || quote.monthly_price)
   const lines = services && services.length ? services : null
   // The builder's toggle promises 'Travel rolled into total on PDF' — and this
