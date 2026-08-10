@@ -10,11 +10,22 @@ import { loadTravelModel } from '@/lib/travelLearning'
 // Load EVERYTHING the advisor composes, in one parallel fetch, and return the
 // ranked suggestions. Shared by the Grow page Suggestions Center and the
 // dashboard top-3 widget so they never diverge.
-export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggestion[]> {
+//
+// Returns NULL when a load-bearing read fails. supabase-js RESOLVES {data:null,
+// error}, so coercing every read with `|| []` let a dead connection look like a
+// spotless business: the feed said "Nothing needs your attention" under a green
+// check. The two PARTIAL failures are worse than the total one —
+//   • invoices fail → invoicedJobIds empties → every completed job reads as
+//     UNBILLED, so the advisor tells the owner to invoice already-invoiced work.
+//   • quote_outcomes fail → priceLossRate falls to 0, DISABLING the "losing
+//     mostly on price → never tell them to raise" suppression, so the advisor
+//     recommends a price rise to a business that is losing quotes on price.
+// Enrichment reads stay deliberately tolerant — see the split below.
+export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggestion[] | null> {
   // Local session read — no auth round-trip before the parallel advisor fetch below.
   const { data: { session } } = await supabase.auth.getSession()
   const user = session?.user
-  if (!user) return []
+  if (!user) return null
   const uid = user.id
 
   // One parallel round-trip for the whole advisor. Line items are fetched by
@@ -59,6 +70,21 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
     supabase.from('quote_outcomes').select('quote_id, reason, detail, competitor_price').eq('user_id', uid),
     loadTravelModel(supabase),
   ])
+
+  // ── The honesty gate ──
+  // These eight decide WHAT the advisor claims: the work, the money, the people
+  // and the settings every figure is computed against. If any one of them failed
+  // we do not know the answer, and "we don't know" must not render as "nothing to
+  // do". Same all-or-nothing rule the dashboard loader uses.
+  const failed =
+    jRes.error || qRes.error || rRes.error || pRes.error ||
+    cRes.error || iRes.error || liRes.error || woRes.error || sRes.error
+  if (failed) return null
+  // DELIBERATELY TOLERANT — these degrade honestly rather than lying:
+  //   nRes (neighbour leads)  → one growth idea goes missing; the feed UNDER-claims.
+  //   dRes (dismissals)       → a dismissed card resurfaces; noise, not a false
+  //                             all-clear, and re-dismissing costs one tap.
+  //   travelM                 → falls back to its own documented default model.
 
   const jobs = (jRes.data as unknown as Job[]) || []
   const settings = sRes.data as Record<string, unknown> | null

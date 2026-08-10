@@ -77,6 +77,7 @@
     "verify:crew-invite": "tsx scripts/verify-crew-invite.ts",
     "verify:deposit": "tsx scripts/verify-deposit.ts",
     "verify:deposit-documents": "tsx scripts/verify-deposit-documents.ts",
+    "verify:data-honesty": "tsx scripts/verify-data-honesty.ts",
     "verify:dispatch-board": "tsx scripts/verify-dispatch-board.ts",
     "verify:lead-journey": "tsx scripts/verify-lead-journey.ts",
     "verify:back-office": "tsx scripts/verify-back-office.ts",

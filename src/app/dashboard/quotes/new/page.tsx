@@ -121,11 +121,19 @@ export default function NewQuotePage() {
 
     // Next number from the highest EXISTING quote number — a row count would
     // reissue a number after any delete and two quotes would share it.
-    const { data: qnums } = await supabase
+    const { data: qnums, error: qnumsErr } = await supabase
       .from('quotes')
       .select('quote_number')
       .eq('user_id', user!.id)
-    const quote_number = generateQuoteNumber(maxNumericSuffix(((qnums as { quote_number: string }[]) || []).map(n => n.quote_number)) + 1)
+    // A failed read resolves as {data:null,error}; coerced to [] it would report
+    // "you have no quotes" and reissue EPS-<year>-0001 on top of an existing one.
+    // quote_number carries no unique index, so the duplicate would be written and
+    // never noticed. Returning false keeps the autosave draft — nothing is lost.
+    if (qnumsErr || !qnums) {
+      toast.error('Could not read your existing quote numbers, so nothing was saved. Check your connection and press Save again.')
+      return false
+    }
+    const quote_number = generateQuoteNumber(maxNumericSuffix((qnums as { quote_number: string }[]).map(n => n.quote_number)) + 1)
 
     // Every quote gets a real customer + property (create or match — no dupes, no orphans).
     let customerId: string | null = values.customer_id && values.customer_id !== '__manual' ? values.customer_id : null

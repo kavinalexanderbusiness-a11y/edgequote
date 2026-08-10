@@ -483,6 +483,14 @@ export default function QuoteDetailPage() {
 
       // ONE numbering engine — shared with the auto-draft and manual creation.
       const invoiceNumber = await nextInvoiceNumber(supabase, user!.id)
+      // null = the invoice ledger read failed, so the next number is unknown.
+      // Converting anyway would mint INV-0001 over an existing invoice; the quote
+      // is safer left unconverted, and the owner can simply press Convert again.
+      if (!invoiceNumber) {
+        toast.error('Could not read your existing invoice numbers, so the quote was not converted. Check your connection and try again.')
+        setConverting(false)
+        return
+      }
 
       // Local dates — UTC stamping dates evening invoices tomorrow.
       const issued = localTodayISO()

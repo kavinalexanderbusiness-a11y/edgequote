@@ -191,13 +191,23 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
     const eligible = sel.selectedItems.filter(q => ['accepted', 'scheduled', 'completed'].includes(q.status))
     if (!eligible.length) { toast.error('Select accepted, scheduled or completed quotes to convert.'); return }
     setBusyKey('convert')
-    const [{ data: nums }, { data: existing }, linesByQuote] = await Promise.all([
+    const [{ data: nums, error: numsErr }, { data: existing, error: existingErr }, linesByQuote] = await Promise.all([
       supabase.from('invoices').select('invoice_number').eq('user_id', user.id),
       supabase.from('invoices').select('quote_id').in('quote_id', eligible.map(q => q.id)),
       fetchLinesByQuote(supabase, eligible.map(q => q.id)),
     ])
-    const already = new Set(((existing as { quote_id: string | null }[]) || []).map(r => r.quote_id))
-    let next = maxNumericSuffix(((nums as { invoice_number: string }[]) || []).map(n => n.invoice_number)) + 1
+    // Both reads are load-bearing and both fail SILENTLY as {data:null,error}.
+    // Coerced to [], the numbering restarts at INV-0001 (nothing in the schema
+    // stops a duplicate — the only unique index is invoices(job_id)) and the
+    // already-converted set empties, so every selected quote is converted a
+    // second time. Convert nothing rather than bill a customer twice.
+    if (numsErr || !nums || existingErr || !existing) {
+      toast.error('Could not read your existing invoices, so nothing was converted. Check your connection and try again.')
+      setBusyKey(null)
+      return
+    }
+    const already = new Set((existing as { quote_id: string | null }[]).map(r => r.quote_id))
+    let next = maxNumericSuffix((nums as { invoice_number: string }[]).map(n => n.invoice_number)) + 1
     const issued = localTodayISO()
     const dueISO = formatDfn(addDays(parseISO(issued), 14), 'yyyy-MM-dd')
     let created = 0
@@ -235,11 +245,19 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
     setBusyKey('duplicate')
-    const [{ data: qnums }, linesByQuote] = await Promise.all([
+    const [{ data: qnums, error: qnumsErr }, linesByQuote] = await Promise.all([
       supabase.from('quotes').select('quote_number').eq('user_id', user.id),
       fetchLinesByQuote(supabase, sel.selectedItems.map(q => q.id)),
     ])
-    let next = maxNumericSuffix(((qnums as { quote_number: string }[]) || []).map(n => n.quote_number)) + 1
+    // A failed read coerced to [] restarts the sequence at EPS-<year>-0001, and
+    // quote_number has no unique index either — prod already carries two
+    // duplicated quote numbers, so this is not hypothetical.
+    if (qnumsErr || !qnums) {
+      toast.error('Could not read your existing quote numbers, so nothing was duplicated. Check your connection and try again.')
+      setBusyKey(null)
+      return
+    }
+    let next = maxNumericSuffix((qnums as { quote_number: string }[]).map(n => n.quote_number)) + 1
     // (The breakdown for every selected quote was batch-fetched above via
     // fetchLinesByQuote — the same helper bulkConvert uses.)
     let created = 0

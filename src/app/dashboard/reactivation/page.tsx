@@ -71,14 +71,17 @@ export default function ReactivationPage() {
   const [risk, setRisk] = useState<RiskCustomer[]>([])
   const [ranOut, setRanOut] = useState<RanOutCustomer[]>([])
   const [metrics, setMetrics] = useState({ atRisk: 0, potential: 0, reactivationRate: 0, revenueRecovered: 0 })
+  // A load-bearing read failed — distinct from "genuinely nobody is at risk",
+  // which is the only case allowed to show the reassuring empty state.
+  const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     async function load() {
       // Local session read — no auth round-trip before the data batch below.
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
-      // No session must not strand the skeleton forever.
-      if (!user) { setLoading(false); return }
+      // No session must not strand the skeleton forever — nor claim all-clear.
+      if (!user) { setFailed(true); setLoading(false); return }
       const [cRes, jRes, qRes, rRes, sRes] = await Promise.all([
         supabase.from('customers').select('*').eq('user_id', user!.id).is('archived_at', null), // don't suggest re-engaging deliberately-archived customers
         supabase.from('jobs').select('customer_id, scheduled_date, status, service_type, quote_id, recurrence_id, price').eq('user_id', user!.id),
@@ -86,6 +89,16 @@ export default function ReactivationPage() {
         supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user!.id),
         supabase.from('business_settings').select('service_seasons').eq('user_id', user!.id).maybeSingle(),
       ])
+      // ── The honesty gate ──
+      // Every figure below derives from these five reads, and supabase-js
+      // RESOLVES {data:null,error} on a dead connection. Coerced with `|| []`, a
+      // failed customers or jobs read produced "At risk: 0" above a green
+      // "Every customer is booked or recently served" — the most reassuring
+      // answer in the app, invented from a network blip, on the one screen whose
+      // whole job is to warn the owner that people are slipping away.
+      if (cRes.error || jRes.error || qRes.error || rRes.error || sRes.error) {
+        setFailed(true); setLoading(false); return
+      }
       const seasons: ServiceSeasons = settingsToSeasons((sRes.data as { service_seasons: unknown } | null)?.service_seasons)
       const customers = (cRes.data as Customer[]) || []
       const jobs = (jRes.data as JobLite[]) || []
@@ -233,6 +246,22 @@ export default function ReactivationPage() {
         <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Customer Reactivation" description="Win back customers you already paid to acquire." />
         <SkeletonTiles count={4} />
         <Card className="p-5"><Skeleton className="h-4 w-48" /><Skeleton className="h-3 w-72 mt-2.5" /></Card>
+      </PageContainer>
+    )
+  }
+
+  // Zeroed tiles ("At risk: 0", "Potential recovery: $0") are a claim about the
+  // business. We have no data, so we make no claim.
+  if (failed) {
+    return (
+      <PageContainer>
+        <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Customer Reactivation" description="Win back customers you already paid to acquire." />
+        <Card>
+          <EmptyState icon={AlertTriangle} className="py-14"
+            title="Couldn’t check who is slipping away"
+            description="Your customers, jobs and quotes could not be read, so this page has nothing to show. That is a connection problem — not a sign that everyone is booked."
+            action={{ label: 'Try again', onClick: () => window.location.reload() }} />
+        </Card>
       </PageContainer>
     )
   }

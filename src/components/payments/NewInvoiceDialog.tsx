@@ -84,6 +84,9 @@ export function NewInvoiceDialog({ open, onClose, onCreated }: {
       // ONE numbering engine — shared with the auto-draft and quote conversion, so
       // a manual invoice can never collide with a generated one.
       const invoice_number = await nextInvoiceNumber(supabase, user.id)
+      // null = the ledger read failed, so the next number is UNKNOWN. Creating
+      // anyway would mint INV-0001 on top of an invoice that already has it.
+      if (!invoice_number) throw new Error('Could not read your existing invoice numbers, so nothing was created. Check your connection and try again.')
 
       const { data, error: err } = await supabase.from('invoices').insert({
         user_id: user.id,
