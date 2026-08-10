@@ -238,5 +238,120 @@ H('The established all-or-nothing loaders still hold')
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-console.log(`\n${fail === 0 ? '✅' : '❌'} data-honesty: ${pass} passed, ${fail} failed\n`)
-process.exit(fail === 0 ? 0 : 1)
+// 6. DAY AVAILABILITY — an unknown day is never an open day
+//
+// The lie: `loadDayStatuses` did `data || []`, and an empty row set is a
+// positive claim — "no day is blocked". Reproduced end to end before fixing:
+// a day the owner marked Vacation went isDayBlocked=false, its capacity went
+// from 0 back to a full 16 crew-hours, and Weather Ops named that exact day as
+// the best place to move a rained-out day's work.
+//
+// This section runs the REAL functions against a Supabase double that fails the
+// way the real client does (RESOLVES {data:null,error}, never throws), then pins
+// the four states the fix has to keep straight: success, failed initial read,
+// failed refresh, and an optimize attempt while availability is unknown.
+H('Day availability: unknown is never open')
+async function dayAvailability() {
+  const { loadDayStatuses, buildDayStatusMap, isDayBlocked, buildCapacityForDate } =
+    await import('../src/lib/dayStatus')
+  const { computeWeatherImpact } = await import('../src/lib/weatherImpact')
+  const { learnLaborModel } = await import('../src/lib/labor')
+
+  const CLOSED = '2026-08-13'
+  const ROWS = [{
+    id: 'd1', date: CLOSED, status: 'vacation', blocks: true, label: null, notes: null,
+    starts_at: null, ends_at: null, crew_size: null, created_by: null, created_at: '2026-08-01T00:00:00Z',
+  }]
+  const client = (res: unknown) => ({ from: () => ({ select: () => ({ eq: async () => res }) }) }) as never
+  const OK = client({ data: ROWS, error: null })
+  const DEAD = client({ data: null, error: { message: 'network error' } })
+
+  // ── State 1: success ──
+  const rows = await loadDayStatuses(OK, 'u1')
+  check('success returns rows', Array.isArray(rows) && rows.length === 1, true)
+  const map = buildDayStatusMap(rows ?? [])
+  check('…the closed day is blocked', isDayBlocked(map, CLOSED), true)
+  check('…and has zero capacity', buildCapacityForDate(map, { crew: 2, hours: 8 })(CLOSED), 0)
+
+  // ── State 2: failed read is DISTINGUISHABLE from an empty schedule ──
+  const dead = await loadDayStatuses(DEAD, 'u1')
+  check('a failed read returns null, not []', dead, null)
+  // The distinction that matters: [] is a real answer, null is the absence of one.
+  const emptyButLoaded = await loadDayStatuses(client({ data: [], error: null }), 'u1')
+  check('…while a genuinely empty schedule still returns []', Array.isArray(emptyButLoaded), true)
+
+  // ── State 3: failed REFRESH keeps the last known map ──
+  // The page does `if (rows) setDayStatusMap(...)`; simulate both halves here so
+  // the contract is tested, not just the source text.
+  let live = map
+  const refreshed = await loadDayStatuses(DEAD, 'u1')
+  if (refreshed) live = buildDayStatusMap(refreshed)
+  check('a failed refresh does not erase the closed day', isDayBlocked(live, CLOSED), true)
+  check('…and does not resurrect its capacity', buildCapacityForDate(live, { crew: 2, hours: 8 })(CLOSED), 0)
+
+  // ── State 4: Weather Ops must not target a day it could not verify ──
+  const forecast = [
+    { date: '2026-08-12', rainy: true, mmRain: 14, popPct: 90, windKph: 20, code: 65, label: 'Heavy rain' },
+    { date: CLOSED, rainy: false, mmRain: 0, popPct: 5, windKph: 8, code: 0, label: 'Clear' },
+    { date: '2026-08-14', rainy: false, mmRain: 0, popPct: 5, windKph: 8, code: 0, label: 'Clear' },
+  ] as never
+  const jobs = [{ id: 'j1', date: '2026-08-12', sqft: 5000, serviceType: 'Lawn Mowing', crewSize: 2, propertyId: 'p1', isInitial: false, value: 120, customerId: 'c1' }] as never
+  const model = learnLaborModel([])
+  const days = [0, 1, 2, 3, 4, 5, 6]
+  const wi = (ds: Parameters<typeof computeWeatherImpact>[8]) =>
+    computeWeatherImpact(jobs, forecast, model, 16, days, '2026-08-12', 'x', false, ds)
+
+  check('with a known map it skips the closed day', wi(map).atRiskDays[0]?.recommendedDay, '2026-08-14')
+  // null = the read failed. Naming ANY day here is naming one we cannot verify.
+  check('with UNKNOWN availability it names no day at all', wi(null).atRiskDays[0]?.recommendedDay, null)
+  check('…and says why, rather than blaming the forecast',
+    /Couldn’t load your closed days/.test(wi(null).atRiskDays[0]?.recommendedNote ?? ''), true)
+  // The reassuring path must survive: a real, successfully-read empty schedule
+  // still gets a recommendation. Refusing there would be its own bug.
+  check('a loaded-but-empty schedule still gets a recommendation',
+    wi(buildDayStatusMap([])).atRiskDays[0]?.recommendedDay, '2026-08-13')
+}
+
+// ── The wiring the engine tests above cannot see ──
+function dayAvailabilityWiring() {
+  const DS = read('src/lib/dayStatus.ts')
+  const SCHED = read('src/app/dashboard/schedule/page.tsx')
+  const WEATHER = read('src/lib/weatherImpact.ts')
+
+  check('loadDayStatuses can report "I could not read"',
+    /export async function loadDayStatuses\([^)]*\): Promise<DayStatusRow\[\] \| null>/.test(DS), true)
+  check('…and the contract is written down where the next reader will be',
+    /an UNKNOWN day is never an OPEN day/.test(DS), true)
+
+  check('the schedule refresh keeps the last known map',
+    /const rows = await loadDayStatuses\(supabase, user\.id\)\s*\r?\n\s*if \(rows\) setDayStatusMap\(buildDayStatusMap\(rows\)\)/.test(SCHED), true)
+  check('…and no longer builds a map straight from the call',
+    /setDayStatusMap\(buildDayStatusMap\(await loadDayStatuses/.test(SCHED), false)
+
+  check('optimizing refuses while availability is unknown',
+    /const dayStatusUnknown = dayStatusMap === undefined/.test(SCHED)
+    && /if \(dayStatusUnknown\) \{ setBanner\(DAY_STATUS_UNKNOWN_MSG\); return \}/.test(SCHED), true)
+  // The refusal must be INSIDE the single funnel both entry points use.
+  const fnStart = SCHED.indexOf('function launchOptimizer(')
+  const refusal = SCHED.indexOf('if (dayStatusUnknown) { setBanner(DAY_STATUS_UNKNOWN_MSG); return }', fnStart)
+  const setsState = SCHED.indexOf('setShowOptimize(true)', fnStart)
+  check('…before it opens the optimizer', fnStart > 0 && refusal > fnStart && setsState > refusal, true)
+  check('auto-propose stays quiet instead of proposing a blind plan',
+    /if \(dayStatusUnknown\) return/.test(SCHED), true)
+  check('Reschedule refuses too — it picks destination days the same way',
+    /if \(dayStatusUnknown\) \{ setBanner\(DAY_STATUS_UNKNOWN_MSG\); return \} setRainCenterDay/.test(SCHED), true)
+
+  check('Weather Ops accepts "unknown" as a distinct input',
+    /dayStatus: DayStatusMap \| null = \{ byDate: \{\}, blockedDates: new Set\(\) \}/.test(WEATHER), true)
+  check('…its loader passes null when the read failed',
+    /const dayStatus = dRes\.error \? null : buildDayStatusMap/.test(WEATHER), true)
+  check('…and findDryDay refuses before scanning the forecast',
+    /if \(!dayStatusKnown\) return null/.test(WEATHER), true)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+dayAvailability().then(() => {
+  dayAvailabilityWiring()
+  console.log(`\n${fail === 0 ? '✅' : '❌'} data-honesty: ${pass} passed, ${fail} failed\n`)
+  process.exit(fail === 0 ? 0 : 1)
+})

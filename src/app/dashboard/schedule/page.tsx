@@ -222,7 +222,19 @@ export default function SchedulePage() {
   const [rainBusy, setRainBusy] = useState<string | null>(null)
   const [rainSummary, setRainSummary] = useState<RainMoveSummary | null>(null)
 
+  // `undefined` = day availability was never read successfully (the initial read
+  // failed, and every refresh since has too). It is NOT "no days are blocked" —
+  // that is `{ byDate: {}, blockedDates: new Set() }`. Anything that PLACES work
+  // on a date has to tell those two apart, because the optimizer's target-date
+  // list and Weather Ops' move targets are both built by asking `isDayBlocked`,
+  // which answers false for both.
+  const dayStatusUnknown = dayStatusMap === undefined
+  const DAY_STATUS_UNKNOWN_MSG =
+    'Your day availability (closed days, vacations, rain blocks) could not be loaded, so this could move work onto a day you closed. Refresh and try again.'
+
   function launchOptimizer(opts?: { scope: OptimizeScope; mode: OptimizeMode; anchorDate: string }) {
+    // Refuse rather than optimize against availability we could not read.
+    if (dayStatusUnknown) { setBanner(DAY_STATUS_UNKNOWN_MSG); return }
     setOptimizeLaunch(opts ? { ...opts, autoRun: true } : null)
     setShowOptimize(true)
   }
@@ -316,6 +328,10 @@ export default function SchedulePage() {
     const anchor = autoOptimizeQueued.anchorDate
     setAutoOptimizeQueued(null)
     if (optJobsAll.length === 0) return
+    // Proposing unprompted is worse than staying quiet: without day availability
+    // the plan can route work onto a closed day, and the owner never asked for
+    // it. The manual Optimize button explains the refusal; this one just stops.
+    if (dayStatusUnknown) return
 
     const run = (scope: OptimizeScope) => optimizeSchedule(optJobsAll, { ...optBaseOpts, mode: 'recommended', scope, anchorDate: anchor })
     const worthIt = (r: ReturnType<typeof run>, bar: 'local' | 'global'): boolean => {
@@ -689,9 +705,16 @@ export default function SchedulePage() {
   }, [fetchJobs])
 
   // ── Day Status: live sync + optimistic set/clear (source of truth = day_statuses) ──
+  // A failed REFRESH must not erase a good map. This runs on every realtime
+  // event and after every day-status write, so `buildDayStatusMap([])` here
+  // silently un-blocked every closed day the moment one refetch dropped —
+  // including, immediately after the owner blocked a day, the block they had
+  // just made. null = "couldn't read"; keep what the database still holds.
   const reloadDayStatuses = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
-    if (user) setDayStatusMap(buildDayStatusMap(await loadDayStatuses(supabase, user.id)))
+    if (!user) return
+    const rows = await loadDayStatuses(supabase, user.id)
+    if (rows) setDayStatusMap(buildDayStatusMap(rows))
   }, [supabase])
   useRealtimeRefresh('day_statuses', uid ? `user_id=eq.${uid}` : null, reloadDayStatuses)
   // Jobs too: any write (this tab's optimistic mutations, another device, the
@@ -2066,7 +2089,10 @@ export default function SchedulePage() {
         description={scheduleSubtitle(jobs.length)}
         action={
           <div className="flex items-center gap-2">
-            <Button variant="secondary" onClick={() => { setRainCenterDay(rainTarget?.date ?? null); setShowRainCenter(true) }} title="Reschedule — move visits (weather, equipment, absence, holiday, emergency) and notify customers">
+            {/* Reschedule picks destination days the same way the optimizer does
+                (planRainDelay skips blocked dates), so it carries the same risk
+                when availability is unknown — refuse for the same reason. */}
+            <Button variant="secondary" onClick={() => { if (dayStatusUnknown) { setBanner(DAY_STATUS_UNKNOWN_MSG); return } setRainCenterDay(rainTarget?.date ?? null); setShowRainCenter(true) }} title="Reschedule — move visits (weather, equipment, absence, holiday, emergency) and notify customers">
               <CalendarClock className="w-4 h-4" /> Reschedule
             </Button>
             <Button variant="secondary" onClick={() => launchOptimizer()} title="Optimize your schedule — pick scope and goal">

@@ -180,9 +180,25 @@ export function showsDayStatus(row: DayStatusRow | null | undefined): boolean {
 }
 
 // ── supabase helpers (shared by the scheduler UI + the Weather Ops loader) ──────
-export async function loadDayStatuses(supabase: SupabaseClient, userId: string): Promise<DayStatusRow[]> {
-  const { data } = await supabase.from('day_statuses').select(DAY_STATUS_SELECT).eq('user_id', userId)
-  return (data as DayStatusRow[]) || []
+// ⚠️ THE FAILURE CONTRACT: an UNKNOWN day is never an OPEN day.
+//
+// Returns NULL when the read failed. supabase-js RESOLVES {data:null,error}, so
+// the old `|| []` handed back an empty row set — and an empty set is a positive
+// claim: "no day is blocked". Every consumer believes it. `isDayBlocked` goes
+// false on a day the owner closed, `dayLaborHours` turns that day from 0 back
+// into a full crew-day, the optimizer adds it to its target dates, and Weather
+// Ops recommends moving a rained-out day's work ONTO it. Reproduced end to end
+// before this was changed.
+//
+// Callers must do one of exactly two things with null, never a third:
+//   • KEEP the last map they read successfully — a refresh must not erase state
+//     the database still holds; or
+//   • REFUSE the operation that would place work on a date.
+// There is no honest way to schedule against availability you could not read.
+export async function loadDayStatuses(supabase: SupabaseClient, userId: string): Promise<DayStatusRow[] | null> {
+  const { data, error } = await supabase.from('day_statuses').select(DAY_STATUS_SELECT).eq('user_id', userId)
+  if (error || !data) return null
+  return data as DayStatusRow[]
 }
 
 export interface SetDayStatusInput {
