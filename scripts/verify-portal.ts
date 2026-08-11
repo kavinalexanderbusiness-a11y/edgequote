@@ -13,7 +13,7 @@ import {
   requestPresetsOf, resolveDocAddress, groupPhotos, orphanPhotos, liveStatusOf, visitDay,
   daysAwayLabel, dueSoonLabel, invoiceDepositNote, invoiceDepositPaidNote, invoicePaymentNote, parsePortalDeepLink, tabNavTarget, buildVisitICS, visitToCalendarEvent,
   messageAboutDoc, primaryPortalAction, draftStorageKey, etransferReference, isSendChord,
-  needsContactMethod, contactUpdateMessage, contactSentKey, recentPaymentLanded,
+  contactGap, isUsablePhone, isUsableEmail, PHONE_MIN_DIGITS, recentPaymentLanded,
   showDocFilters, DOC_FILTER_MIN,
   NO_PROPERTY, MAX_REQUEST_PRESETS,
   type PortalData, type PortalJob, type PortalProperty, type DocBlobRenderers,
@@ -429,26 +429,48 @@ console.log('\ninvoicePaymentNote (never mistakes the total for what is owed):')
   check('a quote is never a payment note', invoicePaymentNote(d.get('q-sent')!) === null)
 }
 
-// ── missing-contact prompt (asks ONLY the truly unreachable; message always carries the info) ─
-console.log('\nneedsContactMethod / contactUpdateMessage (the unreachable-customer card):')
+// ── which contact detail is missing (the prompt's ONE input) ─────────────────
+// This replaced needsContactMethod(), which only answered the both-missing case
+// and so never asked the 47 customers with a phone and no email — the commonest
+// gap in the book.
+console.log('\ncontactGap (what the portal asks for, and when it says nothing):')
 {
-  check('no phone AND no email → prompt', needsContactMethod({ phone: null, email: null }) === true)
-  check('empty strings → prompt', needsContactMethod({ phone: '', email: '' }) === true)
-  check('whitespace is not a contact method', needsContactMethod({ phone: '  ', email: ' ' }) === true)
-  check('phone alone is enough — never nags for the second', needsContactMethod({ phone: '403-555-0100', email: null }) === false)
-  check('email alone is enough', needsContactMethod({ phone: null, email: 'j@x.com' }) === false)
-  check('both on file → no prompt', needsContactMethod({ phone: '403-555-0100', email: 'j@x.com' }) === false)
-  check('missing customer payload → no claim', needsContactMethod(null) === false && needsContactMethod(undefined) === false)
+  check('neither on file → both', contactGap({ phone: null, email: null }) === 'both')
+  check('empty strings count as missing', contactGap({ phone: '', email: '' }) === 'both')
+  check('whitespace is not a contact detail', contactGap({ phone: '  ', email: ' ' }) === 'both')
+  check('phone on file, no email → asks for the email', contactGap({ phone: '403-555-0100', email: null }) === 'email')
+  check('email on file, no phone → asks for the phone', contactGap({ phone: null, email: 'j@x.com' }) === 'phone')
+  check('complete file → asks for nothing', contactGap({ phone: '403-555-0100', email: 'j@x.com' }) === 'none')
+  check('whitespace phone with a real email still asks for the phone', contactGap({ phone: '   ', email: 'j@x.com' }) === 'phone')
+  // ⚠️ THE honesty case. A payload we failed to read tells us nothing about the
+  // file — so the prompt asks for nothing rather than asserting a gap. The
+  // inverse ("failed read ⇒ profile complete") is equally covered: the only
+  // thing gated on this is the prompt, and it returns on the next good load.
+  check('missing customer payload claims no gap', contactGap(null) === 'none' && contactGap(undefined) === 'none')
+}
 
-  check('message carries the phone', contactUpdateMessage('403-555-0100', '') === 'Please add my contact details to your file — Phone: 403-555-0100')
-  check('message carries the email', contactUpdateMessage('', 'j@x.com') === 'Please add my contact details to your file — Email: j@x.com')
-  check('both → both, phone first', contactUpdateMessage('403-555-0100', 'j@x.com') === 'Please add my contact details to your file — Phone: 403-555-0100 · Email: j@x.com')
-  check('nothing typed → null (empty request unsendable)', contactUpdateMessage('', '') === null)
-  check('whitespace-only → null', contactUpdateMessage('  ', ' ') === null)
-  check('values are trimmed', contactUpdateMessage(' 403-555-0100 ', '') === 'Please add my contact details to your file — Phone: 403-555-0100')
+// ── the client-side mirror of portal_add_contact's validation ────────────────
+// The RPC is the authority and re-checks everything; these exist so an obvious
+// typo doesn't cost a round-trip. verify:portal-contact pins them against the
+// migration so the two can't drift apart silently.
+console.log('\nisUsablePhone / isUsableEmail (instant feedback, server still decides):')
+{
+  check('a full national number is usable', isUsablePhone('(403) 555-0100'))
+  check('punctuation and spacing are irrelevant', isUsablePhone('403.555.0100') && isUsablePhone('4035550100'))
+  check('a country code is fine', isUsablePhone('+1 403 555 0100'))
+  // 7 digits is what phoneMatches() will LINK on, deliberately not what this will
+  // accept: a local number with no area code cannot be dialled by the business.
+  check('a 7-digit local number is refused', !isUsablePhone('555-0100'))
+  check(`the floor is ${PHONE_MIN_DIGITS} digits`, !isUsablePhone('4035550') && isUsablePhone('4035550100'))
+  check('an absurdly long number is refused', !isUsablePhone('1234567890123456789'))
+  check('empty is not usable', !isUsablePhone('') && !isUsablePhone('   '))
 
-  check('sent-flag key is token-scoped', contactSentKey('tok-a') !== contactSentKey('tok-b'))
-  check('sent-flag key never collides with a draft key', contactSentKey('t') !== draftStorageKey('t', 'message') && !contactSentKey('t').startsWith('eqp:draft:'))
+  check('an ordinary address is usable', isUsableEmail('jane@example.com'))
+  check('surrounding whitespace is tolerated', isUsableEmail('  jane@example.com '))
+  check('no @ is refused', !isUsableEmail('jane.example.com'))
+  check('no TLD is refused', !isUsableEmail('jane@example'))
+  check('a space inside is refused', !isUsableEmail('jane doe@example.com'))
+  check('empty is refused', !isUsableEmail('') && !isUsableEmail('  '))
 }
 
 // ── doc filters: finding tools only when there's something to find ──────────

@@ -1319,6 +1319,14 @@ begin
 end; $$;
 grant execute on function public.portal_set_consent(text, boolean, boolean) to anon, authenticated;
 
+-- portal_add_contact: the customer fills in a MISSING phone/email on their own
+-- record. Not reproduced here — the definition, and the four rules that make an
+-- anonymous write to `customers` safe, live in ONE place:
+--     supabase/RUN-2026-08-10-portal-add-contact.sql
+-- (This file already holds a STALE 3-arg portal_set_consent above; the live one
+-- takes four. Copying a second identity-writing function into a file nobody
+-- reconciles is how the wrong one gets run.)
+
 -- get_portal_data: expose sms_opt_in/email_opt_in so the portal can show + edit consent.
 -- ══════════════════════════════════════════════════════════════════════════
 -- ⚠️  SUPERSEDED — DO NOT RESTORE THIS BODY.  (INF-2, 2026-07-17)

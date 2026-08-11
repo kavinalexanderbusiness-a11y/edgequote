@@ -10,9 +10,9 @@ import { displayQuoteStatus } from '@/lib/quoteStatus'
 import type { QuoteStatus } from '@/types'
 import { renderPortalInvoiceBlob, renderPortalQuoteBlob } from '@/lib/portalPdf'
 import {
-  buildPortalView, needsContactMethod, normalizePortal, parsePortalDeepLink, primaryPortalAction,
+  buildPortalView, contactGap, normalizePortal, parsePortalDeepLink, primaryPortalAction,
   recentPaymentLanded, tabNavTarget,
-  type PortalData, type SubmitRequestFn, type TabKey,
+  type AddContactResult, type PortalData, type SubmitRequestFn, type TabKey,
 } from './model'
 import type { PortalActions } from './components/shared'
 import { HomeTab, ReviewCard, ConsentCard, ContactMethodCard } from './components/HomeTab'
@@ -422,6 +422,30 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     if (!ok) setActionError('Your request didn’t go through — please try again, or call us directly.')
     return !!ok
   }
+  // Self-serve contact detail — fills a MISSING phone/email on this customer's own
+  // record. Token-scoped RPC, same shape as saveConsent above: there is no customer
+  // id to pass, because the token is the only thing that decides whose row moves.
+  //
+  // NOT optimistic, unlike consent. A wrong consent toggle is visibly wrong and one
+  // tap from being fixed; a contact detail the portal *claims* to have saved and
+  // hasn't is invisible to everyone until the day someone tries to use it. So the
+  // card only reports success from the row state the RPC read back, and this
+  // refetches so the prompt disappears because the FILE changed, not because the
+  // client decided it had. A failed refetch leaves the card up — the write still
+  // landed, and asking twice is cheaper than a silent gap.
+  async function addContact(phone: string, email: string): Promise<AddContactResult> {
+    setActionError(null)
+    const { data, error } = await supabase.rpc('portal_add_contact', {
+      p_token: token, p_phone: phone || null, p_email: email || null,
+    })
+    // supabase-js RESOLVES { data: null, error } on a dropped connection, so the
+    // error object is the only thing separating "the server said no" from "we never
+    // reached the server" — the discriminator load() documents.
+    if (error) return { ok: false, reason: 'network' }
+    const res = (data ?? { ok: false, reason: 'network' }) as AddContactResult
+    if (res.ok) await load()
+    return res
+  }
   // Structured requests (appointment / reschedule / plan change) — same pipeline,
   // carrying structure alongside the human-readable message. The RPC re-verifies
   // that any referenced job/plan belongs to this token's customer.
@@ -678,12 +702,17 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
               banners above stay outside it (they aren't tab content). */}
           <div id="portal-panel" role="tabpanel" aria-labelledby={`porttab-${activeTab}`} tabIndex={-1} className="focus-visible:outline-none">
             {activeTab === 'home' && <HomeTab view={view} actions={actions} suppressApproved={justAccepted} />}
-            {/* Reachability outranks the review ask: with no phone AND no email on
-                file, the owner literally cannot confirm a date or send the invoice.
-                Submitting goes through the same request pipeline as everything else
-                (portal_request_service) — the owner applies it to the file. */}
-            {activeTab === 'home' && needsContactMethod(data.customer) && (
-              <ContactMethodCard token={token} businessName={biz?.company_name ?? null} onSubmit={request} />
+            {/* Reachability outranks the review ask: a missing phone or email is
+                why a visit can't be confirmed or an invoice sent. Renders nothing
+                at all when the file is complete — and nothing when the payload is
+                absent, because a read we didn't get is not a gap we can claim.
+                It sits BELOW the customer's actual quotes, invoices and visits:
+                a detail we're missing must never outrank what they came for. */}
+            {activeTab === 'home' && contactGap(data.customer) !== 'none' && (
+              <ContactMethodCard
+                gap={contactGap(data.customer) as 'phone' | 'email' | 'both'}
+                businessName={biz?.company_name ?? null}
+                onSave={addContact} />
             )}
             {activeTab === 'home' && biz?.review_url && view.derived.lastCompleted && !data.customer.reviewed_at && !reviewDeclined && (
               <ReviewCard reviewUrl={biz.review_url} businessName={biz.company_name} reviewed={markedReviewed} onReviewed={markReviewed} onDecline={declineReview} />

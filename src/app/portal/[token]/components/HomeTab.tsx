@@ -25,8 +25,8 @@ import { confirm as confirmDialog } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
 import { ledgerRowType } from '@/lib/payments/analytics'
 import {
-  contactSentKey, contactUpdateMessage, daysAwayLabel, liveStatusOf, primaryPortalAction, visitToCalendarEvent, visitDay,
-  type Derived, type PortalJob, type PortalView, type SubmitRequestFn,
+  daysAwayLabel, isUsableEmail, isUsablePhone, liveStatusOf, primaryPortalAction, visitToCalendarEvent, visitDay,
+  type AddContactResult, type ContactGap, type Derived, type PortalJob, type PortalView, type SubmitRequestFn,
 } from '../model'
 import { AddToCalendar, PortalSection, StatusPill, StatusStepper, Thumb, type TabProps } from './shared'
 
@@ -794,58 +794,113 @@ function PrefRow({ label, icon: Icon, on, onChange }: { label: string; icon: typ
   )
 }
 
-// ── Missing contact method (PortalClient mounts it on Home — model.needsContactMethod) ──
-// The one thing the portal ASKS a first-time customer for. With neither a phone
-// nor an email on file the owner cannot confirm a visit date or send the invoice
-// for the work — the relationship dead-ends the moment either side needs the
-// other. Submitting is a REQUEST like every portal action (portal_request_service
-// → the owner's ONE Messages hub): the owner applies it to the file; the portal
-// never writes customer identity itself. sessionStorage (token-scoped) keeps the
-// thank-you up across tab switches; once the owner records a method,
-// needsContactMethod hides the card for good.
-export function ContactMethodCard({ token, businessName, onSubmit }: { token: string; businessName: string | null; onSubmit: (message: string) => Promise<boolean> }) {
+// ── Missing contact detail (PortalClient mounts it on Home — model.contactGap) ──
+// Asks for the detail the file is actually missing, and writes it. The previous
+// version fired only when BOTH were absent and could not write anything: it sent
+// the typed values to the owner as a service request for them to re-type. That
+// left the commonest gap in the book — a phone on file but no email — never
+// asked, and made the owner do the work anyway.
+//
+// It stays a PROMPT, not a gate. Nothing here blocks viewing a quote, approving
+// work, paying an invoice or checking a visit; it sits under those, it can be
+// ignored forever, and it disappears the moment the row says the gap is closed.
+// Closed as one card even when both are missing: two amber warnings competing
+// over one problem is how a helpful ask starts reading like an error.
+const FIELD_HELP: Record<Exclude<ContactGap, 'none'>, { title: string; why: string }> = {
+  // Named after the value to the CUSTOMER, not to the business's database.
+  phone: { title: 'Add your phone number', why: 'so we can reach you about your visit' },
+  email: { title: 'Add your email', why: 'so your quotes, invoices and portal link can be sent to you' },
+  both: { title: 'Complete your contact info', why: 'so we can reach you and send your paperwork' },
+}
+
+export function ContactMethodCard({ gap, businessName, onSave }: {
+  gap: Exclude<ContactGap, 'none'>
+  businessName: string | null
+  onSave: (phone: string, email: string) => Promise<AddContactResult>
+}) {
   const [phone, setPhone] = useState('')
   const [email, setEmail] = useState('')
   const [busy, setBusy] = useState(false)
-  const [sent, setSent] = useState<boolean>(() => {
-    try { return typeof window !== 'undefined' && window.sessionStorage.getItem(contactSentKey(token)) === '1' } catch { return false }
-  })
-  const message = contactUpdateMessage(phone, email)
+  const [error, setError] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
 
-  if (sent) return (
+  const wantPhone = gap === 'phone' || gap === 'both'
+  const wantEmail = gap === 'email' || gap === 'both'
+  const who = businessName || 'your service provider'
+  // "both" is satisfied by EITHER — one way to reach someone is the win; demanding
+  // the second is how a helpful ask becomes a form.
+  const filled = (wantPhone && phone.trim() !== '') || (wantEmail && email.trim() !== '')
+
+  // The reasons the RPC can return, said in the customer's terms. `already_on_file`
+  // and `phone_taken` are the two that are not the customer's fault and not
+  // retryable by typing harder, so both hand off to the business.
+  function explain(r: AddContactResult): string {
+    switch (r.reason) {
+      case 'bad_phone': return 'That doesn’t look like a complete phone number — please include the area code.'
+      case 'bad_email': return 'That doesn’t look like a valid email address — please check it.'
+      case 'phone_taken': return `That number is already on file for someone else with ${who}. Send them a message below and they’ll sort it out.`
+      case 'email_taken': return `That email is already on file for someone else with ${who}. Send them a message below and they’ll sort it out.`
+      case 'already_on_file': return 'Your file was just updated elsewhere — refresh to see what’s on it now.'
+      case 'nothing_to_add': return 'Enter a phone number or an email address first.'
+      case 'invalid_token': return 'This link is no longer valid, so we couldn’t save that.'
+      default: return 'We couldn’t save that just now — your details are still here, please try again.'
+    }
+  }
+
+  if (saved) return (
     <div className="rounded-card border border-emerald-500/30 bg-emerald-500/[0.06] p-4 mt-3">
-      <p className="text-sm font-semibold text-emerald-400 flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4" /> Contact details sent</p>
-      <p className="text-xs text-ink-muted mt-0.5">{businessName || 'We'}&rsquo;ll add them to your file so you get visit confirmations and invoices.</p>
+      <p className="text-sm font-semibold text-emerald-400 flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4" /> Thanks — that’s on your file</p>
+      <p className="text-xs text-ink-muted mt-0.5">{who} can reach you here from now on.</p>
     </div>
   )
+
+  const help = FIELD_HELP[gap]
   return (
-    <div className="rounded-card border border-amber-400/30 bg-amber-400/[0.06] p-4 mt-3">
-      <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><Phone className="w-4 h-4 text-amber-400" /> How can we reach you?</p>
-      <p className="text-xs text-ink-muted mt-0.5 mb-3">
-        {businessName || 'Your service provider'} has no phone number or email on file for you — so there&rsquo;s no way to confirm a visit date or send your invoice. Add at least one:
+    // Neutral, not amber. This is a helpful ask about a detail we don't have, and
+    // an alert colour would rank it against the customer's actual quote or invoice.
+    <div className="rounded-card border border-border bg-bg-secondary p-4 mt-3">
+      <p className="text-sm font-semibold text-ink flex items-center gap-1.5">
+        {gap === 'email' ? <Mail className="w-4 h-4 text-accent-text" /> : <Phone className="w-4 h-4 text-accent-text" />}
+        {help.title}
       </p>
+      <p className="text-xs text-ink-muted mt-0.5 mb-3">Keep your details up to date {help.why}.</p>
       <form className="space-y-2" onSubmit={async e => {
         e.preventDefault()
-        if (!message || busy) return
-        setBusy(true)
-        const ok = await onSubmit(message)   // failure → PortalClient's actionError explains; the form stays for retry
+        if (!filled || busy) return
+        // Local mirror of the RPC's own rules — an obvious typo shouldn't cost a
+        // round-trip. The server re-checks and remains the authority.
+        if (wantPhone && phone.trim() && !isUsablePhone(phone)) { setError(explain({ ok: false, reason: 'bad_phone' })); return }
+        if (wantEmail && email.trim() && !isUsableEmail(email)) { setError(explain({ ok: false, reason: 'bad_email' })); return }
+        setBusy(true); setError(null)
+        const res = await onSave(phone.trim(), email.trim())
         setBusy(false)
-        if (ok) {
-          setSent(true)
-          try { window.sessionStorage.setItem(contactSentKey(token), '1') } catch { /* storage-blocked → thank-you lasts this render only */ }
-        }
+        // Success is what the ROW says, never that the call returned: the RPC reads
+        // the customer back after its write and reports that. A failure keeps the
+        // form, keeps every character typed, and says what happened.
+        if (res.ok && (res.added?.length ?? 0) > 0) setSaved(true)
+        else setError(explain(res))
       }}>
-        <input type="tel" inputMode="tel" autoComplete="tel" value={phone} onChange={e => setPhone(e.target.value)}
-          placeholder="Phone — (403) 555-0100" aria-label="Phone number"
-          className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
-        <input type="email" inputMode="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)}
-          placeholder="Email — jane@example.com" aria-label="Email address"
-          className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
-        <Button type="submit" className="w-full" loading={busy} disabled={!message}>
-          Send to {businessName || 'us'}
-        </Button>
+        {wantPhone && (
+          <input type="tel" inputMode="tel" autoComplete="tel" value={phone} onChange={e => { setPhone(e.target.value); setError(null) }}
+            placeholder="(403) 555-0100" aria-label="Phone number"
+            // text-base below the sm breakpoint: iOS zooms the whole page in on any
+            // focused input under 16px, and it does not zoom back out.
+            className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
+        )}
+        {wantEmail && (
+          <input type="email" inputMode="email" autoComplete="email" value={email} onChange={e => { setEmail(e.target.value); setError(null) }}
+            placeholder="jane@example.com" aria-label="Email address"
+            className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
+        )}
+        {error && <p className="text-xs text-red-400" role="alert">{error}</p>}
+        <Button type="submit" className="w-full" loading={busy} disabled={!filled}>Save</Button>
       </form>
-      <p className="text-[10px] text-ink-faint mt-2">Goes straight to {businessName || 'the business'} — they&rsquo;ll add it to your file. Nothing else is shared.</p>
+      {/* Says exactly what the write does. Adding a number is not agreeing to be
+          texted — portal_add_contact touches neither opt-in column — and the
+          Message preferences card below this one is where that actually changes. */}
+      <p className="text-[10px] text-ink-faint mt-2">
+        Only {who} sees this. It doesn’t change your message preferences.
+      </p>
     </div>
   )
 }

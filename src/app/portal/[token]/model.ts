@@ -250,14 +250,55 @@ export function draftStorageKey(token: string, surface: DraftSurface): string {
   return `eqp:draft:${surface}:${token}`
 }
 
-// ── Missing contact method (the "unreachable customer" problem, portal side) ──
-// True ONLY when the file holds neither a phone nor an email with real content —
-// whitespace is not a way to reach someone. One method on file is enough: the
-// card asks for "at least one" and never nags for the second. A missing customer
-// payload is false — the portal can't claim a gap it can't see.
-export function needsContactMethod(customer: { phone: string | null; email: string | null } | null | undefined): boolean {
-  if (!customer) return false
-  return !(customer.phone ?? '').trim() && !(customer.email ?? '').trim()
+// ── Which contact detail is missing? ─────────────────────────────────────────
+// THE one answer, so the prompt, the form and the guard can't disagree about
+// what's absent. Whitespace is not a way to reach someone.
+//
+// ⚠️ A missing customer payload is 'none' — NOT 'both'. A read that failed tells
+// us nothing about the file, and the honest reading of "we don't know" is to ask
+// for nothing, never to assert a gap. (The inverse mistake — treating a failed
+// read as "profile complete" — is harmless here for the same reason: the prompt
+// is the only thing gated on this, and it reappears on the next good load.)
+//
+// This replaced needsContactMethod(), which answered only the both-missing case.
+// That left the 47 customers with a phone but no email, and the 2 with an email
+// but no phone, never asked — the commonest gap in the book was the one nobody
+// was prompted about.
+export type ContactGap = 'none' | 'phone' | 'email' | 'both'
+
+export function contactGap(customer: { phone: string | null; email: string | null } | null | undefined): ContactGap {
+  if (!customer) return 'none'
+  const noPhone = !(customer.phone ?? '').trim()
+  const noEmail = !(customer.email ?? '').trim()
+  if (noPhone && noEmail) return 'both'
+  if (noPhone) return 'phone'
+  if (noEmail) return 'email'
+  return 'none'
+}
+
+// ── What counts as a usable contact detail ───────────────────────────────────
+// ⚠️ These MIRROR portal_add_contact's validation so the customer gets an answer
+// without a round-trip. The RPC is the authority — it re-checks everything, and a
+// disagreement can only ever make this side stricter-looking, never let a bad
+// value through. verify:portal-contact pins the two thresholds against the
+// migration file so the mirror can't drift silently.
+//
+// Ten digits, not the seven that phoneMatches() will link on: seven is a local
+// number missing its area code, and a stored number that can't be dialled fails
+// at exactly the moment it's needed.
+export const PHONE_MIN_DIGITS = 10
+export const PHONE_MAX_DIGITS = 15
+
+export function isUsablePhone(raw: string): boolean {
+  const d = (raw || '').replace(/\D/g, '')
+  return d.length >= PHONE_MIN_DIGITS && d.length <= PHONE_MAX_DIGITS
+}
+
+// Same shape as the SQL check: something, @, something, dot, a real TLD. Kept
+// deliberately loose — an address the customer insists is theirs is not ours to
+// argue with, and the only failure this needs to catch is an obvious typo.
+export function isUsableEmail(raw: string): boolean {
+  return /^[^\s@]+@[^\s@.]+\.[^\s@]{2,}$/.test((raw || '').trim())
 }
 
 // Did real money land in the ledger just now? THE post-checkout confirmation test.
@@ -299,26 +340,29 @@ export function recentPaymentLanded(
   return false
 }
 
-// The request text for "add my contact details". Pure so verify pins that it
-// ALWAYS carries the typed value(s) — a message saying "update my contact info"
-// WITHOUT the info would make the owner ask for it, which is the exact
-// round-trip this card exists to remove. Null when nothing real was typed: an
-// empty request must be unsendable.
-export function contactUpdateMessage(phone: string, email: string): string | null {
-  const p = phone.trim()
-  const e = email.trim()
-  if (!p && !e) return null
-  const parts = [p ? `Phone: ${p}` : null, e ? `Email: ${e}` : null].filter(Boolean)
-  return `Please add my contact details to your file — ${parts.join(' · ')}`
-}
+// ── What portal_add_contact answered ─────────────────────────────────────────
+// The RPC returns the row state read back AFTER its write, which is the only
+// thing that entitles the portal to say "saved". `reason` is a machine code, not
+// a sentence — the wording lives with the card so copy can change without
+// touching a contract, and so the same code can read differently in two places.
+//
+// `contactUpdateMessage` / `contactSentKey` were deleted with the old card. That
+// card couldn't write anything, so it sent the typed values to the owner as a
+// REQUEST and used a sessionStorage flag to remember it had — a client-side
+// guess at a server-side fact. The file now changes for real, so "is it done?"
+// is answered by the customer row on the next load and nothing needs to remember.
+export type AddContactReason =
+  | 'invalid_token' | 'nothing_to_add' | 'already_on_file'
+  | 'bad_phone' | 'bad_email' | 'phone_taken' | 'email_taken'
+  | 'network'
 
-// Session flag "this visit already sent contact details" — token-scoped like
-// draftStorageKey (two customers on one shared device never see each other's
-// thank-you) and namespaced apart from drafts so neither key can clobber the
-// other. Session-scoped on purpose: the card should stay down while the owner
-// applies the change, but a NEW visit may ask again if the file is still empty.
-export function contactSentKey(token: string): string {
-  return `eqp:contact-sent:${token}`
+export interface AddContactResult {
+  ok: boolean
+  reason?: AddContactReason | null
+  added?: string[]
+  skipped?: string[]
+  has_phone?: boolean
+  has_email?: boolean
 }
 
 // A contextual "ask about this" seed for the message composer. It MUST carry
