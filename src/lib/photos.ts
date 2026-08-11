@@ -85,17 +85,33 @@ export async function listPhotos(
   userId: string,
   scope: { jobId?: string | null; propertyId?: string | null; customerId?: string | null; limit?: number },
 ): Promise<JobPhotoView[]> {
+  return (await listPhotosResult(supabase, userId, scope)).photos
+}
+
+/**
+ * The same read, with the failure still attached.
+ *
+ * `listPhotos` collapses a dropped connection into `[]`, which is right for a
+ * gallery (it renders "no photos" and the owner tries again) but wrong for the
+ * timeline, where an empty list is read as a statement about the customer's
+ * history. Additive on purpose: every existing caller keeps the old signature.
+ */
+export async function listPhotosResult(
+  supabase: SupabaseClient,
+  userId: string,
+  scope: { jobId?: string | null; propertyId?: string | null; customerId?: string | null; limit?: number },
+): Promise<{ photos: JobPhotoView[]; error: boolean }> {
   let q = supabase.from('job_photos').select('*').eq('user_id', userId)
   if (scope.jobId) q = q.eq('job_id', scope.jobId)
   else if (scope.propertyId) q = q.eq('property_id', scope.propertyId)
   // Customer scope spans every property they own — the whole visual history, which
   // is what a customer timeline needs. Narrowest scope still wins above.
   else if (scope.customerId) q = q.eq('customer_id', scope.customerId)
-  else return []
+  else return { photos: [], error: false }
   q = q.order('taken_at', { ascending: false })
   if (scope.limit) q = q.limit(scope.limit)
-  const { data } = await q
-  return withUrl(supabase, (data as JobPhoto[]) || [])
+  const { data, error } = await q
+  return { photos: await withUrl(supabase, (data as JobPhoto[]) || []), error: !!error }
 }
 
 // ONE batched read for many properties at once — so a list page (Properties)

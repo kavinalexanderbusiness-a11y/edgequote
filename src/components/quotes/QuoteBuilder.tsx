@@ -22,8 +22,11 @@ import { Collapsible } from '@/components/ui/Collapsible'
 import { Modal } from '@/components/ui/Modal'
 import { AssistButton, AiStop, AiUndo, AiError, AiNote, AI_CHECK_FIRST } from '@/components/ai/ui'
 import { useAiAssist } from '@/hooks/useAiAssist'
-import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
+import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings, ServiceBundleWithItems, ACQUISITION_SOURCES } from '@/types'
 import { sumServiceLines, serviceLineTotals, emptyServiceLine } from '@/lib/quoteServices'
+import { BundlePicker } from '@/components/quotes/BundlePicker'
+import { bundleScope, templateIndex } from '@/lib/serviceBundles'
+import { confirm } from '@/lib/confirm'
 import { MATERIAL_SUGGESTIONS, emptyMaterialLine } from '@/lib/quoteMaterials'
 import { QuoteOptionsEditor } from '@/components/quotes/QuoteOptionsEditor'
 import {
@@ -125,6 +128,7 @@ export function QuoteBuilder({
         customer_name: '',
         customer_phone: '',
         customer_email: '',
+        acquisition_source: '',
         address: '',
         service_type: '',
         service_template_id: '',
@@ -512,6 +516,58 @@ export function QuoteBuilder({
     setPriceOrigin('applied')
     setAppliedFor(currentServiceKey())
   }
+  // ── Starting from a bundle ─────────────────────────────────────────────────
+  // A bundle SEEDS this form and is then finished with. It writes the same
+  // fields a person typing would, so a quote built from one is indistinguishable
+  // downstream from one typed by hand — and nothing records which bundle it
+  // was, which is exactly why editing or deleting that bundle later cannot
+  // reach this quote. See lib/serviceBundles (COPY SEMANTICS).
+  //
+  // It REPLACES the scope rather than merging into it. Merging would need an
+  // answer to "is this bundle's mowing line the same as the mowing line you
+  // already have?", and every answer to that is a guess. Replacing is one
+  // sentence the owner can predict, and it asks first whenever there is
+  // anything to lose.
+  async function applyBundle(bundle: ServiceBundleWithItems) {
+    const scope = bundleScope(bundle.items, templateIndex(templates))
+    if (!scope.primary) {
+      toast.error(`“${bundle.name}” has no lines to apply.`)
+      return
+    }
+    const hasScope = !!String(getValues('service_type') || '').trim()
+      || (getValues('services') || []).length > 0
+    if (hasScope) {
+      const ok = await confirm({
+        title: `Apply “${bundle.name}”?`,
+        message: 'This replaces the service lines on this quote. The customer, address, measurements and travel stay as they are.',
+        confirmLabel: 'Apply bundle',
+        icon: Layers,
+      })
+      if (!ok) return
+    }
+    // Order matters: the id first, because the template effect below derives
+    // the name, the hourly rate and the canned description from it — the same
+    // road ServicePicker's onPick takes. A primary line that IS a catalogue
+    // service therefore ends up named by the CATALOGUE, which is the honest
+    // answer when the two disagree.
+    setValue('service_template_id', scope.primary.service_template_id)
+    setValue('service_type', scope.primary.service_type)
+    serviceLines.replace(scope.extras)
+    // The price is the owner's own saved figure, so the suggestion engine must
+    // stop writing to the field — 'manual' + clearing the cadence is exactly
+    // what typing in the price box does, and it is the same claim: this number
+    // is mine, not one anybody recommended.
+    setValue('initial_price', scope.primary.price)
+    setPriceOrigin('manual')
+    setPickedCadence(null)
+    setAppliedFor(null)
+    // Only when the bundle actually recorded an estimate. Unknown hours is not
+    // zero hours — this form is explicit that an empty hours field is correct
+    // rather than a gap, and writing 0 would fabricate a labour figure.
+    if (scope.primary.hours != null) setValue('hours', scope.primary.hours)
+    toast.success(`Applied “${bundle.name}” — everything is editable.`)
+  }
+
   // The service changed under an accepted price. The number STAYS (it may still be
   // what the owner wants, and silently zeroing their price would be the worse bug)
   // but it stops claiming to be an engine recommendation anyone agreed to. Still
@@ -658,7 +714,11 @@ export function QuoteBuilder({
       serviceIdx.length ? `${serviceIdx.length} service${serviceIdx.length !== 1 ? 's' : ''}` : null,
       materialIdx.length ? `${materialIdx.length} material${materialIdx.length !== 1 ? 's' : ''}` : null,
     ].filter(Boolean).join(' · ') + ` · ${formatCurrency(serviceExtrasNet + materialsSum.net)}`
-    : 'Add cleanup, hedges, mulch…'
+    // Trade-neutral: this drawer is on every trade’s quote, and naming lawn
+    // extras told a painter or an electrician what a landscaper would add.
+    // The drawer’s own title already says "Services & materials"; this line
+    // only has to read as optional.
+    : 'Optional — extra services, or materials you’ll bill for'
   // Every part states where it stands, so a shut door reads as answered rather
   // than as two more questions. "Best days to schedule" is deliberately NOT in
   // here: it is a lookup, not a setting — nothing about it is stored on the
@@ -1237,6 +1297,13 @@ export function QuoteBuilder({
                     <Input label="Email" type="email" placeholder="jane@example.com"
                       {...register('customer_email')} />
                   </div>
+                  {/* The quote builder is the app's biggest maker of source-less
+                      customers (every quote for a new person minted one) — this
+                      one optional pick is where that stops. '' = "Not sure" is a
+                      real answer and the default: never required, never guessed. */}
+                  <Select label="How did they find you?" placeholder="Not sure"
+                    options={ACQUISITION_SOURCES.map(s => ({ value: s, label: s }))}
+                    {...register('acquisition_source')} />
 
                   {/* Likely-match prompt — use the existing customer instead of duplicating */}
                   {likelyMatch && (
@@ -1296,6 +1363,23 @@ export function QuoteBuilder({
                   dropped at submit, and that id is what tells the pricing seam
                   which engine may recommend. */}
               <input type="hidden" {...register('service_template_id')} />
+              {/* One tap above the service field, because "this is the Spring
+                  Cleanup I do every March" is a thought an owner has BEFORE
+                  naming a service, not after. Hidden while editing a saved
+                  quote: replacing the scope of a quote that may already be sent
+                  is a different and much sharper action than seeding a blank
+                  one, and it is not what V1 is for. */}
+              {!isEdit && (
+                <div className="flex justify-end -mt-1">
+                  <BundlePicker
+                    templates={templates}
+                    blockedReason={optionsOn
+                      ? 'This quote offers alternatives to choose between, so it holds no service lines. Turn the alternatives off to build a scope from a bundle.'
+                      : null}
+                    onApply={applyBundle}
+                  />
+                </div>
+              )}
               {activeTemplates.length > 0 ? (
                 <ServicePicker
                   label="Service *"

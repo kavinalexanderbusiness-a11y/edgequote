@@ -124,17 +124,43 @@ check('no owner-CRM <table> lacks a horizontal scroll container', unwrapped.leng
 // level "just this one", or the disclosure is removed and the cards are dropped
 // with it. This pins both — the components must still be mounted, AND still be
 // inside the disclosure.
-console.log('\n── the customer profile leads with work, not history ──')
+console.log('\n── the customer profile leads with work, then history, then reference ──')
 const profile = readFileSync('src/app/dashboard/customers/[id]/page.tsx', 'utf8')
-const REFERENCE = ['CustomerComms', 'ReviewLifecycle', 'PaymentMethodCard', 'TimelineCard', 'ReferralPanel']
+// ⭐ TimelineCard was moved OUT of this list by owner decision (2026-08-11,
+// Customer Timeline V1). The declutter above is about REFERENCE material —
+// consent toggles, card-on-file, referrals — and the relationship history is not
+// reference: "what actually happened with this customer" is why the profile gets
+// opened at all, and a history that needs a tap on "More about this customer"
+// (whose summary line is `hidden sm:inline`, so on a PHONE it never even names
+// History) is a history the owner does not have. It is pinned below instead, with
+// the position that made the declutter work — still under today's work.
+const REFERENCE = ['CustomerComms', 'ReviewLifecycle', 'PaymentMethodCard', 'ReferralPanel']
 check('the "More about this customer" disclosure still exists', /<MoreAboutCustomer>/.test(profile) && /function MoreAboutCustomer/.test(profile))
-check('… and is closed by default (history must not lead)', /function MoreAboutCustomer[\s\S]{0,400}useState\(false\)/.test(profile))
+check('… and is closed by default (reference must not lead)', /function MoreAboutCustomer[\s\S]{0,400}useState\(false\)/.test(profile))
 const inner = profile.match(/<MoreAboutCustomer>([\s\S]*?)<\/MoreAboutCustomer>/)?.[1] ?? ''
 for (const comp of REFERENCE) {
   const mounted = new RegExp(`<${comp}[\\s/>]`).test(profile)
   check(`${comp} is still mounted, and behind the disclosure`, mounted && new RegExp(`<${comp}[\\s/>]`).test(inner),
     mounted ? 'moved back out to the top level' : 'component was REMOVED — capability lost, not simplified')
 }
+// The history's own contract: VISIBLE without a tap, but never above the work.
+check('the relationship history is visible without opening anything',
+  /<TimelineCard[\s/>]/.test(profile) && !/<TimelineCard[\s/>]/.test(inner),
+  'TimelineCard is back inside the disclosure — the history needs a tap again')
+check('… and still sits BELOW today\'s work, not above it',
+  profile.indexOf('Open Items') < profile.indexOf('<TimelineCard') &&
+  profile.indexOf('Upcoming Work') < profile.indexOf('<TimelineCard') &&
+  profile.indexOf('Properties</h2>') < profile.indexOf('<TimelineCard'),
+  'history now outranks the work the owner opened the page for')
+// …and ABOVE the detail it summarises. Measured at 375px: after the 440px thread
+// the card started 4,145px down the page; here, ~640px sooner.
+check('… and ABOVE the conversation thread it summarises (summary before detail)',
+  profile.indexOf('<TimelineCard') < profile.indexOf('<ConversationThread') &&
+  profile.indexOf('<TimelineCard') < profile.indexOf('<CustomerAiSummary'),
+  'the history sank below the 440px thread again')
+check('… and it stays capped, so it costs about a screen and not the page',
+  /TIMELINE_CAP = \d/.test(readFileSync('src/components/timeline/TimelineCard.tsx', 'utf8')),
+  'the 8-event cap is gone — the profile grows without bound again')
 // The things an owner opens the page FOR must stay above the fold-ish, i.e. NOT
 // swept into the same disclosure in a later "tidy up".
 for (const keep of ['Open Items', 'Upcoming Work', 'Properties']) {

@@ -1,4 +1,4 @@
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate, parseLocalDate } from '@/lib/utils'
 
 // ── THE customer/property timeline engine ────────────────────────────────────
 // One chronological history, built from the tables that ALREADY hold the events.
@@ -26,6 +26,7 @@ export type TimelineKind =
   | 'job_scheduled' | 'job_completed' | 'invoice_created' | 'invoice_viewed' | 'invoice_paid'
   | 'message_in' | 'message_out' | 'note' | 'payment' | 'credit' | 'refund' | 'expense'
   | 'photo' | 'measurement' | 'price_change' | 'consent' | 'automation' | 'portal_request'
+  | 'deposit_requested'
 
 // Coarse buckets for filtering. Every kind belongs to exactly one group.
 export type TimelineGroup = 'sales' | 'work' | 'money' | 'comms' | 'record'
@@ -36,6 +37,7 @@ export const KIND_GROUP: Record<TimelineKind, TimelineGroup> = {
   job_scheduled: 'work', job_completed: 'work', photo: 'work', measurement: 'work',
   invoice_created: 'money', invoice_viewed: 'money', invoice_paid: 'money',
   payment: 'money', credit: 'money', refund: 'money', expense: 'money', price_change: 'money',
+  deposit_requested: 'money',
   message_in: 'comms', message_out: 'comms', automation: 'comms', portal_request: 'comms',
   note: 'record', consent: 'record',
 }
@@ -82,9 +84,14 @@ export interface TlQuote { id: string; quote_number: string; service_type?: stri
 /** `recurrence_id` is what lets one booking of a series read as one event rather
  *  than 25 — see the jobs section of buildTimeline. */
 export interface TlJob { id: string; title?: string | null; scheduled_date: string; status: string; created_at: string; updated_at: string; completed_at?: string | null; actual_minutes?: number | null; property_id?: string | null; recurrence_id?: string | null }
-export interface TlInvoice { id: string; invoice_number: string; amount?: number | null; status: string; created_at: string; updated_at: string; paid_at?: string | null; viewed_at?: string | null; property_id?: string | null }
+/** `deposit_amount` is stored GST-INCLUSIVE (it is the figure the customer was
+ *  told), unlike `amount` which is net — so it is the ONE money field here that
+ *  must never be run through `gross()`. See lib/payments/deposit.ts. */
+export interface TlInvoice { id: string; invoice_number: string; amount?: number | null; status: string; created_at: string; updated_at: string; paid_at?: string | null; viewed_at?: string | null; property_id?: string | null; deposit_amount?: number | string | null; deposit_requested_at?: string | null }
 export interface TlMessage { direction: string; channel: string; body: string | null; created_at: string }
-export interface TlPayment { amount: number; status: string; kind: string; method: string | null; notes: string | null; created_at: string }
+/** `invoice_id` is what lets one payment be recognised as the settlement of a
+ *  bill (dedup) or as the deposit that was asked for (labelling) — both below. */
+export interface TlPayment { amount: number; status: string; kind: string; method: string | null; notes: string | null; created_at: string; invoice_id?: string | null }
 export interface TlServiceRequest { message: string; created_at: string }
 /** `url` is resolved by the caller from storage_path (lib/photos owns that mapping). */
 export interface TlPhoto { id: string; url: string; kind?: string | null; caption?: string | null; taken_at?: string | null; created_at?: string | null; property_id?: string | null; job_id?: string | null }
@@ -179,14 +186,70 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
     })
   }
 
+  // ── Money: ONE REAL-WORLD ACTION IS ONE ROW ────────────────────────────────
+  // THE DEDUPLICATION CONTRACT, stated once:
+  //
+  //   Two rows are merged when ONE write mechanically produced both. They are
+  //   kept apart when each was a separate act, even if they happened a second
+  //   apart.
+  //
+  // The case that matters is money arriving. A payment lands and the DB trigger
+  // `recompute_invoice_paid` flips the invoice to 'paid' and stamps `paid_at` —
+  // nobody performed a second action, so "Payment received · $362.50" followed by
+  // "Invoice INV-0042 paid · $362.50" was one event, told twice, with the amount
+  // repeated as though twice the money had come in. Measured against live data:
+  // 56 of 59 paid invoices had a payment within 60s of `paid_at`.
+  //
+  // So: the LEDGER owns money arriving, and it absorbs the settlement — the
+  // surviving row is the payment, which is the one that knows the amount and the
+  // method, and it gains the invoice's number and link. `invoice_paid` still
+  // stands alone when nothing paid it in that window (an invoice marked paid by
+  // hand, a legacy row) — that is a real, separate owner action.
+  //
+  // What is NOT merged, deliberately: the receipt SMS/email that may follow. That
+  // is a separate act — the business chose to tell the customer — and it belongs
+  // to Messages, not Money. Suppressing a real comms record by pattern-matching a
+  // message body is exactly the guesswork that makes a history untrustworthy.
+  // Same for a quote being accepted and its invoice being auto-drafted: a
+  // decision and a bill are two things, and TIE_RANK orders them.
+  const SETTLE_WINDOW_MS = 120_000
+  const paidInvoiceIds = new Set<string>()
+  for (const inv of s.invoices || []) {
+    if (inv.status !== 'paid') continue
+    const paidAt = at(inv.paid_at || inv.updated_at)
+    const settled = (s.payments || []).some(p =>
+      p.invoice_id === inv.id && p.status === 'paid' && p.kind !== 'credit' && Number(p.amount) > 0 &&
+      Math.abs(at(p.created_at) - paidAt) <= SETTLE_WINDOW_MS)
+    if (settled) paidInvoiceIds.add(inv.id)
+  }
+
+  const invoiceById = new Map<string, TlInvoice>()
+  for (const inv of s.invoices || []) invoiceById.set(inv.id, inv)
+
   for (const inv of s.invoices || []) {
     const href = `/dashboard/invoices?invoice=${encodeURIComponent(inv.invoice_number)}`
     const pid = inv.property_id
     out.push({ at: inv.created_at, kind: 'invoice_created', title: `Invoice ${inv.invoice_number} created`, sub: money(gross(inv.amount)), href, propertyId: pid })
     // The customer opening their invoice is already recorded; it was never surfaced.
     if (inv.viewed_at) out.push({ at: inv.viewed_at, kind: 'invoice_viewed', title: `${inv.invoice_number} opened by the customer`, href, propertyId: pid })
+    // ASKED FOR is not RECEIVED. `deposit_requested_at` is stamped only after a
+    // confirmed send (lib/payments/deposit.ts), so this row means the customer was
+    // genuinely told — never that money moved. The money half is a payment row
+    // below, labelled "Deposit received". Both were previously invisible, which
+    // left "we asked for half up front" nowhere in the history at all.
+    // deposit_amount is already GST-inclusive: NOT passed through gross().
+    const depositAsk = Number(inv.deposit_amount) || 0
+    if (inv.deposit_requested_at && depositAsk > 0) {
+      out.push({
+        at: inv.deposit_requested_at, kind: 'deposit_requested',
+        title: `Deposit requested · ${money(depositAsk)}`,
+        sub: `on ${inv.invoice_number}`, href, propertyId: pid,
+      })
+    }
     // paid_at for the same reason as completed_at above.
-    if (inv.status === 'paid') out.push({ at: inv.paid_at || inv.updated_at, kind: 'invoice_paid', title: `Invoice ${inv.invoice_number} paid`, sub: money(gross(inv.amount)), href, propertyId: pid })
+    if (inv.status === 'paid' && !paidInvoiceIds.has(inv.id)) {
+      out.push({ at: inv.paid_at || inv.updated_at, kind: 'invoice_paid', title: `Invoice ${inv.invoice_number} paid`, sub: money(gross(inv.amount)), href, propertyId: pid })
+    }
   }
 
   // With a customerId, a comms event opens THE conversation, not the bare inbox.
@@ -206,6 +269,38 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
   // The ledger holds payments AND credit movements (kind='credit') AND reversals
   // (negative amounts). They all wore one "payment" icon; they're distinct money
   // events and now read as such.
+  // Which payments fall inside a deposit that was actually ASKED FOR. Walking the
+  // ledger in time order per invoice is what separates the two things the owner
+  // needs to tell apart: money that answered the up-front ask, and money that came
+  // later against the rest of the bill. A payment counts as the deposit only while
+  // the ask is still uncovered by everything received before it — so a $2,000 ask
+  // paid $2,000 then $2,000 gives ONE "Deposit received" and one plain payment,
+  // never two deposits. Nothing here re-derives an amount: every figure is the
+  // stored row, and coverage is compared against `invoices.deposit_amount` exactly
+  // as lib/payments/deposit.ts compares it.
+  const depositPayments = new Set<TlPayment>()
+  const byInvoice = new Map<string, TlPayment[]>()
+  for (const p of s.payments || []) {
+    if (p.status !== 'paid' || p.kind === 'credit' || !p.invoice_id) continue
+    const list = byInvoice.get(p.invoice_id)
+    if (list) list.push(p); else byInvoice.set(p.invoice_id, [p])
+  }
+  for (const [invId, rows] of byInvoice) {
+    const inv = invoiceById.get(invId)
+    const ask = Number(inv?.deposit_amount) || 0
+    if (!inv || !inv.deposit_requested_at || ask <= 0) continue
+    const askedAt = at(inv.deposit_requested_at)
+    let covered = 0
+    for (const p of rows.slice().sort((a, b) => at(a.created_at) - at(b.created_at))) {
+      const amt = Number(p.amount) || 0
+      // Money that arrived BEFORE the ask cannot be an answer to it, but it does
+      // count toward covering it — same as the engine, which reads whatever has
+      // been received.
+      if (amt > 0 && covered < ask - 0.005 && at(p.created_at) >= askedAt) depositPayments.add(p)
+      covered = Math.round((covered + amt) * 100) / 100
+    }
+  }
+
   for (const p of s.payments || []) {
     if (p.status !== 'paid') continue
     const amt = Number(p.amount) || 0
@@ -214,7 +309,22 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
     } else if (amt < 0) {
       out.push({ at: p.created_at, kind: 'refund', title: `Refund · ${money(Math.abs(amt))}`, sub: p.notes || undefined })
     } else {
-      out.push({ at: p.created_at, kind: 'payment', title: 'Payment received', sub: `${money(amt)}${p.method && p.method !== 'stripe' ? ` · ${p.method}` : ''}` })
+      // The absorbed settlement (see the contract above): when this payment is what
+      // flipped its invoice to paid, it says so and links there, instead of a second
+      // row repeating the same money.
+      const inv = p.invoice_id ? invoiceById.get(p.invoice_id) : undefined
+      const settles = !!inv && paidInvoiceIds.has(inv.id) &&
+        Math.abs(at(p.created_at) - at(inv.paid_at || inv.updated_at)) <= SETTLE_WINDOW_MS
+      const isDeposit = depositPayments.has(p)
+      out.push({
+        at: p.created_at, kind: 'payment',
+        title: isDeposit ? 'Deposit received' : 'Payment received',
+        sub: join(money(amt), p.method && p.method !== 'stripe' ? p.method : null,
+          inv && settles ? `${inv.invoice_number} paid in full` : inv ? `on ${inv.invoice_number}` : null),
+        // No propertyId on purpose: a payment settles a BILL, it does not happen at
+        // an address, and the property timeline deliberately never loads payments.
+        href: inv ? `/dashboard/invoices?invoice=${encodeURIComponent(inv.invoice_number)}` : undefined,
+      })
     }
   }
 
@@ -282,15 +392,43 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
   return sortTimeline(out)
 }
 
+// ── Time: ONE parse, and it is the LOCAL one ─────────────────────────────────
+// Sorting and month-bucketing must agree with the date each row actually prints,
+// and rows print through `formatDate` → `parseLocalDate`. A bare `new Date(str)`
+// does NOT: on a date-only value ("2026-08-01") the spec says UTC midnight, so in
+// any negative-offset zone (the owner's America/Toronto is UTC−4/−5) it becomes
+// July 31st. `expenses.spent_at` and `jobs.scheduled_date` are real DATE columns,
+// so this was not hypothetical — an expense stamped the 1st sorted into July and
+// printed "Aug 1" under a "July" heading. Same parse everywhere kills that class.
+const at = (s: string) => parseLocalDate(s).getTime()
+
+// Deterministic tie-break. Timestamps collide constantly here — a quote accepted
+// auto-drafts its invoice in the same write, and a booked series shares a
+// created_at to the microsecond — and `Array.sort` gives ties no defined order
+// beyond stability, so the same history could render in a different order after a
+// filter or a refetch re-pushed the rows. Ranking by CAUSAL position resolves them
+// the way the business reads: the effect sits above its cause in a newest-first
+// list. Anything unranked falls to 0 and then sorts by title, so the order is
+// always a pure function of the events — never of the fetch order.
+const TIE_RANK: Partial<Record<TimelineKind, number>> = {
+  lead: 1, quote_created: 2, quote_sent: 3, followup: 4,
+  quote_declined: 5, quote_accepted: 5,
+  job_scheduled: 6, job_completed: 7,
+  invoice_created: 8, invoice_viewed: 9, deposit_requested: 10,
+  payment: 11, invoice_paid: 12,
+}
+
 // Newest first. Rows with an unparseable date sink to the bottom rather than
 // landing at 1970 and pretending to be the oldest thing that ever happened.
 export function sortTimeline(events: TimelineEvent[]): TimelineEvent[] {
   return events.slice().sort((a, b) => {
-    const ta = new Date(a.at).getTime(), tb = new Date(b.at).getTime()
-    if (Number.isNaN(ta) && Number.isNaN(tb)) return 0
+    const ta = at(a.at), tb = at(b.at)
+    if (Number.isNaN(ta) && Number.isNaN(tb)) return a.title.localeCompare(b.title)
     if (Number.isNaN(ta)) return 1
     if (Number.isNaN(tb)) return -1
-    return tb - ta
+    if (tb !== ta) return tb - ta
+    const ra = TIE_RANK[a.kind] ?? 0, rb = TIE_RANK[b.kind] ?? 0
+    return rb - ra || a.title.localeCompare(b.title)
   })
 }
 
@@ -324,10 +462,13 @@ export function timelineGroupCounts(events: TimelineEvent[]): Record<TimelineGro
 }
 
 // Calendar-month buckets, preserving the incoming order (already newest-first).
+// parseLocalDate, not `new Date` — see the note on `at` above. A date-only value
+// bucketed as UTC put a row under the PREVIOUS month's heading while its own line
+// printed the right date.
 export function groupTimelineByMonth(events: TimelineEvent[]): { label: string; events: TimelineEvent[] }[] {
   const out: { label: string; events: TimelineEvent[] }[] = []
   for (const e of events) {
-    const d = new Date(e.at)
+    const d = parseLocalDate(e.at)
     const label = Number.isNaN(d.getTime()) ? 'Earlier' : d.toLocaleDateString('en-CA', { month: 'long', year: 'numeric' })
     const last = out[out.length - 1]
     if (last && last.label === label) last.events.push(e)

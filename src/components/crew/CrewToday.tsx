@@ -12,8 +12,11 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import { StickyActionBar } from '@/components/ui/StickyActionBar'
 import {
   CheckCircle2, Play, Navigation, Phone, StickyNote, Users, Check, Clock, AlertTriangle, Megaphone,
+  NotebookPen, Eye, Lock,
 } from 'lucide-react'
 import { CrewStopPhotos } from '@/components/crew/CrewStopPhotos'
+import { CompletionSheet } from '@/components/completion/CompletionSheet'
+import { crewSaveCompletionRecord } from '@/lib/crewJob'
 
 // ── Today ────────────────────────────────────────────────────────────────────
 // The six questions a worker has, answered in the order they ask them:
@@ -51,6 +54,13 @@ export function CrewToday() {
   // of quietly posing as current. Cleared by the next successful load.
   const [staleAsOf, setStaleAsOf] = useState<number | null>(null)
   const [acting, setActing] = useState<string | null>(null)
+  // The proof-of-work editor. Held by STOP ID rather than by a copy of the stop,
+  // so the sheet always reads the freshest row `load()` put on screen — a note
+  // the office edited mid-shift must not be overwritten by a snapshot taken when
+  // the button was tapped. ⛔ It never opens itself: finishing a visit stays ONE
+  // tap, and this is the affordance for the times there is something to say.
+  const [recordingId, setRecordingId] = useState<string | null>(null)
+  const [photosOutstanding, setPhotosOutstanding] = useState<Record<string, number>>({})
   const today = localTodayISO()
   const alive = useRef(true)
   const dayRef = useRef<CrewDay | null>(null)
@@ -103,6 +113,13 @@ export function CrewToday() {
       clearInterval(t)
     }
   }, [load])
+
+  // Returns the SAME map when the count hasn't moved, so React bails out of the
+  // re-render. Without that the child's report-up effect and this setter would
+  // chase each other forever (new object → re-render → new callback → effect).
+  const reportPhotosOutstanding = useCallback((id: string, n: number) => {
+    setPhotosOutstanding(m => (m[id] ?? 0) === n ? m : { ...m, [id]: n })
+  }, [])
 
   // The live minute tick — an on-the-clock stop shows how long it has been
   // running, and that number has to keep moving.
@@ -313,6 +330,18 @@ export function CrewToday() {
                       <Phone className="w-3.5 h-3.5" aria-hidden /> Call
                     </a>
                   )}
+                  {/* Say what happened. Available at EVERY stage, not gated
+                      behind finishing: the leaking sprinkler head is found while
+                      working, not remembered at the end of a form. Finishing
+                      stays one tap and this never interrupts it. */}
+                  <button
+                    type="button"
+                    onClick={() => setRecordingId(stop.id)}
+                    className="tap-target h-10 px-3 rounded-lg border border-border text-xs font-medium text-ink-muted flex items-center justify-center gap-1.5 hover:text-ink hover:border-border-strong transition-colors"
+                  >
+                    <NotebookPen className="w-3.5 h-3.5" aria-hidden />
+                    {stop.completion_summary || stop.completion_issue ? 'Edit note' : 'Add note'}
+                  </button>
                   {!finished && (
                     <Button
                       size="sm"
@@ -327,10 +356,31 @@ export function CrewToday() {
                   )}
                 </div>
 
+                {/* What has already been recorded, on the card face — so a
+                    worker can see it without opening anything, and the two
+                    audiences stay visibly apart (eye = the customer reads it,
+                    lock = only the office does). */}
+                {stop.completion_summary?.trim() && (
+                  <p className="mt-2 flex items-start gap-1.5 text-xs text-ink-muted">
+                    <Eye className="w-3.5 h-3.5 shrink-0 mt-0.5 text-accent-text" aria-hidden />
+                    <span className="whitespace-pre-wrap break-words">{stop.completion_summary.trim()}</span>
+                  </p>
+                )}
+                {stop.completion_issue?.trim() && (
+                  <p className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-300/90">
+                    <Lock className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden />
+                    <span className="whitespace-pre-wrap break-words">{stop.completion_issue.trim()}</span>
+                  </p>
+                )}
+
                 {/* Photograph the work — 'before' until it starts, 'after' once
                     on the clock or done. Uploads go through /api/crew/photos,
                     which re-verifies this visit belongs to this worker's crew. */}
-                <CrewStopPhotos jobId={stop.id} status={stop.status} />
+                <CrewStopPhotos
+                  jobId={stop.id}
+                  status={stop.status}
+                  onOutstandingChange={n => reportPhotosOutstanding(stop.id, n)}
+                />
               </div>
             </div>
           </section>
@@ -386,6 +436,25 @@ export function CrewToday() {
           </div>
         </StickyActionBar>
       )}
+
+      {/* The record editor. Reads the stop straight out of the day currently on
+          screen, so it can never save over a fresher note; writes through the
+          typed crew RPC, which re-checks that this visit is still this crew's.
+          A failed save keeps the words in the boxes and says so. */}
+      {(() => {
+        const stop = active.find(s => s.id === recordingId)
+        if (!stop) return null
+        return (
+          <CompletionSheet
+            open
+            onClose={() => setRecordingId(null)}
+            job={stop}
+            photosOutstanding={photosOutstanding[stop.id] ?? 0}
+            onSave={record => crewSaveCompletionRecord(supabase, stop.id, record)}
+            onSaved={() => { void load() }}
+          />
+        )
+      })()}
     </div>
   )
 }

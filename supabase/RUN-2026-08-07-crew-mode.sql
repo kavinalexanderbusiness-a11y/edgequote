@@ -338,8 +338,16 @@ begin
             -- concurrency guard every other queued job patch does.
             'updated_at', j.updated_at,
             -- The access note (gate code, where to park) — the one thing you
-            -- need before pulling into the driveway.
+            -- need before pulling into the driveway. INTERNAL: this field is
+            -- not in get_portal_data's payload, so it never reaches a customer.
             'notes', j.notes,
+            -- Proof of work already recorded on this visit, so the completion
+            -- sheet opens showing it instead of a blank box that would
+            -- overwrite it. completion_summary is what the CUSTOMER reads;
+            -- completion_issue is for the office only. Written back through
+            -- crew_set_completion_record (RUN-2026-08-11-proof-of-work.sql).
+            'completion_summary', j.completion_summary,
+            'completion_issue', j.completion_issue,
             'customer', case when cu.id is null then null else
               jsonb_build_object('name', cu.name, 'phone', cu.phone) end,
             'property', case when p.id is null then null else
