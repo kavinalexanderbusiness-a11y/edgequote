@@ -89,7 +89,7 @@ const stop = (id: string, status: CrewStop['status']): CrewStop => ({
   id, title: id, service_type: null, scheduled_date: '2026-08-07', start_time: null,
   duration_minutes: 45, crew_size: 1, status, started_at: null, completed_at: null,
   actual_minutes: null, on_my_way_at: null, route_order: null, updated_at: 'v1',
-  notes: null, customer: null, property: null,
+  notes: null, completion_summary: null, completion_issue: null, customer: null, property: null,
 })
 eq('an on-the-clock visit outranks the queue',
   nextCrewStop([stop('a', 'scheduled'), stop('b', 'in_progress')])?.id, 'b')
@@ -344,6 +344,7 @@ const mk = (id: string, status: CrewStop['status'], order: number): CrewStop => 
   id, title: id, service_type: null, scheduled_date: '2026-08-09', start_time: null,
   duration_minutes: 30, crew_size: 1, status, started_at: null, completed_at: null,
   actual_minutes: null, on_my_way_at: null, route_order: order, updated_at: 'v1', notes: null,
+  completion_summary: null, completion_issue: null,
   customer: null, property: null,
 })
 // (No bare block after the arrow-object above: `=> ({…})` followed by `{` is an

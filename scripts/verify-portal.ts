@@ -42,7 +42,7 @@ const PROP_B: PortalProperty = { id: 'prop-b', address: '99 Rental Ave NE', city
 const job = (over: Partial<PortalJob>): PortalJob => ({
   id: 'j1', recurrence_id: null, property_id: PROP_A.id, quote_id: null, price: 65,
   is_initial_visit: null, service_type: 'Mowing', title: 'Mowing', scheduled_date: '2026-07-20',
-  status: 'scheduled', on_my_way_at: null, started_at: null, completed_at: null, notes: null, ...over,
+  status: 'scheduled', on_my_way_at: null, started_at: null, completed_at: null, completion_summary: null, ...over,
 })
 
 // A payload carrying EVERY key the live RPC sends — the round-trip tripwire.

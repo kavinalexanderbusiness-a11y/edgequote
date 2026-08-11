@@ -22,6 +22,21 @@
 -- have re-opened a confirmed customer data exposure and dropped the deposit fields,
 -- silently, with no migration error.
 --
+-- ── 2026-08-11 — RESYNCED AGAIN, and the drift it caught AGAIN ──────────────
+-- Live had moved 6086 → 6403 chars. The delta was entirely in the `quotes`
+-- projection: `qt.selected_option_id` plus the `options` sub-aggregate over
+-- public.quote_options, applied to production by the quote-options lane whose
+-- branch has NOT merged to main. This file did not carry it — so re-running
+-- this file as it stood would have DROPPED options a live portal payload is
+-- already serving. Adopted verbatim from live before anything else was touched,
+-- exactly as the 2026-08-09 resync did. ⭐ THE RULE THIS KEEPS PROVING: pull
+-- pg_get_functiondef FIRST and reconcile, because `create or replace` has no
+-- merge — the last writer wins the whole body.
+--
+-- The proof-of-work change in the same pass: the `jobs` projection drops `notes`
+-- (an INTERNAL field that was reaching customers) and gains `completion_summary`
+-- (written FOR the customer). See the jobs line below for the full account.
+--
 -- ⛔ A SNAPSHOT OF A MOVING OBJECT ROTS BY DEFAULT. Documentation asking the next
 -- person to "query production first" did not survive two same-day changes. So the
 -- drift is now MACHINE-CHECKED: `npm run verify:portal-canonical` fails the build
@@ -120,6 +135,11 @@ begin
       select qt.id, qt.quote_number, qt.service_type, qt.address, qt.property_id, qt.total, qt.initial_price, qt.subtotal,
              qt.weekly_price, qt.biweekly_price, qt.monthly_price, qt.notes, qt.status, qt.created_at,
              qt.issued_date, qt.crew_size, qt.hours, qt.travel_fee, qt.valid_until,
+             qt.selected_option_id,
+             coalesce((select json_agg(o order by o.sort_order) from (
+               select qo.id, qo.name, qo.description, qo.price, qo.sort_order, qo.is_recommended
+               from public.quote_options qo where qo.quote_id = qt.id
+             ) o), '[]'::json) as options,
              coalesce((select json_agg(s order by s.sort_order) from (
                select qs.service_type, qs.quantity, qs.unit, qs.unit_price, qs.est_minutes,
                       qs.discount_type, qs.discount_value, qs.notes, qs.sort_order
@@ -138,7 +158,21 @@ begin
     'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, kind, invoice_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
     -- property_id, quote_id, price, is_initial_visit: buildServicePlans groups by
     -- property and uses jobVisitValue to separate initial from recurring price.
-    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, property_id, quote_id, price, is_initial_visit, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
+    --
+    -- ⛔⛔ THE INTERNAL ACCESS NOTE IS NOT IN THIS PROJECTION, AND MUST NEVER BE
+    -- PUT BACK. jobs.notes is written for whoever DOES the work — the job form
+    -- calls it "notes for whoever does the work", crew_day ships it to the
+    -- worker's phone as "the access note (gate code, where to park)". It was
+    -- selected here and rendered verbatim in the customer's visit history: 49 of
+    -- 78 completed production visits carried one, including "dog removal, keep
+    -- gate closed". Removing it here kills the leak AT THE SOURCE — a portal
+    -- component cannot render what was never serialized.
+    -- ⛔ jobs.completion_issue is internal for the same reason and likewise absent.
+    -- ⭐ jobs.completion_summary is the CUSTOMER-VISIBLE field, written for the
+    -- person who paid: it replaces the access note as the words on a finished
+    -- visit. `verify:completion` fails the build if either internal field
+    -- reappears in this line.
+    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, property_id, quote_id, price, is_initial_visit, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, completion_summary from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
     -- start_date, end_count: the series' own window and count limit.
     'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, start_date, end_date, end_count from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
     'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json),

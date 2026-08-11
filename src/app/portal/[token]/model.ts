@@ -49,7 +49,15 @@ export interface PortalQuote { id: string; quote_number: string; service_type: s
 // `property_id` null is the HONEST answer for an invoice spanning several properties —
 // never infer one, or a combined invoice prints one address as if it were the whole bill.
 export interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; property_id?: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null; amount_paid?: number | null; deposit_amount?: number | null; deposit_requested_at?: string | null }
-export interface PortalJob { id: string; recurrence_id: string | null; property_id: string | null; quote_id: string | null; price: number | null; is_initial_visit: boolean | null; service_type: string | null; title: string; scheduled_date: string; status: string; on_my_way_at: string | null; started_at: string | null; completed_at: string | null; notes: string | null }
+// ⛔ NO `notes` FIELD, DELIBERATELY. jobs.notes is the INTERNAL access note for
+// whoever does the work (gate code, where to park) — it was selected by
+// get_portal_data and rendered verbatim here until 2026-08-11, on 49 of 78
+// completed production visits, including "dog removal, keep gate closed". It is
+// gone from the RPC's projection, so there is nothing left to render even by
+// accident. `completion_summary` is the field written FOR the customer, and
+// `completion_issue` (the internal half) is likewise not in the payload.
+// verify:completion fails the build if either internal field reappears.
+export interface PortalJob { id: string; recurrence_id: string | null; property_id: string | null; quote_id: string | null; price: number | null; is_initial_visit: boolean | null; service_type: string | null; title: string; scheduled_date: string; status: string; on_my_way_at: string | null; started_at: string | null; completed_at: string | null; completion_summary: string | null }
 export interface PortalRec { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null; start_date: string | null; end_date: string | null; end_count: number | null }
 export interface PortalPhoto { id: string; job_id: string | null; storage_path: string; kind: string; caption: string | null; taken_at: string }
 export interface PortalPayment { id: string; amount: number; status: string; paid_at: string | null; provider: string; invoice_id: string | null; created_at: string; kind?: string }
