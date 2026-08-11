@@ -31,6 +31,7 @@
     "verify:pricing": "tsx scripts/verify-pricing.ts",
     "verify:priority-queue": "tsx scripts/verify-priority-queue.ts",
     "verify:guardrails": "tsx scripts/verify-guardrails.ts",
+    "verify:health": "tsx scripts/verify-health.ts",
     "verify:labor": "tsx scripts/verify-labor.ts",
     "verify:density": "tsx scripts/verify-density.ts",
     "verify:learning": "tsx scripts/verify-learning.ts",

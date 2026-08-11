@@ -89,8 +89,19 @@ export async function GET() {
   // state, because "Stripe is on" would be a lie that costs the owner money.
   const stripeKeyOnly = !!process.env.STRIPE_SECRET_KEY && !process.env.STRIPE_WEBHOOK_SECRET
 
+  // Same shape, and the one this endpoint was missing. vercel.json DECLARES the
+  // scheduled jobs, and Vercel runs them against this deploy — but cronSecretOk()
+  // opens with `if (!expected) return false`, so with CRON_SECRET absent EVERY
+  // cron 403s on every run: reminders, quote follow-ups, AutoPay charges, reports.
+  // Not an optional capability switched off — a declared part of the deploy that
+  // cannot work, silently, forever. `cron: false` sitting inside a body that says
+  // "ok" is exactly the always-200 health check this file's own header warns
+  // against, so it degrades. Production only: a local run has no cron scheduler,
+  // and degrading there would train everyone to ignore the word.
+  const cronsDeclaredButUnusable = process.env.VERCEL_ENV === 'production' && !cron
+
   const down = !checks.database.ok
-  const degraded = !checks.config.ok || stripeKeyOnly
+  const degraded = !checks.config.ok || stripeKeyOnly || cronsDeclaredButUnusable
 
   return NextResponse.json(
     {
@@ -108,6 +119,7 @@ export async function GET() {
         cron,
         maps,
         ...(stripeKeyOnly ? { warning: 'STRIPE_SECRET_KEY set without STRIPE_WEBHOOK_SECRET — AutoPay will refuse to charge' } : {}),
+        ...(cronsDeclaredButUnusable ? { cron_warning: 'CRON_SECRET is not set — every scheduled job in vercel.json is rejected with 403 (no reminders, no follow-ups, no AutoPay, no reports)' } : {}),
       },
       ms: Date.now() - started,
     },
