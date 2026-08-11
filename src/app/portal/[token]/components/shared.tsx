@@ -18,8 +18,12 @@ import { buildVisitICS, type CalendarVisit, type JourneyStep, type LiveStatus, t
 
 export interface PortalActions {
   token: string
-  /** Approve a quote (confirm dialog + portal_accept_quote). */
-  accept: (quoteId: string) => void
+  /** Approve a quote (confirm dialog + portal_accept_quote).
+   *  `optionId` names WHICH alternative, on a quote that offers a choice. It is
+   *  required for those and absent for every ordinary quote — the RPC refuses an
+   *  options quote with no choice, so passing nothing there is a failed approval,
+   *  not a default. */
+  accept: (quoteId: string, optionId?: string) => void
   accepting: string | null
   /** Start Stripe checkout for one invoice (POST /api/portal/pay). */
   pay: (invoiceId: string) => void

@@ -71,7 +71,16 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
   // This is the surface a texted link lands on; making someone tap through to a list
   // to find the thing they came to do is a tap we can spend for them. Several
   // documents keeps the signpost — we can't guess which one they meant.
-  const oneQuoteId = topAction?.kind === 'approve' ? topAction.focusDocId : null
+  // ⛔ …but NOT when that one quote offers alternatives. Approving it takes a
+  // choice, and there is nowhere on this card to read three scopes and compare
+  // them — a one-tap Approve here would either commit the customer to a price
+  // they never picked or (correctly) be refused by the RPC and read as a broken
+  // button. The signpost above still carries them to Billing, where the
+  // comparison lives; that tap buys the decision they're being asked to make.
+  const oneQuoteDoc = topAction?.kind === 'approve' && topAction.focusDocId
+    ? view.docItems.find(d => d.rawId === topAction.focusDocId) || null
+    : null
+  const oneQuoteId = oneQuoteDoc && !(oneQuoteDoc.options?.length) ? oneQuoteDoc.rawId : null
   const oneInvoice = topAction?.kind === 'pay' && topAction.focusDocId
     ? view.docItems.find(d => d.rawId === topAction.focusDocId) || null
     : null
@@ -181,7 +190,14 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
                       : `${awaiting.length} quotes are ready for your review`}
                   </p>
                   <p className="text-xs text-ink-muted">
-                    {awaiting.length === 1 ? `${formatCurrency(awaiting[0].amount)} — review and approve when you're ready` : `Review and approve when you're ready`}
+                    {awaiting.length === 1
+                      // A quote with an unmade choice has no single price yet, so
+                      // this line says what there IS to do instead of asserting
+                      // the recommended option as the figure.
+                      ? (awaiting[0].options?.length
+                        ? `${awaiting[0].options.length} options — pick one and approve it`
+                        : `${formatCurrency(awaiting[0].amount)} — review and approve when you're ready`)
+                      : `Review and approve when you're ready`}
                   </p>
                   {/* The quote's OWN expiry, or nothing. This used to print issue-date +
                       30 days as fact — inventing a deadline for the 2 in 3 live quotes

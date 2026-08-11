@@ -25,6 +25,11 @@ import { useAiAssist } from '@/hooks/useAiAssist'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
 import { sumServiceLines, serviceLineTotals, emptyServiceLine } from '@/lib/quoteServices'
 import { MATERIAL_SUGGESTIONS, emptyMaterialLine } from '@/lib/quoteMaterials'
+import { QuoteOptionsEditor } from '@/components/quotes/QuoteOptionsEditor'
+import {
+  EXAMPLE_OPTION_NAMES, OPTIONS_VS_LINES_MESSAGE, headlineOptionPrice, optionProblemMessage,
+  optionSetProblem, optionsConflictWithLines, recommendedOption,
+} from '@/lib/quoteOptions'
 import { loadServiceUnits, SYSTEM_UNITS, type ServiceUnit } from '@/lib/units'
 import { formatCurrency, formatDate, suggestTravelFee, cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
@@ -67,6 +72,11 @@ interface QuoteBuilderProps {
   autosaveKey?: string
   /** Server record's updated_at — drafts older than this are never offered. */
   autosaveBaselineUpdatedAt?: string | null
+  /** The name of the option the customer already approved, when this quote's
+   *  alternatives are settled. Present → the options editor goes read-only: the
+   *  approved row can't be deleted (ON DELETE RESTRICT) and rewriting the others
+   *  would change what the record says the customer was shown. */
+  optionsLockedName?: string | null
   /** Where Cancel goes. The EDIT flow is a same-route state toggle (the detail
       page flips `editing`), so its Cancel must return to the quote VIEW — the
       default router.back() pops history right out of the quote (or the app
@@ -105,7 +115,7 @@ type PitchCadence = 'one_time' | 'weekly' | 'biweekly'
 
 export function QuoteBuilder({
   customers, templates, recentTemplateIds, tiers, settings, defaultCustomerId, defaultPropertyId, defaultValues, onSubmit, isEdit,
-  autosaveKey, autosaveBaselineUpdatedAt, onCancel,
+  autosaveKey, autosaveBaselineUpdatedAt, optionsLockedName, onCancel,
 }: QuoteBuilderProps) {
   const router = useRouter()
   const { register, handleSubmit, watch, setValue, getValues, reset, control, setFocus, formState: { errors, isSubmitting } } =
@@ -161,6 +171,11 @@ export function QuoteBuilder({
         notes: '',
         status: 'draft',
         services: [],
+        // Off, and empty. A normal quote never touches either of these, and the
+        // save paths write no option rows while `has_options` is false — so
+        // every existing quote and every new plain one behaves byte-identically.
+        has_options: false,
+        options: [],
         ...defaultValues,
       },
     })
@@ -264,6 +279,20 @@ export function QuoteBuilder({
     // on a save that actually happened. Same rule handleOpenPdf already applies
     // to marking a quote Sent.
     async v => {
+      // ── Options: BLOCK, don't warn ────────────────────────────────────────
+      // Unlike the $0 note below, these two are not judgement calls the owner
+      // may override — the database refuses both, so "Save anyway" would mean
+      // "watch a constraint violation". Say the sentence while the fields that
+      // caused it are still on screen, which is the only cheap moment.
+      if (v.has_options) {
+        if (optionsConflictWithLines(true, (v.services || []).length)) {
+          setServicesOpen(true); setMaterialsOpen(true)
+          toast.error(OPTIONS_VS_LINES_MESSAGE)
+          return
+        }
+        const p = optionSetProblem(v.options || [])
+        if (p) { toast.error(optionProblemMessage(p)); return }
+      }
       // Warn-never-block on a $0 first-visit total. Saving it is LEGAL (a
       // weekly-only pitch deliberately has no first-visit price) — but it saves
       // as a quote that Send/PDF/invoice will hard-block one screen later as
@@ -410,7 +439,27 @@ export function QuoteBuilder({
   // discount semantics as invoices). The first-visit total = primary + extras + travel.
   // (`watchedServices` is declared at the top of the component — see the note there.)
   const extras = useMemo(() => sumServiceLines(watchedServices), [watchedServices])
-  const effectiveTotal = initialPrice + extras.net + Number(travelFee || 0)
+
+  // ── Alternatives ────────────────────────────────────────────────────────────
+  // `has_options` is the owner's declared intent, held separately from the array
+  // so switching off doesn't discard what they typed (see QuoteFormValues).
+  const optionsOn = !!watch('has_options')
+  const watchedOptions = watch('options') || []
+  const optionsLocked = !!optionsLockedName
+  // ⭐ The ONE money rule, asked of the ONE engine — never re-derived here. This
+  // is the same figure `initial_price` is saved as and the same one the approval
+  // RPC would set: the recommended option, else the first. Nothing sums.
+  const optionsHeadline = headlineOptionPrice(watchedOptions)
+  const optionsProblem = optionsOn ? optionSetProblem(watchedOptions) : null
+  const optionsClashWithLines = optionsConflictWithLines(optionsOn, watchedServices?.length ?? 0)
+  const recommended = recommendedOption(watchedOptions)
+
+  // With options on, the quote's value IS one option's price plus travel —
+  // additive lines cannot coexist (the DB refuses them), so `extras` is not part
+  // of this branch by construction rather than by being left out of a sum.
+  const effectiveTotal = optionsOn
+    ? (optionsHeadline ?? 0) + Number(travelFee || 0)
+    : initialPrice + extras.net + Number(travelFee || 0)
   // A price arriving disarms the $0-save warning — Save is one tap again.
   useEffect(() => { if (zeroTotalArmed && effectiveTotal > 0) setZeroTotalArmed(false) }, [zeroTotalArmed, effectiveTotal])
 
@@ -983,10 +1032,28 @@ export function QuoteBuilder({
         </div>
       )}
       <div className="border-t border-border pt-3 space-y-2">
+        {/* ⭐ With options on, this list is the one place the owner can be
+            misread into thinking the alternatives combine — so it prints each
+            option's OWN customer-facing figure and no subtotal, and the total
+            row below names which single option the quote is currently worth.
+            There is no row here that adds two options together. */}
+        {optionsOn ? (
+          watchedOptions.length > 0 ? watchedOptions.map((o, i) => (
+            <div key={o.id || `p-${i}`} className="flex items-center justify-between text-sm gap-3">
+              <span className={cn('truncate', o.is_recommended ? 'text-accent-text font-medium' : 'text-ink-muted')}>
+                {o.name?.trim() || `Option ${i + 1}`}{o.is_recommended ? ' · recommended' : ''}
+              </span>
+              <span className="text-ink font-medium tabular-nums shrink-0">
+                {formatCurrency((Number(o.price) || 0) + Number(travelFee || 0))}
+              </span>
+            </div>
+          )) : <p className="text-sm text-ink-faint">No options yet.</p>
+        ) : (
         <div className="flex items-center justify-between">
           <span className="text-sm text-ink-muted">First visit{priceOrigin === 'manual' ? ' (manual)' : ''}</span>
           <span className="text-ink font-semibold tabular-nums">{initialPrice > 0 ? formatCurrency(initialPrice) : '—'}</span>
         </div>
+        )}
         {/* Split, and counted correctly. ONE row labelled "Additional services
             (N)" used serviceLines.fields.length — the length of the array holding
             BOTH kinds — over a figure that also included materials. One hedge trim
@@ -1016,9 +1083,20 @@ export function QuoteBuilder({
           </div>
         )}
         <div className="flex items-center justify-between pt-2 border-t border-border">
-          <span className="text-sm font-semibold text-ink">First visit total</span>
+          <span className="text-sm font-semibold text-ink">
+            {optionsOn ? 'Quote value' : 'First visit total'}
+          </span>
           <span className="text-2xl font-bold text-accent-text tabular-nums">{effectiveTotal > 0 ? formatCurrency(effectiveTotal) : '—'}</span>
         </div>
+        {/* Which of the two things that number means — the reporting semantics,
+            said where the owner sets the numbers. */}
+        {optionsOn && effectiveTotal > 0 && (
+          <p className="text-[11px] text-ink-faint">
+            {optionsLocked
+              ? `${optionsLockedName} — the option the customer approved.`
+              : `Your ${recommended ? recommended.name : 'first'} option. The customer pays for the ONE they choose — never the total of all ${watchedOptions.length}.`}
+          </p>
+        )}
         {/* §14 — the mistake the product can't undo: a priceless quote saves
             happily and afterwards looks identical to a priced one, in the list,
             on the PDF and in the portal. Say so BEFORE the tap, next to the
@@ -1453,6 +1531,53 @@ export function QuoteBuilder({
                   It is one field; it belongs under whatever recommendation is (or
                   isn't) offered. Same registration, same hint states, same
                   priceOrigin tracking — only its position changed. */}
+              {/* ── One price, or a choice of them ────────────────────────────
+                  A normal quote must stay exactly as simple as it was, so this
+                  is a switch and not a mode the form is always half in: off (the
+                  default, and the state of every quote that exists) renders the
+                  single Price field below and nothing else changes. On, the
+                  alternatives editor takes its place — not sits beside it, because
+                  `initial_price` can hold one or the other and a form showing both
+                  would be asking which of two numbers is the price. */}
+              <div className={cn('rounded-xl border px-3 py-2.5', optionsOn ? 'border-accent/30 bg-accent/[0.03]' : 'border-border bg-bg-secondary/50')}>
+                <Toggle
+                  checked={optionsOn}
+                  onChange={on => {
+                    setValue('has_options', on)
+                    // Seed on FIRST use only. Flipping off and back on returns the
+                    // owner to what they typed — re-seeding would silently discard it.
+                    if (on && (getValues('options') || []).length === 0) {
+                      setValue('options', EXAMPLE_OPTION_NAMES.map(e => ({
+                        name: e.name, description: '', price: 0, is_recommended: e.is_recommended,
+                      })))
+                    }
+                  }}
+                  label="Offer multiple options"
+                  disabled={optionsLocked}
+                />
+                <p className="text-[11px] text-ink-faint mt-1">
+                  {optionsOn
+                    ? 'The customer picks one and approves it. Options replace the single price and the line-by-line breakdown.'
+                    : 'Give the customer a choice of scopes — Budget / Standard / Premium — instead of one price.'}
+                </p>
+              </div>
+
+              {optionsOn ? (
+                <>
+                  <QuoteOptionsEditor
+                    options={watchedOptions}
+                    onChange={next => setValue('options', next, { shouldDirty: true })}
+                    travelFee={Number(travelFee) || 0}
+                    lockedSelectedName={optionsLockedName ?? null}
+                  />
+                  {/* The database refuses a quote holding both, so say it here
+                      rather than let Save produce a constraint error. */}
+                  {optionsClashWithLines && (
+                    <Banner tone="warn" icon={AlertTriangle}>{OPTIONS_VS_LINES_MESSAGE}</Banner>
+                  )}
+                </>
+              ) : (
+              <>
               <div>
                 <Input label="Price ($, first visit)" type="number" step="1" min="0"
                   className="text-lg font-semibold tabular-nums"
@@ -1506,8 +1631,14 @@ export function QuoteBuilder({
                   "Plan pricing" sub-section, so a warning that the FIRST-VISIT
                   price is below the crew-cost floor waited for someone to open a
                   section about recurring plans. A never-block warning nobody sees
-                  is not a warning. Moved, not copied. */}
+                  is not a warning. Moved, not copied.
+                  With options on there is no single first-visit price for them to
+                  judge — `initial_price` is blank and the guardrails would report
+                  a $0 job as below the floor, which is true of a number nobody
+                  entered. Silence is the honest answer, not a warning about zero. */}
               <PriceGuardrailNote guardrails={priceGuardrails} />
+              </>
+              )}
 
             </CardBody>
           </Card>
@@ -1675,6 +1806,13 @@ export function QuoteBuilder({
               Measure → Recommended price → Accept → fine-tune → extras. Each line
               has qty × unit price − discount; totals sum via the one
               quote-services engine. The primary service above stays untouched. ── */}
+          {/* ⛔ Hidden entirely while options are on, and not merely disabled: a
+              service line ADDS to the quote total, an option's price IS it, and
+              the database refuses a quote holding both. A drawer offering rows
+              that cannot be saved is an invitation to lose typing. Any lines
+              already present stay in the form (the switch is reversible) and the
+              banner beside the editor names them. */}
+          {!optionsOn && (
           <Collapsible title="Services & materials" icon={Layers} summary={linesSummary}
             open={servicesOpen || materialsOpen} onOpenChange={setLinesOpen}>
             <div className="space-y-3">
@@ -1880,6 +2018,7 @@ export function QuoteBuilder({
               )}
             </div>
           </Collapsible>
+          )}
 
 
           {/* ── More options — the set-it-and-forget-it end of a quote ──

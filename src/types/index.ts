@@ -1186,10 +1186,9 @@ export interface QuoteServiceInput {
   kind: QuoteLineKind
 }
 
-/** An option as a builder form would hold it. ⚠️ NOT yet wired into
- *  QuoteFormValues — the quote_options FOUNDATION is shipped and proven, the
- *  owner/customer surfaces are not built. Defined here so the follow-up starts
- *  from the shape the database already enforces. */
+/** An option as the builder form holds it. Saved by delete-and-reinsert (the
+ *  same shape quote_services uses), so `id` is carried only to render a stable
+ *  key and to tell an existing row from a new one — never written back. */
 export interface QuoteOptionInput {
   /** Present only for an option already on the quote; blank for a new row. */
   id?: string
@@ -1242,6 +1241,17 @@ export interface QuoteFormValues {
   nearby_count: number | null
   // Additional service lines beyond the primary one (multi-service quotes).
   services: QuoteServiceInput[]
+  // ── Alternatives (Budget / Standard / Premium) ────────────────────────────
+  // `has_options` is the owner's DECLARED intent — the "Offer multiple options"
+  // switch — and it is a separate fact from the array being non-empty. Turning
+  // the switch off must leave the rows in the form (so turning it back on
+  // doesn't lose the typing) while the save path writes none of them; deriving
+  // the mode from `options.length` instead would make "off" and "not typed yet"
+  // the same state and silently resurrect a discarded set.
+  // ⛔ MUTUALLY EXCLUSIVE with `services`: an option's price IS the whole job,
+  // a service line ADDS to it. The database refuses a quote holding both.
+  has_options: boolean
+  options: QuoteOptionInput[]
 }
 
 export interface CustomerFormValues {

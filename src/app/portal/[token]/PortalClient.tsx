@@ -305,7 +305,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
 
   function photoUrl(path: string) { return supabase.storage.from('job-photos').getPublicUrl(path).data.publicUrl }
 
-  async function accept(qid: string) {
+  async function accept(qid: string, optionId?: string) {
     if (accepting) return // double-click guard
     // Approving commits the customer to a quote value — never ask someone to
     // approve an amount without showing it, and always say that approving isn't
@@ -349,8 +349,37 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       setData(d => d ? { ...d } : d)
       return
     }
+    // ── Which alternative ─────────────────────────────────────────────────────
+    // Re-resolved against the FRESH payload, never trusted from the click. The
+    // refetch above exists because a tab left open can be quoting a stale price;
+    // an option id from that same stale render deserves exactly as little trust.
+    // If the named option is no longer on this quote (the owner revised it while
+    // the tab sat open), stop — approving "whatever is there now" would record
+    // consent to something the customer never read.
+    const freshOpts = q?.options ?? []
+    const chosenOpt = optionId ? freshOpts.find(o => o.id === optionId) ?? null : null
+    if (optionId && !chosenOpt) {
+      setActionError('That option isn’t on this quote any more — it may have been updated. Please refresh and take another look.')
+      return
+    }
+    if (freshOpts.length > 0 && !chosenOpt) {
+      // The button is disabled until one is picked, so this is a stale tab or a
+      // replayed request — and the RPC would refuse it anyway. Say the useful
+      // thing rather than let a silent false become "we couldn't record it".
+      setActionError('This quote has a few options — please pick the one you want, then approve it.')
+      return
+    }
+
     const svc = (q?.service_type || '').trim()
-    const amount = Number(q?.total) || 0
+    // ⭐ ONE money path. On an options quote the figure is the CHOSEN option plus
+    // travel — the identical arithmetic quote_apply_option_choice performs when
+    // it writes accepted_price — so the number in this dialog is the number the
+    // business records. `q.total` still carries the recommended option at this
+    // moment (nobody has chosen yet), and quoting it here would show one price
+    // and bank another.
+    const amount = chosenOpt
+      ? Number(chosenOpt.price) + (Number(q?.travel_fee) || 0)
+      : Number(q?.total) || 0
     // The dialog's whole job is stating what the customer commits to, so it must
     // match the doc row one tap beneath it:
     // • every plan price is PER VISIT (model.ts's own doc-row comment calls the
@@ -371,24 +400,49 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       ? `Ongoing plan options: ${planBits.join(' · ')} — we'll confirm your schedule with you.`
       : planBits.length === 1 ? `Ongoing visits after that are ${planBits[0]}.` : null
     const gst = Number((fresh ?? data)?.business?.gst_percent) || 0
-    const what = svc
-      ? `${lineCount > 1 ? `${svc} + ${lineCount - 1} more service${lineCount > 2 ? 's' : ''}` : svc} for ${formatCurrency(amount)}`
-      : formatCurrency(amount)
+    // On an options quote the dialog must name the OPTION, not the service: the
+    // whole decision the customer just made was which one, and confirming
+    // "Landscape rebuild for $5,550" would echo back the part they didn't choose.
+    const what = chosenOpt
+      ? `the ${chosenOpt.name} option${svc ? ` of ${svc}` : ''} for ${formatCurrency(amount)}`
+      : svc
+        ? `${lineCount > 1 ? `${svc} + ${lineCount - 1} more service${lineCount > 2 ? 's' : ''}` : svc} for ${formatCurrency(amount)}`
+        : formatCurrency(amount)
     const confirmed = await confirmDialog({
-      title: `Approve ${formatCurrency(amount)}?`,
+      title: chosenOpt ? `Approve ${chosenOpt.name} — ${formatCurrency(amount)}?` : `Approve ${formatCurrency(amount)}?`,
       message: [
         `You're approving ${what}${gst > 0 ? `, plus GST (${gst}%) added on your invoice` : ''}.`,
+        // Say what happens to the ones they didn't pick, at the moment of
+        // commitment — "am I signing up for all three?" is the fear this whole
+        // screen exists to answer, and it deserves answering here too.
+        chosenOpt && freshOpts.length > 1
+          ? `The other ${freshOpts.length - 1} option${freshOpts.length > 2 ? 's aren’t' : ' isn’t'} ordered and won’t be charged.`
+          : null,
         plan,
         `Approving doesn't charge you — we'll confirm a date with you first, and you'll only get an invoice after the work is done.`,
       ].filter(Boolean).join(' '),
-      confirmLabel: `Approve ${formatCurrency(amount)}`,
+      confirmLabel: chosenOpt ? `Approve ${chosenOpt.name}` : `Approve ${formatCurrency(amount)}`,
     })
     if (!confirmed) return
     setAccepting(qid)
     setActionError(null)
-    const { data: ok } = await supabase.rpc('portal_accept_quote', { p_token: token, p_quote_id: qid })
+    // The third argument is omitted, not null-defaulted, on an ordinary quote —
+    // portal_accept_quote's plain path is reached exactly as it always was.
+    const { data: ok } = await supabase.rpc('portal_accept_quote', {
+      p_token: token, p_quote_id: qid, ...(chosenOpt ? { p_option_id: chosenOpt.id } : {}),
+    })
     if (ok) {
-      setData(d => d ? { ...d, quotes: d.quotes.map(q => q.id === qid ? { ...q, status: 'accepted' } : q) } : d)
+      // Carry the CHOICE into the optimistic patch, not just the status. Without
+      // it the row would flip to Approved while still rendering three tappable
+      // options — the customer's own decision missing from the screen that just
+      // took it. (`total` is left alone: the next load brings the server's, and
+      // guessing it here would be a second money path.)
+      setData(d => d ? {
+        ...d,
+        quotes: d.quotes.map(q => q.id === qid
+          ? { ...q, status: 'accepted', ...(chosenOpt ? { selected_option_id: chosenOpt.id } : {}) }
+          : q),
+      } : d)
       // Close the loop — the customer must SEE their approval registered.
       setJustAccepted(true)
     } else {

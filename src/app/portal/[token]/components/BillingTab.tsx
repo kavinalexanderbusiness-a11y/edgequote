@@ -234,6 +234,21 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
   // `d.status` is the DISPLAY status, so an expired quote is not 'sent' and loses
   // its Accept button here without a second expiry test.
   const canAccept = d.kind === 'quote' && d.status === 'sent'
+  // ── Alternatives ────────────────────────────────────────────────────────────
+  const opts = d.options ?? []
+  const hasOpts = opts.length > 0
+  const chosen = d.selectedOptionId ? opts.find(o => o.id === d.selectedOptionId) ?? null : null
+  // ⭐ NOTHING IS PRE-SELECTED, and the Recommended option is not an exception.
+  // Approving is consent to a specific price, and a pre-ticked row turns "I read
+  // three options and picked one" into "I tapped the big button" — the customer
+  // would have agreed to a number chosen by the person selling it. The button
+  // stays disabled, saying what to do, until they actually choose.
+  const [picked, setPicked] = useState<string | null>(null)
+  const pickedOpt = picked ? opts.find(o => o.id === picked) ?? null : null
+  // A quote that offers alternatives is only approvable once one is named — the
+  // same rule the database enforces (portal_accept_quote refuses an options quote
+  // with no choice), stated here as a disabled button rather than a failed call.
+  const approveReady = !hasOpts || !!pickedOpt
   const isExpired = d.kind === 'quote' && d.status === 'expired'
   // `!actions.paymentPending`: while a just-completed checkout is still being
   // confirmed, this row's balance is the PRE-payment one and a second Pay tap
@@ -330,6 +345,17 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
                 <p className="text-[11px] text-ink-faint mt-0.5 tabular-nums">still due · {formatCurrency(d.amount)} total, {pay.paid} paid</p>
               </>
             )
+            // ⛔ A quote with an unmade choice has NO single price, and printing
+            // one here — the biggest, boldest figure on the row — would assert
+            // the recommended option as settled fact before the customer has read
+            // the alternatives. Say how many there are; the prices belong beside
+            // the names they buy, in the cards below.
+            if (hasOpts && !chosen) return (
+              <>
+                <p className="text-sm font-bold text-ink">{opts.length} options</p>
+                <p className="text-[11px] text-ink-faint mt-0.5">choose one below</p>
+              </>
+            )
             return (
               <>
                 <p className="text-sm font-bold text-ink tabular-nums">{formatCurrency(d.amount)}</p>
@@ -348,6 +374,91 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
       {/* Where this quote is on its way to being done — direct display of the
           stored status, between the header and the price breakdown. */}
       {steps !== null && <JourneyRail steps={steps} />}
+      {/* ── Choose one ────────────────────────────────────────────────────────
+          ⭐ ALWAYS ONE COLUMN, at every width. Three desktop pricing cards
+          squeezed side-by-side is how this pattern normally arrives on a phone,
+          and at 375px it produces three 100px columns of clipped scope text —
+          the exact information a customer needs to tell the options apart. A
+          stacked list reads identically at 375, 390, 430 and on a desktop: name,
+          price, what you get, in that order, one at a time.
+
+          Restrained emphasis on Recommended: a hairline accent border and a small
+          word. No colour-flooded "MOST POPULAR" banner, no crossed-out fake
+          anchor price, no pre-tick, no countdown. The customer is choosing how to
+          spend their own money and the honest job here is legibility. */}
+      {hasOpts && (
+        <div className="mt-3 pt-3 border-t border-border/60">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">
+            {chosen ? 'What you chose' : 'Choose one option'}
+          </p>
+          <p className="text-[11px] text-ink-muted mt-0.5 mb-2">
+            {chosen
+              ? 'The other options are shown for your records — they weren’t ordered and won’t be charged.'
+              : `${opts.length} versions of the same job. You pick one and pay for that one — they’re not added together.`}
+          </p>
+          <div className="space-y-2">
+            {opts.map(o => {
+              const isChosen = chosen?.id === o.id
+              const notChosen = !!chosen && !isChosen
+              const isPicked = !chosen && picked === o.id
+              const selectable = canAccept && !chosen
+              const Wrapper = selectable ? 'button' : 'div'
+              return (
+                <Wrapper
+                  key={o.id}
+                  {...(selectable
+                    ? { type: 'button' as const, onClick: () => setPicked(o.id), 'aria-pressed': isPicked }
+                    : {})}
+                  className={cn(
+                    'w-full text-left rounded-xl border p-3 transition-colors',
+                    selectable && 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
+                    isChosen ? 'border-emerald-500/40 bg-emerald-500/[0.07]'
+                      : notChosen ? 'border-border bg-bg-tertiary/30 opacity-70'
+                      : isPicked ? 'border-accent bg-accent/[0.08] ring-1 ring-accent/40'
+                      : o.isRecommended ? 'border-accent/35 bg-accent/[0.03] hover:border-accent/60'
+                      : 'border-border bg-bg-tertiary/40 hover:border-border-strong',
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex items-start gap-2">
+                      {selectable && (
+                        // A real radio look, so "you are choosing ONE" is visible
+                        // before anything is tapped rather than inferred after.
+                        <span className={cn('mt-0.5 w-4 h-4 rounded-full border-2 shrink-0 flex items-center justify-center',
+                          isPicked ? 'border-accent' : 'border-border-strong')} aria-hidden>
+                          {isPicked && <span className="w-2 h-2 rounded-full bg-accent" />}
+                        </span>
+                      )}
+                      {isChosen && <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" aria-hidden />}
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-ink">{o.name}</p>
+                        {o.isRecommended && !chosen && (
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-accent-text">Recommended</span>
+                        )}
+                        {isChosen && (
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400">Your choice</span>
+                        )}
+                        {notChosen && (
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">Not selected</span>
+                        )}
+                      </div>
+                    </div>
+                    <span className={cn('text-sm font-bold shrink-0 tabular-nums', notChosen ? 'text-ink-muted' : 'text-ink')}>
+                      {formatCurrency(o.amount)}
+                    </span>
+                  </div>
+                  {/* Not truncated: the scope text is the ONLY thing that explains
+                      why one option costs more than another. Wrapping costs a
+                      line; clipping costs the comparison. */}
+                  {o.description && (
+                    <p className="text-xs text-ink-muted mt-1.5 whitespace-pre-wrap leading-relaxed">{o.description}</p>
+                  )}
+                </Wrapper>
+              )
+            })}
+          </div>
+        </div>
+      )}
       {/* The additive breakdown — these add up to the figure above. */}
       {d.lines && d.lines.length > 0 && (
         <div className="mt-3 pt-2.5 border-t border-border/60 space-y-1">
@@ -415,8 +526,27 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
         <div className="mt-3">
           {canAccept && (
             <>
-              <Button className="w-full sm:w-auto" onClick={() => actions.accept(d.rawId)} loading={actions.accepting === d.rawId}><Check className="w-4 h-4" /> Approve — {formatCurrency(d.amount)}</Button>
-              <p className="text-[11px] text-ink-faint mt-1.5">You&rsquo;ll confirm on the next step — we&rsquo;ll then reach out to schedule.</p>
+              {/* The button quotes the CHOSEN option's figure, which is the same
+                  `option + travel` the approval RPC snapshots as accepted_price —
+                  so what it says and what gets recorded are one number. Disabled
+                  until a choice exists: the alternative is a button that names
+                  somebody else's pick. */}
+              <Button
+                className="w-full sm:w-auto"
+                disabled={!approveReady}
+                onClick={() => actions.accept(d.rawId, picked ?? undefined)}
+                loading={actions.accepting === d.rawId}
+              >
+                <Check className="w-4 h-4" />
+                {hasOpts
+                  ? (pickedOpt ? `Approve ${pickedOpt.name} — ${formatCurrency(pickedOpt.amount)}` : 'Choose an option above')
+                  : `Approve — ${formatCurrency(d.amount)}`}
+              </Button>
+              <p className="text-[11px] text-ink-faint mt-1.5">
+                {hasOpts && !pickedOpt
+                  ? 'Pick the option you want, then approve it.'
+                  : 'You’ll confirm on the next step — we’ll then reach out to schedule.'}
+              </p>
             </>
           )}
           {canPay && (

@@ -16,6 +16,7 @@ import { saveManual } from '@/lib/measure/data'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { applyFeeRecovery } from '@/lib/invoiceTotals'
 import { sumServiceLines, recentTemplateIdsFrom } from '@/lib/quoteServices'
+import { headlineOptionPrice, optionRowsFor } from '@/lib/quoteOptions'
 import { LeadPrefillPayload, LEAD_PREFILL_KEY, closeOpenLeads } from '@/lib/leads'
 import { toast } from '@/lib/toast'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
@@ -208,6 +209,25 @@ export default function NewQuotePage() {
     const extrasNet = sumServiceLines(extraLines).net
     const initialWithExtras = (recoveredPrimary ?? 0) + extrasNet
 
+    // ── Alternatives ─────────────────────────────────────────────────────────
+    // Fee recovery is applied to each option FIRST, then the headline is taken
+    // from the recovered set. Order matters and only one order is correct: the
+    // stored option price and `initial_price` must be the SAME number, because
+    // the approval RPC later sets initial_price = the chosen option's stored
+    // price. Recovering the headline separately would leave the quote priced at
+    // £5,400×1.03 while the row the customer taps says £5,400 — and the moment
+    // they chose, the total would silently move.
+    const optionsOn = !!values.has_options
+    const optionRows = optionsOn
+      ? optionRowsFor(
+          (values.options || []).map(o => ({ ...o, price: applyFeeRecovery(Number(o.price) || 0, settings) ?? 0 })),
+          '', '',   // quote_id / user_id filled once the row exists — see below
+        )
+      : []
+    // THE one engine, asked the same way every surface asks it: the recommended
+    // option, else the first. Never a sum.
+    const optionHeadline = optionsOn ? headlineOptionPrice(optionRows) : null
+
     // ADR-002 · state which configuration priced this quote, or don't write it.
     //
     // FAIL-CLOSED, and this is the whole point. A quote whose config we cannot name is
@@ -244,7 +264,11 @@ export default function NewQuotePage() {
       // facing prices ONCE, here at generation. Jobs + invoices + Stripe inherit
       // these, so there's no double-application. suggested_price stays at the raw
       // engine value, so the quote page still shows "suggested → quoted".
-      initial_price: initialWithExtras > 0 ? initialWithExtras : null,
+      // An options quote is priced at ONE option — the recommended one until the
+      // customer chooses. `quotes.total` is generated over this column, so that
+      // single substitution is the entire reason invoice conversion, job costing,
+      // the deposit engine and pipeline reporting needed no change.
+      initial_price: optionsOn ? optionHeadline : (initialWithExtras > 0 ? initialWithExtras : null),
       weekly_price: applyFeeRecovery(Number(values.weekly_price) > 0 ? Number(values.weekly_price) : null, settings),
       biweekly_price: applyFeeRecovery(Number(values.biweekly_price) > 0 ? Number(values.biweekly_price) : null, settings),
       monthly_price: applyFeeRecovery(Number(values.monthly_price) > 0 ? Number(values.monthly_price) : null, settings),
@@ -282,6 +306,23 @@ export default function NewQuotePage() {
     }).select().single()
 
     if (!error && data) {
+      // ── The alternatives ───────────────────────────────────────────────────
+      // Written BEFORE anything else that could return early, and their failure
+      // is reported rather than swallowed: a quote whose row saved at the
+      // recommended price with no option rows behind it is the worst possible
+      // half-state — it looks priced, it can be sent, and the customer would be
+      // shown one number with nothing to choose between. Returning false keeps
+      // the autosave draft so a second Save re-runs the whole write.
+      if (optionsOn && optionRows.length) {
+        const { error: optErr } = await supabase.from('quote_options').insert(
+          optionRows.map(r => ({ ...r, quote_id: data.id, user_id: user!.id })),
+        )
+        if (optErr) {
+          toast.error('Saved the quote, but its options could not be written: ' + optErr.message + ' — press Save again.')
+          router.push(`/dashboard/quotes/${data.id}`)
+          return false
+        }
+      }
       // Persist the service breakdown (only for multi-service quotes; single-service
       // quotes stay legacy with no child rows — identical behavior to before).
       // Row 0 = the primary service, rows 1+ = the additional lines.
