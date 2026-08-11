@@ -202,7 +202,7 @@ export function AddressAutocomplete({
                 tabIndex={-1}
                 onMouseEnter={() => setHi(i)}
                 onClick={() => choose(s)}
-                className={cn('w-full text-left px-3.5 py-2.5 text-sm text-ink flex items-center gap-2 transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface')}
+                className={cn('w-full text-left px-3.5 py-2.5 text-sm text-ink flex items-center gap-2 transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface-raised')}
               >
                 <MapPin className="w-3.5 h-3.5 text-ink-faint shrink-0" />
                 <span className="truncate">{s.text}</span>

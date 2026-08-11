@@ -327,7 +327,7 @@ export default function ServiceTemplatesPage() {
                   // The whole row opens the editor (the pencil was the only way in);
                   // the inline controls stop the click from bubbling.
                   <div key={t.id} onClick={() => openEdit(t)}
-                    className="flex items-center gap-3 sm:gap-4 px-5 py-3.5 cursor-pointer hover:bg-surface/40 transition-colors">
+                    className="flex items-center gap-3 sm:gap-4 px-5 py-3.5 cursor-pointer hover:bg-surface-raised/40 transition-colors">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className={`text-sm font-medium ${t.is_active ? 'text-ink' : 'text-ink-faint line-through'}`}>{t.name}</span>

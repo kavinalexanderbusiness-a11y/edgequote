@@ -221,7 +221,7 @@ export function PropertySelect({
             ) : rows.map((r, i) => (
               r.type === 'property' ? (
                 <button key={r.p.id} type="button" onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
-                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface')}>
+                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface-raised')}>
                   <Home className="w-3.5 h-3.5 text-ink-faint shrink-0" />
                   <span className="min-w-0 flex-1">
                     <span className="block text-ink truncate">{r.p.address}</span>
@@ -236,13 +236,13 @@ export function PropertySelect({
                 </button>
               ) : r.type === 'none' ? (
                 <button key="none" type="button" onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
-                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 transition-colors text-ink-muted', i === hi ? 'bg-surface' : 'hover:bg-surface')}>
+                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 transition-colors text-ink-muted', i === hi ? 'bg-surface' : 'hover:bg-surface-raised')}>
                   {noneLabel}
                   {value === '' && <Check className="w-4 h-4 text-accent-text shrink-0 ml-auto" />}
                 </button>
               ) : (
                 <button key="add" type="button" onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
-                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 border-t border-border text-accent-text transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface')}>
+                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 border-t border-border text-accent-text transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface-raised')}>
                   <Plus className="w-3.5 h-3.5 shrink-0" /> Add a new property
                 </button>
               )

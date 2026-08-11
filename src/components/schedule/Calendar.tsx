@@ -356,7 +356,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                 data-date={dateISO}
                 {...dayHandlers(dateISO, day)}
                 className={cn(
-                  'min-h-[108px] border-b border-r border-border p-1.5 text-left align-top transition-colors hover:bg-surface rounded-sm relative cursor-pointer',
+                  'min-h-[108px] border-b border-r border-border p-1.5 text-left align-top transition-colors hover:bg-surface-raised rounded-sm relative cursor-pointer',
                   !inMonth && 'bg-bg-secondary/40',
                   statusRow && dayStatusMeta(statusRow.status).shade,
                   selected && 'ring-2 ring-accent ring-inset z-10',
@@ -421,7 +421,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                 data-date={dateISO}
                 {...dayHandlers(dateISO, day)}
                 className={cn(
-                  'min-h-[320px] border-r border-border p-2 text-left align-top transition-colors hover:bg-surface cursor-pointer',
+                  'min-h-[320px] border-r border-border p-2 text-left align-top transition-colors hover:bg-surface-raised cursor-pointer',
                   statusRow && dayStatusMeta(statusRow.status).shade,
                   selected && 'ring-2 ring-accent ring-inset z-10',
                   i === 6 && 'border-r-0'

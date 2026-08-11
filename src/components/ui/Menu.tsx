@@ -171,7 +171,10 @@ export function Menu({ items, align = 'start', width = 288, ariaLabel = 'Menu', 
                   'w-full text-left flex items-start gap-2.5 px-2.5 py-2 rounded-lg transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                   it.danger
                     ? (i === active ? 'bg-red-500/10 text-red-400' : 'text-red-400/80 hover:bg-red-500/10 hover:text-red-400')
-                    : (i === active ? 'bg-surface text-ink' : 'text-ink-muted hover:bg-surface hover:text-ink'),
+                    // Keyboard-active row must match the pointer hover exactly —
+                    // both are "this is the item you're on". `surface` is the
+                    // panel's own fill, so it read as no highlight at all.
+                    : (i === active ? 'bg-surface-raised text-ink' : 'text-ink-muted hover:bg-surface-raised hover:text-ink'),
                   it.disabled && 'opacity-50 pointer-events-none',
                 )}>
                 {Icon && <Icon className={cn('w-4 h-4 shrink-0 mt-0.5', it.danger ? 'text-red-400' : 'text-accent-text')} />}

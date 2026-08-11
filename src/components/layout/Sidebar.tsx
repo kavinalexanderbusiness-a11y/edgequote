@@ -150,7 +150,7 @@ export function Sidebar() {
   const linkClass = (active: boolean) =>
     cn(
       'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-      active ? 'bg-accent/10 text-accent-text' : 'text-ink-muted hover:text-ink hover:bg-surface'
+      active ? 'bg-accent/10 text-accent-text' : 'text-ink-muted hover:text-ink hover:bg-surface-raised'
     )
 
   // ONE renderer for a nav row, so the ungrouped home link and every grouped
@@ -180,7 +180,7 @@ export function Sidebar() {
         <nav aria-label="Primary" className="flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-y-auto">
           <button
             onClick={() => { onNavigate?.(); openCommand() }}
-            className="flex items-center gap-3 px-3 py-2.5 mb-1 rounded-xl text-sm font-medium text-ink-muted bg-surface/60 border border-border hover:text-ink hover:bg-surface transition-all w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            className="flex items-center gap-3 px-3 py-2.5 mb-1 rounded-xl text-sm font-medium text-ink-muted bg-surface/60 border border-border hover:text-ink hover:bg-surface-raised transition-all w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
             <Search className="w-4 h-4" />
             <span className="flex-1 text-left">Search</span>
             <Kbd className="hidden lg:inline">⌘K</Kbd>

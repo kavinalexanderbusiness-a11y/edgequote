@@ -690,7 +690,16 @@ export default function InvoicesPage() {
             : filter ? `No ${filter} invoices.` : 'No invoices to show.'}
         </InlineEmpty>
       ) : (
-        <div className="space-y-3">
+        /* ── ONE panel, not 66 cards ─────────────────────────────────────────
+           In detail mode each invoice IS its own object (its own payments, its
+           own deposit panel), so it keeps its own card. The LIST is one thing —
+           "which invoice?" — and 66 separately-bordered, separately-filled,
+           gap-separated cards asked the eye to parse 66 objects to answer it.
+           Measured on the real page: 66 drawn boundaries became 1. A hairline
+           between rows carries the same separation at a fraction of the weight,
+           which is the pattern the app's best surfaces (the dashboard's work
+           days, Grow's Customer Health) already use by hand. */
+        <div className={detailMode ? 'space-y-3' : 'rounded-card border border-border bg-surface divide-y divide-border overflow-hidden'}>
           {visible.map((inv, i) => detailMode ? (
             <InvoiceDetail
               key={inv.id}
@@ -772,7 +781,11 @@ export default function InvoicesPage() {
                   type="button"
                   onClick={() => openInvoice(inv)}
                   aria-label={`Open ${inv.invoice_number} for ${inv.customer_name || 'this customer'}`}
-                  className={`w-full text-left rounded-card border border-border bg-surface hover:border-border-strong active:scale-[0.997] transition-all px-4 py-3.5 flex items-center gap-3 animate-rise stagger-${Math.min(i + 1, 6)} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
+                  // A row in a panel, no longer a card of its own: the border,
+                  // radius and fill live on the panel now, so the row carries
+                  // only its hover. focus ring is `-inset` so it draws INSIDE
+                  // the clipped panel instead of being cut off by it.
+                  className={`w-full text-left bg-transparent hover:bg-surface-raised active:scale-[0.997] transition-all px-4 py-3.5 flex items-center gap-3 animate-rise stagger-${Math.min(i + 1, 6)} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40`}
                 >
                   <div className="min-w-0 flex-1">
                     {/* flex-wrap: an invoice can carry BOTH a status pill and the

@@ -282,7 +282,19 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
           </Card>
         )
       ) : (
-        <div className="grid gap-3">
+        // ── ONE panel, not 100 cards ────────────────────────────────────────
+        // The list answers "which customer?". As 100 separately-bordered,
+        // gap-separated cards it made the busiest screen in the app read as 100
+        // competing objects; a hairline between rows separates them just as well
+        // for a fraction of the visual weight.
+        //
+        // `min-w-0` is load-bearing, not tidiness: a bare `grid`/flex track is
+        // floored at its items' MIN-CONTENT width, and this row's min-content is
+        // ~501px (checkbox + avatar + name + Quote button + overflow menu). At
+        // 390px that pushed every row 111px past the viewport — measured live —
+        // putting "Quote", the row's primary action, off-screen behind a
+        // sideways scroll nobody would think to try.
+        <div className="rounded-card border border-border bg-surface divide-y divide-border overflow-hidden">
           {filtered.slice(0, RENDER_CAP).map((c, i) => (
             // STRETCHED-LINK ROW: the whole card opens the profile, not just the
             // ~14px name text — a glove-sized target on the app's busiest list.
@@ -294,8 +306,19 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
             // `relative z-10`, or the overlay silently swallows it into a profile
             // navigation. Passive content (avatar, badges, city, date) stays under
             // the overlay on purpose — tapping it opens the profile.
-            <Card key={c.id} {...hoverIntent(() => prefetchCustomer(c.id))}
-              className={cn('relative flex items-center gap-3 px-5 py-4 transition-colors card-lift animate-rise', i < 6 && `stagger-${i + 1}`, sel.isSelected(c.id) ? 'border-accent/50' : 'hover:border-border-strong')}>
+            // A row of the panel above, not a card: no border, no radius, no
+            // card-lift (a row that floats off its own list is a card pretending
+            // to be a row). Selection now reads as a tinted row + accent rail
+            // rather than a recoloured border, which a divided list has no room
+            // for. `min-w-0` lets the track shrink past min-content — see above.
+            // flex-wrap + ml-auto on the actions: the fixed furniture (checkbox,
+            // avatar, "Quote", the ⋯ menu) is ~208px, so at 390px the identity
+            // column was left ~130px and the customer's NAME wrapped to two
+            // lines while a button kept the space. Wrapping lets the actions
+            // drop to their own right-aligned line on a phone and changes
+            // nothing on a desktop, where the row never runs out of width.
+            <div key={c.id} {...hoverIntent(() => prefetchCustomer(c.id))}
+              className={cn('relative min-w-0 flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-4 sm:px-5 transition-colors animate-rise', i < 6 && `stagger-${i + 1}`, sel.isSelected(c.id) ? 'bg-accent/[0.07] shadow-[inset_2px_0_0_0_rgb(var(--c-accent))]' : 'hover:bg-surface-raised')}>
               <SelectCheckbox className="relative z-10" checked={sel.isSelected(c.id)} onToggle={shift => sel.toggle(c.id, shift)} />
               {/* Avatar — deterministic colour per customer (scannable identity) */}
               <Avatar name={c.name} seed={c.id} />
@@ -316,8 +339,13 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
                     the wrapped lines overlap — the same bug wearing a different hat. */}
                 <div className="flex items-center gap-x-4 gap-y-2 mt-1 flex-wrap">
                   {c.email && (
-                    <a href={`mailto:${c.email}`} className="relative z-10 flex items-center gap-1.5 py-2 text-xs text-ink-muted hover:text-ink hover:underline touch-manipulation">
-                      <Mail className="w-3.5 h-3.5 shrink-0" /> {c.email}
+                    // min-w-0 + truncate: the row is now free to shrink to the
+                    // viewport (it used to spill 111px past it), and a long
+                    // address is the one child with no natural break — without
+                    // this it runs under the actions and the panel clips it,
+                    // which is the same information loss wearing a tidier hat.
+                    <a href={`mailto:${c.email}`} className="relative z-10 min-w-0 max-w-full flex items-center gap-1.5 py-2 text-xs text-ink-muted hover:text-ink hover:underline touch-manipulation">
+                      <Mail className="w-3.5 h-3.5 shrink-0" /> <span className="truncate">{c.email}</span>
                     </a>
                   )}
                   {c.phone && (
@@ -337,7 +365,11 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
                   the secondary actions live in one shared overflow menu.
                   `relative z-10` keeps this whole cluster above the row's stretched
                   profile-link overlay (see the row comment above). */}
-              <div className="relative z-10 flex items-center gap-1">
+              {/* `w-full` below sm is what actually forces the wrap: the info
+                  column is `flex-1 min-w-0` (basis 0), so it will always squeeze
+                  itself onto one line with the actions rather than push them off
+                  it — a full-width child is the only deterministic break. */}
+              <div className="relative z-10 ml-auto flex items-center justify-end gap-1 w-full sm:w-auto">
                 <Button variant="secondary" size="sm" onClick={() => router.push(`/dashboard/quotes/new?customer=${c.id}`)} title="Start a new quote for this customer">
                   <FileText className="w-4 h-4" /> Quote
                 </Button>
@@ -356,7 +388,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
                   )}
                 </Menu>
               </div>
-            </Card>
+            </div>
           ))}
         </div>
       )}

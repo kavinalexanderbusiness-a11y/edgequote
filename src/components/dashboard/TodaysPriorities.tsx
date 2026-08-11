@@ -73,7 +73,7 @@ export function TodaysPriorities({ items }: { items: Priority[] }) {
                   // row. A ranked queue whose #1 looks identical to its #8 isn't
                   // opening on "the one next action"; this makes where-to-start
                   // unmistakable without inventing a new pattern.
-                  className={cn('group flex items-center gap-3 px-4 sm:px-5 py-3.5 hover:bg-surface/40 active:bg-surface/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50',
+                  className={cn('group flex items-center gap-3 px-4 sm:px-5 py-3.5 hover:bg-surface-raised/40 active:bg-surface-raised/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50',
                     i === 0 && 'bg-accent/[0.04]')}
                 >
                   {/* Both decorative: this is an <ol>, so assistive tech already

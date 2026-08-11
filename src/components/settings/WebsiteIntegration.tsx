@@ -411,7 +411,7 @@ function CopyRow({ label, value, copied, onCopy, hint, icon: Icon, openHref }: {
         <Button size="sm" variant="ghost" onClick={onCopy}>{copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy</>}</Button>
         {openHref && (
           <a href={openHref} target="_blank" rel="noopener noreferrer" aria-label="Open booking link in new tab"
-            className="inline-flex items-center justify-center rounded-xl text-ink-muted hover:text-ink hover:bg-surface px-3.5 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            className="inline-flex items-center justify-center rounded-xl text-ink-muted hover:text-ink hover:bg-surface-raised px-3.5 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
             <ExternalLink className="w-3.5 h-3.5" />
           </a>
         )}

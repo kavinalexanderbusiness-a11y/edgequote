@@ -35,7 +35,7 @@ export function CodeBlock({ code, label, className }: { code: string; label?: st
         type="button"
         onClick={() => copy('code', code)}
         aria-label="Copy code"
-        className="absolute right-2 top-2 rounded-md p-1.5 text-ink-faint hover:text-ink hover:bg-surface transition-colors"
+        className="absolute right-2 top-2 rounded-md p-1.5 text-ink-faint hover:text-ink hover:bg-surface-raised transition-colors"
         style={label ? { top: '1.65rem' } : undefined}
       >
         {copiedKey === 'code' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}

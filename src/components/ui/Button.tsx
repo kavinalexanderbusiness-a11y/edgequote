@@ -21,7 +21,7 @@ const BASE = 'inline-flex items-center justify-center gap-2 font-medium rounded-
 const VARIANTS: Record<ButtonVariant, string> = {
   primary:   'bg-accent text-black hover:bg-accent-hover active:scale-[0.98] shadow-sm',
   secondary: 'bg-surface border border-border-strong text-ink hover:bg-surface-raised active:scale-[0.98]',
-  ghost:     'text-ink-muted hover:text-ink hover:bg-surface active:scale-[0.98]',
+  ghost:     'text-ink-muted hover:text-ink hover:bg-surface-raised active:scale-[0.98]',
   danger:    'bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 active:scale-[0.98]',
 }
 

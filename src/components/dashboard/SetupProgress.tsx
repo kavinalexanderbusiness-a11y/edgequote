@@ -84,7 +84,7 @@ export function SetupProgress() {
       <div className="border-t border-border divide-y divide-border">
         {missing.map(item => (
           <Link key={item.key} href={item.href}
-            className="flex items-center gap-3 px-5 py-3 hover:bg-surface transition-colors group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-inset">
+            className="flex items-center gap-3 px-5 py-3 hover:bg-surface-raised transition-colors group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-inset">
             <Circle className="w-4 h-4 text-ink-faint shrink-0" />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium text-ink">{item.label}</p>

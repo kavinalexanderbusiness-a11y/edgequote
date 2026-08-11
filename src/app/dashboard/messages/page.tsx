@@ -934,7 +934,7 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
         onContextMenu={selectMode ? undefined : (e) => { e.preventDefault(); openMenu.current() }}
         onTouchStart={selectMode ? undefined : onTouchStart} onTouchMove={selectMode ? undefined : onTouchMove} onTouchEnd={selectMode ? undefined : onTouchEnd}
         style={{ transform: `translateX(${dx}px)`, transition: dx === 0 ? 'transform 0.15s' : 'none', height: ROW_H }}
-        className={cn('relative bg-bg-secondary w-full text-left px-4 flex items-center gap-3 cursor-pointer hover:bg-surface/40 transition-colors outline-none focus-visible:bg-surface/60 focus-visible:ring-1 focus-visible:ring-accent focus-visible:ring-inset',
+        className={cn('relative bg-bg-secondary w-full text-left px-4 flex items-center gap-3 cursor-pointer hover:bg-surface-raised/40 transition-colors outline-none focus-visible:bg-surface-raised/60 focus-visible:ring-1 focus-visible:ring-accent focus-visible:ring-inset',
           selected && 'bg-accent/10 before:absolute before:left-0 before:inset-y-0 before:w-[3px] before:bg-accent before:content-[""]', checked && 'bg-accent/10')}
       >
         {selectMode && <input type="checkbox" readOnly checked={checked} className="accent-accent w-4 h-4 shrink-0 pointer-events-none" />}

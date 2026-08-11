@@ -194,7 +194,11 @@ const ServicePicker = forwardRef<HTMLInputElement, ServicePickerProps>(
                   id={`${listId}-${i}`} role="option" aria-selected={templateId === r.t.id}
                   onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
                   className={cn('w-full text-left px-3.5 py-2.5 flex items-center gap-2 transition-colors',
-                    i === hi ? 'bg-surface' : 'hover:bg-surface')}>
+                    // -raised, not `surface`: this popover's own fill IS the card
+                    // rung, so highlighting a row with `surface` painted it the
+                    // colour it already was. Keyboard-active and pointer-hover
+                    // must also match — they mean the same thing.
+                    i === hi ? 'bg-surface-raised' : 'hover:bg-surface-raised')}>
                   <span className="min-w-0 flex-1">
                     {/* The NAME carries the row. Price is the supporting fact, one
                         step down in size and colour, so a scan reads services
@@ -217,7 +221,7 @@ const ServicePicker = forwardRef<HTMLInputElement, ServicePickerProps>(
               {selected && onDetach && (
                 <button type="button"
                   onClick={() => { onDetach(); setOpen(false); setFiltering(false); setQuery(''); setHi(-1) }}
-                  className="w-full text-left px-3.5 py-2.5 text-xs text-accent-text border-t border-border hover:bg-surface transition-colors">
+                  className="w-full text-left px-3.5 py-2.5 text-xs text-accent-text border-t border-border hover:bg-surface-raised transition-colors">
                   This isn’t “{selected.name}” — save it as one-off work
                 </button>
               )}
