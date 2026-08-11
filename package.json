@@ -33,6 +33,7 @@
     "verify:labor": "tsx scripts/verify-labor.ts",
     "verify:density": "tsx scripts/verify-density.ts",
     "verify:learning": "tsx scripts/verify-learning.ts",
+    "verify:estimate-actual": "tsx scripts/verify-estimate-actual.ts",
     "verify:analytics": "tsx scripts/verify-analytics.ts",
     "verify:integrations": "tsx scripts/verify-integrations.ts",
     "verify:inventory": "tsx scripts/verify-inventory.ts",

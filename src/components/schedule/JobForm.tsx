@@ -19,6 +19,7 @@ import {
 } from '@/lib/seasons'
 import { WeeklyScheduler } from '@/components/schedule/WeeklyScheduler'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
+import { EstimatedVsActual } from '@/components/labor/EstimatedVsActual'
 import type { Cadence } from '@/lib/labor'
 import { resolvePrefs, type PrefSource } from '@/lib/preferences'
 import { findJobMatch, type JobLiteForMatch } from '@/lib/dedup'
@@ -588,9 +589,23 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         )} />
 
       {status === 'completed' && (
-        <Input label="Actual time on site (minutes)" type="number" min="0" step="5"
-          hint="Captured for future pricing intelligence — planned vs. actual time."
-          {...register('actual_minutes', { min: 0 })} />
+        <div className="space-y-2.5">
+          <Input label="Actual time on site (minutes)" type="number" min="0" step="5"
+            hint="Captured for future pricing intelligence — planned vs. actual time."
+            {...register('actual_minutes', { min: 0 })} />
+          {/* The comparison sits directly under the field that feeds it, so the
+              answer to "was I close?" appears as the number is typed rather than
+              on some report the owner has to go looking for. All arithmetic and
+              every honesty rule live in lib/estimateVsActual. */}
+          <EstimatedVsActual
+            visit={{
+              id: excludeJobId || 'current',
+              status,
+              service_type: serviceType || null,
+              duration_minutes: Number(watch('duration_minutes')) || null,
+              actual_minutes: Number(watch('actual_minutes')) || null,
+            }} />
+        </div>
       )}
 
       <Textarea label="Notes" placeholder="Access instructions, gate codes, special requests..."
