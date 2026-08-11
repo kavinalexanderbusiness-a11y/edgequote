@@ -25,7 +25,8 @@ import { confirm as confirmDialog } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
 import { ledgerRowType } from '@/lib/payments/analytics'
 import {
-  daysAwayLabel, isUsableEmail, isUsablePhone, liveStatusOf, primaryPortalAction, visitToCalendarEvent, visitDay,
+  daysAwayLabel, invoiceDepositPaidNote, invoicePaymentNote, isUsableEmail, isUsablePhone,
+  liveStatusOf, primaryPortalAction, visitToCalendarEvent, visitDay,
   type AddContactResult, type ContactGap, type Derived, type PortalJob, type PortalView, type SubmitRequestFn,
 } from '../model'
 import { AddToCalendar, PortalSection, StatusPill, StatusStepper, Thumb, type TabProps } from './shared'
@@ -80,6 +81,18 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
   // the balance shown is pre-payment, and a second tap is a second real charge.
   const canPayInline = !!oneInvoice && actions.paymentsEnabled && !actions.paymentPending && oneInvoice.balance > 0
 
+  // Money already received on the ONE invoice being asked about, in the words the
+  // Billing row already uses. Null when nothing has been paid yet (a plain bill is
+  // its own explanation) or when several invoices make up the figure.
+  const paidContext = (() => {
+    if (!oneInvoice) return null
+    const depPaid = invoiceDepositPaidNote(oneInvoice)
+    if (depPaid) return `Deposit of ${depPaid.paid} received — this is the rest of ${formatCurrency(oneInvoice.amount)}`
+    const note = invoicePaymentNote(oneInvoice)
+    if (note) return `${note.paid} already paid of ${formatCurrency(oneInvoice.amount)} — this is what’s left`
+    return null
+  })()
+
   // "Outstanding" is collections vocabulary — it lands like an accusation on the one
   // banner someone reads when they're already tense about money.
   const dueBanner = view.money.due > 0 ? (
@@ -109,9 +122,20 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
                   <p className="text-sm font-semibold text-ink">
                     Amount due · <span className="tabular-nums text-amber-400">{formatCurrency(view.money.due)}</span>
                   </p>
-                  <p className="text-xs text-ink-muted">
-                    {view.money.owingCount === 1 ? '1 invoice' : `${view.money.owingCount} invoices`} — view and pay whenever you&rsquo;re ready
-                  </p>
+                  {/* What that figure is the REST OF. A customer who has already part-paid
+                      met their own payment twice on one screen with nothing linking them:
+                      "Amount due · $347.50" here, and "Payment received · Card · $347.50"
+                      in the activity feed a screen below — the same number, once as a debt
+                      and once as a receipt, which reads as the payment not having landed.
+                      Billing's row has always said it properly; this is the same sentence
+                      from the same verify-pinned helpers (invoiceDepositPaidNote /
+                      invoicePaymentNote — the engine's figures, no arithmetic here), said
+                      on the surface a texted link actually opens. Only when ONE invoice is
+                      named: with several, no single breakdown can speak for the sum. */}
+                  <p className="text-xs text-ink-muted">{paidContext ?? (
+                    view.money.owingCount === 1 ? '1 invoice — view and pay whenever you’re ready'
+                      : `${view.money.owingCount} invoices — view and pay whenever you’re ready`
+                  )}</p>
                 </>
               )}
             </div>
@@ -146,7 +170,11 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-9 h-9 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0"><FileText className="w-4 h-4" /></div>
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-ink truncate">
+                  {/* No `truncate`: this is the single sentence the whole card exists to
+                      say, and on a 390px phone it clipped to "3 quotes are ready for your
+                      re…". A headline that runs to two lines costs one line; a headline
+                      that stops mid-word costs the message. */}
+                  <p className="text-sm font-semibold text-ink">
                     {awaiting.length === 1
                       ? (awaiting[0].title !== 'Quote' ? `Your ${awaiting[0].title} quote is ready` : 'Your quote is ready')
                       : `${awaiting.length} quotes are ready for your review`}
@@ -290,20 +318,12 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
                 <PlanRow p={p} heroDate={next?.scheduled_date ?? null} />
                 {/* The way out, on the plan itself. These SEND A REQUEST the owner
                     confirms — the plan doesn't change until a human says so, and the
-                    copy says exactly that. Free-text "send us a message" stays below
-                    for everything these don't cover. */}
-                <PlanActions plan={p} businessName={biz?.company_name || null} submitRequest={actions.submitRequest} />
+                    copy says exactly that. */}
+                <PlanActions plan={p} businessName={biz?.company_name || null} submitRequest={actions.submitRequest}
+                  phone={biz?.phone || null} onMessage={() => actions.navigate('messages')} />
               </div>
             ))}
           </div>
-          {/* An ongoing arrangement with no visible way out is what makes people feel
-              trapped — the buttons above are that way out. This line covers the asks
-              that aren't a button (change frequency, different day of week, …). */}
-          <p className="text-xs text-ink-muted mt-2.5 pt-2.5 border-t border-border/60">
-            Anything else about your plan?{' '}
-            <button type="button" onClick={() => actions.navigate('messages')} className="text-accent-text font-medium hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">Send us a message</button>
-            {biz?.phone ? <> or call <a href={`tel:${biz.phone}`} className="text-accent-text font-medium hover:underline">{biz.phone}</a>.</> : '.'}
-          </p>
         </div>
       )}
 
@@ -324,14 +344,22 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
         <div className="animate-rise stagger-6">
           <PortalSection title="Recent activity">
             <div className="rounded-card border border-border bg-bg-secondary divide-y divide-border/60">
+              {/* Title, then the details beneath it. All three facts used to share ONE
+                  truncating line with the date pinned to the right, so the part that got
+                  cut was always the LAST — which is where the money is. Real rows on a
+                  390px phone read "Payment received · E-transfer · $7…" and "Invoice
+                  INV-0060 issued · $100.00…": a receipt list whose amounts were the one
+                  thing it clipped. The amount and the date now sit on their own short
+                  line, where neither can be cut off. */}
               {events.map(e => (
-                <div key={e.id} className="flex items-center gap-2.5 px-3.5 py-2.5">
-                  <span className={cn('w-6 h-6 rounded-full border flex items-center justify-center shrink-0', e.tone)}><e.icon className="w-3 h-3" /></span>
-                  <p className="text-sm text-ink min-w-0 flex-1 truncate">
-                    {e.title}
-                    {e.sub && <span className="text-xs text-ink-muted"> · {e.sub}</span>}
-                  </p>
-                  <span className="text-[11px] text-ink-faint shrink-0">{formatDate(e.at)}</span>
+                <div key={e.id} className="flex items-start gap-2.5 px-3.5 py-2.5">
+                  <span className={cn('w-6 h-6 rounded-full border flex items-center justify-center shrink-0 mt-0.5', e.tone)}><e.icon className="w-3 h-3" /></span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-ink truncate">{e.title}</p>
+                    <p className="text-xs text-ink-faint tabular-nums">
+                      {[e.sub, formatDate(e.at)].filter(Boolean).join(' · ')}
+                    </p>
+                  </div>
                 </div>
               ))}
             </div>
@@ -366,9 +394,13 @@ function TrustCard({ view }: { view: PortalView }) {
       </div>
       {(biz.phone || biz.email_primary || biz.website) && (
         <div className="flex flex-wrap gap-2 mt-3">
-          {biz.phone && <a href={`tel:${biz.phone}`} className="flex-1 min-w-[100px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-tertiary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Phone className="w-4 h-4 text-accent-text" /> Call</a>}
-          {biz.email_primary && <a href={`mailto:${biz.email_primary}`} className="flex-1 min-w-[100px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-tertiary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Mail className="w-4 h-4 text-accent-text" /> Email</a>}
-          {biz.website && <a href={biz.website.startsWith('http') ? biz.website : `https://${biz.website}`} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-[100px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-tertiary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Globe className="w-4 h-4 text-accent-text" /> Website</a>}
+          {/* `tap-target-y` (the codebase's pointer-coarse 44px floor): measured at
+              42px on a phone, so the three ways to reach a human were the only real
+              buttons on Home under the gloved-thumb minimum. Two pixels, but this is
+              the card that exists to be tapped by someone who wants a person. */}
+          {biz.phone && <a href={`tel:${biz.phone}`} className="tap-target-y flex-1 min-w-[100px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-tertiary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Phone className="w-4 h-4 text-accent-text" /> Call</a>}
+          {biz.email_primary && <a href={`mailto:${biz.email_primary}`} className="tap-target-y flex-1 min-w-[100px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-tertiary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Mail className="w-4 h-4 text-accent-text" /> Email</a>}
+          {biz.website && <a href={biz.website.startsWith('http') ? biz.website : `https://${biz.website}`} target="_blank" rel="noopener noreferrer" className="tap-target-y flex-1 min-w-[100px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-tertiary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Globe className="w-4 h-4 text-accent-text" /> Website</a>}
         </div>
       )}
     </div>
@@ -499,8 +531,22 @@ function RescheduleRequest({ job, todayISO, submitRequest }: { job: PortalJob; t
 }
 
 // ── Plan actions (skip next / pause / cancel — all requests, never mutations) ──
-function PlanActions({ plan, businessName, submitRequest }: {
+// BEHIND A DISCLOSURE, and that is the whole change here. The three buttons were
+// permanent, and on the home screen of a customer whose plan is running perfectly
+// the reddest, most eye-catching control on the page was "Cancel plan" — an exit
+// offered before anything had gone wrong. They also crowded out the answer people
+// actually come for: on a real portal the plan card carried five tap targets
+// (three of them here) directly under "Next visit Aug 14".
+//
+// They are NOT deleted. An ongoing arrangement with no visible way out is what
+// makes people feel trapped, and that reasoning still holds — the way out is one
+// tap away, named plainly, instead of standing open. The free-text line that used
+// to sit outside this card (covering the asks that aren't a button — change
+// frequency, a different weekday) moves inside it, so the default view of a
+// healthy plan is the plan, and nothing else.
+function PlanActions({ plan, businessName, submitRequest, phone, onMessage }: {
   plan: Derived['plans'][number]; businessName: string | null; submitRequest: SubmitRequestFn
+  phone?: string | null; onMessage?: () => void
 }) {
   const [busy, setBusy] = useState<string | null>(null)
   const [sent, setSent] = useState<string | null>(null)
@@ -541,19 +587,34 @@ function PlanActions({ plan, businessName, submitRequest }: {
   )
   const btn = 'inline-flex items-center gap-1 text-xs font-medium rounded-lg border border-border bg-bg-tertiary px-2.5 py-1.5 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50'
   return (
-    <div className="flex flex-wrap gap-1.5 mt-2 pl-[22px]">
-      {plan.nextVisitDate && plan.nextJobId && (
-        <button type="button" disabled={busy !== null} onClick={() => act('skip_next')} className={cn(btn, 'text-ink-muted hover:text-ink hover:border-border-strong')}>
-          {busy === 'skip_next' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <SkipForward className="w-3.5 h-3.5" />} Skip next visit
+    <details className="group mt-1.5 pl-[22px]">
+      <summary className="tap-target-y list-none cursor-pointer inline-flex items-center gap-1 text-xs font-medium text-ink-muted hover:text-ink rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+        Change or pause this plan
+        <ChevronDown className="w-3.5 h-3.5 transition-transform group-open:rotate-180" aria-hidden="true" />
+      </summary>
+      <div className="flex flex-wrap gap-1.5 mt-2">
+        {plan.nextVisitDate && plan.nextJobId && (
+          <button type="button" disabled={busy !== null} onClick={() => act('skip_next')} className={cn(btn, 'text-ink-muted hover:text-ink hover:border-border-strong')}>
+            {busy === 'skip_next' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <SkipForward className="w-3.5 h-3.5" />} Skip next visit
+          </button>
+        )}
+        <button type="button" disabled={busy !== null} onClick={() => act('pause')} className={cn(btn, 'text-ink-muted hover:text-ink hover:border-border-strong')}>
+          {busy === 'pause' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <PauseCircle className="w-3.5 h-3.5" />} Pause plan
         </button>
+        <button type="button" disabled={busy !== null} onClick={() => act('cancel')} className={cn(btn, 'text-red-400/70 hover:text-red-400 hover:border-red-500/30')}>
+          {busy === 'cancel' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />} Cancel plan
+        </button>
+      </div>
+      {/* Everything the three buttons don't cover — a different weekday, a change of
+          frequency — kept with them rather than standing permanently outside the card. */}
+      {onMessage && (
+        <p className="text-xs text-ink-muted mt-2">
+          Something else?{' '}
+          <button type="button" onClick={onMessage} className="text-accent-text font-medium hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">Send us a message</button>
+          {phone ? <> or call <a href={`tel:${phone}`} className="text-accent-text font-medium hover:underline">{phone}</a>.</> : '.'}
+        </p>
       )}
-      <button type="button" disabled={busy !== null} onClick={() => act('pause')} className={cn(btn, 'text-ink-muted hover:text-ink hover:border-border-strong')}>
-        {busy === 'pause' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <PauseCircle className="w-3.5 h-3.5" />} Pause plan
-      </button>
-      <button type="button" disabled={busy !== null} onClick={() => act('cancel')} className={cn(btn, 'text-red-400/70 hover:text-red-400 hover:border-red-500/30')}>
-        {busy === 'cancel' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />} Cancel plan
-      </button>
-    </div>
+    </details>
   )
 }
 
@@ -628,8 +689,16 @@ function useRecentActivity(view: PortalView): TLEvent[] {
         sub: [q.service_type || null, outcome].filter(Boolean).join(' · ') || null,
       })
     }
+    // The visit the "Latest visit" card above is already showing, with its own
+    // heading, its date and its photos. It was ALSO the top row of this feed —
+    // "Weekly Mowing · Aug 7, 2026" as a card, then "Weekly Mowing completed ·
+    // Aug 7, 2026" as a row, ~600px apart. History starts where the card stops.
+    const heroVisitId = view.derived.lastCompleted?.id ?? null
     for (const j of data.jobs) {
-      if (j.completed_at || j.status === 'completed') { ev.push({ id: 'jc' + j.id, at: j.completed_at || j.scheduled_date, icon: CheckCircle2, tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', title: `${j.service_type || j.title} completed`, sub: null }); continue }
+      if (j.completed_at || j.status === 'completed') {
+        if (j.id === heroVisitId) continue
+        ev.push({ id: 'jc' + j.id, at: j.completed_at || j.scheduled_date, icon: CheckCircle2, tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', title: `${j.service_type || j.title} completed`, sub: null }); continue
+      }
       // A visit that hasn't happened yet is not recent ACTIVITY. The next-service
       // hero states it in large type at the top of this very page, and the Visits
       // tab lists every upcoming one — so "Weed Removal scheduled · Aug 11, 2026"
@@ -646,13 +715,19 @@ function useRecentActivity(view: PortalView): TLEvent[] {
     for (const d of docItems.filter(d => d.kind === 'invoice')) {
       // Currently being asked for → the amount-due banner owns it.
       if (dueInvoiceIds.has(d.id)) continue
-      const settled = d.status === 'paid' || d.status === 'overpaid'
+      // `d.status` is the DISPLAY status the model settled once (../model's overdue
+      // and settled overlays, both derived from the ledger balance) — so this feed
+      // reads the same verdict as the Billing row's pill and cannot drift from it.
+      // It printed "$100.00 · Due" for a fully-received invoice until that overlay
+      // existed; the fix belongs there, once, not in each surface that asks.
+      const settlement = d.status === 'cancelled' ? 'Cancelled'
+        : d.status === 'paid' || d.status === 'overpaid' ? 'Paid' : 'Due'
       ev.push({
         id: d.id, at: d.date, icon: Receipt,
         tone: 'text-ink-muted border-border bg-bg-tertiary',
         title: `Invoice ${d.number} issued`,
         // The amount alone left the customer to cross-reference whether they'd paid it.
-        sub: `${formatCurrency(d.amount)}${settled ? ' · Paid' : d.status === 'cancelled' ? ' · Cancelled' : ' · Due'}`,
+        sub: `${formatCurrency(d.amount)} · ${settlement}`,
       })
     }
     // Classify by the ONE ledger classifier, never the sign of the amount: a $200

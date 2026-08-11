@@ -734,5 +734,89 @@ console.log('\nrecentPaymentLanded (post-checkout confirmation):')
     /owingDocs = view\.docItems\.filter\([^)]*status !== 'cancelled'[^)]*\)/.test(paySection))
 }
 
+// 10. What a customer is TOLD about a bill follows the ledger, not the status
+//     column — plus the surface contracts of the simplification pass.
+{
+  const invOf = (over: Record<string, unknown>) => ({
+    id: 'i-x', invoice_number: 'INV-X', service_type: 'Mowing', amount: 100,
+    status: 'unpaid', issued_date: '2026-07-12', due_date: '2026-07-26', notes: null,
+    address: null, property_id: null, line_items: null, job_id: null,
+    created_at: '2026-07-12T10:00:00Z', discount_type: null, discount_value: null,
+    amount_paid: 0, ...over,
+  })
+  // No GST by default so "amount 100, paid 100" is exactly the live INV-0060
+  // shape. The GST case gets its own check below — it is the one that proves the
+  // overlay reads the ENGINE's inclusive total rather than the raw amount column.
+  // Typed as the payload's own business shape — inferring it from the no-GST
+  // literal makes `gst_percent: number`, which the real (nullable) business then
+  // fails to satisfy. tsx runs it either way; `next build` is the one that says so.
+  const noGstBiz: PortalData['business'] = { ...FULL.business!, gst_percent: 0 }
+  const docOf = (over: Record<string, unknown>, business: PortalData['business'] = noGstBiz) => buildDocItems({
+    quotes: [], invoices: [invOf(over)] as unknown as PortalData['invoices'],
+    properties: [], business, todayISO: TODAY, renderers,
+  })[0]
+
+  // The live shape this fixed: INV-0060, stored 'unpaid', $100.00 of $100.00
+  // received. Every balance-derived surface said nothing was owed while the pill
+  // and the Home feed said "Due".
+  const fullyReceived = docOf({ status: 'unpaid', amount_paid: 100 })
+  check('a fully-received invoice never reads as owing, whatever the status column says',
+    fullyReceived.status === 'paid' && fullyReceived.balance === 0)
+  check('… and the overlay changes only the WORD — balance and the ask stay 0',
+    fullyReceived.balance === 0 && fullyReceived.payAmount === 0 && fullyReceived.amount === 100)
+  // A 'sent' invoice settled by e-transfer is the same shape.
+  check('a settled-but-unsynced "sent" invoice reads Paid too',
+    docOf({ status: 'sent', amount_paid: 100 }).status === 'paid')
+  // Cancelled keeps its own word — a withdrawn charge must stay explainable.
+  check('a cancelled invoice is never relabelled Paid by the overlay',
+    docOf({ status: 'cancelled', amount_paid: 100 }).status === 'cancelled')
+  check('a cancelled UNPAID invoice still reads cancelled, not Due',
+    docOf({ status: 'cancelled', amount_paid: 0 }).status === 'cancelled')
+  // 'overpaid' is the more specific truth and outranks a generic "paid".
+  check('an overpaid invoice keeps the more specific word',
+    docOf({ status: 'overpaid', amount_paid: 130 }).status === 'overpaid')
+  // The two overlays are mutually exclusive by construction (one needs balance
+  // > 0, the other <= 0) — an unpaid, past-due bill must still shout.
+  check('the settled overlay cannot mask an overdue bill',
+    docOf({ status: 'unpaid', amount_paid: 0, due_date: '2026-07-01' }).status === 'overdue')
+  check('a part-paid past-due bill is still overdue',
+    docOf({ status: 'partial', amount_paid: 40, due_date: '2026-07-01' }).status === 'overdue')
+  // The overlay asks the balance ENGINE, which works on the GST-inclusive total.
+  // Paying the pre-tax figure does NOT settle a taxed bill — reading the raw
+  // `amount` column here would tell a customer they were square while $5 stood.
+  const taxed = docOf({ status: 'unpaid', amount_paid: 100 }, FULL.business!)
+  check('paying the pre-tax amount does not settle a GST invoice',
+    taxed.amount === 105 && taxed.balance === 5 && taxed.status === 'unpaid')
+
+  const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8')
+  const homeTab = read('src/app/portal/[token]/components/HomeTab.tsx')
+  const billingTab = read('src/app/portal/[token]/components/BillingTab.tsx')
+  const paySection = read('src/app/portal/[token]/components/PaymentsSection.tsx')
+
+  // 10a. Home's amount-due banner explains what the figure is the REST of, using
+  //      the SAME pinned helpers the Billing row uses — never fresh arithmetic.
+  //      Without it a part-paid customer met "Amount due · $347.50" and
+  //      "Payment received · $347.50" on one page with nothing linking them.
+  check('Home\'s due banner sources its paid-context from the pinned helpers',
+    homeTab.includes('invoiceDepositPaidNote(oneInvoice)') && homeTab.includes('invoicePaymentNote(oneInvoice)'))
+  // 10b. Payment INSTRUCTIONS only while there is something to pay.
+  check('Ways-to-pay renders only when a bill is actually owed',
+    paySection.includes('const hasSomethingToPay = owingDocs.length > 0') && paySection.includes('{hasSomethingToPay && ('))
+  // 10c. The plan's exit verbs (including a red "Cancel plan") stay behind one
+  //      disclosure — they must not greet a customer whose plan is running fine.
+  check('plan change/pause/cancel sit behind a disclosure, not on the home screen',
+    homeTab.includes('Change or pause this plan') && /<summary[^>]*>\s*\n?\s*Change or pause this plan/.test(homeTab))
+  // 10d. A document row's title says what the document is FOR — clipping it to
+  //      "Weed removal dep…" beside a money figure is a bill you can't identify.
+  check('a Billing row title is not truncated',
+    billingTab.includes('text-sm font-semibold text-ink tracking-tight">{d.title}')
+    && !billingTab.includes('text-ink truncate tracking-tight">{d.title}'))
+  // 10e. The activity row's amount must not share the truncating line — it was
+  //      always the part that got cut ("Payment received · E-transfer · $7…").
+  check('activity rows keep the amount off the truncating title line',
+    homeTab.includes('{[e.sub, formatDate(e.at)].filter(Boolean).join(\' · \')}')
+    && !/truncate[^>]*>\s*\n?\s*\{e\.title\}\s*\n?\s*\{e\.sub/.test(homeTab))
+}
+
 console.log(`\n${fail === 0 ? '✓' : '✗'} portal checks: ${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

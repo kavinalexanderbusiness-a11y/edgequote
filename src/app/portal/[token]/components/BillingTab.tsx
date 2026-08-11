@@ -264,7 +264,12 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
         <div className="flex items-start gap-3 min-w-0">
           <div className={cn('w-9 h-9 rounded-lg border flex items-center justify-center shrink-0', m.tone)}><m.icon className="w-4 h-4" /></div>
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-ink truncate tracking-tight">{d.title}</p>
+            {/* Not truncated: the title is what this document is FOR, and it is the
+                only line on the row that says so. At 390px it clipped real invoices
+                to "Weed removal dep…" — beside a $347.50 figure, that is a bill the
+                customer cannot identify. Wrapping costs a line; clipping costs the
+                answer. Kind, number and date beneath it are short and fixed. */}
+            <p className="text-sm font-semibold text-ink tracking-tight">{d.title}</p>
             <p className="text-xs text-ink-muted">{m.label} · {d.number} · {formatDate(d.date)}</p>
             {/* When it's due — the row showed only the ISSUE date, so "am I late?" was
                 unanswerable from the one screen built to answer it. Now a soon-due

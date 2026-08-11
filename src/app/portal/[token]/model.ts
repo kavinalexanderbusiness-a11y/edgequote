@@ -679,6 +679,19 @@ export function buildDocItems(opts: {
     // exactly the shape quoteStatus uses for expiry. The portal must tell the
     // customer they're late before a chasing text does.
     const overdue = balance > 0 && !!ii.due_date && ii.due_date < todayISO && ii.status !== 'cancelled'
+    // The mirror of `overdue`, and it exists for the same reason: what a customer is
+    // told about a bill must follow the LEDGER, not a status column that can fall
+    // behind it. Production holds exactly one such row today — INV-0060, stored
+    // 'unpaid' with $100.00 of $100.00 received — and the portal spoke about it with
+    // two voices: the money strip and the amount-due banner (both balance-derived)
+    // correctly showed nothing owed, while this row's pill said "Due" and the Home
+    // activity feed said "$100.00 · Due". A customer's own record of a bill they had
+    // settled told them they still owed it.
+    // Display only: `ii.status` is never written, `balance` is never recomputed, and
+    // because the overlay requires balance <= 0 it cannot collide with `overdue`
+    // (which requires > 0). 'cancelled' keeps its own word — a withdrawn charge must
+    // stay explainable — and 'overpaid' is more specific than 'paid', so both stand.
+    const settled = balance <= 0 && ii.status !== 'cancelled' && ii.status !== 'overpaid'
     // The deposit picture + what Pay collects now — BOTH straight from the
     // engine /api/portal/pay answers to. The row quoting one figure while
     // Stripe charges another is the disagreement this exists to prevent, so
@@ -692,7 +705,7 @@ export function buildDocItems(opts: {
     const charge = cancelled ? null : depositChargeAmount(forDeposit(ii), { gst_percent: gstPct })
     return {
       id: 'i' + ii.id, rawId: ii.id, kind: 'invoice' as const, number: ii.invoice_number, title: ii.service_type || 'Invoice',
-      date: ii.issued_date || ii.created_at, status: overdue ? 'overdue' : ii.status, dueDate: ii.due_date, amount: total, balance,
+      date: ii.issued_date || ii.created_at, status: overdue ? 'overdue' : settled ? 'paid' : ii.status, dueDate: ii.due_date, amount: total, balance,
       payAmount: charge?.amount ?? 0, payIsDeposit: charge?.isDeposit ?? false,
       deposit: dep && dep.status !== 'none' ? {
         requested: dep.requested ?? 0, percent: dep.percent, outstanding: dep.outstanding,
