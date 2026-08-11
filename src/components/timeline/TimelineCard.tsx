@@ -97,7 +97,12 @@ export function TimelineCard({
 
   return (
     <Card className={className}>
-      <CardHeader className="flex items-center gap-2">
+      {/* flex-wrap: at 390px the title + count + action links measured 400px wide
+          against a 390px viewport, so the LAST action ("Measure" on a property)
+          was clipped off the right edge — unreachable on the phone this page is
+          most used on. Wrapping only engages when the row would already
+          overflow, so nothing changes on a desktop header. */}
+      <CardHeader className="flex items-center gap-2 flex-wrap">
         <History className="w-4 h-4 text-accent-text" />
         <h2 className="text-sm font-semibold text-ink">{title}</h2>
         {allEvents.length > 0 && (
