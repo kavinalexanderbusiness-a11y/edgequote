@@ -92,7 +92,8 @@
     "verify:invoice-detail": "tsx scripts/verify-invoice-detail.ts",
     "verify:customer-comms": "tsx scripts/verify-customer-comms.ts",
     "verify:portal-contact": "tsx scripts/verify-portal-contact.ts",
-    "verify:quote-options": "tsx scripts/verify-quote-options.ts"
+    "verify:quote-options": "tsx scripts/verify-quote-options.ts",
+    "verify:global-search": "tsx scripts/verify-global-search.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",
