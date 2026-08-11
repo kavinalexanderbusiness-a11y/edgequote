@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { listPhotos } from '@/lib/photos'
+import { listPhotosResult } from '@/lib/photos'
 import type { Quote, Job, Invoice } from '@/types'
 import type {
   TimelineSources, TlMessage, TlPayment, TlServiceRequest, TlMeasurement,
@@ -31,34 +31,61 @@ export type CustomerTimelineSources = Pick<TimelineSources,
 /** The sources that only exist per job. */
 export type JobTimelineSources = Pick<TimelineSources, 'expenses' | 'priceChanges'>
 
-// Every read is capped and every failure degrades to an empty list: a timeline that
-// silently drops one source is better than a customer page that won't render.
+// ── A DROPPED READ IS NOT AN EMPTY HISTORY ───────────────────────────────────
+// This loader fans out across a dozen tables, and supabase-js RESOLVES on failure
+// with `{data: null, error}` — so `data || []` renders a dead connection as the
+// sentence "nothing ever happened with this customer". With one source down that
+// is a history quietly missing its invoices; with all of them down it is a
+// confident "No history yet" over a customer with ten years of work.
+//
+// So every read reports whether it FAILED, by a name a human can read, and the
+// card says which parts are missing instead of pretending to be complete. The
+// events still render — a partial history is useful, an undisclosed one is not.
+export interface TimelineLoad<T> {
+  sources: T
+  /** Names of sources whose read failed. Empty = everything asked for came back. */
+  missing: string[]
+}
+
+/** Names a failed read for the UI, or contributes nothing when it succeeded. */
+const gap = (label: string, failed: unknown): string[] => (failed ? [label] : [])
+
 export async function loadCustomerTimelineSources(
   supabase: SupabaseClient, userId: string, customerId: string,
-): Promise<CustomerTimelineSources> {
+): Promise<TimelineLoad<CustomerTimelineSources>> {
   const [mRes, payRes, srRes, phRes, meaRes, conRes, camRes] = await Promise.all([
     supabase.from('messages').select('direction, channel, body, created_at').eq('customer_id', customerId).order('created_at', { ascending: false }).limit(50),
-    supabase.from('payments').select('amount, status, kind, method, notes, created_at').eq('customer_id', customerId),
-    supabase.from('service_requests').select('message, created_at').eq('customer_id', customerId),
+    // invoice_id rides along: the engine needs it to tell a deposit from a payment
+    // and to absorb the invoice-settled mirror row. Capped like every other read.
+    supabase.from('payments').select('amount, status, kind, method, notes, created_at, invoice_id').eq('customer_id', customerId).order('created_at', { ascending: false }).limit(200),
+    supabase.from('service_requests').select('message, created_at').eq('customer_id', customerId).order('created_at', { ascending: false }).limit(100),
     // Photos go through the photos engine so storage_path → URL stays in ONE place.
-    listPhotos(supabase, userId, { customerId, limit: 200 }),
-    supabase.from('measurements').select('id, created_at, property_id, accepted_sqft, auto_sqft, source, adjusted').eq('customer_id', customerId),
+    listPhotosResult(supabase, userId, { customerId, limit: 200 }),
+    supabase.from('measurements').select('id, created_at, property_id, accepted_sqft, auto_sqft, source, adjusted').eq('customer_id', customerId).order('created_at', { ascending: false }).limit(100),
     supabase.from('consent_changes').select('id, created_at, channel, old_value, new_value, source').eq('customer_id', customerId).order('created_at', { ascending: false }).limit(100),
     supabase.from('crm_campaign_log').select('id, created_at, channel, status, detail, crm_campaigns(name, kind)').eq('customer_id', customerId).order('created_at', { ascending: false }).limit(100),
   ])
 
   return {
-    customerId,   // comms events deep-link into the conversation (?c=)
-    messages: (mRes.data as TlMessage[]) || [],
-    payments: (payRes.data as TlPayment[]) || [],
-    serviceRequests: (srRes.data as TlServiceRequest[]) || [],
-    photos: phRes || [],
-    measurements: (meaRes.data as TlMeasurement[]) || [],
-    consentChanges: (conRes.data as TlConsentChange[]) || [],
-    campaignLog: ((camRes.data as unknown as CampaignLogRow[]) || []).map(r => ({
-      id: r.id, created_at: r.created_at, channel: r.channel, status: r.status, detail: r.detail,
-      campaign_name: one(r.crm_campaigns)?.name ?? null, campaign_kind: one(r.crm_campaigns)?.kind ?? null,
-    })),
+    sources: {
+      customerId,   // comms events deep-link into the conversation (?c=)
+      messages: (mRes.data as TlMessage[]) || [],
+      payments: (payRes.data as TlPayment[]) || [],
+      serviceRequests: (srRes.data as TlServiceRequest[]) || [],
+      photos: phRes.photos,
+      measurements: (meaRes.data as TlMeasurement[]) || [],
+      consentChanges: (conRes.data as TlConsentChange[]) || [],
+      campaignLog: ((camRes.data as unknown as CampaignLogRow[]) || []).map(r => ({
+        id: r.id, created_at: r.created_at, channel: r.channel, status: r.status, detail: r.detail,
+        campaign_name: one(r.crm_campaigns)?.name ?? null, campaign_kind: one(r.crm_campaigns)?.kind ?? null,
+      })),
+    },
+    missing: [
+      ...gap('Messages', mRes.error), ...gap('Payments', payRes.error),
+      ...gap('Requests', srRes.error), ...gap('Photos', phRes.error),
+      ...gap('Measurements', meaRes.error), ...gap('Consent', conRes.error),
+      ...gap('Automations', camRes.error),
+    ],
   }
 }
 
@@ -74,41 +101,51 @@ export async function loadCustomerTimelineSources(
 // hop then puts them at the address.
 export async function loadPropertyTimelineSources(
   supabase: SupabaseClient, userId: string, propertyId: string,
-): Promise<TimelineSources> {
-  const [qRes, jRes, iRes, meaRes, photos] = await Promise.all([
+): Promise<TimelineLoad<TimelineSources>> {
+  const [qRes, jRes, iRes, meaRes, phRes] = await Promise.all([
     supabase.from('quotes').select('*').eq('property_id', propertyId),
     supabase.from('jobs').select('*').eq('property_id', propertyId),
     supabase.from('invoices').select('*').eq('property_id', propertyId),
     supabase.from('measurements').select('id, created_at, property_id, accepted_sqft, auto_sqft, source, adjusted').eq('property_id', propertyId),
     // Scoped to this address, so the cap is an honest cap on THIS property's photos.
-    listPhotos(supabase, userId, { propertyId, limit: 200 }),
+    listPhotosResult(supabase, userId, { propertyId, limit: 200 }),
   ])
   const jobs = (jRes.data as Job[]) || []
-  const jobSources = await loadJobTimelineSources(supabase, jobs.map(j => j.id))
+  const jobLoad = await loadJobTimelineSources(supabase, jobs.map(j => j.id))
   return {
-    quotes: (qRes.data as Quote[]) || [],
-    jobs,
-    invoices: (iRes.data as Invoice[]) || [],
-    measurements: (meaRes.data as TlMeasurement[]) || [],
-    photos,
-    ...jobSources,
+    sources: {
+      quotes: (qRes.data as Quote[]) || [],
+      jobs,
+      invoices: (iRes.data as Invoice[]) || [],
+      measurements: (meaRes.data as TlMeasurement[]) || [],
+      photos: phRes.photos,
+      ...jobLoad.sources,
+    },
+    missing: [
+      ...gap('Quotes', qRes.error), ...gap('Jobs', jRes.error), ...gap('Invoices', iRes.error),
+      ...gap('Measurements', meaRes.error), ...gap('Photos', phRes.error),
+      ...jobLoad.missing,
+    ],
   }
 }
 
 export async function loadJobTimelineSources(
   supabase: SupabaseClient, jobIds: string[],
-): Promise<JobTimelineSources> {
-  if (jobIds.length === 0) return { expenses: [], priceChanges: [] }
+): Promise<TimelineLoad<JobTimelineSources>> {
+  if (jobIds.length === 0) return { sources: { expenses: [], priceChanges: [] }, missing: [] }
   const [expRes, pcRes] = await Promise.all([
     supabase.from('expenses').select('id, description, amount, spent_at, created_at, job_id, expense_categories(name)')
       .in('job_id', jobIds).is('archived_at', null),
     supabase.from('job_price_changes').select('id, old_amount, new_amount, reason, scope, created_at, job_id').in('job_id', jobIds),
   ])
   return {
-    expenses: ((expRes.data as unknown as ExpenseRow[]) || []).map(r => ({
-      id: r.id, description: r.description, amount: r.amount, spent_at: r.spent_at,
-      created_at: r.created_at, job_id: r.job_id, category: one(r.expense_categories)?.name ?? null,
-    })),
-    priceChanges: (pcRes.data as TlPriceChange[]) || [],
+    sources: {
+      expenses: ((expRes.data as unknown as ExpenseRow[]) || []).map(r => ({
+        id: r.id, description: r.description, amount: r.amount, spent_at: r.spent_at,
+        created_at: r.created_at, job_id: r.job_id, category: one(r.expense_categories)?.name ?? null,
+      })),
+      priceChanges: (pcRes.data as TlPriceChange[]) || [],
+    },
+    missing: [...gap('Expenses', expRes.error), ...gap('Price changes', pcRes.error)],
   }
 }

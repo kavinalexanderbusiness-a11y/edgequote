@@ -71,6 +71,20 @@ export interface DashboardData {
   weather: Promise<WeatherImpactReport | null>
   greeting: string
   dateLine: string
+  /** Has this business done ANYTHING yet — a customer, quote, job or invoice?
+   *
+   *  DERIVED from rows this loader already read: no extra query, no stored flag,
+   *  nothing to keep in sync (the setupHealth discipline). It is safe to treat
+   *  `false` as fact because every one of those reads is under the all-or-throw
+   *  failure check below — a transient outage takes the whole dashboard to the
+   *  error screen rather than quietly reporting an empty business. Without that
+   *  guarantee this would be exactly the "uncertain read licensing an action"
+   *  bug the seeding path was fixed for.
+   *
+   *  Consumers use it to tell a brand-new account APART from a mature one that
+   *  has cleared its queue — the two look identical in the data and must not
+   *  read identically on screen. */
+  started: boolean
 }
 
 type SettingsRow = {
@@ -229,9 +243,10 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   const overdue = overdueInv.reduce((s, i) => s + Math.max(0, invoiceBalance(i, settings).balance), 0)
 
   // ── Priorities (THE queue engine) ──
+  const customerRows = (custRes.data as (ReachCustomer & { id: string })[]) || []
   const priorities = computePriorities({
     quotes, invoices, jobs, recById,
-    customers: (custRes.data as (ReachCustomer & { id: string })[]) || [],
+    customers: customerRows,
     // Only the unread ones are a "reply to messages" job. customer_id must
     // survive — the messages row uses it to exclude people leads already counted.
     conversations: conversations.filter(c => Number(c.unread || 0) > 0),
@@ -301,6 +316,10 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     weather,
     greeting: hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening',
     dateLine: now.toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' }),
+    // Four full-history reads already in hand. Any ONE row of real work — even a
+    // customer added and nothing else — means this business has begun, so the
+    // first-run framing stands down permanently and can never re-appear later.
+    started: quotes.length > 0 || jobs.length > 0 || invoices.length > 0 || customerRows.length > 0,
   }
 }
 

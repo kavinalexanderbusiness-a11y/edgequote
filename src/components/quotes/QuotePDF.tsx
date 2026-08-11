@@ -252,10 +252,19 @@ export function QuoteDocument({ quote, settings, services, options }: QuotePDFPr
               {opts.map(o => {
                 const isChosen = chosen?.id === o.id
                 const notChosen = !!chosen && !isChosen
-                // Each row states the figure the customer actually pays for THAT
-                // option — its price plus rolled-in travel — exactly as the
-                // approval RPC computes it. Never accumulated across rows.
-                const rowAmount = Number(o.price) + rolledTravel
+                // ⭐ Each row states the figure the customer actually pays for
+                // THAT option: its price plus travel, which is exactly what
+                // quote_apply_option_choice snapshots as accepted_price and
+                // exactly what the portal's Approve button says.
+                //
+                // ⚠️ `travelFee`, NOT `rolledTravel`. An owner who ticked "show
+                // travel separately" would otherwise get option rows at $5,400
+                // on the paper against $5,550 on the portal button and $5,550 in
+                // the record — three surfaces, three numbers, for one decision.
+                // The itemisation preference still governs the ordinary quote
+                // above; on an options quote a lone $150 row beside three all-in
+                // prices only invites adding it a second time.
+                const rowAmount = Number(o.price) + travelFee
                 return (
                   <View key={o.id} style={styles.tableRow} wrap={false}>
                     <View style={styles.cellDesc}>
@@ -263,7 +272,7 @@ export function QuoteDocument({ quote, settings, services, options }: QuotePDFPr
                         {o.name}{o.is_recommended ? '  ★ Recommended' : ''}
                       </Text>
                       {o.description ? <Text style={styles.muted}>{o.description}</Text> : null}
-                      {rolledTravel > 0 ? <Text style={styles.muted}>Includes travel</Text> : null}
+                      {travelFee > 0 ? <Text style={styles.muted}>Includes {money(travelFee)} travel</Text> : null}
                     </View>
                     <Text style={[styles.td, styles.cellQty, notChosen ? { color: COLORS.faint } : {}]}>
                       {isChosen ? 'Your choice' : notChosen ? 'Not selected' : ''}
@@ -275,11 +284,6 @@ export function QuoteDocument({ quote, settings, services, options }: QuotePDFPr
                 )
               })}
             </View>
-            {shownTravel > 0 ? (
-              <Text style={[styles.muted, { marginTop: 4 }]}>
-                Whichever option you choose, a {money(shownTravel)} travel fee is added.
-              </Text>
-            ) : null}
           </>
         ) : (
         <>

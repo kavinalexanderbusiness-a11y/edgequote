@@ -7,7 +7,7 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { loadAnalyticsCore } from '@/lib/analyticsData'
 import { loadTravelModel } from '@/lib/travelLearning'
-import { Customer } from '@/types'
+import { Customer, ACQUISITION_SOURCES } from '@/types'
 import { format } from 'date-fns'
 import { Coord, haversineKm, geocodeAddressDetailed } from '@/lib/geo'
 import {
@@ -174,10 +174,15 @@ export default function NeighborsPage() {
   // Enter/Convert confirms.
   const [converting, setConverting] = useState<{ leadId: string; thenQuote: boolean } | null>(null)
   const [convertName, setConvertName] = useState('')
+  // The add-field says a neighbor lead can be "door knock, flyer, referral" — the
+  // channel is NOT deterministic from the workflow, so it is asked, optionally, at
+  // the one moment a customer record is minted. '' = not sure, and stays unknown.
+  const [convertSource, setConvertSource] = useState('')
   async function convertLead(lead: Lead, thenQuote: boolean) {
     if (converting?.leadId !== lead.id) {
       setConverting({ leadId: lead.id, thenQuote })
       setConvertName('')
+      setConvertSource('')
       return
     }
     const name = convertName
@@ -187,7 +192,7 @@ export default function NeighborsPage() {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       const ensured = await ensureCustomerAndProperty(
-        supabase, user!.id, { customerId: null, name: name.trim(), address: lead.address }, customers,
+        supabase, user!.id, { customerId: null, name: name.trim(), address: lead.address, source: convertSource }, customers,
       )
       // The customer now EXISTS; this write is what records that fact on the lead.
       // Supabase resolves on a failed write rather than throwing, so the catch below
@@ -324,16 +329,26 @@ export default function NeighborsPage() {
                     </span>
                   </div>
 
-                  {/* Inline name capture for conversion — no browser prompt */}
+                  {/* Inline name capture for conversion — no browser prompt.
+                      The source pick is OPTIONAL ('' = not sure): Enter with just a
+                      name still converts — the pick must never slow a conversion. */}
                   {converting?.leadId === l.id && (
-                    <div className="flex items-center gap-2 mb-2">
+                    <div className="flex items-center gap-2 mb-2 flex-wrap">
                       <input
                         value={convertName} onChange={e => setConvertName(e.target.value)} autoFocus
                         aria-label="Customer name"
                         placeholder={`Customer name for ${l.address}`}
                         onKeyDown={e => { if (e.key === 'Enter' && convertName.trim()) convertLead(l, converting.thenQuote); if (e.key === 'Escape') setConverting(null) }}
-                        className="flex-1 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-1.5 text-sm text-ink outline-none focus:border-accent"
+                        className="flex-1 min-w-40 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-1.5 text-sm text-ink outline-none focus:border-accent"
                       />
+                      <select
+                        value={convertSource} onChange={e => setConvertSource(e.target.value)}
+                        aria-label="How did they find you? (optional)"
+                        className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
+                      >
+                        <option value="">Source? (optional)</option>
+                        {ACQUISITION_SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
                       <Button size="sm" disabled={!convertName.trim()} onClick={() => convertLead(l, converting.thenQuote)}><Check className="w-3.5 h-3.5" /> Convert</Button>
                       <Button size="sm" variant="ghost" onClick={() => setConverting(null)}>Cancel</Button>
                     </div>
