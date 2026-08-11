@@ -4,9 +4,12 @@
 // notification_log for delivery/open timestamps. Writes NOTHING and sends
 // NOTHING; every number here is a fact the send path recorded.
 //
-// Deliberately NOT a revenue-attribution model: revenue rolls up by
-// customers.acquisition_source elsewhere, and inventing a second attribution
-// path here would put two engines on one question.
+// Deliberately NOT an attribution model. "Where did this customer come from?"
+// has ONE home — lib/attribution, which rolls customers up by
+// acquisition_source — and a second answer here would put two engines on one
+// question. That engine deliberately carries no revenue either: source-level
+// money is not canonically safe yet, so neither file has a dollar figure the
+// other could contradict.
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { describeSkip } from '@/lib/comms/skipReasons'

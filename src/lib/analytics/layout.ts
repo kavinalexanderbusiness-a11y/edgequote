@@ -14,7 +14,7 @@
 export type WidgetId =
   | 'executive' | 'financial' | 'yearly' | 'profitability' | 'customers'
   | 'sales' | 'operations' | 'weekday' | 'cancellations' | 'labor' | 'forecasting'
-  | 'marketing' | 'communications'
+  | 'marketing' | 'communications' | 'acquisition'
 
 export interface WidgetMeta {
   id: WidgetId
@@ -51,6 +51,10 @@ export const WIDGETS: WidgetMeta[] = [
   { id: 'marketing',     title: 'Marketing',      blurb: 'What each campaign sent, and what got delivered and opened' },
   // Appended last for the same forward-compat reason as marketing above.
   { id: 'communications', title: 'Communications', blurb: 'Messages sent and received, delivery health, and how fast you reply' },
+  // Same rule again: appended, never slotted mid-registry. Note this is NOT the
+  // Marketing widget's neighbour by accident — Marketing is what YOU sent, this is
+  // where customers say they CAME FROM. Different questions, different engines.
+  { id: 'acquisition',   title: 'Where customers come from', blurb: 'Lead source, and how far each source gets — customers, quotes, wins, work' },
 ]
 
 const ALL_IDS = WIDGETS.map(w => w.id)
