@@ -144,25 +144,35 @@ H('5. HOME NO LONGER SAYS THE SAME THING TWICE')
   check('the hero’s date is what gets passed down',
     /heroDate=\{next\?\.scheduled_date \?\? null\}/.test(HOME), true)
 
-  // Recent activity is HISTORY; the attention area owns anything still pending.
-  check('quotes awaiting approval are kept out of the history feed',
-    /awaitingQuoteIds\.has\(q\.id\)\) continue/.test(HOME), true)
-  check('the invoice currently being asked for is kept out too',
-    /dueInvoiceIds\.has\(d\.id\)\) continue/.test(HOME), true)
-  check('…and only while the banner is actually shown (money.due > 0)',
-    /view\.money\.due > 0\s*\?[\s\S]{0,260}?: \[\]/.test(HOME), true)
-  // DocItem.balance is POSITIVE on a cancelled invoice — an owing filter that
-  // forgets status would suppress a cancelled document from the history for no
-  // reason. (Same trap the deposit work documented.)
-  check('the owing filter excludes cancelled/paid, not just balance > 0',
-    /d\.status !== 'paid' && d\.status !== 'overpaid' && d\.status !== 'cancelled'/.test(HOME), true)
-  // A FUTURE visit is not "recent activity" — the hero states it at the top of the
-  // same page and Visits lists every one. A past visit that never completed IS
-  // history and must survive.
-  check('upcoming visits are kept out of the history feed',
-    /j\.scheduled_date > view\.todayISO\) continue/.test(HOME), true)
-  check('…but a completed visit is still recorded first',
-    HOME.indexOf("status === 'completed'") < HOME.indexOf('j.scheduled_date > view.todayISO'), true)
+  // Six checks stood here pinning the SUPPRESSION RULES of Home's general activity
+  // feed: awaiting quotes kept out of it, the currently-due invoice kept out, future
+  // visits kept out, and so on. Each existed so the feed could not restate something
+  // the attention area was already showing.
+  //
+  // The feed is gone (see model.recentPayments for the evidence: on four of six live
+  // portals it was 100% records Billing already owns, and a settled invoice emitted
+  // BOTH its own row AND its payment's, spending two of five rows on one
+  // transaction). So those six rules are not weakened — they are unfalsifiable.
+  // There is no feed to duplicate anything into, which is strictly stronger than any
+  // list of things it had to remember to skip.
+  //
+  // What replaces them is the invariant itself, plus the narrow surface that stayed.
+  // The suppression rules' substance lives on where it still applies: the
+  // cancelled-invoice trap on an owing filter is pinned by verify:portal
+  // ('e-transfer owing filter excludes cancelled/draft invoices'), and what must
+  // never disappear from Home — awaiting quotes, money owed, the next visit, a
+  // payment confirmation — is pinned there too, by name.
+  check('Home builds no general activity feed at all',
+    /useRecentActivity|interface TLEvent/.test(HOME), false)
+  check('…and cannot re-derive one from documents',
+    /Invoice \$\{d\.number\} issued|Quote \$\{q\.quote_number\} sent/.test(HOME), false)
+  // What survived is money that MOVED — the one thing Home could not otherwise say,
+  // because an e-transfer or cash payment is recorded by the owner long after any
+  // checkout return. Money-only, and absent when nothing has moved.
+  check('what remains is payments only, from the pure model helper',
+    /recentPayments\(view\.data\.payments, todayISO\)/.test(HOME), true)
+  check('…rendered only when there is something to confirm',
+    /\{\s*payments\.length > 0 && \(/.test(HOME), true)
 }
 
 H('6. KEYBOARD NAV STILL WALKS THE WHOLE (SHORTER) BAR')

@@ -14,7 +14,7 @@ import {
   daysAwayLabel, dueSoonLabel, invoiceDepositNote, invoiceDepositPaidNote, invoicePaymentNote, parsePortalDeepLink, tabNavTarget, buildVisitICS, visitToCalendarEvent,
   messageAboutDoc, primaryPortalAction, draftStorageKey, etransferReference, isSendChord,
   contactGap, isUsablePhone, isUsableEmail, PHONE_MIN_DIGITS, recentPaymentLanded,
-  showDocFilters, DOC_FILTER_MIN,
+  showDocFilters, DOC_FILTER_MIN, recentPayments, RECENT_PAYMENT_MAX,
   NO_PROPERTY, MAX_REQUEST_PRESETS,
   type PortalData, type PortalJob, type PortalProperty, type DocBlobRenderers,
 } from '../src/app/portal/[token]/model'
@@ -811,11 +811,89 @@ console.log('\nrecentPaymentLanded (post-checkout confirmation):')
   check('a Billing row title is not truncated',
     billingTab.includes('text-sm font-semibold text-ink tracking-tight">{d.title}')
     && !billingTab.includes('text-ink truncate tracking-tight">{d.title}'))
-  // 10e. The activity row's amount must not share the truncating line — it was
+  // 10e. The payment row's amount must not share the truncating line — that was
   //      always the part that got cut ("Payment received · E-transfer · $7…").
-  check('activity rows keep the amount off the truncating title line',
-    homeTab.includes('{[e.sub, formatDate(e.at)].filter(Boolean).join(\' · \')}')
-    && !/truncate[^>]*>\s*\n?\s*\{e\.title\}\s*\n?\s*\{e\.sub/.test(homeTab))
+  check('Home payment rows keep the amount off the truncating title line',
+    homeTab.includes('{formatCurrency(p.amount)} · {formatDate(p.at)}')
+    && !/truncate[^>]*>\s*\n?\s*\{p\.label\}\s*\n?\s*\{formatCurrency/.test(homeTab))
+}
+
+// 11. Home is not a history ledger — "Recent activity" narrowed to money that
+//     actually MOVED. These pin both halves: what the surface may contain, and
+//     what must never vanish from Home because of that narrowing.
+{
+  const pay = (over: Record<string, unknown>) => ({
+    id: 'pay-' + (over.id ?? '1'), amount: 100, status: 'completed',
+    paid_at: '2026-07-16T10:00:00Z', provider: 'etransfer', invoice_id: null,
+    created_at: '2026-07-16T10:00:00Z', ...over,
+  }) as unknown as PortalData['payments'][number]
+
+  // TODAY is 2026-07-18, so the 30-day window opens on 2026-06-18.
+  const rows = recentPayments([
+    pay({ id: 'old', paid_at: '2026-05-01T10:00:00Z' }),          // outside the window
+    pay({ id: 'new', paid_at: '2026-07-17T10:00:00Z', amount: 75 }),
+    pay({ id: 'mid', paid_at: '2026-07-10T10:00:00Z', amount: 50 }),
+  ], TODAY)
+  check('recent payments: only inside the window, newest first',
+    rows.length === 2 && rows[0].id === 'new' && rows[1].id === 'mid'
+    && rows[0].amount === 75 && rows[1].amount === 50)
+  check('recent payments: an e-transfer says how it was paid',
+    rows[0].label === 'Payment received · E-transfer')
+  check('recent payments: capped',
+    recentPayments([pay({ id: 'a' }), pay({ id: 'b' }), pay({ id: 'c' }), pay({ id: 'd' })], TODAY).length === RECENT_PAYMENT_MAX)
+  check('recent payments: nothing recent → the section has no rows to render',
+    recentPayments([pay({ id: 'old', paid_at: '2026-01-01T10:00:00Z' })], TODAY).length === 0)
+  check('recent payments: an empty/absent ledger claims nothing',
+    recentPayments([], TODAY).length === 0 && recentPayments(null, TODAY).length === 0)
+
+  // Classification is the ONE ledger classifier, never the sign of the amount —
+  // a refund and an overpayment-moved-to-credit are both negative and only the
+  // first is money leaving the business.
+  const refund = recentPayments([pay({ id: 'r', amount: -50 })], TODAY)[0]
+  check('recent payments: a refund is named as one and shows a positive magnitude',
+    refund.label === 'Refund issued' && refund.isRefund === true && refund.amount === 50)
+  const toCredit = recentPayments([pay({ id: 'c', amount: -50, provider: 'credit' })], TODAY)[0]
+  check('recent payments: an overpayment moved to credit is NOT called a refund',
+    toCredit.label === 'Overpayment moved to credit' && toCredit.isRefund === false)
+  const fromCredit = recentPayments([pay({ id: 'f', amount: 50, provider: 'credit' })], TODAY)[0]
+  check('recent payments: settling from credit says so',
+    fromCredit.label === 'Settled from account credit')
+  // The credit LEDGER stays out: Billing's "Available credit" tile is its story,
+  // and repeating it here would state the same money twice.
+  check('recent payments: credit-ledger rows are excluded',
+    recentPayments([pay({ id: 'k', kind: 'credit' })], TODAY).length === 0)
+
+  // ── The regression half: narrowing Home must not have removed an ANSWER. ──
+  const homeSrc = readFileSync(join(process.cwd(), 'src/app/portal/[token]/components/HomeTab.tsx'), 'utf8')
+  // A quote awaiting approval, and the approve action itself.
+  check('Home still surfaces quotes awaiting approval',
+    homeSrc.includes("d.kind === 'quote' && d.status === 'sent'")
+    && homeSrc.includes('quotes are ready for your review')
+    && homeSrc.includes('actions.accept(oneQuoteId)'))
+  // Money owed, and the ability to pay it.
+  check('Home still surfaces money owed and the way to pay it',
+    homeSrc.includes('view.money.due > 0') && homeSrc.includes('Amount due')
+    && homeSrc.includes('actions.pay(oneInvoice.rawId)'))
+  // Upcoming work.
+  check('Home still surfaces the next visit',
+    homeSrc.includes('NEXT SERVICE') || homeSrc.includes('Next service'))
+  // The one thing the old feed uniquely carried: an owner-recorded payment has no
+  // other confirmation on Home (the checkout banner is Stripe-return only).
+  // Not just "the code mentions payments" — the section must be gated on there
+  // BEING rows. A guard that only greps for the call survives the section being
+  // switched off, which is exactly the regression this whole check exists for.
+  check('Home still confirms a payment landed',
+    homeSrc.includes('recentPayments(') && homeSrc.includes('Recent payments')
+    && /\{\s*payments\.length\s*>\s*0\s*&&/.test(homeSrc))
+  // And the general ledger did NOT survive the narrowing.
+  check('Home no longer rebuilds a general activity feed',
+    !homeSrc.includes('useRecentActivity') && !homeSrc.includes('interface TLEvent')
+    && !/Invoice \$\{d\.number\} issued/.test(homeSrc)
+    && !/Quote \$\{q\.quote_number\} sent/.test(homeSrc))
+  // One definition of the method word, so Home and Billing cannot drift.
+  const paySrc = readFileSync(join(process.cwd(), 'src/app/portal/[token]/components/PaymentsSection.tsx'), 'utf8')
+  check('paymentMethodLabel has exactly one definition, in the model',
+    !/function paymentMethodLabel/.test(paySrc) && !/function paymentMethodLabel/.test(homeSrc))
 }
 
 console.log(`\n${fail === 0 ? '✓' : '✗'} portal checks: ${pass} passed, ${fail} failed`)

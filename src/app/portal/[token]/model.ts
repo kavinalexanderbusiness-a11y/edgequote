@@ -22,7 +22,7 @@ import { settingsToSeasons } from '@/lib/seasons'
 // dependency is invoiceTotals, which this module already pulls.
 import { invoiceBalance } from '@/lib/payments/ledger'
 import { depositState, depositChargeAmount } from '@/lib/payments/deposit'
-import { cashAmountOf } from '@/lib/payments/analytics'
+import { cashAmountOf, ledgerRowType } from '@/lib/payments/analytics'
 import { serviceLineTotals } from '@/lib/quoteServices'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
 import { formatCurrency, parseLocalDate } from '@/lib/utils'
@@ -844,6 +844,89 @@ export function moneySummary(invoices: PortalInvoice[], business: PortalData['bu
   }
   const r = (n: number) => Math.round(n * 100) / 100
   return { invoiced: r(invoiced), paid: r(paid), due: r(due), owingCount }
+}
+
+// ── Recent payments (what replaced Home's "Recent activity" feed) ───────────
+// Home used to carry a five-row chronological feed of everything that had ever
+// happened. Rendered against six live portals it was, in four of them, 100%
+// records that Billing already owns — and worse, DOUBLE-ENTRY: a settled invoice
+// emitted BOTH "Invoice INV-0062 issued · $55.00 · Paid" AND "Payment received ·
+// E-transfer · $55.00", so one $55 transaction spent two of the five rows saying
+// the same thing twice. The cap was routinely filled by two or three
+// transactions.
+//
+// It could never have been otherwise: everything ACTIONABLE is deliberately
+// suppressed from it (awaiting quotes and the currently-due invoice belong to the
+// attention cards, future visits to the hero), so by construction the feed could
+// only ever hold settled history — while Home's job is "is there anything I need
+// to do, and has anything important changed".
+//
+// ⭐ ONE class of row survived that test: money moving. 33 of 58 live portals have
+// payments and most are e-transfer or cash, which the OWNER records hours or days
+// later — and the post-checkout confirmation banner only ever fires on the Stripe
+// return (`?paid=1`). So for those customers Home had no positive way to say "your
+// money arrived"; the only signal was the amount-due banner being absent, and an
+// absence is not a confirmation. Refunds and credit movements are the same story
+// pointing the other way, and a customer must not have to go looking for those.
+//
+// So: money movements only, recent only, capped, and ABSENT when nothing has
+// moved. Classification is `ledgerRowType` — the ONE ledger classifier, never the
+// sign of the amount (a $200 refund and a $200 overpayment moved to credit are
+// both negative, and only the first is money leaving). `kind === 'credit'` rows
+// stay excluded exactly as before: that is the credit LEDGER, whose story is
+// Billing's "Available credit" tile, and counting it here would state the same
+// money twice — the very thing this replacement exists to stop.
+export const RECENT_PAYMENT_DAYS = 30
+export const RECENT_PAYMENT_MAX = 3
+
+export interface RecentPayment { id: string; at: string; amount: number; label: string; isRefund: boolean }
+
+export function recentPayments(
+  payments: PortalPayment[] | null | undefined,
+  todayISO: string,
+  opts?: { days?: number; max?: number },
+): RecentPayment[] {
+  const days = opts?.days ?? RECENT_PAYMENT_DAYS
+  const max = opts?.max ?? RECENT_PAYMENT_MAX
+  const today = parseLocalDate(todayISO)
+  if (!today || !payments) return []
+  const cutoff = new Date(today.getTime() - days * 86400000)
+  const out: RecentPayment[] = []
+  for (const p of payments) {
+    if (p.kind === 'credit') continue
+    const at = p.paid_at || p.created_at
+    if (!at) continue
+    // Compared as an instant, so a `paid_at` timestamp and a date-only
+    // `created_at` are judged the same way. A row dated in the FUTURE is still
+    // "recent" — it has certainly not fallen out of the window.
+    const when = new Date(at)
+    if (isNaN(when.getTime()) || when < cutoff) continue
+    const rt = ledgerRowType(p)
+    out.push({
+      id: p.id,
+      at,
+      // Always the magnitude: the label carries the direction, so a refund reads
+      // "Refund issued · $50.00" rather than a minus sign the eye can miss.
+      amount: Math.abs(Number(p.amount) || 0),
+      label: rt === 'Refund' ? 'Refund issued'
+        : rt === 'Overpayment to credit' ? 'Overpayment moved to credit'
+        : rt === 'Settled from credit' ? 'Settled from account credit'
+        : `Payment received · ${paymentMethodLabel(p.provider)}`,
+      isRefund: rt === 'Refund',
+    })
+  }
+  return out.sort((a, b) => b.at.localeCompare(a.at)).slice(0, max)
+}
+
+// How the customer paid, in their words. Lived in HomeTab and PaymentsSection as
+// two identical copies; it belongs with the rows it labels.
+export function paymentMethodLabel(provider: string | null | undefined): string {
+  switch (provider) {
+    case 'stripe': return 'Card'
+    case 'etransfer': return 'E-transfer'
+    case 'cash': return 'Cash'
+    default: return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : 'Payment'
+  }
 }
 
 // Real cash refunded to the customer across these rows — a NEGATIVE cash movement

@@ -15,7 +15,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   CalendarClock, Check, CheckCircle2, ChevronDown, CreditCard, FileText, Globe,
-  Image as ImageIcon, Loader2, Mail, MessageSquare, MessageSquarePlus,
+  Loader2, Mail, MessageSquare, MessageSquarePlus,
   Navigation, PauseCircle, Phone, Receipt, Repeat, SkipForward, Star,
   UserRound, XCircle,
 } from 'lucide-react'
@@ -23,10 +23,9 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
-import { ledgerRowType } from '@/lib/payments/analytics'
 import {
   daysAwayLabel, invoiceDepositPaidNote, invoicePaymentNote, isUsableEmail, isUsablePhone,
-  liveStatusOf, primaryPortalAction, visitToCalendarEvent, visitDay,
+  liveStatusOf, primaryPortalAction, recentPayments, visitToCalendarEvent, visitDay,
   type AddContactResult, type ContactGap, type Derived, type PortalJob, type PortalView, type SubmitRequestFn,
 } from '../model'
 import { AddToCalendar, PortalSection, StatusPill, StatusStepper, Thumb, type TabProps } from './shared'
@@ -57,7 +56,9 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
 
   const last = derived.lastCompleted
   const lastPhotos = last ? (view.photosByJob.get(last.id) || []).slice(0, 3) : []
-  const events = useRecentActivity(view)
+  // Money that has moved lately — the one row class the old activity feed carried
+  // that Home could not say any other way. Pure + verify-pinned in ../model.
+  const payments = useMemo(() => recentPayments(view.data.payments, todayISO), [view.data.payments, todayISO])
 
   // THE ranked next action — the one engine that knows overdue beats balance-due beats
   // quote-awaiting. It already powers the cross-tab banner; Home ignored it and always
@@ -339,25 +340,35 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
           but it belongs with the reassurance, after the answers. */}
       <TrustCard view={view} />
 
-      {/* 6 · Recent activity — the old Timeline tab, compacted to its last 5 rows */}
-      {events.length > 0 && (
+      {/* 6 · Recent payments — money that has MOVED lately, and nothing else.
+          What this replaced, and why, is documented on model.recentPayments: the
+          general activity feed was a chronological copy of Billing that spent two
+          of its five rows restating a single transaction. This keeps the one row
+          class Home could not otherwise say — an e-transfer or cash payment is
+          recorded by the owner hours later, long after any checkout banner — and
+          absent when nothing has moved inside the window. The amount and date sit
+          on their own line so neither can be truncated (real rows once clipped to
+          "Payment received · E-transfer · $7…"). */}
+      {payments.length > 0 && (
         <div className="animate-rise stagger-6">
-          <PortalSection title="Recent activity">
+          <PortalSection title="Recent payments"
+            action={
+              <button type="button" onClick={() => actions.navigate('billing')}
+                className="text-xs font-semibold text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                Receipts &amp; history →
+              </button>
+            }>
             <div className="rounded-card border border-border bg-bg-secondary divide-y divide-border/60">
-              {/* Title, then the details beneath it. All three facts used to share ONE
-                  truncating line with the date pinned to the right, so the part that got
-                  cut was always the LAST — which is where the money is. Real rows on a
-                  390px phone read "Payment received · E-transfer · $7…" and "Invoice
-                  INV-0060 issued · $100.00…": a receipt list whose amounts were the one
-                  thing it clipped. The amount and the date now sit on their own short
-                  line, where neither can be cut off. */}
-              {events.map(e => (
-                <div key={e.id} className="flex items-start gap-2.5 px-3.5 py-2.5">
-                  <span className={cn('w-6 h-6 rounded-full border flex items-center justify-center shrink-0 mt-0.5', e.tone)}><e.icon className="w-3 h-3" /></span>
+              {payments.map(p => (
+                <div key={p.id} className="flex items-start gap-2.5 px-3.5 py-2.5">
+                  <span className={cn('w-6 h-6 rounded-full border flex items-center justify-center shrink-0 mt-0.5',
+                    p.isRefund ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>
+                    <CreditCard className="w-3 h-3" />
+                  </span>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm text-ink truncate">{e.title}</p>
+                    <p className="text-sm text-ink truncate">{p.label}</p>
                     <p className="text-xs text-ink-faint tabular-nums">
-                      {[e.sub, formatDate(e.at)].filter(Boolean).join(' · ')}
+                      {formatCurrency(p.amount)} · {formatDate(p.at)}
                     </p>
                   </div>
                 </div>
@@ -616,142 +627,6 @@ function PlanActions({ plan, businessName, submitRequest, phone, onMessage }: {
       )}
     </details>
   )
-}
-
-// ── 6 · Recent activity (the old Timeline tab, absorbed and capped at 5) ────
-interface TLEvent { id: string; at: string; icon: typeof FileText; tone: string; title: string; sub: string | null }
-
-function paymentMethodLabel(provider: string): string {
-  switch (provider) {
-    case 'stripe': return 'Card'
-    case 'etransfer': return 'E-transfer'
-    case 'cash': return 'Cash'
-    default: return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : 'Payment'
-  }
-}
-
-// Recent activity is HISTORY — what has already happened. Anything still waiting
-// on the customer is the attention area's job, at the top of the page, with the
-// real button on it.
-//
-// They overlapped: a quote awaiting approval appeared as "Quote EPS-2026-0134
-// sent · Awaiting your approval" here AND as "3 quotes are ready for your review"
-// above, and an unpaid invoice appeared as "Invoice INV-0065 issued · Due" AND as
-// "Amount due · $347.50". On the 3-quote prospect the ENTIRE feed was the same
-// three quotes the card above already summarised — a second, weaker copy of the
-// call to action, phrased as a past event.
-//
-// Suppressing them costs no access: both are one tap away through the attention
-// card itself (it navigates to Billing, pre-filtered) and through the Billing
-// tab, which lists every document with its live status.
-function useRecentActivity(view: PortalView): TLEvent[] {
-  return useMemo<TLEvent[]>(() => {
-    const { data, photosByJob, docItems } = view
-    const ev: TLEvent[] = []
-    // The exact sets the attention area is showing. `awaiting` mirrors HomeTab's
-    // own filter (docItems, kind quote, display status 'sent'); the due set is
-    // only suppressed when the banner is actually rendered (money.due > 0), so a
-    // document nothing is currently asking about stays in the history.
-    const awaitingQuoteIds = new Set(
-      docItems.filter(d => d.kind === 'quote' && d.status === 'sent').map(d => d.rawId),
-    )
-    const dueInvoiceIds = new Set(
-      view.money.due > 0
-        ? docItems.filter(d => d.kind === 'invoice' && d.balance > 0
-            && d.status !== 'paid' && d.status !== 'overpaid' && d.status !== 'cancelled').map(d => d.id)
-        : [],
-    )
-    // Quote events read the DISPLAY status + GST-true totals off DocItem — the
-    // exact figures the documents rows show — so this feed can never disagree
-    // with the row it summarizes and never runs a second status/money engine.
-    const quoteStatusByRaw = new Map(docItems.filter(d => d.kind === 'quote').map(d => [d.rawId, d.status]))
-    // This event is stamped at the date the quote was SENT, so that's what its title has
-    // to say. "Quote Q-123 accepted" dated the day it went out is a small lie the eye
-    // doesn't catch — the customer approved it days later. The outcome belongs in the
-    // subtitle, where it reads as current state rather than as something that happened
-    // at this point on the line. Tone follows the same rule: amber means "this still
-    // wants you", so a declined or lapsed quote must not wear it.
-    for (const q of data.quotes) {
-      // Still waiting on them → it's the attention card's, not history's.
-      if (awaitingQuoteIds.has(q.id)) continue
-      const st = quoteStatusByRaw.get(q.id) ?? q.status
-      const outcome = st === 'accepted' ? 'Approved'
-        : st === 'declined' ? 'Declined'
-        : st === 'expired' ? 'Expired'
-        : st === 'sent' ? 'Awaiting your approval'
-        : null
-      ev.push({
-        id: 'q' + q.id, at: q.issued_date || q.created_at, icon: FileText,
-        tone: st === 'accepted' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
-          : st === 'sent' ? 'text-amber-400 border-amber-500/30 bg-amber-500/10'
-          : 'text-ink-muted border-border bg-bg-tertiary',
-        title: `Quote ${q.quote_number} sent`,
-        sub: [q.service_type || null, outcome].filter(Boolean).join(' · ') || null,
-      })
-    }
-    // The visit the "Latest visit" card above is already showing, with its own
-    // heading, its date and its photos. It was ALSO the top row of this feed —
-    // "Weekly Mowing · Aug 7, 2026" as a card, then "Weekly Mowing completed ·
-    // Aug 7, 2026" as a row, ~600px apart. History starts where the card stops.
-    const heroVisitId = view.derived.lastCompleted?.id ?? null
-    for (const j of data.jobs) {
-      if (j.completed_at || j.status === 'completed') {
-        if (j.id === heroVisitId) continue
-        ev.push({ id: 'jc' + j.id, at: j.completed_at || j.scheduled_date, icon: CheckCircle2, tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', title: `${j.service_type || j.title} completed`, sub: null }); continue
-      }
-      // A visit that hasn't happened yet is not recent ACTIVITY. The next-service
-      // hero states it in large type at the top of this very page, and the Visits
-      // tab lists every upcoming one — so "Weed Removal scheduled · Aug 11, 2026"
-      // down here was the third telling, and the second on one screen.
-      // A past date that never completed is different: that IS history (a visit
-      // that came and went), so it stays.
-      if (j.scheduled_date > view.todayISO) continue
-      ev.push({ id: 'js' + j.id, at: j.scheduled_date, icon: CalendarClock, tone: 'text-sky-400 border-sky-500/30 bg-sky-500/10', title: `${j.service_type || j.title} scheduled`, sub: null })
-    }
-    // Draft invoices are the owner's unfinished work and are filtered out of the
-    // customer's documents list (buildDocItems does it) — iterating DocItems means
-    // they cannot leak onto this feed either, and `amount` is already the
-    // discounted+GST total those rows display.
-    for (const d of docItems.filter(d => d.kind === 'invoice')) {
-      // Currently being asked for → the amount-due banner owns it.
-      if (dueInvoiceIds.has(d.id)) continue
-      // `d.status` is the DISPLAY status the model settled once (../model's overdue
-      // and settled overlays, both derived from the ledger balance) — so this feed
-      // reads the same verdict as the Billing row's pill and cannot drift from it.
-      // It printed "$100.00 · Due" for a fully-received invoice until that overlay
-      // existed; the fix belongs there, once, not in each surface that asks.
-      const settlement = d.status === 'cancelled' ? 'Cancelled'
-        : d.status === 'paid' || d.status === 'overpaid' ? 'Paid' : 'Due'
-      ev.push({
-        id: d.id, at: d.date, icon: Receipt,
-        tone: 'text-ink-muted border-border bg-bg-tertiary',
-        title: `Invoice ${d.number} issued`,
-        // The amount alone left the customer to cross-reference whether they'd paid it.
-        sub: `${formatCurrency(d.amount)} · ${settlement}`,
-      })
-    }
-    // Classify by the ONE ledger classifier, never the sign of the amount: a $200
-    // refund and a $200 overpayment MOVED to credit are both negative, but only the
-    // first is a refund — the second is money the customer keeps as credit. Sign
-    // alone read both as "Refund issued"; ledgerRowType tells them apart. (Credit-
-    // ledger rows are skipped — availableCredit already tells that story.)
-    for (const p of data.payments) {
-      if (p.kind === 'credit') continue
-      const rt = ledgerRowType(p)
-      const isRefund = rt === 'Refund'
-      ev.push({
-        id: 'p' + p.id, at: p.paid_at || p.created_at, icon: CreditCard,
-        tone: isRefund ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
-        title: isRefund ? 'Refund issued'
-          : rt === 'Overpayment to credit' ? 'Overpayment moved to credit'
-          : rt === 'Settled from credit' ? 'Settled from account credit'
-          : `Payment received · ${paymentMethodLabel(p.provider)}`,
-        sub: formatCurrency(Math.abs(Number(p.amount))),
-      })
-    }
-    for (const [jid, ps] of photosByJob) { if (jid !== 'none' && ps.length) ev.push({ id: 'ph' + jid, at: ps[0]?.taken_at || '', icon: ImageIcon, tone: 'text-violet-400 border-violet-500/30 bg-violet-500/10', title: `${ps.length} photo${ps.length === 1 ? '' : 's'} added`, sub: null }) }
-    return ev.filter(e => e.at).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 5)
-  }, [view])
 }
 
 // ── Review ask (only after a completed visit, hidden once they've reviewed) ──

@@ -20,17 +20,11 @@ import { receiptNumberFor } from '@/lib/payments/ledger'
 import { ledgerRowType } from '@/lib/payments/analytics'
 import { cardExpLabel, cardExpiryState } from '@/lib/payments/card'
 import { Empty, type TabProps } from './shared'
-import { etransferReference, refundedTotal, type PortalCard, type PortalInvoice, type PortalPayment } from '../model'
+import { etransferReference, paymentMethodLabel, refundedTotal, type PortalCard, type PortalInvoice, type PortalPayment } from '../model'
 
-// ── Payment history ──
-function paymentMethodLabel(provider: string): string {
-  switch (provider) {
-    case 'stripe': return 'Card'
-    case 'etransfer': return 'E-transfer'
-    case 'cash': return 'Cash'
-    default: return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : 'Payment'
-  }
-}
+// `paymentMethodLabel` lived here AND in HomeTab as two byte-identical copies.
+// Home's went with its feed; this one now imports the single definition from
+// ../model, so the word a customer reads for "how did I pay" is one string.
 
 export function PaymentsSection({ view, actions }: TabProps) {
   const { data, derived } = view
