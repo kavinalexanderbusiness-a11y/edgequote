@@ -69,6 +69,9 @@ import { Menu, MenuItem } from '@/components/ui/Menu'
 import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { Modal } from '@/components/ui/Modal'
+import { CompletionSheet } from '@/components/completion/CompletionSheet'
+import { JobPhotos } from '@/components/photos/JobPhotos'
+import { saveCompletionRecord } from '@/lib/completion'
 import { BulkActionBar, BulkAction, SelectCheckbox, SelectAllToggle } from '@/components/ui/BulkActions'
 import { toast as notify } from '@/lib/toast'
 import { cn } from '@/lib/utils'
@@ -77,6 +80,7 @@ import {
   ChevronUp, ChevronDown, Wand2, ExternalLink, Truck, StickyNote, HardHat, Navigation, Clock,
   Printer, FileDown, CalendarDays, AlertTriangle, Keyboard, Phone, MessageSquare, Check,
   Play, Copy, History, Activity, CheckCircle2, PlayCircle, Send, Loader2, MoreHorizontal,
+  NotebookPen,
 } from 'lucide-react'
 
 function todayISO(): string {
@@ -129,6 +133,10 @@ export default function DispatchPage() {
   const [dayRow, setDayRow] = useState<DayStatusRow | null>(null)
   const [settings, setSettings] = useState<{ base: Coord | null; workStart: string; dailyHours: number }>({ base: null, workStart: DEFAULT_WORK_START, dailyHours: 8 })
   const [view, setView] = useState<'board' | 'map'>('board')
+  // Which visit's proof-of-work record is open. By ID, never a snapshot: the
+  // sheet must read whatever the last fetch put in `jobs`, or a crew note
+  // written while this board sat open would be saved over.
+  const [recordingId, setRecordingId] = useState<string | null>(null)
   // `?roster=1` opens the roster straight away. Every "add your people" empty
   // state across Workforce/Payroll/Timesheet links here — previously they told
   // the owner to "add people under Crews & roster on the dispatch board" and left
@@ -1564,6 +1572,7 @@ export default function DispatchPage() {
                 statusBusy={statusBusy}
                 onQuickStart={quickStart}
                 onQuickComplete={quickComplete}
+                onRecord={j => setRecordingId(j.id)}
                 onPrintLane={printLane}
                 onCopyItinerary={copyItinerary}
               />
@@ -1753,6 +1762,34 @@ export default function DispatchPage() {
         equipment={equipment}
         onChanged={fetchAll}
       />
+
+      {/* Proof of work — the owner's half of the SAME editor the crew uses
+          (components/completion). ⛔ Not a completion door: it writes only the
+          two record fields, so opening it on a visit that was billed weeks ago
+          cannot re-bill it. Held by id so it always reads the freshest row.
+          Photos come from the canonical owner uploader; a parallel upload path
+          is exactly what must not exist. */}
+      {(() => {
+        const job = jobs.find(j => j.id === recordingId)
+        if (!job) return null
+        return (
+          <CompletionSheet
+            open
+            onClose={() => setRecordingId(null)}
+            job={job}
+            onSave={record => saveCompletionRecord(supabase, job, record)}
+            onSaved={fetchAll}
+            photos={
+              <JobPhotos
+                propertyId={job.property_id ?? null}
+                jobId={job.id}
+                customerId={job.customer_id ?? null}
+                variant="visit"
+              />
+            }
+          />
+        )
+      })()}
     </div>
   )
 }
@@ -1764,7 +1801,7 @@ const CrewLaneCard = memo(function CrewLaneCard({
   lane, route, technicians, vehicles, note, crews, crewSpare, nowMin, base, index, conflictBadge, savingsKm, statusVisible,
   isDropTarget, dropOverload, dropAnchor, dragging, kbGrabbedId, flashJobId, selectedSet, onToggleSelect,
   onDragHandleDown, onGripKeyDown, onNudge, onMoveTo, onBestOrder, optimizing, onSetTechStatus, onSaveNote,
-  statusBusy, onQuickStart, onQuickComplete, onPrintLane, onCopyItinerary,
+  statusBusy, onQuickStart, onQuickComplete, onRecord, onPrintLane, onCopyItinerary,
 }: {
   lane: CrewLaneData
   route: LaneRoute | undefined
@@ -1800,6 +1837,9 @@ const CrewLaneCard = memo(function CrewLaneCard({
   statusBusy: Set<string>
   onQuickStart: (j: Job) => void
   onQuickComplete: (j: Job) => void
+  /** Open the proof-of-work record for this visit. Writes the two record
+   *  fields and nothing else — not a completion door. */
+  onRecord: (j: Job) => void
   onPrintLane: (laneId: string) => void
   onCopyItinerary: (laneId: string) => void
 }) {
@@ -2018,6 +2058,14 @@ const CrewLaneCard = memo(function CrewLaneCard({
               ...(job.status === 'scheduled' ? [{
                 key: 'done', label: 'Mark done (skip check-in)', icon: CheckCircle2, onSelect: () => onQuickComplete(job),
               } as MenuItem] : []),
+              // Proof of work. Available at every stage, and it writes nothing
+              // but the record — never a status, never an invoice.
+              {
+                key: 'record',
+                label: job.completion_summary || job.completion_issue ? 'Edit what was done' : 'Record what was done',
+                icon: NotebookPen,
+                onSelect: () => onRecord(job),
+              } as MenuItem,
               // Each destination carries its room: the job's own minutes against
               // the crew's spare, from the same laneLoad the capacity meters
               // draw. "Move to Green — 2.1h free" is an informed reassignment;

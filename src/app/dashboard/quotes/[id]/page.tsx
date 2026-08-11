@@ -21,6 +21,7 @@ import { Card, CardBody } from '@/components/ui/Card'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { QuoteIntelligencePanel } from '@/components/quotes/QuoteIntelligencePanel'
+import { SaveAsBundleDialog } from '@/components/quotes/SaveAsBundleDialog'
 import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { nextInvoiceNumber } from '@/lib/invoicing'
 import { isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil, markSentPatch, sendBlockedReason, sendBlockedLabel, DEFAULT_QUOTE_VALID_DAYS } from '@/lib/quoteStatus'
@@ -33,7 +34,7 @@ import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { servicePricingKind } from '@/lib/servicePricing'
 import { saveManual } from '@/lib/measure/data'
-import { AlertTriangle, Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Camera, Globe, CalendarClock } from 'lucide-react'
+import { AlertTriangle, Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Camera, Globe, CalendarClock, Layers } from 'lucide-react'
 
 export default function QuoteDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -58,6 +59,11 @@ export default function QuoteDetailPage() {
   const [scheduling, setScheduling] = useState(false)
   const [converting, setConverting] = useState(false)
   const [duplicating, setDuplicating] = useState(false)
+  // "Save this scope as a bundle" — the one creation door for reusable scopes.
+  // Names are held here (not inside the dialog) so the collision check is ready
+  // before the dialog opens rather than after a failed save.
+  const [showSaveBundle, setShowSaveBundle] = useState(false)
+  const [bundleNames, setBundleNames] = useState<string[]>([])
   const [extending, setExtending] = useState(false)
   const [showMessage, setShowMessage] = useState(false)
   // The invoice this quote has already produced (newest, when several exist) —
@@ -102,7 +108,7 @@ export default function QuoteDetailPage() {
       // Local session read — no auth round-trip before the batch below.
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
-      const [qRes, svcRes, optRes, cRes, tRes, tierRes, sRes, invRes, recentRes] = await Promise.all([
+      const [qRes, svcRes, optRes, cRes, tRes, tierRes, sRes, invRes, recentRes, bundleRes] = await Promise.all([
         supabase.from('quotes').select('*').eq('id', id).eq('user_id', user!.id).single(),
         supabase.from('quote_services').select('*').eq('quote_id', id).order('sort_order'),
         // The owner's own order, which is the order the customer saw.
@@ -123,6 +129,9 @@ export default function QuoteDetailPage() {
         // recorded to build it — see recentTemplateIdsFrom.
         supabase.from('quotes').select('service_template_id').eq('user_id', user!.id)
           .not('service_template_id', 'is', null).order('created_at', { ascending: false }).limit(60),
+        // Names only. "Save as bundle" needs to know what would collide before
+        // the owner types anything; it does not need the bundles themselves.
+        supabase.from('service_bundles').select('name').eq('user_id', user!.id),
       ])
       setQuote(qRes.data)
       setServices((svcRes.data as QuoteService[]) || []) // error/absent table → [] (legacy)
@@ -133,6 +142,7 @@ export default function QuoteDetailPage() {
       setTiers(tierRes.data || [])
       setSettings(sRes.data)
       setExistingInvoiceNumber((invRes.data?.[0] as { invoice_number: string } | undefined)?.invoice_number ?? null)
+      setBundleNames(((bundleRes.data as { name: string }[] | null) || []).map(b => b.name.toLowerCase()))
       setLoading(false)
     }
     load()
@@ -340,6 +350,15 @@ export default function QuoteDetailPage() {
             service_type: values.service_type, service_template_id: values.service_template_id || null,
             quantity: 1, unit: 'each', unit_price: Number(values.initial_price) || 0,
             est_minutes: Math.round(Number(values.hours) * 60) || null,
+            // ⚠️ See the twin of this line in quotes/new. PostgREST unifies the
+            // COLUMN SET of a bulk insert and sends an explicit NULL for any key an
+            // object is missing, rather than letting the column default apply. The
+            // extras below carry `kind`, so row 0 arrived as NULL against a NOT NULL
+            // column and the insert was rejected in full. Here that was worse than
+            // in the create path: the DELETE above had already run, so editing any
+            // multi-service quote wiped its breakdown and the retry this file
+            // honestly asks for could never succeed.
+            kind: 'service',
           },
           ...extraLines.map((s, i) => ({
             user_id: u2.id, quote_id: id, sort_order: i + 1,
@@ -1003,6 +1022,16 @@ export default function QuoteDetailPage() {
           <Button onClick={() => setEditing(true)} variant="ghost" size="sm">
             <Edit2 className="w-3.5 h-3.5" /> Edit
           </Button>
+          {/* Save the SCOPE for reuse — distinct from Duplicate, which copies
+              this whole quote (customer and all) once. Hidden on an options
+              quote: alternatives carry no line items, so there is no scope to
+              save, and offering the button would promise one. */}
+          {!options.length && (
+            <Button onClick={() => setShowSaveBundle(true)} variant="ghost" size="sm"
+              aria-label="Save this scope as a bundle" title="Save this scope as a bundle">
+              <Layers className="w-4 h-4" />
+            </Button>
+          )}
           <Button onClick={handleDuplicate} variant="ghost" size="sm" loading={duplicating} aria-label="Duplicate quote" title="Duplicate quote">
             <Copy className="w-4 h-4" />
           </Button>
@@ -1142,6 +1171,17 @@ export default function QuoteDetailPage() {
               }
             }} />
         </Card>
+      )}
+
+      {showSaveBundle && (
+        <SaveAsBundleDialog
+          open
+          onClose={() => setShowSaveBundle(false)}
+          quote={quote}
+          services={services}
+          templates={templates}
+          existingNames={bundleNames}
+        />
       )}
 
       {/* Schedule/convert results flow through the ONE toast system — inline

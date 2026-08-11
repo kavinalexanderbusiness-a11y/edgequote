@@ -248,7 +248,21 @@ export interface Job {
   duration_minutes: number | null
   crew_size: number
   status: JobStatus
+  // 🔒 INTERNAL. The access/instruction note for whoever does the work (gate
+  // code, where to park). crew_day ships it to the worker's phone. ⛔ It is NOT
+  // in get_portal_data's payload and must never go back: it was rendered to
+  // customers until 2026-08-11. Customer-facing words go in completion_summary.
   notes: string | null
+  // ── Proof of work (lib/completion) ─────────────────────────────────────────
+  // What a finished visit LEFT BEHIND. Neither is a completion state: `status` +
+  // `completed_at` remain THE answer to whether and when, stamped only by
+  // lib/jobStatus.completionPatch. Both stay nullable forever — completion must
+  // never depend on paperwork.
+  /** ⭐ CUSTOMER-VISIBLE. "What was done", rendered verbatim in the portal. */
+  completion_summary?: string | null
+  /** 🔒 INTERNAL. What the field found that needs attention. Never leaves the
+   *  business — absent from get_portal_data, pinned by verify:completion. */
+  completion_issue?: string | null
   // Per-visit price. Manual override — when set it wins over the linked quote's
   // cadence price (the one source for what a visit is worth).
   price: number | null
@@ -1587,6 +1601,61 @@ export interface ServiceTemplateFormValues {
   unit_cost: string
   material_cost: string
   is_favorite: boolean
+}
+
+// ── Service bundles ──────────────────────────────────────────────────────────
+// THREE nouns, deliberately distinct, because this repo has been bitten before
+// by one word meaning three things:
+//   ServiceTemplate — a CATALOGUE row. ONE service, and the rate it usually
+//                     sells at. Owns the price.
+//   ServiceBundle   — a named, reusable SET of lines ("Spring Cleanup"). SEEDS
+//                     a quote's scope. Owns no price of its own by default.
+//   QuoteOption     — Budget/Recommended/Premium: ALTERNATIVE whole-job prices
+//                     the customer picks ONE of. An option REPLACES the total;
+//                     a bundle seeds the lines that ADD UP to it. The database
+//                     refuses a quote holding both.
+// ⛔ Do not rename a bundle to a "template" — that noun is the catalogue's.
+export interface ServiceBundle {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  /** What the owner picks from the list — "Spring Cleanup", "Move-out clean". */
+  name: string
+  /** A reminder of what it covers, for the owner. Never shown to a customer. */
+  description: string | null
+  sort_order: number
+}
+
+/** One line a bundle will lay down. Field-for-field the shape of the
+ *  `quote_services` row it becomes, so applying one needs no translation. */
+export interface ServiceBundleItem {
+  id: string
+  created_at: string
+  user_id: string
+  bundle_id: string
+  /** The catalogue service this line IS, when it is one. Null = one-off work
+   *  named by hand — the same freedom the quote builder already allows. */
+  service_template_id: string | null
+  /** The line's display name (→ `quote_services.service_type`). */
+  name: string
+  quantity: number
+  unit: string | null
+  /** ⭐ NULL means "follow the catalogue rate at apply time" — NOT zero, and
+   *  not a promise. A number here is one the owner typed for this bundle; it
+   *  seeds the line's unit_price and nothing ever recomputes it. This column
+   *  is the whole of the bundle's price semantics: there is no rule, curve or
+   *  multiplier anywhere, and no pricing engine is consulted. */
+  unit_price: number | null
+  est_minutes: number | null
+  notes: string | null
+  kind: QuoteLineKind
+  sort_order: number
+}
+
+/** A bundle with its lines, as every surface reads it. */
+export interface ServiceBundleWithItems extends ServiceBundle {
+  items: ServiceBundleItem[]
 }
 
 export interface BusinessSettingsFormValues {

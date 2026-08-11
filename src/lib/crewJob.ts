@@ -146,6 +146,44 @@ export async function crewUncompleteVisit(
   }
 }
 
+/** Record what was done (customer-visible) and what needs attention (internal)
+ *  on an assigned visit — the crew half of lib/completion.
+ *
+ *  ⛔ NOT a completion, and never a substitute for one. This writes exactly two
+ *  text columns; status, completed_at, actual_minutes and the invoice are the
+ *  business of crewCompleteVisit above. A visit can therefore carry a note
+ *  before it is finished, and adding a photo caption to a visit finished last
+ *  Tuesday cannot re-bill it.
+ *
+ *  Through the typed DEFINER RPC, not a table write, for the founding crew-mode
+ *  reason: a crew session holds no table grants at all, and a jsonb patch would
+ *  be a hole a client could stuff `price` into. The RPC re-checks employer +
+ *  crew + not-cancelled itself.
+ *
+ *  Online-only like every crew write, and it REPORTS ITS WRITE: a note that
+ *  silently didn't save is the same lie as a status that didn't. */
+export async function crewSaveCompletionRecord(
+  supabase: SupabaseClient,
+  jobId: string,
+  record: { completion_summary: string | null; completion_issue: string | null },
+): Promise<CrewWriteResult> {
+  try {
+    const { data, error } = await supabase.rpc('crew_set_completion_record', {
+      p_job_id: jobId,
+      p_summary: record.completion_summary,
+      p_issue: record.completion_issue,
+    })
+    if (error) return { ok: false, error: 'That didn’t save — check your signal and try again.' }
+    const res = data as { ok?: boolean; reason?: string } | null
+    if (!res?.ok) {
+      return { ok: false, error: 'Couldn’t save that — this visit is no longer on your board. Refresh and try again.' }
+    }
+    return { ok: true }
+  } catch {
+    return { ok: false, error: 'That didn’t save — check your signal and try again.' }
+  }
+}
+
 /** Undo, for the mis-tap: put the four fields back exactly as they were. */
 export async function crewRevertVisit(
   supabase: SupabaseClient, stop: CrewStop, prev: VisitState,

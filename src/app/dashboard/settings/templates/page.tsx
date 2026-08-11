@@ -23,6 +23,7 @@ import { toneText } from '@/lib/tone'
 import { formatCurrency, cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { Plus, Edit2, Trash2, X, Star } from 'lucide-react'
+import { ServiceBundles } from '@/components/settings/ServiceBundles'
 import { scrollBehavior } from '@/lib/motion'
 
 // Sentinel for the "Other…" option. Never persisted: onSubmit swaps it for the
@@ -366,6 +367,12 @@ export default function ServiceTemplatesPage() {
           </div>
         ))
       )}
+
+      {/* The catalogue above is ONE service per row. A bundle is a named SET of
+          them. Those two are the pair this product is most often confused
+          about, so they share a page — seeing both in one scroll is the
+          cheapest way to keep them apart. */}
+      <ServiceBundles templates={templates} />
     </PageContainer>
   )
 }
