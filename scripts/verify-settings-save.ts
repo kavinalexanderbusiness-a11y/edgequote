@@ -102,8 +102,8 @@ check('the save claims nothing before the error is checked',
 // ── 5. The two patterns are STATED, and edits survive tab switches ───────────
 console.log('\n═══ The contract is written where the owner is standing ═══')
 check('every non-form tab carries a SaveContract line',
-  (PAGE.match(/<SaveContract text=/g) || []).length === 5,
-  'messaging, payroll, modules, notifications, booking — five tabs, five sentences')
+  (PAGE.match(/<SaveContract text=/g) || []).length === 6,
+  'messaging, payroll, modules, notifications, booking, data — six tabs, six sentences')
 check('instant tabs say instant; payroll says press Save',
   /save the moment you make them/.test(PAGE) && /Nothing on this tab saves until you press its Save button/.test(PAGE))
 check('inactive tabs hide, never unmount (edits survive switching)',
