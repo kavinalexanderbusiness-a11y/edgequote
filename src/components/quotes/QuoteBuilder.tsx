@@ -658,7 +658,11 @@ export function QuoteBuilder({
       serviceIdx.length ? `${serviceIdx.length} service${serviceIdx.length !== 1 ? 's' : ''}` : null,
       materialIdx.length ? `${materialIdx.length} material${materialIdx.length !== 1 ? 's' : ''}` : null,
     ].filter(Boolean).join(' · ') + ` · ${formatCurrency(serviceExtrasNet + materialsSum.net)}`
-    : 'Add cleanup, hedges, mulch…'
+    // Trade-neutral: this drawer is on every trade’s quote, and naming lawn
+    // extras told a painter or an electrician what a landscaper would add.
+    // The drawer’s own title already says "Services & materials"; this line
+    // only has to read as optional.
+    : 'Optional — extra services, or materials you’ll bill for'
   // Every part states where it stands, so a shut door reads as answered rather
   // than as two more questions. "Best days to schedule" is deliberately NOT in
   // here: it is a lookup, not a setting — nothing about it is stored on the
