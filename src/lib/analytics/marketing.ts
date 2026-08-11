@@ -16,11 +16,14 @@
 //    figure no engine defines; summing it here would invent the metric and let
 //    it drift from what `sent` means to the send path. Per-campaign is what the
 //    engine knows, so per-campaign is what we show.
-//  • No revenue attribution. campaignStats.ts is explicit that attribution is a
-//    separate question, and a second attribution path here would put two engines
-//    on it. (Note: its header says revenue "rolls up by acquisition_source
-//    elsewhere" — as of this commit no engine actually does that. The comment
-//    describes an intent, not code.)
+//  • No attribution, and no revenue. Attribution now has an engine —
+//    lib/attribution, which answers "where did this customer come from?" by
+//    rolling customers up by acquisition_source — and a second path here would
+//    put two engines on it. Note what it reports: COUNTS per source (customers →
+//    quoted → won → worked), and deliberately no dollars, because source-level
+//    revenue is not canonically safe yet. So there is no money figure here for it
+//    to disagree with either. What this widget shows is what YOU sent; what that
+//    engine shows is where customers say they CAME FROM. Different questions.
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { loadCampaignStats, EMPTY_STATS, type CampaignStats } from '@/lib/crm/campaignStats'

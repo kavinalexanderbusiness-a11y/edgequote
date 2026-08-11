@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import { loadBusinessIntelligence, BIReport, NamedValue, WeekdayStat, YearComparison } from '@/lib/businessIntelligence'
 import { loadLaborInsights, LaborInsights, ServiceAccuracy, ServiceProfit } from '@/lib/labor'
 import { loadMarketingPerformance, type MarketingCampaignRow } from '@/lib/analytics/marketing'
+import { loadAcquisitionFunnel, type AcquisitionFunnel } from '@/lib/attribution'
 import { summarizeStats } from '@/lib/crm/campaignStats'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
@@ -19,7 +20,7 @@ import { AnalyticsWorkspace, WidgetChrome, useWidget } from '@/components/analyt
 import type { WidgetId } from '@/lib/analytics/layout'
 import { formatCurrency, cn } from '@/lib/utils'
 import type { Tone } from '@/lib/tone'
-import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart, Home, AlertTriangle, CalendarDays, Ban, Briefcase, Megaphone, MessageSquare } from 'lucide-react'
+import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart, Home, AlertTriangle, CalendarDays, Ban, Briefcase, Megaphone, MessageSquare, Compass } from 'lucide-react'
 
 // From THE comms insights engine (comms_insights RPC) — the History page renders
 // the same object, so the two surfaces cannot disagree about a number.
@@ -39,6 +40,15 @@ export default function IntelligencePage() {
   const [labor, setLabor] = useState<LaborInsights | null>(() => readCache<LaborInsights>('labor', CACHE_TTL.medium))
   const [marketing, setMarketing] = useState<MarketingCampaignRow[] | null>(() => readCache<MarketingCampaignRow[]>('marketing', CACHE_TTL.medium))
   const [comms, setComms] = useState<CommsInsights | null>(() => readCache<CommsInsights>('comms', CACHE_TTL.medium))
+  // THREE states, not two, and that is the point: `undefined` = still loading,
+  // `null` = the read FAILED, an object = the answer. The other supplementary
+  // widgets can collapse loading and failure into one skeleton because a missing
+  // campaign list reads as "no campaigns". Here a failed read would read as
+  // "every source produced zero customers" — a specific, confident, false verdict
+  // about the owner's marketing. Same trap loadCustomerHealth and loadWinLoss
+  // were fixed for.
+  const [acquisition, setAcquisition] = useState<AcquisitionFunnel | null | undefined>(
+    () => readCache<AcquisitionFunnel>('acquisition', CACHE_TTL.medium) ?? undefined)
 
   useEffect(() => {
     (async () => {
@@ -62,6 +72,19 @@ export default function IntelligencePage() {
     (async () => {
       try { const r = await loadMarketingPerformance(supabase); setMarketing(r); writeCache('marketing', r) }
       catch { /* campaign stats are supplementary — never break the BI report */ }
+    })()
+  }, [supabase])
+
+  // Acquisition — alongside, never blocking the BI report. A thrown error and a
+  // returned null both mean "we could not check", and both must reach the widget
+  // as null rather than being swallowed into an empty board.
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await loadAcquisitionFunnel(supabase)
+        setAcquisition(r)
+        if (r) writeCache('acquisition', r)
+      } catch { setAcquisition(null) }
     })()
   }, [supabase])
 
@@ -488,6 +511,80 @@ export default function IntelligencePage() {
             <Link href="/dashboard/messages/scheduled" className="block rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
               <StatTile label="Scheduled" value={String(comms.scheduled_pending)} icon={CalendarDays} sub="Queued to send" />
             </Link>
+          </div>
+        )}
+      </Section>
+
+      {/* ── WHERE CUSTOMERS COME FROM ── the acquisition funnel, per SOURCE.
+          Distinct from Marketing above: that is what YOU sent, this is what
+          customers said about how they found you. Counts only — see the note on
+          AcquisitionFunnel for why no dollars appear here. */}
+      <Section id="acquisition" title="Where customers come from" icon={Compass}>
+        {acquisition === undefined ? (
+          <Skeleton className="h-24 w-full rounded-card" />
+        ) : acquisition === null ? (
+          // A failed read must not render as "nobody came from anywhere".
+          <div className="rounded-card border border-border bg-bg-secondary p-4">
+            <p className="text-sm text-ink-muted">
+              Couldn&apos;t check where your customers came from — this is a connection problem, not an empty book.{' '}
+              <button type="button" onClick={() => window.location.reload()} className="text-accent-text underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">Try again</button>.
+            </p>
+          </div>
+        ) : acquisition.customers === 0 ? (
+          <div className="rounded-card border border-border bg-bg-secondary p-4">
+            <InlineEmpty icon={Compass} className="py-3">No customers yet — this fills in as you add them.</InlineEmpty>
+          </div>
+        ) : (
+          <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
+            {/* Wide content scrolls inside its own box rather than pushing the page sideways. */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm min-w-[34rem]">
+                <thead>
+                  <tr className="text-[11px] uppercase tracking-wide text-ink-faint border-b border-border">
+                    <th scope="col" className="text-left font-semibold px-3 py-2">Source</th>
+                    <th scope="col" className="text-right font-semibold px-3 py-2">Customers</th>
+                    <th scope="col" className="text-right font-semibold px-3 py-2">Quoted</th>
+                    <th scope="col" className="text-right font-semibold px-3 py-2">Won</th>
+                    <th scope="col" className="text-right font-semibold px-3 py-2">Worked</th>
+                    <th scope="col" className="text-right font-semibold px-3 py-2">Won rate</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {acquisition.rows.map(r => (
+                    <tr key={r.category} className={cn(r.category === 'unknown' && 'bg-bg-tertiary/40')}>
+                      <td className="px-3 py-2">
+                        <span className="font-medium text-ink">{r.label}</span>
+                        {/* The raw words behind the bucket, so 'Other' is never a
+                            black box and 'Google Business Profile' isn't flattened
+                            away into 'Google'. */}
+                        {r.details.length > 0 && (
+                          <span className="block text-[11px] text-ink-faint truncate">{r.details.join(' · ')}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-ink">{r.customers}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{r.quoted}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{r.won}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{r.worked}</td>
+                      {/* Counts always; a percentage only once the cohort is big
+                          enough that one customer can't swing it. */}
+                      <td className="px-3 py-2 text-right tabular-nums text-ink-muted">
+                        {r.wonRate == null ? <span className="text-ink-faint">—</span> : `${Math.round(r.wonRate * 100)}%`}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-[11px] text-ink-faint px-3 py-2 border-t border-border">
+              {acquisition.unknownPct != null && acquisition.unknownPct > 0 ? (
+                <>
+                  <b className="text-ink-muted">{acquisition.unknownPct}% of your customers have no source recorded.</b>{' '}
+                  Every number above is only as good as that gap is small — ask on the next call and set it on the customer&apos;s profile.{' '}
+                </>
+              ) : null}
+              Won rate is customers who accepted a quote ÷ customers from that source, shown only at {acquisition.minSampleForRate}+ customers.
+              &ldquo;Worked&rdquo; means at least one completed visit. Counts are per customer, so one person is counted once however many quotes or visits they have.
+            </p>
           </div>
         )}
       </Section>

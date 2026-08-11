@@ -31,9 +31,14 @@ interface Shot {
   error?: string
 }
 
-export function CrewStopPhotos({ jobId, status }: {
+export function CrewStopPhotos({ jobId, status, onOutstandingChange }: {
   jobId: string
   status: 'scheduled' | 'in_progress' | 'completed'
+  /** How many shots have NOT landed on the server (uploading or failed). The
+   *  completion sheet reads this so its confirmation can say a note saved while
+   *  a photo is still outstanding, instead of one cheerful "Saved" that quietly
+   *  covers evidence this component knows didn't make it. */
+  onOutstandingChange?: (n: number) => void
 }) {
   const [shots, setShots] = useState<Shot[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
@@ -41,6 +46,9 @@ export function CrewStopPhotos({ jobId, status }: {
 
   // Object URLs leak unless revoked — release them when the card unmounts.
   useEffect(() => () => { shots.forEach(s => URL.revokeObjectURL(s.previewUrl)) }, [shots])
+
+  const outstanding = shots.filter(s => s.state !== 'done').length
+  useEffect(() => { onOutstandingChange?.(outstanding) }, [outstanding, onOutstandingChange])
 
   async function upload(key: string, file: File) {
     setShots(prev => prev.map(s => s.key === key ? { ...s, state: 'uploading', error: undefined } : s))

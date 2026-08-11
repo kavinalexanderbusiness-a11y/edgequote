@@ -7,6 +7,8 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { recordImportConsent, SMS_CONSENT_WARNING } from '@/lib/consent'
+import { sanitizeSourceInput } from '@/lib/attribution'
+import { ACQUISITION_SOURCES } from '@/types'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Banner } from '@/components/ui/Banner'
@@ -37,6 +39,7 @@ const truthy = (v: string) => ['true', '1', 'yes', 'y', 'x', 't'].includes(v.toL
 interface ParsedRow {
   name: string; email: string | null; phone: string | null; address: string | null
   city: string | null; province: string | null; postal_code: string | null; notes: string | null
+  source: string | null
   sms_opt_in: boolean; email_opt_in: boolean
 }
 
@@ -60,6 +63,10 @@ function buildRows(csv: string): { rows: ParsedRow[]; error?: string } {
       province: at(r, col('province')) || null,
       postal_code: at(r, col('postal_code')) || null,
       notes: at(r, col('notes')) || null,
+      // Where each customer came from, when the exported system knew. Accepts the
+      // canonical header and the common export name; a per-file default (chosen on
+      // the page) fills only rows that carry nothing. Absent stays honestly blank.
+      source: at(r, col('source')) || at(r, col('acquisition_source')) || null,
       sms_opt_in: col('sms_opt_in') >= 0 ? truthy(at(r, col('sms_opt_in'))) : false,
       email_opt_in: col('email_opt_in') >= 0 ? truthy(at(r, col('email_opt_in'))) : false,
     })
@@ -76,6 +83,9 @@ export default function ImportCustomersPage() {
   const [smsAck, setSmsAck] = useState(false)
   const [importing, setImporting] = useState(false)
   const [done, setDone] = useState<number | null>(null)
+  // Optional per-file source default — applied ONLY to rows whose CSV carries no
+  // source of their own. '' = not sure: those rows import with source unrecorded.
+  const [defaultSource, setDefaultSource] = useState('')
 
   const smsCount = rows.filter(r => r.sms_opt_in).length
   const emailCount = rows.filter(r => r.email_opt_in).length
@@ -110,6 +120,10 @@ export default function ImportCustomersPage() {
         id: crypto.randomUUID(),
         user_id: user.id, name: r.name, email: r.email, phone: r.phone,
         province: r.province || 'AB', notes: r.notes,
+        // Row value wins; the page-level default fills only rows with none; both
+        // are bounded by the same sanitizer every other writer of this column
+        // uses. null (never '') when neither knows — unknown stays visible.
+        acquisition_source: sanitizeSourceInput(r.source || defaultSource),
         sms_opt_in: r.sms_opt_in, email_opt_in: r.email_opt_in,
       }))
       const { error } = await supabase.from('customers').insert(insertRows)
@@ -146,7 +160,7 @@ export default function ImportCustomersPage() {
       {done == null && (
         <Link href="/dashboard/customers" className="text-sm text-ink-muted hover:text-ink flex items-center gap-1.5"><ArrowLeft className="w-4 h-4" /> Back to customers</Link>
       )}
-      <PageHeader title="Import Customers" description="Paste or upload a CSV. Optional columns: sms_opt_in, email_opt_in." />
+      <PageHeader title="Import Customers" description="Paste or upload a CSV. Optional columns: source, sms_opt_in, email_opt_in." />
 
       {done != null ? (
         <Card>
@@ -161,7 +175,7 @@ export default function ImportCustomersPage() {
           <Card>
             <CardBody className="space-y-3">
               <div className="flex items-center justify-between gap-3 flex-wrap">
-                <p className="text-xs text-ink-muted">Columns: <span className="text-ink">name</span> (required), email, phone, address, city, province, postal_code, notes, sms_opt_in, email_opt_in</p>
+                <p className="text-xs text-ink-muted">Columns: <span className="text-ink">name</span> (required), email, phone, address, city, province, postal_code, notes, source, sms_opt_in, email_opt_in</p>
                 <label className="inline-flex items-center gap-1.5 text-xs font-medium text-accent-text cursor-pointer rounded-md focus-within:ring-2 focus-within:ring-accent/40">
                   <Upload className="w-3.5 h-3.5" /> Upload CSV file
                   <input type="file" accept=".csv,text/csv" onChange={onFile} className="sr-only" />
@@ -193,6 +207,23 @@ export default function ImportCustomersPage() {
                     </div>
                   ))}
                   {rows.length > 25 && <p className="px-3 py-1.5 text-[11px] text-ink-faint">…and {rows.length - 25} more</p>}
+                </div>
+
+                {/* Optional, and only for rows the CSV itself didn't answer — a row's
+                    own source column always wins. Skipping imports them as
+                    "Not recorded", which is the truth when nobody knows. */}
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="import-default-source" className="text-xs font-semibold text-ink-muted uppercase tracking-wide">
+                    How did these customers find you? <span className="normal-case font-normal">(optional{rows.some(r => r.source) ? ' — rows with their own source keep it' : ''})</span>
+                  </label>
+                  <select
+                    id="import-default-source"
+                    value={defaultSource} onChange={e => setDefaultSource(e.target.value)}
+                    className={`w-full sm:w-72 bg-bg-tertiary border rounded-lg px-3 py-2 text-sm text-ink outline-none transition-all ${fieldBorder()}`}
+                  >
+                    <option value="">Not sure</option>
+                    {ACQUISITION_SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
                 </div>
 
                 {smsCount > 0 && (

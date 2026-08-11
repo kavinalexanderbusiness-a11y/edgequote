@@ -248,7 +248,21 @@ export interface Job {
   duration_minutes: number | null
   crew_size: number
   status: JobStatus
+  // 🔒 INTERNAL. The access/instruction note for whoever does the work (gate
+  // code, where to park). crew_day ships it to the worker's phone. ⛔ It is NOT
+  // in get_portal_data's payload and must never go back: it was rendered to
+  // customers until 2026-08-11. Customer-facing words go in completion_summary.
   notes: string | null
+  // ── Proof of work (lib/completion) ─────────────────────────────────────────
+  // What a finished visit LEFT BEHIND. Neither is a completion state: `status` +
+  // `completed_at` remain THE answer to whether and when, stamped only by
+  // lib/jobStatus.completionPatch. Both stay nullable forever — completion must
+  // never depend on paperwork.
+  /** ⭐ CUSTOMER-VISIBLE. "What was done", rendered verbatim in the portal. */
+  completion_summary?: string | null
+  /** 🔒 INTERNAL. What the field found that needs attention. Never leaves the
+   *  business — absent from get_portal_data, pinned by verify:completion. */
+  completion_issue?: string | null
   // Per-visit price. Manual override — when set it wins over the linked quote's
   // cadence price (the one source for what a visit is worth).
   price: number | null
@@ -1186,10 +1200,9 @@ export interface QuoteServiceInput {
   kind: QuoteLineKind
 }
 
-/** An option as a builder form would hold it. ⚠️ NOT yet wired into
- *  QuoteFormValues — the quote_options FOUNDATION is shipped and proven, the
- *  owner/customer surfaces are not built. Defined here so the follow-up starts
- *  from the shape the database already enforces. */
+/** An option as the builder form holds it. Saved by delete-and-reinsert (the
+ *  same shape quote_services uses), so `id` is carried only to render a stable
+ *  key and to tell an existing row from a new one — never written back. */
 export interface QuoteOptionInput {
   /** Present only for an option already on the quote; blank for a new row. */
   id?: string
@@ -1206,6 +1219,9 @@ export interface QuoteFormValues {
   // save flow can create/match the customer (no duplicate) and store contact info.
   customer_phone?: string
   customer_email?: string
+  // Optional "how did they find you?" quick-pick shown only for a brand-new
+  // person. '' = not sure — a legitimate answer that stays unknown; never required.
+  acquisition_source?: string
   address: string
   service_type: string
   service_template_id: string
@@ -1242,6 +1258,17 @@ export interface QuoteFormValues {
   nearby_count: number | null
   // Additional service lines beyond the primary one (multi-service quotes).
   services: QuoteServiceInput[]
+  // ── Alternatives (Budget / Standard / Premium) ────────────────────────────
+  // `has_options` is the owner's DECLARED intent — the "Offer multiple options"
+  // switch — and it is a separate fact from the array being non-empty. Turning
+  // the switch off must leave the rows in the form (so turning it back on
+  // doesn't lose the typing) while the save path writes none of them; deriving
+  // the mode from `options.length` instead would make "off" and "not typed yet"
+  // the same state and silently resurrect a discarded set.
+  // ⛔ MUTUALLY EXCLUSIVE with `services`: an option's price IS the whole job,
+  // a service line ADDS to it. The database refuses a quote holding both.
+  has_options: boolean
+  options: QuoteOptionInput[]
 }
 
 export interface CustomerFormValues {

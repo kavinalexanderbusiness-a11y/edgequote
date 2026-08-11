@@ -3,8 +3,12 @@
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Quote, Customer, QuoteFormValues, QuoteService, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, STATUS_LABELS } from '@/types'
+import { Quote, Customer, QuoteFormValues, QuoteService, QuoteOption, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, STATUS_LABELS } from '@/types'
 import { sumServiceLines, serviceLineTotals, splitServices, recentTemplateIdsFrom } from '@/lib/quoteServices'
+import {
+  activeOption, headlineOptionPrice, optionRowsFor, optionValueBasis, optionValueBasisLabel,
+  sortedOptions,
+} from '@/lib/quoteOptions'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { extractBookingPhotos, bookingPhotoViews } from '@/lib/bookingPhotos'
@@ -21,6 +25,7 @@ import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, local
 import { nextInvoiceNumber } from '@/lib/invoicing'
 import { isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil, markSentPatch, sendBlockedReason, sendBlockedLabel, DEFAULT_QUOTE_VALID_DAYS } from '@/lib/quoteStatus'
 import { toast } from '@/lib/toast'
+import { confirm as confirmDialog } from '@/lib/confirm'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
@@ -36,6 +41,10 @@ export default function QuoteDetailPage() {
   const [quote, setQuote] = useState<Quote | null>(null)
   // Multi-service breakdown (quote_services). Empty = legacy single-service quote.
   const [services, setServices] = useState<QuoteService[]>([])
+  // The alternatives (quote_options). Empty on every quote that doesn't offer a
+  // choice, which is every quote until an owner turns the switch on. MUTUALLY
+  // EXCLUSIVE with `services` — the database refuses a quote holding both.
+  const [options, setOptions] = useState<QuoteOption[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [templates, setTemplates] = useState<ServiceTemplate[]>([])
   // Same picker, same ranking as the create door — a service list that reorders
@@ -93,9 +102,11 @@ export default function QuoteDetailPage() {
       // Local session read — no auth round-trip before the batch below.
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
-      const [qRes, svcRes, cRes, tRes, tierRes, sRes, invRes, recentRes] = await Promise.all([
+      const [qRes, svcRes, optRes, cRes, tRes, tierRes, sRes, invRes, recentRes] = await Promise.all([
         supabase.from('quotes').select('*').eq('id', id).eq('user_id', user!.id).single(),
         supabase.from('quote_services').select('*').eq('quote_id', id).order('sort_order'),
+        // The owner's own order, which is the order the customer saw.
+        supabase.from('quote_options').select('*').eq('quote_id', id).order('sort_order'),
         supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
         supabase.from('service_templates').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('travel_fee_tiers').select('*').eq('user_id', user!.id).order('sort_order'),
@@ -115,6 +126,7 @@ export default function QuoteDetailPage() {
       ])
       setQuote(qRes.data)
       setServices((svcRes.data as QuoteService[]) || []) // error/absent table → [] (legacy)
+      setOptions((optRes.data as QuoteOption[]) || [])
       setCustomers(cRes.data || [])
       setTemplates(tRes.data || [])
       setRecentTemplateIds(recentTemplateIdsFrom(recentRes.data))
@@ -147,7 +159,7 @@ export default function QuoteDetailPage() {
       try {
         const ensured = await ensureCustomerAndProperty(
           supabase, user!.id,
-          { customerId: values.customer_id, name: values.customer_name, address: values.address, phone: values.customer_phone, email: values.customer_email },
+          { customerId: values.customer_id, name: values.customer_name, address: values.address, phone: values.customer_phone, email: values.customer_email, source: values.acquisition_source },
           customers,
         )
         customerId = ensured.customerId
@@ -186,6 +198,21 @@ export default function QuoteDetailPage() {
     const extrasNet = sumServiceLines(extraLines).net
     const initialWithExtras = (Number(values.initial_price) > 0 ? Number(values.initial_price) : 0) + extrasNet
 
+    // ── Alternatives ─────────────────────────────────────────────────────────
+    // ⛔ SETTLED ONCE CHOSEN. `selected_option_id` non-null means a real person
+    // approved a specific alternative at a specific price; the composite FK's
+    // ON DELETE RESTRICT would refuse the delete half of the rewrite anyway, and
+    // a save that half-applied would be worse than one that doesn't try. So the
+    // editor is read-only (optionsLockedName below) and this path leaves the rows
+    // exactly as the customer saw them. Price corrections after approval go the
+    // way they already do: edit the quote, with the "they approved $X" warning.
+    const optionsSettled = !!quote?.selected_option_id
+    const optionsOn = !!values.has_options && !optionsSettled
+    // Edit saves as-entered — fee recovery was baked in at creation, same as the
+    // single-service field one line up.
+    const optionRows = optionsOn ? optionRowsFor(values.options || [], id, user!.id) : []
+    const optionHeadline = optionsOn ? headlineOptionPrice(optionRows) : null
+
     // ADR-002: provenance moves WITH the price. Editing a quote re-uses the engine
     // surface (QuoteBuilder), so a re-applied recommendation — or a hand override —
     // strikes a NEW number under TODAY's config. When any price actually moves, record
@@ -195,8 +222,15 @@ export default function QuoteDetailPage() {
     // lie this ADR forbids on a plain duplicate. This closes the gap ADR-002 named and
     // deferred — the one path that could re-price under a newer config yet keep the old
     // version id, silently making the row unreproducible.
+    // The price this save is writing — one option's, or the classic sum of the
+    // primary line and its extras. Named once so the provenance check below and
+    // the update payload can never judge different numbers.
+    const nextInitialPrice = optionsOn
+      ? optionHeadline
+      : (optionsSettled ? (quote?.initial_price ?? null) : (initialWithExtras > 0 ? initialWithExtras : null))
+
     const priceMoved =
-      Number(initialWithExtras || 0)     !== Number(quote?.initial_price || 0) ||
+      Number(nextInitialPrice || 0)      !== Number(quote?.initial_price || 0) ||
       Number(values.weekly_price || 0)   !== Number(quote?.weekly_price || 0) ||
       Number(values.biweekly_price || 0) !== Number(quote?.biweekly_price || 0) ||
       Number(values.monthly_price || 0)  !== Number(quote?.monthly_price || 0)
@@ -233,7 +267,7 @@ export default function QuoteDetailPage() {
         address: values.address,
         service_type: values.service_type,
         service_template_id: values.service_template_id || null,
-        initial_price: initialWithExtras > 0 ? initialWithExtras : null,
+        initial_price: nextInitialPrice,
         weekly_price: Number(values.weekly_price) > 0 ? Number(values.weekly_price) : null,
         biweekly_price: Number(values.biweekly_price) > 0 ? Number(values.biweekly_price) : null,
         monthly_price: Number(values.monthly_price) > 0 ? Number(values.monthly_price) : null,
@@ -265,6 +299,33 @@ export default function QuoteDetailPage() {
       // clean save. supabase-js reports failure in the result object, never by
       // throwing, so ignoring the result IS swallowing the error.
       const { data: { user: u2 } } = await supabase.auth.getUser()
+
+      // ── The alternatives, same clear-and-reinsert, same honesty about it ────
+      // Skipped entirely when the choice is settled (see optionsSettled above) —
+      // the rows are the record of what was offered and what was taken.
+      if (!optionsSettled) {
+        const delOpt = await supabase.from('quote_options').delete().eq('quote_id', id)
+        if (delOpt.error) {
+          toast.error('Saved the quote, but its options could not be updated: ' + delOpt.error.message + ' — press Save again.')
+          return false
+        }
+        if (optionRows.length && u2) {
+          const { data: optRows, error: optErr } = await supabase.from('quote_options')
+            .insert(optionRows.map(r => ({ ...r, user_id: u2.id }))).select('*')
+          if (optErr) {
+            // The delete landed, so the quote genuinely has no options now — and
+            // its `initial_price` was just written to one of them. Say so rather
+            // than let the screen show a priced quote with nothing to choose.
+            setOptions([])
+            toast.error('Saved the quote, but its options were lost mid-save: ' + optErr.message + ' — press Save again to restore them.')
+            return false
+          }
+          setOptions((optRows as QuoteOption[]) || [])
+        } else {
+          setOptions([])
+        }
+      }
+
       const del = await supabase.from('quote_services').delete().eq('quote_id', id)
       if (del.error) {
         // Old lines are still intact — nothing about the breakdown changed. The
@@ -349,7 +410,7 @@ export default function QuoteDetailPage() {
     setPdfLoading(true)
     try {
       const { renderQuoteBlob } = await import('@/components/quotes/QuotePDF')
-      const blob = await renderQuoteBlob(quote, settings, services)
+      const blob = await renderQuoteBlob(quote, settings, services, options)
       const url = URL.createObjectURL(blob)
       // Hand the file directly to the device. On desktop this downloads the
       // PDF; on iOS it opens the PDF viewer / share sheet. Avoids the
@@ -653,8 +714,64 @@ export default function QuoteDetailPage() {
     } finally { setActionBusy(false) }
   }
 
+  // ── "They rang and said they want the Premium" ──────────────────────────────
+  // The owner records the customer's choice through the SAME contract the portal
+  // uses: `owner_select_quote_option` and `portal_accept_quote` are two doors into
+  // one function (quote_apply_option_choice) that owns the money rule. There is no
+  // second implementation of "an option's price becomes the quote's price" — which
+  // is exactly how the owner's screen and the customer's screen would otherwise
+  // start disagreeing about what was bought.
+  const [choosing, setChoosing] = useState<string | null>(null)
+  async function acceptOptionForCustomer(optionId: string) {
+    if (!quote || choosing) return
+    const opt = options.find(o => o.id === optionId)
+    if (!opt) return
+    const priced = Number(opt.price) + (Number(quote.travel_fee) || 0)
+    const ok = await confirmDialog({
+      title: `Record ${opt.name} as the customer’s choice?`,
+      message: `This approves ${quote.quote_number} at ${formatCurrency(priced)} on ${quote.customer_name}’s behalf — the same as if they had approved it in their portal. The other options stay on the record as what was offered, and this can’t be swapped afterwards without sending a revised quote.`,
+      confirmLabel: `Approve ${opt.name} — ${formatCurrency(priced)}`,
+    })
+    if (!ok) return
+    setChoosing(optionId)
+    try {
+      const { data: applied, error } = await supabase.rpc('owner_select_quote_option', {
+        p_quote_id: quote.id, p_option_id: optionId,
+      })
+      // ⚠️ A falsy result is a REFUSAL, not a success with nothing to show, and it
+      // must never be reported as one. Re-read the row and let the database say
+      // what happened rather than assuming either way.
+      const { data: fresh } = await supabase.from('quotes').select('*').eq('id', quote.id).single()
+      if (error || !applied) {
+        if (fresh && (fresh as Quote).selected_option_id === optionId) {
+          setQuote(fresh as Quote)   // it landed (another tab, a retry) — say the true thing
+          toast.success(`${opt.name} recorded as the approved option.`)
+        } else {
+          toast.error(
+            (fresh as Quote | null)?.selected_option_id
+              ? 'This quote already has an approved option — send a revised quote to change it.'
+              : 'Could not record that choice — check your connection and try again.',
+          )
+        }
+        return
+      }
+      if (fresh) setQuote(fresh as Quote)
+      toast.success(`${opt.name} recorded — ${quote.quote_number} is approved at ${formatCurrency(priced)}.`)
+    } finally { setChoosing(null) }
+  }
+
   async function markWon() {
     if (!quote || actionBusy) return
+    // ⛔ An options quote cannot be "won" without saying WHICH option. Accepting
+    // one through the plain patch would set status='accepted' and leave
+    // selected_option_id NULL — an approved quote whose approved scope nobody can
+    // name, which is the single state this whole feature exists to make
+    // impossible. Point at the picker instead of half-recording the sale.
+    if (options.length > 0) {
+      toast.error('This quote offers options — pick the one the customer chose, just below.')
+      document.getElementById('eq-quote-options')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return
+    }
     setActionBusy(true)
     try {
       // Snapshot what was bought (Pricing v2 Phase 0). `total` is the number on the
@@ -792,7 +909,17 @@ export default function QuoteDetailPage() {
           show_travel_separately: quote.show_travel_separately || false,
           notes: quote.notes || '',
           status: quote.status,
+          // A quote that HAS options opens with the switch on and the rows loaded
+          // in the owner's saved order — never re-sorted, never re-seeded.
+          has_options: options.length > 0,
+          options: sortedOptions(options).map(o => ({
+            id: o.id, name: o.name, description: o.description || '',
+            price: Number(o.price) || 0, is_recommended: !!o.is_recommended,
+          })),
         }}
+        // Non-null ⇒ the editor goes read-only and handleUpdate leaves the rows
+        // alone. What was approved is not silently rewritten.
+        optionsLockedName={activeOption(options, quote.selected_option_id)?.name ?? null}
         onSubmit={handleUpdate}
         isEdit
         autosaveKey={`quote:${quote.id}`}
@@ -1140,9 +1267,65 @@ export default function QuoteDetailPage() {
             {/* Say what's actually in the list — mulch under a "Services" heading
                 reads as labour to anyone skimming. */}
             <p className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide">
-              {services.some(s => s.kind === 'material') ? 'Services & materials' : 'Services'}
+              {options.length > 0
+                ? (quote.selected_option_id ? 'Options offered' : 'Options — the customer picks one')
+                : services.some(s => s.kind === 'material') ? 'Services & materials' : 'Services'}
             </p>
-            {services.length > 0 ? (
+            {options.length > 0 ? (
+              // ── The alternatives ────────────────────────────────────────────
+              // ⛔ No subtotal, ever. These rows are alternatives to one another;
+              // a column that added them would be the one lie this whole feature
+              // was built to prevent. The quote's value is stated ONCE, below, as
+              // the single option it currently rests on.
+              <div id="eq-quote-options" className="space-y-2 scroll-mt-24">
+                {sortedOptions(options).map(o => {
+                  const chosen = quote.selected_option_id === o.id
+                  const priced = Number(o.price) + (Number(quote.travel_fee) || 0)
+                  return (
+                    <div key={o.id}
+                      className={`rounded-xl border p-3 ${chosen ? 'border-emerald-500/40 bg-emerald-500/[0.06]'
+                        : quote.selected_option_id ? 'border-border bg-bg-secondary/40 opacity-70'
+                        : o.is_recommended ? 'border-accent/30 bg-accent/[0.04]' : 'border-border bg-bg-secondary'}`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-ink">
+                            {o.name}
+                            {o.is_recommended && <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide text-accent-text">Recommended</span>}
+                            {chosen && <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-400">Chosen</span>}
+                          </p>
+                          {o.description && <p className="text-xs text-ink-muted mt-0.5 whitespace-pre-wrap">{o.description}</p>}
+                        </div>
+                        <span className="text-sm font-semibold text-ink shrink-0 tabular-nums">{formatCurrency(priced)}</span>
+                      </div>
+                      {/* Owner-side acceptance, on the SAME contract as the portal.
+                          Offered only while the quote is still undecided — after a
+                          choice these rows are history, not buttons. */}
+                      {!quote.selected_option_id && (quote.status === 'draft' || quote.status === 'sent') && (
+                        <Button type="button" variant="secondary" size="sm" className="mt-2.5"
+                          loading={choosing === o.id} disabled={!!choosing}
+                          onClick={() => acceptOptionForCustomer(o.id)}>
+                          <Check className="w-3.5 h-3.5" /> They chose {o.name}
+                        </Button>
+                      )}
+                    </div>
+                  )
+                })}
+                {/* ⭐ THE reporting sentence: is this figure PROPOSED or CHOSEN?
+                    Derived from the selection state that already exists, via the
+                    one helper every surface asks — never a second stored column. */}
+                {(() => {
+                  const basis = optionValueBasis(options, quote.selected_option_id)
+                  const active = activeOption(options, quote.selected_option_id)
+                  if (!basis || !active) return null
+                  return (
+                    <p className="text-[11px] text-ink-faint pt-0.5">
+                      {optionValueBasisLabel(basis, active.name, options.length)}
+                      {basis === 'proposed' && ' — this quote counts at that price in your pipeline until they pick.'}
+                    </p>
+                  )
+                })()}
+              </div>
+            ) : services.length > 0 ? (
               // Multi-service breakdown — one row per line (rows are the source of
               // truth; quotes.initial_price is their summed net). Service NAME
               // carries the weight; quantity/discount/notes read as muted sub-notes.

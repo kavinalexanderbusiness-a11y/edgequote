@@ -132,6 +132,13 @@ export interface CrewStop {
   route_order: number | null
   updated_at: string
   notes: string | null
+  // Proof of work, so the completion sheet opens showing what is already
+  // recorded rather than a blank box that would overwrite it (lib/completion).
+  /** ⭐ CUSTOMER-VISIBLE — the words the customer reads in their portal. */
+  completion_summary: string | null
+  /** 🔒 INTERNAL — for the office. Shown to the worker who wrote it; never to a
+   *  customer (it is not in get_portal_data's payload at all). */
+  completion_issue: string | null
   customer: { name: string; phone: string | null } | null
   property: { address: string | null; lat: number | null; lng: number | null } | null
 }

@@ -92,14 +92,14 @@ export default async function DashboardPage() {
           (a finished checklist is a vanity stat). Below the money now: a
           half-configured business still sees it immediately under honest $0
           tiles, and its hydration pop-in no longer moves the hero. */}
-      <div className="animate-rise stagger-2"><SetupProgress /></div>
+      <div className="animate-rise stagger-2"><SetupProgress started={d.started} /></div>
 
       {/* THE WORK — queue beside day plan on desktop so the whole page fits one
           screen; stacked queue-first on phones. items-start keeps each column
           its own height instead of stretching the short one. */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 lg:gap-5 items-start">
         <div className="lg:col-span-3 animate-rise stagger-3">
-          <TodaysPriorities items={d.priorities} />
+          <TodaysPriorities items={d.priorities} started={d.started} />
         </div>
         <div className="lg:col-span-2 space-y-4 lg:space-y-5">
           {/* Weather sits WITH the day plan it threatens — risk and the work at

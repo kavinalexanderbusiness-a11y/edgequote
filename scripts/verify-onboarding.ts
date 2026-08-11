@@ -8,6 +8,8 @@
 //
 // Style follows verify-automations/verify-trades: pure, deterministic, no I/O.
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { seedPlan, seasonsForStorage, serviceRowsFor, type SeedState } from '../src/lib/onboarding/seed'
 import { deriveSetupHealth, type SetupSnapshot } from '../src/lib/onboarding/setupHealth'
 import { LAWN_PACK, NEUTRAL_PACK, tradePack } from '../src/lib/trades'
@@ -165,6 +167,82 @@ check('every item explains what degrades while incomplete',
   deriveSetupHealth(EMPTY_SNAP).items.every(i => i.why.length > 20 && i.label.length > 3), true)
 check('keys are unique and stable',
   new Set(deriveSetupHealth(EMPTY_SNAP).items.map(i => i.key)).size, deriveSetupHealth(EMPTY_SNAP).items.length)
+
+// ═══════════════════════════════════════════════════════════════════════════
+H('7. THE FIRST-RUN FRAMING — a new business is not a finished one')
+// An empty priority queue means two opposite things: "you cleared it" for a
+// working business, "you have not begun" for a brand-new one. The dashboard now
+// tells them apart with ONE derived flag. These pin the three ways that could
+// go wrong: claiming emptiness we didn't read, showing the first-run framing to
+// a mature business, and leaving a caller that doesn't know in the wrong state.
+//
+// Source-level because the subject IS the wiring — there is no pure function to
+// drive. \r is stripped first: a CRLF checkout makes `.` and `$` behave
+// differently and would silently invert every absence check below.
+const src = (p: string) => readFileSync(join(process.cwd(), p), 'utf8').replace(/\r/g, '')
+const DATA = src('src/lib/dashboard/data.ts')
+const PRIORITIES_UI = src('src/components/dashboard/TodaysPriorities.tsx')
+const SETUP_UI = src('src/components/dashboard/SetupProgress.tsx')
+const DASH_PAGE = src('src/app/dashboard/page.tsx')
+
+// ── The honesty rule. Supabase RESOLVES on failure, so a dropped connection
+// returns empty arrays. If `started` were computed before the all-or-throw
+// check, an outage would render "Create your first quote" to a business with
+// 200 of them — the same uncertain-read-licences-an-action bug that the seeding
+// path (section 2b) was fixed for, on a different surface.
+const iThrow = DATA.indexOf('if (failure) throw')
+// The ASSIGNMENT, not the interface field of the same name declared above it.
+const iStarted = DATA.indexOf('started: quotes.length')
+check('`started` is computed AFTER the all-or-throw read check',
+  iThrow > 0 && iStarted > 0 && iStarted > iThrow, true)
+check('`started` is derived from all four full-history reads, not one',
+  ['quotes.length', 'jobs.length', 'invoices.length', 'customerRows.length']
+    .every(t => new RegExp(`started:[^\\n]*${t.replace('.', '\\.')}`).test(DATA)), true)
+
+// ── A mature business that cleared its queue keeps "You're all caught up".
+// The first-run branch must require BOTH conditions; dropping either one is how
+// the wrong card reaches the wrong business.
+check('first-run needs an empty queue AND a never-started business',
+  /const firstRun = items\.length === 0 && !started/.test(PRIORITIES_UI), true)
+check('the "all caught up" card still exists for a queue that was cleared',
+  PRIORITIES_UI.includes('You&rsquo;re all caught up'), true)
+check('the first-run card names the one first action',
+  PRIORITIES_UI.includes('Create your first quote')
+  && /href="\/dashboard\/quotes\/new"/.test(PRIORITIES_UI), true)
+
+// ── Defaults. Any caller that doesn't pass `started` must get the ESTABLISHED
+// behaviour, never the first-run one — an omitted prop should be inert.
+check('TodaysPriorities defaults started = true', /started = true/.test(PRIORITIES_UI), true)
+check('SetupProgress defaults started = true', /started = true/.test(SETUP_UI), true)
+check('SetupProgress waits for a started business', /if \(!started\) return null/.test(SETUP_UI), true)
+check('the dashboard passes the derived flag to both cards',
+  /<TodaysPriorities items=\{d\.priorities\} started=\{d\.started\}/.test(DASH_PAGE)
+  && /<SetupProgress started=\{d\.started\}/.test(DASH_PAGE), true)
+
+// ═══════════════════════════════════════════════════════════════════════════
+H('8. EVERY TRADE, NOT ONE — no lawn vocabulary on universal surfaces')
+// The quote list and the quote builder are shown to all twelve trade packs. Copy
+// naming lawn work told a painter, a plumber and a junk hauler to do something
+// their business does not do. Asserted on the STRING LITERALS, not the files:
+// grepping a whole file would flag the comment that documents the fix, and a
+// byte-exact prose lock would fail an honest rewrite.
+const TRADE_WORDS = ['lawn', 'mow', 'hedge', 'mulch', 'snow', 'sod', 'turf', 'garden']
+const literal = (body: string, re: RegExp, what: string): string => {
+  const m = re.exec(body)
+  if (!m) { fail++; console.log(`  ❌ could not find ${what} — the guard has drifted from the source`); return '' }
+  return m[1]
+}
+const quotesEmpty = literal(src('src/components/quotes/QuoteList.tsx'),
+  /title="No quotes yet"[\s\S]{0,120}?description="([^"]+)"/, 'the quotes empty-state copy')
+// Anchored on the ternary's else-arm at the start of its own line — the
+// expression above it spans comments and template literals of no fixed length.
+const extrasHint = literal(src('src/components/quotes/QuoteBuilder.tsx'),
+  /const linesSummary =[\s\S]*?\n\s*:\s*'([^']+)'/, 'the services & materials drawer hint')
+for (const [what, text] of [['quotes empty state', quotesEmpty], ['extras drawer hint', extrasHint]] as const) {
+  check(`${what} names no single trade`,
+    TRADE_WORDS.filter(w => text.toLowerCase().includes(w)), [])
+  check(`${what} still says something useful`, text.length > 20, true)
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)

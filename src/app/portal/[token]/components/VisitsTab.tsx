@@ -202,7 +202,22 @@ function VisitCard({ j, view, actions, photos, invoice }: {
 
       <VisitPhotos photos={photos} photoUrl={actions.photoUrl} />
 
-      {j.notes && <p className="text-xs text-ink-muted mt-2.5 whitespace-pre-wrap border-l-2 border-border pl-2">{j.notes}</p>}
+      {/* What was done, in the crew's own words — the one written record this
+          visit hands the customer, and the completion of "Completed Aug 11 ·
+          work performed · 2 photos".
+          ⛔ This USED to render `j.notes`, which is the INTERNAL access note the
+          office writes for whoever does the work ("dog removal, keep gate
+          closed" was live on three visits). That field is no longer in the
+          portal payload at all — a component cannot leak what was never
+          serialized — and `completion_issue`, the internal half of the record,
+          is not in the payload either. Only words written FOR the customer
+          reach this line. */}
+      {j.completion_summary?.trim() && (
+        <div className="mt-2.5 border-l-2 border-border pl-2">
+          <p className="text-[10px] font-bold uppercase tracking-wide text-ink-faint">Work performed</p>
+          <p className="text-xs text-ink-muted whitespace-pre-wrap mt-0.5">{j.completion_summary.trim()}</p>
+        </div>
+      )}
 
       {/* The bill this visit produced — tap through to Billing to see (and pay)
           it. Figures + status come from the doc engine above, not local maths. */}

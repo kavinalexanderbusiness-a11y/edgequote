@@ -24,6 +24,7 @@ import { invoiceBalance } from '@/lib/payments/ledger'
 import { depositState, depositChargeAmount } from '@/lib/payments/deposit'
 import { cashAmountOf, ledgerRowType } from '@/lib/payments/analytics'
 import { serviceLineTotals } from '@/lib/quoteServices'
+import { sortedOptions } from '@/lib/quoteOptions'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
 import { formatCurrency, parseLocalDate } from '@/lib/utils'
 import type { Job, JobRecurrence, QuoteStatus } from '@/types'
@@ -39,11 +40,24 @@ export interface PortalQuoteService { service_type: string; quantity: number; un
 // optional because a handful of live rows predate property linking — a legacy quote
 // answers `null`, and callers must degrade to the quote's own `address` text rather
 // than borrowing another property's facts.
-export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null }
+/** One alternative version of the job, as get_portal_data nests it under a quote.
+ *  ⛔ NOT additive with its siblings and NOT additive with `services` — an option's
+ *  price IS the whole job for whoever picks it, and the database refuses a quote
+ *  carrying both kinds of row. */
+export interface PortalQuoteOption { id: string; name: string; description: string | null; price: number; sort_order: number; is_recommended: boolean }
+export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null; options?: PortalQuoteOption[] | null; selected_option_id?: string | null }
 // `property_id` null is the HONEST answer for an invoice spanning several properties —
 // never infer one, or a combined invoice prints one address as if it were the whole bill.
 export interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; property_id?: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null; amount_paid?: number | null; deposit_amount?: number | null; deposit_requested_at?: string | null }
-export interface PortalJob { id: string; recurrence_id: string | null; property_id: string | null; quote_id: string | null; price: number | null; is_initial_visit: boolean | null; service_type: string | null; title: string; scheduled_date: string; status: string; on_my_way_at: string | null; started_at: string | null; completed_at: string | null; notes: string | null }
+// ⛔ NO `notes` FIELD, DELIBERATELY. jobs.notes is the INTERNAL access note for
+// whoever does the work (gate code, where to park) — it was selected by
+// get_portal_data and rendered verbatim here until 2026-08-11, on 49 of 78
+// completed production visits, including "dog removal, keep gate closed". It is
+// gone from the RPC's projection, so there is nothing left to render even by
+// accident. `completion_summary` is the field written FOR the customer, and
+// `completion_issue` (the internal half) is likewise not in the payload.
+// verify:completion fails the build if either internal field reappears.
+export interface PortalJob { id: string; recurrence_id: string | null; property_id: string | null; quote_id: string | null; price: number | null; is_initial_visit: boolean | null; service_type: string | null; title: string; scheduled_date: string; status: string; on_my_way_at: string | null; started_at: string | null; completed_at: string | null; completion_summary: string | null }
 export interface PortalRec { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null; start_date: string | null; end_date: string | null; end_count: number | null }
 export interface PortalPhoto { id: string; job_id: string | null; storage_path: string; kind: string; caption: string | null; taken_at: string }
 export interface PortalPayment { id: string; amount: number; status: string; paid_at: string | null; provider: string; invoice_id: string | null; created_at: string; kind?: string }
@@ -561,6 +575,25 @@ export interface DocItem { id: string; rawId: string; kind: DocKind; number: str
    * total, never a cadence), so the UI must not present them as selectable.
    */
   planOptions?: { label: string; amount: number }[]
+  /**
+   * ⭐ SCOPE alternatives — Budget / Standard / Premium. The customer picks ONE
+   * and that option's price IS the quote's price.
+   *
+   * ⛔ Three different lists live on this row and a reader must never confuse
+   * them. `lines` ADD UP to `amount`. `planOptions` are ongoing per-visit rates
+   * for LATER and are not selectable at all. These are mutually exclusive
+   * versions of the job being quoted, exactly one of which is bought — and they
+   * are the only one of the three the approval flow acts on.
+   *
+   * Each `amount` is what that option costs the customer, travel included, which
+   * is the same figure `quote_apply_option_choice` writes to accepted_price. No
+   * caller sums them, and `amount` above is never their total: it is whichever
+   * single option the quote currently rests on.
+   */
+  options?: { id: string; name: string; description: string | null; amount: number; isRecommended: boolean }[]
+  /** The option the customer approved, once they have. Null while the choice is
+   *  still open — which is the fact the Approve button is gated on. */
+  selectedOptionId?: string | null
   explain?: string[]; propertyId?: string | null; address?: string | null
   /**
    * What the Pay button collects RIGHT NOW — depositChargeAmount's answer, the
@@ -623,6 +656,20 @@ export function buildDocItems(opts: {
     ].filter((l): l is { label: string; amount: number } => l !== null)
     const planOptions = planOptionRows.length > 0 ? planOptionRows : undefined
     const lines = svcLines.length > 0 ? svcLines : undefined
+    // ── The scope alternatives ────────────────────────────────────────────────
+    // Sorted by the ONE shared engine so the customer sees the owner's order —
+    // never re-sorted by price, because an owner who leads with Premium meant to.
+    // Travel is added to EACH option independently (never once to a total): it is
+    // payable whichever one they choose, and it is how the approval RPC computes
+    // accepted_price, so the button and the receipt agree by construction.
+    const qOpts = sortedOptions(qq.options || [])
+    const options = qOpts.length > 0
+      ? qOpts.map(o => ({
+          id: o.id, name: o.name, description: o.description,
+          amount: Number(o.price) + (Number(qq.travel_fee) || 0),
+          isRecommended: !!o.is_recommended,
+        }))
+      : undefined
     const manHours = Number(qq.hours) > 0 && Number(qq.crew_size) > 0 ? Number(qq.hours) * Number(qq.crew_size) : 0
     const fmtHrs = (h: number) => h < 1 ? `${Math.round(h * 60)} minutes` : h === 1 ? '1 hour' : `${Number(h.toFixed(1))} hours`
     const explainBits = [
@@ -636,7 +683,14 @@ export function buildDocItems(opts: {
       manHours > 0
         ? `About ${fmtHrs(manHours)} of work${Number(qq.crew_size) > 1 ? `, with a crew of ${Number(qq.crew_size)}` : ''}.`
         : null,
-      Number(qq.travel_fee) > 0 ? `Includes a ${formatCurrency(Number(qq.travel_fee))} travel charge to reach your property.` : null,
+      // "Includes a travel charge" is true of EVERY option (each row already has
+      // it added), so the sentence holds either way — but on an options quote it
+      // must not read as though it describes one bundled price.
+      Number(qq.travel_fee) > 0
+        ? (options
+          ? `Every option includes the ${formatCurrency(Number(qq.travel_fee))} travel charge to reach your property.`
+          : `Includes a ${formatCurrency(Number(qq.travel_fee))} travel charge to reach your property.`)
+        : null,
       planOptionRows.length > 0 ? 'This price is for the visit above. If you want us back regularly, the ongoing rates are listed separately — you can pick one with us later.' : null,
       'Nothing is charged when you approve — you’ll get an invoice once the work is done.',
     ].filter((s): s is string => !!s)
@@ -651,6 +705,7 @@ export function buildDocItems(opts: {
       amountNote: gstPct > 0 ? `+ GST (${gstPct}%) — added on your invoice` : undefined, balance: 0,
       payAmount: 0, payIsDeposit: false,
       filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(qq), lines, planOptions,
+      options, selectedOptionId: qq.selected_option_id ?? null,
       // Identity, not decoration: the address tells a landlord which of their six
       // quotes this is. It never becomes the row's title — service_type is the
       // real disambiguator for same-property customers.

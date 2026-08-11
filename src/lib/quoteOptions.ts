@@ -173,5 +173,63 @@ export function emptyOption(index: number): OptionLike {
   return { name: '', description: '', price: 0, is_recommended: index === 0 }
 }
 
+/** The three names an owner recognises, seeded into a fresh editor as EXAMPLES —
+ *  every one of them is a plain editable text field. ⛔ Nothing in this feature
+ *  branches on these strings: "Budget/Standard/Premium" is a convention, and
+ *  `is_recommended` is the only structural distinction that exists. The badge is
+ *  deliberately not on the row called "Standard" by any rule — it is on whichever
+ *  row the owner put it on, and the seed just has to start somewhere. */
+export const EXAMPLE_OPTION_NAMES: ReadonlyArray<{ name: string; is_recommended: boolean }> = [
+  { name: 'Budget', is_recommended: false },
+  { name: 'Standard', is_recommended: true },
+  { name: 'Premium', is_recommended: false },
+]
+
+// ── Reporting: is this figure PROPOSED or CHOSEN? ────────────────────────────
+/**
+ * ⭐ THE distinction the owner's reporting needs, derived from the selection
+ * state that already exists — no second column, no second engine.
+ *
+ *   null        this is an ordinary quote; the question doesn't arise
+ *   'proposed'  it offers alternatives and nobody has chosen — the figure is the
+ *               RECOMMENDED option, a real price really offered, but not agreed
+ *   'selected'  a choice was made and the figure IS what was bought
+ *
+ * The figure itself is `quotes.total` in both cases, which is the entire reason
+ * pipeline, job costing, invoice conversion and the deposit engine needed no
+ * change: this function says what the number MEANS, never what it is. ⛔ It must
+ * never be used to compute money — the moment it is, there are two answers.
+ */
+export type OptionValueBasis = 'proposed' | 'selected'
+export function optionValueBasis(
+  options: OptionLike[] | null | undefined,
+  selectedId: string | null | undefined,
+): OptionValueBasis | null {
+  if (!hasOptions(options)) return null
+  return isSelected(selectedId) ? 'selected' : 'proposed'
+}
+
+/** One sentence per basis, so every surface says it the same way. `name` is the
+ *  active option's name — activeOption() already found it. */
+export function optionValueBasisLabel(basis: OptionValueBasis, name: string, count: number): string {
+  return basis === 'selected'
+    ? `Chosen: ${name}`
+    : `Proposed at ${name} — ${count} option${count === 1 ? '' : 's'} offered, none chosen yet`
+}
+
+// ── The rule the builder must enforce BEFORE the database does ───────────────
+/**
+ * Alternatives and additive service lines cannot coexist (the DB's
+ * quote_options_shape_guard refuses it with a check_violation). The owner must
+ * hear that as a sentence while both are still on screen, not as a constraint
+ * error after tapping Save — so this pure predicate is asked by the builder and
+ * asserted by the guard, from one definition.
+ */
+export function optionsConflictWithLines(optionsOn: boolean, lineCount: number): boolean {
+  return optionsOn && lineCount > 0
+}
+export const OPTIONS_VS_LINES_MESSAGE =
+  'Options replace the line-by-line breakdown — an option’s price is the whole job, so extra service or material lines would double-count. Remove them, or turn options off.'
+
 /** Convenience for readers holding real DB rows. */
 export type QuoteOptionRow = QuoteOption
