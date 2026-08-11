@@ -188,6 +188,20 @@ const READ = `(function(){
 const before = JSON.parse(await ev(READ))
 console.log(JSON.stringify({ phase: 'preview', signedInStep: signedIn, fed, ...before }, null, 2))
 
+// The SMS acknowledgement gate: --ack ticks it, so a run can show BOTH states —
+// blocked with the box clear, released once the owner has read the notice.
+if (argv.includes('--ack')) {
+  const acked = await ev(`(() => {
+    const box = document.getElementById('sms-consent-ack')
+    if (!box) return 'no acknowledgement box on the page'
+    box.click()
+    return 'ticked'
+  })()`)
+  await sleep(1200)
+  const after = JSON.parse(await ev(READ))
+  console.log(JSON.stringify({ phase: 'after-ack', acked, buttons: after.buttons.filter(b => /Import|Nothing/.test(b.label)) }, null, 2))
+}
+
 if (shotName) {
   const { data } = await S('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true })
   writeFileSync(join(process.env.TEMP || '.', `${shotName}.${width}.png`), Buffer.from(data, 'base64'))

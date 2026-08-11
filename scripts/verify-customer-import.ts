@@ -14,7 +14,7 @@ import { join } from 'path'
 import {
   parseCsv, suggestMapping, planImport, summarize, willWrite, readRow,
   unimportedRows, mappingNamesSomeone, executeImportPlan, IMPORT_LIMITS, EMPTY_MAPPING,
-  type ColumnMapping, type PlannedRow,
+  type ColumnMapping, type PlannedRow, type ImportRowValues,
 } from '../src/lib/customerImport'
 import type { Customer } from '../src/types'
 import type { AddressCarrier } from '../src/lib/customers'
@@ -40,6 +40,15 @@ const cust = (o: Partial<Book> & { id: string; name: string }): Book => ({
   sms_opt_in: false, email_opt_in: false, created_at: '', updated_at: '', properties: null,
   ...o,
 } as Book)
+
+/** A row's values with everything defaulted — the write-path fixtures below
+ *  only care about a field or two each, and a literal per fixture rots the
+ *  moment ImportRowValues grows. */
+const vals = (o: Partial<ImportRowValues> & { name: string }): ImportRowValues => ({
+  email: null, phone: null, address: null, city: null, province: null,
+  postal_code: null, notes: null, source: null, sms_opt_in: false, email_opt_in: false,
+  ...o,
+})
 
 /** Parse + map + plan in one call, the way the page does it. */
 function plan(csv: string, existing: Book[] = [], override?: Partial<ColumnMapping>): PlannedRow[] {
@@ -419,7 +428,7 @@ H('16. PARTIAL FAILURE — the count is what came back')
 
   const rows: PlannedRow[] = ['Good One', 'BOOM', 'Good Two'].map((name, i) => ({
     line: i + 2,
-    values: { name, email: null, phone: null, address: i === 0 ? '84 17 St NW' : null, city: null, province: null, postal_code: null, notes: null },
+    values: vals({ name, address: i === 0 ? '84 17 St NW' : null }),
     status: 'new', reason: 'New customer.', warnings: [], matchId: null, matchName: null,
     matchedBy: null, duplicateOfLine: null, include: true,
   }))
@@ -463,7 +472,7 @@ H('16. PARTIAL FAILURE — the count is what came back')
   }
   const rows: PlannedRow[] = [{
     line: 2,
-    values: { name: 'Has Address', email: null, phone: null, address: '84 17 St NW', city: 'Calgary', province: 'AB', postal_code: null, notes: null },
+    values: vals({ name: 'Has Address', address: '84 17 St NW', city: 'Calgary', province: 'AB' }),
     status: 'new', reason: 'New customer.', warnings: [], matchId: null, matchName: null,
     matchedBy: null, duplicateOfLine: null, include: true,
   }]
@@ -493,7 +502,7 @@ H('16. PARTIAL FAILURE — the count is what came back')
   }
   const rows: PlannedRow[] = [{
     line: 2,
-    values: { name: 'Someone', email: null, phone: null, address: null, city: null, province: null, postal_code: null, notes: null },
+    values: vals({ name: 'Someone' }),
     status: 'new', reason: 'New customer.', warnings: [], matchId: null, matchName: null,
     matchedBy: null, duplicateOfLine: null, include: true,
   }]
