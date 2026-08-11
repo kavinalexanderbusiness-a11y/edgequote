@@ -186,6 +186,24 @@ export interface VarianceRollup {
   variancePct: number | null
   /** The TYPICAL visit, immune to one big job dominating. Null when empty. */
   medianVariancePct: number | null
+  /**
+   * ⚠️ THREE INDEPENDENT MEDIANS — they do NOT subtract.
+   *
+   * `medianVarianceMinutes` is the median of the PER-VISIT differences (a paired
+   * statistic), not `medianActualMinutes − medianEstimatedMinutes`. Those two are
+   * different numbers whenever the biggest plans are not also the biggest misses,
+   * which is the normal case.
+   *
+   * The paired one is the honest answer to "how far off is a typical visit",
+   * because every comparable visit contributes its own estimate AND its own
+   * actual; unpairing them would compare the plan of one visit to the outcome of
+   * another. The other two exist only to give that number context, so any UI
+   * showing all three must word them as three facts and never stack them in a
+   * column that invites the reader to do the subtraction.
+   */
+  medianEstimatedMinutes: number | null
+  medianActualMinutes: number | null
+  medianVarianceMinutes: number | null
   /** sampleSize >= MIN_SERVICE_SAMPLE — is this a finding or an observation? */
   established: boolean
 }
@@ -210,6 +228,11 @@ export function rollupLaborVariance(cs: LaborComparison[]): VarianceRollup {
       ? round1(((totalActualMinutes - totalEstimatedMinutes) / totalEstimatedMinutes) * 100)
       : null,
     medianVariancePct: cs.length ? round1(median(cs.map(c => c.variancePct))) : null,
+    // Each guarded on its own. An empty sample has no typical anything, and a 0
+    // here would be read as "a typical visit lands exactly on plan".
+    medianEstimatedMinutes: cs.length ? round1(median(cs.map(c => c.estimatedMinutes))) : null,
+    medianActualMinutes: cs.length ? round1(median(cs.map(c => c.actualMinutes))) : null,
+    medianVarianceMinutes: cs.length ? round1(median(cs.map(c => c.varianceMinutes))) : null,
     established: cs.length >= MIN_SERVICE_SAMPLE,
   }
 }
@@ -249,6 +272,40 @@ export function laborVarianceByService(cs: LaborComparison[]): ServiceVariance[]
       Number(b.established) - Number(a.established) ||
       b.sampleSize - a.sampleSize ||
       a.serviceLabel.localeCompare(b.serviceLabel))
+}
+
+/**
+ * ⭐ THE CONSUMABLE PRIMITIVE — "what does history say about THIS service?"
+ *
+ * One service in, one evidence-carrying answer out. This is the shape every
+ * later surface is meant to read (quote builder pricing help, job detail,
+ * reporting, the service catalog) so none of them has to know how a bucket is
+ * built, what a threshold is, or which statistic is the honest one.
+ *
+ * It ALWAYS returns a rollup, never null. A service with no history comes back
+ * with `sampleSize: 0`, `established: false` and every figure `null` — so a
+ * caller cannot accidentally render an absent history as agreement, and the
+ * sample size is always available to display beside any claim.
+ *
+ * ⚠️ It is a REPORT, not an input to a price. Nothing here may be multiplied
+ * into a quote, written back onto an estimate, or used to adjust a rate. The
+ * owner reads it and decides; see the module header and [pricing-v2] — the
+ * standing rule is that the system provides evidence and never re-prices on its
+ * own.
+ *
+ * `excludeJobId` keeps a visit out of its own history. Without it, an owner
+ * looking at a finished visit is shown a "typical" that includes the very row
+ * on screen — self-reference that is invisible at n=30 and decisive at n=5.
+ */
+export function serviceHistory(
+  serviceType: string | null | undefined,
+  comparisons: LaborComparison[],
+  opts?: { excludeJobId?: string },
+): ServiceVariance {
+  const key = serviceKey(serviceType)
+  const exclude = opts?.excludeJobId
+  const mine = comparisons.filter(c => c.serviceKey === key && c.jobId !== exclude)
+  return { ...rollupLaborVariance(mine), serviceKey: key, serviceLabel: serviceLabel(key) }
 }
 
 export interface LaborCoverage {
@@ -372,6 +429,24 @@ export function formatVariancePct(pct: number | null): string {
  * overestimates is turning away work they had time for. The wording describes;
  * it does not grade.
  */
+/**
+ * The same read, for a GROUP of past visits rather than one.
+ *
+ * Separate from `describeVariance` because the claim is different and must not
+ * borrow the singular's confidence: this sentence is about a tendency across a
+ * sample, so it is hedged ("a typical visit"), and it refuses to say anything at
+ * all when there is nothing to say. Null in, honest silence out — never
+ * "typically on target", which is what a 0 would print.
+ */
+export function describeTypicalVariance(medianVarianceMinutes: number | null): string | null {
+  if (medianVarianceMinutes == null || !Number.isFinite(medianVarianceMinutes)) return null
+  const r = Math.round(medianVarianceMinutes)
+  if (r === 0) return 'A typical visit lands on plan'
+  return r > 0
+    ? `A typical visit runs ${formatMinutes(r)} longer than planned`
+    : `A typical visit finishes ${formatMinutes(Math.abs(r))} sooner than planned`
+}
+
 export function describeVariance(v: { varianceMinutes: number; variancePct: number | null }): string {
   const r = Math.round(v.varianceMinutes)
   if (r === 0) return 'Took exactly as long as planned'

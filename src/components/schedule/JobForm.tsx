@@ -20,6 +20,8 @@ import {
 import { WeeklyScheduler } from '@/components/schedule/WeeklyScheduler'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { EstimatedVsActual } from '@/components/labor/EstimatedVsActual'
+import { ServiceEstimateLearning } from '@/components/labor/ServiceEstimateLearning'
+import { loadCompletedVisitLearning, type LearningLoad } from '@/lib/estimateVsActualData'
 import type { Cadence } from '@/lib/labor'
 import { resolvePrefs, type PrefSource } from '@/lib/preferences'
 import { findJobMatch, type JobLiteForMatch } from '@/lib/dedup'
@@ -351,6 +353,30 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     }
   }
 
+  // What past visits of this service taught. Loaded only once the visit is
+  // marked done, because that is the only state where the block renders — an
+  // owner scheduling next week's mow should not pay for a history read.
+  //
+  // `null` means still loading and renders nothing. Every FAILURE, including a
+  // thrown auth call, resolves to an explicit `unavailable` rather than being
+  // left as null: silence would let a broken read look identical to a business
+  // that simply has no history.
+  const [learningLoad, setLearningLoad] = useState<LearningLoad | null>(null)
+  useEffect(() => {
+    if (status !== 'completed') return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        const load = await loadCompletedVisitLearning(supabase, user?.id ?? '')
+        if (!cancelled) setLearningLoad(load)
+      } catch (e) {
+        if (!cancelled) setLearningLoad({ outcome: 'unavailable', reason: String(e) })
+      }
+    })()
+    return () => { cancelled = true }
+  }, [status, supabase])
+
   // Load configured service seasons once (falls back to Calgary defaults).
   useEffect(() => {
     async function loadSeasons() {
@@ -605,6 +631,15 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
               duration_minutes: Number(watch('duration_minutes')) || null,
               actual_minutes: Number(watch('actual_minutes')) || null,
             }} />
+          {/* …and directly under it, what this service usually does. The visit
+              being edited is excluded from its own history so the "typical" it
+              is measured against is genuinely other work. */}
+          {learningLoad && (
+            <ServiceEstimateLearning
+              load={learningLoad}
+              serviceType={serviceType || null}
+              excludeJobId={excludeJobId || undefined} />
+          )}
         </div>
       )}
 
