@@ -1096,6 +1096,14 @@ export interface Quote {
   // being typed here, which is why no owner surface could warn "the customer
   // approved a different number".
   accepted_price: number | null
+  // WHICH alternative the customer approved, when the quote offered several.
+  // Null on every single-scope quote, which is all of them until an owner turns
+  // options on. A composite FK (selected_option_id, id) → quote_options
+  // (id, quote_id) makes "belongs to this quote" a database fact rather than a
+  // convention, and ON DELETE RESTRICT keeps the approved alternative on the
+  // record for good. ⛔ Not the same question as selected_cadence below: that is
+  // WHICH SCHEDULE, this is WHICH SCOPE.
+  selected_option_id: string | null
   selected_cadence: 'one_time' | 'weekly' | 'biweekly' | 'monthly' | null
   follow_up_count_at_acceptance: number | null
   service_template_id: string | null
@@ -1115,6 +1123,31 @@ export interface Quote {
  *  different kind of LINE, so it rides quote_services rather than a second table
  *  that would need a second price rollup. See lib/quoteMaterials. */
 export type QuoteLineKind = 'service' | 'material'
+
+// ── One alternative version of the job ───────────────────────────────────────
+// Budget / Recommended / Premium. MUTUALLY EXCLUSIVE with its siblings and with
+// QuoteService below: a quote_services row ADDS to the quote total, an option
+// row IS the quote total for whoever picks it. The database refuses a quote that
+// has both (quote_options_shape_guard), because "is this line on top of my
+// option or already inside it?" has no good answer.
+// ⛔ V1 options carry no line items of their own — an option is a name, a
+// description and a price, which is how an owner actually writes one.
+export interface QuoteOption {
+  id: string
+  created_at: string
+  updated_at: string
+  quote_id: string
+  user_id: string
+  /** What the customer picks between — "Budget", "Walls + trim", "Full replacement". */
+  name: string
+  /** What this tier includes, in the owner's words. Optional. */
+  description: string | null
+  /** THE price of the whole job at this tier. Never a component of anything. */
+  price: number
+  sort_order: number
+  /** At most one per quote — a partial unique index enforces it. */
+  is_recommended: boolean
+}
 
 export interface QuoteService {
   id: string
@@ -1151,6 +1184,19 @@ export interface QuoteServiceInput {
   discount_value: number
   notes: string
   kind: QuoteLineKind
+}
+
+/** An option as a builder form would hold it. ⚠️ NOT yet wired into
+ *  QuoteFormValues — the quote_options FOUNDATION is shipped and proven, the
+ *  owner/customer surfaces are not built. Defined here so the follow-up starts
+ *  from the shape the database already enforces. */
+export interface QuoteOptionInput {
+  /** Present only for an option already on the quote; blank for a new row. */
+  id?: string
+  name: string
+  description: string
+  price: number
+  is_recommended: boolean
 }
 
 export interface QuoteFormValues {
