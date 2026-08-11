@@ -166,6 +166,9 @@ export default function NewQuotePage() {
         {
           customerId: values.customer_id, name: values.customer_name, address: values.address,
           phone: values.customer_phone, email: values.customer_email,
+          // The builder's optional "how did they find you?" pick — written only if
+          // this save actually creates the customer (or fills a matched blank).
+          source: values.acquisition_source,
           // The intake door captured these; a customer created at conversion must
           // not be poorer than the lead they came from. Undefined off the manual path.
           city: lead?.city, province: lead?.province, postal_code: lead?.postalCode,

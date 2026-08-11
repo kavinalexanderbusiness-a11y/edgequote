@@ -22,7 +22,7 @@ import { Collapsible } from '@/components/ui/Collapsible'
 import { Modal } from '@/components/ui/Modal'
 import { AssistButton, AiStop, AiUndo, AiError, AiNote, AI_CHECK_FIRST } from '@/components/ai/ui'
 import { useAiAssist } from '@/hooks/useAiAssist'
-import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
+import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings, ACQUISITION_SOURCES } from '@/types'
 import { sumServiceLines, serviceLineTotals, emptyServiceLine } from '@/lib/quoteServices'
 import { MATERIAL_SUGGESTIONS, emptyMaterialLine } from '@/lib/quoteMaterials'
 import { QuoteOptionsEditor } from '@/components/quotes/QuoteOptionsEditor'
@@ -125,6 +125,7 @@ export function QuoteBuilder({
         customer_name: '',
         customer_phone: '',
         customer_email: '',
+        acquisition_source: '',
         address: '',
         service_type: '',
         service_template_id: '',
@@ -1237,6 +1238,13 @@ export function QuoteBuilder({
                     <Input label="Email" type="email" placeholder="jane@example.com"
                       {...register('customer_email')} />
                   </div>
+                  {/* The quote builder is the app's biggest maker of source-less
+                      customers (every quote for a new person minted one) — this
+                      one optional pick is where that stops. '' = "Not sure" is a
+                      real answer and the default: never required, never guessed. */}
+                  <Select label="How did they find you?" placeholder="Not sure"
+                    options={ACQUISITION_SOURCES.map(s => ({ value: s, label: s }))}
+                    {...register('acquisition_source')} />
 
                   {/* Likely-match prompt — use the existing customer instead of duplicating */}
                   {likelyMatch && (

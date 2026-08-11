@@ -6,6 +6,7 @@
 
 import type { createClient } from '@/lib/supabase/client'
 import type { Customer } from '@/types'
+import { sanitizeSourceInput } from '@/lib/attribution'
 
 type Supa = ReturnType<typeof createClient>
 
@@ -215,6 +216,14 @@ export interface EnsureInput {
   city?: string | null
   province?: string | null
   postal_code?: string | null
+  /**
+   * Where this person came from, when the caller knows (the quote builder's and
+   * neighbor page's optional quick-pick). Written ONLY when a customer row is
+   * born here, or to FILL a matched customer's blank — the same "first KNOWN
+   * touch wins" contract as resolve_intake_customer in SQL. Never overwrites a
+   * recorded source. Optional everywhere: absent stays honestly unknown.
+   */
+  source?: string | null
 }
 export interface EnsureResult {
   customerId: string
@@ -247,9 +256,14 @@ export async function ensureCustomerAndProperty(
       customerName = match.customer.name
       matchedBy = match.reason
       // Enrich the existing record with any contact info it was missing.
+      // acquisition_source follows the same fill-when-blank rule as phone/email —
+      // the mirror of resolve_intake_customer's coalesce: a blank may be filled,
+      // a recorded answer is never replaced by a later touch.
       const patch: Record<string, string> = {}
       if (!match.customer.phone && input.phone) patch.phone = input.phone
       if (!match.customer.email && input.email) patch.email = input.email
+      const src = sanitizeSourceInput(input.source)
+      if (!(match.customer.acquisition_source || '').trim() && src) patch.acquisition_source = src
       if (Object.keys(patch).length) await supabase.from('customers').update(patch).eq('id', customerId)
     } else {
       const { data, error } = await supabase.from('customers').insert({
@@ -260,6 +274,9 @@ export async function ensureCustomerAndProperty(
         city: input.city || null,
         province: input.province || 'AB',
         postal_code: input.postal_code || null,
+        // Bounded like every other writer of this column; null (not '') when the
+        // caller didn't know — unknown stays a first-class, visible answer.
+        acquisition_source: sanitizeSourceInput(input.source),
         user_id: userId,
       }).select().single()
       if (error || !data) throw new Error(error?.message || 'Could not create customer')

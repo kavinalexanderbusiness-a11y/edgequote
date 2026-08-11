@@ -77,6 +77,15 @@ const BOOKING = read('src/app/book/[token]/BookingClient.tsx')
 const PAGE = read('src/app/dashboard/intelligence/page.tsx')
 const FORM = read('src/components/customers/CustomerForm.tsx')
 const PROFILE = read('src/app/dashboard/customers/[id]/page.tsx')
+// Capture at every door (session 29) — the app-side creators of customer rows.
+const CUSTOMERS = read('src/lib/customers.ts')
+const BUILDER = read('src/components/quotes/QuoteBuilder.tsx')
+const QNEW = read('src/app/dashboard/quotes/new/page.tsx')
+const QEDIT = read('src/app/dashboard/quotes/[id]/page.tsx')
+const NEIGHBORS = read('src/app/dashboard/neighbors/page.tsx')
+const IMPORT = read('src/app/dashboard/customers/import/page.tsx')
+const TYPES = read('src/types/index.ts')
+const BACKFILL = read('supabase/RUN-2026-08-11-backfill-lead-source.sql')
 
 /**
  * Strip comments before asserting that something is ABSENT.
@@ -111,7 +120,8 @@ check('codeOnly removes a whole-line -- comment', !codeOnly('-- roas here\nselec
 check('codeOnly removes a block comment', !codeOnly('/* roas\n here */\nselect 1\n').includes('roas'))
 check('…and keeps the code', codeOnly('-- roas here\nselect 1\n').includes('select 1'))
 check('every file read is normalised to \\n, so a CRLF checkout cannot change a verdict',
-  ![LIB, SQL, INTAKE, BOOKING, PAGE, FORM, PROFILE].some(s => s.includes('\r')),
+  ![LIB, SQL, INTAKE, BOOKING, PAGE, FORM, PROFILE,
+    CUSTOMERS, BUILDER, QNEW, QEDIT, NEIGHBORS, IMPORT, TYPES, BACKFILL].some(s => s.includes('\r')),
   '`.` does not match \\r — one CRLF file makes codeOnly strip nothing at all')
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -221,8 +231,9 @@ check('however hostile, the bounded value still lands in a bucket — cardinalit
   SOURCE_CATEGORIES.some(c => c.key === normalizeSource(cleaned)))
 
 check('lib/intake sanitises the source it sends to the RPC',
-  /p_source:\s*sanitizeSourceInput\(opts\.source\)/.test(INTAKE),
-  'the /api/intake route is CORS-open and reads `source` from the request body')
+  /p_source: (?:\w+ \|\| )*sanitizeSourceInput\(opts\.source\)/.test(INTAKE),
+  'the /api/intake route is CORS-open and reads `source` from the request body — ' +
+  'every candidate in the evidence chain must pass the bound (10e pins the chain itself)')
 check('BookingClient bounds every utm_* value at capture', /sanitizeSourceInput\(sp\.get\('utm_'/.test(BOOKING))
 
 check('SQL: sanitize_source_input exists', /create or replace function public\.sanitize_source_input/.test(SQL))
@@ -437,6 +448,90 @@ check('the customer form keeps a recorded source that is not in the owner dropdo
   /!known\.includes\(current\)/.test(FORM),
   "8 live customers carry 'Website', which the dropdown never offered — a <select> with no matching <option> renders BLANK")
 check('…without removing any existing option', /\.\.\.known\.map\(s => \(\{ value: s, label: s \}\)\)/.test(FORM))
+
+// ─────────────────────────────────────────────────────────────────────────────
+H('10 · capture at every door (session 29 — the 44% was avoidable)')
+
+// At attribution's landing, 45 of 103 customers had no source, and the biggest
+// APP-SIDE maker of them was ensureCustomerAndProperty: every quote saved for a
+// brand-new person minted a source-less customer (measured live: both customers
+// created on 2026-08-11 with no source came through app doors). The rules below
+// pin the fix: every app-side creator can carry a source, every carried source is
+// bounded by THE sanitizer, blanks are filled and never overwritten, and no door
+// is ever REQUIRED to answer — unknown stays a legitimate state.
+
+// 10a — the one find-or-create engine.
+check('ensureCustomerAndProperty accepts an optional source', /source\?: string \| null/.test(CUSTOMERS))
+check('…the INSERT branch writes it through THE sanitizer',
+  /acquisition_source: sanitizeSourceInput\(input\.source\)/.test(CUSTOMERS),
+  'an unbounded write here would bypass the boundary every other writer respects')
+{
+  const patches = [...codeOnly(CUSTOMERS).matchAll(/patch\.acquisition_source/g)]
+  eq('exactly one matched-branch assignment exists', patches.length, 1)
+  check('…and it fills ONLY a blank — first KNOWN touch wins, in the app as in SQL',
+    /if \(!\(match\.customer\.acquisition_source \|\| ''\)\.trim\(\) && src\) patch\.acquisition_source = src/.test(CUSTOMERS),
+    'an unconditional patch would let the LAST touch overwrite a recorded answer')
+}
+
+// 10b — the quote builder, the biggest manual door.
+check('QuoteFormValues carries acquisition_source as OPTIONAL', /acquisition_source\?: string/.test(TYPES))
+check('the builder asks only for a NEW person (inside the manual block)',
+  BUILDER.indexOf("register('acquisition_source')") > BUILDER.indexOf('{showManualName && ('),
+  'asking for a picked existing customer would invite overwriting a recorded source')
+check('…with the shared vocabulary, not a second list',
+  /options=\{ACQUISITION_SOURCES\.map\(s => \(\{ value: s, label: s \}\)\)\}/.test(BUILDER))
+check('…never required — "Not sure" is the default and a real answer',
+  /placeholder="Not sure"\n\s*options=\{ACQUISITION_SOURCES/.test(BUILDER) &&
+  !/register\('acquisition_source',/.test(BUILDER),
+  'a required source field forces the owner to lie to save a quote')
+check('the create door passes it to the engine', /source: values\.acquisition_source/.test(QNEW))
+check('the edit door passes it too (re-pointing a quote can create a customer)',
+  /source: values\.acquisition_source/.test(QEDIT))
+
+// 10c — neighbor-lead conversion. The add-field says "door knock, flyer,
+// referral" — three channels, so the workflow is NOT deterministic evidence and
+// the channel is asked, optionally, at the one moment the customer is minted.
+check('neighbors conversion passes the picked source', /source: convertSource/.test(NEIGHBORS))
+check('…offers the shared vocabulary', /ACQUISITION_SOURCES\.map\(s => <option key=\{s\}/.test(NEIGHBORS))
+check('…and stays optional (first option is the blank)',
+  /<option value="">Source\? \(optional\)<\/option>/.test(NEIGHBORS))
+check('…without auto-stamping a channel the page cannot know',
+  !/source: 'Door Knocking'/.test(codeOnly(NEIGHBORS)),
+  'a neighbor lead can be a flyer or a referral — stamping door-knock would be a silent guess')
+
+// 10d — CSV import (every imported customer used to land as "Not recorded").
+check('the CSV source column is read, with the canonical alias',
+  /at\(r, col\('source'\)\) \|\| at\(r, col\('acquisition_source'\)\)/.test(IMPORT))
+check('a row\'s own source beats the page default, and both are bounded',
+  /acquisition_source: sanitizeSourceInput\(r\.source \|\| defaultSource\)/.test(IMPORT),
+  'the default must fill only rows that carry nothing — never rewrite what the CSV said')
+check('the page default is optional ("Not sure" imports as unrecorded)',
+  /<option value="">Not sure<\/option>/.test(IMPORT))
+check('the column list the owner reads includes source', /postal_code, notes, source, sms_opt_in/.test(IMPORT))
+
+// 10e — the website-lead door prefers evidence over its own label, exactly like
+// the booking door: the customer's words, then the link's utm_source, then the
+// door label. The full raw payload was already persisted (raw_submission), so
+// this loses nothing and invents nothing.
+check('lead door: hear_about (their words) is the strongest evidence',
+  /saidSource \|\| utmSource \|\| sanitizeSourceInput\(opts\.source\) \|\| 'Website'/.test(INTAKE),
+  'utm before hear_about would let a link parameter outrank what the customer said')
+check('…hear_about aliases are read', /\['hear_about', 'hearAbout', 'how_did_you_hear', 'howDidYouHear'\]/.test(INTAKE))
+check('…utm_source aliases are read', /\['utm_source', 'utmSource'\]/.test(INTAKE))
+check('…both are sanitized at capture',
+  /saidSource = sanitizeSourceInput\(leadField\(/.test(INTAKE) && /utmSource = sanitizeSourceInput\(leadField\(/.test(INTAKE))
+check('…and the door label floor survives — a lead-door customer is never source-less',
+  /\|\| 'Website'/.test(INTAKE))
+
+// 10f — the ONE deterministic backfill, and the refusal around it.
+check('backfill fills only blanks', /coalesce\(btrim\(c\.acquisition_source\), ''\) = ''/.test(BACKFILL))
+check('…only for customers with a website_leads row (the deterministic evidence)',
+  /exists \(select 1 from public\.website_leads wl where wl\.customer_id = c\.id\)/.test(BACKFILL))
+check('…writes the door\'s own label, nothing fancier', /set acquisition_source = 'Website'\nwhere/.test(BACKFILL))
+check('…touches no other column', ([...codeOnly(BACKFILL).matchAll(/\bset\b/g)].length === 1))
+check('…and the refusal to guess the other 45 is written down',
+  /DELIBERATELY NOT REPAIRED/.test(BACKFILL))
+check('the production metric is stated where the repair lives', /known_pct/.test(BACKFILL))
 
 // ─────────────────────────────────────────────────────────────────────────────
 console.log(`\n${fail === 0 ? '✅' : '❌'} ${pass} passed, ${fail} failed\n`)

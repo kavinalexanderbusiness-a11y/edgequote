@@ -1205,6 +1205,9 @@ export interface QuoteFormValues {
   // save flow can create/match the customer (no duplicate) and store contact info.
   customer_phone?: string
   customer_email?: string
+  // Optional "how did they find you?" quick-pick shown only for a brand-new
+  // person. '' = not sure — a legitimate answer that stays unknown; never required.
+  acquisition_source?: string
   address: string
   service_type: string
   service_template_id: string
