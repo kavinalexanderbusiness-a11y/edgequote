@@ -25,7 +25,13 @@ import { pageAll } from '@/lib/supabase/pageAll'
 import type { RJob, RRecurrence } from '@/lib/reactivation'
 import type { MoneyBandValues } from '@/components/dashboard/MoneyBand'
 
-type InvoiceRow = Pick<Invoice, 'amount' | 'status' | 'amount_paid' | 'discount_type' | 'discount_value' | 'due_date'>
+// invoice_number/customer_name/viewed_at ride along so the priority queue can
+// NAME the invoice it wants collected and deep-link to it (`?invoice=`) instead
+// of dropping the owner on the full list to find it again. Three text columns on
+// a read that was already happening — no extra query, no extra round trip.
+type InvoiceRow = Pick<Invoice,
+  'amount' | 'status' | 'amount_paid' | 'discount_type' | 'discount_value' | 'due_date'
+  | 'invoice_number' | 'customer_name' | 'viewed_at'>
 // One conversations read serves two consumers: the lead union (all non-archived)
 // and the messages priority row (the unread subset).
 type ConvRow = LeadConvRow & { unread: number }
@@ -114,7 +120,7 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     // at 1000 rows, which would understate Owed/Collected and — via
     // priorities' scheduledQuoteIds — tell the owner to schedule work that is
     // already booked. At ~200 jobs/wk `jobs` crosses the cap within weeks.
-    pageAll<InvoiceRow>(() => sb.from('invoices').select('id, amount, status, amount_paid, discount_type, discount_value, due_date').eq('user_id', userId)),
+    pageAll<InvoiceRow>(() => sb.from('invoices').select('id, amount, status, amount_paid, discount_type, discount_value, due_date, invoice_number, customer_name, viewed_at').eq('user_id', userId)),
     // Every job, lean columns — feeds priorities (missed/unscheduled) + reactivation.
     pageAll<RJob>(() => sb.from('jobs').select('id, quote_id, customer_id, status, scheduled_date, recurrence_id, price, service_type').eq('user_id', userId)),
     // The day plan needs joins + times, but only for the days it shows, so it is a

@@ -90,7 +90,18 @@ export function TodaysPriorities({ items }: { items: Priority[] }) {
                       <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-accent-text mb-0.5">Do first</span>
                     )}
                     <span className="block text-sm font-semibold tracking-tight text-ink truncate">{p.label}</span>
-                    <span className="block text-xs text-ink-muted truncate mt-0.5 tabular-nums">{p.detail}</span>
+                    {/* Why this one, then how many others wait behind it. The
+                        "+N more" is deliberately TEXT, not a second link: the row
+                        keeps exactly one destination (the record it names), and
+                        working the top of the queue is what reveals the next.
+                        Without it, naming one customer would read as a claim that
+                        they are the only one. */}
+                    <span className="block text-xs text-ink-muted truncate mt-0.5 tabular-nums">
+                      {p.detail}
+                      {p.more != null && p.more > 0 && (
+                        <span className="text-ink-faint"> · +{p.more} more</span>
+                      )}
+                    </span>
                   </span>
                   {/* The dollars that JUSTIFIED this row's rank, in full-size
                       type. The queue orders by urgency × value, yet the value
