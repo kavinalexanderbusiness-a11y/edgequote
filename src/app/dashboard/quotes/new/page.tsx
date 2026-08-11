@@ -327,12 +327,22 @@ export default function NewQuotePage() {
       // quotes stay legacy with no child rows — identical behavior to before).
       // Row 0 = the primary service, rows 1+ = the additional lines.
       if (extraLines.length) {
-        await supabase.from('quote_services').insert([
+        const { error: lineErr } = await supabase.from('quote_services').insert([
           {
             user_id: user!.id, quote_id: data.id, sort_order: 0,
             service_type: values.service_type, service_template_id: values.service_template_id || null,
             quantity: 1, unit: 'each', unit_price: recoveredPrimary ?? 0,
             est_minutes: Math.round(Number(values.hours) * 60) || null,
+            // ⚠️ NOT redundant with the column default, and not cosmetic. PostgREST
+            // unifies the COLUMN SET of a bulk insert and sends an explicit NULL for
+            // any key an object is missing — it does not fall back to the default.
+            // The extras below carry `kind`, so omitting it here made row 0 an
+            // explicit NULL against a NOT NULL column: the whole insert was rejected
+            // and EVERY multi-service quote saved with no breakdown at all. It was
+            // silent because this call's error was never read (it is now).
+            // Same trap, same fix, in the edit path. Proven live: 0 rows written
+            // before, 2 after.
+            kind: 'service',
           },
           ...extraLines.map((s, i) => ({
             user_id: user!.id, quote_id: data.id, sort_order: i + 1,
@@ -349,6 +359,14 @@ export default function NewQuotePage() {
             kind: s.kind || 'service',
           })),
         ])
+        if (lineErr) {
+          // The quote row IS saved; only its breakdown is missing. Say exactly
+          // that, and keep the autosave draft (return false) so pressing Save
+          // again re-runs the write with every line still in hand.
+          toast.error('Saved the quote, but its service lines could not be written: ' + lineErr.message + ' — press Save again.')
+          router.push(`/dashboard/quotes/${data.id}`)
+          return false
+        }
       }
       // A measurement taken inside the builder previously lived ONLY on the quote —
       // the property stayed "unmeasured" and sqft-based pricing suggestions never
