@@ -44,7 +44,7 @@ function walk(dir: string, out: string[] = []): string[] {
 const rel = (p: string) => p.slice(SRC.length + 1).replace(/\\/g, '/')
 
 // ── Known exceptions: FROZEN surfaces ────────────────────────────────────────
-// These four are the same defect, on surfaces under an explicit freeze (quotes /
+// These are the same defect, on surfaces under an explicit freeze (quotes /
 // invoices / payments, messaging, scheduling, the quote builder). A freeze means
 // flag, don't fix — so they are recorded here rather than patched, and the debt is
 // visible in the guard instead of invisible in the code. Keyed on the undo's own
@@ -53,7 +53,12 @@ const rel = (p: string) => p.slice(SRC.length + 1).replace(/\\/g, '/')
 //
 // ⚠️ Do not add to this list to make a new failure go away. Check the error.
 const FROZEN_EXCEPTIONS: { file: string; label: string; why: string }[] = [
-  { file: 'app/dashboard/invoices/page.tsx', label: 'cancelled.', why: 'invoices/payments frozen' },
+  // ✅ SPENT AND REMOVED — invoices/page.tsx "<INV> cancelled.". Its undo called
+  // reactivateInvoice and ignored the result, so a failed reactivate dismissed
+  // the toast and left the invoice cancelled with no signal at all. Fixed while
+  // the invoice detail was restructured (the write moved into a named handler
+  // and now branches on its error). This guard demanded the removal itself —
+  // a spent exception is a hole. Do not re-add it.
   { file: 'app/dashboard/messages/page.tsx', label: 'Snoozed until', why: 'messaging frozen' },
   { file: 'app/dashboard/quotes/new/page.tsx', label: 'Saved lawn size updated', why: 'quote builder + pricing frozen' },
   { file: 'app/dashboard/schedule/page.tsx', label: 'Removed “', why: 'scheduling frozen' },

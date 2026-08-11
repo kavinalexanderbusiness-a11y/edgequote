@@ -35,6 +35,10 @@ const eq = (name: string, actual: unknown, expected: unknown) =>
   check(name, Object.is(actual, expected), `expected ${String(expected)}, got ${String(actual)}`)
 
 const PAGE = readFileSync(join(process.cwd(), 'src/app/dashboard/invoices/page.tsx'), 'utf8')
+// The detail is its own component now — see the note on the capability check
+// below. Its own guard is verify:invoice-detail; this file only cares that the
+// LIST half stays a list and that no capability vanished in the move.
+const DETAIL = readFileSync(join(process.cwd(), 'src/components/payments/InvoiceDetail.tsx'), 'utf8')
 
 // The list branch is everything the `detailMode ? … : …` ternary renders when
 // FALSE. Slicing on the marker comment keeps this honest as the file moves.
@@ -92,10 +96,20 @@ console.log('\nThe list row carries nothing you can act with:')
   }
   // The detail must still have all of them — a "simplification" that deletes
   // capability is not the trade being made here.
+  //
+  // ⚠️ The detail now lives in components/payments/InvoiceDetail.tsx: it was
+  // ~310 lines of JSX inline in this page, which is also why it could not be
+  // rendered and measured. Capability is therefore checked across BOTH halves —
+  // the page still owns every write and both send dialogs, the component owns
+  // the layout. Scanning only the page would let the whole surface disappear.
+  const BOTH = PAGE + '\n' + DETAIL
   for (const needle of ['InvoicePaymentControls', 'DepositRequestPanel', 'DraftInvoiceEditor', 'payNow', 'chargeSavedCard', 'setMsgInvoice']) {
-    check(`the detail still has ${needle}`, PAGE.includes(needle),
+    check(`the detail still has ${needle}`, BOTH.includes(needle),
       'moving an action out of the list must not remove it from the product')
   }
+  check('the page renders the detail component when focused',
+    /detailMode \? \([\s\S]{0,80}<InvoiceDetail/.test(PAGE),
+    'the list/detail split must stay the row renderer, not a prop passed into a panel')
 }
 
 // ── 4. Deep links keep working, and now go both ways ────────────────────────

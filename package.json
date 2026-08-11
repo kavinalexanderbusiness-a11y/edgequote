@@ -86,6 +86,7 @@
     "verify:lead-journey": "tsx scripts/verify-lead-journey.ts",
     "verify:back-office": "tsx scripts/verify-back-office.ts",
     "verify:invoice-list": "tsx scripts/verify-invoice-list.ts",
+    "verify:invoice-detail": "tsx scripts/verify-invoice-detail.ts",
     "verify:customer-comms": "tsx scripts/verify-customer-comms.ts"
   },
   "dependencies": {

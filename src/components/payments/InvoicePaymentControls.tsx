@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
@@ -9,18 +9,36 @@ import { Invoice, BusinessSettings, Payment, PAYMENT_METHODS, paymentMethodLabel
 import { Button } from '@/components/ui/Button'
 import { invoiceBalance, recordPayment, applyCreditToInvoice, overpaymentToCredit, recordRefund, receiptNumberFor, removePayment, restorePayment } from '@/lib/payments/ledger'
 import { receiptMessageBody } from '@/lib/comms/templates'
-import { Wallet, Plus, Gift, RotateCcw, Banknote, TrendingUp, X, FileDown, Mail, MessageSquare, ReceiptText } from 'lucide-react'
+import { Collapsible } from '@/components/ui/Collapsible'
+import { Wallet, Gift, RotateCcw, Banknote, TrendingUp, X, FileDown, Mail, MessageSquare, ReceiptText } from 'lucide-react'
 
 function todayISO(): string {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-// Per-invoice payment controls: the Total / Paid / Balance summary, a one-form
-// Record-Payment (multiple payments per invoice), the overpayment resolver
-// (credit / refund / raise total), and one-tap apply-credit. All movements go
-// through the shared ledger so dashboard, portal and reports update automatically.
-export function InvoicePaymentControls({ invoice, settings, uid, credit, payments = [], onChanged, onIssueDraft, defaultOpen }: {
+// Per-invoice payment controls: the record-payment form (multiple payments per
+// invoice), the permanent ledger history with its receipts, the refund door, the
+// overpayment resolver (credit / refund / raise total) and one-tap apply-credit.
+// All movements go through the shared ledger so dashboard, portal and reports
+// update automatically.
+//
+// ── WHAT HAPPENED / DO SOMETHING NOW ───────────────────────────────────────────
+// This component used to be both at once: a Paid/Balance summary line, a ledger
+// list where every row carried three icon buttons (one of them destructive), a
+// refund door, a resolver, two action buttons and a form — all open, all at once,
+// under the invoice's own action cluster. On a settled invoice that produced SIX
+// icon buttons and no primary action at all, and the receipt an owner actually
+// wanted was a 26px icon.
+//
+// So it split along that seam:
+//   • the SUMMARY moved out — the invoice headline states paid/balance once
+//     (duplicating it here is how two figures for one question get out of step),
+//   • the ACTIONS moved out — the detail's ladder decides what is primary and
+//     opens this form through `open`,
+//   • what HAPPENED went behind one disclosure that says what it holds, and
+//     opens itself when the invoice is settled and history is all there is.
+export function InvoicePaymentControls({ invoice, settings, uid, credit, payments = [], onChanged, onIssueDraft, open, onOpenChange }: {
   invoice: Invoice
   settings: BusinessSettings | null
   uid: string
@@ -33,15 +51,24 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
   // the invoice's paid/partial status is derived by a DB trigger off the ledger, so
   // issuing afterwards would stamp 'sent' back over a trigger-derived 'paid'.
   onIssueDraft?: () => Promise<void>
-  /** Open the record-payment form on mount — the field "Get paid" deep link. */
-  defaultOpen?: boolean
+  /**
+   * The record-payment form is CONTROLLED by the detail, because the button that
+   * opens it is up there in the action ladder. A form that opens three panels
+   * below the button reads as a button that did nothing.
+   */
+  open: boolean
+  onOpenChange: (open: boolean) => void
 }) {
   const supabase = useState(() => createClient())[0]
-  const [open, setOpen] = useState(!!defaultOpen)
+  const setOpen = onOpenChange
   const [busy, setBusy] = useState(false)
   const { total, paid, balance, overpaid } = invoiceBalance(invoice, settings)
 
   const [amount, setAmount] = useState(balance > 0 ? String(balance) : '')
+  // Re-seed the amount each time the form is OPENED (the old toggle button did
+  // this inline). `balance` is deliberately not a dependency: re-seeding while the
+  // owner is typing would overwrite a part-payment they had already entered.
+  useEffect(() => { if (open) setAmount(balance > 0 ? String(balance) : '') }, [open])   // eslint-disable-line react-hooks/exhaustive-deps
   const [method, setMethod] = useState('etransfer')
   const [date, setDate] = useState(todayISO())
   const [notes, setNotes] = useState('')
@@ -198,29 +225,81 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
   }
 
   // Nothing to show, nothing to do → render nothing at all. An unpaid invoice
-  // with no ledger rows gets the Record-payment action but never an empty
-  // receipt area; a cancelled invoice with no history adds zero chrome.
+  // with no ledger rows adds no chrome, and neither does a cancelled one.
+  // ⚠️ `canRecord` no longer implies content: the button that opens the form
+  // lives in the detail's action ladder, so an invoice that merely COULD be paid
+  // renders nothing here until the owner opens something.
   const canRecord = invoice.status !== 'paid' && invoice.status !== 'cancelled' && balance > 0
-  const hasContent = payments.length > 0 || paid > 0 || balance !== total || overpaid > 0 || canRecord || !!lastPayment
+  const applyableNow = applyable > 0 && canRecord
+  const hasHistory = payments.length > 0 || paid > 0.01
+  const hasContent = hasHistory || overpaid > 0 || open || !!lastPayment || applyableNow
   if (!hasContent) return null
 
   return (
-    <div className="mt-3 pt-3 border-t border-border space-y-2.5">
-      {/* Summary — only once money is involved (drafts/unpaid stay quiet) */}
-      {(paid > 0 || balance !== total) && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-          <span className="text-ink-muted">Paid <span className="font-semibold text-emerald-400">{formatCurrency(paid)}</span></span>
-          {overpaid > 0
-            ? <span className="text-ink-muted">Overpaid <span className="font-semibold text-violet-400">{formatCurrency(overpaid)}</span></span>
-            : <span className="text-ink-muted">Balance <span className={`font-semibold ${balance > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>{formatCurrency(balance)}</span></span>}
+    <div className="space-y-2.5">
+      {/* Credit sitting on the customer's account is money that can settle this
+          invoice right now, so it is stated with its amount rather than hidden in
+          a menu — and it only exists when there is credit to apply. */}
+      {applyableNow && (
+        <Button size="sm" variant="secondary" loading={busy}
+          onClick={() => run(() => applyCreditToInvoice(supabase, { userId: uid, invoice, amount: applyable }), `Applied ${formatCurrency(applyable)} credit to ${invoice.invoice_number}.`)}>
+          <Gift className="w-3.5 h-3.5" /> Apply {formatCurrency(applyable)} credit
+        </Button>
+      )}
+
+      {/* ── Overpayment: a question, not a record ─────────────────────────────
+          Money is sitting on this invoice that does not belong to it, and until
+          it is credited, refunded or absorbed the books are wrong. That is why
+          this is the one panel that stays open on sight — the invoice's action
+          ladder deliberately offers NO primary button in this state, because the
+          answer is one of these three and none of them is a default. */}
+      {overpaid > 0 && (
+        <div className="rounded-lg border border-violet-500/30 bg-violet-500/[0.06] p-2.5 space-y-2">
+          <p className="text-xs text-ink">Overpaid by <span className="font-semibold text-violet-400">{formatCurrency(overpaid)}</span> — what would you like to do?</p>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="secondary" loading={busy} onClick={() => run(() => overpaymentToCredit(supabase, { userId: uid, invoice, amount: overpaid }), `${formatCurrency(overpaid)} added to customer credit.`)}>
+              <Gift className="w-3.5 h-3.5" /> Apply as credit
+            </Button>
+            {/* Same one-writer rule as the refund door below: a card overpayment gets
+                refunded in Stripe, and the webhook books it. Offering the button here
+                would double-count the identical way. */}
+            {!refundViaCard && (
+              <Button size="sm" variant="secondary" loading={busy} onClick={() => run(() => recordRefund(supabase, { userId: uid, invoice, amount: overpaid, notes: 'Overpayment refund' }), `Refund of ${formatCurrency(overpaid)} recorded.`)}>
+                <Banknote className="w-3.5 h-3.5" /> Record refund
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" loading={busy} onClick={raiseTotal}>
+              <TrendingUp className="w-3.5 h-3.5" /> Raise total
+            </Button>
+          </div>
+          <p className="text-[10px] text-ink-faint">{refundViaCard
+            ? `They paid by card — to return the ${formatCurrency(overpaid)}, refund it in your Stripe dashboard and it will be recorded here automatically. Or keep it as credit against their next invoice.`
+            : `Recording a refund doesn’t move any money — return the ${formatCurrency(overpaid)} the way it came in, then record it here so your balances stay correct.`}</p>
         </div>
       )}
 
-      {/* ── Payments on this invoice — PERMANENT, straight from the ledger. Every
-          row keeps its receipt forever; manual rows can be safely reverted (the
-          trigger re-derives the status — the invoice is never unlocked by hand). */}
-      {payments.length > 0 && (
-        <div className="rounded-lg border border-border bg-bg-secondary divide-y divide-border">
+      {/* ── What has HAPPENED to this invoice ─────────────────────────────────
+          History reads as history. The disclosure states what it holds — how many
+          movements and how much was received — so the owner never has to open it
+          to learn whether it is worth opening, and it stays CLOSED even on a
+          settled invoice: the receipt an owner wants from a paid invoice is the
+          detail's primary action, one tap, and opening a six-button ledger to
+          reach the same PDF is how "paid" became the second-tallest state on the
+          card. The receipts are PERMANENT, straight from the ledger; manual rows
+          can be reverted (the trigger re-derives the status — an invoice is never
+          unlocked by hand). */}
+      {hasHistory && (
+        <Collapsible
+          title="Payment history"
+          icon={ReceiptText}
+          summary={`${payments.length || '—'} ${payments.length === 1 ? 'movement' : 'movements'} · ${formatCurrency(paid)} received`}
+        >
+          {payments.length === 0 ? (
+            <p className="text-xs text-ink-faint">
+              {formatCurrency(paid)} is recorded against this invoice, but it has no individual ledger rows — so there is no receipt to re-issue.
+            </p>
+          ) : (
+          <div className="rounded-lg border border-border bg-bg-secondary divide-y divide-border">
           {payments.map(p => {
             const negative = Number(p.amount) < 0
             const revertable = !negative && p.provider !== 'stripe'
@@ -263,8 +342,8 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
               </div>
             )
           })}
-        </div>
-      )}
+          </div>
+          )}
 
       {/* Refund money already collected. The ledger has recordRefund and the whole
           downstream (refund receipt PDF, netted totals, the portal's "Refunded"
@@ -326,50 +405,7 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
           </button>
         )
       )}
-
-      {/* Overpayment resolver */}
-      {overpaid > 0 && (
-        <div className="rounded-lg border border-violet-500/30 bg-violet-500/[0.06] p-2.5 space-y-2">
-          <p className="text-xs text-ink">Overpaid by <span className="font-semibold text-violet-400">{formatCurrency(overpaid)}</span> — what would you like to do?</p>
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="secondary" loading={busy} onClick={() => run(() => overpaymentToCredit(supabase, { userId: uid, invoice, amount: overpaid }), `${formatCurrency(overpaid)} added to customer credit.`)}>
-              <Gift className="w-3.5 h-3.5" /> Apply as credit
-            </Button>
-            {/* Same one-writer rule as the refund door above: a card overpayment gets
-                refunded in Stripe, and the webhook books it. Offering the button here
-                would double-count the identical way. */}
-            {!refundViaCard && (
-              <Button size="sm" variant="secondary" loading={busy} onClick={() => run(() => recordRefund(supabase, { userId: uid, invoice, amount: overpaid, notes: 'Overpayment refund' }), `Refund of ${formatCurrency(overpaid)} recorded.`)}>
-                <Banknote className="w-3.5 h-3.5" /> Record refund
-              </Button>
-            )}
-            <Button size="sm" variant="ghost" loading={busy} onClick={raiseTotal}>
-              <TrendingUp className="w-3.5 h-3.5" /> Raise total
-            </Button>
-          </div>
-          <p className="text-[10px] text-ink-faint">{refundViaCard
-            ? `They paid by card — to return the ${formatCurrency(overpaid)}, refund it in your Stripe dashboard and it will be recorded here automatically. Or keep it as credit against their next invoice.`
-            : `Recording a refund doesn’t move any money — return the ${formatCurrency(overpaid)} the way it came in, then record it here so your balances stay correct.`}</p>
-        </div>
-      )}
-
-      {/* Actions */}
-      {canRecord && (
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Names the money it takes. "Record payment" sat a few pixels from
-              "Take payment" (the Stripe link) and an owner holding cash had to
-              guess which was theirs — this one writes down money already in
-              hand and moves nothing. */}
-          <Button size="sm" variant="secondary" onClick={() => { setAmount(balance > 0 ? String(balance) : ''); setOpen(o => !o) }}>
-            <Plus className="w-3.5 h-3.5" /> Record cash / cheque / e-transfer
-          </Button>
-          {applyable > 0 && (
-            <Button size="sm" variant="secondary" loading={busy}
-              onClick={() => run(() => applyCreditToInvoice(supabase, { userId: uid, invoice, amount: applyable }), `Applied ${formatCurrency(applyable)} credit to ${invoice.invoice_number}.`)}>
-              <Gift className="w-3.5 h-3.5" /> Apply {formatCurrency(applyable)} credit
-            </Button>
-          )}
-        </div>
+        </Collapsible>
       )}
 
       {/* Record-payment form */}
@@ -377,7 +413,11 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
         <form onSubmit={e => { e.preventDefault(); if (Number(amount) > 0 && !busy) save() }}
           className="rounded-lg border border-border bg-bg-secondary p-3 space-y-2.5">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold text-ink flex items-center gap-1.5"><Wallet className="w-3.5 h-3.5 text-accent-text" /> Record a payment</p>
+            {/* Names the money it takes. The card door says "Card payment link";
+                this one writes down money already in hand and moves nothing —
+                naming the methods here is what keeps the two doors from being
+                one verb apart. */}
+            <p className="text-xs font-semibold text-ink flex items-center gap-1.5"><Wallet className="w-3.5 h-3.5 text-accent-text" /> Record a payment — cash / cheque / e-transfer</p>
             <button type="button" onClick={() => setOpen(false)} className="h-7 w-7 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label="Close"><X className="w-4 h-4" /></button>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">

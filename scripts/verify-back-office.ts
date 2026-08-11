@@ -42,6 +42,8 @@ const PAYMENTS = read('src/app/dashboard/payments/page.tsx')
 const MESSAGES = read('src/app/dashboard/messages/page.tsx')
 const CONVINFO = read('src/components/messages/ConversationInfo.tsx')
 const CONTROLS = read('src/components/payments/InvoicePaymentControls.tsx')
+const DETAIL = read('src/components/payments/InvoiceDetail.tsx')
+const ACTIONS = read('src/lib/payments/invoiceActions.ts')
 const ACCOUNTING = read('src/app/dashboard/accounting/page.tsx')
 
 // ── 1. No owner-facing action may write to a table nothing reads ─────────────
@@ -143,12 +145,21 @@ console.log('\nOne surface owns each fact:')
 // ── 5. The two payment doors cannot be confused ──────────────────────────────
 console.log('\nCash and card are told apart:')
 {
+  // Both doors moved when the detail got one action ladder: the labels are now
+  // decided in lib/payments/invoiceActions (so the primary button, the secondary
+  // button and the menu item can never disagree about what a door is called) and
+  // the cash door names its methods on the form it opens. The RULE is unchanged
+  // and is what these assert: the card door says card, the cash door says cash,
+  // and neither of them is called "take payment".
   check('the card door names the card',
-    /Card payment link|Card link — deposit/.test(INVOICES),
+    /Card payment link|Card link — deposit/.test(ACTIONS) && /Card payment link|Card link — deposit/.test(DETAIL),
     '"Take payment" sat beside "Record payment", differed by one verb, and did the opposite thing')
   check('the cash door names the cash',
-    /Record cash \/ cheque \/ e-transfer/.test(CONTROLS),
+    /cash \/ cheque \/ e-transfer/.test(CONTROLS) && /cash, cheque or e-transfer/.test(DETAIL),
     'the owner holding an e-transfer confirmation had to guess which button was theirs')
+  check('neither door is called "take payment" any more',
+    !/Take payment/.test(INVOICES + DETAIL + CONTROLS + ACTIONS),
+    'one verb apart from "Record payment", and it did the opposite thing')
   check('the destructive receipt action is a real tap target',
     /tap-target[^"]*"[\s\S]{0,400}?Revert payment/.test(CONTROLS) || /tap-target/.test(CONTROLS),
     'Revert deletes a ledger row and was 26px, four pixels from "text the receipt to the customer"')

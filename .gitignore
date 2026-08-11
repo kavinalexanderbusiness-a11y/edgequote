@@ -18,6 +18,11 @@ supabase/.temp/
 # Local git worktrees used for parallel branch work
 .claude/worktrees/
 
+# Invoice-detail measurement output (scripts/inv-cdp.mjs)
+.invbefore/
+.invafter/
+.chrome-profile/
+
 # Quote-builder measurement output (scripts/qb-cdp.mjs)
 .qb-before/
 .qb-after/
