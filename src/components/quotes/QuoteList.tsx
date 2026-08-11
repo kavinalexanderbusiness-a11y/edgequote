@@ -393,8 +393,12 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
         quotes.length === 0 ? (
           // Truly empty (not just a filter miss) → lead to the next action.
           <Card>
+            {/* Trade-neutral on purpose: this page is every business’s quote
+                list, and the old copy told a painter, a plumber and a junk
+                hauler to "measure the lawn". Name the steps the form actually
+                asks for, in words that fit any trade. */}
             <EmptyState icon={FileText} title="No quotes yet"
-              description="Create your first quote — measure the lawn, pick a service, and send it in minutes."
+              description="Create your first quote — add the customer, pick a service, set a price, and send it in minutes."
               action={{ label: 'New quote', onClick: () => router.push('/dashboard/quotes/new') }} />
           </Card>
         ) : (
