@@ -496,8 +496,8 @@ check('…offers the shared vocabulary', /ACQUISITION_SOURCES\.map\(s => <option
 check('…and stays optional (first option is the blank)',
   /<option value="">Source\? \(optional\)<\/option>/.test(NEIGHBORS))
 check('…without auto-stamping a channel the page cannot know',
-  !/source: 'Door Knocking'/.test(codeOnly(NEIGHBORS)),
-  'a neighbor lead can be a flyer or a referral — stamping door-knock would be a silent guess')
+  !/'(Door Knocking|Flyer \/ Mailout|Referral)'/.test(codeOnly(NEIGHBORS).replace(/ACQUISITION_SOURCES\.map[^\n]*/g, '')),
+  'a neighbor lead can be door knock, flyer OR referral — hard-coding any one of them is a silent guess')
 
 // 10d — CSV import (every imported customer used to land as "Not recorded").
 check('the CSV source column is read, with the canonical alias',
