@@ -21,6 +21,7 @@ import { WeeklyScheduler } from '@/components/schedule/WeeklyScheduler'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { EstimatedVsActual } from '@/components/labor/EstimatedVsActual'
 import { ServiceEstimateLearning } from '@/components/labor/ServiceEstimateLearning'
+import { JobCostPanel } from '@/components/jobs/JobCostPanel'
 import { loadCompletedVisitLearning, type LearningLoad } from '@/lib/estimateVsActualData'
 import type { Cadence } from '@/lib/labor'
 import { resolvePrefs, type PrefSource } from '@/lib/preferences'
@@ -639,6 +640,21 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
               load={learningLoad}
               serviceType={serviceType || null}
               excludeJobId={excludeJobId || undefined} />
+          )}
+          {/* …and finally what it COST. Time sits above it because time is what
+              this visit already knows; cost is what somebody has to record.
+              Only on a SAVED visit: an expense needs a job id to point at, and
+              there is none until the visit exists. Creating one is not the
+              moment to think about receipts anyway. */}
+          {isEdit && excludeJobId && (
+            <JobCostPanel
+              job={{
+                id: excludeJobId,
+                status,
+                service_type: serviceType || null,
+                actual_minutes: Number(watch('actual_minutes')) || null,
+                crew_size: Number(watch('crew_size')) || null,
+              }} />
           )}
         </div>
       )}
