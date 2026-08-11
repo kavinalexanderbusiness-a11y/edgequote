@@ -17,6 +17,7 @@ import { LeadSummary } from '@/components/leads/LeadSummary'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { bookingPhotosFromQuotes } from '@/lib/bookingPhotos'
 import { normalizeTags, propertyLabel, propertyLinks, describePropertyLinks, deleteProperty } from '@/lib/customers'
+import { describeSource } from '@/lib/attribution'
 import { PropertySelect } from '@/components/ui/PropertySelect'
 import { buildTimeline } from '@/lib/timeline'
 import {
@@ -819,13 +820,18 @@ export default function CustomerDetailPage() {
                 )}
               </div>
               <div className="flex items-center gap-x-3 gap-y-1 mt-1.5 flex-wrap">
-                {customer.acquisition_source && (() => {
-                  const src = customer.acquisition_source
-                  const isWeb = /website|formspree|webhook|online|booking|api|zapier/i.test(src)
-                  const label = /formspree|webhook|api|zapier/i.test(src) ? 'Website' : src
+                {/* THE source vocabulary lives in lib/attribution — this used to run
+                    its own inline regex ('formspree|webhook|api|zapier' → 'Website'),
+                    which was a second mapping of the same question in a file with no
+                    business owning one. Same badge, one engine behind it, and the raw
+                    words are still shown when they say more than the category does. */}
+                {(() => {
+                  const s = describeSource(customer.acquisition_source)
+                  if (s.category === 'unknown') return null
+                  const isWeb = s.category === 'online_form'
                   return (
                     <span className="text-[10px] uppercase tracking-wide text-ink-muted border border-border rounded px-1.5 py-0.5 inline-flex items-center gap-1">
-                      {isWeb && <Globe className="w-2.5 h-2.5 text-ink-faint" />}{isWeb ? `From ${label}` : label}
+                      {isWeb && <Globe className="w-2.5 h-2.5 text-ink-faint" />}{isWeb ? 'From website' : (s.detail ?? s.label)}
                     </span>
                   )
                 })()}

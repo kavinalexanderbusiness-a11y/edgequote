@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { sendEmail, commsEnabled } from '@/lib/comms/send'
+import { sanitizeSourceInput } from '@/lib/attribution'
 
 // ── Shared lead intake ───────────────────────────────────────────────────────
 // THE single server-side door for turning ANY external submission (website
@@ -192,7 +193,13 @@ export async function submitLead(opts: {
   const { data, error } = await anon.rpc('submit_website_lead', {
     p_token: token,
     p_payload: payload,
-    p_source: (opts.source || 'Website').trim() || 'Website',
+    // `source` becomes customers.acquisition_source, and /api/intake is CORS-open
+    // and unauthenticated with `source` read straight from the request body — so
+    // this is an untrusted-input boundary, not a formatting nicety. THE bound lives
+    // in lib/attribution and is mirrored by sanitize_source_input in SQL, which is
+    // the copy that actually holds: this RPC is granted to `anon` and can be called
+    // without going through any route here.
+    p_source: sanitizeSourceInput(opts.source) || 'Website',
   })
 
   if (error) {

@@ -34,7 +34,9 @@ interface Svc { id: string; name: string }
 // THE conversion now lives in lib/measure — this file had its own copy, as did
 // three others, and four constants can drift apart silently.
 import { M2_TO_SQFT } from '@/lib/measure'
-const HEAR_OPTIONS = ['Website', 'Google Business Profile', 'QR code', 'Facebook', 'Nextdoor', 'Referral from a friend', 'Drove by / yard sign', 'Other']
+// The same eight options as before, now beside the normalizer that has to
+// understand them — one vocabulary, one file. Nothing on this page changed.
+import { HEAR_ABOUT_OPTIONS, sanitizeSourceInput } from '@/lib/attribution'
 
 export function BookingClient({ token, initialBiz }: { token: string; initialBiz: Biz | null }) {
   const supabase = useMemo(() => createClient(), [])
@@ -106,7 +108,14 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
     if (typeof window === 'undefined') return
     const sp = new URLSearchParams(window.location.search)
     const u: Record<string, string> = {}
-    for (const k of ['source', 'medium', 'campaign', 'term', 'content']) { const v = sp.get('utm_' + k); if (v) u[k] = v }
+    // Bounded + control-char-stripped at capture. `utm_source` becomes the customer's
+    // acquisition source when they don't answer "how did you hear about us?", and the
+    // whole object is persisted on the draft quote — so a hand-edited link must not be
+    // able to stuff either. The database applies the same rule (sanitize_source_input);
+    // this one just stops the junk leaving the browser.
+    for (const k of ['source', 'medium', 'campaign', 'term', 'content']) {
+      const v = sanitizeSourceInput(sp.get('utm_' + k)); if (v) u[k] = v
+    }
     setUtm(u)
     const ref = sp.get('ref'); if (ref) setReferralCode(ref)
   }, [])
@@ -473,7 +482,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
                 <select value={hearAbout} onChange={e => setHearAbout(e.target.value)}
                   className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20">
                   <option value="">Select…</option>
-                  {HEAR_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                  {HEAR_ABOUT_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
               </div>
               <Field label="Referral code" value={referralCode} onChange={setReferralCode} placeholder="e.g. JANE20" />

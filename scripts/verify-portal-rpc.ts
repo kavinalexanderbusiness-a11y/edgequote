@@ -23,8 +23,9 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync, existsSync } from 'node:fs'
-import { normalizePortal, buildPortalView, type DocBlobRenderers } from '../src/app/portal/[token]/model'
+import { normalizePortal, buildPortalView, type DocBlobRenderers, type PortalData } from '../src/app/portal/[token]/model'
 import { invoiceBalance } from '../src/lib/payments/ledger'
+import type { InvoiceStatus } from '../src/types'
 
 for (const line of existsSync('.env.local') ? readFileSync('.env.local', 'utf8').split(/\r?\n/) : []) {
   const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/)
@@ -36,6 +37,9 @@ const check = (name: string, ok: boolean, detail?: string) => {
   if (ok) { pass++; console.log(`  ✓ ${name}`) }
   else { fail++; console.error(`  ✗ ${name}${detail ? ` — ${detail}` : ''}`) }
 }
+// Coverage output. Deliberately has NO access to `pass`/`fail` — what the live book
+// happens to contain today must never be able to decide the exit code.
+const report = (m: string) => console.log(`  · ${m}`)
 // A token grants portal access. Never let one reach a log.
 const redact = (t: string) => `${t.slice(0, 4)}…${t.slice(-2)}`
 
@@ -45,19 +49,166 @@ const redact = (t: string) => `${t.slice(0, 4)}…${t.slice(-2)}`
 // `draft` is the owner's private work-in-progress. Everything else is a bill the
 // customer is entitled to read — `cancelled` included, so a withdrawn charge is
 // explainable rather than silently gone. Same rule the RPC already applied to quotes.
-const PRIVATE_STATUSES = new Set(['draft'])
+const PRIVATE_STATUSES = new Set<string>(['draft'])
 const isCustomerVisible = (status: string) => !PRIVATE_STATUSES.has(status)
+
+/**
+ * COMPILE-TIME exhaustiveness over the status vocabulary.
+ *
+ * The runtime tripwires below catch a list that was emptied; this catches the
+ * opposite and quieter drift — a NEW status added to InvoiceStatus that the fixture
+ * never exercises. `tsc` refuses to build this file until the new status is either
+ * listed as customer-visible or declared private, so the guard cannot silently fall
+ * behind the vocabulary it is guarding.
+ */
+type CoveredStatus = 'sent' | 'unpaid' | 'partial' | 'paid' | 'overpaid' | 'cancelled'
+type UncoveredStatus = Exclude<InvoiceStatus, CoveredStatus | 'draft'>
+const _everyStatusIsAccountedFor: UncoveredStatus[] = []
+void _everyStatusIsAccountedFor
 
 const renderers: DocBlobRenderers = { quote: async () => new Blob(['q']), invoice: async () => new Blob(['i']) }
 
+// ── The invariant, proven WITHOUT depending on today's book ──────────────────
+//
+// ⭐⭐ THE BOOK IS NOT A FIXTURE. Three checks at the end of this file used to read
+//
+//     check('issued-but-unpaid invoices are returned', statusesSeen.has('sent') || …)
+//
+// which is an EXISTENCE claim over live production data wearing an invariant's
+// clothes. On 2026-08-11 the owner's book held 59 paid, 4 partial, 2 cancelled and
+// 1 overpaid invoice — and not one issued-but-unpaid row — so the suite went red
+// because a customer had PAID A BILL. Meanwhile `paid` and `partial` passed on that
+// same run purely by luck, one settled invoice away from doing the same thing. A
+// guard that flips with the day's trading teaches everyone to ignore it, which costs
+// more than the check was ever worth.
+//
+// ⚠️ A first fix (main, 2026-08-11) softened only the `sent` line to a console.log
+// when the status was absent. That removes the flake but ALSO removes the claim on
+// exactly the days it cannot be observed — the guard stops proving the thing it is
+// named for — and it left the other two as the same coin flip. Softening the
+// assertion was the wrong axis: the problem was never the strictness, it was
+// sourcing the evidence from a book that changes under you.
+//
+// This is not a new lesson in this file: the draft-withholding check above was
+// already fixed for exactly this, and its comment says why. The fix was simply
+// never carried across to its three siblings. It is now.
+//
+// The claim is real and is kept whole — it is just proven in the two places it
+// actually lives, neither of which needs a particular row to exist today:
+//
+//   SERVER  the RPC's invoice filter is an EXCLUSION — `status <> 'draft'` — so no
+//           non-draft status CAN be dropped. Pinned as text by verify:portal-canonical
+//           and, from the other side, by the allowlist tripwire below: an allowlist
+//           creeping into that select is the one edit that would silently stop
+//           returning a 'sent' invoice.
+//   CONSUMER a fixture payload shaped exactly like get_portal_data's output, driven
+//           through the REAL model and ledger, proving an issued-but-unpaid invoice
+//           survives normalize → view → doc item with its money intact.
+//
+// Both run ALWAYS — including on a machine with no credentials, which until now
+// proved nothing at all. What is left of the live sweep is COVERAGE: reported,
+// never asserted.
+
+/** Shaped like get_portal_data's json payload, minimal but complete. */
+const fixture = (invoices: PortalData['invoices']): PortalData => ({
+  customer: { id: 'c-fix', name: 'Fixture Customer', email: null, phone: null, address: null, city: null },
+  business: { company_name: 'Fixture Co', owner_name: null, phone: null, email_primary: null, email_secondary: null, website: null, logo_url: null, logo_scale: null, base_address: null, terms_text: null, gst_percent: 0 },
+  property: null, properties: [], quotes: [], invoices, jobs: [], recurrences: [], photos: [], payments: [],
+})
+
+const inv = (over: Partial<PortalData['invoices'][number]>): PortalData['invoices'][number] => ({
+  id: 'i-fix', invoice_number: 'INV-FIXTURE', service_type: 'Mowing', amount: 100, status: 'sent',
+  issued_date: '2026-07-01', due_date: '2026-07-15', notes: null, address: null, property_id: null,
+  line_items: null, job_id: null, created_at: '2026-07-01T10:00:00Z', amount_paid: 0, ...over,
+})
+
+/**
+ * Every status a customer is entitled to read, proven end-to-end on a fixture.
+ * `sent` and `unpaid` are the two spellings of issued-but-unpaid that the DB CHECK
+ * constraint allows, and both must arrive — that is the claim the deleted assertion
+ * was making, now made deterministically.
+ */
+function checkVisibleStatusesSurviveTheModel() {
+  const ISSUED_UNPAID: InvoiceStatus[] = ['sent', 'unpaid']
+  const VISIBLE: InvoiceStatus[] = [...ISSUED_UNPAID, 'partial', 'paid', 'overpaid', 'cancelled']
+
+  // Silent-cap tripwires. Emptying either list above removes the proof WITHOUT
+  // failing anything — the loops simply stop running, and a guard that covers
+  // nothing reports the same green as one that covers everything. (Mutation-testing
+  // this repair is what found it: `ISSUED_UNPAID = []` passed.)
+  check('the fixture covers both spellings of issued-but-unpaid',
+    ISSUED_UNPAID.length === 2 && ISSUED_UNPAID.includes('sent') && ISSUED_UNPAID.includes('unpaid'),
+    `covers: ${ISSUED_UNPAID.join(', ') || 'NOTHING'}`)
+  check('…and every customer-visible status, none quietly dropped',
+    VISIBLE.length === 6 && new Set(VISIBLE).size === 6 && !VISIBLE.some(s => PRIVATE_STATUSES.has(s)),
+    `covers: ${VISIBLE.join(', ')}`)
+
+  const pd = normalizePortal(JSON.parse(JSON.stringify(fixture(
+    VISIBLE.map((status, n) => inv({
+      id: `i-${status}`, invoice_number: `INV-${status.toUpperCase()}`, status,
+      amount: 100, amount_paid: status === 'partial' ? 40 : status === 'paid' ? 100 : status === 'overpaid' ? 120 : 0,
+      due_date: `2026-07-${String(10 + n).padStart(2, '0')}`,
+    })),
+  ))))
+  if (!pd) { check('the fixture payload normalises at all', false); return }
+
+  // normalizePortal is the first place a status could be silently dropped.
+  check('every customer-visible status survives normalizePortal',
+    VISIBLE.every(s => pd.invoices.some(i => i.status === s)),
+    `kept: ${pd.invoices.map(i => i.status).join(', ')}`)
+
+  const view = buildPortalView(pd, '2026-07-20', renderers)
+  const shownIds = new Set(view.docItems.filter(d => d.kind === 'invoice').map(d => d.rawId))
+  check('…and reaches the customer as a document they can open',
+    VISIBLE.every(s => shownIds.has(`i-${s}`)),
+    `missing: ${VISIBLE.filter(s => !shownIds.has(`i-${s}`)).join(', ') || 'none'}`)
+
+  // The point of the deleted check, made deterministic: an issued-but-unpaid
+  // invoice is not merely PRESENT, it still asks for its money.
+  for (const s of ISSUED_UNPAID) {
+    const d = view.docItems.find(x => x.rawId === `i-${s}`)!
+    check(`an issued-but-unpaid ('${s}') invoice is returned AND still payable`,
+      !!d && d.payAmount === 100 && d.balance === 100,
+      d ? `payAmount=${d.payAmount}, balance=${d.balance}` : 'absent')
+  }
+  // …and the settled one is not asking again — the same engine, opposite verdict,
+  // so "everything is payable" cannot be what makes the line above pass.
+  const paid = view.docItems.find(x => x.rawId === 'i-paid')
+  check('…while a settled invoice asks for nothing', !!paid && paid.payAmount === 0,
+    paid ? `payAmount=${paid.payAmount}` : 'absent')
+}
+
+/**
+ * The one server-side edit that would silently stop returning issued-but-unpaid
+ * invoices: swapping the exclusion for an allowlist. verify:portal-canonical pins
+ * that `status <> 'draft'` is PRESENT; this pins that nothing narrower replaces it.
+ */
+function checkServerFilterIsAnExclusionNotAnAllowlist() {
+  // The SAME file verify:portal-canonical treats as the one true definition.
+  const path = 'supabase/CANONICAL-get_portal_data.sql'
+  if (!existsSync(path)) { check(`canonical portal SQL exists at ${path}`, false); return }
+  const sql = readFileSync(path, 'utf8').replace(/\r\n?/g, '\n')
+  const sel = sql.slice(sql.indexOf('from public.invoices'), sql.indexOf('from public.invoices') + 200)
+  check('the invoice filter EXCLUDES draft rather than allow-listing statuses',
+    /status\s*<>\s*'draft'/.test(sel) && !/status\s+in\s*\(/i.test(sel) && !/status\s*=\s*'/.test(sel),
+    `an allowlist here silently drops every status nobody remembered — saw: ${sel.split('\n')[0]}`)
+}
+
 async function main() {
+  // Deterministic first, and unconditionally — these need no database, no
+  // credentials and no particular invoice to exist, so they hold on every machine
+  // and on every day's book.
+  console.log('\n  deterministic (no live data required):')
+  checkVisibleStatusesSurviveTheModel()
+  checkServerFilterIsAnExclusionNotAnAllowlist()
+  checkTheTransientDependencyCannotComeBack()
+
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   const email = process.env.PORTAL_RPC_OWNER_EMAIL
   const password = process.env.PORTAL_RPC_OWNER_PASSWORD
   if (!url || !anonKey || !email || !password) {
-    console.log('  … SKIPPED — no Supabase/owner credentials (set NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, PORTAL_RPC_OWNER_EMAIL, PORTAL_RPC_OWNER_PASSWORD to run)')
-    console.log('\n✓ portal RPC checks: skipped')
+    console.log('  … live sweep SKIPPED — no Supabase/owner credentials (set NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, PORTAL_RPC_OWNER_EMAIL, PORTAL_RPC_OWNER_PASSWORD to run)')
     return
   }
 
@@ -149,21 +300,42 @@ async function main() {
   check('every customer-visible invoice is still returned', missing === 0, `${missing} missing`)
   check('no invoice from another customer appears in a payload', foreign === 0, `${foreign} foreign`)
   check('counts, balances and the View/Download contract all hold', balanceMismatches === 0, `${balanceMismatches} mismatch(es)`)
-  // 2 + 3: prove the visible set really spans the paid/partial statuses, so
-  // "nothing leaked" can never be satisfied by returning nothing.
-  check('paid invoices are returned', statusesSeen.has('paid'))
-  check('partially-paid invoices are returned', statusesSeen.has('partial'), `saw: ${[...statusesSeen].join(', ')}`)
-  // ⚠️ Asserted only when such an invoice EXISTS. This is a live-data probe, and
-  // the business had no issued-but-unpaid invoice left on 2026-08-11 (59 paid, 4
-  // partial, 2 cancelled, 1 overpaid) — so the guard went red because a customer
-  // paid a bill, which is not a regression in anything. Same vacuity handling the
-  // draft-withholding check above already uses: a status the data cannot exercise
-  // is reported, not failed. The leak direction stays hard-asserted above; this
-  // one only exists to prove the visible set isn't empty, and `paid`/`partial`
-  // already prove that.
-  const unpaidSeen = statusesSeen.has('sent') || statusesSeen.has('unpaid')
-  if (unpaidSeen) check('issued-but-unpaid invoices are returned', true)
-  else console.log(`  … no issued-but-unpaid invoice exists right now, so that status is unexercised (saw: ${[...statusesSeen].join(', ')})`)
+  // ⭐ COVERAGE, NOT A VERDICT. What the live book happened to contain today is
+  // reported so a reader can see how much of the payload was exercised for real —
+  // and is deliberately NOT fed to check(). `report` has no access to the pass/fail
+  // counters, which is the mechanism that keeps it that way: reinstating the old
+  // behaviour would mean calling check() here again, which the tripwire below
+  // refuses. The invariant itself is proven in `deterministic` above.
+  //
+  // Note "nothing leaked" is still not vacuous: `missing === 0` is a for-all over
+  // whatever the book DOES hold, and it fails the moment a visible invoice goes
+  // absent — that is the anti-vacuity the existence checks were reaching for.
+  const spanned = ['sent', 'unpaid', 'partial', 'paid', 'overpaid', 'cancelled'].filter(s => statusesSeen.has(s))
+  report(`live coverage: the book exercised ${spanned.length}/6 customer-visible statuses (${spanned.join(', ') || 'none'})`)
+  if (!statusesSeen.has('sent') && !statusesSeen.has('unpaid')) {
+    report('note: no issued-but-unpaid invoice exists in the book right now, so the live')
+    report('      sweep could not exercise one. Proven deterministically above instead.')
+  }
+}
+
+/**
+ * The old defect, made structurally unable to return.
+ *
+ * ⚠️ This greps this guard's own source, which is the shape that made
+ * verify:public-edge report the cure as the disease — so it reads CODE ONLY. The
+ * prose above quotes the deleted `check(… statusesSeen.has('sent') …)` line on
+ * purpose, and that explanation must never be what fails the build.
+ */
+function checkTheTransientDependencyCannotComeBack() {
+  const self = readFileSync(__filename, 'utf8')
+    .replace(/\r\n?/g, '\n')                       // `.` does not match \r — a CRLF
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')             // checkout would strip nothing
+    .split('\n').map(l => l.replace(/^\s*\/\/[^\n]*/, '')).join('\n')
+  check('no live-data status tally is wired to a pass/fail check',
+    !/check\([^)]*statusesSeen/.test(self),
+    'an existence claim over the production book is a coin flip, not an invariant')
+  check('…and the coverage reporter cannot fail the run',
+    /const report = \(m: string\) => console\.log/.test(self))
 }
 
 main()

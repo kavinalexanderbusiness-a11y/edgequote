@@ -93,7 +93,8 @@
     "verify:customer-comms": "tsx scripts/verify-customer-comms.ts",
     "verify:portal-contact": "tsx scripts/verify-portal-contact.ts",
     "verify:quote-options": "tsx scripts/verify-quote-options.ts",
-    "verify:quote-pdf": "tsx scripts/verify-quote-pdf.ts"
+    "verify:quote-pdf": "tsx scripts/verify-quote-pdf.ts",
+    "verify:attribution": "tsx scripts/verify-attribution.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",
