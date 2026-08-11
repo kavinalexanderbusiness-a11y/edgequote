@@ -159,7 +159,7 @@ export default function QuoteDetailPage() {
       try {
         const ensured = await ensureCustomerAndProperty(
           supabase, user!.id,
-          { customerId: values.customer_id, name: values.customer_name, address: values.address, phone: values.customer_phone, email: values.customer_email },
+          { customerId: values.customer_id, name: values.customer_name, address: values.address, phone: values.customer_phone, email: values.customer_email, source: values.acquisition_source },
           customers,
         )
         customerId = ensured.customerId

@@ -557,7 +557,54 @@ H('19. SCOPE — V1 imports customers and one address, nothing else')
   const tables = [...src.matchAll(/from\('([a-z_]+)'\)/g)].map(m => m[1])
   check('exactly three tables are written',
     [...new Set(tables)].sort(), ['customer_imports', 'customers', 'properties'])
-  ok('consent is never granted by an import', !src.includes('sms: true') && !src.includes('email: true'))
+  // Consent is carried, never invented: false unless a mapped column says
+  // otherwise, and the page gates any true one behind an acknowledgement.
+  ok('opt-ins come from the row, not from a literal',
+    src.includes('sms: l.row.values.sms_opt_in') && src.includes('email: l.row.values.email_opt_in'))
+  ok('every landed row is offered to the consent audit', src.includes('recordImportConsent'))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+H('19b. SOURCE and CONSENT — the columns main already imported')
+{
+  const rows = plan('Name,Phone,Source,SMS Opt In,Email Opt In\nSourced Person,4035550301,Facebook,yes,true')
+  check('a source column is read', rows[0].values.source, 'Facebook')
+  ok('an SMS opt-in is carried', rows[0].values.sms_opt_in)
+  ok('an email opt-in is carried', rows[0].values.email_opt_in)
+  check('and both are counted for the acknowledgement', [summarize(rows).smsOptIns, summarize(rows).emailOptIns], [1, 1])
+}
+{
+  const m = suggestMapping(['Name', 'Lead Source', 'How did you hear'])
+  check('Lead Source → source', m.source, 1)
+}
+{
+  // Anything that is not an explicit yes is NOT consent — including blank,
+  // "no", and a column nobody mapped.
+  const rows = plan('Name,Phone,SMS Opt In\nA,4035550401,no\nB,4035550402,\nC,4035550403,maybe')
+  check('no / blank / maybe are all refused', rows.map(r => r.values.sms_opt_in), [false, false, false])
+  check('so nothing needs acknowledging', summarize(rows).smsOptIns, 0)
+}
+{
+  // An opt-in on a row that will NOT be written must not demand consent for
+  // someone nobody is creating.
+  const book = [cust({ id: 'cX', name: 'Known', phone: '4035550500' })]
+  const rows = plan('Name,Phone,SMS Opt In\nKnown,4035550500,yes', book)
+  check('the row is a known duplicate', rows[0].status, 'existing')
+  check('and its opt-in is not counted', summarize(rows).smsOptIns, 0)
+}
+{
+  const src = read('lib/customerImport.ts')
+  // attribution owns what a source string may be. Reused, not re-implemented,
+  // so the importer and the public booking door cannot disagree.
+  ok('the source string goes through attribution\u2019s own sanitizer',
+    src.includes("from '@/lib/attribution'") && src.includes('sanitizeSourceInput(at(m.source))'))
+  ok('a per-file default only fills rows with no source of their own',
+    src.includes('r.values.source ?? fallbackSource'))
+  const page = read('app/dashboard/customers/import/page.tsx')
+  ok('the SMS acknowledgement gates the import button',
+    page.includes('smsBlocked') && page.includes('SMS_CONSENT_WARNING'))
+  ok('the default-source control offers the canonical list',
+    page.includes('ACQUISITION_SOURCES'))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

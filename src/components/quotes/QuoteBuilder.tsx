@@ -22,7 +22,7 @@ import { Collapsible } from '@/components/ui/Collapsible'
 import { Modal } from '@/components/ui/Modal'
 import { AssistButton, AiStop, AiUndo, AiError, AiNote, AI_CHECK_FIRST } from '@/components/ai/ui'
 import { useAiAssist } from '@/hooks/useAiAssist'
-import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
+import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings, ACQUISITION_SOURCES } from '@/types'
 import { sumServiceLines, serviceLineTotals, emptyServiceLine } from '@/lib/quoteServices'
 import { MATERIAL_SUGGESTIONS, emptyMaterialLine } from '@/lib/quoteMaterials'
 import { QuoteOptionsEditor } from '@/components/quotes/QuoteOptionsEditor'
@@ -125,6 +125,7 @@ export function QuoteBuilder({
         customer_name: '',
         customer_phone: '',
         customer_email: '',
+        acquisition_source: '',
         address: '',
         service_type: '',
         service_template_id: '',
@@ -450,7 +451,10 @@ export function QuoteBuilder({
   // is the same figure `initial_price` is saved as and the same one the approval
   // RPC would set: the recommended option, else the first. Nothing sums.
   const optionsHeadline = headlineOptionPrice(watchedOptions)
-  const optionsProblem = optionsOn ? optionSetProblem(watchedOptions) : null
+  // (What's WRONG with the set is asked in two places that both need it at the
+  // moment they act — the editor's inline note as the owner types, and the submit
+  // handler over the values actually being saved. A third copy held here would be
+  // a stale render away from disagreeing with the one that blocks the save.)
   const optionsClashWithLines = optionsConflictWithLines(optionsOn, watchedServices?.length ?? 0)
   const recommended = recommendedOption(watchedOptions)
 
@@ -655,7 +659,11 @@ export function QuoteBuilder({
       serviceIdx.length ? `${serviceIdx.length} service${serviceIdx.length !== 1 ? 's' : ''}` : null,
       materialIdx.length ? `${materialIdx.length} material${materialIdx.length !== 1 ? 's' : ''}` : null,
     ].filter(Boolean).join(' · ') + ` · ${formatCurrency(serviceExtrasNet + materialsSum.net)}`
-    : 'Add cleanup, hedges, mulch…'
+    // Trade-neutral: this drawer is on every trade’s quote, and naming lawn
+    // extras told a painter or an electrician what a landscaper would add.
+    // The drawer’s own title already says "Services & materials"; this line
+    // only has to read as optional.
+    : 'Optional — extra services, or materials you’ll bill for'
   // Every part states where it stands, so a shut door reads as answered rather
   // than as two more questions. "Best days to schedule" is deliberately NOT in
   // here: it is a lookup, not a setting — nothing about it is stored on the
@@ -1234,6 +1242,13 @@ export function QuoteBuilder({
                     <Input label="Email" type="email" placeholder="jane@example.com"
                       {...register('customer_email')} />
                   </div>
+                  {/* The quote builder is the app's biggest maker of source-less
+                      customers (every quote for a new person minted one) — this
+                      one optional pick is where that stops. '' = "Not sure" is a
+                      real answer and the default: never required, never guessed. */}
+                  <Select label="How did they find you?" placeholder="Not sure"
+                    options={ACQUISITION_SOURCES.map(s => ({ value: s, label: s }))}
+                    {...register('acquisition_source')} />
 
                   {/* Likely-match prompt — use the existing customer instead of duplicating */}
                   {likelyMatch && (

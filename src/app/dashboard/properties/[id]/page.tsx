@@ -43,6 +43,9 @@ export default function PropertyDetailPage() {
   propertyRef.current = property
   const [customer, setCustomer] = useState<{ id: string; name: string } | null>(null)
   const [events, setEvents] = useState<ReturnType<typeof buildTimeline>>([])
+  // Sources whose read failed — the card names them rather than letting a short
+  // history read as the whole history.
+  const [missing, setMissing] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   // Latest ACTIVE AI analysis of this property, through THE one read seam
@@ -87,14 +90,14 @@ export default function PropertyDetailPage() {
       const cust = Array.isArray(prop.customers) ? prop.customers[0] ?? null : prop.customers ?? null
       if (active) { setLoadError(null); setProperty(prop); setCustomer(cust) }
 
-      const [sources, setRes, ctx] = await Promise.all([
+      const [tl, setRes, ctx] = await Promise.all([
         loadPropertyTimelineSources(supabase, user.id, id),
         supabase.from('business_settings').select('gst_percent').eq('user_id', user.id).maybeSingle(),
         getPropertyContext(supabase, id),
       ])
-      if (active) setInsight(ctx)
+      if (active) { setInsight(ctx); setMissing(tl.missing) }
       const all = buildTimeline({
-        ...sources,
+        ...tl.sources,
         gstPercent: Number((setRes.data as { gst_percent?: number | null } | null)?.gst_percent) || 0,
       })
       // Every row was fetched by property, so this is a guard, not the mechanism:
@@ -308,6 +311,8 @@ export default function PropertyDetailPage() {
       <TimelineCard
         key={id}
         events={events}
+        missing={missing}
+        onRetry={reload}
         title="Property timeline"
         emptyText="Nothing has happened at this address yet."
         actions={

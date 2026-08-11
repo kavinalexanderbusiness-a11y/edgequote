@@ -3,9 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, Upload, Check, AlertTriangle, Monitor, Download, Info } from 'lucide-react'
+import { ArrowLeft, Upload, Check, AlertTriangle, Monitor, Download, Info, ShieldAlert } from 'lucide-react'
 
 import { createClient } from '@/lib/supabase/client'
+import { SMS_CONSENT_WARNING } from '@/lib/consent'
+import { ACQUISITION_SOURCES } from '@/types'
 import { PageContainer } from '@/components/layout/PageContainer'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -64,6 +66,10 @@ export default function ImportCustomersPage() {
   const [rows, setRows] = useState<PlannedRow[]>([])
   const [importing, setImporting] = useState(false)
   const [outcome, setOutcome] = useState<ImportOutcome | null>(null)
+  // Applied ONLY to rows whose CSV carries no source of their own. '' = not
+  // sure, and those rows import with the source unrecorded, which is the truth.
+  const [defaultSource, setDefaultSource] = useState('')
+  const [smsAck, setSmsAck] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -123,12 +129,18 @@ export default function ImportCustomersPage() {
     setRows(rs => rs.map(r => (r.line === line && r.status === 'review' ? { ...r, include: !r.include } : r)))
   }
 
+  // Consent is never granted by an import on its own. If any row being written
+  // carries an SMS opt-in, the owner acknowledges the carrier/CASL rules first —
+  // the same gate the page has always had, now counting only rows that will
+  // actually be created.
+  const smsBlocked = totals.smsOptIns > 0 && !smsAck
+
   async function runImport() {
-    if (!me || totals.toCreate === 0 || importing) return
+    if (!me || totals.toCreate === 0 || importing || smsBlocked) return
     setImporting(true)
     try {
       const res = await executeImportPlan(supabase, {
-        userId: me.id, initiatedBy: me.email, sourceName, rows,
+        userId: me.id, initiatedBy: me.email, sourceName, rows, defaultSource,
       })
       setOutcome(res)
     } finally { setImporting(false) }
@@ -149,6 +161,9 @@ export default function ImportCustomersPage() {
       { label: 'Province/State', value: r => r.province },
       { label: 'Postal/ZIP', value: r => r.postal_code },
       { label: 'Notes', value: r => r.notes },
+      { label: 'Source', value: r => r.source },
+      { label: 'sms_opt_in', value: r => r.sms_opt_in },
+      { label: 'email_opt_in', value: r => r.email_opt_in },
       { label: 'What happened', value: r => r.outcome },
     ])
   }
@@ -336,8 +351,12 @@ export default function ImportCustomersPage() {
               <Figure n={totals.invalid} label="can’t be read" tone="danger" />
             </div>
 
-            {totals.withAddress > 0 && (
-              <p className="text-xs text-ink-muted tabular-nums">{totals.withAddress} of them bring a service address, saved as their primary property.</p>
+            {(totals.withAddress > 0 || totals.emailOptIns > 0 || totals.smsOptIns > 0) && (
+              <p className="text-xs text-ink-muted tabular-nums">
+                {totals.withAddress > 0 && <>{totals.withAddress} of them bring a service address, saved as their primary property. </>}
+                {totals.emailOptIns > 0 && <>{totals.emailOptIns} carry an email opt-in. </>}
+                {totals.smsOptIns > 0 && <>{totals.smsOptIns} carry an SMS opt-in.</>}
+              </p>
             )}
 
             {totals.review > 0 && (
@@ -375,8 +394,42 @@ export default function ImportCustomersPage() {
               )}
             </div>
 
+            {/* Optional, and only for rows the CSV itself didn't answer — a row's
+                own source column always wins. Leaving it imports them as
+                "Not recorded", which is the truth when nobody knows. */}
+            <Select
+              label="How did these customers find you?"
+              fieldSize="sm"
+              className="sm:max-w-xs"
+              value={defaultSource}
+              onChange={e => setDefaultSource(e.target.value)}
+              placeholder="Not sure"
+              hint={rows.some(r => r.values.source) ? 'Rows with their own source keep it.' : 'Applied to every row imported.'}
+              options={ACQUISITION_SOURCES.map(s => ({ value: s, label: s }))}
+            />
+
+            {totals.smsOptIns > 0 && (
+              <Banner tone="warn" icon={ShieldAlert}>
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    id="sms-consent-ack" type="checkbox" checked={smsAck}
+                    onChange={e => setSmsAck(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 accent-accent shrink-0"
+                  />
+                  <span className="text-xs text-ink-muted">
+                    {totals.smsOptIns} of these {totals.smsOptIns !== 1 ? 'rows carry' : 'row carries'} an SMS opt-in. {SMS_CONSENT_WARNING}
+                  </span>
+                </label>
+              </Banner>
+            )}
+
             <div className="flex flex-wrap items-center gap-2">
-              <Button onClick={runImport} loading={importing} disabled={totals.toCreate === 0}>
+              <Button
+                onClick={runImport} loading={importing}
+                disabled={totals.toCreate === 0 || smsBlocked}
+                aria-describedby={smsBlocked ? 'sms-consent-ack' : undefined}
+                title={smsBlocked ? 'Acknowledge the SMS consent notice above to import.' : undefined}
+              >
                 {totals.toCreate === 0 ? 'Nothing to import' : `Import ${totals.toCreate.toLocaleString()} customer${totals.toCreate !== 1 ? 's' : ''}`}
               </Button>
               {totals.detected - totals.toCreate > 0 && (

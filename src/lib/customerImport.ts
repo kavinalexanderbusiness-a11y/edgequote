@@ -22,6 +22,7 @@ import {
   type MatchReason, type AddressCarrier,
 } from '@/lib/customers'
 import { recordImportConsent } from '@/lib/consent'
+import { sanitizeSourceInput } from '@/lib/attribution'
 
 type Supa = ReturnType<typeof createClient>
 
@@ -171,6 +172,7 @@ export type ImportField =
   | 'name' | 'first_name' | 'last_name'
   | 'email' | 'phone'
   | 'address' | 'city' | 'province' | 'postal_code' | 'notes'
+  | 'source' | 'sms_opt_in' | 'email_opt_in'
 
 export const IMPORT_FIELDS: { field: ImportField; label: string; hint?: string }[] = [
   { field: 'name', label: 'Full name', hint: 'Or map First + Last name instead' },
@@ -183,6 +185,9 @@ export const IMPORT_FIELDS: { field: ImportField; label: string; hint?: string }
   { field: 'province', label: 'Province / State' },
   { field: 'postal_code', label: 'Postal / ZIP' },
   { field: 'notes', label: 'Notes' },
+  { field: 'source', label: 'How they found you', hint: 'Left blank stays "Not recorded"' },
+  { field: 'sms_opt_in', label: 'SMS consent', hint: 'Only if the column records real consent' },
+  { field: 'email_opt_in', label: 'Email consent' },
 ]
 
 /** Column index per field; null = not mapped. The owner confirms this before
@@ -192,6 +197,7 @@ export type ColumnMapping = Record<ImportField, number | null>
 export const EMPTY_MAPPING: ColumnMapping = {
   name: null, first_name: null, last_name: null, email: null, phone: null,
   address: null, city: null, province: null, postal_code: null, notes: null,
+  source: null, sms_opt_in: null, email_opt_in: null,
 }
 
 const headerTokens = (h: string) =>
@@ -222,6 +228,12 @@ const ALIASES: Record<ImportField, string[]> = {
     'zip postal', 'postal zip', 'postalcode', 'zipcode'],
   notes: ['notes', 'note', 'comments', 'comment', 'description', 'details', 'memo',
     'internal notes', 'customer notes', 'remarks'],
+  source: ['source', 'acquisition source', 'lead source', 'referral source',
+    'how did you hear', 'how they found you', 'origin', 'channel'],
+  sms_opt_in: ['sms opt in', 'sms consent', 'text consent', 'sms', 'text opt in',
+    'sms subscribed', 'accepts texts'],
+  email_opt_in: ['email opt in', 'email consent', 'email subscribed',
+    'accepts email', 'marketing opt in', 'newsletter'],
 }
 
 // A header naming another channel is never an address, however much of the word
@@ -292,6 +304,15 @@ export interface ImportRowValues {
   province: string | null
   postal_code: string | null
   notes: string | null
+  /** Raw text as the old system wrote it, bounded. lib/attribution categorizes it
+   *  at READ time — the column keeps what was said, never a normalized guess. */
+  source: string | null
+  /** Consent as the exported system recorded it. An import NEVER opts anyone in
+   *  on its own: these are false unless a mapped column says otherwise, and the
+   *  page makes the owner acknowledge the SMS rules before any true one is
+   *  written. */
+  sms_opt_in: boolean
+  email_opt_in: boolean
 }
 
 const cap = (s: string, n: number) => (s.length > n ? s.slice(0, n) : s)
@@ -347,9 +368,21 @@ export function readRow(cells: string[], m: ColumnMapping): { values: ImportRowV
       province: at(m.province) ? cap(at(m.province), IMPORT_LIMITS.province) : null,
       postal_code: at(m.postal_code) ? cap(at(m.postal_code), IMPORT_LIMITS.postal_code) : null,
       notes: rawNotes ? cap(rawNotes, IMPORT_LIMITS.notes) : null,
+      // sanitizeSourceInput is attribution's own bound on this column — reused
+      // rather than re-implemented, so the importer and the public booking door
+      // cannot disagree about what a source string may contain.
+      source: sanitizeSourceInput(at(m.source)),
+      sms_opt_in: truthy(at(m.sms_opt_in)),
+      email_opt_in: truthy(at(m.email_opt_in)),
     },
     warnings,
   }
+}
+
+/** What an exported spreadsheet means by "yes". Anything else — including blank,
+ *  "no", and an unmapped column — is NOT consent. */
+function truthy(v: string): boolean {
+  return ['true', '1', 'yes', 'y', 'x', 't'].includes(v.toLowerCase().trim())
 }
 
 // ── Classification ───────────────────────────────────────────────────────────
@@ -529,6 +562,11 @@ export interface PlanTotals {
   invalid: number
   withAddress: number
   warnings: number
+  /** Opt-ins among the rows that will actually be written — the number the SMS
+   *  acknowledgement is about. Counting rows that are not being imported would
+   *  demand consent for people nobody is creating. */
+  smsOptIns: number
+  emailOptIns: number
 }
 
 /** Recomputed whenever the owner toggles a review row — the button's number and
@@ -542,6 +580,8 @@ export function summarize(rows: PlannedRow[]): PlanTotals {
     invalid: rows.filter(r => r.status === 'invalid').length,
     withAddress: rows.filter(r => willWrite(r) && !!r.values.address).length,
     warnings: rows.filter(r => r.warnings.length > 0).length,
+    smsOptIns: rows.filter(r => willWrite(r) && r.values.sms_opt_in).length,
+    emailOptIns: rows.filter(r => willWrite(r) && r.values.email_opt_in).length,
   }
 }
 
@@ -595,9 +635,16 @@ const CHUNK = 50
  */
 export async function executeImportPlan(
   supabase: Supa,
-  opts: { userId: string; initiatedBy: string; sourceName?: string | null; rows: PlannedRow[] },
+  opts: {
+    userId: string; initiatedBy: string; sourceName?: string | null; rows: PlannedRow[]
+    /** Applied ONLY to rows whose CSV carried no source of their own — a row's
+     *  own column always wins, and no default means "Not recorded", which is
+     *  the truth when nobody knows. */
+    defaultSource?: string | null
+  },
 ): Promise<ImportOutcome> {
   const { userId, initiatedBy, rows } = opts
+  const fallbackSource = sanitizeSourceInput(opts.defaultSource)
   const targets = rows.filter(willWrite)
 
   const out: ImportOutcome = {
@@ -622,6 +669,9 @@ export async function executeImportPlan(
     email: r.values.email,
     phone: r.values.phone,
     notes: r.values.notes,
+    acquisition_source: r.values.source ?? fallbackSource,
+    sms_opt_in: r.values.sms_opt_in,
+    email_opt_in: r.values.email_opt_in,
   })
 
   const landed: { row: PlannedRow; id: string }[] = []
@@ -690,13 +740,17 @@ export async function executeImportPlan(
     }
   }
 
-  // Consent: an import NEVER opts anyone in (V1 maps no consent column), so
-  // there is nothing to record. The call is kept for the day a consent column
-  // is mapped, and passes an empty set today — recordImportConsent no-ops.
+  // Every imported opt-in gets an audit row, paired by the SAME minted ids so
+  // the consent trail cannot drift onto the wrong customer. An import never
+  // opts anyone in by itself: these values are false unless a mapped column
+  // said otherwise, and the page requires the owner to acknowledge the SMS
+  // rules before a single true one can be written.
   try {
     await recordImportConsent(supabase, {
       userId, changedBy: initiatedBy,
-      rows: landed.map(l => ({ customerId: l.id, sms: false, email: false })),
+      rows: landed.map(l => ({
+        customerId: l.id, sms: l.row.values.sms_opt_in, email: l.row.values.email_opt_in,
+      })),
     })
   } catch (e) {
     out.consentError = e instanceof Error ? e.message : 'Consent audit could not be written.'
@@ -726,7 +780,8 @@ export async function executeImportPlan(
  *  reading "=cmd|..." cannot execute when the report is opened in Excel. */
 export function unimportedRows(rows: PlannedRow[], outcome?: ImportOutcome): {
   line: number; name: string; email: string; phone: string; address: string
-  city: string; province: string; postal_code: string; notes: string; outcome: string
+  city: string; province: string; postal_code: string; notes: string
+  source: string; sms_opt_in: string; email_opt_in: string; outcome: string
 }[] {
   const failedByLine = new Map((outcome?.failed ?? []).map(f => [f.line, f.error]))
   return rows
@@ -741,6 +796,11 @@ export function unimportedRows(rows: PlannedRow[], outcome?: ImportOutcome): {
       province: r.values.province ?? '',
       postal_code: r.values.postal_code ?? '',
       notes: r.values.notes ?? '',
+      source: r.values.source ?? '',
+      // Round-trippable: the fixed row can be re-uploaded and read back the same
+      // way, rather than losing its consent on the way out and back.
+      sms_opt_in: r.values.sms_opt_in ? 'true' : 'false',
+      email_opt_in: r.values.email_opt_in ? 'true' : 'false',
       outcome: failedByLine.has(r.line)
         ? `Failed to save: ${failedByLine.get(r.line)}`
         : [r.reason, ...r.warnings].join(' '),
