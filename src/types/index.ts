@@ -248,7 +248,21 @@ export interface Job {
   duration_minutes: number | null
   crew_size: number
   status: JobStatus
+  // 🔒 INTERNAL. The access/instruction note for whoever does the work (gate
+  // code, where to park). crew_day ships it to the worker's phone. ⛔ It is NOT
+  // in get_portal_data's payload and must never go back: it was rendered to
+  // customers until 2026-08-11. Customer-facing words go in completion_summary.
   notes: string | null
+  // ── Proof of work (lib/completion) ─────────────────────────────────────────
+  // What a finished visit LEFT BEHIND. Neither is a completion state: `status` +
+  // `completed_at` remain THE answer to whether and when, stamped only by
+  // lib/jobStatus.completionPatch. Both stay nullable forever — completion must
+  // never depend on paperwork.
+  /** ⭐ CUSTOMER-VISIBLE. "What was done", rendered verbatim in the portal. */
+  completion_summary?: string | null
+  /** 🔒 INTERNAL. What the field found that needs attention. Never leaves the
+   *  business — absent from get_portal_data, pinned by verify:completion. */
+  completion_issue?: string | null
   // Per-visit price. Manual override — when set it wins over the linked quote's
   // cadence price (the one source for what a visit is worth).
   price: number | null
