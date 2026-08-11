@@ -30,8 +30,10 @@ import {
   readVisitLabor, rollupLaborVariance, laborVarianceByService, learnFromCompletedVisits,
   formatMinutes, formatVarianceMinutes, formatVariancePct, describeVariance,
   MIN_SERVICE_SAMPLE, MIN_PLAUSIBLE_MINUTES, MAX_PLAUSIBLE_MINUTES,
+  serviceHistory, describeTypicalVariance,
   type VisitLike, type LaborComparison,
 } from '../src/lib/estimateVsActual'
+import { loadCompletedVisitLearning, HISTORY_LIMIT } from '../src/lib/estimateVsActualData'
 
 let failures = 0
 const ok = (name: string) => console.log(`  ✓ ${name}`)
@@ -352,6 +354,298 @@ console.log('\nDurations read the way an owner says them:')
   eq('…and so does the percentage', formatVariancePct(47), '+47%')
 }
 
-console.log('')
-if (failures) { console.log(`✗ ${failures} estimate-vs-actual check(s) failed\n`); process.exit(1) }
-console.log('✓ all estimate-vs-actual checks passed — unknown stays unknown, and no money is invented\n')
+// ═══════════════════════════════════════════════════════════════════════════
+// V2 — HISTORICAL LEARNING. Turning many finished visits into a tendency adds
+// exactly one new way to lie: a claim that sounds like evidence but is drawn
+// from a sample that cannot support it, or from rows that were never
+// comparable. Each section below is a specific false sentence, blocked.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── 15. THE TYPICAL MISS IS PAIRED ───────────────────────────────────────────
+// The mutation this blocks is the tempting simplification
+// `medianActual − medianEstimate`, which unpairs the plan from its own outcome.
+// This fixture is built so the two answers DISAGREE and the wrong one is the
+// flattering one: three visits that each ran on-or-over produce a median miss of
+// +10m, while the difference of the medians is exactly 0 — "lands on plan".
+console.log('\nThe typical miss is measured per visit, not by subtracting two medians:')
+{
+  const cs: LaborComparison[] = [
+    { jobId: 'a', serviceKey: 'mowing', serviceLabel: 'Mowing', serviceDate: null, estimatedMinutes: 60,  actualMinutes: 60,  varianceMinutes: 0,  variancePct: 0 },
+    { jobId: 'b', serviceKey: 'mowing', serviceLabel: 'Mowing', serviceDate: null, estimatedMinutes: 30,  actualMinutes: 45,  varianceMinutes: 15, variancePct: 50 },
+    { jobId: 'c', serviceKey: 'mowing', serviceLabel: 'Mowing', serviceDate: null, estimatedMinutes: 120, actualMinutes: 130, varianceMinutes: 10, variancePct: 8.3 },
+  ]
+  const r = rollupLaborVariance(cs)
+  eq('typical plan is the median estimate', r.medianEstimatedMinutes, 60)
+  eq('typical result is the median actual', r.medianActualMinutes, 60)
+  eq('…and the typical MISS is +10m, the median of the per-visit differences', r.medianVarianceMinutes, 10)
+  check('…which is NOT the difference of the two medians (that would say 0)',
+        r.medianVarianceMinutes !== (r.medianActualMinutes! - r.medianEstimatedMinutes!),
+        'the paired statistic collapsed into the unpaired one')
+  check('…and it is described as running long, not as on-plan',
+        /longer than planned/.test(describeTypicalVariance(r.medianVarianceMinutes)!),
+        String(describeTypicalVariance(r.medianVarianceMinutes)))
+}
+
+// ── 16. AN EMPTY BUCKET HAS NO TYPICAL ANYTHING ──────────────────────────────
+console.log('\nAn absent history reports nothing, never a zero:')
+{
+  const empty = rollupLaborVariance([])
+  eq('…no typical plan', empty.medianEstimatedMinutes, null)
+  eq('…no typical result', empty.medianActualMinutes, null)
+  eq('…no typical miss', empty.medianVarianceMinutes, null)
+  eq('…and no sentence at all', describeTypicalVariance(null), null)
+  check('…and it is not established', empty.established === false, 'empty sample claimed to be established')
+  eq('…rendered as an em dash, not 0m', formatMinutes(empty.medianActualMinutes), '—')
+}
+
+// ── 17. THE USER'S OWN EXAMPLE: TWO CLEANUPS ARE TWO SERVICES ────────────────
+// "Spring Cleanup" and "Yard Cleanup" must never pool. If they ever merge, five
+// visits of each become one bucket of ten that clears the threshold and starts
+// making claims about work nobody did.
+console.log('\nSimilarly-named services stay separate:')
+{
+  const mk = (t: string, i: number): VisitLike =>
+    visit({ id: `${t}-${i}`, service_type: t, duration_minutes: 120, actual_minutes: 100 + i })
+  const vs = [...Array(5)].flatMap((_, i) => [mk('Spring Cleanup', i), mk('Yard Cleanup', i)])
+  const l = learnFromCompletedVisits(vs)
+  eq('ten visits, two buckets', l.byService.length, 2)
+  const spring = serviceHistory('Spring Cleanup', l.comparisons)
+  const yard = serviceHistory('Yard Cleanup', l.comparisons)
+  check('…they key differently', spring.serviceKey !== yard.serviceKey,
+        `both keyed ${spring.serviceKey}`)
+  eq('…spring cleanup sees only its own five', spring.sampleSize, 5)
+  eq('…yard cleanup sees only its own five', yard.sampleSize, 5)
+  check('…and neither sees all ten', spring.sampleSize + yard.sampleSize === 10 && spring.sampleSize !== 10,
+        'a bucket absorbed the other service')
+}
+
+// ── 18. THE FOUR SPELLINGS OF MOWING DO POOL ─────────────────────────────────
+// The opposite failure, and the one live in production: 30 comparable mowing
+// visits written four ways. Splitting them leaves no bucket clearing 5.
+console.log('\nOne service written four ways is one service:')
+{
+  const spellings = ['Lawn Mowing', 'Weekly Mowing', 'Bi-Weekly Mowing', 'Lawn mowing']
+  const vs = spellings.map((s, i) => visit({ id: `m${i}`, service_type: s, duration_minutes: 40, actual_minutes: 30 }))
+  const l = learnFromCompletedVisits(vs)
+  eq('four spellings, one bucket', l.byService.length, 1)
+  eq('…and every visit is in it', serviceHistory('Lawn Mowing', l.comparisons).sampleSize, 4)
+  eq('…reachable by any of the four spellings',
+     serviceHistory('Bi-Weekly Mowing', l.comparisons).sampleSize, 4)
+}
+
+// ── 19. A VISIT IS NOT ITS OWN EVIDENCE ──────────────────────────────────────
+console.log('\nA visit is excluded from its own history:')
+{
+  const vs = [...Array(5)].map((_, i) =>
+    visit({ id: `j${i}`, duration_minutes: 60, actual_minutes: 90 }))
+  const l = learnFromCompletedVisits(vs)
+  eq('all five are comparable', serviceHistory('Lawn Mowing', l.comparisons).sampleSize, 5)
+  const h = serviceHistory('Lawn Mowing', l.comparisons, { excludeJobId: 'j0' })
+  eq('…but the one on screen sees only the other four', h.sampleSize, 4)
+  check('…which drops it below the threshold, and it says so', h.established === false,
+        'a 4-visit sample still claimed to be established')
+}
+
+// ── 20. THE THRESHOLD IS A CLIFF, AND IT IS THE SHARED ONE ──────────────────
+console.log('\nThe sample threshold is deterministic:')
+{
+  const at = (n: number) => {
+    const vs = [...Array(n)].map((_, i) => visit({ id: `t${i}`, duration_minutes: 60, actual_minutes: 75 }))
+    return serviceHistory('Lawn Mowing', learnFromCompletedVisits(vs).comparisons)
+  }
+  eq(`one short of ${MIN_SERVICE_SAMPLE} is not established`, at(MIN_SERVICE_SAMPLE - 1).established, false)
+  eq(`…exactly ${MIN_SERVICE_SAMPLE} is`, at(MIN_SERVICE_SAMPLE).established, true)
+  check('…and the thin sample still reports its real size, rather than hiding',
+        at(1).sampleSize === 1 && at(1).medianVarianceMinutes === 15,
+        'a below-threshold bucket withheld or faked its figures')
+}
+
+// ── 21. WHAT MUST NEVER REACH A BUCKET ───────────────────────────────────────
+// Each of these would inflate a sample size that the UI presents as evidence.
+console.log('\nNon-comparable rows never reach the history:')
+{
+  const good = [...Array(5)].map((_, i) => visit({ id: `g${i}`, duration_minutes: 60, actual_minutes: 72 }))
+  const poison: VisitLike[] = [
+    visit({ id: 'x1', status: 'cancelled', duration_minutes: 60, actual_minutes: 300 }),
+    visit({ id: 'x2', status: 'scheduled', duration_minutes: 60, actual_minutes: 300 }),
+    visit({ id: 'x3', duration_minutes: 60, actual_minutes: null }),
+    visit({ id: 'x4', duration_minutes: null, actual_minutes: 300 }),
+    visit({ id: 'x5', duration_minutes: 60, actual_minutes: 1 }),
+    visit({ id: 'x6', duration_minutes: 60, actual_minutes: 5000 }),
+  ]
+  const h = serviceHistory('Lawn Mowing', learnFromCompletedVisits([...good, ...poison]).comparisons)
+  eq('a cancelled visit with banked minutes, an unfinished one, a missing actual, a missing estimate, a mis-tap and a timer left running — none of them count',
+     h.sampleSize, 5)
+  eq('…and the typical miss is the honest +12m', h.medianVarianceMinutes, 12)
+
+  // Duplicates: the same visit twice must not become two votes.
+  const dupes = serviceHistory('Lawn Mowing',
+    learnFromCompletedVisits([...good, ...good]).comparisons)
+  eq('the same five visits handed over twice are still five', dupes.sampleSize, 5)
+}
+
+// ── 22. A MISSING ACTUAL IS NOT A FAST VISIT ─────────────────────────────────
+// The single most flattering possible bug: untimed visits counted as 0 minutes
+// would make every service look far quicker than planned.
+console.log('\nAn untimed visit does not drag the typical result to zero:')
+{
+  const timed = [...Array(5)].map((_, i) => visit({ id: `a${i}`, duration_minutes: 60, actual_minutes: 66 }))
+  const untimed = [...Array(20)].map((_, i) => visit({ id: `b${i}`, duration_minutes: 60, actual_minutes: null }))
+  const h = serviceHistory('Lawn Mowing', learnFromCompletedVisits([...timed, ...untimed]).comparisons)
+  eq('…the sample is the five that were timed', h.sampleSize, 5)
+  eq('…the typical result is 66m, not dragged toward 0', h.medianActualMinutes, 66)
+  check('…and it still reads as running long', h.medianVarianceMinutes! > 0,
+        `got ${h.medianVarianceMinutes}`)
+}
+
+// ── 23. THE LOADER: A FAILED READ IS NEVER AN EMPTY HISTORY ─────────────────
+// The V2 failure this whole three-outcome contract exists for. Driven through
+// the REAL loader with a stub client, so the branch is executed, not grepped.
+// (The loader is async and this script compiles to CJS, so the two sections
+// that drive it live in a function rather than at top level.)
+async function loaderChecks() {
+console.log('\nThe loader tells a broken read apart from an empty one:')
+{
+  const stub = (result: { data: unknown; error: unknown }) => {
+    const eqCalls: [string, unknown][] = []
+    const tables: string[] = []
+    const b: Record<string, unknown> = {}
+    Object.assign(b, {
+      select: () => b,
+      eq: (c: string, v: unknown) => { eqCalls.push([c, v]); return b },
+      order: () => b,
+      limit: () => b,
+      then: (r: (v: unknown) => unknown) => Promise.resolve(result).then(r),
+    })
+    const client = { from: (t: string) => { tables.push(t); return b } }
+    return { client: client as never, eqCalls, tables }
+  }
+  const rows = (n: number) => [...Array(n)].map((_, i) => ({
+    id: `r${i}`, status: 'completed', service_type: 'Lawn Mowing',
+    scheduled_date: null, duration_minutes: 60, actual_minutes: 75,
+  }))
+
+  const errored = stub({ data: null, error: { message: 'network down' } })
+  const e = await loadCompletedVisitLearning(errored.client, 'user-a')
+  eq('a read error is unavailable', e.outcome, 'unavailable')
+  check('…and carries the reason', e.outcome === 'unavailable' && /network down/.test(e.reason), JSON.stringify(e))
+
+  const nullish = await loadCompletedVisitLearning(stub({ data: null, error: null }).client, 'user-a')
+  eq('a null payload with NO error is still unavailable, not empty', nullish.outcome, 'unavailable')
+
+  const emptyLoad = await loadCompletedVisitLearning(stub({ data: [], error: null }).client, 'user-a')
+  eq('a genuine empty result is no_history — a different outcome', emptyLoad.outcome, 'no_history')
+
+  const okLoad = await loadCompletedVisitLearning(stub({ data: rows(5), error: null }).client, 'user-a')
+  eq('rows that compare are ok', okLoad.outcome, 'ok')
+  check('…with the learning attached',
+        okLoad.outcome === 'ok' && okLoad.learning.coverage.comparable === 5, JSON.stringify(okLoad))
+
+  // Completed rows that are all untimed: the read worked, there is simply
+  // nothing comparable. Must NOT be reported as a failure either.
+  const untimedLoad = await loadCompletedVisitLearning(stub({
+    data: rows(5).map(r => ({ ...r, actual_minutes: null })), error: null,
+  }).client, 'user-a')
+  eq('completed but untimed rows are no_history, not unavailable', untimedLoad.outcome, 'no_history')
+
+  const capped = await loadCompletedVisitLearning(stub({ data: rows(HISTORY_LIMIT), error: null }).client, 'user-a')
+  check('hitting the cap is disclosed, never silent',
+        capped.outcome === 'ok' && capped.truncated === true, JSON.stringify({ ...capped, learning: undefined }))
+  check('…and a short read is not flagged as capped',
+        okLoad.outcome === 'ok' && okLoad.truncated === false, 'a 5-row read claimed truncation')
+}
+
+// ── 24. THE LOADER IS TENANT-SCOPED, AND THE SCOPE IS REAL ──────────────────
+// Business A's finished work must never teach Business B what to charge. RLS is
+// the guarantee, but RLS is bypassed by a service-role client — so the explicit
+// filter is asserted here, with the actual id, by running the real loader.
+console.log('\nOne business never learns from another:')
+{
+  const stub = () => {
+    const eqCalls: [string, unknown][] = []
+    const tables: string[] = []
+    const b: Record<string, unknown> = {}
+    Object.assign(b, {
+      select: () => b,
+      eq: (c: string, v: unknown) => { eqCalls.push([c, v]); return b },
+      order: () => b, limit: () => b,
+      then: (r: (v: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(r),
+    })
+    return { client: { from: (t: string) => { tables.push(t); return b } } as never, eqCalls, tables }
+  }
+  const a = stub()
+  await loadCompletedVisitLearning(a.client, 'business-a')
+  check('the read is filtered by the caller\'s own user_id',
+        a.eqCalls.some(([c, v]) => c === 'user_id' && v === 'business-a'),
+        JSON.stringify(a.eqCalls))
+  check('…and only completed visits are asked for',
+        a.eqCalls.some(([c, v]) => c === 'status' && v === 'completed'),
+        JSON.stringify(a.eqCalls))
+  eq('…from the jobs table', a.tables.join(','), 'jobs')
+
+  // Mutation: a hardcoded or dropped filter would keep saying 'business-a'.
+  const b2 = stub()
+  await loadCompletedVisitLearning(b2.client, 'business-b')
+  check('…and the filter FOLLOWS the caller, it is not a constant',
+        b2.eqCalls.some(([c, v]) => c === 'user_id' && v === 'business-b') &&
+        !b2.eqCalls.some(([, v]) => v === 'business-a'),
+        JSON.stringify(b2.eqCalls))
+
+  // No user at all must not produce an UNSCOPED read.
+  const none = stub()
+  const r = await loadCompletedVisitLearning(none.client, '')
+  eq('a signed-out read is unavailable', r.outcome, 'unavailable')
+  eq('…and no query was issued at all', none.tables.length, 0)
+}
+}
+
+// ── 25. LEARNING IS EVIDENCE, NOT AN ACTION ─────────────────────────────────
+// The standing product rule: the system shows the owner what happened and never
+// re-prices on its own. Structural, so no future edit can quietly add a writer.
+console.log('\nHistory can be read but never applied:')
+{
+  const engine = readFileSync(join(process.cwd(), 'src/lib/estimateVsActual.ts'), 'utf8')
+  const loader = readFileSync(join(process.cwd(), 'src/lib/estimateVsActualData.ts'), 'utf8')
+  const ui = readFileSync(join(process.cwd(), 'src/components/labor/ServiceEstimateLearning.tsx'), 'utf8')
+
+  check('the loader only ever reads',
+        !/\.(insert|update|upsert|delete|rpc)\s*\(/.test(loader),
+        'the loader contains a write')
+  check('…and reads exactly one table',
+        (loader.match(/\.from\(/g) || []).length === 1, 'the loader touches more than one table')
+  check('the learning UI writes nothing back to the form',
+        !/setValue|register\(|onChange|\.update\(|\.insert\(/.test(ui),
+        'the history surface can edit the estimate it is describing')
+  check('…and offers no "apply" affordance',
+        !/<button|onClick/i.test(ui), 'the history surface has an actionable control')
+  // ⚠️ Strip comments FIRST. This module's header is a long argument about why
+  // it holds no money, so a scan of the raw text finds "price" and "cost" in the
+  // prose and reports the explanation as the violation.
+  const code = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  check('the engine still holds no currency and no price concept',
+        !/price|amount|dollar|currency/i.test(code(engine)),
+        'a money concept entered the labour learning engine')
+  check('…and neither does the loader',
+        !/price|amount|dollar|currency/i.test(code(loader)),
+        'a money concept entered the learning loader')
+  // `$` only counts as money when it is NOT opening a template interpolation.
+  check('…and the surface renders no money',
+        !/[£€]|\$(?!\{)/.test(code(ui)), 'the history surface prints a currency amount')
+
+  // ONE VISIT IS NEVER A TENDENCY. The two describers are deliberately worded
+  // apart, and the surface must pick the singular one at n=1 — a disclaimer
+  // below a "a typical visit…" headline does not unsay the headline.
+  check('the tendency wording is the only one that says "typical"',
+        /typical/i.test(describeTypicalVariance(15)!) &&
+        !/typical/i.test(describeVariance({ varianceMinutes: 15, variancePct: 50 })),
+        'the singular and tendency wordings are no longer distinguishable')
+  check('…and the surface uses the singular wording for a sample of one',
+        /sampleSize === 1[\s\S]{0,200}?describeVariance\(/.test(code(ui)),
+        'a single visit is being described as typical')
+}
+
+loaderChecks().then(() => {
+  console.log('')
+  if (failures) { console.log(`✗ ${failures} estimate-vs-actual check(s) failed\n`); process.exit(1) }
+  console.log('✓ all estimate-vs-actual checks passed — unknown stays unknown, no sample is oversold, and no money is invented\n')
+})
