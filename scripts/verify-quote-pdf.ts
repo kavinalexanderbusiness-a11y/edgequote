@@ -161,6 +161,23 @@ async function main() {
   check('the "choose one" instruction is gone once there is nothing to choose',
     !/choose one option/i.test(a) && !/one option only/i.test(a))
 
+  // ── Itemised travel must not fork the per-option figure ──────────────────
+  // ⚠️ The one surface disagreement this feature can still produce. An owner who
+  // ticked "show travel separately" gets an itemised Travel Fee row on an
+  // ORDINARY quote — but on an options quote, printing the options at $5,400
+  // while the portal's Approve button says $5,550 and accepted_price records
+  // $5,550 is three numbers for one decision. Every option row is all-in,
+  // whatever the itemisation preference says.
+  const itemised = { ...BASE, show_travel_separately: true } as unknown as Quote
+  const it = pageText(Buffer.from(await (await renderQuoteBlob(itemised, SETTINGS, undefined, OPTIONS)).arrayBuffer()))
+  console.log('\n═══ "Show travel separately" cannot fork the per-option price ═══')
+  assertExtractorWorks(it, 'itemised-travel')
+  check('the option rows are still all-in, matching the portal and accepted_price',
+    ['$4,050.00', '$5,550.00', '$7,250.00'].every(f => it.includes(f)),
+    'printing $3,900 / $5,400 / $7,100 here would contradict the button the customer taps')
+  check('and no separate travel row invites adding it twice',
+    !/travel fee/i.test(it) && /includes \$150\.00 travel/i.test(it))
+
   // ── An ordinary quote is untouched ───────────────────────────────────────
   const plain = { ...BASE, weekly_price: null, biweekly_price: null, monthly_price: null } as unknown as Quote
   const p = pageText(Buffer.from(await (await renderQuoteBlob(plain, SETTINGS)).arrayBuffer()))

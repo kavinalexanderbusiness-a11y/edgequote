@@ -450,7 +450,10 @@ export function QuoteBuilder({
   // is the same figure `initial_price` is saved as and the same one the approval
   // RPC would set: the recommended option, else the first. Nothing sums.
   const optionsHeadline = headlineOptionPrice(watchedOptions)
-  const optionsProblem = optionsOn ? optionSetProblem(watchedOptions) : null
+  // (What's WRONG with the set is asked in two places that both need it at the
+  // moment they act — the editor's inline note as the owner types, and the submit
+  // handler over the values actually being saved. A third copy held here would be
+  // a stale render away from disagreeing with the one that blocks the save.)
   const optionsClashWithLines = optionsConflictWithLines(optionsOn, watchedServices?.length ?? 0)
   const recommended = recommendedOption(watchedOptions)
 
