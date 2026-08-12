@@ -1,6 +1,6 @@
 'use client'
 
-import { ReactNode, useEffect } from 'react'
+import { ReactNode, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 
 // ── StickyActionBar ───────────────────────────────────────────────────────────
@@ -24,6 +24,48 @@ interface StickyActionBarProps {
 }
 
 export function StickyActionBar({ children, fixed, className }: StickyActionBarProps) {
+  const ref = useRef<HTMLDivElement>(null)
+
+  // ⭐ Ride the VISUAL viewport, so the software keyboard cannot bury the
+  // primary action.
+  //
+  // `position: fixed; bottom: 0` pins to the LAYOUT viewport, and opening the
+  // keyboard does not shrink that — on iOS Safari, and on Android Chrome's
+  // default `resizes-visual`, only `visualViewport` changes. Measured on the
+  // deployed build at 390px with the visual viewport at 508px (an iPhone
+  // keyboard): the Save button stayed at y 786–834, i.e. 326px BELOW the
+  // keyboard line, completely unreachable while any field was focused.
+  //
+  // The inset is what the keyboard hides; translating up by exactly that puts
+  // the bar on top of it. No visualViewport (older browsers) ⇒ no transform,
+  // and the old behaviour stands.
+  useEffect(() => {
+    if (!fixed) return
+    const vv = window.visualViewport
+    if (!vv) return
+    // Captured for the cleanup: by the time it runs, ref.current may already be
+    // null (React clears it before effect teardown on unmount).
+    const el = ref.current
+    let raf = 0
+    const apply = () => {
+      if (!el) return
+      const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop)
+      // 1px of slack: sub-pixel viewport maths must not leave a permanent
+      // transform on a page with no keyboard.
+      el.style.transform = inset > 1 ? `translateY(${-Math.round(inset)}px)` : ''
+    }
+    const schedule = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(apply) }
+    apply()
+    vv.addEventListener('resize', schedule)
+    vv.addEventListener('scroll', schedule)
+    return () => {
+      cancelAnimationFrame(raf)
+      vv.removeEventListener('resize', schedule)
+      vv.removeEventListener('scroll', schedule)
+      if (el) el.style.transform = ''
+    }
+  }, [fixed])
+
   useEffect(() => {
     if (!fixed) return
     // Ref-counted, not boolean: with two fixed bars mounted at once, the first
@@ -39,6 +81,14 @@ export function StickyActionBar({ children, fixed, className }: StickyActionBarP
 
   return (
     <div
+      ref={ref}
+      // ⭐ THE marker every dropdown measures its floor against
+      // (lib/dropdownPlacement). Only a FIXED bar is chrome over the page — a
+      // sticky one flows in the document and a list simply pushes past it.
+      // Reading the live rect is deliberate: it already accounts for the bar
+      // growing (the $0 "Save anyway" note) and for the keyboard transform
+      // above, neither of which a hard-coded height would.
+      {...(fixed ? { 'data-eq-bottom-chrome': '' } : {})}
       className={cn(
         'bottom-0 z-30 bg-bg-secondary/95 backdrop-blur border-t border-border px-4 py-2.5',
         // A fixed bar is positioned against the VIEWPORT, so it ignores the

@@ -98,7 +98,14 @@ export interface Property {
   mulch_area: number | null
   rock_area: number | null
   driveway_area: number | null
+  // CUSTOMER-FACING: get_portal_data returns this and the portal renders it under
+  // "Notes from your provider". Anything the customer must not read belongs in
+  // `internal_notes` below.
   notes: string | null
+  // PRIVATE to the owner and crew — the place's access facts (gate side, dog,
+  // controller location). Never selected by get_portal_data, so it cannot reach
+  // the portal; verify:location-intelligence pins that.
+  internal_notes?: string | null
   measurement_history: MeasurementSnapshot[]
   // Permanently-saved lawn boundary + map identity (from a website measurement or
   // an in-app trace). The CURRENT boundary — section-tagged {lat,lng} rings (jsonb)
@@ -1062,7 +1069,12 @@ export interface Quote {
   customer_name: string
   address: string
   service_type: string
+  /** ⭐ CUSTOMER-VISIBLE — printed in QuotePDF's Notes box and selected by
+   *  get_portal_data. The scope note written FOR the customer. */
   notes: string | null
+  /** 🔒 INTERNAL — the owner's price floor and private context. Never on a PDF,
+   *  never in the portal payload (lib/noteScope). */
+  internal_notes: string | null
   hours: number
   crew_size: number
   rate: number
@@ -1253,7 +1265,10 @@ export interface QuoteFormValues {
   crew_size: number
   rate: number
   travel_fee: number
+  /** ⭐ CUSTOMER-VISIBLE — prints on the quote PDF and shows in the portal. */
   notes: string
+  /** 🔒 INTERNAL — the owner's price floor and private context (lib/noteScope). */
+  internal_notes: string
   initial_price: number
   weekly_price: number
   biweekly_price: number

@@ -290,7 +290,10 @@ export default function NewQuotePage() {
       custom_travel_required: values.custom_travel_required,
       show_travel_separately: values.show_travel_separately,
       issued_date: localTodayISO(),
+      // Two audiences, two columns — never merged (lib/noteScope). `notes` is
+      // what the customer receives; `internal_notes` never leaves the office.
       notes: values.notes || null,
+      internal_notes: values.internal_notes || null,
       hours: Number(values.hours),
       crew_size: Number(values.crew_size),
       rate: finalRate,

@@ -23,6 +23,7 @@ import { Modal } from '@/components/ui/Modal'
 import { AssistButton, AiStop, AiUndo, AiError, AiNote, AI_CHECK_FIRST } from '@/components/ai/ui'
 import { useAiAssist } from '@/hooks/useAiAssist'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings, ServiceBundleWithItems, ACQUISITION_SOURCES } from '@/types'
+import { AUDIENCE_COPY } from '@/lib/noteScope'
 import { sumServiceLines, serviceLineTotals, emptyServiceLine } from '@/lib/quoteServices'
 import { BundlePicker } from '@/components/quotes/BundlePicker'
 import { bundleScope, templateIndex } from '@/lib/serviceBundles'
@@ -173,6 +174,7 @@ export function QuoteBuilder({
         rate: Number(settings?.default_rate) || 0,
         travel_fee: BLANK,
         notes: '',
+        internal_notes: '',
         status: 'draft',
         services: [],
         // Off, and empty. A normal quote never touches either of these, and the
@@ -328,8 +330,31 @@ export function QuoteBuilder({
         if (bad.some(i => kindAt(i) === 'material')) setMaterialsOpen(true)
         if (bad.some(i => kindAt(i) !== 'material')) setServicesOpen(true)
       }
+      // WHICH field, as a form path. An errored `services` entry is an ARRAY,
+      // so its own key names nothing focusable — walk into it for the real one.
+      const firstPath = (() => {
+        const k = keys[0]
+        if (k !== 'services') return k
+        const rows = (errs.services as unknown as Array<Record<string, { message?: string }>> | undefined) || []
+        const i = rows.findIndex(Boolean)
+        const sub = i >= 0 ? Object.keys(rows[i] || {})[0] : undefined
+        return sub ? `services.${i}.${sub}` : k
+      })()
       const first = errs[keys[0] as keyof typeof errs] as { message?: string } | undefined
       toast.error(first?.message || 'Some fields still need filling in — we’ve opened the section holding them.')
+      // Then PUT THE OWNER ON IT. react-hook-form's own focus-on-error already
+      // ran and found nothing, because the field it wanted was inside a section
+      // this handler has only just opened — the mount happens on the next
+      // render, so the focus has to wait a frame. Without this, a blocked save
+      // on a phone toasts about a field that can be a screen and a half away,
+      // which reads as "Save is broken" rather than "answer this".
+      requestAnimationFrame(() => {
+        setFocus(firstPath as Parameters<typeof setFocus>[0], { shouldSelect: false })
+        // setFocus does not scroll, and a focused input under the keyboard is
+        // no more visible than an unfocused one.
+        const el = document.activeElement
+        if (el instanceof HTMLElement && el !== document.body) el.scrollIntoView({ block: 'center' })
+      })
     },
   )
 
@@ -409,6 +434,7 @@ export function QuoteBuilder({
   // The scheduling-deposit rule — drives the More-options block and its summary.
   const depositType = watch('deposit_type')
   const depositValue = watch('deposit_value')
+  const internalNotes = watch('internal_notes')
   // AI scope writer for the Notes field — words only; pricing never comes from it.
   const aiScope = useAiAssist()
   // What the field held before the assistant replaced it — powers Undo, and
@@ -731,9 +757,17 @@ export function QuoteBuilder({
   // here: it is a lookup, not a setting — nothing about it is stored on the
   // quote, and listing it as "not specified" would invent a field that a reader
   // would then go looking for on the saved row.
+  // The two notes are summarised SEPARATELY and by audience. A single "Notes
+  // added" behind a shut drawer cannot tell an owner whether the words waiting
+  // in there are the ones the customer receives or the ones they must not — and
+  // that is the only question worth answering about a note from the outside.
+  const hasCustomerNote = !!(notes && String(notes).trim())
+  const hasInternalNote = !!(internalNotes && String(internalNotes).trim())
   const moreSummary = [
     Number(travelFee) > 0 ? `Travel ${formatCurrency(Number(travelFee))}` : (includeTravel ? 'No travel fee' : 'Travel absorbed'),
-    notes && String(notes).trim() ? 'Notes added' : 'No notes',
+    hasCustomerNote ? 'Customer note' : null,
+    hasInternalNote ? 'Internal note' : null,
+    !hasCustomerNote && !hasInternalNote ? 'No notes' : null,
     // The scheduling-deposit rule, stated on the shut door. Silent when off —
     // "no deposit" is the default, not an unanswered question.
     depositType === 'percent' && Number(depositValue) > 0 ? `${Number(depositValue)}% deposit to book`
@@ -2243,7 +2277,17 @@ export function QuoteBuilder({
             <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint flex items-center gap-1.5">
               <FileText className="w-3.5 h-3.5" /> Notes
             </p>
-            <Textarea label="Notes" placeholder="Job-specific details, access instructions, gate codes…"
+            {/* ⚠️ THE TRAP THIS CLOSES. This field has ALWAYS been customer-facing
+                — QuotePDF prints it in a "Notes" box and get_portal_data selects
+                it — and its placeholder read "Job-specific details, access
+                instructions, gate codes…". That is an invitation to type
+                operational secrets into the one box on a quote the customer
+                receives. Nobody had taken it yet (all 82 live quote notes read as
+                real scope of work), so this is a latent trap being closed rather
+                than a leak being cleaned up. The field keeps its meaning and its
+                data; the words stop lying about who reads them. */}
+            <Textarea label={AUDIENCE_COPY.customer.label} hint={AUDIENCE_COPY.customer.help}
+              placeholder="Disposal and cleanup are included · existing stepping stones will be reused"
               {...register('notes')} />
             {aiScope.enabled === true && (
               <div className="mt-2 space-y-1.5">
@@ -2287,6 +2331,20 @@ export function QuoteBuilder({
               )}
               </div>
             )}
+
+            {/* ⭐ THE PRIVATE HALF, AND WHY IT IS A SECOND FIELD RATHER THAN A
+                TOGGLE. Until now a quote had exactly ONE box, and it printed. An
+                owner with "don't go below $700" to record had nowhere to put it
+                that the customer would not receive. A visibility switch on the
+                single field would be worse than either: one wrong tap publishes
+                the price floor, and the mistake is invisible afterwards because
+                the text looks identical. Two fields, each permanently one
+                audience — the same shape invoices.notes/internal_notes has had
+                since 2026-07-15. ⛔ Never rendered by QuotePDF; never selected by
+                get_portal_data. Pinned by verify:scoped-notes. */}
+            <Textarea label={AUDIENCE_COPY.internal.label} hint={AUDIENCE_COPY.internal.help}
+              placeholder="Don't discount below $700 · call before changing scope"
+              {...register('internal_notes')} />
 
           {/* Sparkles, not SlidersHorizontal: sharing Advanced Pricing's icon made
               the first and last sections in the stack wear the same glyph, so the

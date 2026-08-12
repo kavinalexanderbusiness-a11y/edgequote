@@ -126,6 +126,7 @@ export default function SchedulePage() {
   const customerParam = searchParams.get('customer')
   const propertyParam = searchParams.get('property')
   const focusRec = searchParams.get('focus')
+  const jobParam = searchParams.get('job')
 
   const [jobs, setJobs] = useState<Job[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
@@ -938,6 +939,26 @@ export default function SchedulePage() {
       setShowForm(false)
     }
   }, [focusRec, jobs])
+
+  // Visit deep link (?job=<id>) — THE focused destination for one visit, used by
+  // global search. Jumps the board to the day that visit lands on and opens that
+  // exact row, the same two moves ?focus= makes for a series.
+  //
+  // Why this had to exist: a visit is the one record type with no page of its own,
+  // so a search result for it used to land on the bare board — which opens on
+  // TODAY. Finding a visit scheduled three weeks out and being shown today's work
+  // is losing it again. ?customer= could not be reused: it is a CREATE door that
+  // opens a blank new-visit form, so it would answer "here is the job you found"
+  // with an empty form.
+  useEffect(() => {
+    if (!jobParam || jobs.length === 0) return
+    const target = jobs.find(j => j.id === jobParam)
+    if (target) {
+      setCursor(parseISO(target.scheduled_date + 'T00:00:00'))
+      setEditing(target)
+      setShowForm(false)
+    }
+  }, [jobParam, jobs])
 
   function closeForm() {
     setShowForm(false)

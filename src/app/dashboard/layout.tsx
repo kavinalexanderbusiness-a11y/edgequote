@@ -1,5 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { readUser } from '@/lib/authState'
+import { AuthUnavailable } from '@/components/auth/AuthUnavailable'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { BottomNav } from '@/components/layout/BottomNav'
 import { RouteFocusManager } from '@/components/layout/RouteFocusManager'
@@ -13,9 +15,14 @@ import { InboundToast } from '@/components/messages/InboundToast'
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) redirect('/login')
+  // THREE answers (lib/authState): only a VERIFIED "no session" may send someone
+  // to the login form. A failure to reach the auth server renders the retry
+  // surface instead — it shows no dashboard data, so nothing leaks, and it does
+  // not throw away a session nobody proved was gone.
+  const auth = await readUser(supabase)
+  if (auth.kind === 'signed-out') redirect('/login')
+  if (auth.kind === 'unavailable') return <AuthUnavailable reason={auth.reason} />
+  const user = auth.user
 
   // First run: an account with NO business_settings row has never been set up —
   // nothing creates that row at signup, so its absence is the one unambiguous

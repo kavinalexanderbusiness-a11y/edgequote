@@ -143,7 +143,15 @@ async function main() {
     (poisoned ?? 0) === 0,
     'the bucket must be derived from the booking\'s persisted property, never from the request')
 
-  await owner.auth.signOut().catch(() => {})
+  // ⚠️ scope:'local' is LOAD-BEARING, not a detail. supabase-js defaults signOut()
+  // to scope:'global', which revokes EVERY session this account holds ANYWHERE —
+  // and these guards sign in as the real production owner. A bare signOut() here
+  // signs the owner out of their own phone and desktop mid-workday. That is not
+  // hypothetical: production logged 214 `/auth/v1/logout?scope=global` calls in
+  // 24 hours, every one of them from `node` on a dev machine, and it was THE
+  // cause of the random sign-outs. 'local' ends only this script's own session.
+  // verify:auth-session fails if a bare signOut() reappears in scripts/.
+  await owner.auth.signOut({ scope: 'local' }).catch(() => {})
 }
 
 main()

@@ -15,6 +15,7 @@ import {
   NotebookPen, Eye, Lock,
 } from 'lucide-react'
 import { CrewStopPhotos } from '@/components/crew/CrewStopPhotos'
+import { CrewStopMedia } from '@/components/crew/CrewStopMedia'
 import { CompletionSheet } from '@/components/completion/CompletionSheet'
 import { crewSaveCompletionRecord } from '@/lib/crewJob'
 
@@ -61,6 +62,16 @@ export function CrewToday() {
   // tap, and this is the affordance for the times there is something to say.
   const [recordingId, setRecordingId] = useState<string | null>(null)
   const [photosOutstanding, setPhotosOutstanding] = useState<Record<string, number>>({})
+  // How much reference media the office attached to each of today's stops.
+  // COUNTS ONLY — one request for the whole day, holding no URLs and nothing
+  // signed. It exists so a card can offer "2 photos · 1 video" without a request
+  // per stop; the signed URLs are minted only when a worker actually opens one
+  // (a signature taken at 7am is dead by the eighth stop).
+  //
+  // A failure here is deliberately SILENT: the counts drive an affordance, not a
+  // fact about the work. Missing them hides an optional section; an error banner
+  // over it would push the day's real work off the screen.
+  const [mediaCounts, setMediaCounts] = useState<Record<string, { photos: number; videos: number }>>({})
   const today = localTodayISO()
   const alive = useRef(true)
   const dayRef = useRef<CrewDay | null>(null)
@@ -91,6 +102,16 @@ export function CrewToday() {
       else setLoadFailed(true)
     }
     setLoading(false)
+
+    // Ride along with the day refresh so a gate photo the office attaches
+    // mid-morning appears on the next poll, exactly as a rewritten note does.
+    // Kept OUT of the branch above on purpose: it must not be able to affect
+    // whether the day renders, or in which of the three states.
+    try {
+      const res = await fetch(`/api/crew/media?date=${encodeURIComponent(today)}`)
+      const d = await res.json().catch(() => ({}))
+      if (alive.current && res.ok && d.ok) setMediaCounts(d.counts || {})
+    } catch { /* an optional affordance, never the day */ }
   }, [supabase, today])
 
   useEffect(() => {
@@ -313,6 +334,16 @@ export function CrewToday() {
                     <span className="whitespace-pre-wrap break-words">{stop.notes.trim()}</span>
                   </div>
                 )}
+
+                {/* …and what it LOOKS like. Reference photos/video the office
+                    attached to this visit, collapsed until tapped — see
+                    CrewStopMedia for why the URLs are signed at that moment and
+                    not at load. Renders nothing when nothing is attached. */}
+                <CrewStopMedia
+                  jobId={stop.id}
+                  photos={mediaCounts[stop.id]?.photos ?? 0}
+                  videos={mediaCounts[stop.id]?.videos ?? 0}
+                />
 
                 <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
                   <a

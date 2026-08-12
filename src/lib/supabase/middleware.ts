@@ -1,6 +1,41 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 import { resolveAppRole, routeFor, isOwnerPath, isCrewPath, isJoinPath } from '@/lib/crewAccess'
+import { readUser } from '@/lib/authState'
+
+/**
+ * A redirect that KEEPS whatever the session write-back put on the response.
+ *
+ * ⚠️ This is the bug that signed people out, and it is invisible by inspection.
+ * `supabase.auth.getUser()` silently refreshes an expired access token, and the
+ * new token pair comes back through the `setAll` hook below — which writes it
+ * onto `supabaseResponse`. `NextResponse.redirect()` builds a BRAND NEW response
+ * that carries none of it. So on any request that both refreshed AND redirected,
+ * the browser was sent away holding the OLD refresh token.
+ *
+ * Measured against production before the fix, same stale token, two paths:
+ * `/dashboard` (no redirect) answered with a fresh `sb-…-auth-token`; `/login`
+ * (redirect) answered with NO Set-Cookie at all — having rotated the token
+ * server-side regardless.
+ *
+ * What that costs, stated precisely, because the failure is a drift rather than
+ * a bang. Rotation IS on: every refresh mints a new token. A rotated-away token
+ * was measured as still ACCEPTED afterwards, and replaying one did NOT revoke
+ * the session — so a single dropped rotation does not sign anyone out on the
+ * spot. The damage is that the browser never ADVANCES: it re-presents the same
+ * ageing token on every subsequent request, refreshing again and again into a
+ * response nobody keeps. The session stops being renewed while appearing to be,
+ * and is stranded the moment that stale token finally stops being honoured —
+ * with no way back but the login form.
+ *
+ * Every redirect out of this file must go through here. verify:auth-session
+ * fails the build if a bare `NextResponse.redirect(` reappears.
+ */
+export function redirectPreservingSession(url: URL, carrying: NextResponse): NextResponse {
+  const redirected = NextResponse.redirect(url)
+  for (const cookie of carrying.cookies.getAll()) redirected.cookies.set(cookie)
+  return redirected
+}
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
@@ -26,8 +61,20 @@ export async function updateSession(request: NextRequest) {
     }
   )
 
-  const { data: { user } } = await supabase.auth.getUser()
+  // THREE answers, not two — see lib/authState. `unavailable` means the auth
+  // server could not be reached or would not answer; it is NOT a sign-out, and
+  // the one thing this middleware must never do is turn a dropped connection
+  // into a login screen.
+  const auth = await readUser(supabase)
+  const user = auth.kind === 'signed-in' ? auth.user : null
   const pathname = request.nextUrl.pathname
+
+  // Could not ASK. Pass the request through untouched, carrying the session
+  // cookies exactly as they arrived. The page's own server gate makes the same
+  // three-way distinction and renders "couldn't reach the server, try again"
+  // rather than either the dashboard or the login form — so an unverifiable
+  // request still reads no data, and a legitimate session still survives.
+  if (auth.kind === 'unavailable') return supabaseResponse
 
   // ── Which half of the app? ─────────────────────────────────────────────────
   // The owner's CRM (/dashboard) and Crew Mode (/crew) are different products
@@ -57,7 +104,7 @@ export async function updateSession(request: NextRequest) {
       // business yet, means the first-run /setup flow and an accidental empty
       // business. Carry the destination so sign-in returns them to it.
       if (target === '/login' && pathname !== '/login') url.searchParams.set('next', pathname)
-      return NextResponse.redirect(url)
+      return redirectPreservingSession(url, supabaseResponse)
     }
     // A signed-in user who is not linked yet may only be at /crew/join; every
     // other crew path already redirected there above.

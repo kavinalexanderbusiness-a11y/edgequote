@@ -3,6 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { displayAddress } from '@/lib/customers'
+// See lib/dropdownPlacement — an unbounded downward list covered the fixed
+// mobile Save bar and ate the tap.
+import { useDropdownPlacement, dropdownStyle } from '@/hooks/useDropdownPlacement'
 import type { Customer } from '@/types'
 import { User, Plus, ChevronDown, X, Check } from 'lucide-react'
 
@@ -38,6 +41,10 @@ export function CustomerPicker({
   const [open, setOpen] = useState(false)
   const [hi, setHi] = useState(0)
   const boxRef = useRef<HTMLDivElement>(null)
+  // The input's wrapper — boxRef also holds the label, which the list is not
+  // anchored to.
+  const anchorRef = useRef<HTMLDivElement>(null)
+  const place = useDropdownPlacement(anchorRef, open)
   const inputId = label ? label.toLowerCase().replace(/\s+/g, '-') : undefined
 
   // Keep the input text in sync with the externally-selected customer while the menu
@@ -102,7 +109,7 @@ export function CustomerPicker({
   return (
     <div className="flex flex-col gap-1.5" ref={boxRef}>
       {label && <label htmlFor={inputId} className="text-xs font-semibold text-ink-muted uppercase tracking-wide">{label}</label>}
-      <div className="relative">
+      <div className="relative" ref={anchorRef}>
         <User className="w-4 h-4 text-ink-faint absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
         <input
           id={inputId}
@@ -130,7 +137,10 @@ export function CustomerPicker({
           <ChevronDown className="w-4 h-4 text-ink-faint absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
         )}
         {open && (
-          <div className="absolute z-overlay mt-1 w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl overflow-hidden origin-top animate-pop max-h-72 overflow-y-auto overscroll-contain">
+          <div role="listbox" aria-label={label ? `${label} options` : 'Customers'}
+            data-eq-dropdown
+            style={dropdownStyle(place)}
+            className="absolute z-overlay w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl origin-top animate-pop overflow-y-auto overscroll-contain">
             {rows.length === 0 ? (
               <p className="px-3.5 py-2.5 text-sm text-ink-faint">{query.trim() ? `No customers match “${query.trim()}”.` : 'No customers yet — add one to start a conversation.'}</p>
             ) : rows.map((r, i) => (

@@ -23,16 +23,21 @@
 // records which bundle it came from. Section 4 proves the absence, and sections
 // 6–8 prove the behaviour against the live database.
 //
-// ⚠️ THE LIVE HALF WRITES. Sections 5–8 sign in as the owner, create ONE
-// fixture bundle (ZZ-VERIFY-BUNDLE) and ONE fixture quote (ZZ-VERIFY-BUNDLE-Q),
-// attack them, and delete both in a finally. A leftover from a killed run is
-// swept at the start of the next one. Everything it touches it made; it never
+// ⚠️ THE LIVE HALF WRITES — INTO A FIXTURE TENANT, NEVER THE REAL BOOK.
+// Sections 5–8 create ONE fixture bundle and ONE fixture quote, attack them, and
+// delete both in a finally. They used to do that in the OWNER's tenant, under
+// fixed names, reading the owner's own first `service_templates` row: two
+// concurrent runs deleted each other's fixtures by name, and a sibling guard
+// doing the same thing put 45 alerts in the owner's bell (see
+// scripts/lib/verify-fixture and verify-quote-options). Everything now lives in a
+// marked fixture tenant, every name carries a per-run id, and the catalogue entry
+// is one this guard made rather than one of the owner's real services. It never
 // asserts on the state of the real book (a guard that asserts on transient
 // production data is its own outage — see the portal-invoice incident).
 
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { openFixtureTenant, isSkipped, fixtureResidue, loadEnvLocal } from './lib/verify-fixture'
 import {
   bundleLines, bundleScope, bundleSummary, bundleTotal, captureBundleItems,
   cleanBundleName, priceBasis, resolveUnitPrice, templateIndex,
@@ -43,10 +48,7 @@ import {
 import { sumServiceLines } from '../src/lib/quoteServices'
 import type { ServiceBundleItem, ServiceTemplate } from '../src/types'
 
-for (const line of existsSync('.env.local') ? readFileSync('.env.local', 'utf8').split(/\r?\n/) : []) {
-  const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim())
-  if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].trim().replace(/^(['"])(.*)\1$/, '$2')
-}
+loadEnvLocal()
 
 let failures = 0
 const ok = (n: string) => console.log(`  ✓ ${n}`)
@@ -292,35 +294,28 @@ check('manager rows are thumb-sized', /min-h-\[44px\]/.test(MGR))
 // ═════════════════════════════════════════════════════════════════════════════
 // LIVE — the copy guarantee, against the real database
 // ═════════════════════════════════════════════════════════════════════════════
-const BUNDLE_NAME = 'ZZ-VERIFY-BUNDLE'
-const QUOTE_NUMBER = 'ZZ-VERIFY-BUNDLE-Q'
-
 async function live() {
   console.log('\n═══ 5. Live: setup ═══')
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  const email = process.env.PORTAL_RPC_OWNER_EMAIL
-  const password = process.env.PORTAL_RPC_OWNER_PASSWORD
-  if (!url || !anonKey || !email || !password) {
-    console.log('  – live checks skipped (no .env.local credentials); the static half above still ran')
+  // No owner credentials are read anywhere below this line. openFixtureTenant
+  // aborts the process outright if the tenant it reaches is not marked as a
+  // fixture tenant, so this guard cannot be configured to write into a real book.
+  const t = await openFixtureTenant('verify:service-bundles')
+  if (isSkipped(t)) {
+    console.log(`  – live checks skipped (${t.skipped}); the static half above still ran`)
     return
   }
-
-  const owner: SupabaseClient = createClient(url, anonKey)
-  const { data: auth, error: authErr } = await owner.auth.signInWithPassword({ email, password })
-  if (authErr || !auth?.user) { fail('sign in as the owner', authErr?.message ?? 'no user'); return }
-  const uid = auth.user.id
-  ok('signed in as the owner')
-
-  // Sweep any leftover from a killed run BEFORE creating this one.
-  await owner.from('service_bundles').delete().eq('user_id', uid).eq('name', BUNDLE_NAME)
-  await owner.from('quotes').delete().eq('user_id', uid).eq('quote_number', QUOTE_NUMBER)
+  const owner = t.db
+  const uid = t.uid
+  const BUNDLE_NAME = t.tag('VERIFY-BUNDLE')
+  const QUOTE_NUMBER = t.tag('VERIFY-BUNDLE-Q')
+  ok('signed in as an isolated fixture tenant')
 
   let bundleId: string | null = null
   let quoteId: string | null = null
   try {
-    const { data: tpl } = await owner.from('service_templates').select('*').eq('user_id', uid).limit(1).single()
-    if (!tpl) { fail('the business has a catalogue to bundle', 'no service_templates row'); return }
+    // The fixture tenant's OWN catalogue entry. This used to be the owner's first
+    // real service, whose name and rate then appeared on the fixture quote.
+    const tpl = await t.fixtureTemplate()
 
     const { data: b, error: bErr } = await owner.from('service_bundles')
       .insert({ user_id: uid, name: BUNDLE_NAME }).select('id').single()
@@ -394,13 +389,16 @@ async function live() {
     console.log('\n═══ 9. Live: cleanup ═══')
     if (quoteId) await owner.from('quotes').delete().eq('id', quoteId)
     if (bundleId) await owner.from('service_bundles').delete().eq('id', bundleId)
-    await owner.from('service_bundles').delete().eq('user_id', uid).like('name', BUNDLE_NAME + '%')
-    await owner.from('quotes').delete().eq('user_id', uid).eq('quote_number', QUOTE_NUMBER)
-    const { count: leftB } = await owner.from('service_bundles').select('id', { count: 'exact', head: true }).like('name', BUNDLE_NAME + '%')
-    const { count: leftQ } = await owner.from('quotes').select('id', { count: 'exact', head: true }).eq('quote_number', QUOTE_NUMBER)
-    check('the guard cleaned up after itself', (leftB ?? 0) === 0 && (leftQ ?? 0) === 0,
-      `${leftB} bundle(s) and ${leftQ} quote(s) remain — delete them by hand`)
-    await owner.auth.signOut().catch(() => {})
+    // close() sweeps this run's bundle, quote and catalogue entry, and signs out.
+    await t.close()
+    // Counted, not assumed — and scoped to THIS run's id, so a concurrent run's
+    // live fixtures can neither be deleted nor counted here. The old version swept
+    // and counted by the shared name, which is precisely how two runs failed each
+    // other.
+    const residue = await fixtureResidue(t)
+    const left = Object.entries(residue).filter(([, n]) => n !== 0)
+    check('the guard cleaned up after itself, in the fixture tenant', left.length === 0,
+      left.map(([k, n]) => `${n} ${k}`).join(', ') + ` still carry run id ${t.runId}`)
   }
 }
 
