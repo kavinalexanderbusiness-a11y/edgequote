@@ -756,6 +756,10 @@ export interface Payment {
   status: string
   paid_at: string | null
   stripe_payment_intent?: string | null
+  /** The quote/booking a PRE-INVOICE deposit secures (both recordDeposit legs
+   *  carry it). Null on ordinary invoice payments. The scheduling gate derives
+   *  "deposit received" from these rows — see lib/payments/depositGate. */
+  quote_id?: string | null
 }
 
 // Manual payment methods the owner can record (Stripe rows come from the webhook;
@@ -1120,6 +1124,24 @@ export interface Quote {
   selected_option_id: string | null
   selected_cadence: 'one_time' | 'weekly' | 'biweekly' | 'monthly' | null
   follow_up_count_at_acceptance: number | null
+  // ── Deposit-gated scheduling ───────────────────────────────────────────────
+  // The RULE: 'percent' of the accepted price, or a 'fixed' dollar figure, that
+  // must be COLLECTED (ledger, payments.quote_id rows) before the booking is
+  // secured. NULL pair = no deposit required — the quote behaves exactly as it
+  // always has. Readiness is DERIVED by lib/payments/depositGate on every read;
+  // there is deliberately no deposit_paid column to go stale after a refund.
+  deposit_type: 'percent' | 'fixed' | null
+  deposit_value: number | null
+  // The customer's scheduling PREFERENCE — a request, never an appointment.
+  // Written only by portal_set_scheduling_preference while status='accepted';
+  // a real visit exists only when the owner schedules one.
+  preferred_date: string | null
+  preferred_date_2: string | null
+  preferred_timing: 'morning' | 'afternoon' | null
+  preferred_note: string | null
+  // The owner's explicit "schedule without the required deposit" stamp. The
+  // deposit stays owed — this records the decision, it doesn't waive the money.
+  deposit_override_at: string | null
   service_template_id: string | null
   overgrowth_multiplier: number
   issued_date: string | null
@@ -1269,6 +1291,13 @@ export interface QuoteFormValues {
   // a service line ADDS to it. The database refuses a quote holding both.
   has_options: boolean
   options: QuoteOptionInput[]
+  // ── Scheduling deposit (deposit-gated scheduling) ─────────────────────────
+  // The owner's per-quote rule: require this much collected before the booking
+  // is secured. '' = off (the default — a normal quote gains no extra step).
+  // Value semantics follow deposit_type: percent of the accepted price, or
+  // fixed dollars. Readiness itself is DERIVED (lib/payments/depositGate).
+  deposit_type: '' | 'percent' | 'fixed'
+  deposit_value: number
 }
 
 export interface CustomerFormValues {

@@ -128,6 +128,69 @@ export async function createInvoiceCheckoutSession(
   }
 }
 
+// ── Scheduling-deposit Checkout (a QUOTE's booking deposit — no invoice yet) ──
+// The same hosted-Checkout discipline as the invoice session above (server-derived
+// amount, 30-minute expiry, secret-trim, generic errors), with DIFFERENT metadata:
+// `quote_deposit=1` + `quote_id`, never `invoice_id`. That key is what routes the
+// webhook to the pre-invoice deposit branch (recordDeposit's two-leg shape with
+// payments.quote_id) instead of the invoice branch — a deposit recorded against a
+// quote id in the invoice path would corrupt the ledger, so the two vocabularies
+// never share a field. The amount is the gate's `outstanding`, computed by the
+// caller from lib/payments/depositGate — this function is a door, not a rule.
+export async function createQuoteDepositCheckoutSession(
+  quote: { id: string; quote_number: string; service_type: string | null; user_id: string; customer_id: string | null },
+  opts: { successUrl: string; cancelUrl: string; chargeCents: number; chargeLabel: string },
+): Promise<CheckoutResult> {
+  if (!stripeEnabled()) return { ok: false, error: 'Payments are not set up yet.' }
+  const cents = Math.round(opts.chargeCents)
+  if (!Number.isFinite(cents) || cents <= 0) return { ok: false, error: 'There is no deposit outstanding to pay.' }
+
+  const form = new URLSearchParams()
+  form.set('mode', 'payment')
+  form.set('success_url', opts.successUrl)
+  form.set('cancel_url', opts.cancelUrl)
+  form.set('client_reference_id', quote.id)
+  form.set('line_items[0][quantity]', '1')
+  form.set('line_items[0][price_data][currency]', 'cad')
+  form.set('line_items[0][price_data][unit_amount]', String(cents))
+  // Named as the deposit it is — the checkout page is the one surface where our
+  // own copy can't add context, and a bare quote number over a part amount reads
+  // as the wrong figure at the exact moment the card is out.
+  form.set('line_items[0][price_data][product_data][name]', opts.chargeLabel)
+  if (quote.service_type) form.set('line_items[0][price_data][product_data][description]', quote.service_type.slice(0, 200))
+  // Same 30-minute expiry as the invoice session, same reason: the outstanding
+  // amount is re-derived from the ledger on every Pay tap, so a fresh session is
+  // always right where a stale overnight one could double-collect.
+  form.set('expires_at', String(Math.floor(Date.now() / 1000) + 30 * 60))
+  form.set('metadata[quote_deposit]', '1')
+  form.set('metadata[quote_id]', quote.id)
+  form.set('metadata[user_id]', quote.user_id)
+  if (quote.customer_id) form.set('metadata[customer_id]', quote.customer_id)
+  form.set('metadata[quote_number]', quote.quote_number)
+  form.set('payment_intent_data[metadata][quote_id]', quote.id)
+
+  const secret = process.env.STRIPE_SECRET_KEY?.trim()
+  if (!secret) { console.error('[stripe] STRIPE_SECRET_KEY missing/blank'); return { ok: false, error: GENERIC_PAYMENT_ERROR } }
+  try {
+    const res = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form,
+    })
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '')
+      console.error(`[stripe] deposit checkout session HTTP ${res.status}:`, detail.slice(0, 500))
+      return { ok: false, error: GENERIC_PAYMENT_ERROR }
+    }
+    const data = await res.json()
+    return { ok: true, url: data.url }
+  } catch (e) {
+    // e.message can embed the Authorization header (the key) — log, never return.
+    console.error('[stripe] deposit checkout session request failed:', e)
+    return { ok: false, error: GENERIC_PAYMENT_ERROR }
+  }
+}
+
 // ── Card-on-file AutoPay (SetupIntents + off-session PaymentIntents) ──────────
 // All raw REST, same secret-trim + server-only-logging discipline as above. These
 // power "save a card" (hosted Checkout in mode=setup) and the recurring off-session

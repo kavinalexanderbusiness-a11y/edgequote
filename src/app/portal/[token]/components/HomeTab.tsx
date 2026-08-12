@@ -17,7 +17,7 @@ import {
   CalendarClock, Check, CheckCircle2, ChevronDown, CreditCard, FileText, Globe,
   Loader2, Mail, MessageSquare, MessageSquarePlus,
   Navigation, PauseCircle, Phone, Receipt, Repeat, SkipForward, Star,
-  UserRound, XCircle,
+  UserRound, Wallet, XCircle,
 } from 'lucide-react'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
@@ -67,6 +67,13 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
   // disagree about what matters most.
   const topAction = primaryPortalAction(view.docItems, view.money)
   const payFirst = topAction?.kind === 'pay'
+  // The ranked engine put the SCHEDULING DEPOSIT first — an approved quote whose
+  // booking isn't secured yet. One card, one figure (the gate's outstanding — the
+  // same number the charge route will ask for), one action.
+  const depositDoc = topAction?.kind === 'pay-deposit' && topAction.focusDocId
+    ? view.docItems.find(d => d.rawId === topAction.focusDocId) || null
+    : null
+  const depositGate = depositDoc?.schedulingDeposit ?? null
   // When the ranked action names exactly ONE document, the real button belongs HERE.
   // This is the surface a texted link lands on; making someone tap through to a list
   // to find the thing they came to do is a tap we can spend for them. Several
@@ -172,6 +179,40 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
           ranked order above; each card keeps its whole-surface tap AND, when it names
           one document, carries the real action so the decision happens right here. */}
       {payFirst && dueBanner}
+      {/* The scheduling deposit — the one thing between an approved quote and a
+          confirmed booking. States stay separate on the card itself: APPROVED is
+          said as done, the DEPOSIT is asked for, and nothing claims a schedule. */}
+      {depositDoc && depositGate && (
+        <div className="rounded-card border border-amber-500/30 bg-amber-500/[0.06] card-lift animate-rise stagger-2">
+          <button type="button" onClick={() => actions.navigate('billing', { docsCat: 'quote', focusDocId: depositDoc.rawId })}
+            className="w-full text-left p-4 rounded-card hover:border-amber-500/50 active:scale-[0.99] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0"><Wallet className="w-4 h-4" /></div>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-ink">
+                    Deposit to secure scheduling · <span className="tabular-nums text-amber-400">{formatCurrency(depositGate.outstanding)}</span>
+                  </p>
+                  <p className="text-xs text-ink-muted">
+                    {depositGate.collected > 0
+                      ? `${formatCurrency(depositGate.collected)} of ${formatCurrency(depositGate.required)} received — your quote is approved`
+                      : 'Your quote is approved — your timing is confirmed once the deposit is received'}
+                  </p>
+                </div>
+              </div>
+              <span className="text-xs font-semibold text-amber-400 shrink-0">View →</span>
+            </div>
+          </button>
+          {actions.paymentsEnabled && !actions.paymentPending && (
+            <div className="px-4 pb-4">
+              <Button className="w-full" onClick={() => actions.payQuoteDeposit(depositDoc.rawId)} loading={actions.payingQuoteId === depositDoc.rawId}>
+                <CreditCard className="w-4 h-4" /> Pay {formatCurrency(depositGate.outstanding)} deposit
+              </Button>
+              <p className="text-[11px] text-ink-faint mt-1.5 text-center">Secure checkout by Stripe — you&rsquo;ll confirm on the next screen.</p>
+            </div>
+          )}
+        </div>
+      )}
       {awaiting.length > 0 && (
         <div className="rounded-card border border-amber-500/30 bg-amber-500/10 card-lift animate-rise stagger-2">
           <button type="button" onClick={() => actions.navigate('billing', { docsCat: 'quote' })}
@@ -277,10 +318,19 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
             {/* This is the screen someone stares at for days after saying yes. "Will contact
                 you shortly" gives them nothing to do but wonder — tell them where the answer
                 will land and that reaching out is welcome. */}
-            <p className="text-sm text-ink-muted mt-1">
-              We&rsquo;re arranging your first visit. The date will appear here as soon as it&rsquo;s booked
-              {biz && (biz.phone || biz.email_primary) ? ' — and you can call or email us any time using the card above.' : '.'}
-            </p>
+            {/* When a scheduling deposit is still owed, "we're arranging your
+                visit" is untrue — the ball is in the customer's court, and the
+                card above holds the action. Say which state they're actually in. */}
+            {depositGate ? (
+              <p className="text-sm text-ink-muted mt-1">
+                The {formatCurrency(depositGate.outstanding)} deposit above secures your booking — once it&rsquo;s received, we&rsquo;ll confirm your date and it will appear here.
+              </p>
+            ) : (
+              <p className="text-sm text-ink-muted mt-1">
+                We&rsquo;re arranging your first visit. The date will appear here as soon as it&rsquo;s booked
+                {biz && (biz.phone || biz.email_primary) ? ' — and you can call or email us any time using the card above.' : '.'}
+              </p>
+            )}
           </div>
         ) : (
           <div>

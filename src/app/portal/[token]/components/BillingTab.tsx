@@ -509,6 +509,84 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
           </ul>
         </div>
       )}
+      {/* ── The scheduling deposit ─────────────────────────────────────────────
+          Present only on an approved quote that requires one (model gates it).
+          THE five states stay distinct here: the quote is APPROVED (pill above),
+          the deposit is REQUIRED or RECEIVED (this panel — the ledger's answer,
+          never a stored flag), the preferred date below is a REQUEST, and
+          nothing says "scheduled" until a real visit exists. One obvious action:
+          the outstanding figure and its Pay button, or the received check. */}
+      {d.kind === 'quote' && d.schedulingDeposit && !d.schedulingDeposit.satisfied && (
+        <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/[0.07] px-3.5 py-3">
+          <p className="text-sm font-semibold text-ink flex items-center gap-1.5">
+            <Wallet className="w-4 h-4 text-amber-400 shrink-0" />
+            {formatCurrency(d.schedulingDeposit.outstanding)} deposit to secure scheduling
+          </p>
+          {/* Partial honesty: what arrived, what's still required — a $1,000
+              payment against $2,700 is progress, never satisfaction. */}
+          {d.schedulingDeposit.collected > 0 && (
+            <p className="text-[11px] text-ink-muted mt-1 tabular-nums">
+              {formatCurrency(d.schedulingDeposit.collected)} of {formatCurrency(d.schedulingDeposit.required)} received — {formatCurrency(d.schedulingDeposit.outstanding)} still required.
+            </p>
+          )}
+          <p className="text-[11px] text-ink-muted mt-1">
+            Your quote is approved. Your preferred timing will be confirmed after the required deposit is received.
+          </p>
+          {actions.paymentsEnabled && !actions.paymentPending ? (
+            <>
+              <Button className="w-full sm:w-auto mt-2.5"
+                onClick={() => actions.payQuoteDeposit(d.rawId)}
+                loading={actions.payingQuoteId === d.rawId}>
+                <CreditCard className="w-4 h-4" /> Pay {formatCurrency(d.schedulingDeposit.outstanding)} deposit
+              </Button>
+              <p className="text-[11px] text-ink-faint mt-1.5 flex items-center gap-1">
+                <ShieldCheck className="w-3 h-3 text-emerald-400 shrink-0" /> Secure checkout by Stripe — you&rsquo;ll confirm on the next screen.
+              </p>
+            </>
+          ) : !actions.paymentPending && (
+            // No online payments for this business — say how it actually works
+            // instead of rendering a Pay button that can't. The owner records
+            // e-transfer/cash through their ledger and this panel flips to
+            // "received" the moment they do.
+            <p className="text-[11px] text-ink-muted mt-2">
+              Pay by e-transfer or cash — see <span className="font-medium text-ink">Ways to pay</span> below, or message us. We&rsquo;ll record it as soon as it arrives.
+            </p>
+          )}
+        </div>
+      )}
+      {d.kind === 'quote' && d.schedulingDeposit?.satisfied && (
+        <div className="mt-3 rounded-xl border border-emerald-500/30 bg-emerald-500/[0.06] px-3.5 py-3">
+          <p className="text-sm font-semibold text-emerald-400 flex items-center gap-1.5">
+            <CheckCircle2 className="w-4 h-4 shrink-0" /> Deposit received — {formatCurrency(d.schedulingDeposit.collected)}
+          </p>
+          <p className="text-[11px] text-ink-muted mt-1">
+            {d.status === 'scheduled'
+              ? 'Your booking is secured — the visit is on your schedule.'
+              : 'Ready to schedule — we’ll confirm the final date with you.'}
+          </p>
+        </div>
+      )}
+      {/* ── Preferred timing — a REQUEST, never a booking ─────────────────────
+          Editable while the quote is 'accepted' (the RPC's own rule); once a
+          real visit exists the schedule speaks and changes go through Messages.
+          Deliberately available BEFORE the deposit is paid: telling us when
+          suits them costs nothing and loses nothing if payment comes later. */}
+      {d.kind === 'quote' && d.canEditPreference && (
+        <PreferenceForm doc={d} actions={actions} />
+      )}
+      {d.kind === 'quote' && !d.canEditPreference && d.status === 'scheduled' && d.preference && (d.preference.date || d.preference.timing) && (
+        <div className="mt-3 rounded-xl border border-border bg-bg-tertiary/40 px-3.5 py-2.5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Your requested timing</p>
+          <p className="text-xs text-ink-muted mt-1">
+            {[
+              d.preference.date ? formatDate(d.preference.date) : null,
+              d.preference.date2 ? `or ${formatDate(d.preference.date2)}` : null,
+              d.preference.timing === 'morning' ? 'mornings' : d.preference.timing === 'afternoon' ? 'afternoons' : null,
+            ].filter(Boolean).join(' · ')}
+          </p>
+          <p className="text-[11px] text-ink-faint mt-1">Your visit is booked — check the schedule above. Need a different day? Send us a message below.</p>
+        </div>
+      )}
       {/* An expired quote takes the Accept button's place — the customer is told plainly
           that the price no longer stands, rather than being left to tap a button that
           would commit them to a number we can't honour. No extension is offered here:
@@ -581,6 +659,118 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
         <MessageSquare className="w-3.5 h-3.5" /> Question about this {m.label.toLowerCase()}?
       </button>
       <DocActions filename={d.filename} getBlob={d.getBlob} />
+    </div>
+  )
+}
+
+// ── Preferred-timing form ────────────────────────────────────────────────────
+// A PREFERENCE, never self-booking — the copy says so twice and nothing here
+// touches the schedule. Saves through the ONE token-scoped RPC; the echoed-back
+// payload (a refetch inside savePreference) is the proof it kept, so the form
+// seeds from what the server last held and "Saved" only follows a real write.
+function PreferenceForm({ doc, actions }: { doc: DocItem; actions: PortalActions }) {
+  const pref = doc.preference
+  const today = localTodayISO()
+  const [date, setDate] = useState(pref?.date ?? '')
+  const [date2, setDate2] = useState(pref?.date2 ?? '')
+  const [timing, setTiming] = useState<'morning' | 'afternoon' | ''>(
+    pref?.timing === 'morning' || pref?.timing === 'afternoon' ? pref.timing : '')
+  const [note, setNote] = useState(pref?.note ?? '')
+  const [busy, setBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [localError, setLocalError] = useState<string | null>(null)
+  // Open the editor only when there's nothing saved yet — a saved preference
+  // shows as a quiet summary with an Edit affordance, not a form re-armed.
+  const hasSaved = !!(pref?.date || pref?.timing || pref?.note)
+  const [editing, setEditing] = useState(!hasSaved)
+
+  async function submit() {
+    setLocalError(null)
+    // The server refuses past dates too (with a UTC-tolerant margin); this is
+    // the friendly local check with the customer's own clock.
+    if (date && date < today) { setLocalError('That first date is in the past — pick a day from today on.'); return }
+    if (date2 && date2 < today) { setLocalError('That second date is in the past — pick a day from today on.'); return }
+    if (date2 && !date) { setLocalError('Add your first-choice date before a second one.'); return }
+    setBusy(true)
+    const ok = await actions.savePreference(doc.rawId, {
+      date: date || null, date2: date2 || null, timing: timing || null, note: note.trim() || null,
+    })
+    setBusy(false)
+    if (ok) { setSaved(true); setEditing(false); setTimeout(() => setSaved(false), 4000) }
+  }
+
+  if (!editing) {
+    return (
+      <div className="mt-3 rounded-xl border border-border bg-bg-tertiary/40 px-3.5 py-2.5">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint flex items-center gap-1.5">
+          Your preferred timing {saved && <span className="text-emerald-400 normal-case tracking-normal font-medium inline-flex items-center gap-1"><Check className="w-3 h-3" /> Saved</span>}
+        </p>
+        <p className="text-xs text-ink mt-1">
+          {[
+            pref?.date ? formatDate(pref.date) : null,
+            pref?.date2 ? `or ${formatDate(pref.date2)}` : null,
+            pref?.timing === 'morning' ? 'mornings' : pref?.timing === 'afternoon' ? 'afternoons' : null,
+          ].filter(Boolean).join(' · ') || 'No preference given yet'}
+        </p>
+        {pref?.note && <p className="text-[11px] text-ink-muted mt-0.5 whitespace-pre-wrap">{pref.note}</p>}
+        <p className="text-[11px] text-ink-faint mt-1">This is a request, not a booking — we&rsquo;ll confirm the final date with you.</p>
+        <button type="button" onClick={() => setEditing(true)}
+          className="mt-1.5 text-xs font-medium text-accent-text rounded hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+          Change preferred timing
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-3 rounded-xl border border-border bg-bg-tertiary/40 px-3.5 py-3">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">When would suit you?</p>
+      <p className="text-[11px] text-ink-muted mt-0.5 mb-2.5">
+        Optional — tell us your preferred timing and we&rsquo;ll aim for it. <span className="text-ink font-medium">We&rsquo;ll confirm the final date with you</span>; this doesn&rsquo;t book a visit by itself.
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+        <label className="block">
+          <span className="text-[11px] text-ink-muted">Preferred date</span>
+          <input type="date" value={date} min={today} onChange={e => setDate(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-border bg-bg-secondary px-2.5 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent/40 [color-scheme:dark]" />
+        </label>
+        <label className="block">
+          <span className="text-[11px] text-ink-muted">Second choice <span className="text-ink-faint">(optional)</span></span>
+          <input type="date" value={date2} min={date || today} onChange={e => setDate2(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-border bg-bg-secondary px-2.5 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent/40 [color-scheme:dark]" />
+        </label>
+      </div>
+      <div className="mt-2.5">
+        <span className="text-[11px] text-ink-muted">Time of day</span>
+        <div className="mt-1 grid grid-cols-3 gap-1.5" role="radiogroup" aria-label="Time of day preference">
+          {([['', 'No preference'], ['morning', 'Morning'], ['afternoon', 'Afternoon']] as const).map(([v, label]) => (
+            <button key={v || 'none'} type="button" role="radio" aria-checked={timing === v}
+              onClick={() => setTiming(v)}
+              className={cn('rounded-lg border px-2 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
+                timing === v ? 'border-accent bg-accent/[0.1] text-ink' : 'border-border bg-bg-secondary text-ink-muted hover:border-border-strong')}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <label className="block mt-2.5">
+        <span className="text-[11px] text-ink-muted">Anything we should know? <span className="text-ink-faint">(optional)</span></span>
+        <textarea value={note} maxLength={500} rows={2} onChange={e => setNote(e.target.value)}
+          placeholder="e.g. any weekday after 1pm works"
+          className="mt-1 w-full rounded-lg border border-border bg-bg-secondary px-2.5 py-2 text-sm text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 resize-none" />
+      </label>
+      {localError && <p className="text-[11px] text-red-400 mt-1.5">{localError}</p>}
+      <div className="mt-2.5 flex items-center gap-2">
+        <Button size="sm" onClick={submit} loading={busy} disabled={busy}>
+          <Check className="w-3.5 h-3.5" /> Save preference
+        </Button>
+        {hasSaved && (
+          <button type="button" onClick={() => { setEditing(false); setLocalError(null) }}
+            className="text-xs font-medium text-ink-muted rounded hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+            Cancel
+          </button>
+        )}
+      </div>
     </div>
   )
 }

@@ -37,6 +37,18 @@
 -- (an INTERNAL field that was reaching customers) and gains `completion_summary`
 -- (written FOR the customer). See the jobs line below for the full account.
 --
+-- ── 2026-08-11 (deposit-gated scheduling) — RECONCILED WITH LIVE, THEN EXTENDED ─
+-- pg_get_functiondef pulled FIRST (live was 6657 chars): live differed from this
+-- file ONLY in two trimmed comment blocks (identical functional SQL — the
+-- proof-of-work session applied a leaner-commented copy). Adopted the file's
+-- fuller comments as the canon and added, functionally:
+--   quotes   += accepted_price (the consented figure the deposit derives from),
+--               deposit_type, deposit_value (the scheduling-deposit rule),
+--               preferred_date, preferred_date_2, preferred_timing, preferred_note
+--               (the customer's own scheduling REQUEST, shown back to them)
+--   payments += quote_id (links a pre-invoice booking deposit to its quote so the
+--               portal can derive deposit-received honestly from the ledger)
+--
 -- ⛔ A SNAPSHOT OF A MOVING OBJECT ROTS BY DEFAULT. Documentation asking the next
 -- person to "query production first" did not survive two same-day changes. So the
 -- drift is now MACHINE-CHECKED: `npm run verify:portal-canonical` fails the build
@@ -136,6 +148,14 @@ begin
              qt.weekly_price, qt.biweekly_price, qt.monthly_price, qt.notes, qt.status, qt.created_at,
              qt.issued_date, qt.crew_size, qt.hours, qt.travel_fee, qt.valid_until,
              qt.selected_option_id,
+             -- accepted_price: what the customer CONSENTED to (selected option +
+             -- travel, snapshotted at approval) — the scheduling deposit derives
+             -- from this, never from a live total an edit could move.
+             -- deposit_type/deposit_value: the scheduling-deposit rule.
+             -- preferred_*: the customer's own scheduling REQUEST (a preference,
+             -- never a booking) — shown back so a reload keeps what they told us.
+             qt.accepted_price, qt.deposit_type, qt.deposit_value,
+             qt.preferred_date, qt.preferred_date_2, qt.preferred_timing, qt.preferred_note,
              coalesce((select json_agg(o order by o.sort_order) from (
                select qo.id, qo.name, qo.description, qo.price, qo.sort_order, qo.is_recommended
                from public.quote_options qo where qo.quote_id = qt.id
@@ -155,7 +175,9 @@ begin
     -- above has always carried. Deleting it re-opens a confirmed data exposure.
     -- deposit_amount / deposit_requested_at: the deposit surface reads these.
     'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, amount_paid, status, issued_date, due_date, notes, address, property_id, line_items, job_id, created_at, discount_type, discount_value, deposit_amount, deposit_requested_at from public.invoices where customer_id = v_customer and status <> 'draft') i), '[]'::json),
-    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, kind, invoice_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
+    -- quote_id: which booking a pre-invoice deposit secures. The portal derives
+    -- "deposit received" from these rows (signed cash sum), never from a flag.
+    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, kind, invoice_id, quote_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
     -- property_id, quote_id, price, is_initial_visit: buildServicePlans groups by
     -- property and uses jobVisitValue to separate initial from recurring price.
     --

@@ -22,6 +22,10 @@ import { settingsToSeasons } from '@/lib/seasons'
 // dependency is invoiceTotals, which this module already pulls.
 import { invoiceBalance } from '@/lib/payments/ledger'
 import { depositState, depositChargeAmount } from '@/lib/payments/deposit'
+// THE scheduling-deposit gate (lib/payments/depositGate) — the same engine the
+// /api/portal/quote-deposit charge route runs over the same ledger rows, so the
+// row's figures and Stripe's ask can never disagree.
+import { schedulingGate } from '@/lib/payments/depositGate'
 import { cashAmountOf, ledgerRowType } from '@/lib/payments/analytics'
 import { serviceLineTotals } from '@/lib/quoteServices'
 import { sortedOptions } from '@/lib/quoteOptions'
@@ -45,7 +49,13 @@ export interface PortalQuoteService { service_type: string; quantity: number; un
  *  price IS the whole job for whoever picks it, and the database refuses a quote
  *  carrying both kinds of row. */
 export interface PortalQuoteOption { id: string; name: string; description: string | null; price: number; sort_order: number; is_recommended: boolean }
-export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null; options?: PortalQuoteOption[] | null; selected_option_id?: string | null }
+// `accepted_price` is the consent snapshot (selected option + travel) — the
+// scheduling deposit derives from it, never from a total an edit could move.
+// `deposit_type`/`deposit_value` is the scheduling-deposit RULE; readiness is
+// derived from the ledger by lib/payments/depositGate, never stored anywhere.
+// `preferred_*` is the customer's own scheduling REQUEST — a preference, never
+// an appointment — echoed back so a reload keeps what they told us.
+export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null; options?: PortalQuoteOption[] | null; selected_option_id?: string | null; accepted_price?: number | null; deposit_type?: string | null; deposit_value?: number | null; preferred_date?: string | null; preferred_date_2?: string | null; preferred_timing?: string | null; preferred_note?: string | null }
 // `property_id` null is the HONEST answer for an invoice spanning several properties —
 // never infer one, or a combined invoice prints one address as if it were the whole bill.
 export interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; property_id?: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null; amount_paid?: number | null; deposit_amount?: number | null; deposit_requested_at?: string | null }
@@ -60,7 +70,7 @@ export interface PortalInvoice { id: string; invoice_number: string; service_typ
 export interface PortalJob { id: string; recurrence_id: string | null; property_id: string | null; quote_id: string | null; price: number | null; is_initial_visit: boolean | null; service_type: string | null; title: string; scheduled_date: string; status: string; on_my_way_at: string | null; started_at: string | null; completed_at: string | null; completion_summary: string | null }
 export interface PortalRec { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null; start_date: string | null; end_date: string | null; end_count: number | null }
 export interface PortalPhoto { id: string; job_id: string | null; storage_path: string; kind: string; caption: string | null; taken_at: string }
-export interface PortalPayment { id: string; amount: number; status: string; paid_at: string | null; provider: string; invoice_id: string | null; created_at: string; kind?: string }
+export interface PortalPayment { id: string; amount: number; status: string; paid_at: string | null; provider: string; invoice_id: string | null; quote_id?: string | null; created_at: string; kind?: string }
 export interface PortalCard { brand: string | null; last4: string | null; exp_month: number | null; exp_year: number | null }
 // The owner's OWN catalogue (service_templates), surfaced by get_portal_data. This
 // is what makes ONE portal fit any field-service business — and it is also the
@@ -594,6 +604,24 @@ export interface DocItem { id: string; rawId: string; kind: DocKind; number: str
   /** The option the customer approved, once they have. Null while the choice is
    *  still open — which is the fact the Approve button is gated on. */
   selectedOptionId?: string | null
+  /**
+   * The SCHEDULING-DEPOSIT gate, present only on a quote that requires one and
+   * has been approved (or scheduled). Every figure is lib/payments/depositGate's
+   * answer over the same ledger rows the charge route reads — the row can never
+   * quote money the server won't ask for. `satisfied` is the ONE fact that
+   * separates "Deposit required" from "Deposit received"; scheduling itself is
+   * still the business's call either way.
+   */
+  schedulingDeposit?: {
+    required: number; collected: number; outstanding: number
+    percent: number | null; satisfied: boolean
+  }
+  /** The customer's scheduling preference, echoed back. Editable while the
+   *  quote is 'accepted'; read-only once a real visit exists. */
+  preference?: { date: string | null; date2: string | null; timing: string | null; note: string | null }
+  /** True while portal_set_scheduling_preference will still accept a write —
+   *  i.e. status is exactly 'accepted'. The form hides itself after that. */
+  canEditPreference?: boolean
   explain?: string[]; propertyId?: string | null; address?: string | null
   /**
    * What the Pay button collects RIGHT NOW — depositChargeAmount's answer, the
@@ -619,10 +647,22 @@ export function buildDocItems(opts: {
   todayISO: string
   renderers: DocBlobRenderers
   onInvoiceOpen?: (invoiceId: string) => void
+  /** The customer's ledger rows — the scheduling-deposit gate derives from these. */
+  payments?: PortalPayment[]
 }): DocItem[] {
-  const { quotes, invoices, properties, business, todayISO, renderers, onInvoiceOpen } = opts
+  const { quotes, invoices, properties, business, todayISO, renderers, onInvoiceOpen, payments } = opts
   const gstPct = Number(business?.gst_percent) || 0
   const propsById = new Map(properties.map(p => [p.id, p]))
+  // Cash rows by the quote they secure. The gate engine applies isCashRow itself;
+  // this only groups. Rows with no quote_id (ordinary invoice payments) drop out.
+  const depositRowsByQuote = new Map<string, PortalPayment[]>()
+  for (const p of payments || []) {
+    if (p.quote_id) {
+      const list = depositRowsByQuote.get(p.quote_id) || []
+      list.push(p)
+      depositRowsByQuote.set(p.quote_id, list)
+    }
+  }
 
   const q: DocItem[] = quotes.map(qq => {
     // The property THIS quote is for. Null for a legacy quote with no
@@ -697,6 +737,25 @@ export function buildDocItems(opts: {
     // THE shared expiry engine — the same call the owner's screens make.
     const display = displayQuoteStatus({ status: qq.status as QuoteStatus, valid_until: qq.valid_until }, todayISO)
     const expired = display === 'expired'
+    // ── The scheduling-deposit gate ──────────────────────────────────────────
+    // THE engine's answer (lib/payments/depositGate — the same call the charge
+    // route makes over the same rows), surfaced only once the quote is approved
+    // or scheduled: before consent there is nothing to secure, and a declined
+    // quote gates nothing. A quote with no rule carries no gate at all — it
+    // renders exactly as it did before this feature existed.
+    const gateActive = qq.status === 'accepted' || qq.status === 'scheduled'
+    const gate = gateActive ? schedulingGate(qq, depositRowsByQuote.get(qq.id)) : null
+    const schedulingDeposit = gate && gate.required > 0 ? {
+      required: gate.required, collected: gate.collected, outstanding: gate.outstanding,
+      percent: gate.percent, satisfied: gate.status === 'satisfied',
+    } : undefined
+    // The preference travels on any live approved/scheduled quote (so a reload
+    // shows it back); the FORM only opens while the RPC will still accept a
+    // write — status exactly 'accepted'.
+    const preference = gateActive ? {
+      date: qq.preferred_date ?? null, date2: qq.preferred_date_2 ?? null,
+      timing: qq.preferred_timing ?? null, note: qq.preferred_note ?? null,
+    } : undefined
     return {
       id: 'q' + qq.id, rawId: qq.id, kind: 'quote' as const, number: qq.quote_number, title: qq.service_type || 'Quote',
       date: qq.issued_date || qq.created_at, status: display, expiredOn: expired ? qq.valid_until || undefined : undefined,
@@ -706,6 +765,7 @@ export function buildDocItems(opts: {
       payAmount: 0, payIsDeposit: false,
       filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(qq), lines, planOptions,
       options, selectedOptionId: qq.selected_option_id ?? null,
+      schedulingDeposit, preference, canEditPreference: qq.status === 'accepted',
       // Identity, not decoration: the address tells a landlord which of their six
       // quotes this is. It never becomes the row's title — service_type is the
       // real disambiguator for same-property customers.
@@ -1008,7 +1068,7 @@ export function refundedTotal(payments: PortalPayment[]): number {
 // identity so a dismissal sticks until the situation actually changes.
 export interface PortalNextAction {
   key: string
-  kind: 'pay' | 'approve'
+  kind: 'pay' | 'approve' | 'pay-deposit'
   headline: string
   docsCat: 'invoice' | 'quote'
   focusDocId: string | null
@@ -1029,6 +1089,19 @@ export function primaryPortalAction(docItems: DocItem[], money: MoneySummary): P
   }
   if (owing.some(d => d.status === 'overdue')) {
     return { key: `overdue:${money.due}:${owing.length}`, kind: 'pay', headline: `Past due: ${formatCurrency(money.due)}`, docsCat: 'invoice', focusDocId: oneOwing }
+  }
+  // An approved quote whose SCHEDULING DEPOSIT is still owed — the one thing
+  // standing between the customer and a confirmed booking, so it outranks an
+  // ordinary balance (which has its own due date) and sits only behind overdue.
+  // The figure is the gate's `outstanding` (the same number the charge route
+  // will ask for), so a partial payment shrinks the headline honestly.
+  const depositDue = docItems.find(d => d.kind === 'quote' && d.schedulingDeposit && !d.schedulingDeposit.satisfied && d.schedulingDeposit.outstanding > 0)
+  if (depositDue?.schedulingDeposit) {
+    return {
+      key: `qdeposit:${depositDue.schedulingDeposit.outstanding}:${depositDue.rawId}`, kind: 'pay-deposit',
+      headline: `Pay ${formatCurrency(depositDue.schedulingDeposit.outstanding)} deposit to secure scheduling`,
+      docsCat: 'quote', focusDocId: depositDue.rawId,
+    }
   }
   if (money.due > 0 && owing.length > 0) {
     return { key: `due:${money.due}:${owing.length}`, kind: 'pay', headline: `Balance due: ${formatCurrency(money.due)}`, docsCat: 'invoice', focusDocId: oneOwing }
@@ -1170,7 +1243,7 @@ export function buildPortalView(data: PortalData, todayISO: string, renderers: D
     properties,
     multiProperty: properties.length > 1,
     hasProperty,
-    docItems: buildDocItems({ quotes: data.quotes, invoices: data.invoices, properties, business: data.business, todayISO, renderers, onInvoiceOpen }),
+    docItems: buildDocItems({ quotes: data.quotes, invoices: data.invoices, properties, business: data.business, todayISO, renderers, onInvoiceOpen, payments: data.payments }),
     money: moneySummary(data.invoices, data.business),
     propertyModels: buildPropertyModels(data, derived, photosByJob),
     customerSince: customerSinceYear(data),

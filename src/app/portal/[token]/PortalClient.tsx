@@ -7,6 +7,9 @@ import { confirm as confirmDialog } from '@/lib/confirm'
 import { ConfirmHost } from '@/components/ui/ConfirmHost'
 import { cn, formatCurrency, localTodayISO } from '@/lib/utils'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
+// THE scheduling-deposit rule (lib/payments/depositGate) — the approve dialog and
+// success banner name the exact ask the charge route will make, from one engine.
+import { requiredDeposit } from '@/lib/payments/depositGate'
 import type { QuoteStatus } from '@/types'
 import { renderPortalInvoiceBlob, renderPortalQuoteBlob } from '@/lib/portalPdf'
 import {
@@ -77,6 +80,11 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   // it yet; 'confirmed' = a new payment row actually landed. Never conflate the two.
   const [justPaid, setJustPaid] = useState<'confirming' | 'confirmed' | null>(null)
   const [justAccepted, setJustAccepted] = useState(false)
+  // The scheduling deposit the just-approved quote asks for (engine-derived at
+  // accept time) — the success banner names the NEXT step instead of promising
+  // "nothing else to do" about a booking that still needs securing.
+  const [acceptedDepositAsk, setAcceptedDepositAsk] = useState<number | null>(null)
+  const [payingQuoteId, setPayingQuoteId] = useState<string | null>(null)
   // Billing opens pre-filtered to what the customer came for (the quote signpost
   // filters to quotes, the balance path to invoices).
   const [docsCat, setDocsCat] = useState<'all' | 'quote' | 'invoice'>('all')
@@ -408,6 +416,15 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       : svc
         ? `${lineCount > 1 ? `${svc} + ${lineCount - 1} more service${lineCount > 2 ? 's' : ''}` : svc} for ${formatCurrency(amount)}`
         : formatCurrency(amount)
+    // The scheduling deposit THIS approval will call for — the engine's own
+    // figure over the amount being consented to (for an options quote, the
+    // chosen option + travel: identical to what accepted_price will become).
+    // Named at the moment of commitment: "approving doesn't charge you" must
+    // not stand unqualified when a deposit request is the very next screen.
+    const depositAsk = requiredDeposit({
+      status: q.status, total: amount, accepted_price: amount,
+      deposit_type: q.deposit_type ?? null, deposit_value: q.deposit_value ?? null,
+    })
     const confirmed = await confirmDialog({
       title: chosenOpt ? `Approve ${chosenOpt.name} — ${formatCurrency(amount)}?` : `Approve ${formatCurrency(amount)}?`,
       message: [
@@ -419,7 +436,9 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
           ? `The other ${freshOpts.length - 1} option${freshOpts.length > 2 ? 's aren’t' : ' isn’t'} ordered and won’t be charged.`
           : null,
         plan,
-        `Approving doesn't charge you — we'll confirm a date with you first, and you'll only get an invoice after the work is done.`,
+        depositAsk > 0
+          ? `Approving doesn't charge you. A ${formatCurrency(depositAsk)} deposit is asked for next to secure your booking — we'll confirm your date once it's received.`
+          : `Approving doesn't charge you — we'll confirm a date with you first, and you'll only get an invoice after the work is done.`,
       ].filter(Boolean).join(' '),
       confirmLabel: chosenOpt ? `Approve ${chosenOpt.name}` : `Approve ${formatCurrency(amount)}`,
     })
@@ -443,7 +462,10 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
           ? { ...q, status: 'accepted', ...(chosenOpt ? { selected_option_id: chosenOpt.id } : {}) }
           : q),
       } : d)
-      // Close the loop — the customer must SEE their approval registered.
+      // Close the loop — the customer must SEE their approval registered, and
+      // when a deposit stands between them and a booked date, the banner names
+      // it rather than promising there's nothing left to do.
+      setAcceptedDepositAsk(depositAsk > 0 ? depositAsk : null)
       setJustAccepted(true)
     } else {
       // A falsy result is NOT proof of failure. portal_accept_quote only matches a
@@ -518,6 +540,51 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   function markInvoiceViewed(invoiceId: string) {
     supabase.rpc('portal_mark_invoice_viewed', { p_token: token, p_invoice_id: invoiceId }).then(() => {}, () => {})
   }
+  // Start Stripe checkout for a quote's SCHEDULING DEPOSIT. The mirror of pay()
+  // below — same re-entry guard, same "the server decided" handling of 409s. The
+  // amount is never sent: /api/portal/quote-deposit derives the outstanding ask
+  // from the ledger server-side.
+  async function payQuoteDeposit(quoteId: string) {
+    if (payingQuoteId || payingId) return // never start two checkout sessions
+    setPayingQuoteId(quoteId)
+    try {
+      const res = await fetch('/api/portal/quote-deposit', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, quoteId }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (res.ok && d.url) { window.location.href = d.url; return } // redirecting to Stripe — stay disabled
+      // 404/409 = the server decided there is nothing to collect (already paid in
+      // another tab, or the owner recorded an e-transfer) — resync and say so.
+      if (res.status === 404 || res.status === 409) {
+        await load()
+        setActionError('This deposit looks already settled — we’ve refreshed your billing below. If you think that’s wrong, message us and we’ll check.')
+      } else {
+        setActionError('We couldn’t start the payment — please try again in a moment, or contact us and we’ll sort it out.')
+      }
+    } catch {
+      setActionError('We couldn’t start the payment — please try again in a moment, or contact us and we’ll sort it out.')
+    }
+    setPayingQuoteId(null) // only reached on failure — a successful redirect left the page
+  }
+
+  // Save (or clear) the customer's scheduling preference — token-scoped RPC, one
+  // writer. NOT optimistic: the form reports what the server kept, and a refetch
+  // makes the echoed-back preference the proof it saved.
+  async function savePreference(quoteId: string, pref: { date: string | null; date2: string | null; timing: string | null; note: string | null }): Promise<boolean> {
+    setActionError(null)
+    const { data: ok, error } = await supabase.rpc('portal_set_scheduling_preference', {
+      p_token: token, p_quote_id: quoteId,
+      p_date: pref.date, p_date_2: pref.date2, p_timing: pref.timing, p_note: pref.note,
+    })
+    if (error || !ok) {
+      setActionError('We couldn’t save your preferred timing — please check the dates and try again.')
+      return false
+    }
+    await load()
+    return true
+  }
+
   async function pay(invoiceId: string) {
     if (payingId) return // re-entry guard — never start two checkout sessions
     setPayingId(invoiceId)
@@ -578,6 +645,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   const biz = data.business
   const actions: PortalActions = {
     token, accept, accepting, pay, payingId, paymentsEnabled,
+    payQuoteDeposit, payingQuoteId, savePreference,
     paymentPending: justPaid === 'confirming',
     request: (message: string) => request(message),
     submitRequest, photoUrl, markInvoiceViewed, refresh: load,
@@ -711,13 +779,19 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
           {justAccepted && (
             <div className="mb-3 rounded-card border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-sm font-medium px-4 py-3 flex items-start justify-between gap-3">
               {/* Say who will reach out and where the answer will appear, so they
-                  can check instead of wait. */}
+                  can check instead of wait — and when a deposit stands between
+                  approval and a booked date, name that step instead of promising
+                  there's nothing left to do. */}
               <span className="flex items-start gap-2"><CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>Quote approved — thank you!{' '}
-                  <span className="font-normal">{biz?.company_name || 'We'}&rsquo;ll contact you to agree a date. Once it&rsquo;s booked, your visit appears on this page — nothing else to do for now.</span>
+                  <span className="font-normal">
+                    {acceptedDepositAsk != null
+                      ? <>Next step: pay the {formatCurrency(acceptedDepositAsk)} deposit below to secure your booking — your preferred timing is confirmed once it&rsquo;s received.</>
+                      : <>{biz?.company_name || 'We'}&rsquo;ll contact you to agree a date. Once it&rsquo;s booked, your visit appears on this page — nothing else to do for now.</>}
+                  </span>
                 </span>
               </span>
-              <button onClick={() => setJustAccepted(false)} aria-label="Dismiss" className="shrink-0 opacity-70 hover:opacity-100"><X className="w-4 h-4" /></button>
+              <button onClick={() => { setJustAccepted(false); setAcceptedDepositAsk(null) }} aria-label="Dismiss" className="shrink-0 opacity-70 hover:opacity-100"><X className="w-4 h-4" /></button>
             </div>
           )}
           {actionError && (
@@ -738,11 +812,11 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
             if (!a || a.key === dismissedAction) return null
             return (
               <div className={cn('mb-3 rounded-card border flex items-center gap-1 pr-1',
-                a.kind === 'pay' ? 'border-amber-500/30 bg-amber-500/[0.08]' : 'border-accent/25 bg-accent/[0.08]')}>
+                a.kind !== 'approve' ? 'border-amber-500/30 bg-amber-500/[0.08]' : 'border-accent/25 bg-accent/[0.08]')}>
                 <button type="button"
                   onClick={() => actions.navigate('billing', { docsCat: a.docsCat, focusDocId: a.focusDocId })}
                   className="flex-1 flex items-center gap-2.5 px-4 py-3 text-left rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                  {a.kind === 'pay' ? <Wallet className="w-4 h-4 shrink-0 text-amber-400" /> : <FileText className="w-4 h-4 shrink-0 text-accent-text" />}
+                  {a.kind !== 'approve' ? <Wallet className="w-4 h-4 shrink-0 text-amber-400" /> : <FileText className="w-4 h-4 shrink-0 text-accent-text" />}
                   <span className="text-sm font-medium text-ink">{a.headline}</span>
                   <ChevronRight className="w-4 h-4 text-ink-faint ml-auto shrink-0" />
                 </button>

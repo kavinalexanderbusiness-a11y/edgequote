@@ -20,6 +20,7 @@ import { headlineOptionPrice, optionRowsFor } from '@/lib/quoteOptions'
 import { LeadPrefillPayload, LEAD_PREFILL_KEY, closeOpenLeads } from '@/lib/leads'
 import { toast } from '@/lib/toast'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
+import { depositRuleFromForm } from '@/lib/payments/depositGate'
 
 interface MeasurementPayload {
   customerId: string | null
@@ -246,7 +247,17 @@ export default function NewQuotePage() {
       return false   // nothing saved — keep the autosave draft
     }
 
+    // Scheduling-deposit rule — the ONE shared mapping (lib/payments/depositGate).
+    // Invalid input stops the save with the reason; it is never silently dropped,
+    // because a rule the owner believes is set and isn't is an unsecured booking.
+    const depositRule = depositRuleFromForm(values.deposit_type, values.deposit_value)
+    if (!depositRule.ok) {
+      toast.error(`Scheduling deposit: ${depositRule.error} Nothing was saved.`)
+      return false   // nothing saved — keep the autosave draft
+    }
+
     const { data, error } = await supabase.from('quotes').insert({
+      ...depositRule.patch,
       quote_number,
       // ADR-002 provenance. `price_source: 'engine'` is truthful for every quote this
       // form writes — even one the owner priced by hand, because `suggested_price` was

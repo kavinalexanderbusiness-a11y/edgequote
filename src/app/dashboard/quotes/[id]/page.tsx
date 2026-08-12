@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Quote, Customer, QuoteFormValues, QuoteService, QuoteOption, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, STATUS_LABELS } from '@/types'
+import { Quote, Customer, QuoteFormValues, QuoteService, QuoteOption, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, STATUS_LABELS, PAYMENT_METHODS } from '@/types'
 import { sumServiceLines, serviceLineTotals, splitServices, recentTemplateIdsFrom } from '@/lib/quoteServices'
 import {
   activeOption, headlineOptionPrice, optionRowsFor, optionValueBasis, optionValueBasisLabel,
@@ -34,7 +34,15 @@ import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { servicePricingKind } from '@/lib/servicePricing'
 import { saveManual } from '@/lib/measure/data'
-import { AlertTriangle, Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Camera, Globe, CalendarClock, Layers } from 'lucide-react'
+// THE scheduling-deposit gate (lib/payments/depositGate): required/collected/
+// outstanding derived from the ledger on every read — the same engine the portal
+// and the charge route run, so this page can never disagree with them.
+import {
+  depositRuleFromForm, gateBlocksScheduling, loadQuoteDepositRows, schedulingGate,
+  schedulingPreferenceLine, stampDepositOverride, type GateLedgerRow,
+} from '@/lib/payments/depositGate'
+import { recordDeposit } from '@/lib/payments/ledger'
+import { AlertTriangle, Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Camera, Globe, CalendarClock, Layers, Wallet, CheckCircle2 } from 'lucide-react'
 
 export default function QuoteDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -71,6 +79,17 @@ export default function QuoteDetailPage() {
   const [existingInvoiceNumber, setExistingInvoiceNumber] = useState<string | null>(null)
   const [savedCustomerMsg, setSavedCustomerMsg] = useState<string | null>(null)
   const [dupMsg, setDupMsg] = useState<string | null>(null)
+  // ── Scheduling-deposit gate ────────────────────────────────────────────────
+  // The quote's deposit ledger rows (payments.quote_id). null = not loaded yet
+  // OR the read failed — and an unreadable ledger must NEVER display as "no
+  // deposit received", so the panel says "checking…" instead of a verdict.
+  const [depositRows, setDepositRows] = useState<GateLedgerRow[] | null>(null)
+  const [depositRowsError, setDepositRowsError] = useState<string | null>(null)
+  // The offline-payment recorder (e-transfer / cash / card-elsewhere).
+  const [recordingDeposit, setRecordingDeposit] = useState(false)
+  const [depAmount, setDepAmount] = useState('')
+  const [depMethod, setDepMethod] = useState('etransfer')
+  const [depBusy, setDepBusy] = useState(false)
 
 
   const supabase = createClient()
@@ -143,10 +162,29 @@ export default function QuoteDetailPage() {
       setSettings(sRes.data)
       setExistingInvoiceNumber((invRes.data?.[0] as { invoice_number: string } | undefined)?.invoice_number ?? null)
       setBundleNames(((bundleRes.data as { name: string }[] | null) || []).map(b => b.name.toLowerCase()))
+      // The deposit ledger — only fetched when a rule exists (every other quote
+      // pays nothing for the feature). A failed read stays null: "couldn't
+      // check" must never render as "nothing received".
+      const qRow = qRes.data as Quote | null
+      if (qRow?.deposit_type) {
+        const { rows, error } = await loadQuoteDepositRows(supabase, qRow.id)
+        if (error) setDepositRowsError(error)
+        else setDepositRows(rows)
+      } else {
+        setDepositRows([])
+      }
       setLoading(false)
     }
     load()
   }, [id])
+
+  // Re-derive the gate's ledger picture (post-record / post-refresh).
+  async function refreshDepositRows(quoteId: string) {
+    const { rows, error } = await loadQuoteDepositRows(supabase, quoteId)
+    if (error) { setDepositRowsError(error); return }
+    setDepositRowsError(null)
+    setDepositRows(rows)
+  }
 
   // Resolves FALSE when the update failed, so the builder keeps the autosave
   // draft rather than clearing it on a save that never landed.
@@ -267,10 +305,20 @@ export default function QuoteDetailPage() {
       }
     }
 
+    // Scheduling-deposit rule — the ONE shared mapping (lib/payments/depositGate),
+    // same fail-closed shape as provenance: an invalid rule stops the save with
+    // the reason rather than silently writing a different gate than the owner set.
+    const depositRule = depositRuleFromForm(values.deposit_type, values.deposit_value)
+    if (!depositRule.ok) {
+      toast.error(`Scheduling deposit: ${depositRule.error} Nothing was saved.`)
+      return false
+    }
+
     const { data, error } = await supabase
       .from('quotes')
       .update({
         ...provenance,
+        ...depositRule.patch,
         customer_id: customerId,
         customer_name: customerName,
         property_id: propertyId,
@@ -502,6 +550,34 @@ export default function QuoteDetailPage() {
 
   async function handleScheduleJob(dateOverride?: string) {
     if (!quote) return
+    // ── The scheduling guard ───────────────────────────────────────────────
+    // An accepted quote whose required deposit hasn't been collected does not
+    // schedule silently. The owner CAN — emergencies are real — but only through
+    // an explicit, named override that stamps deposit_override_at (the audit
+    // record) and leaves the money honestly still owed. Derived fresh from the
+    // ledger AT CLICK TIME, never from the page's possibly-stale rows: the
+    // customer may have paid while this tab sat open.
+    if (quote.deposit_type && quote.status === 'accepted') {
+      const { rows, error: rowsErr } = await loadQuoteDepositRows(supabase, quote.id)
+      if (rowsErr) {
+        toast.error('Couldn’t check the deposit ledger — try again. (Scheduling was not started: an unchecked deposit must not schedule as if paid.)')
+        return
+      }
+      setDepositRows(rows)
+      const gate = schedulingGate(quote, rows)
+      if (gateBlocksScheduling(quote, gate)) {
+        const ok = await confirmDialog({
+          title: 'Schedule without the required deposit?',
+          message: `This quote requires a ${formatCurrency(gate.required)} deposit before scheduling is confirmed, and ${gate.collected > 0 ? `only ${formatCurrency(gate.collected)} has been received — ${formatCurrency(gate.outstanding)} is still outstanding` : 'none of it has been received yet'}. Scheduling anyway books the visit with the deposit still owed — the customer's portal will keep asking for it.`,
+          confirmLabel: 'Schedule without deposit',
+          destructive: true,
+        })
+        if (!ok) return
+        // The audit stamp — records that this was a decision, not an oversight.
+        // Non-fatal on failure: the confirmed intent stands either way.
+        await stampDepositOverride(supabase, quote.id)
+      }
+    }
     setScheduling(true)
     try {
       const { data: { user } } = await supabase.auth.getUser()
@@ -935,6 +1011,9 @@ export default function QuoteDetailPage() {
             id: o.id, name: o.name, description: o.description || '',
             price: Number(o.price) || 0, is_recommended: !!o.is_recommended,
           })),
+          // The scheduling-deposit rule survives the edit round-trip. '' = none.
+          deposit_type: (quote.deposit_type ?? '') as '' | 'percent' | 'fixed',
+          deposit_value: Number(quote.deposit_value) || 0,
         }}
         // Non-null ⇒ the editor goes read-only and handleUpdate leaves the rows
         // alone. What was approved is not silently rewritten.
@@ -1101,20 +1180,143 @@ export default function QuoteDetailPage() {
         </Banner>
       )}
 
-      {quote.status === 'accepted' && (
-        <div className="flex items-center justify-between flex-wrap gap-3 text-sm bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
-          <span className="text-ink font-medium flex items-center gap-2">
-            <CalendarPlus className="w-4 h-4 shrink-0 text-accent-text" /> Accepted — this job isn’t scheduled yet.
-          </span>
-          <div className="flex items-center gap-2">
-            {/* Honest label — this books the job on TODAY's route (move it after). */}
-            <Button size="sm" onClick={() => handleScheduleJob()} loading={scheduling}>
-              <CalendarPlus className="w-3.5 h-3.5" /> Schedule for today
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => router.push(`/dashboard/schedule?quote=${quote.id}`)}>Pick a day</Button>
+      {(quote.status === 'accepted' || quote.status === 'scheduled') && (() => {
+        // The gate — derived from the ledger rows loaded above. rowsUnknown means
+        // the read failed: say "checking" rather than a verdict either way.
+        const rowsUnknown = quote.deposit_type ? depositRows == null : false
+        const gate = schedulingGate(quote, depositRows ?? [])
+        const prefLine = schedulingPreferenceLine(quote, formatDate)
+        // A SCHEDULED quote that still owes its deposit — the override case, or a
+        // payment that bounced after booking. The ask stays visible and recordable;
+        // only the "schedule anyway" affordance drops (it already happened).
+        const scheduledStillOwed = quote.status === 'scheduled'
+          && gate.required > 0 && gate.status !== 'satisfied'
+        if (quote.status === 'scheduled' && !scheduledStillOwed && !rowsUnknown) return null
+        // ── Deposit still owed: the banner leads with the money, not the button ─
+        if (quote.deposit_type && (rowsUnknown || gateBlocksScheduling(quote, gate) || scheduledStillOwed)) {
+          return (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.07] px-4 py-3 space-y-2">
+              <p className="text-sm font-medium text-ink flex items-center gap-2">
+                <Wallet className="w-4 h-4 shrink-0 text-amber-400" />
+                {rowsUnknown
+                  ? `${quote.status === 'scheduled' ? 'Scheduled' : 'Accepted'} — checking the deposit ledger…`
+                  : scheduledStillOwed
+                    ? <>Scheduled{quote.deposit_override_at ? ' (your call)' : ''} — <span className="text-amber-400">{formatCurrency(gate.outstanding)} deposit still owed</span>{gate.collected > 0 ? <> ({formatCurrency(gate.collected)} received so far)</> : null}</>
+                    : gate.collected > 0
+                      ? <>Accepted — deposit {formatCurrency(gate.collected)} of {formatCurrency(gate.required)} received · <span className="text-amber-400">{formatCurrency(gate.outstanding)} still required</span></>
+                      : <>Accepted — awaiting the <span className="text-amber-400">{formatCurrency(gate.required)}</span> deposit before scheduling</>}
+              </p>
+              {depositRowsError && <p className="text-xs text-red-400">{depositRowsError}</p>}
+              <p className="text-xs text-ink-muted">
+                {scheduledStillOwed
+                  ? 'The customer’s portal keeps asking for it — record it here when it arrives another way.'
+                  : 'Scheduling isn’t secured until the deposit is collected. The customer can pay from their portal.'}
+                {prefLine ? <> · <span className="text-ink">Customer preference: {prefLine}</span></> : null}
+                {quote.preferred_note ? <> · &ldquo;{quote.preferred_note}&rdquo;</> : null}
+              </p>
+              {!rowsUnknown && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  {!recordingDeposit ? (
+                    <Button size="sm" variant="secondary" onClick={() => { setRecordingDeposit(true); setDepAmount(String(gate.outstanding)) }}>
+                      <Check className="w-3.5 h-3.5" /> Record deposit received
+                    </Button>
+                  ) : (
+                    // Inline recorder for offline money: e-transfer, cash, a card
+                    // charged elsewhere. Goes through recordDeposit — THE ledger
+                    // door — with the quote link, so it satisfies the gate exactly
+                    // the way a Stripe payment does. No second truth.
+                    <div className="flex items-end gap-2 flex-wrap">
+                      <label className="block">
+                        <span className="block text-[11px] text-ink-muted mb-1">Amount ($)</span>
+                        <input type="number" step="0.01" min="0" value={depAmount} onChange={e => setDepAmount(e.target.value)}
+                          className="w-28 rounded-lg border border-border bg-bg-tertiary px-2.5 py-1.5 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent/40" />
+                      </label>
+                      <label className="block">
+                        <span className="block text-[11px] text-ink-muted mb-1">How it arrived</span>
+                        <select value={depMethod} onChange={e => setDepMethod(e.target.value)}
+                          className="rounded-lg border border-border bg-bg-tertiary px-2.5 py-1.5 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent/40">
+                          {PAYMENT_METHODS.filter(mm => mm.value !== 'credit').map(mm => (
+                            <option key={mm.value} value={mm.value}>{mm.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <Button size="sm" loading={depBusy} onClick={async () => {
+                        const amt = Number(depAmount)
+                        if (!(amt > 0)) { toast.error('Enter the amount that was received.'); return }
+                        if (!quote.customer_id) { toast.error('This quote has no customer to record the deposit against.'); return }
+                        setDepBusy(true)
+                        const { data: { user: u } } = await supabase.auth.getUser()
+                        const res = await recordDeposit(supabase, {
+                          userId: u!.id, customerId: quote.customer_id, amount: amt, method: depMethod,
+                          quoteId: quote.id, notes: `Scheduling deposit — ${quote.quote_number}`,
+                        })
+                        setDepBusy(false)
+                        if (res.error) { toast.error('Could not record the deposit: ' + res.error); return }
+                        setRecordingDeposit(false)
+                        await refreshDepositRows(quote.id)
+                        // Undo deletes BOTH ledger legs — removing only the cash
+                        // row would leave phantom customer credit. The delete is
+                        // CHECKED: a failed undo must say so, not report a ledger
+                        // row gone while it still stands (the undo contract).
+                        const ids = res.paymentIds || []
+                        toast.undo(`${formatCurrency(amt)} deposit recorded for ${quote.quote_number}.`, async () => {
+                          if (ids.length) {
+                            const { error: undoErr } = await supabase.from('payments').delete().in('id', ids)
+                            if (undoErr) {
+                              toast.error('Could not remove the recorded deposit — it still stands. ' + undoErr.message)
+                              return
+                            }
+                          }
+                          await refreshDepositRows(quote.id)
+                        })
+                      }}>
+                        Record
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setRecordingDeposit(false)}>Cancel</Button>
+                    </div>
+                  )}
+                  {/* The override lives behind the SAME handler the normal button
+                      uses — handleScheduleJob re-derives the gate at click time
+                      and raises the explicit confirm. No silent bypass exists.
+                      Absent once scheduled: the decision was already made. */}
+                  {!scheduledStillOwed && (
+                    <Button size="sm" variant="ghost" onClick={() => handleScheduleJob()} loading={scheduling}
+                      title="Books the visit with the deposit still owed — asks you to confirm first">
+                      Schedule without deposit…
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        }
+        if (quote.status === 'scheduled') return null
+        // ── No gate, or gate satisfied: READY TO SCHEDULE ─────────────────────
+        return (
+          <div className="flex items-center justify-between flex-wrap gap-3 text-sm bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
+            <span className="text-ink font-medium flex items-center gap-2 flex-wrap">
+              {gate.status === 'satisfied' ? (
+                <>
+                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                  <span>Ready to schedule — <span className="text-emerald-400">{formatCurrency(gate.collected)} deposit received</span>.</span>
+                </>
+              ) : (
+                <>
+                  <CalendarPlus className="w-4 h-4 shrink-0 text-accent-text" /> Accepted — this job isn’t scheduled yet.
+                </>
+              )}
+              {prefLine && <span className="text-xs text-ink-muted w-full sm:w-auto">Customer preference: {prefLine}{quote.preferred_note ? ` · “${quote.preferred_note}”` : ''}</span>}
+            </span>
+            <div className="flex items-center gap-2">
+              {/* Honest label — this books the job on TODAY's route (move it after). */}
+              <Button size="sm" onClick={() => handleScheduleJob()} loading={scheduling}>
+                <CalendarPlus className="w-3.5 h-3.5" /> Schedule for today
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => router.push(`/dashboard/schedule?quote=${quote.id}`)}>Pick a day</Button>
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* Send this quote to the customer — the ONE shared Send Message dialog. */}
       {quote.customer_id && (

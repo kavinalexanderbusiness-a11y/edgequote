@@ -152,24 +152,32 @@ export function isCashRow(r: { kind?: string | null; provider?: string | null; s
 //    no new plumbing.
 // invoice_id is null on both: a deposit predates the invoice. recompute_invoice_paid
 // returns early on a null invoice_id, so neither leg can disturb an invoice.
+//
+// quoteId (optional) welds the deposit to the BOOKING it secures — both legs
+// carry payments.quote_id, and lib/payments/depositGate derives "scheduling
+// deposit received" from the cash legs. Omitted, this is the original untargeted
+// customer-credit deposit, unchanged. Returns the inserted row ids so a caller
+// can offer Undo (delete BOTH legs — removing only the cash leg would leave the
+// credit ledger granting money that was never kept).
 export async function recordDeposit(sb: Supa, p: {
-  userId: string; customerId: string; amount: number; method: string; notes?: string
-}): Promise<{ error?: string }> {
+  userId: string; customerId: string; amount: number; method: string; notes?: string; quoteId?: string
+}): Promise<{ error?: string; paymentIds?: string[] }> {
   const amt = round2(p.amount)
   if (!(amt > 0)) return { error: 'Enter a deposit amount.' }
   if (!p.customerId) return { error: 'Choose which customer this deposit is from.' }
   const at = new Date().toISOString()
-  const base = { user_id: p.userId, customer_id: p.customerId, invoice_id: null, currency: 'cad', status: 'paid', paid_at: at }
+  const base = { user_id: p.userId, customer_id: p.customerId, invoice_id: null, quote_id: p.quoteId ?? null, currency: 'cad', status: 'paid', paid_at: at }
   const note = p.notes?.trim() || 'Deposit'
   // Sign convention, and it is easy to get backwards: GRANTING credit is a POSITIVE
   // kind='credit' row (see overpaymentToCredit); SPENDING it is negative (see
   // applyCreditToInvoice). availableCredit sums them, so a flipped sign here would
   // drive a customer's balance negative instead of giving them their deposit.
-  const { error } = await sb.from('payments').insert([
+  const { data, error } = await sb.from('payments').insert([
     { ...base, amount: amt, kind: 'payment', provider: p.method, method: p.method, notes: note },
     { ...base, amount: amt, kind: 'credit', provider: 'credit', method: 'credit', notes: `${note} — held as credit` },
-  ])
-  return error ? { error: error.message } : {}
+  ]).select('id')
+  if (error) return { error: error.message }
+  return { paymentIds: ((data as { id: string }[]) || []).map(r => r.id) }
 }
 
 // Sum of the customer's credit ledger = currently available credit.

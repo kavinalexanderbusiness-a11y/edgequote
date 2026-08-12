@@ -28,6 +28,13 @@ export interface PortalActions {
   /** Start Stripe checkout for one invoice (POST /api/portal/pay). */
   pay: (invoiceId: string) => void
   payingId: string | null
+  /** Start Stripe checkout for a quote's SCHEDULING DEPOSIT
+   *  (POST /api/portal/quote-deposit — the amount is derived server-side). */
+  payQuoteDeposit: (quoteId: string) => void
+  payingQuoteId: string | null
+  /** Save (or clear — all nulls) the scheduling preference. Token-scoped RPC;
+   *  accepted quotes only. Resolves false when the server refused the write. */
+  savePreference: (quoteId: string, pref: { date: string | null; date2: string | null; timing: string | null; note: string | null }) => Promise<boolean>
   paymentsEnabled: boolean
   /** A checkout just completed and the ledger hasn't confirmed it yet. Pay
    *  affordances hide while this is true: the customer is looking at a balance

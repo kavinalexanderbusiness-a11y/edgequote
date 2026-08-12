@@ -41,6 +41,10 @@ import { formatCurrency } from '@/lib/utils'
 import { needsFollowUp, canChaseCustomer, compareFollowUp } from '@/lib/followup'
 import type { ReachCustomer } from '@/lib/comms/reach'
 import { invoiceBalance, displayInvoiceStatus } from '@/lib/payments/ledger'
+// THE scheduling gate — the queue must not urge scheduling a booking the owner
+// deliberately gated on a deposit that hasn't arrived. Same engine as the quote
+// page and the portal, so all three agree on which bookings are secured.
+import { schedulingGate, gateBlocksScheduling, type GateLedgerRow } from '@/lib/payments/depositGate'
 import { computeReactivation, type RJob, type RQuote, type RRecurrence } from '@/lib/reactivation'
 import type { LeadResponseReport } from '@/lib/leadResponse'
 import type { ServiceSeasons } from '@/lib/seasons'
@@ -113,6 +117,13 @@ export interface PrioritiesInput {
   seasons: ServiceSeasons
   feeSettings: FeeSettings | null
   today: string
+  /**
+   * Quote-linked deposit ledger rows (payments.quote_id), grouped by quote — the
+   * scheduling gate's input. Absent/missing entries read as NOTHING COLLECTED,
+   * which fails SAFE: a gated quote lands in the waiting row (check the quote)
+   * rather than in "schedule now" (act on an unsecured booking).
+   */
+  quoteDepositRows?: Record<string, GateLedgerRow[]>
   /** Cap the list so the queue stays scannable. */
   limit?: number
 }
@@ -281,26 +292,64 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
 
   // 3) Accepted but not scheduled — committed revenue most at risk of slipping.
   //    Cancelled jobs must NOT count as scheduled.
+  //
+  //    Split by the SCHEDULING GATE: a deposit-gated booking whose money hasn't
+  //    arrived must not be urged onto the schedule — the owner set that gate on
+  //    purpose. Those quotes get their own row ("waiting on the deposit", the
+  //    verb is chase/record, the door is the quote page where both live);
+  //    everything else keeps the schedule-now row it always had, and once a
+  //    gated quote's deposit lands it moves up here labelled as ready.
   const scheduledQuoteIds = new Set(jobs.filter(j => j.quote_id && j.status !== 'cancelled').map(j => j.quote_id))
   const acceptedUnscheduled = quotes.filter(q => q.status === 'accepted' && !scheduledQuoteIds.has(q.id))
-  const acceptedTotal = acceptedUnscheduled.reduce((s, q) => s + Number(q.total || 0), 0)
-  if (acceptedUnscheduled.length > 0) {
+  const gateOf = (q: Quote) => schedulingGate(q, i.quoteDepositRows?.[q.id] ?? [])
+  const readyToSchedule = acceptedUnscheduled.filter(q => !gateBlocksScheduling(q, gateOf(q)))
+  const waitingOnDeposit = acceptedUnscheduled.filter(q => gateBlocksScheduling(q, gateOf(q)))
+  const acceptedTotal = readyToSchedule.reduce((s, q) => s + Number(q.total || 0), 0)
+  if (readyToSchedule.length > 0) {
     // Biggest first: within one tier the engine already ranks by money, so the
     // quote it opens is the one whose slipping costs most. `?quote=` opens the
     // schedule's job form already filled from that quote (customer, service,
     // duration, crew, cadence) — the existing door, not a new one.
-    const top = [...acceptedUnscheduled].sort((a, b) => Number(b.total || 0) - Number(a.total || 0))[0]
+    const top = [...readyToSchedule].sort((a, b) => Number(b.total || 0) - Number(a.total || 0))[0]
     const named = displayName(top?.customer_name)
+    // Name the satisfied gate when there is one — "deposit received" is the
+    // whole reason this row can now say "schedule it" about a gated booking.
+    const topGate = top ? gateOf(top) : null
     next.push({
       kind: 'unscheduled',
       label: named ? `Schedule ${possessive(named)} job` : 'Schedule accepted jobs',
       detail: named
-        ? `${top.service_type || 'Accepted quote'} · accepted, no date yet`
-        : `${acceptedUnscheduled.length} accepted quote${acceptedUnscheduled.length !== 1 ? 's' : ''} with no date`,
+        ? `${top.service_type || 'Accepted quote'} · ${topGate && topGate.required > 0 && topGate.status === 'satisfied' ? 'deposit received — ready to schedule' : 'accepted, no date yet'}`
+        : `${readyToSchedule.length} accepted quote${readyToSchedule.length !== 1 ? 's' : ''} with no date`,
       value: named ? Number(top.total || 0) : acceptedTotal,
-      more: named ? acceptedUnscheduled.length - 1 : 0,
+      more: named ? readyToSchedule.length - 1 : 0,
       href: named ? `/dashboard/schedule?quote=${encodeURIComponent(top.id)}` : '/dashboard/schedule',
       score: 80_000 + adder(acceptedTotal),
+    })
+  }
+  if (waitingOnDeposit.length > 0) {
+    // The blocked half: approved, not yet secured. The figure is the OUTSTANDING
+    // deposit (what the row is waiting on), never the quote total — a $4,000 row
+    // about a $1,350 wait would rank and read as the wrong obligation. Door =
+    // the quote page, which holds both the record-offline-payment door and the
+    // explicit schedule-anyway override.
+    const withGate = waitingOnDeposit.map(q => ({ q, gate: gateOf(q) }))
+    const top = [...withGate].sort((a, b) => b.gate.outstanding - a.gate.outstanding)[0]
+    const named = displayName(top.q.customer_name)
+    const outstandingTotal = withGate.reduce((s, x) => s + x.gate.outstanding, 0)
+    next.push({
+      kind: 'unscheduled',
+      label: named ? `Waiting on ${possessive(named)} deposit` : 'Bookings waiting on deposits',
+      detail: named
+        ? `${formatCurrency(top.gate.collected)} of ${formatCurrency(top.gate.required)} received · approved, not yet secured`
+        : `${waitingOnDeposit.length} approved booking${waitingOnDeposit.length !== 1 ? 's' : ''} not yet secured`,
+      value: named ? top.gate.outstanding : outstandingTotal,
+      more: named ? waitingOnDeposit.length - 1 : 0,
+      href: named ? `/dashboard/quotes/${encodeURIComponent(top.q.id)}` : '/dashboard/quotes',
+      // Below drafts (60k): the next move is usually the customer's, not the
+      // owner's — but it stays on the list because a stalled deposit IS the
+      // thing standing between approved work and the calendar.
+      score: 58_000 + adder(outstandingTotal),
     })
   }
 

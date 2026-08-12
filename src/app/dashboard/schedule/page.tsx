@@ -53,7 +53,10 @@ import { StickyActionBar } from '@/components/ui/StickyActionBar'
 import { VisitAddress } from '@/components/schedule/VisitAddress'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Skeleton, SkeletonRows } from '@/components/ui/Skeleton'
-import { cn, minutesBetween, localTodayISO } from '@/lib/utils'
+import { cn, minutesBetween, localTodayISO, formatCurrency } from '@/lib/utils'
+// THE scheduling gate — this door must agree with the quote page's Schedule
+// button about whether a deposit-gated booking may book (lib/payments/depositGate).
+import { gateBlocksScheduling, loadQuoteDepositRows, schedulingGate, stampDepositOverride } from '@/lib/payments/depositGate'
 import { orderDayStops, nextFieldStop } from '@/lib/fieldStops'
 import { toast } from '@/lib/toast'
 import { confirm } from '@/lib/confirm'
@@ -879,12 +882,17 @@ export default function SchedulePage() {
       }
       if (!active) return
       setQuoteCtx(q as Quote)
+      // The customer's PREFERRED date seeds the form when it's still ahead —
+      // honouring the request they typed into their portal without a copy step.
+      // Only a seed: the owner picks the real date, and a preference already in
+      // the past falls back to today rather than booking backwards.
+      const preferred = (q as Quote).preferred_date
       setQuotePrefill({
         customer_id: q.customer_id || '',
         property_id: propertyId || '',
         title: `${q.service_type} — ${q.customer_name}`,
         service_type: q.service_type,
-        scheduled_date: localToday(),
+        scheduled_date: preferred && preferred >= localToday() ? preferred : localToday(),
         duration_minutes: Math.round(Number(q.hours) * 60),
         crew_size: q.crew_size,
         status: 'scheduled',
@@ -987,6 +995,30 @@ export default function SchedulePage() {
 
   async function handleAdd(values: JobFormValues, recurrence: Recurrence, meta?: SuggestionMeta, opts?: { addAnother?: boolean }) {
     const { data: { user } } = await supabase.auth.getUser()
+    // ── The scheduling guard (the ?quote= door) ───────────────────────────────
+    // Same contract as the quote page's Schedule button: a deposit-gated booking
+    // whose money hasn't arrived books only through an explicit, stamped
+    // override. Derived from the ledger AT SUBMIT TIME (the customer may have
+    // paid while the form was open); an unreadable ledger refuses rather than
+    // schedules — "couldn't check" must never behave as "paid".
+    if (quoteCtx?.deposit_type && quoteCtx.status === 'accepted') {
+      const { rows, error: depErr } = await loadQuoteDepositRows(supabase, quoteCtx.id)
+      if (depErr) {
+        setBanner('Couldn’t check this quote’s deposit ledger — nothing was scheduled. Try again.')
+        return
+      }
+      const gate = schedulingGate(quoteCtx, rows)
+      if (gateBlocksScheduling(quoteCtx, gate)) {
+        const ok = await confirm({
+          title: 'Schedule without the required deposit?',
+          message: `This quote requires a ${formatCurrency(gate.required)} deposit before scheduling is confirmed, and ${gate.collected > 0 ? `only ${formatCurrency(gate.collected)} has been received` : 'none of it has been received yet'}. Scheduling anyway books the visit with ${formatCurrency(gate.outstanding)} still owed — the customer's portal will keep asking for it.`,
+          confirmLabel: 'Schedule without deposit',
+          destructive: true,
+        })
+        if (!ok) return
+        await stampDepositOverride(supabase, quoteCtx.id)
+      }
+    }
     const base = {
       user_id: user!.id,
       customer_id: values.customer_id || null,

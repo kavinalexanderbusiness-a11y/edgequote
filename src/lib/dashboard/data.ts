@@ -40,8 +40,11 @@ type ConvRow = LeadConvRow & { unread: number }
 // amount fields), priorities (status/total), needsFollowUp (sent_at,
 // last_followed_up_at), reactivation (cadence prices, created_at) and dayPlan's
 // jobVisitValue. `select('*')` shipped all 45 columns for these 14.
+// deposit_type/deposit_value/accepted_price/deposit_override_at feed the
+// scheduling gate: WITHOUT them a deposit-gated quote reads as gateless and the
+// queue would urge scheduling a booking the owner deliberately gated.
 const QUOTE_COLUMNS =
-  'id, customer_id, customer_name, status, total, service_type, created_at, sent_at, last_followed_up_at, initial_price, weekly_price, biweekly_price, monthly_price, lead_meta'
+  'id, customer_id, customer_name, status, total, service_type, created_at, sent_at, last_followed_up_at, initial_price, weekly_price, biweekly_price, monthly_price, lead_meta, accepted_price, deposit_type, deposit_value, deposit_override_at'
 
 export interface DashboardData {
   money: MoneyBandValues
@@ -128,6 +131,7 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   // ── Phase 1: read every table ONCE, all in parallel ──
   const [
     invRes, jobRes, planJobRes, quoteRes, recRes, convRes, custRes, setRes,
+    depositRowsRes,
     todayCash, weekCash, prevWeekCash, monthCash, lastMonthCash,
   ] = await Promise.all([
     // The three full-history reads are PAGED. An unbounded select silently stops
@@ -168,6 +172,11 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     sb.from('customers').select('id, phone, email, sms_opt_in, email_opt_in, message_prefs').eq('user_id', userId).is('archived_at', null),
     // Widened with base_* so the weather engine doesn't re-read this same row.
     sb.from('business_settings').select('gst_percent, service_seasons, preferred_work_days, work_start_time, daily_capacity_hours, base_lat, base_lng, base_address').eq('user_id', userId).maybeSingle(),
+    // Quote-linked deposit ledger rows (pre-invoice booking deposits) — the
+    // scheduling gate derives readiness from these. Tiny by construction: only
+    // rows that secure a booking carry quote_id (partial index matches).
+    sb.from('payments').select('quote_id, amount, kind, provider, status')
+      .eq('user_id', userId).not('quote_id', 'is', null),
     collectedBetween(sb, { userId, startIso: dayB.start, endIso: dayB.end }),
     collectedBetween(sb, { userId, startIso: weekB.start, endIso: dayB.end }),
     // The comparison windows, through THE same ledger engine — so the
@@ -192,6 +201,11 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     : convRes.error ? `conversations: ${convRes.error.message}`
     : custRes.error ? `customers: ${custRes.error.message}`
     : setRes.error ? `settings: ${setRes.error.message}`
+    // Deposit ledger joins the all-or-throw rule: an unread ledger rendered as
+    // "no deposit received" would tell the owner to chase money already paid —
+    // or, through the gate, to schedule a booking that IS secured as if it
+    // weren't. Unknown must stay unknown, and here unknown fails the load.
+    : depositRowsRes.error ? `booking deposits: ${depositRowsRes.error.message}`
     : todayCash.error ? `today's payments: ${todayCash.error}`
     : weekCash.error ? `this week's payments: ${weekCash.error}`
     // The comparison windows join the same all-or-throw rule: a delta computed
@@ -244,8 +258,13 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
 
   // ── Priorities (THE queue engine) ──
   const customerRows = (custRes.data as (ReachCustomer & { id: string })[]) || []
+  // Deposit rows grouped by the booking they secure — the queue's gate input.
+  const quoteDepositRows: Record<string, { amount: number; kind?: string | null; provider?: string | null; status?: string | null }[]> = {}
+  for (const r of (depositRowsRes.data as { quote_id: string | null; amount: number; kind: string | null; provider: string | null; status: string | null }[]) || []) {
+    if (r.quote_id) (quoteDepositRows[r.quote_id] ||= []).push(r)
+  }
   const priorities = computePriorities({
-    quotes, invoices, jobs, recById,
+    quotes, invoices, jobs, recById, quoteDepositRows,
     customers: customerRows,
     // Only the unread ones are a "reply to messages" job. customer_id must
     // survive — the messages row uses it to exclude people leads already counted.
