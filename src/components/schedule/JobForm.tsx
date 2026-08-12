@@ -165,6 +165,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   const [endDate, setEndDate] = useState(ui0.endDate)
   const [endCount, setEndCount] = useState(ui0.endCount)
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
+  const [seasonsLoaded, setSeasonsLoaded] = useState(false)
   // Existing recurring series on the selected property — for duplicate detection.
   const [propSeries, setPropSeries] = useState<{ id: string; service_type: string | null; unit: string | null; count: number | null }[]>([])
   const [dupAck, setDupAck] = useState(false) // owner chose "create anyway"
@@ -311,12 +312,14 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   // "Season end", reopened the job, saw "Specific date", and reasonably
   // concluded the save was lost. Derived, not stored: the season config +
   // end_date remain the only truth, so the two can never disagree. Only while
-  // the control is untouched, and only an EXACT match — a hand-picked date that
-  // happens to equal the season end means the same thing anyway.
+  // the control is untouched, and only an EXACT match against the owner's
+  // LOADED season config — matching against the pre-load Calgary defaults
+  // could claim "Season end" for a hand-picked date, and season mode re-derives
+  // its date on save, so that claim would silently rewrite the stored end.
   useEffect(() => {
-    if (!isEdit || endTouched.current) return
+    if (!isEdit || !seasonsLoaded || endTouched.current) return
     if (endMode === 'on' && endDate && seasonEndDate && endDate === seasonEndDate) setEndMode('season')
-  }, [isEdit, endMode, endDate, seasonEndDate])
+  }, [isEdit, seasonsLoaded, endMode, endDate, seasonEndDate])
 
   // Saved measurement recommendation for the selected property — the pricing
   // source of truth. Maps the chosen cadence to its measured price (same custom-
@@ -408,6 +411,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
       if (!user) return
       const { data } = await supabase.from('business_settings').select('service_seasons').eq('user_id', user.id).maybeSingle()
       setSeasons(settingsToSeasons((data as { service_seasons: unknown } | null)?.service_seasons))
+      setSeasonsLoaded(true)
     }
     loadSeasons()
   }, [supabase])
