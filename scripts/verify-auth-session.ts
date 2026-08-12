@@ -173,24 +173,36 @@ console.log('\nNo script may end sessions it does not own:')
   // forbidden call in its failure message, and a guard that trips on its own
   // error string can never go green.
   const SELF = 'verify-auth-session.ts'
+
+  // ⚠️ RECURSIVE, and that is not a detail. The first version of this scan read
+  // only the top level of scripts/, and the very next merge from main landed a
+  // bare signOut() in scripts/lib/verify-fixture.ts — a shared helper called by
+  // several guards, i.e. the highest-leverage place for this bug to hide, and
+  // the one place the guard could not see. A scan whose blind spot is the shared
+  // library is not a guard.
+  const walk = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap(e =>
+      e.isDirectory() ? walk(join(dir, e.name))
+        : /\.(ts|mjs|js)$/.test(e.name) && e.name !== SELF ? [join(dir, e.name)] : [])
+
+  const files = walk(join(ROOT, 'scripts'))
+  const rel = (f: string) => f.slice(join(ROOT, 'scripts').length + 1).replace(/\\/g, '/')
   const offenders: string[] = []
-  for (const f of readdirSync(join(ROOT, 'scripts')).filter(f => /\.(ts|mjs|js)$/.test(f) && f !== SELF)) {
-    const src = stripComments(readFileSync(join(ROOT, 'scripts', f), 'utf8').replace(/\r\n?/g, '\n'))
+  for (const f of files) {
+    const src = stripComments(readFileSync(f, 'utf8').replace(/\r\n?/g, '\n'))
     // A signOut with no argument is scope:'global' — every device, everywhere.
     for (const line of src.split('\n')) {
-      if (/\.auth\.signOut\(\s*\)/.test(line)) offenders.push(`${f}: ${line.trim()}`)
+      if (/\.auth\.signOut\(\s*\)/.test(line)) offenders.push(`${rel(f)}: ${line.trim()}`)
     }
   }
   check('no bare .auth.signOut() anywhere in scripts/', offenders.length === 0,
     `these revoke EVERY session the account holds, including the owner's phone:\n      ${offenders.join('\n      ')}\n      use .auth.signOut({ scope: 'local' })`)
 
   // The scripts that sign in as the real owner must say so explicitly.
-  const scoped = readdirSync(join(ROOT, 'scripts'))
-    .filter(f => /\.ts$/.test(f) && f !== SELF)
-    .filter(f => stripComments(readFileSync(join(ROOT, 'scripts', f), 'utf8')).includes('.auth.signOut('))
-  check('every script that signs out at all passes an explicit scope', scoped.every(f =>
-    readFileSync(join(ROOT, 'scripts', f), 'utf8').includes("scope: 'local'")),
-    `${scoped.join(', ')}`)
+  const scoped = files.filter(f => stripComments(readFileSync(f, 'utf8')).includes('.auth.signOut('))
+  check(`every script that signs out passes an explicit scope (${scoped.length} file(s))`,
+    scoped.every(f => readFileSync(f, 'utf8').includes("scope: 'local'")),
+    scoped.map(rel).join(', '))
 }
 
 // ── 5. The app's own explicit sign-out is DELIBERATELY global ────────────────

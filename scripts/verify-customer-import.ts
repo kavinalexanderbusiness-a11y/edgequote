@@ -30,10 +30,9 @@ function check(name: string, actual: unknown, expected: unknown) {
 function ok(name: string, cond: boolean) { check(name, cond, true) }
 
 const SRC = join(__dirname, '..', 'src')
-// ⚠️ Normalised to \n before anything is matched. Git hands these files to a
-// Windows checkout as CRLF, and every multi-line anchor in this guard is written
-// with \n — so `includes()` finds nothing and the check below reports an RLS
-// policy as MISSING when it is present. False red locally, green in CI.
+// Normalized: several checks below anchor on a literal \n, and a CRLF checkout
+// (git on Windows) would fail them against text that IS correct — the same
+// false red ba2095ea fixed in verify:job-cost.
 const read = (p: string) => readFileSync(join(SRC, p), 'utf8').replace(/\r\n?/g, '\n')
 
 type Book = Customer & AddressCarrier

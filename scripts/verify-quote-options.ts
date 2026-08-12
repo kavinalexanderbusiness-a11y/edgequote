@@ -22,13 +22,29 @@
 // no arrangement of this data in which the alternatives add up, because nothing
 // adds them.
 //
-// ⚠️ THE LIVE HALF WRITES. Sections 5–7 sign in as the owner, create ONE fixture
-// quote (number ZZ-VERIFY-OPTIONS), attack it, and delete it in a finally. A
-// leftover from a killed run is swept at the start of the next one. Everything it
-// creates is deleted; nothing existing is touched, read-modified or relied upon —
-// this guard asserts on data it made, never on the state of the real book.
+// ⚠️ THE LIVE HALF WRITES — AND NOT INTO THE REAL BOOK.
+//
+// It used to. This guard signed in as the OWNER, created its fixture quote in the
+// owner's tenant, attached it to a REAL customer (whichever live portal token came
+// back first), and accepted it through that customer's own portal door. Accepting
+// a quote fires trg_notify_quote_accepted, so every single run put "Automated
+// guard fixture — safe to delete accepted a quote" into the owner's notification
+// bell. On 2026-08-11 that happened forty-five times in two hours, and a real
+// customer's portal showed a $5,550 job at "1 Verification Way" while it ran.
+//
+// The trigger was never the bug — an accepted quote is exactly what an owner must
+// be told about, and nothing in src/ changed. THE TENANT was the bug. Sections 6–7
+// now run inside a marked FIXTURE TENANT (scripts/lib/verify-fixture), against a
+// customer and a portal token that tenant owns. The trigger still fires; it
+// notifies a tenant nobody is looking at. The harness refuses to write at all
+// unless the database confirms the tenant is marked, so no env var can aim this
+// file at a real business. Every name carries a per-run id, so two concurrent runs
+// cannot see or delete each other's fixtures.
+//
+// Section 5 needs no login and no fixture at all: it is pure refusal-probing
+// against anonymous callers, and it writes nothing by construction.
 
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import {
@@ -39,11 +55,9 @@ import {
 // The downstream engine, imported rather than described: if the job's value ever
 // stops resolving through this, section 2b stops being true.
 import { jobVisitValue } from '../src/lib/visitValue'
+import { openFixtureTenant, isSkipped, fixtureResidue, loadEnvLocal } from './lib/verify-fixture'
 
-for (const line of existsSync('.env.local') ? readFileSync('.env.local', 'utf8').split(/\r?\n/) : []) {
-  const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim())
-  if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].trim().replace(/^(['"])(.*)\1$/, '$2')
-}
+loadEnvLocal()
 
 let failures = 0
 const ok = (n: string) => console.log(`  ✓ ${n}`)
@@ -52,7 +66,6 @@ const check = (n: string, cond: boolean, d = '') => cond ? ok(n) : fail(n, d)
 const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8')
 
 const GHOST = '00000000-0000-0000-0000-0000000000ff'
-const FIXTURE_NUMBER = 'ZZ-VERIFY-OPTIONS'
 
 // ── 1. The pricing rule, which is the whole feature ──────────────────────────
 console.log('\n═══ An option IS the price — it is never a component of one ═══')
@@ -323,8 +336,6 @@ check('the owner door proves auth.uid() explicitly',
 async function main() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  const email = process.env.PORTAL_RPC_OWNER_EMAIL
-  const password = process.env.PORTAL_RPC_OWNER_PASSWORD
 
   console.log('\n═══ The deployed database, attacked for real ═══')
   if (!url || !anonKey || url.includes('placeholder')) {
@@ -354,31 +365,31 @@ async function main() {
     forgedToken.error === null && forgedToken.data === false,
     `returned ${JSON.stringify(forgedToken.data)}`)
 
-  if (!email || !password) {
-    console.log('  … SKIPPED the end-to-end run — needs PORTAL_RPC_OWNER_EMAIL / _PASSWORD')
+  // ── The writable half runs in a fixture tenant, or it does not run ─────────
+  // No owner credentials are read anywhere below this line. openFixtureTenant
+  // aborts the process outright if the tenant it reaches is not marked as a
+  // fixture tenant in the database, so "write into the real book" is not a state
+  // this guard can be configured into.
+  const t = await openFixtureTenant('verify:quote-options')
+  if (isSkipped(t)) {
+    console.log(`  … SKIPPED the end-to-end run — ${t.skipped}`)
     return
   }
-  const owner: SupabaseClient = createClient(url, anonKey)
-  const { data: auth, error: authErr } = await owner.auth.signInWithPassword({ email, password })
-  if (authErr || !auth?.user) {
-    console.log(`  … SKIPPED the end-to-end run — owner sign-in failed (${authErr?.message})`)
-    return
-  }
-  const uid = auth.user.id
-
-  // Sweep any fixture a killed run left behind, before making a new one.
-  await owner.from('quotes').delete().eq('user_id', uid).eq('quote_number', FIXTURE_NUMBER)
+  const owner = t.db
+  const uid = t.uid
+  const FIXTURE_NUMBER = t.tag('VERIFY-OPTIONS')
 
   let quoteId: string | null = null
   let otherQuoteId: string | null = null
   try {
     // ── 6. A real options quote, built the way the builder builds one ────────
-    // A customer WITH a portal token, so the customer door can be exercised end
-    // to end. Deleted in the finally below; total lifetime is a second or two.
-    const { data: tok } = await owner.from('customer_portal_tokens')
-      .select('token, customer_id').eq('revoked', false).limit(1).maybeSingle()
-    const token = (tok as { token: string; customer_id: string } | null)?.token ?? null
-    const customerId = (tok as { token: string; customer_id: string } | null)?.customer_id ?? null
+    // The fixture tenant's OWN customer, with its OWN portal token, so the
+    // customer door can be exercised end to end without a real person's portal
+    // ever being addressed. This is the line that used to read the first live
+    // token in the owner's book — see the header. Deleted in the finally below.
+    const fx = await t.fixtureCustomer()
+    const token = fx.token
+    const customerId = fx.id
 
     const rows = optionRowsFor(
       [
@@ -526,8 +537,10 @@ async function main() {
       redecide.data === false && redecide.error === null)
 
     // ── Survives a reload ────────────────────────────────────────────────────
-    const fresh = createClient(url, anonKey)
-    await fresh.auth.signInWithPassword({ email, password })
+    const fresh = createClient(url, anonKey, { auth: { persistSession: false } })
+    await fresh.auth.signInWithPassword({
+      email: process.env.VERIFY_FIXTURE_EMAIL!, password: process.env.VERIFY_FIXTURE_PASSWORD!,
+    })
     // ⚠️ Two queries, not a PostgREST embed. There are now TWO foreign keys
     // between these tables — quote_options.quote_id → quotes, and
     // quotes.selected_option_id → quote_options — so `quotes(…, quote_options(…))`
@@ -560,19 +573,17 @@ async function main() {
     for (const qid of [quoteId, otherQuoteId]) {
       if (qid) await owner.from('quotes').delete().eq('id', qid)
     }
-    const { count } = await owner.from('quotes')
-      .select('id', { count: 'exact', head: true }).eq('user_id', uid).eq('quote_number', FIXTURE_NUMBER)
-    check('the guard cleaned up after itself', (count ?? 0) === 0,
-      `${count} fixture quote(s) named ${FIXTURE_NUMBER} remain — delete them by hand`)
-    // ⚠️ scope:'local' is LOAD-BEARING, not a detail. supabase-js defaults signOut()
-    // to scope:'global', which revokes EVERY session this account holds ANYWHERE —
-    // and these guards sign in as the real production owner. A bare signOut() here
-    // signs the owner out of their own phone and desktop mid-workday. That is not
-    // hypothetical: production logged 214 `/auth/v1/logout?scope=global` calls in
-    // 24 hours, every one of them from `node` on a dev machine, and it was THE
-    // cause of the random sign-outs. 'local' ends only this script's own session.
-    // verify:auth-session fails if a bare signOut() reappears in scripts/.
-    await owner.auth.signOut({ scope: 'local' }).catch(() => {})
+    // close() removes this run's customer, portal token and any notification the
+    // fixture's own triggers raised inside the fixture tenant, then signs out.
+    await t.close()
+    // Measured, not asserted by assumption: cleanup that is claimed but never
+    // counted is how ZZ- rows used to accumulate. Scoped to THIS run's id, so a
+    // concurrent run's live fixtures can neither be deleted nor counted here.
+    const residue = await fixtureResidue(t)
+    const left = Object.entries(residue).filter(([, n]) => n !== 0)
+    check('the guard cleaned up after itself, in the fixture tenant',
+      left.length === 0,
+      left.map(([k, n]) => `${n} ${k}`).join(', ') + ` still carry run id ${t.runId}`)
   }
 }
 
