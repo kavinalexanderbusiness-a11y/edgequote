@@ -22,6 +22,7 @@ import { formatDate, formatCurrency, localTodayISO } from '@/lib/utils'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes, latestSavedRecommendation, recommendationIsStale, pricingConfidence } from '@/lib/pricing'
 import { resolvePrefs, prefSummary, type PrefSource } from '@/lib/preferences'
 import { computePropertyHealth } from '@/lib/propertyHealth'
+import { typicalDurationFrom, describeTypicalDuration, type TypicalDuration } from '@/lib/locationSummary'
 import { loadBusinessShape, SHAPE_LOADING, type BusinessShape } from '@/lib/businessShape'
 import { getPropertyContexts } from '@/lib/ai/propertyContext'
 import { LocatedJob, fetchLocatedUpcomingJobs, nearbyJobCount } from '@/lib/geo'
@@ -38,7 +39,11 @@ interface PropPerf {
   collected: number         // money actually RECEIVED against this property's invoices
   completedVisits: number
   avgInvoice: number        // avg invoice TOTAL (tax + discount in), not avg receipt
-  avgActualMin: number | null
+  // THE typical on-site time, through lib/locationSummary — a median over
+  // plausibly-timed visits, carrying the count of TIMED visits it was actually
+  // built from. Was a bare mean labelled "avg of {completedVisits}", which named
+  // a sample four times larger than the one behind the number.
+  typical: TypicalDuration | null
   lastActualMin: number | null  // actual minutes of the most recent timed completed visit
   lastServiceDate: string | null
 }
@@ -54,11 +59,10 @@ type LastInvoice = { id: string; invoice_number: string; status: string; date: s
 function buildPerformance(jobs: PerfJob[], invoices: PerfInvoice[], settings: BusinessSettings | null): Record<string, PropPerf> {
   const out: Record<string, PropPerf> = {}
   const ensure = (id: string): PropPerf =>
-    (out[id] ||= { collected: 0, completedVisits: 0, avgInvoice: 0, avgActualMin: null, lastActualMin: null, lastServiceDate: null })
+    (out[id] ||= { collected: 0, completedVisits: 0, avgInvoice: 0, typical: null, lastActualMin: null, lastServiceDate: null })
 
   // Completed visits + actual-time + last service from jobs.
-  const durSum: Record<string, number> = {}
-  const durCount: Record<string, number> = {}
+  const timedByProp: Record<string, PerfJob[]> = {}
   const lastActualDate: Record<string, string> = {} // newest timed visit per property
   for (const j of jobs) {
     if (!j.property_id || j.status !== 'completed') continue
@@ -66,15 +70,17 @@ function buildPerformance(jobs: PerfJob[], invoices: PerfInvoice[], settings: Bu
     p.completedVisits++
     if (!p.lastServiceDate || j.scheduled_date > p.lastServiceDate) p.lastServiceDate = j.scheduled_date
     if (Number(j.actual_minutes) > 0) {
-      durSum[j.property_id] = (durSum[j.property_id] || 0) + Number(j.actual_minutes)
-      durCount[j.property_id] = (durCount[j.property_id] || 0) + 1
+      ;(timedByProp[j.property_id] ||= []).push(j)
       if (!lastActualDate[j.property_id] || j.scheduled_date >= lastActualDate[j.property_id]) {
         lastActualDate[j.property_id] = j.scheduled_date
         p.lastActualMin = Number(j.actual_minutes)
       }
     }
   }
-  for (const id of Object.keys(durCount)) out[id].avgActualMin = Math.round(durSum[id] / durCount[id])
+  // ONE engine decides what a typical visit is and whether it may be claimed at
+  // all — including the plausibility bound this loop never had (production holds
+  // a 1-minute "General Landscaping" visit that a mean happily averaged in).
+  for (const [id, timed] of Object.entries(timedByProp)) out[id].typical = typicalDurationFrom(timed)
 
   // Money, through the ONE ledger engine. This used to sum raw `invoices.amount`
   // over `status === 'paid'` and call it "Lifetime revenue" — wrong three ways:
@@ -301,8 +307,10 @@ export default function PropertiesPage() {
     const qp = quotePricingByProp[property.id]
     const nearby = property.lat != null && property.lng != null ? nearbyJobCount({ lat: property.lat, lng: property.lng }, locatedJobs).count : 0
     const confidence = saved ? pricingConfidence({ hasMeasurement: true, nearbyComparables: nearby }) : null
-    const estMin = perf?.avgActualMin ?? saved?.rec.est_minutes ?? null
-    const estFromActual = perf?.avgActualMin != null
+    // Learned time wins over the saved recommendation — but only once the engine
+    // says there is enough of it to be a typical value at all.
+    const estMin = perf?.typical?.minutes ?? saved?.rec.est_minutes ?? null
+    const estFromActual = perf?.typical != null
     const measured = !!saved || Number(property.lawn_sqft) > 0
     const hasWonQuote = (qp?.accepted ?? 0) > 0
 
@@ -635,7 +643,11 @@ export default function PropertiesPage() {
                       <PerfStat icon={DollarSign} label="Collected" value={formatCurrency(perf.collected)} tone="text-accent-text" />
                       <PerfStat icon={CheckCircle2} label="Completed visits" value={String(perf.completedVisits)} />
                       <PerfStat icon={Receipt} label="Avg invoice" value={perf.avgInvoice > 0 ? formatCurrency(perf.avgInvoice) : '—'} />
-                      <PerfStat icon={Timer} label="Avg service time" value={perf.avgActualMin != null ? `${perf.avgActualMin} min` : '—'} />
+                      {/* "—" is the honest reading when the engine withholds:
+                          this address has no typical time yet, not a typical
+                          time of nothing. */}
+                      <PerfStat icon={Timer} label="Typical visit" value={perf.typical != null ? `${perf.typical.minutes} min` : '—'}
+                        sub={perf.typical != null ? `${perf.typical.sampleSize} timed` : undefined} />
                     </div>
                   </div>
                 )}
@@ -730,7 +742,13 @@ export default function PropertiesPage() {
                             <span className={durDelta > 10 ? 'text-amber-400' : durDelta < -5 ? 'text-emerald-400' : 'text-ink-faint'}>({durDelta > 0 ? '+' : ''}{durDelta}m)</span>
                           </span>
                         ) : estMin != null ? (
-                          <span className="inline-flex items-center gap-1"><Timer className="w-3 h-3" /> Est. visit ~{estMin} min{estFromActual ? <span className="text-ink-faint"> · avg of {perf!.completedVisits}</span> : null}</span>
+                          /* When the figure is LEARNED, the sample size in the
+                             sentence is the timed-visit count the median was
+                             actually built from — not the property's total
+                             completed visits, which is what it used to name. */
+                          <span className="inline-flex items-center gap-1"><Timer className="w-3 h-3" /> {estFromActual
+                            ? <>Typical visit {describeTypicalDuration(perf!.typical!)}</>
+                            : <>Est. visit ~{estMin} min</>}</span>
                         ) : null}
                         {confidence && (
                           <span className="inline-flex items-center gap-1"><ShieldCheck className="w-3 h-3" /> {confidence[0].toUpperCase() + confidence.slice(1)} confidence</span>
@@ -763,13 +781,16 @@ export default function PropertiesPage() {
   )
 }
 
-function PerfStat({ icon: Icon, label, value, tone }: { icon: typeof DollarSign; label: string; value: string; tone?: string }) {
+// `sub` is the evidence line: a stat derived from a SAMPLE says how big the
+// sample was, right under the figure, so the number can never travel without it.
+function PerfStat({ icon: Icon, label, value, tone, sub }: { icon: typeof DollarSign; label: string; value: string; tone?: string; sub?: string }) {
   return (
     <div className="rounded-lg border border-border bg-surface px-2 py-1.5">
       <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1">
         <Icon className="w-3 h-3" /> {label}
       </p>
       <p className={`text-sm font-bold tabular-nums ${tone || 'text-ink'}`}>{value}</p>
+      {sub && <p className="text-[10px] text-ink-faint tabular-nums leading-tight">{sub}</p>}
     </div>
   )
 }

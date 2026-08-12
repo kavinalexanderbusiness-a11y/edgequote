@@ -102,7 +102,9 @@
     "verify:quote-options": "tsx scripts/verify-quote-options.ts",
     "verify:quote-pdf": "tsx scripts/verify-quote-pdf.ts",
     "verify:attribution": "tsx scripts/verify-attribution.ts",
-    "verify:service-bundles": "tsx scripts/verify-service-bundles.ts"
+    "verify:service-bundles": "tsx scripts/verify-service-bundles.ts",
+    "verify:location-intelligence": "tsx scripts/verify-location-intelligence.ts",
+    "verify:global-search": "tsx scripts/verify-global-search.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",
