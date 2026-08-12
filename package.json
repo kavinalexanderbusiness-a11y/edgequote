@@ -22,6 +22,7 @@
     "verify:ai-surface": "tsx scripts/verify-ai-surface.ts",
     "verify:offline-uncomplete": "tsx scripts/verify-offline-uncomplete.ts",
     "verify:seasons": "tsx scripts/verify-seasons.ts",
+    "verify:season-end": "tsx scripts/verify-season-end.ts",
     "verify:modules": "tsx scripts/verify-modules.ts",
     "verify:measure": "tsx scripts/verify-measure.ts",
     "verify:measurement-rpc": "tsx scripts/verify-measurement-rpc.ts",
