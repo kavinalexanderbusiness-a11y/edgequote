@@ -68,6 +68,7 @@
     "verify:lead-intake": "tsx scripts/verify-lead-intake.ts",
     "verify:quote-status": "tsx scripts/verify-quote-status.ts",
     "verify:quote-builder": "tsx scripts/verify-quote-builder.ts",
+    "verify:mobile-save": "tsx scripts/verify-mobile-save.ts",
     "verify:invoice-status": "tsx scripts/verify-invoice-status.ts",
     "verify:invoice-actions": "tsx scripts/verify-invoice-actions.ts",
     "verify:followup": "tsx scripts/verify-followup.ts",
