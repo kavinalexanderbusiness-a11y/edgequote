@@ -9,6 +9,10 @@ import { formatServicePrice } from '@/lib/servicePricing'
 // function, so the search, the ranking, the Recent block and the grouping rule
 // can be asserted on directly instead of inferred from this file's JSX.
 import { buildServiceMenu } from '@/lib/servicePicker'
+// WHERE the menu is allowed to be. A 288px list opening downward from a field
+// in the lower half of a phone form covered the fixed Save bar and swallowed
+// the tap — see lib/dropdownPlacement for the measurement.
+import { useDropdownPlacement, dropdownStyle } from '@/hooks/useDropdownPlacement'
 import type { ServiceTemplate } from '@/types'
 import { Wrench, ChevronDown, Check, Star, Search } from 'lucide-react'
 
@@ -76,6 +80,10 @@ const ServicePicker = forwardRef<HTMLInputElement, ServicePickerProps>(
     const [hi, setHi] = useState(-1)
     const boxRef = useRef<HTMLDivElement>(null)
     const listRef = useRef<HTMLDivElement>(null)
+    // The INPUT's wrapper, not boxRef — boxRef includes the label, and the list
+    // is anchored to the box you can see, not to the words above it.
+    const anchorRef = useRef<HTMLDivElement>(null)
+    const place = useDropdownPlacement(anchorRef, open)
 
     useEffect(() => {
       function onDoc(e: MouseEvent) { if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false) }
@@ -125,7 +133,7 @@ const ServicePicker = forwardRef<HTMLInputElement, ServicePickerProps>(
         {label && (
           <label htmlFor={inputId} className="text-xs font-semibold text-ink-muted uppercase tracking-wide">{label}</label>
         )}
-        <div className="relative">
+        <div className="relative" ref={anchorRef}>
           {open ? <Search className="w-4 h-4 text-ink-faint absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 : <Wrench className="w-4 h-4 text-ink-faint absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />}
           <input
@@ -174,7 +182,9 @@ const ServicePicker = forwardRef<HTMLInputElement, ServicePickerProps>(
           <ChevronDown className={cn('w-4 h-4 text-ink-faint absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none transition-transform', open && 'rotate-180')} />
           {open && (
             <div ref={listRef} id={listId} role="listbox" aria-label={label ? `${label} options` : 'Services'}
-              className="absolute z-overlay mt-1 w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl overflow-hidden origin-top animate-pop max-h-72 overflow-y-auto overscroll-contain">
+              data-eq-dropdown
+              style={dropdownStyle(place)}
+              className="absolute z-overlay w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl origin-top animate-pop overflow-y-auto overscroll-contain">
               {rows.length === 0 && (
                 // Not an error state — the name they typed IS the service name,
                 // so there is nothing else to do here. But say the right thing:

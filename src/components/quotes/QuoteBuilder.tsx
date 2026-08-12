@@ -326,8 +326,31 @@ export function QuoteBuilder({
         if (bad.some(i => kindAt(i) === 'material')) setMaterialsOpen(true)
         if (bad.some(i => kindAt(i) !== 'material')) setServicesOpen(true)
       }
+      // WHICH field, as a form path. An errored `services` entry is an ARRAY,
+      // so its own key names nothing focusable — walk into it for the real one.
+      const firstPath = (() => {
+        const k = keys[0]
+        if (k !== 'services') return k
+        const rows = (errs.services as unknown as Array<Record<string, { message?: string }>> | undefined) || []
+        const i = rows.findIndex(Boolean)
+        const sub = i >= 0 ? Object.keys(rows[i] || {})[0] : undefined
+        return sub ? `services.${i}.${sub}` : k
+      })()
       const first = errs[keys[0] as keyof typeof errs] as { message?: string } | undefined
       toast.error(first?.message || 'Some fields still need filling in — we’ve opened the section holding them.')
+      // Then PUT THE OWNER ON IT. react-hook-form's own focus-on-error already
+      // ran and found nothing, because the field it wanted was inside a section
+      // this handler has only just opened — the mount happens on the next
+      // render, so the focus has to wait a frame. Without this, a blocked save
+      // on a phone toasts about a field that can be a screen and a half away,
+      // which reads as "Save is broken" rather than "answer this".
+      requestAnimationFrame(() => {
+        setFocus(firstPath as Parameters<typeof setFocus>[0], { shouldSelect: false })
+        // setFocus does not scroll, and a focused input under the keyboard is
+        // no more visible than an unfocused one.
+        const el = document.activeElement
+        if (el instanceof HTMLElement && el !== document.body) el.scrollIntoView({ block: 'center' })
+      })
     },
   )
 
