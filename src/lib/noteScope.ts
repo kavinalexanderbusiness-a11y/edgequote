@@ -135,6 +135,29 @@ export const SCOPED_NOTE_FIELDS: readonly ScopedNoteField[] = [
     enforcedBy: 'Never rendered by any PDF; absent from get_portal_data.',
   },
 
+  // ── Property (added by the location-intelligence pass, same day) ───────────
+  // ⭐ CONVERGENT EVIDENCE THAT THE MODEL IS RIGHT. A separate session hit the
+  // same wall from the other side — "where does 'gate is on the east side'
+  // go?" — and landed on the identical answer without coordination: reuse
+  // `internal_notes` as THE product-wide name for "the owner's, never the
+  // customer's", and let the column carry the audience. Two independent passes
+  // choosing the same shape is the strongest argument against inventing a
+  // visibility enum here.
+  {
+    table: 'properties',
+    column: 'notes',
+    audience: 'customer',
+    purpose: 'What the provider wants the customer to know about their property.',
+    enforcedBy: "Selected by get_portal_data and rendered under 'Notes from your provider'. Customer-facing BY DESIGN.",
+  },
+  {
+    table: 'properties',
+    column: 'internal_notes',
+    audience: 'internal',
+    purpose: 'Private facts about the PLACE — where the gate is, which dog, where the irrigation controller lives.',
+    enforcedBy: "get_portal_data enumerates the property columns it returns, so a new column is invisible to the portal by construction. Also pinned by verify:location-intelligence.",
+  },
+
   // ── Visit (a `jobs` row IS a visit) ────────────────────────────────────────
   {
     table: 'jobs',
