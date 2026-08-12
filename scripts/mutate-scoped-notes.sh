@@ -139,7 +139,7 @@ mutate "the signed URL is given a one-year life" \
 
 mutate "the storage path is echoed back to the client" \
   src/app/api/crew/media/route.ts \
-  's/      caption: m\.caption,\n      created_at: m\.created_at,/      caption: m.caption,\n      storage_path: m.storage_path,\n      created_at: m.created_at,/'
+  's/      id: m\.id,/      id: m.id,\n      storage_path: m.storage_path,/'
 
 echo ""
 echo "=== 5. the guard's own machinery ==="

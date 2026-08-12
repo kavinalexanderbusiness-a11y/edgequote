@@ -144,12 +144,37 @@ if (has(PORTAL_SQL)) {
     return out
   }
 
+  // ⭐ WHOLE-FILE WHERE THE NAME IS UNIQUE, SLICE ONLY WHERE IT IS NOT.
+  // Mutation testing found the slice alone was too weak: adding `qt.internal_notes`
+  // to the quotes projection went UNCAUGHT, because the nearest `select` before
+  // `from public.quotes` is the NESTED quote_services select, not the outer
+  // column list the alias belongs to. Nested projections defeat any
+  // slice heuristic.
+  //
+  // But most hidden columns have names no customer-facing field shares —
+  // `internal_notes`, `completion_issue` — and for those the strongest possible
+  // check is also the simplest: the string must not appear in the file AT ALL,
+  // qualified, nested or otherwise. Only `notes` is genuinely ambiguous (hidden
+  // on customers and jobs, deliberately PRESENT on quotes, invoices and
+  // properties), and that is the one case that needs the slice.
+  //
+  // Which is which is derived from the registry, not hand-listed, so a new
+  // internal field is protected by the strong check the moment it is declared.
+  const customerFacingColumns = new Set(
+    SCOPED_NOTE_FIELDS.filter(f => f.audience === 'customer').map(f => f.column))
+
   for (const f of hidden) {
     if (f.table === 'crew_media') {
       // No projection reads it at all — assert the TABLE never appears.
       check('portal payload omits crew_media entirely',
         !/\bcrew_media\b/.test(portal),
         'crew reference media is not customer-facing at any point, including after completion')
+      continue
+    }
+    if (!customerFacingColumns.has(f.column)) {
+      check(`portal payload omits ${f.table}.${f.column} (whole file)`,
+        !new RegExp(`\\b${f.column}\\b`).test(portal),
+        `${f.column} appears anywhere in the portal RPC — ${f.purpose}`)
       continue
     }
     const lists = columnListsFor(f.table)
@@ -244,8 +269,13 @@ const MIGRATION = 'supabase/RUN-2026-08-11-scoped-notes-crew-media.sql'
 check(`${MIGRATION} exists`, has(MIGRATION))
 if (has(MIGRATION)) {
   const sql = stripSql(read(MIGRATION))
+  // The literal VALUES tuple, not a `[\s\S]*?` walk from `insert into`. Mutation
+  // testing caught that: flipping the tuple to `true` left the lazy matcher free
+  // to skip ahead and find the `false` in the ON CONFLICT clause below, so the
+  // bucket could be made public with the check still green.
   check('the crew-media bucket is created private',
-    /insert\s+into\s+storage\.buckets[\s\S]*?'crew-media'[\s\S]*?false/i.test(sql))
+    /'crew-media',\s*'crew-media',\s*false\b/i.test(sql),
+    'public:true would make the URL itself the permission — the whole reason this is not job-photos')
   check('re-running RE-ASSERTS private (a later flip cannot survive a replay)',
     /on\s+conflict[\s\S]*?set[\s\S]*?public\s*=\s*false/i.test(sql),
     'without this, `do update` could leave a bucket someone had flipped to public')
@@ -308,20 +338,31 @@ if (has(CREW_MEDIA_UI)) {
 // "access instructions, gate codes…". Nobody had taken the invitation yet.
 console.log('\n═══ The owner is never left guessing ═══')
 
-const FORMS: [string, string][] = [
-  ['src/components/quotes/QuoteBuilder.tsx', 'quote'],
-  ['src/components/schedule/JobForm.tsx', 'visit'],
-  ['src/components/customers/CustomerForm.tsx', 'customer'],
+// ⚠️ CHECKED PER FIELD, NOT PER FILE. Mutation testing caught the weaker
+// version: replacing the quote's customer-note label with a bare "Notes" left
+// the file still matching /AUDIENCE_COPY\.\w+\.label/ — because the INTERNAL
+// field two blocks down still used it. A form-wide check cannot tell you which
+// field stopped saying who reads it, which is the only thing worth knowing.
+// So each field is named, with the exact audience it must claim.
+const LABELLED_FIELDS: { file: string; what: string; audience: string }[] = [
+  { file: 'src/components/quotes/QuoteBuilder.tsx',   what: "the quote's customer note", audience: 'customer' },
+  { file: 'src/components/quotes/QuoteBuilder.tsx',   what: "the quote's internal note", audience: 'internal' },
+  { file: 'src/components/schedule/JobForm.tsx',      what: "the visit's crew note",     audience: 'crew' },
+  { file: 'src/components/customers/CustomerForm.tsx', what: "the customer's note",      audience: 'internal' },
 ]
-for (const [p, what] of FORMS) {
-  if (!has(p)) { fail(`${p} exists`, 'missing'); continue }
-  const src = read(p)   // NOT stripped: we are asserting on rendered JSX props
-  check(`the ${what} form states its notes' audience from AUDIENCE_COPY`,
-    /AUDIENCE_COPY\.\w+\.label/.test(src) && /AUDIENCE_COPY\.\w+\.help/.test(src),
-    'hand-written labels drift; the promise must come from one place')
-  check(`the ${what} form no longer invites gate codes into a printing field`,
-    !/placeholder="[^"]*gate codes[^"]*"[\s\S]{0,200}register\('notes'\)/.test(src) ||
-    what !== 'quote',
+for (const { file, what, audience } of LABELLED_FIELDS) {
+  if (!has(file)) { fail(`${file} exists`, 'missing'); continue }
+  const src = read(file).replace(/\s+/g, ' ')   // NOT comment-stripped: asserting on rendered JSX props
+  check(`${what} claims the ${audience} audience, from one source`,
+    new RegExp(`label=\\{AUDIENCE_COPY\\.${audience}\\.label\\} hint=\\{AUDIENCE_COPY\\.${audience}\\.help\\}`).test(src),
+    `a hand-written label drifts, and a missing one leaves the owner guessing which of three audiences this field has`)
+}
+
+for (const p of ['src/components/quotes/QuoteBuilder.tsx', 'src/components/schedule/JobForm.tsx',
+                 'src/components/customers/CustomerForm.tsx']) {
+  if (!has(p)) continue
+  check(`${p.split('/').pop()} does not invite gate codes into a printing field`,
+    !/placeholder="[^"]*gate codes[^"]*"[\s\S]{0,200}register\('notes'\)/.test(read(p)),
     'this exact placeholder sat on the field that prints on the customer PDF')
 }
 
