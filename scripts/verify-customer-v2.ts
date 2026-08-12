@@ -76,10 +76,18 @@ const types = read('types/index.ts')
 const cfv = types.slice(types.indexOf('interface CustomerFormValues'), types.indexOf('}', types.indexOf('interface CustomerFormValues')))
 check('CustomerFormValues has no address fields', ['address:', 'city:', 'province:', 'postal_code:'].filter(f => cfv.includes(f)), [])
 check('CustomerFormValues has tags', cfv.includes('tags: string[]'), true)
-const importPage = read('app/dashboard/customers/import/page.tsx')
-const customersInsert = importPage.slice(importPage.indexOf('const insertRows'), importPage.indexOf("from('customers').insert"))
+// The CSV importer's write path moved to lib/customerImport (Session 25). The
+// anchors are asserted to EXIST before the slice is read: a moved symbol would
+// otherwise make indexOf return -1, slice an empty string, and pass this check
+// by having nothing in it to fail on.
+const importLib = read('lib/customerImport.ts')
+const payloadStart = importLib.indexOf('const payload = (r: PlannedRow, id: string) => ({')
+const payloadEnd = importLib.indexOf('})', payloadStart)
+check('the import write payload is still findable in lib/customerImport',
+  payloadStart >= 0 && payloadEnd > payloadStart, true)
+const customersInsert = importLib.slice(payloadStart, payloadEnd)
 check('CSV import puts the address on the PROPERTY, not the customer row',
-  customersInsert.includes('address'), false)
+  ['address', 'city', 'province', 'postal_code'].filter(f => customersInsert.includes(f)), [])
 
 // ═══════════════════════════════════════════════════════════════════════════
 H('4. DERIVED PLANS — attribution has one path')
