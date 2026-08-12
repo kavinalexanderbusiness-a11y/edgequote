@@ -230,7 +230,10 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
         user_id: user.id, quote_id: q.id, customer_id: q.customer_id, property_id: q.property_id,
         invoice_number: `INV-${String(next).padStart(4, '0')}`, customer_name: q.customer_name,
         address: q.address, service_type: q.service_type, amount: q.total, line_items: lineItems, status: 'unpaid',
-        issued_date: issued, due_date: dueISO, notes: q.notes,
+        // Each half maps to its own counterpart on the invoice (lib/noteScope):
+        // `notes` prints, `internal_notes` never does. Same rule as the
+        // single-quote convert on the detail page.
+        issued_date: issued, due_date: dueISO, notes: q.notes, internal_notes: q.internal_notes,
       })
       if (!error) { created++; next++ }
     }
@@ -273,7 +276,9 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
         price_source: q.price_source, pricing_config_version_id: q.pricing_config_version_id,
         value_grade: q.value_grade, nearby_count: q.nearby_count,
         overgrowth_multiplier: q.overgrowth_multiplier, custom_travel_required: q.custom_travel_required,
-        show_travel_separately: q.show_travel_separately, notes: q.notes, hours: q.hours, crew_size: q.crew_size,
+        // Both halves come along, each staying on its own side of the boundary.
+        show_travel_separately: q.show_travel_separately, notes: q.notes, internal_notes: q.internal_notes,
+        hours: q.hours, crew_size: q.crew_size,
         rate: q.rate, travel_fee: q.travel_fee, property_id: q.property_id,
         measured_sqft: q.measured_sqft, suggested_price: q.suggested_price, travel_distance_km: q.travel_distance_km,
         pricing_confidence: q.pricing_confidence,

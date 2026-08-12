@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { isChannel } from '@/lib/marketing/channels'
+import { readUser } from '@/lib/authState'
 
 // GET /api/marketing/connect/callback — the OAuth redirect target. Validates the CSRF
 // state, then (once a provider's token exchange + app secret are configured) swaps the
@@ -9,8 +10,16 @@ import { isChannel } from '@/lib/marketing/channels'
 // round trip honestly and returns the owner to the Studio.
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.redirect(new URL('/login', req.url))
+  // Only a VERIFIED signed-out state may bounce the owner to the login form
+  // (lib/authState). A blip while the OAuth provider hands them back must not
+  // cost them the session that started the connection.
+  const auth = await readUser(supabase)
+  if (auth.kind === 'signed-out') return NextResponse.redirect(new URL('/login', req.url))
+  if (auth.kind === 'unavailable') {
+    const retry = new URL('/dashboard/grow/studio', req.url)
+    retry.searchParams.set('connect', 'unavailable')
+    return NextResponse.redirect(retry)
+  }
 
   const params = new URL(req.url).searchParams
   const platform = params.get('platform') || ''

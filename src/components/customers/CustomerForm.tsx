@@ -15,6 +15,7 @@ import { findCustomerMatch, normalizeTags } from '@/lib/customers'
 import { SMS_CONSENT_WARNING } from '@/lib/consent'
 import { cn } from '@/lib/utils'
 import { Customer, CustomerFormValues, ACQUISITION_SOURCES } from '@/types'
+import { AUDIENCE_COPY } from '@/lib/noteScope'
 import { Users, MessageSquare, Mail, ShieldCheck, Info, Tag, X } from 'lucide-react'
 
 interface CustomerFormProps {
@@ -297,9 +298,14 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
         render={({ field }) => <TagsInput value={field.value || []} onChange={field.onChange} />}
       />
 
+      {/* Internal by construction — get_portal_data's `customer` projection names
+          its columns and this is not one of them. The label says so, because a
+          field the owner believes might be customer-facing is a field they will
+          censor themselves in (lib/noteScope). */}
       <Textarea
-        label="Notes"
-        placeholder="Gate codes, preferred contact times, billing notes..."
+        label={AUDIENCE_COPY.internal.label}
+        hint={AUDIENCE_COPY.internal.help}
+        placeholder="Difficult about the last invoice · prefers texts · don't discount"
         {...register('notes')}
       />
       <div className="flex items-center justify-end gap-3 pt-2">

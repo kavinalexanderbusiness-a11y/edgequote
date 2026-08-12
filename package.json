@@ -8,6 +8,7 @@
     "verify:automations": "tsx scripts/verify-automations.ts",
     "verify:comms-governor": "tsx scripts/verify-comms-governor.ts",
     "verify:completion": "tsx scripts/verify-completion.ts",
+    "verify:scoped-notes": "tsx scripts/verify-scoped-notes.ts",
     "verify:business-shape": "tsx scripts/verify-business-shape.ts",
     "verify:trades": "tsx scripts/verify-trades.ts",
     "verify:undo-contract": "tsx scripts/verify-undo-contract.ts",
@@ -60,6 +61,7 @@
     "verify:surface-system": "tsx scripts/verify-surface-system.ts",
     "verify:inbox": "tsx scripts/verify-inbox.ts",
     "verify:customer-v2": "tsx scripts/verify-customer-v2.ts",
+    "verify:customer-import": "tsx scripts/verify-customer-import.ts",
     "verify:portal": "tsx scripts/verify-portal.ts",
     "verify:portal-rpc": "tsx scripts/verify-portal-rpc.ts",
     "verify:portal-canonical": "tsx scripts/verify-portal-canonical.ts",
@@ -82,6 +84,8 @@
     "verify:workforce": "tsx scripts/verify-workforce.ts",
     "verify:team": "tsx scripts/verify-team.ts",
     "verify:job-completion": "tsx scripts/verify-job-completion.ts",
+    "verify:job-cost": "tsx scripts/verify-job-cost.ts",
+    "verify:auth-session": "tsx scripts/verify-auth-session.ts",
     "verify:crew-access": "tsx scripts/verify-crew-access.ts",
     "verify:public-edge": "tsx scripts/verify-public-edge.ts",
     "verify:tenant-boundary": "tsx scripts/verify-tenant-boundary.ts",
@@ -100,7 +104,10 @@
     "verify:quote-options": "tsx scripts/verify-quote-options.ts",
     "verify:quote-pdf": "tsx scripts/verify-quote-pdf.ts",
     "verify:attribution": "tsx scripts/verify-attribution.ts",
-    "verify:service-bundles": "tsx scripts/verify-service-bundles.ts"
+    "verify:service-bundles": "tsx scripts/verify-service-bundles.ts",
+    "verify:location-intelligence": "tsx scripts/verify-location-intelligence.ts",
+    "verify:global-search": "tsx scripts/verify-global-search.ts",
+    "verify:fixture-isolation": "tsx scripts/verify-fixture-isolation.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

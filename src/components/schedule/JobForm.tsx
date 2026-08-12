@@ -21,6 +21,9 @@ import { WeeklyScheduler } from '@/components/schedule/WeeklyScheduler'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { EstimatedVsActual } from '@/components/labor/EstimatedVsActual'
 import { ServiceEstimateLearning } from '@/components/labor/ServiceEstimateLearning'
+import { JobCostPanel } from '@/components/jobs/JobCostPanel'
+import { JobReferenceMedia } from '@/components/schedule/JobReferenceMedia'
+import { AUDIENCE_COPY } from '@/lib/noteScope'
 import { loadCompletedVisitLearning, type LearningLoad } from '@/lib/estimateVsActualData'
 import type { Cadence } from '@/lib/labor'
 import { resolvePrefs, type PrefSource } from '@/lib/preferences'
@@ -640,10 +643,33 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
               serviceType={serviceType || null}
               excludeJobId={excludeJobId || undefined} />
           )}
+          {/* …and finally what it COST. Time sits above it because time is what
+              this visit already knows; cost is what somebody has to record.
+              Only on a SAVED visit: an expense needs a job id to point at, and
+              there is none until the visit exists. Creating one is not the
+              moment to think about receipts anyway. */}
+          {isEdit && excludeJobId && (
+            <JobCostPanel
+              job={{
+                id: excludeJobId,
+                status,
+                service_type: serviceType || null,
+                actual_minutes: Number(watch('actual_minutes')) || null,
+                crew_size: Number(watch('crew_size')) || null,
+              }} />
+          )}
         </div>
       )}
 
-      <Textarea label="Notes" placeholder="Access instructions, gate codes, special requests..."
+      {/* ⭐ THE AUDIENCE, SAID OUT LOUD. This field goes to the phone of whoever
+          works the visit (crew_day ships it as stops[].notes) and to nobody
+          else — it was removed from get_portal_data on 2026-08-11 after 49 of
+          78 completed visits rendered their gate codes in the customer's
+          history. The label used to be a bare "Notes", which is the same word
+          the quote form used for a field that PRINTS. Two opposite audiences
+          cannot share one word. */}
+      <Textarea label={AUDIENCE_COPY.crew.label} hint={AUDIENCE_COPY.crew.help}
+        placeholder="Use the east gate · park on the street · don't prune the lilac"
         {...register('notes')} />
       {aiNotes.enabled === true && String(watch('notes') || '').trim() !== '' && (
         <div className="-mt-2 space-y-1.5">
@@ -679,6 +705,13 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           )}
         </div>
       )}
+
+      {/* The same instruction, shown rather than described. Sits directly under
+          the note because "use the east gate" and a photo of the east gate are
+          one thought, not two features. On CREATE there is no visit to attach a
+          file to yet, and the component says so instead of offering a control
+          that would fail. */}
+      <JobReferenceMedia jobId={isEdit ? (excludeJobId || null) : null} />
 
       {/* Time & crew — expanded while creating (the smart duration suggestion
           matters then), a one-line summary when editing. */}

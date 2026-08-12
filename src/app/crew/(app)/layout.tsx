@@ -1,6 +1,8 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { resolveAppRole, CREW_JOIN, OWNER_ROOT } from '@/lib/crewAccess'
+import { readUser } from '@/lib/authState'
+import { AuthUnavailable } from '@/components/auth/AuthUnavailable'
 import { CrewNav } from '@/components/crew/CrewNav'
 import { Toaster } from '@/components/ui/Toaster'
 
@@ -19,8 +21,12 @@ import { Toaster } from '@/components/ui/Toaster'
 // upload widget. A worker gets three destinations and one action.
 export default async function CrewLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  // Three answers (lib/authState). A worker between cell towers must not be told
+  // they are signed out — that is the same shape as the "dead signal = you were
+  // fired" bug CrewDayResult exists to prevent, one layer up.
+  const auth = await readUser(supabase)
+  if (auth.kind === 'signed-out') redirect('/login')
+  if (auth.kind === 'unavailable') return <AuthUnavailable reason={auth.reason} />
 
   const role = await resolveAppRole(supabase)
   if (role === 'owner') redirect(OWNER_ROOT)
