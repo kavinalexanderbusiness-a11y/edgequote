@@ -119,7 +119,10 @@ export function JobReferenceMedia({ jobId }: { jobId: string | null }) {
   }
 
   return (
-    <div className="rounded-xl border border-border bg-bg-secondary p-3 space-y-2">
+    // data-scoped-notes marks this subtree for scripts/notes-cdp.mjs, so a
+    // mobile overflow finding can be attributed to THIS component rather than to
+    // whatever else happens to share the page.
+    <div data-scoped-notes className="rounded-xl border border-border bg-bg-secondary p-3 space-y-2">
       <div className="flex items-start gap-1.5">
         <Paperclip className="w-3.5 h-3.5 shrink-0 mt-0.5 text-sky-400" aria-hidden />
         <div className="min-w-0">
