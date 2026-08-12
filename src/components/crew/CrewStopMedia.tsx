@@ -82,7 +82,10 @@ export function CrewStopMedia({ jobId, photos, videos }: {
   }
 
   return (
-    <div className="mt-2">
+    // data-scoped-notes marks this subtree for scripts/notes-cdp.mjs, so a
+    // mobile overflow finding can be attributed to THIS component rather than to
+    // whatever else happens to share the worker's screen.
+    <div data-scoped-notes className="mt-2">
       <button
         type="button"
         onClick={toggle}
