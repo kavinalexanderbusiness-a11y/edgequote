@@ -98,7 +98,14 @@ export interface Property {
   mulch_area: number | null
   rock_area: number | null
   driveway_area: number | null
+  // CUSTOMER-FACING: get_portal_data returns this and the portal renders it under
+  // "Notes from your provider". Anything the customer must not read belongs in
+  // `internal_notes` below.
   notes: string | null
+  // PRIVATE to the owner and crew — the place's access facts (gate side, dog,
+  // controller location). Never selected by get_portal_data, so it cannot reach
+  // the portal; verify:location-intelligence pins that.
+  internal_notes?: string | null
   measurement_history: MeasurementSnapshot[]
   // Permanently-saved lawn boundary + map identity (from a website measurement or
   // an in-app trace). The CURRENT boundary — section-tagged {lat,lng} rings (jsonb)
