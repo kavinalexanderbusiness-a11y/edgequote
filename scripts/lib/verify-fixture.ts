@@ -132,7 +132,7 @@ export async function openFixtureTenant(label: string): Promise<FixtureTenant | 
       + `\n   is exactly what happened on 2026-08-11. Point VERIFY_FIXTURE_* at a marked`
       + `\n   tenant, or leave them unset and this guard will skip its live half.\n`,
     )
-    await db.auth.signOut().catch(() => {})
+    await db.auth.signOut({ scope: 'local' }).catch(() => {})
     process.exit(1)
   }
 
@@ -200,7 +200,7 @@ export async function openFixtureTenant(label: string): Promise<FixtureTenant | 
     // Notifications the fixture's own triggers raised — in the FIXTURE tenant, so
     // nobody ever saw them. Cleared anyway so the tenant stays a clean room.
     await db.from('notifications').delete().eq('user_id', uid)
-    await db.auth.signOut().catch(() => {})
+    await db.auth.signOut({ scope: 'local' }).catch(() => {})
   }
 
   return { db, anon: createClient(url, anonKey), uid, runId, tag, fixtureCustomer, fixtureTemplate, close }

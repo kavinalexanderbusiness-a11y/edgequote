@@ -560,7 +560,7 @@ async function main() {
         r?.selected_option_id,
       )?.name === 'Standard',
       'the same activeOption() the portal and the PDF call, over the row the database actually holds')
-    await fresh.auth.signOut().catch(() => {})
+    await fresh.auth.signOut({ scope: 'local' }).catch(() => {})
 
     // ── Downstream: the invoice reads the ONE money path ─────────────────────
     check('the invoice conversion would bill the selected option only',

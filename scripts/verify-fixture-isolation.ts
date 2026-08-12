@@ -217,7 +217,13 @@ async function live() {
     liveCustomer === null,
     'a fixture customer in the real book is a fake person in a real CRM')
 
-  await owner.auth.signOut().catch(() => {})
+  // ⚠️ scope:'local' is LOAD-BEARING. supabase-js defaults signOut() to
+  // scope:'global', which revokes EVERY session this account holds ANYWHERE —
+  // and this guard signs in as the REAL owner. A bare signOut() here signs the
+  // owner out of their own phone and desktop mid-workday. Production logged 214
+  // `/auth/v1/logout?scope=global` calls in 24 hours, every one from `node` on a
+  // dev machine, and that was THE cause of the random sign-outs.
+  await owner.auth.signOut({ scope: 'local' }).catch(() => {})
 }
 
 live()
