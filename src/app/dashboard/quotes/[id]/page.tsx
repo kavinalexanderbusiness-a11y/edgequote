@@ -34,7 +34,8 @@ import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { servicePricingKind } from '@/lib/servicePricing'
 import { saveManual } from '@/lib/measure/data'
-import { AlertTriangle, Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Camera, Globe, CalendarClock, Layers } from 'lucide-react'
+import { AlertTriangle, Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Camera, Globe, CalendarClock, Layers, Lock } from 'lucide-react'
+import { AUDIENCE_COPY } from '@/lib/noteScope'
 
 export default function QuoteDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -284,7 +285,9 @@ export default function QuoteDetailPage() {
         overgrowth_multiplier: mult,
         custom_travel_required: values.custom_travel_required,
         show_travel_separately: values.show_travel_separately,
+        // Two audiences, two columns — never merged (lib/noteScope).
         notes: values.notes || null,
+        internal_notes: values.internal_notes || null,
         hours: Number(values.hours),
         crew_size: Number(values.crew_size),
         rate: finalRate,
@@ -611,7 +614,13 @@ export default function QuoteDetailPage() {
         status: 'unpaid',
         issued_date: issued,
         due_date: dueISO,
+        // ⭐ AUDIENCE SURVIVES THE CONVERSION. The invoice has the same two
+        // halves the quote does (invoices.notes prints, invoices.internal_notes
+        // never does), so each side maps to its own counterpart. The one thing
+        // that must never happen here is quote.internal_notes landing in
+        // invoices.notes — that is a price floor on a customer's bill.
         notes: quote.notes,
+        internal_notes: quote.internal_notes,
       })
 
       if (error) {
@@ -667,7 +676,11 @@ export default function QuoteDetailPage() {
         overgrowth_multiplier: quote.overgrowth_multiplier,
         custom_travel_required: quote.custom_travel_required,
         show_travel_separately: quote.show_travel_separately,
+        // A duplicate is the same quote again, so BOTH halves come along and
+        // each stays on its own side. Copying `internal_notes` into `notes`
+        // (or dropping it) would be the leak and the loss respectively.
         notes: quote.notes,
+        internal_notes: quote.internal_notes,
         hours: quote.hours,
         crew_size: quote.crew_size,
         rate: quote.rate,
@@ -927,6 +940,7 @@ export default function QuoteDetailPage() {
           custom_travel_required: quote.custom_travel_required || false,
           show_travel_separately: quote.show_travel_separately || false,
           notes: quote.notes || '',
+          internal_notes: quote.internal_notes || '',
           status: quote.status,
           // A quote that HAS options opens with the switch on and the rows loaded
           // in the owner's saved order — never re-sorted, never re-seeded.
@@ -1291,10 +1305,27 @@ export default function QuoteDetailPage() {
             )}
           </div>
 
+          {/* ⭐ THE TWO NOTES, NEVER IN ONE BOX. This is the owner's preview of a
+              document the customer receives, so the field that WILL be on it and
+              the field that must never be are labelled by audience and visually
+              separated. A shared "Notes" heading over both is precisely how a
+              price floor ends up read aloud on a phone call. */}
           {quote.notes && (
             <div className="pt-3 border-t border-border">
-              <p className="text-[10px] text-ink-faint uppercase tracking-wide font-semibold mb-1">Notes</p>
+              <p className="text-[10px] text-ink-faint uppercase tracking-wide font-semibold mb-1">
+                {AUDIENCE_COPY.customer.label} <span className="text-ink-faint/70 normal-case font-normal">· on the PDF and in their portal</span>
+              </p>
               <p className="text-sm text-ink-muted whitespace-pre-wrap">{quote.notes}</p>
+            </div>
+          )}
+
+          {quote.internal_notes && (
+            <div className="pt-3 border-t border-border">
+              <p className="text-[10px] uppercase tracking-wide font-semibold mb-1 text-amber-400/90 flex items-center gap-1">
+                <Lock className="w-3 h-3" aria-hidden /> {AUDIENCE_COPY.internal.label}
+                <span className="text-ink-faint normal-case font-normal">· only your team</span>
+              </p>
+              <p className="text-sm text-ink-muted whitespace-pre-wrap">{quote.internal_notes}</p>
             </div>
           )}
 

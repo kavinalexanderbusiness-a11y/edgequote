@@ -1058,7 +1058,12 @@ export interface Quote {
   customer_name: string
   address: string
   service_type: string
+  /** ⭐ CUSTOMER-VISIBLE — printed in QuotePDF's Notes box and selected by
+   *  get_portal_data. The scope note written FOR the customer. */
   notes: string | null
+  /** 🔒 INTERNAL — the owner's price floor and private context. Never on a PDF,
+   *  never in the portal payload (lib/noteScope). */
+  internal_notes: string | null
   hours: number
   crew_size: number
   rate: number
@@ -1231,7 +1236,10 @@ export interface QuoteFormValues {
   crew_size: number
   rate: number
   travel_fee: number
+  /** ⭐ CUSTOMER-VISIBLE — prints on the quote PDF and shows in the portal. */
   notes: string
+  /** 🔒 INTERNAL — the owner's price floor and private context (lib/noteScope). */
+  internal_notes: string
   initial_price: number
   weekly_price: number
   biweekly_price: number
