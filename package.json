@@ -60,6 +60,7 @@
     "verify:surface-system": "tsx scripts/verify-surface-system.ts",
     "verify:inbox": "tsx scripts/verify-inbox.ts",
     "verify:customer-v2": "tsx scripts/verify-customer-v2.ts",
+    "verify:customer-import": "tsx scripts/verify-customer-import.ts",
     "verify:portal": "tsx scripts/verify-portal.ts",
     "verify:portal-rpc": "tsx scripts/verify-portal-rpc.ts",
     "verify:portal-canonical": "tsx scripts/verify-portal-canonical.ts",
@@ -81,6 +82,7 @@
     "verify:workforce": "tsx scripts/verify-workforce.ts",
     "verify:team": "tsx scripts/verify-team.ts",
     "verify:job-completion": "tsx scripts/verify-job-completion.ts",
+    "verify:job-cost": "tsx scripts/verify-job-cost.ts",
     "verify:crew-access": "tsx scripts/verify-crew-access.ts",
     "verify:public-edge": "tsx scripts/verify-public-edge.ts",
     "verify:tenant-boundary": "tsx scripts/verify-tenant-boundary.ts",
@@ -100,6 +102,8 @@
     "verify:quote-pdf": "tsx scripts/verify-quote-pdf.ts",
     "verify:attribution": "tsx scripts/verify-attribution.ts",
     "verify:service-bundles": "tsx scripts/verify-service-bundles.ts",
+    "verify:location-intelligence": "tsx scripts/verify-location-intelligence.ts",
+    "verify:global-search": "tsx scripts/verify-global-search.ts",
     "verify:fixture-isolation": "tsx scripts/verify-fixture-isolation.ts"
   },
   "dependencies": {
