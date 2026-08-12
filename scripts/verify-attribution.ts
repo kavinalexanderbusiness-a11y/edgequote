@@ -84,6 +84,8 @@ const QNEW = read('src/app/dashboard/quotes/new/page.tsx')
 const QEDIT = read('src/app/dashboard/quotes/[id]/page.tsx')
 const NEIGHBORS = read('src/app/dashboard/neighbors/page.tsx')
 const IMPORT = read('src/app/dashboard/customers/import/page.tsx')
+// The importer's rules moved into the engine; the page is now the surface only.
+const IMPORT_LIB = read('src/lib/customerImport.ts')
 const TYPES = read('src/types/index.ts')
 const BACKFILL = read('supabase/RUN-2026-08-11-backfill-lead-source.sql')
 
@@ -121,7 +123,7 @@ check('codeOnly removes a block comment', !codeOnly('/* roas\n here */\nselect 1
 check('…and keeps the code', codeOnly('-- roas here\nselect 1\n').includes('select 1'))
 check('every file read is normalised to \\n, so a CRLF checkout cannot change a verdict',
   ![LIB, SQL, INTAKE, BOOKING, PAGE, FORM, PROFILE,
-    CUSTOMERS, BUILDER, QNEW, QEDIT, NEIGHBORS, IMPORT, TYPES, BACKFILL].some(s => s.includes('\r')),
+    CUSTOMERS, BUILDER, QNEW, QEDIT, NEIGHBORS, IMPORT, IMPORT_LIB, TYPES, BACKFILL].some(s => s.includes('\r')),
   '`.` does not match \\r — one CRLF file makes codeOnly strip nothing at all')
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -500,14 +502,25 @@ check('…without auto-stamping a channel the page cannot know',
   'a neighbor lead can be door knock, flyer OR referral — hard-coding any one of them is a silent guess')
 
 // 10d — CSV import (every imported customer used to land as "Not recorded").
-check('the CSV source column is read, with the canonical alias',
-  /at\(r, col\('source'\)\) \|\| at\(r, col\('acquisition_source'\)\)/.test(IMPORT))
+//
+// ⚠️ These four pinned the ORIGINAL importer's exact source text: a fixed
+// `col('source')` lookup, one inline expression, and a raw <select>. Session 25
+// rebuilt the importer around a confirmed column MAPPING (lib/customerImport),
+// which keeps every rule below and expresses all of them differently. Re-aimed
+// at the rules themselves — the same four things still fail if broken, and a
+// header no longer has to be spelled "source" for the column to be read.
+check('the CSV source column is read, under the canonical alias and its variants',
+  /source: \['source', 'acquisition source'/.test(IMPORT_LIB) && /source: sanitizeSourceInput\(at\(m\.source\)\)/.test(IMPORT_LIB),
+  'the importer must offer a source field and read whatever column the owner maps to it')
 check('a row\'s own source beats the page default, and both are bounded',
-  /acquisition_source: sanitizeSourceInput\(r\.source \|\| defaultSource\)/.test(IMPORT),
+  /r\.values\.source \?\? fallbackSource/.test(IMPORT_LIB)
+  && /const fallbackSource = sanitizeSourceInput\(opts\.defaultSource\)/.test(IMPORT_LIB),
   'the default must fill only rows that carry nothing — never rewrite what the CSV said')
 check('the page default is optional ("Not sure" imports as unrecorded)',
-  /<option value="">Not sure<\/option>/.test(IMPORT))
-check('the column list the owner reads includes source', /postal_code, notes, source, sms_opt_in/.test(IMPORT))
+  /placeholder="Not sure"/.test(IMPORT),
+  'the shared Select renders its placeholder as the empty-value option')
+check('the owner is offered a source column to map',
+  /\{ field: 'source', label: '[^']+'/.test(IMPORT_LIB))
 
 // 10e — the website-lead door prefers evidence over its own label, exactly like
 // the booking door: the customer's words, then the link's utm_source, then the

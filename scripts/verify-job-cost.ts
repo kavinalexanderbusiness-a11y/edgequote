@@ -482,7 +482,14 @@ console.log('\nThe surface reads the contract rather than re-deriving it:')
 console.log('\nMutation tests — breaking each predicate must break the suite:')
 {
   const enginePath = join(__dirname, '..', 'src', 'lib', 'jobCost.ts')
-  const original = readFileSync(enginePath, 'utf8')
+  // ⚠️ Normalised to \n before anything is matched against it. Git hands this
+  // file to a Windows checkout as CRLF, and every `from:` anchor below is
+  // written with \n — so `includes()` finds NOTHING and all six mutations
+  // report "could not be applied". That is red on Windows and green in CI, for
+  // reasons that have nothing to do with the code under test. Writing the
+  // mutant back with \n is harmless: it is a temp copy that tsx parses and
+  // deletes. Same fix, same reason, as verify-attribution's `read()`.
+  const original = readFileSync(enginePath, 'utf8').replace(/\r\n?/g, '\n')
 
   // The assertion is handed the MUTANT's own exports. Closing over the real
   // module's functions instead would test the real engine, and every mutation
