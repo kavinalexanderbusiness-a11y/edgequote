@@ -30,7 +30,11 @@ function check(name: string, actual: unknown, expected: unknown) {
 function ok(name: string, cond: boolean) { check(name, cond, true) }
 
 const SRC = join(__dirname, '..', 'src')
-const read = (p: string) => readFileSync(join(SRC, p), 'utf8')
+// ⚠️ Normalised to \n before anything is matched. Git hands these files to a
+// Windows checkout as CRLF, and every multi-line anchor in this guard is written
+// with \n — so `includes()` finds nothing and the check below reports an RLS
+// policy as MISSING when it is present. False red locally, green in CI.
+const read = (p: string) => readFileSync(join(SRC, p), 'utf8').replace(/\r\n?/g, '\n')
 
 type Book = Customer & AddressCarrier
 const cust = (o: Partial<Book> & { id: string; name: string }): Book => ({
@@ -372,7 +376,7 @@ H('14. TENANCY — the file can never choose the business')
   ok('the id is minted, never taken from the row', src.includes('crypto.randomUUID()'))
   // The real guarantee is in the database, not here — pinned so a future
   // migration cannot quietly drop it.
-  const schema = readFileSync(join(__dirname, '..', 'supabase', 'schema.sql'), 'utf8')
+  const schema = readFileSync(join(__dirname, '..', 'supabase', 'schema.sql'), 'utf8').replace(/\r\n?/g, '\n')
   ok('customer_imports carries RLS', schema.includes('alter table public.customer_imports enable row level security'))
   ok('its insert policy is own-row only', schema.includes('"customer_imports: insert own" on public.customer_imports\n  for insert with check (auth.uid() = user_id)'))
   ok('anon holds no grant on the import audit', schema.includes('revoke all on public.customer_imports from anon'))

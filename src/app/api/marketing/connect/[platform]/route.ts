@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { isChannel } from '@/lib/marketing/channels'
 import { provider, canConnectApi } from '@/lib/marketing/providers'
+import { readUser } from '@/lib/authState'
 
 // GET /api/marketing/connect/[platform] — start the OAuth connect flow for a platform.
 // Env-gated: when the platform's OAuth app is registered (client id env set) AND the
@@ -16,8 +17,13 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ plat
   if (!isChannel(platform)) { back.searchParams.set('connect', 'error'); return NextResponse.redirect(back) }
 
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.redirect(new URL('/login', req.url))
+  // Only a VERIFIED signed-out state may bounce to the login form (lib/authState).
+  const auth = await readUser(supabase)
+  if (auth.kind === 'signed-out') return NextResponse.redirect(new URL('/login', req.url))
+  if (auth.kind === 'unavailable') {
+    back.searchParams.set('connect', 'unavailable')
+    return NextResponse.redirect(back)
+  }
 
   back.searchParams.set('platform', platform)
   if (!canConnectApi(platform)) {

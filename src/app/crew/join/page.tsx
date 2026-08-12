@@ -2,6 +2,8 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { resolveAppRole, CREW_ROOT, OWNER_ROOT } from '@/lib/crewAccess'
 import { CrewJoinForm } from '@/components/crew/CrewJoinForm'
+import { readUser } from '@/lib/authState'
+import { AuthUnavailable } from '@/components/auth/AuthUnavailable'
 
 export const metadata = { title: 'Join your crew — EdgeQuote' }
 
@@ -16,8 +18,12 @@ export const metadata = { title: 'Join your crew — EdgeQuote' }
 // lives outside that tree entirely.
 export default async function CrewJoinPage() {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  // Three answers (lib/authState) — an employee redeeming a code on site, on one
+  // bar of signal, must not lose the session that got them here.
+  const auth = await readUser(supabase)
+  if (auth.kind === 'signed-out') redirect('/login')
+  if (auth.kind === 'unavailable') return <AuthUnavailable reason={auth.reason} />
+  const user = auth.user
 
   const role = await resolveAppRole(supabase)
   if (role === 'crew') redirect(CREW_ROOT)

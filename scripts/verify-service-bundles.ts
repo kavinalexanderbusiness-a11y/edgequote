@@ -400,7 +400,15 @@ async function live() {
     const { count: leftQ } = await owner.from('quotes').select('id', { count: 'exact', head: true }).eq('quote_number', QUOTE_NUMBER)
     check('the guard cleaned up after itself', (leftB ?? 0) === 0 && (leftQ ?? 0) === 0,
       `${leftB} bundle(s) and ${leftQ} quote(s) remain — delete them by hand`)
-    await owner.auth.signOut().catch(() => {})
+    // ⚠️ scope:'local' is LOAD-BEARING, not a detail. supabase-js defaults signOut()
+    // to scope:'global', which revokes EVERY session this account holds ANYWHERE —
+    // and these guards sign in as the real production owner. A bare signOut() here
+    // signs the owner out of their own phone and desktop mid-workday. That is not
+    // hypothetical: production logged 214 `/auth/v1/logout?scope=global` calls in
+    // 24 hours, every one of them from `node` on a dev machine, and it was THE
+    // cause of the random sign-outs. 'local' ends only this script's own session.
+    // verify:auth-session fails if a bare signOut() reappears in scripts/.
+    await owner.auth.signOut({ scope: 'local' }).catch(() => {})
   }
 }
 

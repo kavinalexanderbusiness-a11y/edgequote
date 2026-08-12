@@ -547,7 +547,7 @@ async function main() {
         r?.selected_option_id,
       )?.name === 'Standard',
       'the same activeOption() the portal and the PDF call, over the row the database actually holds')
-    await fresh.auth.signOut().catch(() => {})
+    await fresh.auth.signOut({ scope: 'local' }).catch(() => {})
 
     // ── Downstream: the invoice reads the ONE money path ─────────────────────
     check('the invoice conversion would bill the selected option only',
@@ -564,7 +564,15 @@ async function main() {
       .select('id', { count: 'exact', head: true }).eq('user_id', uid).eq('quote_number', FIXTURE_NUMBER)
     check('the guard cleaned up after itself', (count ?? 0) === 0,
       `${count} fixture quote(s) named ${FIXTURE_NUMBER} remain — delete them by hand`)
-    await owner.auth.signOut().catch(() => {})
+    // ⚠️ scope:'local' is LOAD-BEARING, not a detail. supabase-js defaults signOut()
+    // to scope:'global', which revokes EVERY session this account holds ANYWHERE —
+    // and these guards sign in as the real production owner. A bare signOut() here
+    // signs the owner out of their own phone and desktop mid-workday. That is not
+    // hypothetical: production logged 214 `/auth/v1/logout?scope=global` calls in
+    // 24 hours, every one of them from `node` on a dev machine, and it was THE
+    // cause of the random sign-outs. 'local' ends only this script's own session.
+    // verify:auth-session fails if a bare signOut() reappears in scripts/.
+    await owner.auth.signOut({ scope: 'local' }).catch(() => {})
   }
 }
 
