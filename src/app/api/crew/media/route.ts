@@ -161,21 +161,32 @@ export async function GET(req: NextRequest) {
     // the first is true.
     return NextResponse.json({ error: 'Your instructions are attached but wouldn’t open — try again.' }, { status: 502 })
   }
-  const urlByPath = new Map((signed || []).map(s => [s.path, s.signedUrl]))
+  // ⚠️ MATCHED BY POSITION, WITH path AS THE FALLBACK — not the other way round.
+  // createSignedUrls returns one entry per requested path, in order. Keying a Map
+  // on the returned `path` assumes it echoes the input byte-for-byte; if it ever
+  // came back normalised (a leading slash, the bucket prefixed, URL-encoded), the
+  // lookup would miss on EVERY row and the worker would be told each of their
+  // instructions "wouldn't open" — a total, silent failure that looks exactly
+  // like a storage outage. Order is the contract that cannot drift, and the path
+  // check below is kept as a second chance rather than the only one.
+  const signedList = signed || []
+  const byPath = new Map(signedList.map(s => [s.path, s.signedUrl]))
+  const urlFor = (path: string, i: number): string | null =>
+    signedList[i]?.signedUrl ?? byPath.get(path) ?? null
 
   return NextResponse.json({
     ok: true,
     // ⛔ storage_path is NOT echoed back. The worker needs something to PLAY, not
     // the object's address — and a path is the one string that would still mean
     // something after the signature expired.
-    media: media.map(m => ({
+    media: media.map((m, i) => ({
       id: m.id,
       kind: m.kind,
       mime: m.mime,
       size_bytes: m.size_bytes,
       caption: m.caption,
       created_at: m.created_at,
-      url: urlByPath.get(m.storage_path) ?? null,
+      url: urlFor(m.storage_path, i),
     })),
     expires_in: SIGNED_URL_SECONDS,
   })
