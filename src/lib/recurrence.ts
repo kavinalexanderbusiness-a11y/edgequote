@@ -72,6 +72,31 @@ export function jobsInScope(anchor: Job, allJobs: Job[], scope: RecurrenceScope)
   return series.filter(j => j.scheduled_date >= anchor.scheduled_date)
 }
 
+// ── Series-end reconciliation ─────────────────────────────────────────────────
+// The visits that CONTRADICT a series' end date: still merely scheduled, sitting
+// strictly AFTER the end. Everything with history weight is out of bounds here —
+// completed/in-progress/cancelled visits (work that happened, is happening, or
+// was explicitly called off) and anything the caller marks protected (invoiced
+// visits: deleting one un-links its invoice). The anchor — the visit the owner
+// is looking at while saving — is also excluded: removing the row under an open
+// editor is how a save turns into a vanish. Strict `>` so a visit ON the end
+// date is the season's last legitimate stop, never a ghost.
+export interface SeriesVisitLite { id: string; scheduled_date: string; status: string }
+export function visitsBeyondEnd(
+  series: SeriesVisitLite[],
+  endDate: string | null,
+  opts: { anchorId?: string; protectedIds?: Set<string> } = {},
+): string[] {
+  if (!endDate) return []
+  return series
+    .filter(j =>
+      j.scheduled_date > endDate &&
+      j.status === 'scheduled' &&
+      j.id !== opts.anchorId &&
+      !opts.protectedIds?.has(j.id))
+    .map(j => j.id)
+}
+
 /** Shift a date string by a number of days, returning yyyy-MM-dd. */
 export function shiftDate(iso: string, deltaDays: number): string {
   return format(addDays(parseISO(iso), deltaDays), 'yyyy-MM-dd')

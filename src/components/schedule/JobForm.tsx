@@ -40,6 +40,12 @@ export interface Recurrence {
   count: number
   endDate: string | null
   endCount: number | null
+  // True when the owner explicitly set the Ends control this session. Lets the
+  // save distinguish "re-asserted the same end rule" (reconcile the series
+  // against it — remove stray visits past the end) from "didn't touch it"
+  // (leave deliberately-moved visits alone). Absent on rows hydrated from the
+  // database (recFromRow), so an untouched save never reconciles by surprise.
+  endAsserted?: boolean
 }
 
 export interface SuggestionMeta {
@@ -298,6 +304,20 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     setEndMode(serviceSeason ? 'season' : 'never')
   }, [serviceSeason, isEdit])
 
+  // Editing: RECOGNISE a stored end date that IS this service's season end, and
+  // show it as "Season end" rather than a bare "Specific date". Season End is
+  // stored as a plain end_date (the engine needs no season awareness), so
+  // without this the mode could never survive a reload — the owner picked
+  // "Season end", reopened the job, saw "Specific date", and reasonably
+  // concluded the save was lost. Derived, not stored: the season config +
+  // end_date remain the only truth, so the two can never disagree. Only while
+  // the control is untouched, and only an EXACT match — a hand-picked date that
+  // happens to equal the season end means the same thing anyway.
+  useEffect(() => {
+    if (!isEdit || endTouched.current) return
+    if (endMode === 'on' && endDate && seasonEndDate && endDate === seasonEndDate) setEndMode('season')
+  }, [isEdit, endMode, endDate, seasonEndDate])
+
   // Saved measurement recommendation for the selected property — the pricing
   // source of truth. Maps the chosen cadence to its measured price (same custom-
   // cadence mapping as effectiveFreq: 3wk≈biweekly, 4wk+≈monthly).
@@ -326,6 +346,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
       // so the recurrence engine needs no season awareness).
       endDate: endMode === 'season' ? seasonEndDate : (endMode === 'on' && endDate ? endDate : null),
       endCount: endMode === 'after' ? Math.max(1, endCount) : null,
+      endAsserted: endTouched.current,
     }
   }
 
