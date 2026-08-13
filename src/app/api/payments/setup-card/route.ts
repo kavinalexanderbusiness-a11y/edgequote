@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { stripeEnabled, createSetupCheckoutSession } from '@/lib/stripe/config'
 import { ensureStripeCustomerId } from '@/lib/payments/cards'
+import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -15,6 +16,11 @@ export async function POST(req: NextRequest) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+  // Tenant capability: a saved card exists to be CHARGED into the deployment's
+  // one Stripe account — a tenant without online_payments must not collect one.
+  if (!(await tenantCapabilities(supabase, user.id)).onlinePayments) {
+    return NextResponse.json({ error: CAPABILITY_MESSAGE.payments }, { status: 503 })
+  }
 
   const body = await req.json().catch(() => ({}))
   const customerId = String(body.customerId || '')

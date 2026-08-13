@@ -30,6 +30,9 @@ export function summarizeSendOutcome(data: {
     return { ok: false, text: 'Held — today’s send limit was reached.' }
   }
   if (reasons.includes('no-optin')) return { ok: false, text: 'This customer hasn’t opted in — turn on SMS/email on their profile.' }
+  // A platform restriction, not a setup gap — "finish setup in Settings" would
+  // send the owner hunting for a switch that does not exist for their business.
+  if (reasons.includes('not-enabled')) return { ok: false, text: 'Messaging isn’t enabled for this business.' }
   if (reasons.includes('disabled')) return { ok: false, text: 'Messaging isn’t set up yet — finish setup in Settings → Messaging.' }
   const err = Object.values(r).find(v => v.error)?.error
   if (err) return { ok: false, text: err }

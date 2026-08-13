@@ -3,6 +3,7 @@ import { createClient as createServerClient } from '@/lib/supabase/server'
 import { createClient as createServiceClient } from '@supabase/supabase-js'
 import { stripeEnabled } from '@/lib/stripe/config'
 import { reconcileStripe } from '@/lib/payments/reconcile'
+import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -21,6 +22,14 @@ export async function POST(req: NextRequest) {
   const supabase = await createServerClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+  // Tenant capability. Also the fix for the account-wide leak flagged in
+  // PLATFORM-BILLING-ADR: listSucceededPaymentIntents reads the WHOLE Stripe
+  // account, so any session whose tenant has no online_payments grant (a crew
+  // login, a second business's owner) would otherwise be handed every charge in
+  // the deployment as "unrecorded money".
+  if (!(await tenantCapabilities(supabase, user.id)).onlinePayments) {
+    return NextResponse.json({ error: CAPABILITY_MESSAGE.payments }, { status: 403 })
+  }
   if (!stripeEnabled()) {
     return NextResponse.json({ error: 'Stripe isn’t connected, so there’s nothing to reconcile against.' }, { status: 400 })
   }

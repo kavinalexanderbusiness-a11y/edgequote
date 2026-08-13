@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { createClient as createServiceClient } from '@supabase/supabase-js'
 import { attemptAutoPayCharge } from '@/lib/payments/autopay'
+import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -16,6 +17,11 @@ export async function POST(req: NextRequest) {
   const supabase = await createServerClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+  // Tenant capability (the engine re-checks — this door answers with the honest
+  // sentence instead of a bare 'skipped' so the Charge-card button can say why).
+  if (!(await tenantCapabilities(supabase, user.id)).onlinePayments) {
+    return NextResponse.json({ error: CAPABILITY_MESSAGE.payments }, { status: 503 })
+  }
 
   const body = await req.json().catch(() => ({}))
   const invoiceId = String(body.invoiceId || '')
