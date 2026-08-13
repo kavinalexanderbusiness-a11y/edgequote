@@ -97,6 +97,44 @@ export function visitsBeyondEnd(
     .map(j => j.id)
 }
 
+// ── What a rule change MEANS for an existing series ──────────────────────────
+// One engine, so the page never has to re-derive it. Three real answers:
+//
+//  regenerate — the rule still has visits ahead: rebuild the forward grid.
+//  end        — the rule stops the series at or before the visit being edited.
+//               NOT a failure. This is what "ends Oct 31" means when you're
+//               standing on the Oct 28 visit, and refusing it (as a bare
+//               `future.length === 0` check does) silently discards the
+//               owner's end rule: nothing persists, and reopening the job
+//               still says "Never ends".
+//  reject     — the rule genuinely materialises no schedule: an end before the
+//               visit itself, or an END-LESS cadence that yields nothing
+//               forward. Only here is keeping the old schedule the right call.
+export type SeriesChangePlan =
+  | { kind: 'reject'; reason: 'no-occurrences' | 'no-future' }
+  | { kind: 'end'; cutoff: string }
+  | { kind: 'regenerate'; future: string[] }
+
+export function planSeriesChange(
+  anchorISO: string,
+  unit: RecurUnit,
+  count: number,
+  endDate: string | null,
+  endCount: number | null,
+  todayISO: string,
+): SeriesChangePlan {
+  const dates = generateOccurrences(anchorISO, unit, count, endDate, endCount)
+  if (dates.length === 0) return { kind: 'reject', reason: 'no-occurrences' }
+  const future = dates.slice(1).filter(d => d >= todayISO)
+  if (future.length > 0) return { kind: 'regenerate', future }
+  if (!endDate && !endCount) return { kind: 'reject', reason: 'no-future' }
+  // The cutoff is the owner's own end date; a count-limited rule ends at the
+  // last occurrence it allows. Reconciling against the END DATE (not the last
+  // generated date) is what keeps a legitimate in-season stop that simply sits
+  // off the new grid.
+  return { kind: 'end', cutoff: endDate ?? dates[dates.length - 1] }
+}
+
 /** Shift a date string by a number of days, returning yyyy-MM-dd. */
 export function shiftDate(iso: string, deltaDays: number): string {
   return format(addDays(parseISO(iso), deltaDays), 'yyyy-MM-dd')

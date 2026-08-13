@@ -59,6 +59,10 @@ interface JobFormProps {
   excludeJobId?: string
   // Existing series for the job being edited, so the Repeat controls pre-fill.
   initialRecurrence?: Recurrence
+  /** `job_recurrences.start_date` of the series being edited. Season End is a
+   *  property of the series, not of the visit under the editor, so it resolves
+   *  from here — every visit in a series then agrees on one season end. */
+  seriesStartDate?: string
   allowAddAnother?: boolean
   suggestedPrice?: number // quote-derived per-visit price, shown as the price hint
   // Soft cadence/preference warnings for the chosen date+time (page-supplied, so
@@ -151,7 +155,7 @@ function recurrenceToUi(r?: Recurrence) {
   }
 }
 
-export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, allowAddAnother, suggestedPrice, warnFor, onSubmit, onCancel, onDirtyChange, isEdit }: JobFormProps) {
+export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, seriesStartDate, allowAddAnother, suggestedPrice, warnFor, onSubmit, onCancel, onDirtyChange, isEdit }: JobFormProps) {
   const supabase = createClient()
   const [properties, setProperties] = useState<Property[]>([])
   const addAnotherRef = useRef(false)
@@ -275,11 +279,20 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   const interval = presetToInterval(preset, customUnit, customCount)
 
   // ── Seasonal recurrence ──
-  // The service's season (lawn/snow), if any, and the season-end date for a
-  // series starting on the job's scheduled date.
+  // The service's season (lawn/snow), if any, and the season-end date for the
+  // series this visit belongs to.
   const serviceSeason = seasonForService(serviceType, seasons)
   const category = serviceCategory(serviceType)
-  const seasonEndDate = serviceSeason && scheduledDate ? seasonEndDateFor(scheduledDate, serviceSeason) : null
+  // Season End is a property of the SERIES, so it resolves from the series'
+  // start date — not from whichever visit happens to be open. An open-ended
+  // series pre-creates a rolling horizon of visits, so visits PAST the season
+  // end already exist on the calendar; picking "Season end" while standing on
+  // one of those resolved seasonEndDateFor's "you must mean next season" branch
+  // and stored NEXT year's end, which is no cutoff at all — the November visits
+  // the owner was looking at stayed exactly where they were. Falls back to the
+  // job's own date for a new series, where that date IS the start.
+  const seasonAnchorDate = seriesStartDate || scheduledDate
+  const seasonEndDate = serviceSeason && seasonAnchorDate ? seasonEndDateFor(seasonAnchorDate, serviceSeason) : null
   // The effective end date the series will use, given the chosen end mode.
   const effectiveEndDate =
     endMode === 'season' ? seasonEndDate

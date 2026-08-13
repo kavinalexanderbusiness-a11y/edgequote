@@ -13,7 +13,7 @@ import { DayOpsPanel, QuoteLite, QuickPatch } from '@/components/schedule/DayOps
 import { Coord, geocodeAddress } from '@/lib/geo'
 import { JobForm, Recurrence, SuggestionMeta } from '@/components/schedule/JobForm'
 import { ScopeDialog } from '@/components/schedule/ScopeDialog'
-import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel, visitsBeyondEnd } from '@/lib/recurrence'
+import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel, visitsBeyondEnd, planSeriesChange } from '@/lib/recurrence'
 import type { JobRecurrence } from '@/types'
 import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts, uncompleteJob } from '@/lib/invoicing'
 import { queueOrRun } from '@/lib/offline/outbox'
@@ -1322,12 +1322,14 @@ export default function SchedulePage() {
   async function changeRecurrence(job: Job, values: JobFormValues, recurrence: Recurrence) {
     if (!job.recurrence_id || !recurrence.unit) return
     const { data: { user } } = await supabase.auth.getUser()
-    // Validate the NEW cadence first — never delete the existing future visits
-    // for a rule that wouldn't regenerate any.
-    const dates = generateOccurrences(values.scheduled_date, recurrence.unit, recurrence.count, recurrence.endDate, recurrence.endCount)
-    const future = dates.slice(1).filter(d => d >= localToday())
-    if (future.length === 0) {
-      setBanner('That cadence/end date would leave no future visits — the existing schedule was kept unchanged.')
+    // What does this rule change actually mean? (lib/recurrence.planSeriesChange)
+    // Validate before touching anything — never delete a working schedule for a
+    // rule that materialises none.
+    const plan = planSeriesChange(values.scheduled_date, recurrence.unit, recurrence.count, recurrence.endDate, recurrence.endCount, localToday())
+    if (plan.kind === 'reject') {
+      setBanner(plan.reason === 'no-occurrences'
+        ? `That end date (${formatDate(recurrence.endDate!)}) is before this visit — the existing schedule was kept unchanged.`
+        : 'That cadence would leave no future visits — the existing schedule was kept unchanged.')
       return
     }
     // Stale-editor guard: this form hydrated from `recurrences[id]`. If the row
@@ -1365,6 +1367,28 @@ export default function SchedulePage() {
       setBanner('Could not save the new schedule rule — the series is unchanged. ' + (updErr?.message ?? ''))
       return
     }
+    // The rule ends the series at or before the visit being edited: there is no
+    // forward grid to regenerate, only visits that now contradict the end. Use
+    // the reconcile predicate rather than the regenerate path below — a stop
+    // that sits BEFORE the end but off the new grid (an Oct 31 visit under a
+    // rule anchored Oct 28) is still legitimate, and regeneration would delete
+    // it without re-creating it. The cutoff is the owner's own end date, or for
+    // a count-limited rule the last occurrence it allows.
+    if (plan.kind === 'end') {
+      const cutoff = plan.cutoff
+      const series = jobs.filter(j => j.recurrence_id === job.recurrence_id)
+      const ghostIds = visitsBeyondEnd(series, cutoff, { anchorId: job.id, protectedIds: invoicedJobIds })
+      const kept = series.filter(j => j.scheduled_date > cutoff && j.id !== job.id && !ghostIds.includes(j.id)).length
+      if (ghostIds.length) {
+        const { error: delErr } = await supabase.from('jobs').delete().in('id', ghostIds)
+        if (delErr) {
+          setBanner(`The new rule was saved, but the ${ghostIds.length} visit${ghostIds.length !== 1 ? 's' : ''} after ${formatDate(cutoff)} could not be removed: ` + delErr.message)
+          return
+        }
+      }
+      setBanner(`This series now ends ${formatDate(cutoff)}.${ghostIds.length ? ` ${ghostIds.length} later visit${ghostIds.length !== 1 ? 's' : ''} removed.` : ''}${kept ? ` ${kept} completed or invoiced visit${kept !== 1 ? 's' : ''} after that date kept.` : ''}`)
+      return
+    }
     // Regenerate forward. Only merely-scheduled, uninvoiced siblings are
     // replaceable; completed/in-progress work and invoice-linked visits are
     // business history and survive a rule change (their dates are skipped on
@@ -1380,7 +1404,7 @@ export default function SchedulePage() {
       }
     }
     const preservedDates = new Set(preserved.map(j => j.scheduled_date))
-    const toInsert = future.filter(d => !preservedDates.has(d))
+    const toInsert = plan.future.filter(d => !preservedDates.has(d))
     const base = occurrenceBase(values, user!.id, job.recurrence_id, job.quote_id)
     if (toInsert.length) {
       const { error: insErr } = await supabase.from('jobs').insert(toInsert.map(d => ({ ...base, scheduled_date: d, price: job.quote_id ? null : base.price })))
@@ -1389,7 +1413,7 @@ export default function SchedulePage() {
         return
       }
     }
-    setBanner(`Schedule updated to ${recurrenceLabel(recurrence.unit, recurrence.count)}. ${future.length} future visit${future.length !== 1 ? 's' : ''}.${preserved.length ? ` ${preserved.length} completed/invoiced visit${preserved.length !== 1 ? 's' : ''} kept.` : ''}`)
+    setBanner(`Schedule updated to ${recurrenceLabel(recurrence.unit, recurrence.count)}. ${plan.future.length} future visit${plan.future.length !== 1 ? 's' : ''}.${preserved.length ? ` ${preserved.length} completed/invoiced visit${preserved.length !== 1 ? 's' : ''} kept.` : ''}`)
   }
 
   // Orchestrator for an edit on a recurring job (or a one-time → one-time edit):
@@ -2419,6 +2443,7 @@ export default function SchedulePage() {
               initialRecurrence={editing?.recurrence_id && recurrences[editing.recurrence_id]
                 ? recFromRow(recurrences[editing.recurrence_id])
                 : (!editing ? quoteRecurrence : undefined)}
+              seriesStartDate={editing?.recurrence_id ? recurrences[editing.recurrence_id]?.start_date : undefined}
               defaultValues={editing ? {
                 customer_id: editing.customer_id || '',
                 property_id: editing.property_id || '',
