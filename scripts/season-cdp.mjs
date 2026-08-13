@@ -30,7 +30,17 @@ const BASE = process.env.BASE_URL || 'http://127.0.0.1:3000'
 const env = Object.fromEntries(
   readFileSync(resolve('.env.local'), 'utf8').replace(/\r\n/g, '\n').split('\n')
     .map(l => l.match(/^([A-Z_]+)=(.*)$/)).filter(Boolean).map(m => [m[1], m[2].replace(/^["']|["']$/g, '')]))
-const EMAIL = env.BACKFILL_OWNER_EMAIL, PASS = env.BACKFILL_OWNER_PASSWORD
+// Signs in as the FIXTURE TENANT by default. This driver SAVES (--save), and a
+// save is a real write to whichever book it is signed into — pointing it at the
+// owner's account by default made "verify the fix" and "edit the owner's live
+// schedule" the same keystroke. `--owner` is the deliberate, typed-out opt-in.
+const useOwner = rest.includes('--owner')
+const EMAIL = useOwner ? env.BACKFILL_OWNER_EMAIL : env.VERIFY_FIXTURE_EMAIL
+const PASS = useOwner ? env.BACKFILL_OWNER_PASSWORD : env.VERIFY_FIXTURE_PASSWORD
+if (!EMAIL || !PASS) {
+  console.error(`no credentials for the ${useOwner ? 'owner' : 'fixture'} tenant in .env.local`)
+  process.exit(2)
+}
 
 const PROFILE = resolve('.chrome-season')
 const chrome = spawn(CHROME, [
