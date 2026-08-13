@@ -284,13 +284,20 @@ console.log('\n12. Cancelled visits do not consume capacity; only open visits lo
 
 console.log('\n13. Tenancy — every read scoped, the engine pure:')
 {
+  // Per-READ-BLOCK scoping, not a whole-file count: a count can be satisfied by
+  // a code COMMENT that quotes the filter (this file's tenancy header does),
+  // which would let a real read lose its scope unnoticed. Each supabase.from()
+  // block must itself carry the filter, up to that read's closing paren-chain.
   const load = read('src/lib/dayFitLoad.ts')
-  const reads = load.match(/from\('([a-z_]+)'\)/g) || []
-  check('the loader touches jobs/settings/technicians/pto only',
-    reads.every(r => /jobs|business_settings|technicians|pto_entries/.test(r)), reads.join(', '))
-  const eqCount = (load.match(/\.eq\('user_id',\s*userId\)/g) || []).length
-  check(`every one of its ${reads.length} reads carries .eq('user_id', userId)`, eqCount >= reads.length,
-    `${eqCount} scoped of ${reads.length}`)
+  const blocks = load.split(/supabase\.from\(/).slice(1)
+  check('the loader has its four reads', blocks.length === 4, `found ${blocks.length}`)
+  for (const b of blocks) {
+    const table = b.match(/^'([a-z_]+)'/)?.[1] ?? '?'
+    check(`the ${table} read is tenant-scoped in ITS OWN call chain`,
+      /jobs|business_settings|technicians|pto_entries/.test(table)
+      && /\.eq\('user_id', userId\)/.test(b.split(/\n\s*\n/)[0]),
+      `no .eq('user_id', userId) inside the ${table} read`)
+  }
   check('the engine itself does no I/O', !/supabase|from\(|fetch\(/i.test(read('src/lib/dayFit.ts')), 'dayFit must stay pure')
   check('the advisor loads templates tenant-scoped',
     /from\('service_templates'\)\.select\('name, recurrence'\)\.eq\('user_id', uid\)/.test(read('src/lib/suggestionsLoad.ts')),
