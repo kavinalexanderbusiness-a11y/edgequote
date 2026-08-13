@@ -16,6 +16,7 @@
 // never the owner's book. Skips cleanly where no live credentials exist (CI).
 
 import { generateOccurrences, visitsBeyondEnd } from '../src/lib/recurrence'
+import { seasonEndDateFor, DEFAULT_SEASONS } from '../src/lib/seasons'
 import { openFixtureTenant, isSkipped } from './lib/verify-fixture'
 
 let pass = 0
@@ -135,12 +136,35 @@ async function main() {
     const { data: anonRead } = await t.anon.from('job_recurrences').select('id').eq('id', recId)
     check('anon sees no recurrence at all', anonRead?.length ?? -1, 0)
 
+    // ── 8. Season End resolves from the SERIES, not the open visit ───────────
+    // The editor reads job_recurrences.start_date for this. Proven against the
+    // stored row because the bug was exactly a disagreement between what the
+    // series is and which visit happened to be open: an open-ended series
+    // pre-creates visits PAST the season end, and resolving from one of those
+    // stored NEXT year's end — a full extra season instead of a cutoff.
+    H('8. Season End is a property of the SERIES (resolved from start_date)')
+    await db.from('job_recurrences').update({ end_date: null }).eq('id', recId)
+    const { data: recRead } = await db.from('job_recurrences')
+      .select('start_date').eq('id', recId).maybeSingle()
+    const startDate = (recRead as { start_date: string } | null)?.start_date
+    check('the series start is the one the fixture created', startDate, '2026-06-19')
+    const fromSeries = seasonEndDateFor(startDate!, DEFAULT_SEASONS.lawn)
+    check('resolved from the series start → this season\'s end', fromSeries, '2026-10-31')
+    const late = (await readSeries()).filter(j => j.scheduled_date > '2026-10-31').map(j => j.scheduled_date)
+    check('the series really does hold visits past that end (the bug\'s setup)', late.length > 0, true)
+    for (const openVisit of late) {
+      check(`standing on ${openVisit}, the series end is still ${fromSeries}`,
+        seasonEndDateFor(startDate!, DEFAULT_SEASONS.lawn), fromSeries)
+      check(`…while resolving from that visit would have said next year`,
+        seasonEndDateFor(openVisit, DEFAULT_SEASONS.lawn) > fromSeries, true)
+    }
+
     // ── Cleanup — measured, not assumed ──────────────────────────────────────
     await db.from('jobs').delete().eq('recurrence_id', recId)
     await db.from('job_recurrences').delete().eq('id', recId)
     const { count: leftJobs } = await db.from('jobs').select('id', { count: 'exact', head: true }).eq('user_id', uid).like('title', `%${t.runId}%`)
     const { count: leftRecs } = await db.from('job_recurrences').select('id', { count: 'exact', head: true }).eq('id', recId)
-    H('8. Residue')
+    H('9. Residue')
     check('no fixture visits left behind', leftJobs ?? -1, 0)
     check('no fixture recurrence left behind', leftRecs ?? -1, 0)
   } finally {
