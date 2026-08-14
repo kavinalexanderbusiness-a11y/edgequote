@@ -119,6 +119,7 @@
     "verify:deposit-scheduling": "tsx scripts/verify-deposit-scheduling.ts",
     "verify:day-fit": "tsx scripts/verify-day-fit.ts",
     "verify:work-sessions": "tsx scripts/verify-work-sessions.ts",
+    "verify:account-recovery": "tsx scripts/verify-account-recovery.ts",
     "schema:contract": "tsx scripts/schema/capture-contract.mts",
     "schema:baseline": "tsx scripts/schema/generate-baseline.ts",
     "verify:rebuild": "tsx scripts/verify-rebuild.ts",

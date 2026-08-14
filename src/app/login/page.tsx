@@ -1,11 +1,13 @@
 'use client'
 
 import { Suspense, useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Banner } from '@/components/ui/Banner'
+import { FORGOT_PATH } from '@/lib/passwordRecovery'
 import { Zap } from 'lucide-react'
 
 export default function LoginPage() {
@@ -107,6 +109,18 @@ function LoginForm() {
               Sign In
             </Button>
           </form>
+
+          {/* Below the button, not beside the password label: somebody reaches
+              for this AFTER a sign-in has failed, and that is where their eye
+              already is. */}
+          <div className="mt-5 pt-5 border-t border-border text-center">
+            <Link
+              href={FORGOT_PATH}
+              className="text-sm font-medium text-ink-muted hover:text-ink transition-colors tap-target inline-flex items-center justify-center"
+            >
+              Forgot your password?
+            </Link>
+          </div>
         </div>
 
         <p className="text-center text-xs text-ink-faint mt-6">
