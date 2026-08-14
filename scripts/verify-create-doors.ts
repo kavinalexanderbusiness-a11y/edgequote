@@ -104,6 +104,10 @@ console.log('\n═══ A door does not make you re-enter what it knows ══�
 const BARE_QUOTE_DOORS: Record<string, string> = {
   'app/dashboard/page.tsx':                'home page header — no customer is on screen yet',
   'app/dashboard/quotes/page.tsx':         'the quote list header — the list is every customer’s',
+  // Same species as the quote list header: the board spans every deal, so no one
+  // customer is on screen to carry. The pipeline's PER-ROW doors are not bare —
+  // lib/pipeline builds every prepare_quote / renew_service href with ?customer=.
+  'app/dashboard/pipeline/page.tsx':       'the pipeline header — the board is every customer’s',
   'components/command/CommandPalette.tsx': 'global ⌘K — reachable from anywhere, belongs to nobody',
   'components/layout/BottomNav.tsx':       'the mobile quick action — same, global',
   'components/quotes/QuoteList.tsx':       'the empty-state CTA and the "n" shortcut on the same list',
