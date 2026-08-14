@@ -153,12 +153,15 @@ export function quickAddActions(ctx: QuickAddContext, enabled: ReadonlySet<strin
  * Anything else is ignored — an unknown panel must open the form normally
  * rather than fail.
  */
-export type JobPanel = 'time' | 'cost'
+// 'profit' is a READING door, not a recording one: the finished-work review at
+// /dashboard/job-profit links each row back to the visit it is about. It is
+// deliberately NOT offered by the + sheet — there is nothing to add there.
+export type JobPanel = 'time' | 'cost' | 'profit'
 export function readJobPanel(param: string | null | undefined): JobPanel | null {
-  return param === 'time' || param === 'cost' ? param : null
+  return param === 'time' || param === 'cost' || param === 'profit' ? param : null
 }
 
 /** The DOM id a job panel anchors on, shared by the panel and the scroller. */
 export function jobPanelAnchorId(panel: JobPanel): string {
-  return panel === 'time' ? 'job-work-sessions' : 'job-cost'
+  return panel === 'time' ? 'job-work-sessions' : panel === 'profit' ? 'job-profit' : 'job-cost'
 }

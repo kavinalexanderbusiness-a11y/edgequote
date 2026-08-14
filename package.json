@@ -94,6 +94,7 @@
     "verify:team": "tsx scripts/verify-team.ts",
     "verify:job-completion": "tsx scripts/verify-job-completion.ts",
     "verify:job-cost": "tsx scripts/verify-job-cost.ts",
+    "verify:job-profit": "tsx scripts/verify-job-profit.ts",
     "verify:auth-session": "tsx scripts/verify-auth-session.ts",
     "verify:crew-access": "tsx scripts/verify-crew-access.ts",
     "verify:public-edge": "tsx scripts/verify-public-edge.ts",

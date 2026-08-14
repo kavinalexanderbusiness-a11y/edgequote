@@ -1,14 +1,16 @@
 // ── Visit value — the leaf the whole app can afford to import ────────────────
 // THE single definition of "what is this visit worth" and how a recurring
 // cadence resolves. Extracted from lib/invoicing because HALF THE APP needs
-// these three pure functions — geo, the optimizer, weather impact, labor,
+// these pure functions — geo, the optimizer, weather impact, labor,
 // profitability, suggestions, revenue intelligence, signals, dashboards —
 // and importing them from lib/invoicing dragged the entire invoice engine
 // (numbering, draft creation, discount maths, date-fns) into every one of
-// those graphs. This module deliberately imports NOTHING.
+// those graphs. This module imports NOTHING but a type.
 //
-// lib/invoicing re-exports all three, so existing `from '@/lib/invoicing'`
+// lib/invoicing re-exports all of them, so existing `from '@/lib/invoicing'`
 // call sites (including frozen surfaces) keep working unchanged.
+
+import type { InvoiceLineItem, JobLineItem } from '@/types'
 
 // Resolve a recurring cadence to weekly/biweekly/monthly. The legacy `freq`
 // column is null for any non-legacy interval (every 3 weeks, every 10 days,
@@ -56,4 +58,59 @@ export function jobVisitValue(jobPrice: number | null | undefined, quote: Record
   const p = Number(jobPrice)
   if (Number.isFinite(p) && p > 0) return p
   return quoteVisitAmount(quote, isInitial ? null : freq)
+}
+
+// ── What the customer has authorized us to bill for this visit ───────────────
+// The base visit value PLUS every approved extra PLUS a separately-billed travel
+// charge. It lives here, next to jobVisitValue, because it is the same question
+// one step out: jobVisitValue answers "what is the service worth", this answers
+// "what may we bill for the whole visit".
+//
+// ⭐ ONE definition, TWO readers. The invoice engine builds a draft from this, and
+// the job-profit review measures margin against it (lib/jobProfit). Because they
+// call the same function, "what we were authorized to bill" and "what we billed"
+// can only ever differ for a REASON that is itself recorded — a hand-edited
+// invoice, or a discount — never because two code paths added up the same visit
+// differently.
+//
+// `job_line_items` are priced EXTRAS (revenue), and once change orders land they
+// are what an APPROVAL mints — so an approved extra is authorized value by
+// construction, and a pending or declined one has no row and cannot bill.
+
+// Human label for the base service line on an invoice/breakdown ("Weekly Mowing").
+function serviceLineLabel(serviceType: string | null | undefined, freq: string | null, isInitial: boolean): string {
+  const base = serviceType || 'Services rendered'
+  if (isInitial) return `Initial visit — ${base}`
+  if (!freq) return base
+  const cap = freq.charAt(0).toUpperCase() + freq.slice(1)
+  return `${cap} ${base}`
+}
+
+// THE single definition of what an invoice should show + total: the base visit
+// value (job price > quote) plus every add-on, plus a separate travel charge
+// when the quote bills travel separately. Used by the draft + the sync so the
+// breakdown and the amount can never disagree.
+export function buildInvoiceLineItems(opts: {
+  serviceType: string | null
+  baseAmount: number
+  freq: string | null
+  isInitial: boolean
+  addons?: Pick<JobLineItem, 'description' | 'amount'>[] | null
+  quote?: Record<string, unknown> | null
+}): { lineItems: InvoiceLineItem[]; total: number } {
+  const lines: InvoiceLineItem[] = []
+  const base = Math.round(opts.baseAmount)
+  if (base > 0) lines.push({ description: serviceLineLabel(opts.serviceType, opts.freq, opts.isInitial), amount: base, kind: 'service' })
+  for (const a of opts.addons || []) {
+    const amt = Math.round(Number(a.amount) || 0)
+    if (amt !== 0) lines.push({ description: a.description, amount: amt, kind: 'addon' })
+  }
+  // Separate travel charge only when the quote opted to bill it separately —
+  // otherwise it's already inside the cadence price (don't double-count).
+  const q = opts.quote
+  if (q && q.show_travel_separately && Number(q.travel_fee) > 0) {
+    lines.push({ description: 'Travel charge', amount: Math.round(Number(q.travel_fee)), kind: 'travel' })
+  }
+  const total = lines.reduce((s, l) => s + l.amount, 0)
+  return { lineItems: lines, total }
 }

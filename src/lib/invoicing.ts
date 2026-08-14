@@ -15,26 +15,21 @@ export interface AutoInvoiceResult {
   reason?: 'not-recurring' | 'exists' | 'no-amount' | 'error'
 }
 
-// The three pure visit-value functions live in lib/visitValue — a leaf module
-// half the app (geo, optimizer, weather, labor, profitability…) can import
+// The pure visit-value functions live in lib/visitValue — a leaf module half the
+// app (geo, optimizer, weather, labor, profitability, job profit…) can import
 // WITHOUT dragging this whole invoice engine into its bundle. Re-exported here
 // so every existing `from '@/lib/invoicing'` call site keeps working unchanged.
-import { effectiveFreq, quoteVisitAmount, jobVisitValue } from '@/lib/visitValue'
-export { effectiveFreq, quoteVisitAmount, jobVisitValue }
+//
+// `buildInvoiceLineItems` moved there on 2026-08-14 for the same reason and with
+// the same guarantee: it is now ALSO the definition of authorized visit value
+// that lib/jobProfit measures margin against, so the amount a visit was
+// authorized for and the amount it was invoiced for come from one function
+// rather than two spellings of it.
+import {
+  effectiveFreq, quoteVisitAmount, jobVisitValue, buildInvoiceLineItems,
+} from '@/lib/visitValue'
+export { effectiveFreq, quoteVisitAmount, jobVisitValue, buildInvoiceLineItems }
 
-// Human label for the base service line on an invoice/breakdown ("Weekly Mowing").
-function serviceLineLabel(serviceType: string | null | undefined, freq: string | null, isInitial: boolean): string {
-  const base = serviceType || 'Services rendered'
-  if (isInitial) return `Initial visit — ${base}`
-  if (!freq) return base
-  const cap = freq.charAt(0).toUpperCase() + freq.slice(1)
-  return `${cap} ${base}`
-}
-
-// THE single definition of what an invoice should show + total: the base visit
-// value (job price > quote) plus every add-on, plus a separate travel charge
-// when the quote bills travel separately. Used by the draft + the sync so the
-// breakdown and the amount can never disagree.
 // THE invoice number generator. Sequential INV-#### from the highest EXISTING
 // number — a row count would reissue a number after any delete and two invoices
 // would share it (duplicate customer-facing documents). Every path that mints an
@@ -53,31 +48,6 @@ export async function nextInvoiceNumber(supabase: Supa, userId: string): Promise
   if (error || !data) return null
   const next = maxNumericSuffix((data as { invoice_number: string }[]).map(n => n.invoice_number)) + 1
   return `INV-${String(next).padStart(4, '0')}`
-}
-
-export function buildInvoiceLineItems(opts: {
-  serviceType: string | null
-  baseAmount: number
-  freq: string | null
-  isInitial: boolean
-  addons?: Pick<JobLineItem, 'description' | 'amount'>[] | null
-  quote?: Record<string, unknown> | null
-}): { lineItems: InvoiceLineItem[]; total: number } {
-  const lines: InvoiceLineItem[] = []
-  const base = Math.round(opts.baseAmount)
-  if (base > 0) lines.push({ description: serviceLineLabel(opts.serviceType, opts.freq, opts.isInitial), amount: base, kind: 'service' })
-  for (const a of opts.addons || []) {
-    const amt = Math.round(Number(a.amount) || 0)
-    if (amt !== 0) lines.push({ description: a.description, amount: amt, kind: 'addon' })
-  }
-  // Separate travel charge only when the quote opted to bill it separately —
-  // otherwise it's already inside the cadence price (don't double-count).
-  const q = opts.quote
-  if (q && q.show_travel_separately && Number(q.travel_fee) > 0) {
-    lines.push({ description: 'Travel charge', amount: Math.round(Number(q.travel_fee)), kind: 'travel' })
-  }
-  const total = lines.reduce((s, l) => s + l.amount, 0)
-  return { lineItems: lines, total }
 }
 
 // Keep DRAFT invoices in sync with their job's price — the JOB is the source of

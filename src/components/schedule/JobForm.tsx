@@ -22,6 +22,7 @@ import { SmartEstimateCard } from '@/components/labor/SmartEstimateCard'
 import { EstimatedVsActual } from '@/components/labor/EstimatedVsActual'
 import { ServiceEstimateLearning } from '@/components/labor/ServiceEstimateLearning'
 import { JobCostPanel } from '@/components/jobs/JobCostPanel'
+import { JobProfitPanel } from '@/components/jobs/JobProfitPanel'
 import DurationField from '@/components/jobs/DurationField'
 import WorkSessionsPanel from '@/components/jobs/WorkSessionsPanel'
 import { formatDuration, workdayMinutes } from '@/lib/workDuration'
@@ -419,6 +420,10 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   // left as null: silence would let a broken read look identical to a business
   // that simply has no history.
   const [learningLoad, setLearningLoad] = useState<LearningLoad | null>(null)
+  // Bumped when a cost is recorded (or undone) below, so the profit review
+  // re-reads instead of standing there with a margin computed from rows that have
+  // just changed underneath it.
+  const [costVersion, setCostVersion] = useState(0)
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -752,9 +757,30 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
                 service_type: serviceType || null,
                 actual_minutes: Number(watch('actual_minutes')) || null,
                 crew_size: Number(watch('crew_size')) || null,
-              }} />
+              }}
+              onChange={() => setCostVersion(v => v + 1)} />
             </div>
           )}
+        </div>
+      )}
+
+      {/* …and finally what all of that MEANT. Cost is what somebody records; this
+          is the only panel that subtracts it from what the work was worth, and it
+          refuses to unless the cost is complete (lib/jobProfit).
+          Deliberately OUTSIDE the completed-only block above:
+            • completed — it reads as the conclusion, right under the cost door;
+            • in_progress — a multi-day project can be watched against its price
+              while it runs, which is the whole point of a project;
+            • cancelled — money spent on work that never happened is still spent,
+              and this is where it says so instead of implying a loss;
+            • scheduled — nothing has happened, so there is nothing to review and
+              the panel does not mount. */}
+      {/* id: the landing target for /dashboard/schedule?job=<id>&panel=profit —
+          how the finished-work review gets back to the visit it is about
+          (lib/quickAdd owns that vocabulary). */}
+      {isEdit && excludeJobId && status !== 'scheduled' && (
+        <div id="job-profit" className="scroll-mt-4">
+          <JobProfitPanel jobId={excludeJobId} reloadKey={costVersion} />
         </div>
       )}
 

@@ -432,11 +432,18 @@ export function describeCost(c: JobActualCost): string {
   if (c.total.state === 'known') return `Cost ${formatCost(c.total.amount)}`
   if (c.total.state === 'unknown') return 'No costs recorded for this visit'
   const missing = c.total.unknownCategories.map(k => CATEGORY_LABEL[k].toLowerCase())
-  return `At least ${formatCost(c.total.knownAmount)} — ${listWords(missing)} not recorded`
+  return `At least ${formatCost(c.total.knownAmount)} — ${joinWords(missing)} not recorded`
 }
 
-/** "labour" · "labour and materials" · "labour, materials and other costs" */
-function listWords(words: string[]): string {
+/**
+ * "labour" · "labour and materials" · "labour, materials and other costs"
+ *
+ * Exported because lib/jobProfit words the same absence in its own sentence
+ * ("Margin incomplete — labour cost not recorded"), and two joiners would
+ * eventually disagree about the Oxford comma on the one screen where both
+ * sentences can appear at once.
+ */
+export function joinWords(words: string[]): string {
   if (words.length <= 1) return words[0] ?? ''
   return `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`
 }

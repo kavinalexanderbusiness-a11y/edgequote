@@ -8,7 +8,7 @@ import { CustomerHealthPanel } from '@/components/grow/CustomerHealthPanel'
 import { WinLossPanel } from '@/components/grow/WinLossPanel'
 import {
   BarChart3, Gauge, HeartPulse, Map as MapIcon, Target, ShieldCheck, CalendarCheck,
-  ArrowRight, TrendingUp, CloudRain, Ruler, FileText, ChevronDown, type LucideIcon,
+  ArrowRight, TrendingUp, CloudRain, Ruler, FileText, ChevronDown, Coins, type LucideIcon,
 } from 'lucide-react'
 
 // ── Grow ─────────────────────────────────────────────────────────────────────
@@ -56,6 +56,11 @@ const GOALS: { title: string; sub: string; tools: Tool[] }[] = [
     tools: [
       { label: 'Fix unpriced & underpriced jobs', href: '/dashboard/pricing-recovery', icon: Gauge, blurb: 'One-tap repairs on jobs earning less than they should.' },
       { label: 'What actually makes money', href: '/dashboard/profitability', icon: BarChart3, blurb: 'Which routes and neighbourhoods are worth the drive.' },
+      // The ACTUALS counterpart to the route grades above: those are priced from a
+      // planning rate and available for every job, this one only speaks where a
+      // real cost was recorded. Same goal, opposite evidence — so it sits in the
+      // same group rather than becoming a fourth one.
+      { label: 'Did finished jobs make money', href: '/dashboard/job-profit', icon: Coins, blurb: 'Finished visits against the price they agreed — and what nobody recorded.' },
     ],
   },
 ]
