@@ -8,7 +8,7 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Property, BusinessSettings, Job, JobRecurrence, Invoice } from '@/types'
 import { invoiceBalance } from '@/lib/payments/ledger'
-import { buildServicePlans, ServicePlan } from '@/lib/recurrence'
+import { buildServicePlans, ServicePlan, PLAN_STATUS_LABEL } from '@/lib/recurrence'
 import { settingsToSeasons } from '@/lib/seasons'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -315,7 +315,7 @@ export default function PropertiesPage() {
     const hasWonQuote = (qp?.accepted ?? 0) > 0
 
     // Active recurring service (the dominant non-paused plan).
-    const activePlan = plans.find(p => !p.paused) ?? null
+    const activePlan = plans.find(p => p.status === 'active') ?? null
     // Last actual visit vs the estimate (when both exist).
     const estDur = saved?.rec.est_minutes ?? null
     const durDelta = perf?.lastActualMin != null && estDur != null ? perf.lastActualMin - estDur : null
@@ -595,16 +595,20 @@ export default function PropertiesPage() {
                   <div className="mt-3 space-y-1.5">
                     {plans.map(plan => (
                       <div key={plan.recurrenceId}
-                        className={`rounded-xl border px-3 py-2 flex items-center justify-between gap-3 ${plan.paused ? 'border-border bg-bg-tertiary' : 'border-accent/20 bg-accent/5'}`}>
+                        className={`rounded-xl border px-3 py-2 flex items-center justify-between gap-3 ${plan.status !== 'active' ? 'border-border bg-bg-tertiary' : 'border-accent/20 bg-accent/5'}`}>
                         <div className="min-w-0">
-                          <p className="text-xs font-semibold text-ink flex items-center gap-1.5 truncate">
-                            <Repeat className={`w-3 h-3 shrink-0 ${plan.paused ? 'text-ink-faint' : 'text-accent-text'}`} />
-                            {plan.serviceName}
-                            {plan.paused && <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint border border-border rounded px-1 py-0.5">Paused</span>}
+                          {/* `truncate` on a flex CONTAINER does nothing to its
+                              children: the name needs its own truncate, and the
+                              status chip needs shrink-0 or a longer label
+                              ("Upcoming cancelled") squashes at 375px. */}
+                          <p className="text-xs font-semibold text-ink flex items-center gap-1.5 min-w-0">
+                            <Repeat className={`w-3 h-3 shrink-0 ${plan.status !== 'active' ? 'text-ink-faint' : 'text-accent-text'}`} />
+                            <span className="truncate">{plan.serviceName}</span>
+                            {plan.status !== 'active' && <span className="shrink-0 whitespace-nowrap text-[10px] font-semibold uppercase tracking-wide text-ink-faint border border-border rounded px-1 py-0.5">{PLAN_STATUS_LABEL[plan.status]}</span>}
                           </p>
                           <p className="text-[11px] text-ink-muted truncate">
                             {plan.cadenceLabel}{plan.weekday && ` · ${plan.weekday}`}{plan.windowLabel && ` · ${plan.windowLabel}`}
-                            {!plan.paused && ` · ${plan.remaining} visit${plan.remaining !== 1 ? 's' : ''} remaining`}
+                            {plan.status === 'active' && ` · ${plan.remaining} visit${plan.remaining !== 1 ? 's' : ''} remaining`}
                           </p>
                         </div>
                         {property.customer_id && (

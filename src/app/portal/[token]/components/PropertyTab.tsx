@@ -15,6 +15,7 @@ import {
   Camera, CheckCircle2, MapPin, Receipt, Repeat, Ruler, StickyNote,
 } from 'lucide-react'
 import { cn, formatCurrency, parseLocalDate } from '@/lib/utils'
+import { PLAN_STATUS_CUSTOMER_LABEL } from '@/lib/recurrence'
 import type { PortalProperty, PropertyModel } from '../model'
 import { Empty, StatCard, PortalSection, type TabProps } from './shared'
 
@@ -199,14 +200,17 @@ function FactsRow({ model, onPhotos, className }: { model: PropertyModel; onPhot
 }
 
 // One plan, compactly — the same ServicePlan fields PlanRow reads, nothing
-// inferred here. `paused` = history but no future visit booked; the honest
-// label is "No visits booked", not "cancelled".
+// inferred here. The customer-facing wording comes from the engine
+// (PLAN_STATUS_CUSTOMER_LABEL): a finished plan says "Plan complete" and a
+// seasonal one says "Back next season", where both used to say "No visits
+// booked" — which reads as neglect when the truth is the work is done.
 function PlanLine({ plan }: { plan: PlanItem }) {
   const perVisit = plan.recurringPrice ?? plan.initialPrice
+  const stopped = plan.status !== 'active'
   return (
     <div className="flex items-start gap-2.5 rounded-xl border border-border bg-bg-tertiary/40 px-3 py-2.5">
       <span className={cn('w-6 h-6 rounded-lg border flex items-center justify-center shrink-0 mt-0.5',
-        plan.paused ? 'border-border bg-bg-tertiary text-ink-faint' : 'border-accent/25 bg-accent/10 text-accent-text')}>
+        stopped ? 'border-border bg-bg-tertiary text-ink-faint' : 'border-accent/25 bg-accent/10 text-accent-text')}>
         <Repeat className="w-3 h-3" aria-hidden="true" />
       </span>
       <div className="min-w-0 flex-1">
@@ -218,8 +222,8 @@ function PlanLine({ plan }: { plan: PlanItem }) {
           )}
         </p>
         <p className="text-[11px] mt-0.5">
-          {plan.paused ? (
-            <span className="text-ink-faint">No visits booked</span>
+          {stopped ? (
+            <span className="text-ink-faint">{PLAN_STATUS_CUSTOMER_LABEL[plan.status]}</span>
           ) : plan.nextVisitDate ? (
             <span className="text-ink-muted">Next visit <span className="font-semibold text-ink">{fmtDate(plan.nextVisitDate)}</span></span>
           ) : (

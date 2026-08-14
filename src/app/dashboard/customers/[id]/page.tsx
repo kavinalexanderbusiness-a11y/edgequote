@@ -26,7 +26,7 @@ import {
 } from '@/lib/timelineData'
 import { TimelineCard } from '@/components/timeline/TimelineCard'
 import { needsFollowUp, daysSince } from '@/lib/followup'
-import { recurrenceLabel, recurringCustomerLabel, buildServicePlans, ServicePlan } from '@/lib/recurrence'
+import { recurrenceLabel, recurringCustomerLabel, buildServicePlans, ServicePlan, PlanStatus, PLAN_STATUS_LABEL } from '@/lib/recurrence'
 import { jobVisitValue, effectiveFreq } from '@/lib/visitValue'
 import { settingsToSeasons, DEFAULT_SEASONS, ServiceSeasons } from '@/lib/seasons'
 import { invoiceBalance } from '@/lib/payments/ledger'
@@ -550,14 +550,14 @@ export default function CustomerDetailPage() {
       .map(j => j.id)
     if (futureIds.length === 0) return
     const ok = await confirmDialog({
-      title: `Pause ${plan.serviceName}?`,
-      message: `This cancels ${futureIds.length} upcoming visit${futureIds.length !== 1 ? 's' : ''}. Past visits are kept, and you can schedule it again anytime.`,
-      confirmLabel: 'Pause plan',
+      title: `Cancel ${futureIds.length} upcoming visit${futureIds.length !== 1 ? 's' : ''}?`,
+      message: `This cancels every upcoming ${plan.serviceName} visit. Completed visits are kept. There is no pause to undo — restarting means scheduling the work again.`,
+      confirmLabel: 'Cancel upcoming visits',
     })
     if (!ok) return
     setPausing(plan.recurrenceId)
     const { error } = await supabase.from('jobs').update({ status: 'cancelled' }).in('id', futureIds)
-    if (error) toast.error('Could not pause: ' + error.message)
+    if (error) toast.error('Could not cancel the upcoming visits: ' + error.message)
     else setJobs(prev => prev.map(j => futureIds.includes(j.id) ? { ...j, status: 'cancelled' } : j))
     setPausing(null)
   }
@@ -609,7 +609,7 @@ export default function CustomerDetailPage() {
     }> = {}
     const ensure = (pid: string) => (byProp[pid] ||= { plans: [], upcoming: [], openQuotes: [], outstanding: 0, lastServiceDate: null })
     for (const p of properties) ensure(p.id)
-    for (const plan of servicePlans) if (plan.propertyId && byProp[plan.propertyId] && !plan.paused) byProp[plan.propertyId].plans.push(plan)
+    for (const plan of servicePlans) if (plan.propertyId && byProp[plan.propertyId] && plan.status === 'active') byProp[plan.propertyId].plans.push(plan)
     for (const j of jobs) {
       if (!j.property_id || !byProp[j.property_id]) continue
       const e = byProp[j.property_id]
@@ -1489,17 +1489,29 @@ function RollupStat({ icon: Icon, label, value, tone = 'text-ink' }: {
 }
 
 // One recurring schedule, summarised — visible without opening the calendar.
+// What a stopped plan says, per status. One sentence each, and each one says
+// something DIFFERENT to do — the old copy said "schedule it again to resume"
+// to a customer whose season simply hadn't come round yet.
+const PLAN_STATUS_DETAIL: Record<PlanStatus, string> = {
+  active: '',
+  dormant: 'Out of season — nothing to do until it comes round again',
+  ended: 'Every visit on this plan has been delivered',
+  cancelled_ahead: 'The upcoming visits were cancelled — schedule again to restart',
+  ran_dry: 'No visits left on the calendar — schedule again to keep it going',
+}
+
 function ServicePlanRow({ plan, customerId, pausing, onPause }: {
   plan: ServicePlan; customerId: string; pausing: boolean; onPause: () => void
 }) {
+  const stopped = plan.status !== 'active'
   return (
-    <div className={`rounded-xl border p-3 ${plan.paused ? 'border-border bg-bg-tertiary' : 'border-accent/20 bg-accent/5'}`}>
+    <div className={`rounded-xl border p-3 ${stopped ? 'border-border bg-bg-tertiary' : 'border-accent/20 bg-accent/5'}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-bold text-ink flex items-center gap-1.5">
-            <Repeat className={`w-3.5 h-3.5 shrink-0 ${plan.paused ? 'text-ink-faint' : 'text-accent-text'}`} />
+          <p className="text-sm font-bold text-ink flex flex-wrap items-center gap-1.5">
+            <Repeat className={`w-3.5 h-3.5 shrink-0 ${stopped ? 'text-ink-faint' : 'text-accent-text'}`} />
             {plan.serviceName}
-            {plan.paused && <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint border border-border rounded px-1.5 py-0.5">Paused</span>}
+            {stopped && <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint border border-border rounded px-1.5 py-0.5">{PLAN_STATUS_LABEL[plan.status]}</span>}
           </p>
           <p className="text-xs text-ink-muted mt-0.5">
             {plan.cadenceLabel}
@@ -1507,8 +1519,8 @@ function ServicePlanRow({ plan, customerId, pausing, onPause }: {
             {plan.windowLabel && <> · {plan.windowLabel}</>}
           </p>
           <p className="text-xs mt-0.5">
-            {plan.paused
-              ? <span className="text-ink-faint">No upcoming visits — schedule it again to resume</span>
+            {stopped
+              ? <span className="text-ink-faint">{PLAN_STATUS_DETAIL[plan.status]}</span>
               : <span className="text-accent-text font-semibold">{plan.remaining} visit{plan.remaining !== 1 ? 's' : ''} remaining{plan.nextVisitDate ? ` · next ${formatDate(plan.nextVisitDate)}` : ''}</span>}
           </p>
           {/* Initial vs recurring pricing — only when they actually differ */}
@@ -1524,18 +1536,24 @@ function ServicePlanRow({ plan, customerId, pausing, onPause }: {
       <div className="flex flex-wrap gap-2 mt-2.5">
         {/* One entry into the schedule — focuses this plan when it has an upcoming visit. */}
         <ButtonLink
-          href={!plan.paused && plan.nextVisitDate ? `/dashboard/schedule?focus=${plan.recurrenceId}` : `/dashboard/schedule?customer=${customerId}`}
+          href={!stopped && plan.nextVisitDate ? `/dashboard/schedule?focus=${plan.recurrenceId}` : `/dashboard/schedule?customer=${customerId}`}
           variant="secondary" size="sm">
           Open schedule
         </ButtonLink>
-        {!plan.paused && plan.remaining > 0 && (
+        {/* Named for what it DOES. There is no pause primitive: this cancels the
+            upcoming visits, and the link below opens a new-job form rather than
+            restoring anything — calling that pair Pause/Resume promised a state
+            the product does not have. */}
+        {!stopped && plan.remaining > 0 && (
           <Button variant="ghost" size="sm" loading={pausing} onClick={onPause}>
-            Pause schedule
+            Cancel upcoming visits
           </Button>
         )}
-        {plan.paused && (
+        {/* A finished plan and a dormant season are not waiting to be re-booked;
+            offering "Schedule again" there invents work the owner didn't ask for. */}
+        {(plan.status === 'cancelled_ahead' || plan.status === 'ran_dry') && (
           <ButtonLink href={`/dashboard/schedule?customer=${customerId}`} variant="secondary" size="sm">
-            Resume schedule
+            Schedule again
           </ButtonLink>
         )}
       </div>
