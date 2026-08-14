@@ -448,8 +448,12 @@ const histSrc = strip(readFileSync(new URL('../src/lib/seriesHistory.ts', import
 check('the editor re-seeds through reseedRepeatUi', /reseedRepeatUi\(/.test(formSrc), true)
 check('…inside an effect, so a LATE series still reaches the controls',
   /useEffect\(\(\)\s*=>\s*\{[\s\S]{0,400}?reseedRepeatUi\(/.test(formSrc), true)
-check('…and it reports whether Repeat was touched this session',
-  /repeatAsserted:\s*repeatTouched\.current/.test(formSrc), true)
+// Both branches of buildRecurrence, because the destructive one is the `unit:
+// null` return — a flag hard-coded true THERE is the whole guard undone.
+check('…and it reports whether Repeat was touched this session, on both branches',
+  (formSrc.match(/repeatAsserted:\s*repeatTouched\.current/g) || []).length >= 2, true)
+check('…never as a constant the save cannot disbelieve',
+  /repeatAsserted:\s*(true|false)/.test(formSrc), false)
 check('every Repeat control marks the flag (select, custom count, custom unit, chips, one-time)',
   (formSrc.match(/repeatTouched\.current\s*=\s*true/g) || []).length >= 5, true)
 check('Season End anchors on the SERIES start, falling back to the visit',
@@ -470,13 +474,20 @@ check('every history table a delete would cascade or orphan is checked',
     .every(t => (HISTORY_TABLES as readonly string[]).includes(t)), true)
 check('…and the reader fails CLOSED on a failed table read',
   /complete:\s*failed\.size === 0/.test(histSrc), true)
-// Write honesty: three writes end a series, and each proves it landed.
-check('the removal path counts rows on every write it claims',
+// Write honesty. Ending a series takes up to four writes and each one must
+// prove it landed — asserted PER WRITE, by count, because a single "somewhere
+// in this file there is a row check" is satisfied by a sibling block while the
+// mutated one sails through. That is exactly how mutation 6 first survived.
+check('every write in the removal path asks for its rows back',
   (pageSrc.match(/\.select\('id'\)/g) || []).length >= 4, true)
-check('…and treats zero rows back as failure, not success',
-  /data\.length === 0/.test(pageSrc) && /!==\s*removeIds\.length/.test(pageSrc), true)
-check('…including the detach, which the FK would otherwise do silently',
+check('both single-row detaches treat zero rows as failure (this AND future scope)',
+  (pageSrc.match(/\|\| !data \|\| data\.length === 0/g) || []).length >= 2, true)
+check('the placeholder delete is counted against the ids it asked for',
+  /!==\s*removeIds\.length/.test(pageSrc), true)
+check('…so is the bulk detach, which the FK would otherwise do silently',
   /!==\s*detachIds\.length/.test(pageSrc), true)
+check('…and dropping the rule itself is not assumed either',
+  /!recGone \|\| recGone\.length === 0/.test(pageSrc), true)
 
 console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)
 if (fail > 0) process.exit(1)
