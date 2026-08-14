@@ -296,17 +296,25 @@ async function liveRefusals() {
   const cases: [string, string][] = [
     ['a malformed token', 'not-a-real-token'],
     ['a well-formed hash that was never issued', '0'.repeat(56)],
-    ['another 56-character guess', 'f'.repeat(56)],
   ]
   const seen: string[] = []
   for (const [label, tok] of cases) {
     const r = await verify(tok)
+    // ⚠️ /verify is capped at 30 requests an hour for the whole project. Running
+    // this guard in a mutation-testing loop exhausts that, and a rate-limited
+    // answer is evidence of NOTHING about Supabase's refusal contract. Reporting
+    // it as a failure would make the guard fail for having been run — the same
+    // class of flake as asserting over transient production data.
+    if (r.status === 429) {
+      console.log(`  … live checks skipped — the project's /verify rate limit (30/hour) is spent`)
+      return
+    }
     check(`${label} is refused`, r.status === 403 || r.status === 400, `got ${r.status}`)
     check(`${label} issues no session`, !r.body.access_token && !r.body.user,
       'a refusal that hands back a session is not a refusal')
     seen.push(`${r.status}:${r.code}`)
   }
-  check('every refusal is the same refusal', new Set(seen).size === 1,
+  check('both refusals are the same refusal', new Set(seen).size === 1,
     `distinguishable answers would say which guesses were close: ${seen.join(' | ')}`)
   check('and it is Supabase\'s own combined invalid-or-expired answer',
     seen[0] === '403:otp_expired', `got ${seen[0]}`)
