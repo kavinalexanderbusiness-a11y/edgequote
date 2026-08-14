@@ -1603,7 +1603,7 @@ export default function SchedulePage() {
         // The rest of the save is a normal edit and still applies; only the
         // schedule is left alone, and the owner is told exactly that.
         await applyFieldEdits(job, values, scope)
-        setBanner('Saved — the repeat schedule was left as it is. To end it, set Repeats to “Does not repeat” yourself and save again.')
+        setBanner('Saved — the repeat schedule was left as it is. Nothing in this save asked to end it: change the Repeats control yourself, then save again.')
         await fetchJobs()
         setEditing(null)
         return
