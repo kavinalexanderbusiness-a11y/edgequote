@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
+import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { renderMessage, isCommercialMessage, MsgType, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
 import { dispatchToCustomer } from '@/lib/comms/dispatch'
@@ -48,20 +49,21 @@ interface CampaignRow {
   created_at: string
 }
 
-export async function GET(req: NextRequest) {
-  const secret = req.headers.get('authorization')?.replace('Bearer ', '') || new URL(req.url).searchParams.get('secret') || ''
-  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
-    return NextResponse.json({ error: 'forbidden' }, { status: 403 })
-  }
+async function handler(req: NextRequest) {
+  // THE shared guard (lib/cron/guard). This route used to re-type the token parsing
+  // and compare the secret with a plain `!==` — which leaks it a byte at a time
+  // through response timing, and is the exact duplication cronSecretOk was extracted
+  // to end. Same decision, same fail-closed behaviour when CRON_SECRET is unset.
+  if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   const enabled = commsEnabled()
   if (!enabled.sms && !enabled.email) {
     return NextResponse.json({ ok: true, disabled: true, note: 'Comms disabled — set Twilio/Resend env vars to enable campaign sends.' })
   }
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL, svc = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !svc) {
+  const client = serviceClient()
+  if (!client) {
     return NextResponse.json({ ok: true, skipped: true, note: 'Set SUPABASE_SERVICE_ROLE_KEY to enable campaign sends.' })
   }
-  const supabase = createClient(url, svc)
+  const supabase = client
   const today = new Date()
 
   // Archived campaigns are soft-deleted: their crm_campaign_log survives (audit +
@@ -233,9 +235,17 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json({
-    ok: true, campaigns: campaigns.length, processed, sent,
+    // A claim that failed for anything other than a duplicate means a customer this
+    // campaign meant to reach was passed over for a reason nobody chose. `notes` are
+    // returned in a body the scheduler throws away, so the verdict has to be a field
+    // the heartbeat can read.
+    ok: claimFailures === 0, campaigns: campaigns.length, processed, sent,
     ...(reaped ? { reaped } : {}),
     ...(claimFailures ? { claimFailures } : {}),
     ...(notes.length ? { notes } : {}),
   })
 }
+
+// This file had no console output of any kind, and every failure it knows about was
+// returned in a body Vercel discards. The heartbeat is now the one durable record.
+export const GET = withCronSweep('campaigns', handler, b => counts(b, undefined, 'processed', 'sent'))

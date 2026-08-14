@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
+import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { processDueJobs } from '@/lib/marketing/publishQueue'
 
 export const dynamic = 'force-dynamic'
@@ -10,7 +11,7 @@ export const dynamic = 'force-dynamic'
 // cron just sweeps ALL owners once a day (or hourly if a Pro user bumps the schedule in
 // vercel.json) so a post still goes out even if the owner never logs in. Guarded by
 // CRON_SECRET + the service-role key; no-ops cleanly when either is absent.
-export async function GET(req: NextRequest): Promise<NextResponse> {
+async function handler(req: NextRequest): Promise<NextResponse> {
   if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   const supabase = serviceClient() // service role → sweeps every owner
   if (!supabase) return NextResponse.json({ ok: true, skipped: true, note: 'Optional — set SUPABASE_SERVICE_ROLE_KEY to enable the daily sweep.' })
@@ -18,3 +19,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const result = await processDueJobs(supabase)
   return NextResponse.json({ ok: true, ...result })
 }
+
+// The heartbeat is the only durable evidence this sweep ever ran: processDueJobs
+// swallows a failed read and returns all-zeros, so "nothing was due" and "the query
+// died" reach the exact same response.
+export const GET = withCronSweep('publish', handler, b => counts(b, undefined, 'processed', 'published'))

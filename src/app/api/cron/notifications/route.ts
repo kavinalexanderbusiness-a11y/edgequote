@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
+import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { addDays, format } from 'date-fns'
 // MERGE (main ← guardian-2): both. guardian-2's loadOwnerContext replaces main's
 // inline bizCache (hence no MsgType/resolveAutomations here — the shared read owns
@@ -42,7 +43,7 @@ const MAX_PER_RUN = 500
 // dispatch can never disagree about what was claimed.
 const CHANNELS = ['sms', 'email']
 
-export async function GET(req: NextRequest) {
+async function handler(req: NextRequest) {
   if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   const enabled = commsEnabled()
   if (!enabled.sms && !enabled.email) {
@@ -228,8 +229,13 @@ export async function GET(req: NextRequest) {
   // Not "we'll get them next run" — tomorrow's reminders and yesterday's review
   // requests have no next run. Raise the cap.
   if (truncated) console.warn(`[cron/notifications] hit MAX_PER_RUN=${MAX_PER_RUN} (reminders: ${remTruncated}, reviews: ${revTruncated}) — jobs past the cap were NOT messaged and this date will not be revisited.`)
-  const summary = { ok: true, sent, skipped, errors, truncated }
+  // Truncation here is PERMANENT message loss, not a deferral — both batches key off
+  // a specific date and tomorrow's run looks at a different one — so it counts against
+  // the run's verdict just as a failed channel does.
+  const summary = { ok: errors === 0 && !truncated, sent, skipped, errors, truncated }
   // Log only when there was something to do, so quiet runs stay quiet in the logs.
   if (remRows.length || revRows.length) console.log('[cron/notifications] run:', JSON.stringify(summary))
   return NextResponse.json(summary)
 }
+
+export const GET = withCronSweep('notifications', handler, b => counts(b, undefined, undefined, 'sent'))
