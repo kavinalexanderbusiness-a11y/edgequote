@@ -187,6 +187,7 @@ async function main() {
       v2('2026-08-14', 'in_progress'), // being worked right now
       v2('2026-08-21', 'cancelled'),   // deliberately called off
       v2('2026-09-04', 'scheduled'),   // will carry a work session
+      v2('2026-09-18', 'scheduled'),   // will carry a photo and NOTHING else
       v2('2026-11-06', 'scheduled'),   // bare future placeholders — the only fair game
       v2('2026-11-14', 'scheduled'),
     ]).select('id, scheduled_date, status')
@@ -195,6 +196,13 @@ async function main() {
     const pick = (date: string, status: string) => made.find(j => j.scheduled_date === date && j.status === status)!
     const anchor2 = pick('2026-08-14', 'scheduled').id
     const worked = pick('2026-09-04', 'scheduled').id
+    // A future visit that is `scheduled`, carries no logged time, and is spared
+    // ONLY because a record points at it. Without it this section could not tell
+    // the history lookup from the status check — both would spare `worked`.
+    const shot = pick('2026-09-18', 'scheduled').id
+    const { error: phErr } = await db.from('job_photos')
+      .insert({ user_id: uid, job_id: shot, storage_path: `${t.runId}/proof.jpg`, kind: 'after' })
+    check('a proof photo can be attached to a scheduled visit', phErr ?? null, null)
 
     // Logged time makes a merely-`scheduled` visit history. actual_minutes is the
     // database-enforced sum of these rows, so this is the real signal.
@@ -218,13 +226,18 @@ async function main() {
       live.filter(j => j.id !== anchor2).map(j => j.id))
     check('every history table was reachable — the answer is known, not assumed', enc.complete, true)
     check('the work-session visit is named as encumbered', enc.ids.has(worked), true)
+    check('so is the photographed one — proof of work counts as history', enc.ids.has(shot), true)
+    check('a bare placeholder is NOT named — the lookup is not blanket protection',
+      enc.ids.has(pick('2026-11-06', 'scheduled').id), false)
 
     const TODAY = '2026-08-14' // fixed, never the clock — a guard must not drift at midnight
     const plan9 = partitionSeriesVisits(live, { anchorId: anchor2, protectedIds: enc.ids, todayISO: TODAY })
     check('only the two bare future placeholders are replaceable',
       plan9.replaceable.map(j => j.scheduled_date).sort(), ['2026-11-06', '2026-11-14'])
-    check('in-progress, cancelled and logged-time visits are preserved',
-      plan9.preserved.map(j => j.status).sort(), ['cancelled', 'in_progress', 'scheduled'])
+    check('in-progress, cancelled, logged-time and photographed visits are preserved',
+      plan9.preserved.map(j => j.status).sort(), ['cancelled', 'in_progress', 'scheduled', 'scheduled'])
+    check('…and the photographed one is spared by the RECORD alone, not its status',
+      plan9.preserved.some(j => j.id === shot), true)
     check('the past is untouched, worked or not',
       plan9.untouched.map(j => j.scheduled_date).sort(), ['2026-07-02', '2026-07-09'])
 
@@ -240,7 +253,8 @@ async function main() {
     check('the rule itself is removed, one row', recGone?.length, 1)
 
     const after9 = await readRemoval()
-    check('six visits survive — everything except the two placeholders', after9.length, 6)
+    check('seven visits survive — everything except the two placeholders', after9.length, 7)
+    check('the photographed visit survived', after9.some(j => j.id === shot), true)
     check('the completed visit is intact', after9.some(j => j.status === 'completed'), true)
     check('the in-progress visit is intact', after9.some(j => j.status === 'in_progress'), true)
     check('the cancelled record is intact', after9.some(j => j.status === 'cancelled'), true)
@@ -251,6 +265,8 @@ async function main() {
     check('the work session survived the removal', wsLeft?.length, 1)
     check('…with its minutes, and the job still reports them',
       after9.find(j => j.id === worked)?.actual_minutes, 75)
+    const { data: phLeft } = await db.from('job_photos').select('id').eq('job_id', shot)
+    check('the proof photo is still attached to its visit', phLeft?.length, 1)
 
     // ── 10. Why that protection is load-bearing, and why counting is ─────────
     H('10. The cascade is real, and a no-op write is silent')
