@@ -55,6 +55,7 @@ import {
   MIN_SERVICE_SAMPLE, type VisitLike, type LaborComparison,
 } from '../src/lib/estimateVsActual'
 import { resolveDuration } from '../src/lib/dayFit'
+import { loadCompletedVisitLearning } from '../src/lib/estimateVsActualData'
 import { DEFAULT_CAPACITY_HOURS } from '../src/lib/route'
 import { WORKDAY_FALLBACK_HOURS, formatDuration } from '../src/lib/workDuration'
 
@@ -735,5 +736,113 @@ console.log('\n21. Day Suggestions and the Smart Estimate agree:')
     /MIN_SERVICE_SAMPLE|established/.test(read('src/lib/dayFit.ts')), '')
 }
 
-console.log(failures ? `\n✗ ${failures} failure(s)` : '\n✓ smart-estimate: every rule holds')
-process.exit(failures ? 1 : 0)
+// ── 22. THE LOADER'S OWN WIRING ──────────────────────────────────────────────
+// Everything above hands the engine hand-built session facts, which proves the
+// JUDGEMENT and not the PLUMBING. A mutation that swapped the loader's
+// `elapsedMinutes: t.elapsedMinutes` for `t.labourMinutes` sailed through every
+// one of them: elapsed and labour would arrive already confused, and the engine
+// would faithfully reason about the wrong pair. So this section drives the real
+// loader against a stub client that answers both reads.
+async function loaderChecks() {
+  console.log('\n22. The loader maps Session 47\'s totals to the right fields:')
+
+  const stub = (jobs: unknown[], sessions: unknown[], opts?: { sessionsThrow?: boolean }) => {
+    const calls: { table: string; eq: [string, unknown][]; ins: unknown[] }[] = []
+    return {
+      from(table: string) {
+        const rec = { table, eq: [] as [string, unknown][], ins: [] as unknown[] }
+        calls.push(rec)
+        const rows = table === 'jobs' ? jobs : sessions
+        const b: Record<string, unknown> = {}
+        Object.assign(b, {
+          select: () => b,
+          eq: (c: string, v: unknown) => { rec.eq.push([c, v]); return b },
+          in: (_c: string, v: unknown[]) => {
+            if (opts?.sessionsThrow) throw new Error('transport exploded')
+            rec.ins.push(v); return b
+          },
+          order: () => b,
+          limit: () => b,
+          then: (r: (v: unknown) => unknown) => Promise.resolve({ data: rows, error: null }).then(r),
+        })
+        return b
+      },
+      calls,
+    }
+  }
+
+  // Six two-day projects: 480m×2 then 240m×2. Elapsed 720, labour 1440.
+  const jobRows = Array.from({ length: 6 }, (_, i) => ({
+    id: `j${i}`, status: 'completed', service_type: 'Warehouse Fit-Out',
+    scheduled_date: '2026-05-01', duration_minutes: 600, actual_minutes: 720, crew_size: 2,
+  }))
+  const sessionRows = jobRows.flatMap(j => ([
+    { id: `${j.id}a`, user_id: 'owner', job_id: j.id, worked_on: '2026-05-01', started_at: null, ended_at: null, minutes: 480, workers: 2, labour_minutes: 960, note: null, source: 'manual', created_at: '', updated_at: '' },
+    { id: `${j.id}b`, user_id: 'owner', job_id: j.id, worked_on: '2026-05-02', started_at: null, ended_at: null, minutes: 240, workers: 2, labour_minutes: 480, note: null, source: 'manual', created_at: '', updated_at: '' },
+  ]))
+
+  {
+    const s = stub(jobRows, sessionRows)
+    const load = await loadCompletedVisitLearning(s as never, 'owner')
+    eq('the load succeeds', load.outcome, 'ok')
+    const c = load.outcome === 'ok' ? load.learning.comparisons[0] : null
+    eq('ELAPSED is the summed session minutes — not the labour', c?.actualMinutes, 720)
+    eq('LABOUR is the summed person-minutes — not the elapsed', c?.laborMinutes, 1440)
+    check('…and the two are not interchangeable', c!.actualMinutes !== c!.laborMinutes)
+    eq('…labelled as measured, because every session was hand-logged', c?.laborSource, 'work_sessions')
+    eq('…and the crew is the count the sessions agree on', c?.crewSize, 2)
+    const e = load.outcome === 'ok'
+      ? buildWorkEstimate(serviceHistory('Warehouse Fit-Out', load.learning.comparisons), { capacityHours: 8 })
+      : null
+    eq('end to end: 1 day 4h on site', formatEstimatedDuration(e!.suggestedElapsedMinutes, e!.workdayMinutes), '1 day 4h')
+    eq('end to end: 24 labour-hours', formatLaborHours(e!.suggestedLaborMinutes), '24 labour-hours')
+    eq('end to end: measured', e!.laborSource, 'work_sessions')
+    // Tenancy, on the wire: both reads scoped, and the session read asks only
+    // for job ids that came from this owner's own jobs.
+    const jobsCall = s.calls.find(c2 => c2.table === 'jobs')
+    const sessCall = s.calls.find(c2 => c2.table === 'job_work_sessions')
+    check('the jobs read is scoped to the caller',
+      jobsCall!.eq.some(([c2, v]) => c2 === 'user_id' && v === 'owner'), JSON.stringify(jobsCall?.eq))
+    check('the session read asks only for this owner\'s job ids',
+      Array.isArray(sessCall?.ins[0]) && (sessCall!.ins[0] as string[]).every(id => jobRows.some(j => j.id === id)),
+      JSON.stringify(sessCall?.ins[0]))
+  }
+
+  {
+    // A foreign session that somehow reached the client is dropped, not summed.
+    // (The composite FK makes this unreachable in the database; the filter is
+    // what stands if a service-role client is ever passed.)
+    const foreign = sessionRows.map(r => ({ ...r, user_id: 'someone-else' }))
+    const load = await loadCompletedVisitLearning(stub(jobRows, foreign) as never, 'owner')
+    const c = load.outcome === 'ok' ? load.learning.comparisons[0] : null
+    eq('a foreign session contributes NO labour', c?.laborSource, 'planned_crew')
+    eq('…and the figure falls back to the plan, correctly labelled', c?.laborMinutes, 1440)
+    check('…while elapsed is untouched, because it never came from there',
+      c?.actualMinutes === 720)
+  }
+
+  {
+    // A session read that THROWS costs the labour claim and nothing else.
+    const load = await loadCompletedVisitLearning(
+      stub(jobRows, sessionRows, { sessionsThrow: true }) as never, 'owner')
+    eq('a thrown session read still loads', load.outcome, 'ok')
+    const c = load.outcome === 'ok' ? load.learning.comparisons[0] : null
+    eq('…elapsed is unaffected', c?.actualMinutes, 720)
+    eq('…and labour degrades to the plan, never to "measured"', c?.laborSource, 'planned_crew')
+  }
+
+  console.log(failures ? `\n✗ ${failures} failure(s)` : '\n✓ smart-estimate: every rule holds')
+  process.exit(failures ? 1 : 0)
+}
+
+// ⚠️ These scripts compile to CJS — no top-level await. The async section runs
+// through .then(), which is also where the final verdict is printed.
+// ⚠️ NO trailing process.exit here. One used to sit at the end of this file and
+// would fire the instant loaderChecks() suspended on its first await — killing
+// the process before a single loader check ran, and exiting 0 while reporting
+// nothing. The verdict is printed and the code returned INSIDE the async
+// function; a rejection is failed loudly rather than swallowed.
+loaderChecks().catch(e => {
+  console.log(`\n✗ loader checks threw: ${String(e)}`)
+  process.exit(1)
+})
