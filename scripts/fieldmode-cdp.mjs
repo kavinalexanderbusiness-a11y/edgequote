@@ -506,6 +506,67 @@ try {
     log(`  ${path.padEnd(34)} ${String(w8.scripts).padStart(3)} scripts · ${String(w8.scriptKb).padStart(5)} kB JS · interactive ${w8.domInteractiveMs}ms`)
   }
 
+  // ── 7. Long names, and a bad connection ───────────────────────────────────
+  // The field bar and the + both render a customer's name. "Sarah Kevol" fits;
+  // a strata corporation does not. Tested by REWRITING the rendered text rather
+  // than by creating a customer with a silly name — a layout question does not
+  // justify a row in the owner's book.
+  log('\n═══ 7. Long names · slow connection ═══')
+  {
+    await setWidth(375)
+    await openBoard()
+    const longName = await evaluate(`(() => {
+      const LONG = 'Bridleridge Ravine Homeowners Association & Property Management Ltd.'
+      const bar = [...document.querySelectorAll('div')].find(d =>
+        /fixed/.test(d.className || '') && /Next stop|On the clock|Underway/i.test(d.textContent || ''))
+      if (!bar) return { found: false }
+      const name = [...bar.querySelectorAll('span')].find(s => /truncate/.test(s.className || ''))
+      if (!name) return { found: true, named: false }
+      name.textContent = LONG
+      const r = bar.getBoundingClientRect()
+      const nr = name.getBoundingClientRect()
+      const primary = [...bar.querySelectorAll('button')].pop()
+      const pr = primary ? primary.getBoundingClientRect() : null
+      return {
+        found: true, named: true,
+        barRight: Math.round(r.right), viewport: innerWidth,
+        nameOverflows: nr.right > innerWidth + 1,
+        // The one thing that must survive a long name: the action is still there.
+        primaryVisible: !!pr && pr.width > 40 && pr.right <= innerWidth + 1,
+        primaryWidth: pr ? Math.round(pr.width) : 0,
+      }
+    })()`)
+    const over = await evaluate(OVERFLOW)
+    report.surfaces.longName = { ...longName, overflow: over }
+    log(`  field bar with a 67-character customer name: name clipped cleanly=${!longName.nameOverflows} · primary still ${longName.primaryWidth}px and on screen=${longName.primaryVisible}`)
+    if ((over || []).length) log(`  ⚠ overflow: ${over.join(' · ')}`)
+
+    // Slow 3G. What is being checked is NOT a stopwatch — it is that the day
+    // board paints something honest before the data lands, rather than an empty
+    // page that reads as "you have no work today".
+    // ⚠️ `skeleton` is expected to be FALSE on a warm profile: the board paints
+    // from lib/clientCache first and revalidates behind it, so by 2.5s there is
+    // real content and no skeleton left to find. The assertion that matters is
+    // `claimsEmpty` — a board that has not loaded must never say the day is.
+    await send('Network.emulateNetworkConditions', {
+      offline: false, latency: 400, downloadThroughput: (400 * 1024) / 8, uploadThroughput: (400 * 1024) / 8,
+    })
+    await send('Page.navigate', { url: `${baseUrl}/dashboard/schedule` })
+    await sleep(2500)
+    const early = await evaluate(`(() => {
+      const t = (document.querySelector('main') || document.body).textContent || ''
+      return {
+        skeleton: !!document.querySelector('[class*=animate-pulse], [class*=skeleton], [class*=Skeleton]'),
+        // ⛔ The failure this guards: a still-loading board that says the day is empty.
+        claimsEmpty: /no visits|nothing scheduled|no stops/i.test(t),
+        chars: t.length,
+      }
+    })()`)
+    await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+    report.surfaces.slowNetwork = early
+    log(`  on slow 3G at 2.5s: skeleton shown=${early.skeleton} · claims the day is empty=${early.claimsEmpty}`)
+  }
+
   if (jsonOut) { writeFileSync(jsonOut, JSON.stringify(report, null, 2)); log(`\n  → ${jsonOut}`) }
 } catch (e) {
   console.error('measurement failed: ' + (e?.stack || e?.message || e))
