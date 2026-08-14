@@ -3,7 +3,7 @@ import { listPhotosResult } from '@/lib/photos'
 import type { Quote, Job, Invoice } from '@/types'
 import type {
   TimelineSources, TlMessage, TlPayment, TlServiceRequest, TlMeasurement,
-  TlConsentChange, TlPriceChange,
+  TlConsentChange, TlPriceChange, TlWorkSession,
 } from '@/lib/timeline'
 
 // ── Loading the rows the timeline engine eats ────────────────────────────────
@@ -29,7 +29,7 @@ export type CustomerTimelineSources = Pick<TimelineSources,
   'customerId' | 'messages' | 'payments' | 'serviceRequests' | 'photos' | 'measurements' | 'consentChanges' | 'campaignLog'>
 
 /** The sources that only exist per job. */
-export type JobTimelineSources = Pick<TimelineSources, 'expenses' | 'priceChanges'>
+export type JobTimelineSources = Pick<TimelineSources, 'expenses' | 'priceChanges' | 'workSessions'>
 
 // ── A DROPPED READ IS NOT AN EMPTY HISTORY ───────────────────────────────────
 // This loader fans out across a dozen tables, and supabase-js RESOLVES on failure
@@ -132,11 +132,14 @@ export async function loadPropertyTimelineSources(
 export async function loadJobTimelineSources(
   supabase: SupabaseClient, jobIds: string[],
 ): Promise<TimelineLoad<JobTimelineSources>> {
-  if (jobIds.length === 0) return { sources: { expenses: [], priceChanges: [] }, missing: [] }
-  const [expRes, pcRes] = await Promise.all([
+  if (jobIds.length === 0) return { sources: { expenses: [], priceChanges: [], workSessions: [] }, missing: [] }
+  const [expRes, pcRes, wsRes] = await Promise.all([
     supabase.from('expenses').select('id, description, amount, spent_at, created_at, job_id, expense_categories(name)')
       .in('job_id', jobIds).is('archived_at', null),
     supabase.from('job_price_changes').select('id, old_amount, new_amount, reason, scope, created_at, job_id').in('job_id', jobIds),
+    // The days each job was worked. `job_id` rides along because the timeline's
+    // anti-clutter rule counts a job's sessions before emitting any of them.
+    supabase.from('job_work_sessions').select('id, job_id, worked_on, minutes, workers, note').in('job_id', jobIds),
   ])
   return {
     sources: {
@@ -145,7 +148,12 @@ export async function loadJobTimelineSources(
         created_at: r.created_at, job_id: r.job_id, category: one(r.expense_categories)?.name ?? null,
       })),
       priceChanges: (pcRes.data as TlPriceChange[]) || [],
+      workSessions: (wsRes.data as TlWorkSession[]) || [],
     },
-    missing: [...gap('Expenses', expRes.error), ...gap('Price changes', pcRes.error)],
+    missing: [
+      ...gap('Expenses', expRes.error),
+      ...gap('Price changes', pcRes.error),
+      ...gap('Work history', wsRes.error),
+    ],
   }
 }

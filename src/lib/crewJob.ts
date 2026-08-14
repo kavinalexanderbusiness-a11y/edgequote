@@ -82,15 +82,50 @@ async function write(
   return { ok: true, nextUpdatedAt: res.updated_at }
 }
 
-/** ▶ Check in. Keeps any minutes already banked on the visit. */
+/** ▶ Check in, or pick the clock back up on a job stopped earlier. Both are the
+ *  same write and the same sentence to a worker — "start working on this" — so
+ *  they are one function. The guard is on the CLOCK, not the status: a visit
+ *  with `started_at` set already has somebody on it. A visit that is
+ *  `in_progress` with no clock is one that was stopped for the day, and
+ *  refusing to start it (which the old `status !== 'scheduled'` check did) would
+ *  strand a multi-day job on the crew's phone with no way to work it again.
+ *
+ *  Minutes already banked are passed straight back untouched. */
 export async function crewStartVisit(supabase: SupabaseClient, stop: CrewStop): Promise<CrewWriteResult> {
-  if (stop.status !== 'scheduled') return { ok: false, error: 'That visit is already underway.' }
+  if (stop.started_at) return { ok: false, error: 'That visit is already underway.' }
+  if (stop.status === 'completed') return { ok: false, error: 'That visit is already finished.' }
   return write(supabase, stop, {
     status: 'in_progress',
     started_at: new Date().toISOString(),
     completed_at: null,
     actual_minutes: stop.actual_minutes,
   }, 'start it')
+}
+
+/** ⏸ Stop for today — the day ends, the visit does not.
+ *
+ *  ⛔ NOT a completion, and this is the whole reason it exists on the crew's
+ *  phone. Completing runs the invoice handoff and can text the customer that the
+ *  work is done; a worker who is coming back tomorrow must have a way out of the
+ *  day that does neither. It writes the same four lifecycle fields through the
+ *  same RPC — status stays `in_progress`, the clock clears — and the DATABASE
+ *  banks the time worked as a dated work session, so a day stopped from a phone
+ *  and a day stopped from the office produce the identical record.
+ *
+ *  The visit's DATE is deliberately not changed here: which day the crew comes
+ *  back is the office's call, and `crew_set_visit_status` cannot write
+ *  scheduled_date anyway (the crew field guard refuses it). */
+export async function crewStopForToday(supabase: SupabaseClient, stop: CrewStop): Promise<CrewWriteResult> {
+  if (stop.status === 'completed') return { ok: false, error: 'That visit is already finished.' }
+  if (!stop.started_at) return { ok: false, error: 'That visit isn’t started.' }
+  return write(supabase, stop, {
+    status: 'in_progress',
+    started_at: null,
+    completed_at: null,
+    // Passed back as held. The database recomputes the total from the sessions
+    // once this clock is banked — the phone never has to work it out.
+    actual_minutes: stop.actual_minutes,
+  }, 'stop for today')
 }
 
 /** ✓ Check out — through /api/crew/complete, NOT the bare RPC, because on every

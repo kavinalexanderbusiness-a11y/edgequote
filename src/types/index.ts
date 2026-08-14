@@ -273,12 +273,21 @@ export interface Job {
   // Per-visit price. Manual override — when set it wins over the linked quote's
   // cadence price (the one source for what a visit is worth).
   price: number | null
-  // Actual minutes spent on site. Auto-calculated from started_at → completed_at
-  // by the check-in/check-out flow (manually editable). THE timing value every
-  // engine reads (profitability, routes, pricing calibration).
+  // ELAPSED minutes on site. THE timing value every engine reads (profitability,
+  // routes, pricing calibration).
+  //
+  // ⭐ ONE CONTRACT, enforced by the database: once a job has work sessions, this
+  // IS the sum of their `minutes` — a total that disagrees with its parts is
+  // corrected on the way in (see supabase/RUN-2026-08-13-work-sessions.sql, and
+  // lib/workSession for the doors). A job with no sessions keeps whatever the
+  // check-in clock or the owner recorded, exactly as before. null = nothing
+  // recorded, never 0.
   actual_minutes: number | null
-  // Check-in/check-out: ▶ Start stamps started_at (arrival), ✓ Complete stamps
-  // completed_at and derives actual_minutes.
+  // Check-in: ▶ Start stamps started_at (arrival). It is CLEARED when the clock
+  // is banked — by completing, or by stopping for the day — and the arrival time
+  // lives on from there as the work session's own started_at. So
+  // `status === 'in_progress' && started_at === null` is a real and meaningful
+  // state: the job is underway but nobody is on the clock right now.
   started_at: string | null
   completed_at: string | null
   // Stamped by /api/comms/send when an "on my way" goes out (portal live status).
@@ -297,6 +306,41 @@ export interface Job {
   crew_id?: string | null
   customers?: Pick<Customer, 'id' | 'name' | 'phone' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'>
   properties?: Pick<Property, 'id' | 'address' | 'lat' | 'lng' | 'neighborhood' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'>
+}
+
+// ── Work sessions (RUN-2026-08-13-work-sessions) ──────────────────────────────
+// One stretch of work, on one job, on one day. A job worked across three days
+// has three of these; a 45-minute service call has one, or none if nobody timed
+// it. THE itemisation of `jobs.actual_minutes` — see lib/workSession.
+//
+// ⛔ Not `time_entries`. That is the PAYROLL clock: a person's shift, with a
+// snapshot wage, answering "what do I owe this employee". This answers "what
+// happened on this job on this day", carries no wage and names no person.
+
+export type WorkSessionSource = 'clock' | 'manual' | 'carried'
+
+export interface WorkSession {
+  id: string
+  user_id: string
+  job_id: string
+  /** The day the work happened, in the business's own reckoning. */
+  worked_on: string
+  /** The clock stretch, when there was one. null for time typed in by hand —
+   *  "about 3 hours yesterday" is not a claim about 09:00–12:00. */
+  started_at: string | null
+  ended_at: string | null
+  /** ELAPSED minutes on site. */
+  minutes: number
+  /** How many people were on site. A COUNT, never a roster. */
+  workers: number
+  /** Person-minutes — GENERATED in the database as minutes × workers, so the
+   *  elapsed/labour distinction has exactly one arithmetic. */
+  labour_minutes: number
+  /** Short, optional, and about the WORK ("ran out of primer"). Internal. */
+  note: string | null
+  source: WorkSessionSource
+  created_at: string
+  updated_at: string
 }
 
 // ── Dispatch & Crew Management (RUN-2026-07-15-dispatch-crews) ────────────────

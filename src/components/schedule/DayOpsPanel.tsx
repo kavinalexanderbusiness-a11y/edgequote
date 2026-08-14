@@ -28,8 +28,10 @@ import { SendMessageDialog, type MessageRecipient } from '@/components/comms/Sen
 import {
   DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
   Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send, Receipt,
-  ChevronUp, ChevronDown, Wand2, MoreHorizontal, CalendarDays, StickyNote, MessagesSquare,
+  ChevronUp, ChevronDown, Wand2, MoreHorizontal, CalendarDays, StickyNote, MessagesSquare, PauseCircle,
 } from 'lucide-react'
+import StopForTodaySheet from '@/components/jobs/StopForTodaySheet'
+import type { StopForTodayInput } from '@/lib/workSession'
 
 export interface QuoteLite {
   id: string
@@ -51,10 +53,15 @@ interface Props {
   onStartJob: (job: Job) => void | Promise<void>
   onMarkDone: (job: Job) => void | Promise<void>
   onMove: (job: Job, newDateISO: string) => void
-  // Send an in-progress visit to another day WITHOUT completing it: banks the time
-  // worked so far, pauses the timer, keeps photos/notes/price, and lands it on the
-  // chosen day ready to resume. Nothing is billed until the job is completed.
-  onContinue: (job: Job, newDateISO: string) => void
+  // ⭐ Stop for the day WITHOUT completing the visit: banks the time worked so
+  // far as a dated work session, stops the clock, keeps photos/notes/price, and
+  // optionally lands the job on the day it will be picked up again. The job
+  // stays IN PROGRESS. ⛔ Nothing is billed and the customer is told nothing —
+  // that is the whole distinction from onMarkDone.
+  onStopForToday: (job: Job, input: StopForTodayInput) => void | Promise<void>
+  // ▶ Pick the clock back up on a job already underway. The sessions already
+  // banked are untouched.
+  onResume: (job: Job) => void | Promise<void>
   onDeleteJob: (job: Job) => void
   onSetPrice: (job: Job, price: number | null, reason?: string) => Promise<void>
   workStartTime: string
@@ -90,7 +97,7 @@ export interface QuickPatch {
 
 export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
-  onOpenJob, onStartJob, onMarkDone, onMove, onContinue, onSetPrice, workStartTime, capacityHours, onRainDelay, onAddJob, onQuickSave,
+  onOpenJob, onStartJob, onMarkDone, onMove, onStopForToday, onResume, onSetPrice, workStartTime, capacityHours, onRainDelay, onAddJob, onQuickSave,
   addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons, addonTemplates,
   onStopOrder,
 }: Props) {
@@ -100,8 +107,11 @@ export function DayOpsPanel({
   const [acting, setActing] = useState<string | null>(null)
   const [quickId, setQuickId] = useState<string | null>(null)
   const [moveId, setMoveId] = useState<string | null>(null)
-  // Which in-progress job's "continue on another day" date picker is open.
-  const [continueId, setContinueId] = useState<string | null>(null)
+  // Which visit's "Stop for today" sheet is open. A sheet rather than the old
+  // inline date picker because stopping is now three answers, not one, and the
+  // most important of them ("when are you back?") has a legitimate "not yet".
+  const [stopping, setStopping] = useState<Job | null>(null)
+  const [stopBusy, setStopBusy] = useState(false)
   const [qv, setQv] = useState<{ start_time: string; crew_size: number; duration_minutes: number; status: JobStatus; notes: string; price: number }>({ start_time: '', crew_size: 1, duration_minutes: 0, status: 'scheduled', notes: '', price: 0 })
   const [savingQuick, setSavingQuick] = useState(false)
   // First-class price: a dedicated, price-only inline editor on every card.
@@ -186,7 +196,7 @@ export function DayOpsPanel({
   // keep the tap-again-to-close behaviour the buttons already had.
   function closePanels() {
     setPriceId(null); setQuickId(null); setMoveId(null)
-    setPhotoId(null); setAddonsId(null); setMessageId(null); setContinueId(null)
+    setPhotoId(null); setAddonsId(null); setMessageId(null)
     setChatId(null)
   }
   const toggleChat = (job: Job) => { const was = chatId === job.id; closePanels(); if (!was) setChatId(job.id) }
@@ -194,7 +204,7 @@ export function DayOpsPanel({
   const toggleAddons = (job: Job) => { const was = addonsId === job.id; closePanels(); if (!was) setAddonsId(job.id) }
   const toggleMessage = (job: Job) => { const was = messageId === job.id; closePanels(); if (!was) setMessageId(job.id) }
   const toggleMove = (job: Job) => { const was = moveId === job.id; closePanels(); if (!was) setMoveId(job.id) }
-  const toggleContinue = (job: Job) => { const was = continueId === job.id; closePanels(); if (!was) setContinueId(job.id) }
+  const openStop = (job: Job) => { closePanels(); setStopping(job) }
 
   function openPrice(job: Job) {
     closePanels()
@@ -1036,6 +1046,23 @@ export function DayOpsPanel({
                         {job.status === 'scheduled' && (
                           <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onStartJob(job) } finally { setActing(null) } }} icon={Play} label="Start" tone={job.on_my_way_at ? 'primary' : undefined} />
                         )}
+                        {/* ⭐ THE THREE FIELD DOORS ON AN ACTIVE VISIT, all
+                            visible, none hidden in an overflow menu:
+                              on the clock → Stop for today · Complete
+                              stopped      → Resume · Complete
+                            "Stop for today" used to be a menu item called
+                            "Continue on another day", which meant the only
+                            one-tap way out of a job you hadn't finished was
+                            Complete — and Complete drafts an invoice and can
+                            text the customer that the work is done. */}
+                        {job.status === 'in_progress' && job.started_at && (
+                          <ActionBtn disabled={acting !== null} onClick={() => openStop(job)} icon={PauseCircle} label="Stop for today"
+                            title="Records today’s time and keeps the job open — nothing is invoiced and the customer isn’t told anything." />
+                        )}
+                        {job.status === 'in_progress' && !job.started_at && (
+                          <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onResume(job) } finally { setActing(null) } }} icon={Play} label="Resume" tone="primary"
+                            title="Start the clock again on this job. The time already recorded is kept." />
+                        )}
                         {job.status === 'in_progress' && (
                           <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onMarkDone(job) } finally { setActing(null) } }} icon={CheckCircle2} label="Complete" tone="complete" />
                         )}
@@ -1074,9 +1101,9 @@ export function DayOpsPanel({
                         <Menu align="end" width={300} items={[
                           { key: 'quick', label: 'Quick edit', description: 'Time, crew, status & notes — this visit', icon: SlidersHorizontal, onSelect: () => { quickId === job.id ? setQuickId(null) : openQuick(job) } },
                           { key: 'edit', label: 'Edit job', description: 'Property, title & the recurring schedule', icon: Pencil, onSelect: () => onOpenJob(job) },
-                          // Only an already-started job can be "continued" — banks today's
-                          // time & photos and finishes another day, without completing/billing it.
-                          ...(job.status === 'in_progress' ? [{ key: 'continue', label: 'Continue on another day', description: 'Not done today? Keep today’s time & photos, finish it another day', icon: CalendarDays, onSelect: () => toggleContinue(job) }] : []),
+                          // Stop for today is a first-class button on the card
+                          // above, not a menu item — it is one of the three
+                          // things a person standing on site actually does.
                           { key: 'move', label: 'Move to another day', description: 'Reschedule this visit to another date', icon: Move, onSelect: () => toggleMove(job) },
                         ]}>
                           {({ toggle, triggerProps }) => (
@@ -1096,23 +1123,6 @@ export function DayOpsPanel({
                             onChange={e => { if (e.target.value && e.target.value !== date) { onMove(job, e.target.value); setMoveId(null) } }}
                             className="bg-bg-secondary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
                           <Button size="sm" variant="ghost" onClick={() => setMoveId(null)}>Cancel</Button>
-                        </div>
-                      )}
-
-                      {/* Continue on another day — an in-progress visit that isn't finished.
-                          Banks today's worked time, pauses the timer, keeps photos/notes/price,
-                          and lands it on the chosen day ready to resume. Not billed until done. */}
-                      {continueId === job.id && (
-                        <div className="mt-2 rounded-lg border border-border bg-bg-secondary p-2.5 space-y-2" onClick={e => e.stopPropagation()}>
-                          <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><CalendarDays className="w-3 h-3" /> Continue on another day</p>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-xs text-ink-muted">Finish on</span>
-                            <input type="date" defaultValue={date}
-                              onChange={e => { if (e.target.value && e.target.value !== date) { onContinue(job, e.target.value); setContinueId(null) } }}
-                              className="bg-bg-secondary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
-                            <Button size="sm" variant="ghost" onClick={() => setContinueId(null)}>Cancel</Button>
-                          </div>
-                          <p className="text-[10px] text-ink-faint">Today’s time and photos are kept — it lands on that day ready to resume, and isn’t billed until you complete it.</p>
                         </div>
                       )}
 
@@ -1212,6 +1222,21 @@ export function DayOpsPanel({
             })}
           </div>
         </div>
+      )}
+
+      {/* The one stop sheet for this board. */}
+      {stopping && (
+        <StopForTodaySheet
+          open
+          onClose={() => setStopping(null)}
+          jobTitle={stopping.customers?.name || stopping.title}
+          crewSize={stopping.crew_size ?? 1}
+          runningSince={stopping.started_at}
+          busy={stopBusy}
+          onStop={async input => {
+            setStopBusy(true)
+            try { await onStopForToday(stopping, input) } finally { setStopBusy(false); setStopping(null) }
+          }} />
       )}
     </div>
   )

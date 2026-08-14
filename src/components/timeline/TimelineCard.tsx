@@ -14,7 +14,7 @@ import { formatDate, cn } from '@/lib/utils'
 import {
   FileText, Send, RotateCw, CheckCircle2, XCircle, CalendarPlus, Wrench, Receipt,
   Eye, DollarSign, MessageSquare, StickyNote, Wallet, Camera, Ruler, Shield,
-  Sparkles, Globe, History, Search, X, HandCoins, AlertTriangle,
+  Sparkles, Globe, History, Search, X, HandCoins, AlertTriangle, Timer,
 } from 'lucide-react'
 
 // ── THE timeline UI ──────────────────────────────────────────────────────────
@@ -35,6 +35,9 @@ const EVENT_META: Record<TimelineKind, { icon: typeof FileText; color: string }>
   quote_declined:  { icon: XCircle,      color: 'text-ink-faint bg-bg-tertiary border-border' },
   job_scheduled:   { icon: CalendarPlus, color: 'text-accent-text bg-accent/10 border-accent/20' },
   job_completed:   { icon: Wrench,       color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
+  // A day worked on a job that took several. Deliberately the quieter sibling of
+  // job_completed — work happening is not work finishing.
+  work_session:    { icon: Timer,        color: 'text-sky-300 bg-sky-400/10 border-sky-400/20' },
   invoice_created: { icon: Receipt,      color: 'text-ink-muted bg-surface border-border' },
   deposit_requested:{icon: HandCoins,    color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
   invoice_viewed:  { icon: Eye,          color: 'text-blue-400 bg-blue-500/10 border-blue-500/20' },

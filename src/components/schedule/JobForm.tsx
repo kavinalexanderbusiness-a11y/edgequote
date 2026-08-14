@@ -22,6 +22,9 @@ import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { EstimatedVsActual } from '@/components/labor/EstimatedVsActual'
 import { ServiceEstimateLearning } from '@/components/labor/ServiceEstimateLearning'
 import { JobCostPanel } from '@/components/jobs/JobCostPanel'
+import DurationField from '@/components/jobs/DurationField'
+import WorkSessionsPanel from '@/components/jobs/WorkSessionsPanel'
+import { formatDuration, workdayMinutes } from '@/lib/workDuration'
 import { JobReferenceMedia } from '@/components/schedule/JobReferenceMedia'
 import { AUDIENCE_COPY } from '@/lib/noteScope'
 import { loadCompletedVisitLearning, type LearningLoad } from '@/lib/estimateVsActualData'
@@ -143,6 +146,11 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   const [endCount, setEndCount] = useState(ui0.endCount)
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
   const [seasonsLoaded, setSeasonsLoaded] = useState(false)
+  // Minutes in ONE workday for this business. Seeded with the same 8h fallback
+  // every other daily_capacity_hours reader uses, so the duration control is
+  // never blank or wrong while settings are in flight.
+  const [workdayMin, setWorkdayMin] = useState<number>(workdayMinutes(null))
+  const [ownerId, setOwnerId] = useState<string | null>(null)
   // Existing recurring series on the selected property — for duplicate detection.
   const [propSeries, setPropSeries] = useState<{ id: string; service_type: string | null; unit: string | null; count: number | null }[]>([])
   const [dupAck, setDupAck] = useState(false) // owner chose "create anyway"
@@ -415,13 +423,21 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     return () => { cancelled = true }
   }, [status, supabase])
 
-  // Load configured service seasons once (falls back to Calgary defaults).
+  // Load configured service seasons once (falls back to Calgary defaults), plus
+  // the length of this business's WORKDAY — the same daily_capacity_hours the
+  // calendar's capacity bar and every scheduling engine read. It is what makes
+  // "2 workdays" mean 12 hours to a cleaning business on 6-hour days and 20 to a
+  // crew on 10-hour ones. ⛔ Never 24, and never hard-coded here.
   useEffect(() => {
     async function loadSeasons() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
-      const { data } = await supabase.from('business_settings').select('service_seasons').eq('user_id', user.id).maybeSingle()
-      setSeasons(settingsToSeasons((data as { service_seasons: unknown } | null)?.service_seasons))
+      setOwnerId(user.id)
+      const { data } = await supabase.from('business_settings')
+        .select('service_seasons, daily_capacity_hours').eq('user_id', user.id).maybeSingle()
+      const s = data as { service_seasons: unknown; daily_capacity_hours: number | null } | null
+      setSeasons(settingsToSeasons(s?.service_seasons))
+      setWorkdayMin(workdayMinutes(s?.daily_capacity_hours))
       setSeasonsLoaded(true)
     }
     loadSeasons()
@@ -659,11 +675,34 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           <Select label="Status" options={STATUS_OPTIONS} {...field} />
         )} />
 
+      {/* ⭐ WORK HISTORY — every day this job was worked, and the door to add one
+          by hand. Shown for a job that is UNDERWAY as well as one that is
+          finished: recording "worked 3h today" is the whole point of the feature
+          and must not require pretending the job is done first.
+
+          Only on a SAVED visit — a work session needs a job id to point at, and
+          there is none until the visit exists. */}
+      {isEdit && excludeJobId && ownerId && (status === 'in_progress' || status === 'completed') && (
+        <WorkSessionsPanel
+          job={{ id: excludeJobId, user_id: ownerId, crew_size: Number(watch('crew_size')) || 1 }}
+          // The total the DATABASE computed, not one this form worked out. Kept
+          // in the form so the estimate-vs-actual comparison below re-reads
+          // against the same number every other surface shows.
+          onTotalChange={m => setValue('actual_minutes', m ?? 0, { shouldValidate: false })} />
+      )}
+
       {status === 'completed' && (
         <div className="space-y-2.5">
-          <Input label="Actual time on site (minutes)" type="number" min="0" step="5"
-            hint="Captured for future pricing intelligence — planned vs. actual time."
-            {...register('actual_minutes', { min: 0 })} />
+          {/* The raw total is typed by hand ONLY where no session can exist yet:
+              a visit being CREATED as already-completed. On a saved job the
+              database holds this equal to the sum of its work sessions, so an
+              editable box here would be a control whose value is overruled the
+              moment it is saved — the panel above is the honest door. */}
+          {!isEdit && (
+            <Input label="Actual time on site (minutes)" type="number" min="0" step="5"
+              hint="Captured for future pricing intelligence — planned vs. actual time."
+              {...register('actual_minutes', { min: 0 })} />
+          )}
           {/* The comparison sits directly under the field that feeds it, so the
               answer to "was I close?" appears as the number is typed rather than
               on some report the owner has to go looking for. All arithmetic and
@@ -758,17 +797,28 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
       {/* Time & crew — expanded while creating (the smart duration suggestion
           matters then), a one-line summary when editing. */}
       <Collapsible title="Time & crew" icon={Clock} defaultOpen={!isEdit}
-        summary={`${Number(watch('duration_minutes')) || 0}m · ${Number(watch('crew_size')) || 1} crew${watch('start_time') ? ` · ${watch('start_time')}` : ''}`}>
+        summary={`${formatDuration(Number(watch('duration_minutes')), workdayMin) || 'Not sized'} · ${Number(watch('crew_size')) || 1} crew${watch('start_time') ? ` · ${watch('start_time')}` : ''}`}>
         <Input label="Job Title" placeholder="Auto-named from service + customer if blank"
           error={errors.title?.message}
           {...register('title')} />
 
-        <div className="grid grid-cols-2 gap-4">
-          <Input label="Duration (minutes)" type="number" step="1" min="0"
-            {...register('duration_minutes', { min: 0 })} />
-          <Input label="Crew Size" type="number" min="1"
-            {...register('crew_size', { min: { value: 1, message: 'Min 1' } })} />
-        </div>
+        {/* Duration is a VALUE + a UNIT — 45 minutes, 2 hours, 3 workdays — and
+            still one stored integer of minutes. The unit is how it is spoken,
+            not a second fact: see lib/workDuration. Stacked rather than in the
+            old 2-up grid because the control is itself two fields, and three
+            boxes on one line is unusable at 375px. */}
+        <Controller name="duration_minutes" control={control}
+          render={({ field }) => (
+            <DurationField
+              label="Duration"
+              workdayMin={workdayMin}
+              value={Number(field.value) > 0 ? Number(field.value) : null}
+              onChange={m => field.onChange(m ?? '')}
+            />
+          )} />
+        <Input label="Crew Size" type="number" min="1"
+          hint="How many people are on site at once. Duration stays the time on site — two people for an hour is one hour, not two."
+          {...register('crew_size', { min: { value: 1, message: 'Min 1' } })} />
 
         {/* Smart Labor Calculator V2 — learns duration from history; fills the field
             above (never overwrites a typed value, never affects price). */}

@@ -1,4 +1,5 @@
 import { formatCurrency, formatDate, parseLocalDate } from '@/lib/utils'
+import { formatWorked } from '@/lib/workDuration'
 
 // ── THE customer/property timeline engine ────────────────────────────────────
 // One chronological history, built from the tables that ALREADY hold the events.
@@ -26,7 +27,7 @@ export type TimelineKind =
   | 'job_scheduled' | 'job_completed' | 'invoice_created' | 'invoice_viewed' | 'invoice_paid'
   | 'message_in' | 'message_out' | 'note' | 'payment' | 'credit' | 'refund' | 'expense'
   | 'photo' | 'measurement' | 'price_change' | 'consent' | 'automation' | 'portal_request'
-  | 'deposit_requested'
+  | 'deposit_requested' | 'work_session'
 
 // Coarse buckets for filtering. Every kind belongs to exactly one group.
 export type TimelineGroup = 'sales' | 'work' | 'money' | 'comms' | 'record'
@@ -35,6 +36,7 @@ export const KIND_GROUP: Record<TimelineKind, TimelineGroup> = {
   lead: 'sales', quote_created: 'sales', quote_sent: 'sales', followup: 'sales',
   quote_accepted: 'sales', quote_declined: 'sales',
   job_scheduled: 'work', job_completed: 'work', photo: 'work', measurement: 'work',
+  work_session: 'work',
   invoice_created: 'money', invoice_viewed: 'money', invoice_paid: 'money',
   payment: 'money', credit: 'money', refund: 'money', expense: 'money', price_change: 'money',
   deposit_requested: 'money',
@@ -78,6 +80,9 @@ export interface TimelineSources {
   consentChanges?: TlConsentChange[]
   priceChanges?: TlPriceChange[]
   campaignLog?: TlCampaignLog[]
+  /** Days a job was worked (job_work_sessions). See the work-session block in
+   *  buildTimeline for the anti-clutter rule that governs what is emitted. */
+  workSessions?: TlWorkSession[]
 }
 
 export interface TlQuote { id: string; quote_number: string; service_type?: string | null; total?: number | null; status: string; created_at: string; updated_at: string; sent_at?: string | null; last_followed_up_at?: string | null; follow_up_count?: number | null; property_id?: string | null }
@@ -102,6 +107,9 @@ export interface TlConsentChange { id: string; channel: string; old_value?: bool
 export interface TlPriceChange { id: string; old_amount?: number | null; new_amount?: number | null; reason?: string | null; scope?: string | null; created_at: string; job_id?: string | null }
 /** `campaign_name`/`campaign_kind` come from the crm_campaigns join the caller does. */
 export interface TlCampaignLog { id: string; campaign_name?: string | null; campaign_kind?: string | null; channel?: string | null; status?: string | null; detail?: string | null; created_at: string }
+/** One day's work on one job. `job_id` is what lets the anti-clutter rule below
+ *  count a job's sessions before deciding whether any of them are worth a row. */
+export interface TlWorkSession { id: string; job_id: string; worked_on: string; minutes: number; workers?: number | null; note?: string | null; property_id?: string | null }
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
 const money = (n: unknown) => formatCurrency(Number(n) || 0)
@@ -172,6 +180,44 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
       out.push({ at: j.completed_at || j.updated_at, kind: 'job_completed', title: `Job completed — ${name}`, sub: mins > 0 ? `${mins} min on site` : undefined, propertyId: j.property_id })
     }
   }
+  // ── Work sessions: the days a job was actually worked ──────────────────────
+  //
+  // ⭐⭐ THE ANTI-CLUTTER RULE: a job with ONE work session emits nothing here.
+  //
+  // One session IS the visit. The completion row already says "Job completed"
+  // with the time on site, so a "Worked 45m" line beside it is the same fact
+  // twice — and every routine visit in the book would grow one. Sessions earn a
+  // row only when there is more than one, because that is precisely when the
+  // history says something the completion cannot: that this job took several
+  // days, and which ones.
+  //
+  // This is [customer-timeline-v1]'s rule applied to a new source — collapse
+  // what ONE act produced, never merge two real events.
+  const sessionsByJob = new Map<string, TlWorkSession[]>()
+  for (const w of s.workSessions || []) {
+    const list = sessionsByJob.get(w.job_id)
+    if (list) list.push(w)
+    else sessionsByJob.set(w.job_id, [w])
+  }
+  for (const list of sessionsByJob.values()) {
+    if (list.length < 2) continue
+    for (const w of list) {
+      const mins = Number(w.minutes) || 0
+      if (mins <= 0) continue
+      const people = Number(w.workers) || 1
+      out.push({
+        // Dated to the DAY the work happened, at midday — a work session has no
+        // clock time of its own (a hand-logged one never did), and midday keeps
+        // it inside its own day in every timezone the browser might render in.
+        at: `${w.worked_on}T12:00:00.000Z`,
+        kind: 'work_session',
+        title: `Worked ${formatWorked(mins)}`,
+        sub: join(people > 1 ? `${people} people` : null, clip(w.note, 90) || null),
+        propertyId: w.property_id ?? null,
+      })
+    }
+  }
+
   for (const c of scheduleClusters.values()) {
     const dates = c.dates.slice().sort()
     const n = dates.length
