@@ -121,6 +121,7 @@
     "verify:change-orders": "tsx scripts/verify-change-orders.ts",
     "verify:deposit-scheduling": "tsx scripts/verify-deposit-scheduling.ts",
     "verify:day-fit": "tsx scripts/verify-day-fit.ts",
+    "verify:day-plan": "tsx scripts/verify-day-plan.ts",
     "verify:work-sessions": "tsx scripts/verify-work-sessions.ts",
     "verify:account-recovery": "tsx scripts/verify-account-recovery.ts",
     "schema:contract": "tsx scripts/schema/capture-contract.mts",

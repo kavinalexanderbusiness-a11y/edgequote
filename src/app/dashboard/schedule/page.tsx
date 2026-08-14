@@ -28,6 +28,7 @@ import { queueOrRun, isNetworkError } from '@/lib/offline/outbox'
 import { completionPatch } from '@/lib/jobStatus'
 import { stopForToday, resumeWork, deleteWorkSession, type StopForTodayInput } from '@/lib/workSession'
 import { formatWorked } from '@/lib/workDuration'
+import { loadDayFitContext, type DayFitContext } from '@/lib/dayFitLoad'
 import StopForTodaySheet from '@/components/jobs/StopForTodaySheet'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 // THE words for the work (lib/vocabulary): a `jobs` row is one VISIT, and this
@@ -212,6 +213,13 @@ export default function SchedulePage() {
   // Neutral until the settings read lands — never a trade's chips by default.
   const [addonTemplates, setAddonTemplates] = useState<AddonTemplate[]>(NEUTRAL_PACK.addons)
   const [defaultCrew, setDefaultCrew] = useState(1)
+  // ⭐ Who can work each day + what history says a service takes — Session 46's
+  // loader, ALREADY the source for the best-day suggesters. Loaded once for the
+  // horizon and handed to the day board so "is tomorrow realistic?" and "which
+  // day should this land on?" are answered from one roster read, not two.
+  // null while loading, or when the read was unavailable — which lib/dayPlan
+  // reports as a caveat rather than as a fully-staffed day.
+  const [dayFitCtx, setDayFitCtx] = useState<DayFitContext | null>(null)
   // Defaults come from the resolver, not a hand-copied literal — otherwise every
   // new automation has to be remembered here too (and this is loaded from
   // settings a moment later anyway).
@@ -317,6 +325,30 @@ export default function SchedulePage() {
     const capacityForDate = buildCapacityForDate(dayStatusMap, { crew, hours: (capacityHours > 0 ? capacityHours : 8) / crew })
     return { today: localToday(), base: baseCoord, preferredDays: preferredWorkDays, capacityHours, recurrences: recs, roadDist, dayStatusMap, capacityForDate, minPerKm: travel.minPerKm }
   }, [recurrences, baseCoord, preferredWorkDays, capacityHours, roadDist, dayStatusMap, defaultCrew, travel.minPerKm])
+
+  // The roster + learning context for the day board. One load for the horizon;
+  // a failure leaves it null, which the plan reports honestly.
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      const res = await loadDayFitContext(supabase, user.id, { fromISO: localToday() })
+      if (alive && res.outcome === 'ok') setDayFitCtx(res.ctx)
+    })()
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Workers available on the OPEN day. ⚠️ Only inside the loaded horizon: time
+  // off was read for that window alone, so a date outside it would look fully
+  // staffed simply because nobody's booked-off rows were fetched. Outside the
+  // window the honest answer is "not known", and the plan says so.
+  const workersOnOpenDay = useMemo(() => {
+    if (!dayFitCtx) return null
+    const iso = format(cursor, 'yyyy-MM-dd')
+    return dayFitCtx.horizonDates.includes(iso) ? dayFitCtx.workersByDate(iso) : null
+  }, [dayFitCtx, cursor])
 
   // ── Effective capacity for the OPEN day (one source: lib/dayStatus) ──────────
   // Feeds the Day Ops panel the day's real start time + labour-hours (after any
@@ -2653,6 +2685,13 @@ export default function SchedulePage() {
             <ChevronLeft className="w-4 h-4" />
           </Button>
           <Button variant="secondary" size="sm" onClick={() => setCursor(new Date())}>Today</Button>
+          {/* ⭐ Tomorrow, by name. The day the owner plans is almost never the
+              one they are standing in, and "next period" was the only way to
+              reach it — a chevron whose meaning depends on the active view.
+              Day view only: on week/month it would mean something else. */}
+          {view === 'day' && format(cursor, 'yyyy-MM-dd') !== format(addDays(new Date(), 1), 'yyyy-MM-dd') && (
+            <Button variant="secondary" size="sm" onClick={() => setCursor(addDays(new Date(), 1))}>Tomorrow</Button>
+          )}
           <Button variant="secondary" size="sm" aria-label="Next period" onClick={() => navigate(1)}>
             <ChevronRight className="w-4 h-4" />
           </Button>
@@ -2925,6 +2964,8 @@ export default function SchedulePage() {
           onRemindChangeOrder={remindChange}
           workStartTime={dayView.start}
           capacityHours={dayView.laborHours}
+          workersOnDay={workersOnOpenDay}
+          learnedDurationFor={dayFitCtx?.learnedFor}
           onRainDelay={() => rainDelayDay(dayISO)}
           onAddJob={() => openNewJob(cursor)}
           onQuickSave={quickSaveJob}

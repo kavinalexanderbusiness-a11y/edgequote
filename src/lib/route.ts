@@ -443,7 +443,9 @@ export function recommendScheduleDays(
 // Weekend Outlook so an 8:00 start always produces the same 2:45 finish.
 
 export const DEFAULT_WORK_START = '08:00'
-const FALLBACK_LEG_MIN = 10     // drive estimate when a leg has no distance
+// Drive allowance for a leg with no distance (an un-located stop). Exported so
+// lib/dayPlan charges the SAME allowance it discloses as "unplaced".
+export const FALLBACK_LEG_MIN = 10
 export const DEFAULT_JOB_MIN = 45
 
 export function timeToMinutes(hhmm: string | null | undefined): number {
@@ -464,20 +466,32 @@ export interface DayEtas { stops: EtaStop[]; finishMin: number; finish: string; 
 
 // Walk the ordered route: drive each leg, work the stop, drive on. legKm null →
 // fallback leg time so un-located stops still advance the clock.
+//
+// `legMinutesOverride` lets a caller that KNOWS a leg's real duration spend it
+// here instead of re-deriving `km × minPerKm`. lib/dayPlan passes the measured
+// road durations cached by lib/distance; anything null or absent falls through
+// to the model exactly as before. It exists so there is still only ONE walk
+// from a work start to a finish time — a second chain that timed the same day
+// differently is precisely how a panel and a timeline start disagreeing about
+// when the owner gets home.
 export function computeDayEtas(
   startHHmm: string | null | undefined,
   ordered: { jobId: string; legKm: number | null }[],
   durationMinByJob: Record<string, number>,
   speed?: SpeedModel,   // learned travel speed + load/unload overhead (else legacy 2 min/km)
+  legMinutesOverride?: (number | null | undefined)[],
 ): DayEtas {
   const startMin = timeToMinutes(startHHmm || DEFAULT_WORK_START)
   let t = startMin
   const stops: EtaStop[] = []
-  for (const s of ordered) {
-    t += s.legKm != null ? legMinutes(s.legKm, speed) : FALLBACK_LEG_MIN
+  ordered.forEach((s, i) => {
+    const override = legMinutesOverride?.[i]
+    t += override != null && Number.isFinite(override) && override >= 0
+      ? Math.round(override)
+      : s.legKm != null ? legMinutes(s.legKm, speed) : FALLBACK_LEG_MIN
     stops.push({ jobId: s.jobId, arrivalMin: t, arrival: minutesToTime12(t) })
     t += durationMinByJob[s.jobId] ?? DEFAULT_JOB_MIN
-  }
+  })
   return { stops, finishMin: t, finish: minutesToTime12(t), startMin }
 }
 
