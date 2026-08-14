@@ -235,8 +235,13 @@ const view = stripTs(read(VIEW))
 check('the view renders an outbox with its own failed state',
   /pending\.map/.test(view) && /'failed'/.test(view) && /onRetry/.test(view),
   'a failed send must be visible IN THE THREAD, not only in a toast that scrolls away')
+// ⚠️ ANCHORED TO THE PENDING BUBBLE (`p.state`), not to any `state === 'failed'`
+// in the file. Mutation testing caught this: blanking the pending bubble's
+// classes still passed, because the loose pattern matched the ATTACHMENT chip's
+// own failed styling further down. A guard that can be satisfied by a different
+// element than the one it names is not watching anything.
 check('a pending message is visually distinct from a sent one',
-  /state === 'failed'[\s\S]{0,200}(border-red|opacity)/.test(view),
+  /p\.state === 'failed'\s*\?\s*'[^']*border-red[^']*'\s*:\s*'[^']*opacity/.test(view),
   'if in-flight and delivered look identical, the screen is claiming a send it did not get')
 check('the view never optimistically marks a message delivered',
   !/setMessages/.test(view),
@@ -259,10 +264,26 @@ check('a failed READ is not rendered as an empty conversation',
   '"nobody said anything" and "we could not ask" are different facts')
 
 // ⭐ THE THREE-OUTCOME RULE (lib/crewAccess's, and it applies identically here).
-check('the crew read keeps error / revoked / ok apart',
-  /kind: 'error'/.test(lib) && /kind: 'revoked'/.test(lib) && /kind: 'ok'/.test(lib) &&
-  /if \(error\) return \{ kind: 'error'/.test(lib) && /if \(!data\) return \{ kind: 'revoked' \}/.test(lib),
-  'supabase-js RESOLVES {error} on a dead connection — folding it into null tells a worker in a dead zone they were fired')
+// ⚠️ ASSERTED PER FUNCTION. Mutation testing caught a whole-file version of this:
+// folding error→revoked inside loadCrewConversation still passed, because the
+// other two doors still contained the string it was grepping for. One door
+// silently losing the distinction is exactly the bug — it is the one that tells
+// a worker in a dead zone that they were fired.
+const libFn = (name: string): string => {
+  const i = lib.indexOf(`export async function ${name}`)
+  if (i < 0) return ''
+  const rest = lib.slice(i)
+  const end = rest.indexOf('\nexport ', 1)
+  return end < 0 ? rest : rest.slice(0, end)
+}
+for (const door of ['loadCrewConversation', 'postCrewMessage', 'loadCrewInbox']) {
+  const body = libFn(door)
+  check(`${door} was located (mechanism control)`, /supabase\.rpc\(/.test(body),
+    'if this fails the outcome check below is reading an empty string')
+  check(`${door} keeps error and revoked apart`,
+    /if \(error\) return \{ kind: 'error'/.test(body) && /if \(!data\) return \{ kind: 'revoked' \}/.test(body),
+    'supabase-js RESOLVES {error} on a dead connection — folding it into null tells a worker in a dead zone they were fired')
+}
 
 // ── 6. Unread is ONE rule, spelled the same everywhere ──────────────────────
 console.log('\n═══ Unread ═══')
