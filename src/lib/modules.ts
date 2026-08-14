@@ -1,7 +1,7 @@
 import type { LucideIcon } from 'lucide-react'
 import {
   LayoutDashboard, CalendarDays, Users, Home, FileText, Receipt, Wallet, MessageSquare, Wrench, Bot, Sprout, Radio, Plug,
-  Calculator, HardHat,
+  Calculator, HardHat, Target,
 } from 'lucide-react'
 
 // ── Feature-module registry ───────────────────────────────────────────────────
@@ -106,6 +106,16 @@ export const FEATURE_MODULES: FeatureModule[] = [
     description: 'Every customer, their history, and the conversation.',
     permissions: ['customers:read', 'customers:write', 'messages:send'],
     keywords: 'clients people contacts' },
+  // Sits directly under Customers because it is the same subject seen from the
+  // other end: not "who do I serve" but "who is mid-decision, and what do I owe
+  // them next". It requires `quotes` for a real reason rather than shelf-order —
+  // four of the six rungs are derived from a quote's status, so without that
+  // module the board could only ever show leads.
+  { key: 'pipeline',   label: 'Pipeline',   href: '/dashboard/pipeline',   icon: Target,
+    category: 'customers', version: 1, updatedAt: '2026-08-13', featured: true, requires: ['customers', 'quotes'],
+    description: 'Every lead and quote in flight, each with the one thing to do next.',
+    permissions: ['customers:read', 'quotes:read', 'invoices:read', 'jobs:read', 'messages:read'],
+    keywords: 'sales deals leads opportunities funnel stages next action follow up won lost' },
   { key: 'properties', label: 'Properties', href: '/dashboard/properties', icon: Home,
     category: 'customers', version: 1, updatedAt: '2026-07-08', requires: ['customers'],
     description: 'Sites and service locations, with measurements and notes.',

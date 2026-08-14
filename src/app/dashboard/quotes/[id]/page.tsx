@@ -24,6 +24,7 @@ import { toast } from '@/lib/toast'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
+import { isWon } from '@/lib/salesStage'
 import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { servicePricingKind } from '@/lib/servicePricing'
@@ -725,7 +726,7 @@ export default function QuoteDetailPage() {
           tweaking a draft. Warn, never block: price corrections after acceptance
           are legitimate (that's why Edit exists here), but they must be made
           knowing the customer hasn't agreed to the new number. */}
-      {['accepted', 'scheduled', 'completed', 'paid'].includes(quote.status) && (
+      {isWon(quote.status) && (
         <Banner tone="warn" icon={AlertTriangle}>
           <span className="font-semibold text-ink">
             The customer approved this quote{Number(quote.accepted_price) > 0 ? ` at ${formatCurrency(Number(quote.accepted_price))}` : ''}.
@@ -829,6 +830,8 @@ export default function QuoteDetailPage() {
             sentAt={quote.sent_at}
             validUntil={quote.valid_until}
             total={quote.total}
+            // Names the optional "why was this lost?" question on a decline.
+            customerName={quote.customer_name}
             onChanged={(s) => {
               setQuote(prev => prev ? { ...prev, status: s } : prev)
             }}

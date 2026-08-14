@@ -1,4 +1,7 @@
 import { formatCurrency, formatDate } from '@/lib/utils'
+// THE won/lost rule (lib/salesStage) — this file used to carry its own local Set,
+// one of seven copies of the same four statuses across the app.
+import { isWon } from '@/lib/salesStage'
 
 // ── THE customer/property timeline engine ────────────────────────────────────
 // One chronological history, built from the tables that ALREADY hold the events.
@@ -96,7 +99,6 @@ export interface TlPriceChange { id: string; old_amount?: number | null; new_amo
 /** `campaign_name`/`campaign_kind` come from the crm_campaigns join the caller does. */
 export interface TlCampaignLog { id: string; campaign_name?: string | null; campaign_kind?: string | null; channel?: string | null; status?: string | null; detail?: string | null; created_at: string }
 
-const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
 const money = (n: unknown) => formatCurrency(Number(n) || 0)
 const clip = (s: string | null | undefined, n: number) => (s || '').trim().slice(0, n)
 const join = (...parts: (string | null | undefined | false)[]) => parts.filter(Boolean).join(' · ') || undefined
@@ -124,7 +126,7 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
     if (q.sent_at) out.push({ at: q.sent_at, kind: 'quote_sent', title: `Quote ${q.quote_number} sent`, href, propertyId: pid })
     if (q.last_followed_up_at) out.push({ at: q.last_followed_up_at, kind: 'followup', title: `Followed up on ${q.quote_number}`, sub: `${q.follow_up_count ?? 0} total`, href, propertyId: pid })
     // quotes has no accepted_at/declined_at — updated_at is the only timestamp there is.
-    if (WON.has(q.status)) out.push({ at: q.updated_at, kind: 'quote_accepted', title: `Quote ${q.quote_number} accepted`, sub: money(q.total), href, propertyId: pid })
+    if (isWon(q.status)) out.push({ at: q.updated_at, kind: 'quote_accepted', title: `Quote ${q.quote_number} accepted`, sub: money(q.total), href, propertyId: pid })
     // A declined quote used to just stop appearing — losing the sale left no trace.
     if (q.status === 'declined') out.push({ at: q.updated_at, kind: 'quote_declined', title: `Quote ${q.quote_number} declined`, sub: money(q.total), href, propertyId: pid })
   }
