@@ -8,10 +8,16 @@ export const metadata = {
 }
 
 // ── Choosing a new password ──────────────────────────────────────────────────
-// Arrived at from a one-time token in the query string, holding no session — so,
+// Arrived at from a one-time token in the emailed link, holding no session — so,
 // like /crew/welcome, it has to be reachable signed-out and the gate must not
 // bounce it to /login. Inert without a valid token: all it can do is set a
 // password for whoever that token already identifies.
+//
+// The canonical link shape is PATH segments — /reset-password/<hash> — because
+// an emailed query string is at the mercy of every quoted-printable decoder in
+// transit: `=73` is a valid QP escape, and a `?token=73…` link measurably lost
+// bytes on the way to a real inbox (beta signup, 2026-08-13). The optional
+// catch-all also still honours ?token= / ?token_hash=, and a recovery fragment.
 export default function ResetPasswordPage() {
   return (
     <div className="min-h-screen bg-bg flex items-center justify-center px-4 py-10">

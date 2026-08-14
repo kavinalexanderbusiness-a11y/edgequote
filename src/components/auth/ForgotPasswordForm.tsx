@@ -2,13 +2,12 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Banner } from '@/components/ui/Banner'
 import {
-  classifyRecoverySend, acceptedMessage, UNAVAILABLE_MESSAGE, RESET_PATH,
-  type RecoveryRequestOutcome,
+  classifyRecoverySend, acceptedMessage, UNAVAILABLE_MESSAGE, THROTTLED_MESSAGE,
+  RESET_REQUEST_ENDPOINT, type RecoveryRequestOutcome,
 } from '@/lib/passwordRecovery'
 // The same permissive check the invite flow uses. One regex for "did they
 // fat-finger this", not two that disagree.
@@ -35,18 +34,22 @@ export function ForgotPasswordForm() {
     if (!isPlausibleEmail(address)) { setFieldError('That doesn’t look like an email address.'); return }
 
     setBusy(true)
-    const supabase = createClient()
-    // `redirectTo` is what Supabase's own {{ .ConfirmationURL }} would use. We
-    // send the reset page's own URL so that the default template still lands
-    // somewhere real if this project is ever switched to it — but the link we
-    // actually want carries {{ .TokenHash }} to this same path, which needs no
-    // allow-list entry at all. See lib/passwordRecovery for why.
-    const { error } = await supabase.auth.resetPasswordForEmail(address, {
-      redirectTo: `${window.location.origin}${RESET_PATH}`,
-    })
-    const result = classifyRecoverySend(error)
+    // Our own server route, NOT supabase.auth.resetPasswordForEmail. The link is
+    // minted with the service role and sent through Resend — the same path beta
+    // signup uses — because Supabase's own mailer neither delivers on this
+    // project nor answers without leaking which addresses have accounts. See
+    // lib/passwordRecovery and the route's own header.
+    //
+    // A thrown fetch (offline, DNS, aborted) has no status, and classify turns
+    // that into `unavailable` — never into a claim that something was sent.
+    const status = await fetch(RESET_REQUEST_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: address }),
+    }).then(r => r.status).catch(() => null)
+
     setSentTo(address)
-    setOutcome(result)
+    setOutcome(classifyRecoverySend(status))
     setBusy(false)
   }
 
@@ -81,9 +84,11 @@ export function ForgotPasswordForm() {
         </div>
       ) : (
         <form onSubmit={submit} className="space-y-4" noValidate>
-          {/* Only ever the honest failure. The accepted case is handled above and
-              the ambiguous ones never get here — classifyRecoverySend folds them. */}
+          {/* Both honest failures. Neither depends on whether the address has an
+              account: the route decides both BEFORE it looks anything up, and the
+              limiter counts attempts rather than matches. */}
           {outcome?.kind === 'unavailable' && <Banner tone="danger">{UNAVAILABLE_MESSAGE}</Banner>}
+          {outcome?.kind === 'throttled' && <Banner tone="warn">{THROTTLED_MESSAGE}</Banner>}
           <Input
             label="Email"
             type="email"

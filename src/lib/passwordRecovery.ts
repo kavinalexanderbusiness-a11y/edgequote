@@ -19,32 +19,40 @@ export const FORGOT_PATH = '/forgot-password'
 /** Where they choose a new password, holding a token. */
 export const RESET_PATH = '/reset-password'
 
+/** Where the browser asks for a link. Our own server route — NOT Supabase's
+ *  /recover, which leaks account existence through its rate-limit status (see
+ *  classifyRecoverySend). */
+export const RESET_REQUEST_ENDPOINT = '/api/public/password-reset'
+
 // ── The link ─────────────────────────────────────────────────────────────────
-// Built around Supabase's `hashed_token` in the QUERY STRING, not around its
-// `action_link` and not around the PKCE `?code=`. The same three reasons crew
-// invites already chose this shape (see lib/crewInvite), and one more that only
-// matters when the link travels by email:
+// Supabase's `hashed_token` in PATH SEGMENTS. Not action_link, not the PKCE
+// `?code=`, and — since 2026-08-13 — not a query string either.
 //
 //  1. action_link's `redirect_to` must be on the project's Redirect URLs
-//     allow-list or it silently falls back to SITE_URL. On this project that
-//     list is EMPTY and SITE_URL is http://localhost:3000 — a production owner
-//     would be sent to their own machine.
+//     allow-list or it silently falls back to SITE_URL, which on this project
+//     was http://localhost:3000 in production.
 //  2. action_link lands with the session in the URL FRAGMENT, which no server
-//     can read.
+//     can read — and @supabase/ssr pins flowType to pkce, so supabase-js ignores
+//     an implicit fragment entirely (measured; see readRecoveryFragment).
 //  3. PKCE (`?code=`) stores its verifier in the browser that ASKED. Requesting
 //     on a phone and opening the link on a laptop — the normal way a locked-out
 //     person behaves — cannot work. `verifyOtp({ token_hash })` has no such tie.
-//  4. A token in our query string is only spent when OUR page runs JavaScript.
-//     Corporate mail scanners and link previewers that GET every URL in an email
-//     would burn a Supabase `/verify` link before the owner ever clicked it;
-//     against this one they do nothing.
+//  4. The token is only spent when OUR page runs JavaScript. Mail scanners that
+//     GET every URL in a message would burn a Supabase `/verify` link before the
+//     owner ever clicked it; against this one they do nothing.
+//  5. ⭐ PATH SEGMENTS, because `=` belongs to quoted-printable. Beta signup
+//     measured a query-form link losing bytes on the way to a real inbox: `=73`
+//     is a valid QP escape, so a transport that re-encodes the body can eat part
+//     of `?token=…`. A path-segment URL carries no `=` and no `?`, so there is
+//     nothing for a QP decoder to misread. Same shape as buildBetaConfirmUrl.
 export function buildResetUrl(appOrigin: string, hashedToken: string): string {
-  return `${appOrigin.replace(/\/$/, '')}${RESET_PATH}?token=${encodeURIComponent(hashedToken)}`
+  return `${appOrigin.replace(/\/$/, '')}${RESET_PATH}/${encodeURIComponent(hashedToken)}`
 }
 
-/** Both spellings are accepted on the way in: `token` is what we build and what
- *  crew invites already use, `token_hash` is what Supabase's own documented
- *  template snippet emits. A link that works is worth more than a tidy name. */
+/** Query spellings still accepted on the way IN, though nothing we send uses
+ *  them: `token` is the shape this feature shipped with, `token_hash` is what
+ *  Supabase's own documented template snippet emits. Reading both costs nothing
+ *  and means a link from either source still opens. */
 export const RESET_TOKEN_PARAMS = ['token', 'token_hash'] as const
 
 export function readResetToken(get: (k: string) => string | null): string | null {
@@ -53,6 +61,20 @@ export function readResetToken(get: (k: string) => string | null): string | null
     if (v && v.trim()) return v.trim()
   }
   return null
+}
+
+/**
+ * THE canonical read: the token as a path segment, from Next's optional
+ * catch-all (`/reset-password/[[...link]]`). Next has already decoded each
+ * segment, so what arrives is the raw hashed_token.
+ *
+ * Exactly one segment is accepted. A deeper path is not a link we built, and
+ * quietly picking one segment out of several would make the route guess.
+ */
+export function readResetPathToken(segments: string[] | undefined): string | null {
+  if (!segments || segments.length !== 1) return null
+  const v = segments[0]?.trim()
+  return v ? v : null
 }
 
 // ── The OTHER link shape ─────────────────────────────────────────────────────
@@ -125,31 +147,39 @@ export function readRecoveryFragment(hash: string): RecoveryFragment {
 // without naming an account, so it stays a failure report and not an oracle.
 export type RecoveryRequestOutcome =
   | { kind: 'accepted' }
+  | { kind: 'throttled' }
   | { kind: 'unavailable' }
 
-/** Shape of the error supabase-js hands back. Narrowed here so the classifier
- *  can be exercised with plain objects in the guard. */
-export interface RecoveryError { status?: number; code?: string; name?: string; message?: string }
-
 /**
- * THE predicate. Same three-answer discipline as loadCrewDay: a request that
- * never landed must never be reported as an answer.
+ * THE predicate, over OUR route's HTTP status.
  *
- *   no error            → accepted
- *   4xx (incl. 429/400) → accepted   — the server answered; which answer it gave
- *                                      is account-existence information, so it
- *                                      does not reach the screen
- *   5xx                 → unavailable — includes error_sending_recovery_email,
- *                                      i.e. the mailer is down. Nothing was sent.
- *   no status at all    → unavailable — a fetch that never completed
+ * The route is built so that every status it can return is decided BEFORE any
+ * account lookup happens — so none of them is a function of whether the address
+ * exists, and each can be reported honestly:
+ *
+ *   200 → accepted     the one neutral answer, identical for an address with an
+ *                      account, one without, and one whose send failed
+ *   429 → throttled    the limiter counts EVERY attempt, matched or not, so this
+ *                      fires the same way for a real owner and for a sweep. It is
+ *                      not an oracle, and saying "wait a minute" is both true and
+ *                      more useful than pretending a link is coming
+ *   4xx → unavailable  a malformed body or a route that isn't there
+ *   5xx → unavailable  no service-role key, no email provider, or the ledger
+ *                      write failed. NOTHING WAS SENT and the route knows it
+ *   ——  → unavailable  a fetch that never completed
  *
  * ⚠️ The default is `unavailable`, not `accepted`. An unrecognised failure must
  * degrade into "we don't know that it worked", never into "it worked".
+ *
+ * ⚠️ This deliberately no longer classifies Supabase's own /recover. That
+ * endpoint answers 200 for an unknown address, 429 for a known one asked twice
+ * inside a minute, and 400 for a known one whose address the mailer rejects —
+ * measured 2026-08-13 — so two requests a minute apart identify an EdgeQuote
+ * owner. The browser no longer calls it at all.
  */
-export function classifyRecoverySend(error: RecoveryError | null | undefined): RecoveryRequestOutcome {
-  if (!error) return { kind: 'accepted' }
-  const status = typeof error.status === 'number' ? error.status : 0
-  if (status >= 400 && status < 500) return { kind: 'accepted' }
+export function classifyRecoverySend(status: number | null | undefined): RecoveryRequestOutcome {
+  if (status === 200) return { kind: 'accepted' }
+  if (status === 429) return { kind: 'throttled' }
   return { kind: 'unavailable' }
 }
 
@@ -164,6 +194,11 @@ export function acceptedMessage(email: string): string {
 export const UNAVAILABLE_MESSAGE =
   'We couldn’t send a reset link just now — nothing has gone out. Check your connection and try again in a minute.'
 
+/** The limiter counts attempts, not matches, so this sentence is safe to show:
+ *  it is true of any address, and reveals nothing about which ones have accounts. */
+export const THROTTLED_MESSAGE =
+  'Too many reset requests. Wait a few minutes and try again.'
+
 // ── Holding a link ───────────────────────────────────────────────────────────
 // THREE outcomes, and collapsing the last two is the bug this type exists to
 // prevent. `dead` and `unavailable` look identical to a tired person on a phone
@@ -175,6 +210,10 @@ export type ResetTokenOutcome =
   | { kind: 'ready'; email: string | null }
   | { kind: 'dead' }
   | { kind: 'unavailable' }
+
+/** Shape of the error supabase-js hands back from verifyOtp/setSession. Narrowed
+ *  here so the classifier can be exercised with plain objects in the guard. */
+export interface RecoveryError { status?: number; code?: string; name?: string; message?: string }
 
 /**
  * Expired, already used, malformed, and never-existed all resolve to ONE answer.

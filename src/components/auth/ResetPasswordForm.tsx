@@ -2,15 +2,15 @@
 
 import { Suspense, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Banner } from '@/components/ui/Banner'
 import { Skeleton } from '@/components/ui/Skeleton'
 import {
-  readResetToken, readRecoveryFragment, classifyResetToken, passwordProblem,
-  MIN_PASSWORD, RESET_SIGNOUT_SCOPE, RESET_DESTINATION, FORGOT_PATH,
+  readResetToken, readResetPathToken, readRecoveryFragment, classifyResetToken,
+  passwordProblem, MIN_PASSWORD, RESET_SIGNOUT_SCOPE, RESET_DESTINATION, FORGOT_PATH,
   type ResetTokenOutcome,
 } from '@/lib/passwordRecovery'
 import { KeyRound, ShieldCheck, LinkIcon, RefreshCw } from 'lucide-react'
@@ -22,11 +22,17 @@ export function ResetPasswordForm() {
 function Form() {
   const router = useRouter()
   const params = useSearchParams()
-  // Read to a STRING before it becomes an effect dependency. The searchParams
-  // object is a new instance on every render, and an effect keyed on it re-runs
-  // forever — the failure that made global search unusable until a real browser
-  // caught it.
-  const token = readResetToken(k => params.get(k))
+  const routeParams = useParams()
+  // Read to a STRING before it becomes an effect dependency. Both params objects
+  // are new instances on every render, and an effect keyed on one re-runs forever
+  // — the failure that made global search unusable until a real browser caught it.
+  //
+  // Path segment FIRST: that is the shape we email, and the shape that survives
+  // quoted-printable. The query forms are still read so a link from an older
+  // build, or from Supabase's own template, still opens.
+  const raw = routeParams?.link
+  const token = readResetPathToken(Array.isArray(raw) ? raw : raw ? [raw] : undefined)
+    ?? readResetToken(k => params.get(k))
   const [outcome, setOutcome] = useState<ResetTokenOutcome | null>(null)
   const [pw, setPw] = useState('')
   const [pw2, setPw2] = useState('')
