@@ -39,6 +39,12 @@ export default function SetupPage() {
     ;(async () => {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { router.replace('/login'); return }
+      // Finish a pending beta redemption before anything is written (idempotent;
+      // answers calmly for everyone: legacy owner → 'already-owner', crew →
+      // 'no-invite'). Without this, an invited owner whose /signup/confirm tab
+      // died between verification and redemption would hit the business_settings
+      // INSERT policy below with no way through.
+      await supabase.rpc('claim_beta_invite')
       if (!alive) return
       setUid(user.id)
       const [st, biz] = await Promise.all([

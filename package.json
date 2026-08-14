@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "beta:invite": "tsx scripts/beta-invite.ts",
     "verify": "tsx scripts/verify-all.ts",
+    "verify:beta-signup": "tsx scripts/verify-beta-signup.ts",
     "verify:automations": "tsx scripts/verify-automations.ts",
     "verify:capabilities": "tsx scripts/verify-capabilities.ts",
     "verify:comms-governor": "tsx scripts/verify-comms-governor.ts",
@@ -33,6 +35,7 @@
     "verify:vocabulary": "tsx scripts/verify-vocabulary.ts",
     "verify:advanced-setup": "tsx scripts/verify-advanced-setup.ts",
     "verify:create-doors": "tsx scripts/verify-create-doors.ts",
+    "verify:cron": "tsx scripts/verify-cron.ts",
     "verify:pricing": "tsx scripts/verify-pricing.ts",
     "verify:priority-queue": "tsx scripts/verify-priority-queue.ts",
     "verify:guardrails": "tsx scripts/verify-guardrails.ts",

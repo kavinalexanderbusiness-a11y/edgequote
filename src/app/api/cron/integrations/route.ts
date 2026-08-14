@@ -7,6 +7,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
+import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { processDueDeliveries, requeueStuckDeliveries, pruneIntegrationLogs } from '@/lib/integrations/deliver'
 import { STUCK_PROCESSING_MINUTES, RETENTION_DAYS } from '@/lib/integrations/retry'
 
@@ -14,40 +15,31 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
-export async function GET(req: NextRequest) {
+async function handler(req: NextRequest) {
   if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   const sb = serviceClient()
-  const requestId = crypto.randomUUID().slice(0, 8)
   const started = Date.now()
   if (!sb) {
     console.error('[cron/integrations] SUPABASE_SERVICE_ROLE_KEY missing — sweep AND heartbeat cannot run')
     return NextResponse.json({ error: 'service key missing' }, { status: 503 })
   }
 
-  const heartbeat = async (ok: boolean, detected: number, written: number, error: string | null) => {
-    try {
-      await sb.from('automation_sweeps').upsert({
-        job: 'integrations', ran_on: new Date().toISOString().slice(0, 10),
-        ran_at: new Date().toISOString(), // explicit: upsert UPDATE won't re-fire default now()
-        ok, detected, written, ms: Date.now() - started, error, request_id: requestId,
-      }, { onConflict: 'job,ran_on' })
-    } catch (e) {
-      console.error('[cron/integrations] heartbeat write failed:', e instanceof Error ? e.message : e)
-    }
-  }
-
+  // The bespoke heartbeat that used to live here moved to lib/cron/heartbeat, where
+  // all twelve crons share one writer. It also keyed `ran_on` off the UTC date while
+  // signals and engine used the server's local date — so two jobs could file the same
+  // night under different days. One writer, one day key.
   try {
     const requeued = await requeueStuckDeliveries(sb, STUCK_PROCESSING_MINUTES)
     const summary = await processDueDeliveries(sb, null, 240_000)
     await pruneIntegrationLogs(sb, RETENTION_DAYS)
-    await heartbeat(true, summary.claimed, summary.delivered, null)
     // Unconditional: for a sweep, the quiet night is the one needing proof.
-    console.log('[cron/integrations] run:', JSON.stringify({ requestId, requeued, ...summary, ms: Date.now() - started }))
+    console.log('[cron/integrations] run:', JSON.stringify({ requeued, ...summary, ms: Date.now() - started }))
     return NextResponse.json({ ok: true, requeued, ...summary })
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
-    await heartbeat(false, 0, 0, message.slice(0, 500))
     console.error('[cron/integrations] failed:', message)
-    return NextResponse.json({ error: message }, { status: 500 })
+    return NextResponse.json({ ok: false, error: message }, { status: 500 })
   }
 }
+
+export const GET = withCronSweep('integrations', handler, b => counts(b, undefined, 'claimed', 'delivered'))
