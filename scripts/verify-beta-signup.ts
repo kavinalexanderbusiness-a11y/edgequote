@@ -178,6 +178,30 @@ H('8. the operator script')
   check('npm alias exists', /"beta:invite": "tsx scripts\/beta-invite\.ts"/.test(PKG))
 }
 
+H('9. a new tenant starts capability-restricted BY CONSTRUCTION')
+{
+  // Session 43's platform_capabilities model: a MISSING row is zero grants, the
+  // app only reads it, and granting is operator SQL. The signup lane therefore
+  // restricts every new tenant by doing NOTHING — and this section pins that
+  // "nothing" so it stays deliberate: no file in the lane may so much as name
+  // the grants table. A signup path that wrote a capability row would be a new
+  // tenant born holding the shared Stripe account.
+  const LANE: Array<[string, string]> = [
+    ['migration', SQL], ['signup route', SIGNUP_ROUTE], ['resend route', RESEND_ROUTE],
+    ['signup page', SIGNUP_PAGE], ['confirm page', CONFIRM_PAGE], ['setup page', SETUP_PAGE],
+    ['operator script', SCRIPT],
+    ['shared lib', read('src/lib/betaInvite.ts')], ['server lib', read('src/lib/betaInviteServer.ts')],
+  ]
+  for (const [name, text] of LANE) {
+    check(`${name} never touches platform_capabilities`, !/platform_capabilities/.test(text))
+  }
+  // If the capability model itself moves, fail loudly so this section gets
+  // re-derived instead of pinning against a table that no longer exists.
+  const capLib = read('src/lib/capabilities.ts')
+  check('the capability read model is where session 43 put it (fails closed on a missing row)',
+    /platform_capabilities/.test(capLib) && /NO_CAPABILITIES/.test(capLib))
+}
+
 console.log('')
 if (failures) {
   console.log(`✗ ${failures} check(s) failed`)

@@ -138,6 +138,13 @@ const SEND_ALLOWLIST: Record<string, string> = {
   'src/app/api/comms/send/route.ts': 'manual send — gated in-route (mirrors dispatch)',
   'src/app/api/comms/test/route.ts': 'owner self-test — gated in-route',
   'src/app/api/public/portal-access/route.ts': 'platform-transactional: customer-requested portal links',
+  // Beta signup verification is the platform speaking AS ITSELF to someone who
+  // is not a tenant yet — there is no tenant to hold an outbound_email grant
+  // until the very verification this email performs. Same class as
+  // portal-access; both routes are invite/token-gated and row-throttled
+  // (beta_invites.send_count / last_sent_at), pinned by verify:beta-signup.
+  'src/app/api/beta/signup/route.ts': 'platform-transactional: signup email verification (recipient predates the tenant)',
+  'src/app/api/beta/resend/route.ts': 'platform-transactional: signup verification resend (row-throttled on the invite)',
   'src/app/api/booking/notify/route.ts': 'owner alert TO the business itself (customer half goes through dispatch)',
   'src/lib/intake.ts': 'lead alert TO the business itself',
   'src/app/api/cron/reports/route.ts': 'scheduled report TO the business itself',
