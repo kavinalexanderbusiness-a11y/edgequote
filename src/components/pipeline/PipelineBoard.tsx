@@ -147,7 +147,7 @@ function PipelineRow({ o, lossReason, onExplain }: {
       <div className="relative">
         <Link
           href={o.href}
-          className="group flex items-center gap-3 px-3.5 sm:px-4 py-3 min-h-[68px] hover:bg-surface/40 active:bg-surface/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50"
+          className="group flex items-center gap-3 px-3.5 sm:px-4 py-3 min-h-[68px] hover:bg-surface-raised/40 active:bg-surface-raised/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50"
         >
           <span aria-hidden className={cn('shrink-0 w-9 h-9 rounded-lg border flex items-center justify-center', meta.tone)}>
             <Icon className="w-4 h-4" />
