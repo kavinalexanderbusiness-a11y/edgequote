@@ -182,11 +182,21 @@ console.log('\n═══ The next stop, and what it takes to do it ═══')
   const bar = stripComments(read('src/components/schedule/FieldStopBar.tsx'))
   const page = stripComments(read('src/app/dashboard/schedule/page.tsx'))
   check('the page uses the shared bar', /<FieldStopBar/.test(page))
+  // ⚠️ These three were mutation-tested and MISSED their first time. Asserting
+  // that `directionsUrl` and `job.notes` merely APPEAR in the file passes
+  // happily while the control that used them is deleted — the identifier
+  // survives in the href builder and in `const note = job.notes…`. What matters
+  // is that each is RENDERED, so that is what is asserted now.
   check('WHERE: directions, from the same engine the card uses',
-    /directionsUrl\(/.test(bar),
+    /href=\{directionsUrl\(/.test(bar) && /Directions\s*<\/a>/.test(bar)
+    // …and shown whenever there is anywhere to go — not gated off behind a
+    // constant, which is how a control disappears while its code stays put.
+    && /\{hasWhere && \(/.test(bar),
     'MEASURED: the card\'s "Route to" sat at y=1781 — 985px of scrolling')
-  check('WHO: the customer can be called from the bar', /href=\{`tel:\$\{phone\}`\}/.test(bar))
-  check('WHAT TO KNOW: the crew note is shown', /job\.notes/.test(bar),
+  check('WHO: the customer can be called from the bar',
+    /href=\{`tel:\$\{phone\}`\}/.test(bar) && /Call\s*\n?\s*<\/a>/.test(bar))
+  check('WHAT TO KNOW: the crew note is shown',
+    /\{note && \(/.test(bar) && /\{note\}<\/span>/.test(bar),
     'gate code, where to park, the dog — the reason you read the visit at all')
   check('WHAT WAS SAID: the crew conversation, not the customer thread',
     /<VisitConversation/.test(bar) && !/api\/comms\/send/.test(bar),
@@ -197,9 +207,11 @@ console.log('\n═══ The next stop, and what it takes to do it ═══')
   check('the three states are still told apart',
     /On the clock/.test(bar) && /Underway · stopped/.test(bar) && /Next stop/.test(bar),
     'a visit underway with nobody on the clock is neither of the other two')
+  // ⚠️ Mutation-tested: the first version of this check ORed two patterns, and
+  // the loose one matched `const [chat, setChat] = useState(false)` on the next
+  // line — so flipping `open` to true passed. One exact declaration, no OR.
   check('the details start CLOSED',
-    /useState\(false\)[\s\S]{0,120}setOpen\(false\); setChat\(false\)/.test(bar)
-    || /const \[open, setOpen\] = useState\(false\)/.test(bar),
+    /const \[open, setOpen\] = useState\(false\)\r?\n/.test(bar),
     'a panel that opens itself covers the board it summarises')
   check('a new stop never inherits the last one\'s open panel',
     /setOpen\(false\); setChat\(false\) \}, \[job\.id\]\)/.test(bar))
