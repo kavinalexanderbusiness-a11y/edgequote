@@ -8,6 +8,7 @@
     "verify": "tsx scripts/verify-all.ts",
     "verify:beta-signup": "tsx scripts/verify-beta-signup.ts",
     "verify:automations": "tsx scripts/verify-automations.ts",
+    "verify:capabilities": "tsx scripts/verify-capabilities.ts",
     "verify:comms-governor": "tsx scripts/verify-comms-governor.ts",
     "verify:completion": "tsx scripts/verify-completion.ts",
     "verify:scoped-notes": "tsx scripts/verify-scoped-notes.ts",
@@ -110,7 +111,8 @@
     "verify:location-intelligence": "tsx scripts/verify-location-intelligence.ts",
     "verify:global-search": "tsx scripts/verify-global-search.ts",
     "verify:fixture-isolation": "tsx scripts/verify-fixture-isolation.ts",
-    "verify:deposit-scheduling": "tsx scripts/verify-deposit-scheduling.ts"
+    "verify:deposit-scheduling": "tsx scripts/verify-deposit-scheduling.ts",
+    "verify:day-fit": "tsx scripts/verify-day-fit.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

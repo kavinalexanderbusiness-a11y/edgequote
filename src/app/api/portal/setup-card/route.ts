@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { stripeEnabled, createSetupCheckoutSession } from '@/lib/stripe/config'
 import { ensureStripeCustomerId } from '@/lib/payments/cards'
+import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -26,7 +27,13 @@ export async function POST(req: NextRequest) {
   // routes. anon can't write customers, so it runs on the service role.
   const svc = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!svc) return NextResponse.json({ error: 'Could not start card setup.' }, { status: 502 })
-  const ensured = await ensureStripeCustomerId(createClient(url, svc), c, { userId: c.user_id })
+  const admin = createClient(url, svc)
+  // Tenant capability, from the owner the token resolved to — a card is only
+  // ever saved to be charged into the deployment's one Stripe account.
+  if (!(await tenantCapabilities(admin, c.user_id)).onlinePayments) {
+    return NextResponse.json({ error: CAPABILITY_MESSAGE.payments }, { status: 503 })
+  }
+  const ensured = await ensureStripeCustomerId(admin, c, { userId: c.user_id })
   if (!ensured.id) return NextResponse.json({ error: ensured.error || 'Could not start card setup.' }, { status: 502 })
   const stripeCustomerId = ensured.id
 

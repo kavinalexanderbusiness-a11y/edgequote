@@ -5,6 +5,9 @@
 import { parseISO, addDays, format, getDay } from 'date-fns'
 import { Coord, haversineKm, geocodeAddressDetailed, NEARBY_RADIUS_KM, SchedJob } from '@/lib/geo'
 import type { createClient } from '@/lib/supabase/client'
+// Type-only — lib/dayFit imports this module's estimateDayLoad at runtime, so a
+// value import here would be a cycle. The fit CALLS come in through opts.fitFor.
+import type { DayFit } from '@/lib/dayFit'
 
 type Supa = ReturnType<typeof createClient>
 
@@ -320,6 +323,10 @@ export interface DayPlan {
   nearbyCount: number      // existing located jobs within radius of the target
   addedDriveMin: number    // marginal driving to slot the target into that day's route
   customerPreferred: boolean // this weekday is in the customer's preferred set
+  // Realistic-capacity verdict for placing the candidate here (lib/dayFit),
+  // present when the caller supplied opts.fitFor. 'over' days are excluded from
+  // every lens — an open-looking calendar slot is not capacity (Session 46).
+  fit?: DayFit
 }
 
 export interface ScheduleModes {
@@ -343,6 +350,11 @@ export function recommendScheduleDays(
     customerPreferredDays?: number[] // the customer's preferred weekdays (boost)
     customerAvoidDays?: number[]     // the customer's avoid weekdays (excluded)
     speed?: SpeedModel               // learned travel speed (else legacy 2 min/km)
+    // Day-fit oracle (Session 46): date → capacity verdict for the candidate.
+    // When present, a day whose verdict is 'over' can win NO lens — not even
+    // revenue. 'unknown' days stay eligible (they carry their own caveat); the
+    // owner can still pick any date by hand.
+    fitFor?: (date: string) => DayFit
   },
 ): ScheduleModes {
   const horizon = opts.horizonDays ?? 28
@@ -396,11 +408,20 @@ export function recommendScheduleDays(
       nearbyCount: nearby.length,
       addedDriveMin,
       customerPreferred: custPref.has(widx),
+      fit: opts.fitFor?.(iso),
     })
   }
 
   if (!days.length) return { density: null, balanced: null, revenue: null, days: [] }
-  const argmax = (score: (d: DayPlan) => number) => days.reduce((best, d) => (score(d) > score(best) ? d : best), days[0])
+  // The lens pool: days the candidate can REALISTICALLY land on. 'over' is out —
+  // a rich, tightly-clustered day with no room must not outrank a day with room
+  // (that inversion is the bug this session exists to fix). 'unknown' stays in:
+  // an unverifiable fit is a caveat for the UI, not grounds to hide the day.
+  // If nothing has room, every lens honestly returns null — the caller says
+  // "no day in range has the room" instead of pretending one does.
+  const eligible = days.filter(d => !d.fit || d.fit.verdict !== 'over')
+  if (!eligible.length) return { density: null, balanced: null, revenue: null, days }
+  const argmax = (score: (d: DayPlan) => number) => eligible.reduce((best, d) => (score(d) > score(best) ? d : best), eligible[0])
   // Honour the customer's preferred weekdays as a bonus on every lens, so the
   // recommended day lands on a promised day unless another signal is far stronger.
   const pb = (d: DayPlan) => (d.customerPreferred ? 1 : 0)

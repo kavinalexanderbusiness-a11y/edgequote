@@ -19,6 +19,7 @@ import {
   lifetimeValue, ranOut,
 } from '@/lib/signals'
 import { FOLLOW_UP_DAYS, quoteIsQuiet, startOfDayMs } from '@/lib/followup'
+import { recurrenceEligibilityFor, cadenceFromGap, mayRecommendRecurring } from '@/lib/serviceRecurrence'
 import { generateOccurrences, dayDelta } from '@/lib/recurrence'
 import { ServiceSeasons, serviceCategory, seasonForService, seasonEndDateFor, isWithinSeason } from '@/lib/seasons'
 import { addDays, parseISO, format, getDay } from 'date-fns'
@@ -137,6 +138,11 @@ export interface SuggestionContext {
   workStart: string         // business_settings.work_start_time ('HH:mm') — ETA origin
   speed?: SpeedModel        // learned drive speed (lib/travelLearning); else legacy 2 min/km
   quoteOutcomes: { quote_id: string; reason: string; detail: string | null; competitor_price: number | null }[]
+  // The owner's service catalogue — recurrence eligibility (Session 46). A
+  // template marked one_time forbids "make this recurring" for that service;
+  // lib/serviceRecurrence owns the rule. Load-bearing in the loader's honesty
+  // gate: a failed read must not resurrect a suggestion the owner configured away.
+  serviceTemplates: { name: string; recurrence?: string | null }[]
 }
 
 // ── shared helpers ────────────────────────────────────────────────────────────
@@ -627,16 +633,25 @@ function recurringConversions(ctx: SuggestionContext): Suggestion[] {
     if (!prices.length) continue
     const avg = round5(prices.reduce((a, b) => a + b, 0) / prices.length)
     if (avg <= 0) continue
-    // Observed cadence from the median gap between visits → recommend weekly/biweekly.
+    // Observed cadence from the median gap between visits → weekly/biweekly, or
+    // NOTHING. This used to be `medGap <= 10 ? 'weekly' : 'biweekly'`, which read
+    // two one-off projects 90 days apart as "they visit ~every 90 days → biweekly
+    // fits" and offered a plan the visits never demonstrated. cadenceFromGap only
+    // speaks for gaps a one-click plan can honestly encode (≤ 21 days).
     const gaps: number[] = []
     for (let i = 1; i < completed.length; i++) gaps.push(dayDelta(completed[i - 1].scheduled_date, completed[i].scheduled_date))
     const medGap = gaps.length ? gaps.slice().sort((a, b) => a - b)[Math.floor(gaps.length / 2)] : 14
-    const recommended = medGap > 0 && medGap <= 10 ? 'weekly' : 'biweekly'
+    const rep = completed[completed.length - 1]
+    // Session 46 recurrence gate: the owner's template setting first ('one_time'
+    // is final, whatever the behaviour looks like), real cadence evidence second.
+    // No service NAME is ever inspected — lib/serviceRecurrence owns both rules.
+    const eligibility = recurrenceEligibilityFor(rep.service_type, ctx.serviceTemplates)
+    const recommended = cadenceFromGap(medGap)
+    if (!mayRecommendRecurring(eligibility, recommended) || !recommended) continue
     const weeklyAnnual = avg * SEASON_VISITS.weekly
     const biweeklyAnnual = avg * SEASON_VISITS.biweekly
     const recAnnual = recommended === 'weekly' ? weeklyAnnual : biweeklyAnnual
 
-    const rep = completed[completed.length - 1]
     const prop = rep.property_id ? pById[rep.property_id] : undefined
     const nearby = nearbyCustomerStops(prop, ctx, g.custId)
     const startDate = nextWorkdayStart(ctx)
@@ -660,7 +675,9 @@ function recurringConversions(ctx: SuggestionContext): Suggestion[] {
       why: [
         `${completed.length} one-off ${svcLabel} visits at avg $${avg} — re-quoted each time`,
         nearby > 0 ? `On-route: ${nearby} nearby customer${nearby !== 1 ? 's' : ''} — recurring adds route density` : 'Locks in predictable recurring revenue',
-        `They visit ~every ${medGap || 14} days → ${recommended} fits`,
+        `They visit ~every ${medGap} days → ${recommended} fits`,
+        ...(eligibility === 'usually_recurring' ? ['This service is marked "usually recurring" in your Service Templates']
+          : eligibility === 'recurring_ok' ? ['Recurring service is supported by this service template'] : []),
       ],
       calc: [
         `Weekly: $${avg} × ${SEASON_VISITS.weekly} visits/season = $${Math.round(weeklyAnnual)}/yr`,

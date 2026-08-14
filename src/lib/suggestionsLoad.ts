@@ -52,7 +52,7 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
   const RECURRENCE_COLS = 'id, freq, interval_unit, interval_count'
   const LINE_ITEM_COLS = 'id, job_id, amount, service_key, description, created_at'
   const today = localTodayISO()
-  const [jRes, qRes, rRes, pRes, cRes, iRes, nRes, sRes, liRes, dRes, woRes, travelM] = await Promise.all([
+  const [jRes, qRes, rRes, pRes, cRes, iRes, nRes, sRes, liRes, dRes, woRes, tplRes, travelM] = await Promise.all([
     supabase.from('jobs')
       .select(`${JOB_COLS}, customers(id, name, phone, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)`)
       .eq('user_id', uid),
@@ -68,6 +68,7 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
     supabase.from('job_line_items').select(LINE_ITEM_COLS).eq('user_id', uid).order('created_at', { ascending: true }),
     supabase.from('suggestion_dismissals').select('suggestion_key, snooze_until').eq('user_id', uid),
     supabase.from('quote_outcomes').select('quote_id, reason, detail, competitor_price').eq('user_id', uid),
+    supabase.from('service_templates').select('name, recurrence').eq('user_id', uid),
     loadTravelModel(supabase),
   ])
 
@@ -78,7 +79,11 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
   // do". Same all-or-nothing rule the dashboard loader uses.
   const failed =
     jRes.error || qRes.error || rRes.error || pRes.error ||
-    cRes.error || iRes.error || liRes.error || woRes.error || sRes.error
+    cRes.error || iRes.error || liRes.error || woRes.error || sRes.error ||
+    // Templates carry recurrence ELIGIBILITY (Session 46). A failed read would
+    // resurrect "make this recurring" for a service the owner marked one-time —
+    // the exact suggestion the configuration exists to forbid. Load-bearing.
+    tplRes.error
   if (failed) return null
   // DELIBERATELY TOLERANT — these degrade honestly rather than lying:
   //   nRes (neighbour leads)  → one growth idea goes missing; the feed UNDER-claims.
@@ -131,6 +136,7 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
     invoicedJobIds,
     dismissedKeys,
     quoteOutcomes: (woRes.data as { quote_id: string; reason: string; detail: string | null; competitor_price: number | null }[]) || [],
+    serviceTemplates: (tplRes.data as { name: string; recurrence: string | null }[]) || [],
   }
 
   return buildSuggestions(ctx)

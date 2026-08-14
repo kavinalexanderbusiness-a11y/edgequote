@@ -61,10 +61,19 @@ import { invoiceBalance } from '../src/lib/payments/ledger'
 
 // ── A fake Supabase client ───────────────────────────────────────────────────
 // Only the shape attemptAutoPayCharge actually uses: from(table) →
-// .select().eq().eq().maybeSingle(). Any table it asks for beyond `invoices`
-// means the guard did NOT fire, so those return null and the call fails loudly
-// rather than silently taking a different path.
-function fakeSupabase(invoice: Record<string, unknown> | null) {
+// .select().eq().eq().maybeSingle(). Any table it asks for beyond
+// `platform_capabilities`/`invoices` means the guard did NOT fire, so those
+// return null and the call fails loudly rather than silently taking a
+// different path.
+//
+// The engine's FIRST read (session 43) is the tenant's platform grant — the
+// cron sweeps every tenant, and a business without online_payments must never
+// reach a charge (its customers' money would settle into the founding tenant's
+// Stripe account). The fake models a GRANTED tenant by default so every check
+// below still exercises the gate it was written for; `granted: false` models a
+// private-beta tenant.
+function fakeSupabase(invoice: Record<string, unknown> | null, opts: { granted?: boolean } = {}) {
+  const granted = opts.granted !== false
   const tablesTouched: string[] = []
   const chain = (data: unknown) => {
     const c: Record<string, unknown> = {}
@@ -78,6 +87,9 @@ function fakeSupabase(invoice: Record<string, unknown> | null) {
     tablesTouched,
     from(table: string) {
       tablesTouched.push(table)
+      if (table === 'platform_capabilities') {
+        return chain(granted ? { online_payments: true, inbound_sms: true, outbound_sms: true, outbound_email: true } : null)
+      }
       return chain(table === 'invoices' ? invoice : null)
     },
   } as unknown as Parameters<typeof attemptAutoPayCharge>[0] & { tablesTouched: string[] }
@@ -102,9 +114,22 @@ H('1. THE ENGINE — a cancelled invoice is never charged')
   // Proof the guard fired EARLY: reaching the customer/job lookups would mean the
   // refusal came from something incidental (no card, not recurring) rather than
   // from the cancellation — which would silently start charging again the moment
-  // that incidental condition changed.
+  // that incidental condition changed. (The capability grant is read first, by
+  // design — see the fake's note.)
   check('…and it refused before looking up the job or the customer’s card',
-    sb.tablesTouched, ['invoices'])
+    sb.tablesTouched, ['platform_capabilities', 'invoices'])
+}
+{
+  // Session 43: a tenant WITHOUT the platform's online_payments grant — a
+  // private-beta business on the shared deployment — is refused before the
+  // engine reads anything else. A charge here would settle that business's
+  // customers' money into the founding tenant's Stripe account.
+  const sb = fakeSupabase(invoice({ status: 'unpaid' }), { granted: false })
+  const res = await attemptAutoPayCharge(sb, { invoiceId: 'inv-1', userId: 'u-beta', manual: true })
+  check('an ungranted (beta) tenant is refused with its own named reason',
+    res, { result: 'skipped', reason: 'payments-not-enabled' })
+  check('…before the invoice is even read — no charge path under a withheld grant',
+    sb.tablesTouched, ['platform_capabilities'])
 }
 {
   const sb = fakeSupabase(invoice({ status: 'cancelled', amount_paid: 0, job_id: 'job-1' }))

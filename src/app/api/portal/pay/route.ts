@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { createInvoiceCheckoutSession, stripeEnabled } from '@/lib/stripe/config'
 import { ensureStripeCustomerId, type CardCustomer } from '@/lib/payments/cards'
 import { depositChargeAmount } from '@/lib/payments/deposit'
+import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
 
 export const dynamic = 'force-dynamic'
 
@@ -56,6 +57,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Payments are temporarily unavailable — please try again shortly.' }, { status: 502 })
     }
     const admin = createClient(url, svc)
+    // Tenant capability, from the OWNER the invoice resolved to — never from the
+    // client. A business without the online_payments grant must not have its
+    // customers charged into the deployment's one Stripe account; the portal
+    // hides Pay buttons for it, and this is the server half the portal can't
+    // reach around.
+    if (!(await tenantCapabilities(admin, invoice.user_id)).onlinePayments) {
+      return NextResponse.json({ error: CAPABILITY_MESSAGE.payments }, { status: 503 })
+    }
     if (!Number.isFinite(gst)) {
       const { data: bs, error: bsErr } = await admin.from('business_settings').select('gst_percent').eq('user_id', invoice.user_id).maybeSingle()
       if (bsErr) return NextResponse.json({ error: 'We couldn’t start the payment — please try again in a moment.' }, { status: 502 })
