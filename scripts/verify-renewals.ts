@@ -602,6 +602,20 @@ H('9. TENANT ISOLATION — the schema refuses, not the component')
     /ON DELETE SET NULL \(renewal_of_recurrence_id\)/.test(baseline))
 }
 {
+  // ⭐ THE LOADER↔ENGINE CONTRACT, made executable. "Did this plan reach the
+  // ending it was given" cannot be answered without the series' own dates, and a
+  // loader that stops selecting them does not fail — it quietly answers "no" for
+  // every plan, and finished contracts start reading as emergencies again on the
+  // dashboard. Nothing about that is visible to tsc, and the engine's own tests
+  // pass either way because they are handed the rows directly.
+  for (const f of ['src/lib/dashboard/data.ts', 'src/lib/reactivation.ts', 'src/lib/renewals.ts']) {
+    const sel = stripComments(src(f)).match(/from\('job_recurrences'\)\s*\.select\('([^']*)'\)/)
+    ok(`${f} selects the series' own dates`,
+      !!sel && ['start_date', 'end_date', 'end_count'].every(c => sel[1].includes(c)),
+      sel ? `selects: ${sel[1]}` : 'no job_recurrences select found')
+  }
+}
+{
   const page = stripComments(src('src/app/dashboard/quotes/new/page.tsx'))
   ok('the quote door carries the plan id from the URL',
     /searchParams\.get\('renew'\)/.test(page))
