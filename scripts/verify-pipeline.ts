@@ -458,9 +458,46 @@ check('…and points at the history rather than duplicating it',
   page.includes('/dashboard/quotes') && page.includes('/dashboard/grow'),
   'the win-rate report already exists in Grow — a second copy on this page would drift from it')
 
+// ═════════════════════════════════════════════════════════════════════════════
+// A brand-new tenant sees an empty board, not a crash
+// ─────────────────────────────────────────────────────────────────────────────
+// The fixture tenant on production has zero of everything, and so does every
+// business on its first day. That path renders a DIFFERENT branch of the board
+// (no rows, no pills, an EmptyState) which no other test in this file reaches —
+// and "first run" is where this codebase has been bitten before. Rendered for
+// real, the technique verify:mobile-shell uses, not grepped.
+console.log('\n═══ A brand-new tenant sees an empty board, not a crash ═══')
+{
+  const React = require('react') as typeof import('react')
+  ;(globalThis as Record<string, unknown>).React = React
+  const { renderToStaticMarkup } = require('react-dom/server') as typeof import('react-dom/server')
+  const { PipelineBoard } = require('../src/components/pipeline/PipelineBoard') as typeof import('../src/components/pipeline/PipelineBoard')
+
+  const empty = computePipeline(input())
+  eq('a tenant with no records has an empty board', empty.items.length, 0)
+  eq('…and claims no open money', empty.openValue, 0)
+
+  let html = ''
+  try { html = renderToStaticMarkup(React.createElement(PipelineBoard, { report: empty })) }
+  catch (e) { fail('the empty board renders', String((e as Error).message)) }
+  check('the empty board renders', html.length > 0)
+  check('…and says so in plain words rather than showing a bare frame',
+    /Nothing in the pipeline/.test(html),
+    'a blank card on day one reads as broken')
+
+  // …and the populated branch renders too, with the row's verb visible.
+  const busy = computePipeline(input({ quotes: [quote({ id: 'q1', status: 'accepted' })] }))
+  const busyHtml = renderToStaticMarkup(React.createElement(PipelineBoard, { report: busy }))
+  check('a populated board renders its rows', /Schedule work/.test(busyHtml),
+    'the verb the engine chose must reach the screen')
+  check('…and every stage pill is present', /aria-pressed/.test(busyHtml))
+}
+
+
 console.log('\n── Summary ────────────────────────────────────────────────────')
 if (failures) {
   console.log(`\n❌ verify:pipeline — ${failures} failure${failures === 1 ? '' : 's'}\n`)
   process.exit(1)
 }
 console.log('\n✅ verify:pipeline — stages derived, one action per deal, one engine behind every surface\n')
+
