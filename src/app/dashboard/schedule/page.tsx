@@ -13,7 +13,7 @@ import { DayOpsPanel, QuoteLite, QuickPatch } from '@/components/schedule/DayOps
 import { Coord, geocodeAddress } from '@/lib/geo'
 import { JobForm, Recurrence, SuggestionMeta } from '@/components/schedule/JobForm'
 import { ScopeDialog } from '@/components/schedule/ScopeDialog'
-import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel } from '@/lib/recurrence'
+import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel, visitsBeyondEnd, planSeriesChange } from '@/lib/recurrence'
 import type { JobRecurrence } from '@/types'
 import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts, uncompleteJob } from '@/lib/invoicing'
 import { queueOrRun } from '@/lib/offline/outbox'
@@ -53,7 +53,7 @@ import { StickyActionBar } from '@/components/ui/StickyActionBar'
 import { VisitAddress } from '@/components/schedule/VisitAddress'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Skeleton, SkeletonRows } from '@/components/ui/Skeleton'
-import { cn, minutesBetween, localTodayISO, formatCurrency } from '@/lib/utils'
+import { cn, minutesBetween, localTodayISO, formatCurrency, formatDate } from '@/lib/utils'
 // THE scheduling gate — this door must agree with the quote page's Schedule
 // button about whether a deposit-gated booking may book (lib/payments/depositGate).
 import { gateBlocksScheduling, loadQuoteDepositRows, schedulingGate, stampDepositOverride } from '@/lib/payments/depositGate'
@@ -1295,33 +1295,125 @@ export default function SchedulePage() {
     setBanner('Recurrence removed — this is now a one-time job.')
   }
 
+  // Remove the future visits that contradict a series' end date — the owner just
+  // (re-)asserted the end rule, so a stray visit past it is a ghost the schedule
+  // would keep honouring. Only merely-scheduled, uninvoiced siblings qualify
+  // (visitsBeyondEnd); completed/in-progress/cancelled history and invoice-linked
+  // visits stay, and are named in the banner rather than silently kept.
+  async function reconcileSeriesEnd(job: Job, endDate: string) {
+    if (!job.recurrence_id) return
+    const series = jobs.filter(j => j.recurrence_id === job.recurrence_id)
+    const ghostIds = visitsBeyondEnd(series, endDate, { anchorId: job.id, protectedIds: invoicedJobIds })
+    const kept = series.filter(j => j.scheduled_date > endDate && j.id !== job.id && !ghostIds.includes(j.id) && j.status !== 'cancelled').length
+    if (ghostIds.length) {
+      const { error } = await supabase.from('jobs').delete().in('id', ghostIds)
+      if (error) {
+        setBanner(`Saved, but ${ghostIds.length} visit${ghostIds.length !== 1 ? 's' : ''} after ${formatDate(endDate)} could not be removed: ` + error.message)
+        return
+      }
+      setBanner(`Removed ${ghostIds.length} visit${ghostIds.length !== 1 ? 's' : ''} scheduled after the series end (${formatDate(endDate)}).${kept ? ` ${kept} completed/invoiced visit${kept !== 1 ? 's' : ''} after that date kept.` : ''}`)
+    } else if (kept) {
+      setBanner(`${kept} completed or invoiced visit${kept !== 1 ? 's' : ''} after ${formatDate(endDate)} kept — history is never removed by an end-date change.`)
+    }
+  }
+
   // Change the cadence/end of an existing series: keep past visits, regenerate
   // forward from the anchor with the new rule.
   async function changeRecurrence(job: Job, values: JobFormValues, recurrence: Recurrence) {
     if (!job.recurrence_id || !recurrence.unit) return
     const { data: { user } } = await supabase.auth.getUser()
-    // Validate the NEW cadence first — never delete the existing future visits
-    // for a rule that wouldn't regenerate any.
-    const dates = generateOccurrences(values.scheduled_date, recurrence.unit, recurrence.count, recurrence.endDate, recurrence.endCount)
-    const future = dates.slice(1).filter(d => d >= localToday())
-    if (future.length === 0) {
-      setBanner('That cadence/end date would leave no future visits — the existing schedule was kept unchanged.')
+    // What does this rule change actually mean? (lib/recurrence.planSeriesChange)
+    // Validate before touching anything — never delete a working schedule for a
+    // rule that materialises none.
+    const plan = planSeriesChange(values.scheduled_date, recurrence.unit, recurrence.count, recurrence.endDate, recurrence.endCount, localToday())
+    if (plan.kind === 'reject') {
+      setBanner(plan.reason === 'no-occurrences'
+        ? `That end date (${formatDate(recurrence.endDate!)}) is before this visit — the existing schedule was kept unchanged.`
+        : 'That cadence would leave no future visits — the existing schedule was kept unchanged.')
       return
     }
-    const futureIds = jobs
-      .filter(j => j.recurrence_id === job.recurrence_id && j.id !== job.id && j.scheduled_date > job.scheduled_date)
-      .map(j => j.id)
-    if (futureIds.length) await supabase.from('jobs').delete().in('id', futureIds)
-    await supabase.from('job_recurrences').update({
+    // Stale-editor guard: this form hydrated from `recurrences[id]`. If the row
+    // in the database no longer matches that snapshot (another device or tab
+    // changed the rule while this editor sat open), overwriting it would silently
+    // undo a save the owner already watched succeed elsewhere. Refuse and reload.
+    const snap = recurrences[job.recurrence_id]
+    const { data: fresh, error: freshErr } = await supabase.from('job_recurrences')
+      .select('interval_unit, interval_count, end_date, end_count')
+      .eq('id', job.recurrence_id).maybeSingle()
+    if (freshErr || !fresh) {
+      setBanner('Could not read this recurring schedule — nothing was changed. ' + (freshErr?.message ?? ''))
+      return
+    }
+    if (snap && (
+      fresh.interval_unit !== snap.interval_unit || fresh.interval_count !== snap.interval_count ||
+      (fresh.end_date || null) !== (snap.end_date || null) || (fresh.end_count || null) !== (snap.end_count || null)
+    )) {
+      setBanner('This recurring schedule was changed elsewhere since you opened it — showing the current schedule. Review it and save again.')
+      return
+    }
+    // Persist the rule FIRST and prove it landed — zero rows updated is a
+    // failure, not a success (RLS or a deleted row returns no error at all).
+    // Rule-then-visits ordering means a failure here leaves the series intact,
+    // and a failure below leaves a correct rule plus old visits the next
+    // reconcile/regenerate can still fix — never deleted visits under a stale rule.
+    const { data: updated, error: updErr } = await supabase.from('job_recurrences').update({
       freq: legacyFreqFor(recurrence.unit, recurrence.count),
       interval_unit: recurrence.unit,
       interval_count: recurrence.count,
       end_date: recurrence.endDate,
       end_count: recurrence.endCount,
-    }).eq('id', job.recurrence_id)
+    }).eq('id', job.recurrence_id).select('id')
+    if (updErr || !updated || updated.length === 0) {
+      setBanner('Could not save the new schedule rule — the series is unchanged. ' + (updErr?.message ?? ''))
+      return
+    }
+    // The rule ends the series at or before the visit being edited: there is no
+    // forward grid to regenerate, only visits that now contradict the end. Use
+    // the reconcile predicate rather than the regenerate path below — a stop
+    // that sits BEFORE the end but off the new grid (an Oct 31 visit under a
+    // rule anchored Oct 28) is still legitimate, and regeneration would delete
+    // it without re-creating it. The cutoff is the owner's own end date, or for
+    // a count-limited rule the last occurrence it allows.
+    if (plan.kind === 'end') {
+      const cutoff = plan.cutoff
+      const series = jobs.filter(j => j.recurrence_id === job.recurrence_id)
+      const ghostIds = visitsBeyondEnd(series, cutoff, { anchorId: job.id, protectedIds: invoicedJobIds })
+      const kept = series.filter(j => j.scheduled_date > cutoff && j.id !== job.id && !ghostIds.includes(j.id)).length
+      if (ghostIds.length) {
+        const { error: delErr } = await supabase.from('jobs').delete().in('id', ghostIds)
+        if (delErr) {
+          setBanner(`The new rule was saved, but the ${ghostIds.length} visit${ghostIds.length !== 1 ? 's' : ''} after ${formatDate(cutoff)} could not be removed: ` + delErr.message)
+          return
+        }
+      }
+      setBanner(`This series now ends ${formatDate(cutoff)}.${ghostIds.length ? ` ${ghostIds.length} later visit${ghostIds.length !== 1 ? 's' : ''} removed.` : ''}${kept ? ` ${kept} completed or invoiced visit${kept !== 1 ? 's' : ''} after that date kept.` : ''}`)
+      return
+    }
+    // Regenerate forward. Only merely-scheduled, uninvoiced siblings are
+    // replaceable; completed/in-progress work and invoice-linked visits are
+    // business history and survive a rule change (their dates are skipped on
+    // re-insert so the grid never doubles them up).
+    const siblings = jobs.filter(j => j.recurrence_id === job.recurrence_id && j.id !== job.id && j.scheduled_date > job.scheduled_date)
+    const replaceable = siblings.filter(j => j.status === 'scheduled' && !invoicedJobIds.has(j.id)).map(j => j.id)
+    const preserved = siblings.filter(j => !replaceable.includes(j.id))
+    if (replaceable.length) {
+      const { error: delErr } = await supabase.from('jobs').delete().in('id', replaceable)
+      if (delErr) {
+        setBanner('The new rule was saved, but the old visits could not be replaced: ' + delErr.message)
+        return
+      }
+    }
+    const preservedDates = new Set(preserved.map(j => j.scheduled_date))
+    const toInsert = plan.future.filter(d => !preservedDates.has(d))
     const base = occurrenceBase(values, user!.id, job.recurrence_id, job.quote_id)
-    await supabase.from('jobs').insert(future.map(d => ({ ...base, scheduled_date: d, price: job.quote_id ? null : base.price })))
-    setBanner(`Schedule updated to ${recurrenceLabel(recurrence.unit, recurrence.count)}. ${future.length} future visit${future.length !== 1 ? 's' : ''}.`)
+    if (toInsert.length) {
+      const { error: insErr } = await supabase.from('jobs').insert(toInsert.map(d => ({ ...base, scheduled_date: d, price: job.quote_id ? null : base.price })))
+      if (insErr) {
+        setBanner('The new rule was saved, but its future visits could not be created: ' + insErr.message)
+        return
+      }
+    }
+    setBanner(`Schedule updated to ${recurrenceLabel(recurrence.unit, recurrence.count)}. ${plan.future.length} future visit${plan.future.length !== 1 ? 's' : ''}.${preserved.length ? ` ${preserved.length} completed/invoiced visit${preserved.length !== 1 ? 's' : ''} kept.` : ''}`)
   }
 
   // Orchestrator for an edit on a recurring job (or a one-time → one-time edit):
@@ -1340,6 +1432,16 @@ export default function SchedulePage() {
 
     if (!was || (will && !ruleChanged)) {
       await applyFieldEdits(job, values, scope)
+      // The owner explicitly set the Ends control to a value the series already
+      // stores. That is not a no-op: "ends Oct 31" saved onto a schedule still
+      // showing November visits (rain-delay moves can walk a series past its
+      // own end) means those visits contradict the rule the owner just
+      // confirmed. Re-asserting the end reconciles the series against it.
+      // Untouched saves (recurrence.endAsserted absent/false) never do this —
+      // a crew-size edit must not silently delete deliberately-moved visits.
+      if (was && will && !ruleChanged && recurrence.endAsserted && recurrence.endDate) {
+        await reconcileSeriesEnd(job, recurrence.endDate)
+      }
     } else if (!will) {
       await applyFieldEdits(job, values, 'this')
       await removeRecurrence(job, scope)
@@ -2341,6 +2443,7 @@ export default function SchedulePage() {
               initialRecurrence={editing?.recurrence_id && recurrences[editing.recurrence_id]
                 ? recFromRow(recurrences[editing.recurrence_id])
                 : (!editing ? quoteRecurrence : undefined)}
+              seriesStartDate={editing?.recurrence_id ? recurrences[editing.recurrence_id]?.start_date : undefined}
               defaultValues={editing ? {
                 customer_id: editing.customer_id || '',
                 property_id: editing.property_id || '',
