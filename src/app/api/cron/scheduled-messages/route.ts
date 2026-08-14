@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
+import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { renderMessage, renderBody, MsgType, MSG_LABELS, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
 import { dispatchToCustomer } from '@/lib/comms/dispatch'
@@ -38,22 +39,21 @@ interface ScheduledRow {
   send_at: string
 }
 
-export async function GET(req: NextRequest) {
-  const secret = req.headers.get('authorization')?.replace('Bearer ', '') || new URL(req.url).searchParams.get('secret') || ''
-  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
-    return NextResponse.json({ error: 'forbidden' }, { status: 403 })
-  }
+async function handler(req: NextRequest) {
+  // THE shared guard (lib/cron/guard) — see the note in /api/cron/campaigns. The
+  // hand-rolled `!==` this replaces compared the secret in non-constant time.
+  if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   const enabled = commsEnabled()
   if (!enabled.sms && !enabled.email) {
     console.log('[cron/scheduled-messages] comms disabled — nothing sent')
     return NextResponse.json({ ok: true, disabled: true, note: 'Comms disabled — set Twilio/Resend env vars to enable scheduled sends.' })
   }
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL, svc = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !svc) {
+  const client = serviceClient()
+  if (!client) {
     console.log('[cron/scheduled-messages] no service role key — skipped')
     return NextResponse.json({ ok: true, skipped: true, note: 'Set SUPABASE_SERVICE_ROLE_KEY to enable scheduled sends.' })
   }
-  const supabase = createClient(url, svc)
+  const supabase = client
   const nowIso = new Date().toISOString()
 
   // ── Reap stale claims ───────────────────────────────────────────────────────
@@ -188,8 +188,12 @@ export async function GET(req: NextRequest) {
   // Log unconditionally — for a queue sweep the quiet night is the one needing proof.
   console.log(`[cron/scheduled-messages] due=${due.length} processed=${processed} sent=${sent} reaped=${reaped}${notes.length ? ` notes=${notes.length}` : ''}`)
   return NextResponse.json({
-    ok: true, due: due.length, processed, sent,
+    // A row this run claimed and then failed to send is a deferred message the owner
+    // scheduled deliberately — the run did not do what it was asked.
+    ok: notes.length === 0, due: due.length, processed, sent,
     ...(reaped ? { reaped } : {}),
     ...(notes.length ? { notes } : {}),
   })
 }
+
+export const GET = withCronSweep('scheduled-messages', handler, b => counts(b, undefined, 'due', 'sent'))

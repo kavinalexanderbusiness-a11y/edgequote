@@ -35,6 +35,7 @@
     "verify:vocabulary": "tsx scripts/verify-vocabulary.ts",
     "verify:advanced-setup": "tsx scripts/verify-advanced-setup.ts",
     "verify:create-doors": "tsx scripts/verify-create-doors.ts",
+    "verify:cron": "tsx scripts/verify-cron.ts",
     "verify:pricing": "tsx scripts/verify-pricing.ts",
     "verify:priority-queue": "tsx scripts/verify-priority-queue.ts",
     "verify:guardrails": "tsx scripts/verify-guardrails.ts",

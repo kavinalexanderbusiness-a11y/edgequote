@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { classifyCronHealth, STALE_AFTER_DAYS, type CronVerdict } from '@/lib/cron/heartbeat'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -25,6 +26,54 @@ export const runtime = 'nodejs'
 // A monitor should alert on the STATUS CODE; a human reads the body.
 
 interface Check { ok: boolean; ms?: number; detail?: string }
+
+/** What this endpoint reports about the scheduler: the pure verdict, plus the two
+ *  facts only the query knows. `readable: false` means the run log could not be
+ *  read at all — a question unanswered, never an answer of "nothing ran". */
+type CronReport = CronVerdict & { readable: boolean; lastRunAt: string | null }
+
+/** Read the cron heartbeat and report whether the scheduled jobs are actually
+ *  running. Cheap: `automation_sweeps` holds one row per job per day and this reads
+ *  a few days of it. Never throws — health must survive its own diagnostics.
+ *
+ *  The DECISION lives in lib/cron/heartbeat's classifyCronHealth, which is pure and
+ *  pinned by verify:cron. All that happens here is the select. */
+async function cronHealth(url: string | undefined, serviceKey: string | undefined, configured: boolean): Promise<CronReport> {
+  const freshCutoff = new Date(Date.now() - STALE_AFTER_DAYS * 86_400_000).toISOString().slice(0, 10)
+  // Unknown: report the shape, claim nothing. `operational: false` is the honest
+  // default — answering "yes" for a log that was never read is the same always-200
+  // failure this file's header warns about, one level down.
+  const unknown = (): CronReport => ({
+    ...classifyCronHealth([], { configured, freshCutoff }),
+    neverRan: [], stale: [], failing: [], customerImpacting: [],
+    operational: false, readable: false, lastRunAt: null,
+  })
+
+  // Only the service role can read this table's run counts (the owner-facing columns
+  // are granted separately). No key → the config check already reports it; don't
+  // guess at liveness we cannot see.
+  if (!url || !serviceKey) return unknown()
+
+  const since = new Date(Date.now() - (STALE_AFTER_DAYS + 5) * 86_400_000).toISOString().slice(0, 10)
+  let rows: { job: string; ok: boolean; ran_on: string; ran_at: string }[]
+  try {
+    const sb = createClient(url, serviceKey)
+    const timeout = new Promise<null>(r => setTimeout(() => r(null), TIMEOUT_MS))
+    const query = sb.from('automation_sweeps').select('job, ok, ran_on, ran_at').gte('ran_on', since)
+      .then(({ data, error }) => (error ? null : (data as typeof rows | null) ?? []))
+    const out = await Promise.race([query, timeout])
+    if (out === null) return unknown()
+    rows = out
+  } catch {
+    return unknown()
+  }
+
+  return {
+    ...classifyCronHealth(rows, { configured, freshCutoff }),
+    readable: true,
+    lastRunAt: rows.length ? rows.reduce((a, b) => (a.ran_at >= b.ran_at ? a : b)).ran_at : null,
+  }
+}
 
 // Comfortably above a healthy round trip (~250ms warm, ~1.3s cold) and well
 // under the 5s an uptime monitor typically allows, so our 503 is what gets
@@ -100,8 +149,20 @@ export async function GET() {
   // and degrading there would train everyone to ignore the word.
   const cronsDeclaredButUnusable = process.env.VERCEL_ENV === 'production' && !cron
 
+  // …and the failure the line above CANNOT see. A missing secret is knowable from
+  // the environment; a job that authenticates fine and has quietly stopped running
+  // is only knowable from its run log. Both end in "the reminders aren't going
+  // out", and an endpoint that catches the first and not the second would go green
+  // the moment CRON_SECRET is set, whatever the crons then do.
+  //
+  // Scoped to production for the same reason as above, and deliberately only when
+  // the secret EXISTS: with no secret, "no secret" is the precise diagnosis and
+  // every job would trivially read as never-run. Say the useful thing, once.
+  const crons = await cronHealth(url, service, cron)
+  const cronsStopped = process.env.VERCEL_ENV === 'production' && cron && crons.readable && !crons.operational
+
   const down = !checks.database.ok
-  const degraded = !checks.config.ok || stripeKeyOnly || cronsDeclaredButUnusable
+  const degraded = !checks.config.ok || stripeKeyOnly || cronsDeclaredButUnusable || cronsStopped
 
   return NextResponse.json(
     {
@@ -121,6 +182,10 @@ export async function GET() {
         ...(stripeKeyOnly ? { warning: 'STRIPE_SECRET_KEY set without STRIPE_WEBHOOK_SECRET — AutoPay will refuse to charge' } : {}),
         ...(cronsDeclaredButUnusable ? { cron_warning: 'CRON_SECRET is not set — every scheduled job in vercel.json is rejected with 403 (no reminders, no follow-ups, no AutoPay, no reports)' } : {}),
       },
+      // Which jobs, and whether they are actually running. Reported in every
+      // environment even though only production degrades on it: "have these ever
+      // run?" is a question worth being able to answer from a preview too.
+      crons,
       ms: Date.now() - started,
     },
     {

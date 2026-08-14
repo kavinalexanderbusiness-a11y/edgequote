@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
+import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { addDays, format } from 'date-fns'
 import { prepareAutoDraft } from '@/lib/marketing/autoDraft'
 import { resolveAutomations } from '@/lib/comms/automations'
@@ -12,7 +13,7 @@ export const dynamic = 'force-dynamic'
 // before+after photos and no draft yet, and prepares one (never publishes). Guarded by
 // CRON_SECRET + the service-role key; no-ops cleanly when either is absent. Bounded per
 // run. Idempotent via prepareAutoDraft (skips jobs that already have content pieces).
-export async function GET(req: NextRequest): Promise<NextResponse> {
+async function handler(req: NextRequest): Promise<NextResponse> {
   if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   const client = serviceClient() // service role → sweeps every owner
   if (!client) return NextResponse.json({ ok: true, skipped: true, note: 'Set SUPABASE_SERVICE_ROLE_KEY to enable the daily marketing-draft sweep.' })
@@ -56,3 +57,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
   return NextResponse.json({ ok: true, eligible: eligible.length, prepared })
 }
+
+// Every per-job exception here is swallowed unlogged, so a systematic failure (every
+// AI call erroring) returns `prepared: 0` and reads exactly like a quiet night. The
+// heartbeat at least proves the sweep itself happened.
+export const GET = withCronSweep('marketing-draft', handler, b => counts(b, undefined, 'eligible', 'prepared'))

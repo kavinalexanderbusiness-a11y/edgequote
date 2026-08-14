@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
+import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { AUTOMATION_RULES } from '@/lib/automation/rules'
 import { decide } from '@/lib/automation/decide'
 import { localTodayISO } from '@/lib/utils'
@@ -76,21 +77,9 @@ const DISPATCHERS: Record<string, unknown> = Object.create(null)
 // run. `id` orders it deterministically so paging can't skip or repeat a row.
 const PAGE_ROWS = 1000
 
-type Client = NonNullable<ReturnType<typeof serviceClient>>
-
-// The heartbeat. Wrapped because logging the failure must never BE the failure: a run
-// that worked is not allowed to report failure because its proof-of-life row didn't
-// land (see chase.ts on the same trap).
-async function heartbeat(supabase: Client, row: Record<string, unknown>): Promise<void> {
-  try {
-    const { error } = await supabase.from('automation_sweeps').upsert(row, { onConflict: 'job,ran_on' })
-    if (error) console.error('[cron/engine] heartbeat write failed:', error.message)
-  } catch (e) {
-    console.error('[cron/engine] heartbeat write threw:', e instanceof Error ? e.message : e)
-  }
-}
-
-export async function GET(req: NextRequest) {
+// This route's own heartbeat writer moved to lib/cron/heartbeat — withCronSweep at
+// the bottom of this file files the row now, for all twelve crons alike.
+async function handler(req: NextRequest) {
   if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   const startedAt = Date.now()
   // Vercel's own request id, so a log line and its heartbeat row can be pinned to the
@@ -127,18 +116,10 @@ export async function GET(req: NextRequest) {
       ...(r.error ? { error: r.error } : {}),
     }
     console.log('[cron/engine] run:', JSON.stringify(summary))
-    await heartbeat(supabase, {
-      job: 'engine', ran_on: today, ok: r.ok,
-      owners: r.owners, detected: r.signals, written: r.written, ms,
-      error: r.error ? r.error.slice(0, 200) : null,
-      request_id: requestId,
-      // Set explicitly, not left to the column default: the PK is (job, ran_on), so a
-      // re-run today UPDATEs, and `default now()` only fires on INSERT. Without this the
-      // row would carry the first run's timestamp beside the latest run's verdict.
-      ran_at: new Date().toISOString(),
-    })
     return NextResponse.json(
-      { ok: r.ok, signals: r.signals, evaluated: r.evaluated, written: r.written, fired: r.fired, sent: 0, ...(r.error ? { error: r.error } : {}), ...(r.note ? { note: r.note } : {}) },
+      // `owners` rides in the body so withCronSweep can record it — it is the count
+      // the heartbeat column has always carried, and this is now where it is read from.
+      { ok: r.ok, owners: r.owners, signals: r.signals, evaluated: r.evaluated, written: r.written, fired: r.fired, sent: 0, ...(r.error ? { error: r.error } : {}), ...(r.note ? { note: r.note } : {}) },
       { status: r.status ?? 200 },
     )
   }
@@ -248,3 +229,8 @@ export async function GET(req: NextRequest) {
   // being 0 is visible, rather than something we find out from a customer.
   return finish({ ok: true, owners: ownerCount, signals: signals.length, evaluated: runs.length, written, fired })
 }
+
+// `detected` is what the engine took IN (today's signals) — it detects nothing of its
+// own — and `written` is the verdicts it recorded. Same honest mapping the bespoke
+// heartbeat used.
+export const GET = withCronSweep('engine', handler, b => counts(b, 'owners', 'signals', 'written'))

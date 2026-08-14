@@ -848,11 +848,20 @@ async function run() {
     // list means the walk stopped seeing files rather than the graph getting smaller —
     // which is precisely how the assertions below would start passing for the wrong
     // reason. (types.ts is absent on purpose: nothing imports it except `import type`.)
-    check('no-sender', 'the engine runtime closure is exactly these 5 modules', members, [
+    //
+    // lib/cron/heartbeat.ts joined the closure when all twelve crons moved to one
+    // heartbeat writer, and this check is the reason that was a deliberate decision
+    // rather than a silent one. It is safe HERE, specifically: its only runtime edges
+    // are lib/cron/guard and lib/utils, both already members — supabase-js and
+    // next/server enter as `import type` and vanish at runtime — so the closure grew
+    // by exactly this one file and no send path came with it. The two assertions
+    // below re-prove that independently rather than taking this note's word for it.
+    check('no-sender', 'the engine runtime closure is exactly these 6 modules', members, [
       'app/api/cron/engine/route.ts',
       'lib/automation/decide.ts',
       'lib/automation/rules.ts',
       'lib/cron/guard.ts',
+      'lib/cron/heartbeat.ts',
       'lib/utils.ts',
     ])
 
