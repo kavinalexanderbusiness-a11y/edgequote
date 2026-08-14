@@ -41,10 +41,16 @@ export function buildBetaSignupUrl(appOrigin: string, rawToken: string): string 
 /** The link inside the verification email. Built around `hashed_token`, never
  *  `action_link` — same two reasons as crewInvite.buildSetupUrl: no Redirect-URL
  *  allow-list dependency, and the page (not a URL fragment) establishes the
- *  session, so it works in whatever browser the email opens in. */
+ *  session, so it works in whatever browser the email opens in.
+ *
+ *  PATH segments, deliberately no query string: an emailed `?token_hash=…` is
+ *  at the mercy of every quoted-printable decoder between the sender and the
+ *  click — `=73` is a valid QP escape, so a hash beginning `73…` had its
+ *  leading bytes eaten in transit (observed live 2026-08-13 against Gmail).
+ *  Both segments are URL-safe by construction ([a-z_] type, hex/pkce_ hash). */
 export function buildBetaConfirmUrl(appOrigin: string, hashedToken: string, verificationType: string): string {
   const base = appOrigin.replace(/\/$/, '')
-  return `${base}${SIGNUP_CONFIRM_PATH}?token_hash=${encodeURIComponent(hashedToken)}&type=${encodeURIComponent(verificationType)}`
+  return `${base}${SIGNUP_CONFIRM_PATH}/${encodeURIComponent(verificationType)}/${encodeURIComponent(hashedToken)}`
 }
 
 /** What GET /api/beta/signup?token=… says about an invite. `reserved` means an

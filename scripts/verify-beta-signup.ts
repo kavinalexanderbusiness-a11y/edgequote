@@ -47,7 +47,7 @@ const SQL = read('supabase/RUN-2026-08-13-beta-invites.sql')
 const SIGNUP_ROUTE = read('src/app/api/beta/signup/route.ts')
 const RESEND_ROUTE = read('src/app/api/beta/resend/route.ts')
 const SIGNUP_PAGE = read('src/app/signup/page.tsx')
-const CONFIRM_PAGE = read('src/app/signup/confirm/page.tsx')
+const CONFIRM_PAGE = read('src/app/signup/confirm/[[...link]]/page.tsx')
 const SETUP_PAGE = read('src/app/setup/page.tsx')
 const MIDDLEWARE = read('src/lib/supabase/middleware.ts')
 const SCRIPT = read('scripts/beta-invite.ts')
@@ -65,20 +65,28 @@ H('1. token + hash + URLs (pure)')
   check('signup URL: no double slash, token encoded, right path',
     su === `https://x.example${SIGNUP_PATH}?invite=${encodeURIComponent(t)}`)
   const cu = buildBetaConfirmUrl('https://x.example', 'pkce_ab/cd+ef=', 'signup')
-  check('confirm URL encodes the hashed token', cu.includes('token_hash=pkce_ab%2Fcd%2Bef%3D') && cu.includes(`${SIGNUP_CONFIRM_PATH}?`))
+  check('confirm URL is path segments with the hash encoded',
+    cu === `https://x.example${SIGNUP_CONFIRM_PATH}/signup/pkce_ab%2Fcd%2Bef%3D`)
+  // The transport-safety property itself: a real hashed token (hex or pkce_)
+  // yields an emailed URL with NO '=' and NO '?' — nothing for a quoted-
+  // printable decoder to eat. `=73` is a valid QP escape; a query-form link
+  // measurably lost bytes on its way to a real inbox (2026-08-13).
+  const real = buildBetaConfirmUrl('https://x.example', '733853eddf4416c6b263419cb107b7a459fabd0b9e667bb319e0e547', 'signup')
+  check('emailed URL carries no "=" or "?" (quoted-printable cannot mangle it)',
+    !real.includes('=') && !real.includes('?'))
   check(`MIN_PASSWORD stays ${8} (Supabase default; crew welcome states the same)`, MIN_PASSWORD === 8)
 }
 
 H('2. the verification email (pure)')
 {
-  const url = 'https://x.example/signup/confirm?token_hash=abc&type=signup'
+  const url = buildBetaConfirmUrl('https://x.example', '733853eddf4416c6b263419cb107b7a459fabd0b9e667bb319e0e547', 'signup')
   const m = betaVerifyEmail(url)
-  check('html and text both carry the confirm URL', m.html.includes('token_hash=abc&amp;type=signup') && m.text.includes(url))
+  check('html and text both carry the confirm URL', m.html.includes(`href="${url}"`) && m.text.includes(url))
   check('the didn’t-sign-up line is present (anyone can type a stranger’s address)',
     /didn’t sign up/i.test(m.html) && /didn’t sign up/i.test(m.text))
   check('single-use is stated', /single-use/i.test(m.text))
   check('subject names EdgeQuote', /EdgeQuote/.test(m.subject))
-  check('href is escaped', m.html.includes('href="https://x.example/signup/confirm?token_hash=abc&amp;type=signup"'))
+  check('html-escaping still guards a hostile URL', betaVerifyEmail('https://x.example/a&b<c>').html.includes('href="https://x.example/a&amp;b&lt;c&gt;"'))
 }
 
 H('3. migration: the invite ledger is server-authoritative')
