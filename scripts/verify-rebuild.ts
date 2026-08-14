@@ -48,7 +48,15 @@ async function main() {
 // ── load PGlite, or skip clean ───────────────────────────────────────────────
 let PGlite: any, contribs: any = {}
 try {
-  ;({ PGlite } = await import('@electric-sql/pglite'))
+  // The specifier is a VARIABLE, exactly like `load()` below, and that is
+  // load-bearing rather than stylistic: PGlite is deliberately optional (~100 MB,
+  // installed only when you run this guard), but a LITERAL `import('…')` is still
+  // resolved by the type checker — and `next build` type-checks scripts/. So the
+  // literal made a clean `npm ci && npm run build` fail on a dependency the
+  // repository does not declare and does not want to. Runtime behaviour is
+  // unchanged: the catch below still skips clean when it is absent.
+  const PGLITE_MODULE = '@electric-sql/pglite'
+  ;({ PGlite } = await import(PGLITE_MODULE))
   const load = async (p: string, k: string) => { try { return (await import(p))[k] } catch { return undefined } }
   contribs = {
     pg_trgm: await load('@electric-sql/pglite/contrib/pg_trgm', 'pg_trgm'),
