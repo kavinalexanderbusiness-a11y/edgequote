@@ -494,6 +494,85 @@ console.log('\n═══ A brand-new tenant sees an empty board, not a crash ═
 }
 
 
+// ═════════════════════════════════════════════════════════════════════════════
+// The deposit gate, and the two definitions that must stay two
+// ─────────────────────────────────────────────────────────────────────────────
+console.log('\n═══ A gated booking is not urged onto the schedule ═══')
+{
+  type Row = { amount: number; kind?: string | null; provider?: string | null; status?: string | null }
+  const gated = (rows: Row[] | undefined) =>
+    computePipeline(input({
+      quotes: [quote({ id: 'q1', status: 'accepted', total: 1000, accepted_price: 1000, deposit_type: 'percent', deposit_value: 50 })],
+      ...(rows === undefined ? {} : { quoteDepositRows: { q1: rows } }),
+    })).items[0]?.action
+
+  // ⭐ THE divergence this block exists to stop: the Owner Action queue splits
+  // accepted-unscheduled into ready vs waiting-on-deposit. If the pipeline still
+  // said "Schedule work" here, one screen would urge exactly what the other withholds.
+  eq('an unpaid deposit blocks the schedule prompt', gated([])?.kind, 'collect_deposit')
+  eq('a partly-paid deposit still blocks it',
+    gated([{ amount: 200, kind: 'payment', provider: 'manual', status: 'paid' }])?.kind, 'collect_deposit')
+  eq('a satisfied deposit releases it',
+    gated([{ amount: 500, kind: 'payment', provider: 'manual', status: 'paid' }])?.kind, 'schedule_work')
+  eq('a quote with NO deposit rule is unaffected',
+    computePipeline(input({ quotes: [quote({ id: 'q1', status: 'accepted' })], quoteDepositRows: {} })).items[0]?.action.kind,
+    'schedule_work')
+
+  // ⚠️⚠️ UNREAD ≠ UNPAID. A caller that never loaded payments must not announce
+  // that a paid booking is unsecured — the inverse of the failure depositGate's
+  // own loader guards against, and just as false.
+  eq('an UNREAD deposit ledger skips the gate rather than claiming unpaid',
+    gated(undefined)?.kind, 'schedule_work')
+  check('…and the engine says so where someone will look',
+    /UNDEFINED means "not read"/.test(read('src/lib/pipeline.ts')),
+    'the two meanings of absent are load-bearing and must be written down')
+
+  // Both surfaces ask THE gate; neither re-derives it.
+  for (const f of ['src/lib/pipeline.ts', 'src/lib/dashboard/priorities.ts']) {
+    check(`${f} asks THE scheduling gate`, read(f).includes('gateBlocksScheduling'),
+      'a second readiness rule is a second answer about whether money arrived')
+  }
+  check('a failed deposit read throws rather than un-securing every booking',
+    /depRes\.error \? /.test(read('src/lib/pipelineData.ts')),
+    'reporting "no deposit" on a failed read gates work the customer already paid for')
+}
+
+console.log('\n═══ Change Orders do not become a second won definition ═══')
+{
+  // ⭐⭐ Two engines, two QUESTIONS, two UNITS. isWon answers "did this DEAL
+  // close?" over quotes.status. authorizedValue answers "what is this VISIT
+  // worth now?" over jobs + change_orders. Change Orders never writes `quotes`,
+  // so there is exactly one won definition — and this pins it, in both directions.
+  const co = read('src/lib/changeOrders.ts')
+  check('the change-order engine never classifies won/lost',
+    !/isWon|isLost|salesStage/.test(co),
+    'the moment it answers "did the deal close?" there are two won definitions')
+  check('…and never rewrites the quote the customer agreed to',
+    !/from\('quotes'\)[\s\S]{0,120}\.update\(/.test(co),
+    'rewriting quotes.total / accepted_price would destroy the original agreed value')
+
+  const engine = read('src/lib/pipeline.ts')
+  check('the pipeline never re-derives authorized value',
+    !engine.includes('authorizedValue') && !engine.includes('changeOrders'),
+    'the deal ladder and the visit value are different questions — importing one into the other collapses them')
+
+  // ⚖️ OWNER RULING 2026-08-14: original accepted deal value, current authorized
+  // job value, amount invoiced and amount still collectible are FOUR figures.
+  // The pipeline's headline is the DEAL value and must never silently become the
+  // balance just because a change order grew the invoice.
+  const wonRow = computePipeline(input({
+    quotes: [quote({ id: 'q1', status: 'completed', total: 1000 })],
+    jobs: [job({ id: 'j1', quote_id: 'q1', status: 'completed' })],
+    invoices: [invoice({ id: 'i1', quote_id: 'q1', amount: 1600, amount_paid: 0 })],
+  })).items[0]
+  eq('the headline stays the agreed DEAL value…', wonRow?.value, 1000)
+  check('…while the action quotes what is still COLLECTIBLE, separately',
+    /1,680|1,600/.test(wonRow?.action.detail || ''),
+    `the two figures must both be visible and distinct — got ${wonRow?.action.detail}`)
+  eq('…and the verb is about the money, not the deal', wonRow?.action.kind, 'collect_payment')
+}
+
+
 console.log('\n── Summary ────────────────────────────────────────────────────')
 if (failures) {
   console.log(`\n❌ verify:pipeline — ${failures} failure${failures === 1 ? '' : 's'}\n`)

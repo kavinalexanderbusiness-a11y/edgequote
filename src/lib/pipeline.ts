@@ -44,6 +44,9 @@ import type { ReachCustomer } from '@/lib/comms/reach'
 import { isQuoteExpired, daysUntilExpiry, sendBlockedReason, type ExpirableQuote } from '@/lib/quoteStatus'
 import { invoiceBalance } from '@/lib/payments/ledger'
 import { depositState, type DepositInvoice } from '@/lib/payments/deposit'
+// THE scheduling gate (deposit-gated booking) — the same engine the Owner Action
+// queue asks, so the two can never disagree about which bookings are secured.
+import { schedulingGate, gateBlocksScheduling, type GateQuote, type GateLedgerRow } from '@/lib/payments/depositGate'
 import { computeReactivation, type RJob, type RQuote, type RRecurrence } from '@/lib/reactivation'
 import { computeLeadsNeedingResponse, type LeadConvRow, type LeadQuoteRow, type LeadSource } from '@/lib/leadResponse'
 import { scheduledQuoteIds, tierAdder } from '@/lib/dashboard/priorities'
@@ -168,6 +171,12 @@ export interface PQuote {
   last_followed_up_at: string | null
   valid_until?: string | null
   lead_meta?: unknown
+  /** The deposit RULE the scheduling gate reads (null = no gate, today's
+   *  behaviour exactly). accepted_price is the basis it is taken of. */
+  deposit_type?: string | null
+  deposit_value?: number | null
+  deposit_override_at?: string | null
+  accepted_price?: number | null
   /** Reactivation reads these; they ride along in the same select. */
   initial_price?: number | null
   weekly_price?: number | null
@@ -201,6 +210,10 @@ export interface PipelineInput {
   conversations: LeadConvRow[]
   /** Recorded loss reasons, so a tagged loss stops asking (lib/winLoss). */
   outcomes: { quote_id: string; reason: string }[]
+  /** Signed cash rows keyed by the booking they secure (payments.quote_id).
+   *  Absent = no gate anywhere, which is exactly how a book with no deposit
+   *  rules behaves — never a guess that a booking is unsecured. */
+  quoteDepositRows?: Record<string, GateLedgerRow[]>
   recById: Record<string, RRecurrence>
   seasons: ServiceSeasons
   feeSettings: FeeSettings | null
@@ -227,6 +240,7 @@ function ageOf(at: string, nowMs: number): number {
 // ═════════════════════════════════════════════════════════════════════════════
 export function computePipeline(i: PipelineInput): PipelineReport {
   const { quotes, jobs, invoices, customers, conversations, outcomes, recById, seasons, feeSettings, today } = i
+  const depositRowsByQuote = i.quoteDepositRows
   const nowMs = i.nowMs ?? Date.now()
 
   const custById: Record<string, PCustomer> = {}
@@ -261,6 +275,10 @@ export function computePipeline(i: PipelineInput): PipelineReport {
       invoice: invByQuote[q.id] ?? null,
       customer: q.customer_id ? custById[q.customer_id] ?? null : null,
       lossReason: reasonByQuote[q.id] ?? null,
+      // undefined = the caller never read payments (gate skipped); [] = read,
+      // and nothing has arrived for THIS booking (gate applies). Flattening the
+      // two here would defeat the contract quoteNextAction documents.
+      depositRows: depositRowsByQuote ? (depositRowsByQuote[q.id] ?? []) : undefined,
       feeSettings, today, nowMs,
     })
     // A finished deal asks for nothing and leaves the board. Only won/lost can
@@ -413,6 +431,16 @@ export interface QuoteActionContext {
   customer?: PCustomer | null
   /** A recorded loss reason silences the optional "say why" ask. */
   lossReason?: string | null
+  /**
+   * Signed cash toward THIS booking — the scheduling gate's input.
+   *
+   * ⚠️ UNDEFINED means "not read", and the gate is then SKIPPED. An empty array
+   * means "read, and nothing has arrived", which gates. Collapsing the two would
+   * let a caller that never loaded payments announce that a fully-paid booking is
+   * unsecured — the exact inverse of the failure depositGate's own loader guards
+   * against, and just as false.
+   */
+  depositRows?: GateLedgerRow[] | null
   feeSettings: FeeSettings | null
   today: string
   nowMs?: number
@@ -425,6 +453,7 @@ export function quoteNextAction(q: PQuote, ctx: QuoteActionContext): NextAction 
   const inv = ctx.invoice ?? undefined
   const cust = ctx.customer ?? undefined
   const reasonByQuote: Record<string, string> = ctx.lossReason ? { [q.id]: ctx.lossReason } : {}
+  const depositRows = ctx.depositRows
 
   if (stage === 'quote_draft') {
     // Can this even go out? THE shared send gate, so the pipeline names the same
@@ -495,9 +524,33 @@ export function quoteNextAction(q: PQuote, ctx: QuoteActionContext): NextAction 
   }
 
   if (stage === 'won') {
-    // Money first, and a deposit before the rest of it: an unpaid deposit is the
-    // thing standing between an approved quote and booked work. THE deposit
-    // engine, so "how much is still needed" is the invoice panel's number.
+    // ── The SCHEDULING GATE, first ────────────────────────────────────────────
+    // An accepted quote can carry a deposit rule, and until that money arrives
+    // the owner deliberately gated the booking. THE gate engine
+    // (lib/payments/depositGate), asked exactly as the Owner Action queue asks
+    // it — so the two can never disagree about which bookings are secured.
+    //
+    // Without this the pipeline would say "Schedule work" about precisely the
+    // bookings the owner gated, while the dashboard said "waiting on the
+    // deposit" — one screen urging what the other withholds. It is the SAME
+    // verb (`collect_deposit`), not a new one: the money is what is missing, and
+    // where to record it is what the row links to.
+    const gate = depositRows == null ? null : schedulingGate(q as unknown as GateQuote, depositRows)
+    if (gate && gateBlocksScheduling(q as unknown as GateQuote, gate)) {
+      return {
+        kind: 'collect_deposit',
+        label: 'Collect deposit',
+        detail: gate.collected > 0
+          ? `${formatCurrency(gate.collected)} of ${formatCurrency(gate.required)} received · booking not secured yet`
+          : `${formatCurrency(gate.outstanding)} up front secures the booking`,
+        // The quote page is where the deposit is chased AND recorded, and where
+        // "schedule without the deposit" lives. One door, both halves.
+        href: `/dashboard/quotes/${q.id}`,
+      }
+    }
+    // An INVOICE deposit is a different, later request — money asked for on a
+    // document that already exists. Distinct from the gate above and checked
+    // after it, because the gate is the one blocking the next step.
     if (inv && inv.status !== 'draft' && inv.status !== 'cancelled') {
       const d = depositState(inv, feeSettings)
       if (d.requested != null && d.outstanding > 0.01) {

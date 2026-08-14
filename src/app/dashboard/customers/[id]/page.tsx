@@ -28,6 +28,7 @@ import { TimelineCard } from '@/components/timeline/TimelineCard'
 import { needsFollowUp, daysSince } from '@/lib/followup'
 import { isWon } from '@/lib/salesStage'
 import { quoteNextAction, type PQuote, type PInvoice, type PCustomer } from '@/lib/pipeline'
+import type { GateLedgerRow } from '@/lib/payments/depositGate'
 import { scheduledQuoteIds } from '@/lib/dashboard/priorities'
 import { recurrenceLabel, recurringCustomerLabel, buildServicePlans, ServicePlan } from '@/lib/recurrence'
 import { jobVisitValue, effectiveFreq } from '@/lib/visitValue'
@@ -118,6 +119,10 @@ export default function CustomerDetailPage() {
   const [quotes, setQuotes] = useState<Quote[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
   const [invoices, setInvoices] = useState<Invoice[]>([])
+  // Signed cash keyed by the booking it secures. NULL until read — the pipeline
+  // engine SKIPS the scheduling gate while this is null rather than announcing a
+  // paid booking is unsecured (see quoteNextAction's depositRows contract).
+  const [depositRows, setDepositRows] = useState<Record<string, GateLedgerRow[]> | null>(null)
   const [recurrences, setRecurrences] = useState<JobRecurrence[]>([])
   const [lead, setLead] = useState<WebsiteLead | null>(null)
   // Raw rows for every source lib/timelineData pulls; the engine turns them into
@@ -276,7 +281,7 @@ export default function CustomerDetailPage() {
       const user = session?.user
       // No session must not strand the skeleton forever.
       if (!user) { setLoading(false); return }
-      const [cRes, pRes, qRes, jRes, iRes, refRes, recRes, setRes, lRes, shapeRes, tlCustomer] = await Promise.all([
+      const [cRes, pRes, qRes, jRes, iRes, refRes, recRes, depRes, setRes, lRes, shapeRes, tlCustomer] = await Promise.all([
         supabase.from('customers').select('*').eq('id', id).eq('user_id', user!.id).single(),
         supabase.from('properties').select('*').eq('customer_id', id).order('is_primary', { ascending: false }),
         supabase.from('quotes').select('*').eq('customer_id', id).order('created_at', { ascending: false }),
@@ -285,6 +290,10 @@ export default function CustomerDetailPage() {
         // Advocates this customer referred (needs only id).
         supabase.from('customers').select('id, name').eq('referred_by_customer_id', id),
         supabase.from('job_recurrences').select('*').eq('customer_id', id),
+        // Quote-linked deposit ledger rows — the scheduling gate's input, so this
+        // page's open items agree with the Pipeline board and the dashboard queue
+        // about which bookings are secured.
+        supabase.from('payments').select('quote_id, amount, kind, provider, status').eq('customer_id', id).not('quote_id', 'is', null),
         supabase.from('business_settings').select('service_seasons, gst_percent').eq('user_id', user!.id).maybeSingle(),
         // Newest website lead — the full intake detail (service/address/budget/schedule/contact/source).
         supabase.from('website_leads').select('*').eq('customer_id', id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
@@ -312,6 +321,15 @@ export default function CustomerDetailPage() {
       setQuotes((qRes.data as Quote[]) || [])
       setJobs((jRes.data as Job[]) || [])
       setInvoices((iRes.data as Invoice[]) || [])
+      // A FAILED read stays null (gate skipped), never an empty map — an empty map
+      // would claim every gated booking is unpaid.
+      if (depRes.error) { setDepositRows(null) } else {
+        const byQuote: Record<string, GateLedgerRow[]> = {}
+        for (const r of (depRes.data as ({ quote_id: string | null } & GateLedgerRow)[]) || []) {
+          if (r.quote_id) (byQuote[r.quote_id] ||= []).push(r)
+        }
+        setDepositRows(byQuote)
+      }
       // Warm the cache so the next open (or a back-nav) paints instantly.
       if (cust) writeCache<CustomerPrefetch>(custCacheKey(id), {
         customer: cust, properties: (pRes.data as Property[]) || [], quotes: (qRes.data as Quote[]) || [],
@@ -769,6 +787,7 @@ export default function CustomerDetailPage() {
         booked,
         invoice: invByQuote[q.id] ?? null,
         customer: customer as unknown as PCustomer,
+        depositRows: depositRows ? (depositRows[q.id] ?? []) : undefined,
         feeSettings, today,
       })
       // `wait` is not an open item — the profile lists what needs doing, and a
