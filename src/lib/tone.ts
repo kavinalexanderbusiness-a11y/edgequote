@@ -13,7 +13,11 @@ export const toneSoft: Record<Tone, string> = {
   warn:    'bg-amber-500/10 text-amber-400 border-amber-500/20',
   danger:  'bg-red-500/10 text-red-400 border-red-500/20',
   info:    'bg-blue-500/10 text-blue-400 border-blue-500/20',
-  neutral: 'bg-surface text-ink-muted border-border',
+  // surface-raised, not surface: `surface` is now THE card fill, and a neutral
+  // badge is nearly always sitting ON a card (a draft quote, a cancelled
+  // invoice). The five tinted tones are alpha overlays and read on any rung;
+  // this is the only opaque one, so it has to be the rung above the card.
+  neutral: 'bg-surface-raised text-ink-muted border-border',
 }
 
 /** Foreground only — for big numbers and icons that carry a tone. */

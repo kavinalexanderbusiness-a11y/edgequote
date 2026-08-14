@@ -186,7 +186,7 @@ export function WidgetChrome({ id }: { id: WidgetId }) {
   const ws = useWorkspace()
   if (!ws?.editing) return null
   const hidden = ws.isHidden(id)
-  const btn = 'w-8 h-8 rounded-md flex items-center justify-center text-ink-faint hover:text-ink hover:bg-surface transition-colors disabled:opacity-30 disabled:hover:text-ink-faint disabled:hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40'
+  const btn = 'w-8 h-8 rounded-md flex items-center justify-center text-ink-faint hover:text-ink hover:bg-surface-raised transition-colors disabled:opacity-30 disabled:hover:text-ink-faint disabled:hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40'
   return (
     <span className="flex items-center gap-0.5 shrink-0">
       <button onClick={() => ws.onToggle(id)} aria-label={hidden ? 'Show section' : 'Hide section'} className={btn}>

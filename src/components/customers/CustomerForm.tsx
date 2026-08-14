@@ -15,6 +15,7 @@ import { findCustomerMatch, normalizeTags } from '@/lib/customers'
 import { SMS_CONSENT_WARNING } from '@/lib/consent'
 import { cn } from '@/lib/utils'
 import { Customer, CustomerFormValues, ACQUISITION_SOURCES } from '@/types'
+import { AUDIENCE_COPY } from '@/lib/noteScope'
 import { Users, MessageSquare, Mail, ShieldCheck, Info, Tag, X } from 'lucide-react'
 
 interface CustomerFormProps {
@@ -126,10 +127,23 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
   if (hasEmail && !emailOptIn) consentHints.push(`You added an email — turn on email if ${who} agreed to receive it.`)
 
   const source = watch('acquisition_source')
-  const sourceOptions = [
-    { value: '', label: 'How did they find you?' },
-    ...ACQUISITION_SOURCES.map(s => ({ value: s, label: s })),
-  ]
+  // The intake doors write sources this list has never contained — 'Website',
+  // 'Online Booking', 'Google Business Profile', whatever a customer picked on the
+  // booking page. A <select> whose value matches no <option> renders BLANK, so
+  // opening the edit form on one of those customers showed "How did they find you?"
+  // as if nothing had ever been recorded, inviting the owner to overwrite a real
+  // answer with a guess. Carrying the current value as its own option keeps what is
+  // actually on the record visible and selected. Additive only: no existing option
+  // is removed, so no stored value can stop being choosable.
+  const sourceOptions = useMemo(() => {
+    const known = ACQUISITION_SOURCES as readonly string[]
+    const current = (source || '').trim()
+    return [
+      { value: '', label: 'How did they find you?' },
+      ...(current && !known.includes(current) ? [{ value: current, label: current }] : []),
+      ...known.map(s => ({ value: s, label: s })),
+    ]
+  }, [source])
   // Memoized: at 8k customers this array (and the form's watch()-driven re-renders)
   // would otherwise rebuild the whole option list on every keystroke/field change.
   const referrerOptions = useMemo(() => [
@@ -284,9 +298,14 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
         render={({ field }) => <TagsInput value={field.value || []} onChange={field.onChange} />}
       />
 
+      {/* Internal by construction — get_portal_data's `customer` projection names
+          its columns and this is not one of them. The label says so, because a
+          field the owner believes might be customer-facing is a field they will
+          censor themselves in (lib/noteScope). */}
       <Textarea
-        label="Notes"
-        placeholder="Gate codes, preferred contact times, billing notes..."
+        label={AUDIENCE_COPY.internal.label}
+        hint={AUDIENCE_COPY.internal.help}
+        placeholder="Difficult about the last invoice · prefers texts · don't discount"
         {...register('notes')}
       />
       <div className="flex items-center justify-end gap-3 pt-2">

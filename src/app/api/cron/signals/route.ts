@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
+import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
 import { cadenceDays, churnRisk, daysBetween, isSeasonallyDormant, ranOut } from '@/lib/signals'
 import { localTodayISO } from '@/lib/utils'
@@ -114,20 +115,11 @@ async function fetchAllOwners(supabase: Client): Promise<{ rows: OwnerRow[]; err
   }
 }
 
-// The heartbeat. Wrapped because logging the failure must never BE the failure: a
-// sweep that worked is not allowed to report failure because its proof-of-life row
-// didn't land (see chase.ts on the same trap). Console is the last resort — no
-// heartbeat row, but the run's real outcome survives.
-async function heartbeat(supabase: Client, row: Record<string, unknown>): Promise<void> {
-  try {
-    const { error } = await supabase.from('automation_sweeps').upsert(row, { onConflict: 'job,ran_on' })
-    if (error) console.error('[cron/signals] heartbeat write failed:', error.message)
-  } catch (e) {
-    console.error('[cron/signals] heartbeat write threw:', e instanceof Error ? e.message : e)
-  }
-}
-
-export async function GET(req: NextRequest) {
+// This route's own heartbeat writer moved to lib/cron/heartbeat — withCronSweep at
+// the bottom of this file files the row now, on behalf of all twelve crons. The
+// wrapper reads the counters straight out of the response body below, so `finish`
+// stays the single place that decides what this sweep is willing to claim.
+async function handler(req: NextRequest) {
   if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   const startedAt = Date.now()
   // Vercel's own request id, so a log line and its heartbeat row can be pinned to the
@@ -149,10 +141,11 @@ export async function GET(req: NextRequest) {
 
   const today = localTodayISO()
 
-  // Every exit lands here: one log line and one heartbeat row, unconditionally. The
-  // four shipped crons guard their log with `if (batch.length > 0)` so quiet runs stay
-  // quiet — the opposite is right for a detection sweep, where the quiet night is
-  // exactly the night that needs proof it happened at all.
+  // Every exit lands here: one log line, unconditionally. The four shipped crons guard
+  // their log with `if (batch.length > 0)` so quiet runs stay quiet — the opposite is
+  // right for a detection sweep, where the quiet night is exactly the night that needs
+  // proof it happened at all. The heartbeat row is filed by withCronSweep from the
+  // response this builds.
   const finish = async (r: {
     ok: boolean; owners: number; ownersFailed: number; detected: number; written: number
     error?: string; note?: string; status?: number
@@ -164,16 +157,6 @@ export async function GET(req: NextRequest) {
       ...(r.error ? { error: r.error } : {}),
     }
     console.log('[cron/signals] run:', JSON.stringify(summary))
-    await heartbeat(supabase, {
-      job: 'signals', ran_on: today, ok: r.ok,
-      owners: r.owners, detected: r.detected, written: r.written, ms,
-      error: r.error ? r.error.slice(0, 200) : null,
-      request_id: requestId,
-      // Set explicitly, not left to the column default: the PK is (job, ran_on), so a
-      // re-run today UPDATEs, and `default now()` only fires on INSERT. Without this the
-      // row would carry the first run's timestamp beside the latest run's verdict.
-      ran_at: new Date().toISOString(),
-    })
     return NextResponse.json(
       { ok: r.ok, owners: r.owners, ownersFailed: r.ownersFailed, detected: r.detected, written: r.written, sent: 0, ...(r.error ? { error: r.error } : {}), ...(r.note ? { note: r.note } : {}) },
       { status: r.status ?? 200 },
@@ -336,3 +319,5 @@ export async function GET(req: NextRequest) {
     error: ownersFailed > 0 ? `${ownersFailed} of ${owners.length} owner(s) failed and were skipped` : undefined,
   })
 }
+
+export const GET = withCronSweep('signals', handler, b => counts(b, 'owners', 'detected', 'written'))

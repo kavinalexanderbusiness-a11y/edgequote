@@ -98,7 +98,14 @@ export interface Property {
   mulch_area: number | null
   rock_area: number | null
   driveway_area: number | null
+  // CUSTOMER-FACING: get_portal_data returns this and the portal renders it under
+  // "Notes from your provider". Anything the customer must not read belongs in
+  // `internal_notes` below.
   notes: string | null
+  // PRIVATE to the owner and crew — the place's access facts (gate side, dog,
+  // controller location). Never selected by get_portal_data, so it cannot reach
+  // the portal; verify:location-intelligence pins that.
+  internal_notes?: string | null
   measurement_history: MeasurementSnapshot[]
   // Permanently-saved lawn boundary + map identity (from a website measurement or
   // an in-app trace). The CURRENT boundary — section-tagged {lat,lng} rings (jsonb)
@@ -248,7 +255,21 @@ export interface Job {
   duration_minutes: number | null
   crew_size: number
   status: JobStatus
+  // 🔒 INTERNAL. The access/instruction note for whoever does the work (gate
+  // code, where to park). crew_day ships it to the worker's phone. ⛔ It is NOT
+  // in get_portal_data's payload and must never go back: it was rendered to
+  // customers until 2026-08-11. Customer-facing words go in completion_summary.
   notes: string | null
+  // ── Proof of work (lib/completion) ─────────────────────────────────────────
+  // What a finished visit LEFT BEHIND. Neither is a completion state: `status` +
+  // `completed_at` remain THE answer to whether and when, stamped only by
+  // lib/jobStatus.completionPatch. Both stay nullable forever — completion must
+  // never depend on paperwork.
+  /** ⭐ CUSTOMER-VISIBLE. "What was done", rendered verbatim in the portal. */
+  completion_summary?: string | null
+  /** 🔒 INTERNAL. What the field found that needs attention. Never leaves the
+   *  business — absent from get_portal_data, pinned by verify:completion. */
+  completion_issue?: string | null
   // Per-visit price. Manual override — when set it wins over the linked quote's
   // cadence price (the one source for what a visit is worth).
   price: number | null
@@ -742,6 +763,10 @@ export interface Payment {
   status: string
   paid_at: string | null
   stripe_payment_intent?: string | null
+  /** The quote/booking a PRE-INVOICE deposit secures (both recordDeposit legs
+   *  carry it). Null on ordinary invoice payments. The scheduling gate derives
+   *  "deposit received" from these rows — see lib/payments/depositGate. */
+  quote_id?: string | null
 }
 
 // Manual payment methods the owner can record (Stripe rows come from the webhook;
@@ -1044,7 +1069,12 @@ export interface Quote {
   customer_name: string
   address: string
   service_type: string
+  /** ⭐ CUSTOMER-VISIBLE — printed in QuotePDF's Notes box and selected by
+   *  get_portal_data. The scope note written FOR the customer. */
   notes: string | null
+  /** 🔒 INTERNAL — the owner's price floor and private context. Never on a PDF,
+   *  never in the portal payload (lib/noteScope). */
+  internal_notes: string | null
   hours: number
   crew_size: number
   rate: number
@@ -1096,8 +1126,34 @@ export interface Quote {
   // being typed here, which is why no owner surface could warn "the customer
   // approved a different number".
   accepted_price: number | null
+  // WHICH alternative the customer approved, when the quote offered several.
+  // Null on every single-scope quote, which is all of them until an owner turns
+  // options on. A composite FK (selected_option_id, id) → quote_options
+  // (id, quote_id) makes "belongs to this quote" a database fact rather than a
+  // convention, and ON DELETE RESTRICT keeps the approved alternative on the
+  // record for good. ⛔ Not the same question as selected_cadence below: that is
+  // WHICH SCHEDULE, this is WHICH SCOPE.
+  selected_option_id: string | null
   selected_cadence: 'one_time' | 'weekly' | 'biweekly' | 'monthly' | null
   follow_up_count_at_acceptance: number | null
+  // ── Deposit-gated scheduling ───────────────────────────────────────────────
+  // The RULE: 'percent' of the accepted price, or a 'fixed' dollar figure, that
+  // must be COLLECTED (ledger, payments.quote_id rows) before the booking is
+  // secured. NULL pair = no deposit required — the quote behaves exactly as it
+  // always has. Readiness is DERIVED by lib/payments/depositGate on every read;
+  // there is deliberately no deposit_paid column to go stale after a refund.
+  deposit_type: 'percent' | 'fixed' | null
+  deposit_value: number | null
+  // The customer's scheduling PREFERENCE — a request, never an appointment.
+  // Written only by portal_set_scheduling_preference while status='accepted';
+  // a real visit exists only when the owner schedules one.
+  preferred_date: string | null
+  preferred_date_2: string | null
+  preferred_timing: 'morning' | 'afternoon' | null
+  preferred_note: string | null
+  // The owner's explicit "schedule without the required deposit" stamp. The
+  // deposit stays owed — this records the decision, it doesn't waive the money.
+  deposit_override_at: string | null
   service_template_id: string | null
   overgrowth_multiplier: number
   issued_date: string | null
@@ -1115,6 +1171,31 @@ export interface Quote {
  *  different kind of LINE, so it rides quote_services rather than a second table
  *  that would need a second price rollup. See lib/quoteMaterials. */
 export type QuoteLineKind = 'service' | 'material'
+
+// ── One alternative version of the job ───────────────────────────────────────
+// Budget / Recommended / Premium. MUTUALLY EXCLUSIVE with its siblings and with
+// QuoteService below: a quote_services row ADDS to the quote total, an option
+// row IS the quote total for whoever picks it. The database refuses a quote that
+// has both (quote_options_shape_guard), because "is this line on top of my
+// option or already inside it?" has no good answer.
+// ⛔ V1 options carry no line items of their own — an option is a name, a
+// description and a price, which is how an owner actually writes one.
+export interface QuoteOption {
+  id: string
+  created_at: string
+  updated_at: string
+  quote_id: string
+  user_id: string
+  /** What the customer picks between — "Budget", "Walls + trim", "Full replacement". */
+  name: string
+  /** What this tier includes, in the owner's words. Optional. */
+  description: string | null
+  /** THE price of the whole job at this tier. Never a component of anything. */
+  price: number
+  sort_order: number
+  /** At most one per quote — a partial unique index enforces it. */
+  is_recommended: boolean
+}
 
 export interface QuoteService {
   id: string
@@ -1153,6 +1234,18 @@ export interface QuoteServiceInput {
   kind: QuoteLineKind
 }
 
+/** An option as the builder form holds it. Saved by delete-and-reinsert (the
+ *  same shape quote_services uses), so `id` is carried only to render a stable
+ *  key and to tell an existing row from a new one — never written back. */
+export interface QuoteOptionInput {
+  /** Present only for an option already on the quote; blank for a new row. */
+  id?: string
+  name: string
+  description: string
+  price: number
+  is_recommended: boolean
+}
+
 export interface QuoteFormValues {
   customer_id: string
   customer_name: string
@@ -1160,6 +1253,9 @@ export interface QuoteFormValues {
   // save flow can create/match the customer (no duplicate) and store contact info.
   customer_phone?: string
   customer_email?: string
+  // Optional "how did they find you?" quick-pick shown only for a brand-new
+  // person. '' = not sure — a legitimate answer that stays unknown; never required.
+  acquisition_source?: string
   address: string
   service_type: string
   service_template_id: string
@@ -1169,7 +1265,10 @@ export interface QuoteFormValues {
   crew_size: number
   rate: number
   travel_fee: number
+  /** ⭐ CUSTOMER-VISIBLE — prints on the quote PDF and shows in the portal. */
   notes: string
+  /** 🔒 INTERNAL — the owner's price floor and private context (lib/noteScope). */
+  internal_notes: string
   initial_price: number
   weekly_price: number
   biweekly_price: number
@@ -1196,6 +1295,24 @@ export interface QuoteFormValues {
   nearby_count: number | null
   // Additional service lines beyond the primary one (multi-service quotes).
   services: QuoteServiceInput[]
+  // ── Alternatives (Budget / Standard / Premium) ────────────────────────────
+  // `has_options` is the owner's DECLARED intent — the "Offer multiple options"
+  // switch — and it is a separate fact from the array being non-empty. Turning
+  // the switch off must leave the rows in the form (so turning it back on
+  // doesn't lose the typing) while the save path writes none of them; deriving
+  // the mode from `options.length` instead would make "off" and "not typed yet"
+  // the same state and silently resurrect a discarded set.
+  // ⛔ MUTUALLY EXCLUSIVE with `services`: an option's price IS the whole job,
+  // a service line ADDS to it. The database refuses a quote holding both.
+  has_options: boolean
+  options: QuoteOptionInput[]
+  // ── Scheduling deposit (deposit-gated scheduling) ─────────────────────────
+  // The owner's per-quote rule: require this much collected before the booking
+  // is secured. '' = off (the default — a normal quote gains no extra step).
+  // Value semantics follow deposit_type: percent of the accepted price, or
+  // fixed dollars. Readiness itself is DERIVED (lib/payments/depositGate).
+  deposit_type: '' | 'percent' | 'fixed'
+  deposit_value: number
 }
 
 export interface CustomerFormValues {
@@ -1511,6 +1628,11 @@ export interface ServiceTemplate {
   unit_cost: number | null      // labour / subcontract
   material_cost: number | null  // materials consumed
   is_favorite: boolean
+  // Recurrence eligibility (Session 46) — the ONE place a service may be
+  // declared repeatable or one-time. null = the owner hasn't said; suggestions
+  // then require behavioural cadence evidence (lib/serviceRecurrence). Never
+  // inferred from the service's name.
+  recurrence: 'one_time' | 'recurring_ok' | 'usually_recurring' | null
 }
 
 export interface ServiceTemplateFormValues {
@@ -1528,6 +1650,64 @@ export interface ServiceTemplateFormValues {
   unit_cost: string
   material_cost: string
   is_favorite: boolean
+  // '' = not set (maps to null on submit) — same blank-vs-zero discipline as
+  // the cost fields above.
+  recurrence: string
+}
+
+// ── Service bundles ──────────────────────────────────────────────────────────
+// THREE nouns, deliberately distinct, because this repo has been bitten before
+// by one word meaning three things:
+//   ServiceTemplate — a CATALOGUE row. ONE service, and the rate it usually
+//                     sells at. Owns the price.
+//   ServiceBundle   — a named, reusable SET of lines ("Spring Cleanup"). SEEDS
+//                     a quote's scope. Owns no price of its own by default.
+//   QuoteOption     — Budget/Recommended/Premium: ALTERNATIVE whole-job prices
+//                     the customer picks ONE of. An option REPLACES the total;
+//                     a bundle seeds the lines that ADD UP to it. The database
+//                     refuses a quote holding both.
+// ⛔ Do not rename a bundle to a "template" — that noun is the catalogue's.
+export interface ServiceBundle {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  /** What the owner picks from the list — "Spring Cleanup", "Move-out clean". */
+  name: string
+  /** A reminder of what it covers, for the owner. Never shown to a customer. */
+  description: string | null
+  sort_order: number
+}
+
+/** One line a bundle will lay down. Field-for-field the shape of the
+ *  `quote_services` row it becomes, so applying one needs no translation. */
+export interface ServiceBundleItem {
+  id: string
+  created_at: string
+  user_id: string
+  bundle_id: string
+  /** The catalogue service this line IS, when it is one. Null = one-off work
+   *  named by hand — the same freedom the quote builder already allows. */
+  service_template_id: string | null
+  /** The line's display name (→ `quote_services.service_type`). */
+  name: string
+  quantity: number
+  unit: string | null
+  /** ⭐ NULL means "follow the catalogue rate at apply time" — NOT zero, and
+   *  not a promise. A number here is one the owner typed for this bundle; it
+   *  seeds the line's unit_price and nothing ever recomputes it. This column
+   *  is the whole of the bundle's price semantics: there is no rule, curve or
+   *  multiplier anywhere, and no pricing engine is consulted. */
+  unit_price: number | null
+  est_minutes: number | null
+  notes: string | null
+  kind: QuoteLineKind
+  sort_order: number
+}
+
+/** A bundle with its lines, as every surface reads it. */
+export interface ServiceBundleWithItems extends ServiceBundle {
+  items: ServiceBundleItem[]
 }
 
 export interface BusinessSettingsFormValues {

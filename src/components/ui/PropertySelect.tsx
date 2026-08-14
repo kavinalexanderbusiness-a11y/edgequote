@@ -6,6 +6,9 @@ import { cn } from '@/lib/utils'
 import { ensurePropertyForCustomer } from '@/lib/customers'
 import { AddressAutocomplete, type ParsedAddress } from '@/components/ui/AddressAutocomplete'
 import { Button } from '@/components/ui/Button'
+// See lib/dropdownPlacement — a downward list that ignores the bottom of the
+// screen covered the fixed mobile Save bar and ate the tap.
+import { useDropdownPlacement, dropdownStyle } from '@/hooks/useDropdownPlacement'
 import type { Property } from '@/types'
 import { Home, Plus, ChevronDown, X, Check, Star } from 'lucide-react'
 
@@ -83,6 +86,9 @@ export function PropertySelect({
   // ours only when the dropdown is actually open — a closed dropdown lets the
   // Modal handle Escape exactly as before.
   const openRef = useRef(open); openRef.current = open
+  // The input's wrapper — boxRef also holds the label.
+  const anchorRef = useRef<HTMLDivElement>(null)
+  const place = useDropdownPlacement(anchorRef, open)
   useEffect(() => {
     function onDoc(e: MouseEvent) { if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false) }
     function onKey(e: KeyboardEvent) {
@@ -184,7 +190,7 @@ export function PropertySelect({
   return (
     <div className="flex flex-col gap-1.5" ref={boxRef}>
       {label && <label htmlFor={inputId} className="text-xs font-semibold text-ink-muted uppercase tracking-wide">{label}</label>}
-      <div className="relative">
+      <div className="relative" ref={anchorRef}>
         <Home className="w-4 h-4 text-ink-faint absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
         <input
           id={inputId}
@@ -213,7 +219,10 @@ export function PropertySelect({
           <ChevronDown className="w-4 h-4 text-ink-faint absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
         )}
         {open && (
-          <div className="absolute z-overlay mt-1 w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl overflow-hidden origin-top animate-pop max-h-72 overflow-y-auto overscroll-contain">
+          <div role="listbox" aria-label={label ? `${label} options` : 'Properties'}
+            data-eq-dropdown
+            style={dropdownStyle(place)}
+            className="absolute z-overlay w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl origin-top animate-pop overflow-y-auto overscroll-contain">
             {rows.length === 0 ? (
               <p className="px-3.5 py-2.5 text-sm text-ink-faint">
                 {query.trim() ? `No addresses match “${query.trim()}”.` : 'This customer has no properties yet.'}
@@ -221,7 +230,7 @@ export function PropertySelect({
             ) : rows.map((r, i) => (
               r.type === 'property' ? (
                 <button key={r.p.id} type="button" onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
-                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface')}>
+                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface-raised')}>
                   <Home className="w-3.5 h-3.5 text-ink-faint shrink-0" />
                   <span className="min-w-0 flex-1">
                     <span className="block text-ink truncate">{r.p.address}</span>
@@ -236,13 +245,13 @@ export function PropertySelect({
                 </button>
               ) : r.type === 'none' ? (
                 <button key="none" type="button" onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
-                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 transition-colors text-ink-muted', i === hi ? 'bg-surface' : 'hover:bg-surface')}>
+                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 transition-colors text-ink-muted', i === hi ? 'bg-surface' : 'hover:bg-surface-raised')}>
                   {noneLabel}
                   {value === '' && <Check className="w-4 h-4 text-accent-text shrink-0 ml-auto" />}
                 </button>
               ) : (
                 <button key="add" type="button" onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
-                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 border-t border-border text-accent-text transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface')}>
+                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 border-t border-border text-accent-text transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface-raised')}>
                   <Plus className="w-3.5 h-3.5 shrink-0" /> Add a new property
                 </button>
               )

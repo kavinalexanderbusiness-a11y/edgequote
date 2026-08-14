@@ -23,6 +23,7 @@ import { toneText } from '@/lib/tone'
 import { formatCurrency, cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { Plus, Edit2, Trash2, X, Star } from 'lucide-react'
+import { ServiceBundles } from '@/components/settings/ServiceBundles'
 import { scrollBehavior } from '@/lib/motion'
 
 // Sentinel for the "Other…" option. Never persisted: onSubmit swaps it for the
@@ -58,7 +59,7 @@ export default function ServiceTemplatesPage() {
       // category/rate are re-seeded from this business's own catalogue in openNew();
       // 'General' is the neutral member of the starter list, not a trade.
       // Costs default to '' — unknown — never 0.
-      defaultValues: { name: '', category: 'General', pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true, unit_cost: '', material_cost: '', is_favorite: false },
+      defaultValues: { name: '', category: 'General', pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true, unit_cost: '', material_cost: '', is_favorite: false, recurrence: '' },
     })
 
   const isActive = watch('is_active')
@@ -90,7 +91,7 @@ export default function ServiceTemplatesPage() {
     // it used to be hardcoded 'Lawn Care', so every trade's second service landed
     // in a lawn bucket unless they noticed the dropdown. Falls back to the neutral
     // 'General' before they have any services.
-    reset({ name: '', category: topCategory, pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true, unit_cost: '', material_cost: '', is_favorite: false })
+    reset({ name: '', category: topCategory, pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true, unit_cost: '', material_cost: '', is_favorite: false, recurrence: '' })
     setCustomCategory('')
     setEditing(null)
     setShowForm(true)
@@ -105,6 +106,8 @@ export default function ServiceTemplatesPage() {
       // cost cannot silently write 0 into it.
       unit_cost: costToField(t.unit_cost), material_cost: costToField(t.material_cost),
       is_favorite: !!t.is_favorite,
+      // A stored null stays '' — "not set", never silently promoted to a value.
+      recurrence: t.recurrence || '',
     })
     setEditing(t)
     setShowForm(true)
@@ -128,6 +131,9 @@ export default function ServiceTemplatesPage() {
       // that keeps "unknown" out of the margin maths.
       unit_cost: parseCost(values.unit_cost),
       material_cost: parseCost(values.material_cost),
+      // '' (not set) → NULL. The DB CHECK refuses anything else, so the three
+      // eligibility words and "unset" are the only states that can exist.
+      recurrence: (values.recurrence || null) as ServiceTemplate['recurrence'],
     }
     // A failed save must not close the form as if it succeeded — the owner's
     // edits stay on screen with an honest error instead of silently vanishing.
@@ -243,6 +249,27 @@ export default function ServiceTemplatesPage() {
                 </div>
                 <Select label="Pricing Display Type" options={pricingTypeOptions} {...register('pricing_display_type')} />
               </div>
+              {/* Recurrence eligibility — the ONE place a service is declared
+                  repeatable or one-time (Session 46). "Not set" is honest: the
+                  advisor then needs real repeat-visit evidence before it may
+                  suggest a plan; "One-time only" forbids the suggestion outright. */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+                <Select label="Recurrence" options={[
+                  { value: '', label: 'Not set' },
+                  { value: 'one_time', label: 'One-time only' },
+                  { value: 'recurring_ok', label: 'Recurring allowed' },
+                  { value: 'usually_recurring', label: 'Usually recurring' },
+                ]} {...register('recurrence')} />
+                <p className="text-xs text-ink-muted sm:pt-7">
+                  {watch('recurrence') === 'one_time'
+                    ? 'EdgeQuote will never suggest making this service recurring.'
+                    : watch('recurrence') === 'usually_recurring'
+                      ? 'This service normally runs as a recurring plan.'
+                      : watch('recurrence') === 'recurring_ok'
+                        ? 'Recurring suggestions are allowed when visits show a rhythm.'
+                        : 'Tells scheduling whether this service can repeat.'}
+                </p>
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
                 <Input label={`${priceInputLabel(pdType)} *`} type="number" step={priceInputStep(pdType)} min="0"
                   error={errors.default_rate ? 'A price is required' : undefined}
@@ -327,7 +354,7 @@ export default function ServiceTemplatesPage() {
                   // The whole row opens the editor (the pencil was the only way in);
                   // the inline controls stop the click from bubbling.
                   <div key={t.id} onClick={() => openEdit(t)}
-                    className="flex items-center gap-3 sm:gap-4 px-5 py-3.5 cursor-pointer hover:bg-surface/40 transition-colors">
+                    className="flex items-center gap-3 sm:gap-4 px-5 py-3.5 cursor-pointer hover:bg-surface-raised/40 transition-colors">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className={`text-sm font-medium ${t.is_active ? 'text-ink' : 'text-ink-faint line-through'}`}>{t.name}</span>
@@ -366,6 +393,12 @@ export default function ServiceTemplatesPage() {
           </div>
         ))
       )}
+
+      {/* The catalogue above is ONE service per row. A bundle is a named SET of
+          them. Those two are the pair this product is most often confused
+          about, so they share a page — seeing both in one scroll is the
+          cheapest way to keep them apart. */}
+      <ServiceBundles templates={templates} />
     </PageContainer>
   )
 }

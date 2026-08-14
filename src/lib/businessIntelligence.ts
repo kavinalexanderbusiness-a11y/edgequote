@@ -66,7 +66,17 @@ export interface CollectionSpeed {
 }
 
 /** Season-to-date on BOTH sides — see the cutoff note in computeBI. */
-export interface YearSummary { year: string; revenue: number; jobs: number; profit: number | null }
+export interface YearSummary {
+  year: string; revenue: number; jobs: number; profit: number | null
+  /**
+   * True when ANY route in the slice priced its labour from an assumed duration
+   * rather than clocked time — i.e. `profit` is partly modelled. Read straight off
+   * the profit engine's existing `hasLaborData` flag (lib/profitability), which is
+   * already what stops a route earning a high grade on assumed minutes. Surfaced so
+   * the headline can say "est." instead of implying the year's profit was measured.
+   */
+  profitEstimated: boolean
+}
 export interface YearComparison {
   thisYear: YearSummary
   lastYear: YearSummary | null          // null for a first-season business
@@ -97,6 +107,25 @@ export interface BIReport {
     crewEfficiencyPct: number | null // actual vs estimated time (100 = on estimate; <100 = faster)
     routeRevPerKm: number
     avgGrade: Grade | null
+    /**
+     * How much of grossProfitYTD rests on OBSERVED time versus a model.
+     *
+     * The cost side of this profit is `minutes / 60 × crew_cost_per_hour`, and
+     * `laborMinOf` resolves those minutes as
+     *   actual_minutes || duration_minutes || DEFAULT_LABOR_MIN(45).
+     * Only the first is something that happened. The second is the estimate the
+     * quote carried, and the third is a constant this file itself documents as
+     * lawn-calibrated. Measured on the live book the day this was added: of 71
+     * YTD completed jobs only 35 (49%) had observed minutes — 28 fell back to the
+     * estimate and 8 to the 45-minute constant.
+     *
+     * So the figure was half modelled and labelled with no qualifier. The number
+     * is unchanged (this is not a new profitability engine, and lib/margin still
+     * owns margin arithmetic); what is new is that the caller can now SAY so.
+     * Same idiom as profitability.ts's `hasLaborData`, which already refuses to
+     * grade a route highly when its duration was assumed.
+     */
+    laborBasis: { observedJobs: number; assumedJobs: number; totalJobs: number }
   }
   customers: {
     active: number
@@ -273,11 +302,18 @@ export function computeBI(inp: BIInput): BIReport {
 
   // ── PROFITABILITY ──
   let totalLaborMin = 0, grossProfit = 0
+  // Count the basis as we go — a job whose minutes were OBSERVED (a real check-in
+  // to check-out) versus one whose cost came from the quote's estimate or the
+  // 45-minute constant. Costs nothing and is the only way the surface can stop
+  // presenting a half-modelled figure as a measured one.
+  let observedJobs = 0, assumedJobs = 0
   const custProfit: Record<string, number> = {}
   const svcProfit: Record<string, { profit: number; hours: number }> = {}
   for (const j of ytdCompleted) {
     const v = earned(j)
     const lm = laborMinOf(j)
+    // Mirrors laborMinOf's own first branch exactly (`||`, so 0 is not observed).
+    if (Number(j.actual_minutes)) observedJobs++; else assumedJobs++
     totalLaborMin += lm
     const cost = (lm / 60) * crewCost
     const p = v - cost
@@ -460,6 +496,8 @@ export function computeBI(inp: BIInput): BIReport {
       revenue: round(revenue),
       jobs: yrRoutes.reduce((s, r) => s + r.stops, 0),
       profit: visitEconomics(revenue, laborMinutes, 0, crewCost).profit,
+      // Any route whose minutes were assumed makes the year's profit partly modelled.
+      profitEstimated: yrRoutes.some(r => !r.hasLaborData),
     }
   }
   const thisYearSum = summarizeYear(yr)
@@ -533,7 +571,7 @@ export function computeBI(inp: BIInput): BIReport {
   return {
     generatedFor: new Date(today + 'T00:00:00').toLocaleString('en-US', { month: 'short', year: 'numeric' }),
     financial: { revenueThisMonth: round(revThisMonth), revenueLastMonth: round(revLastMonth), revenueYTD: round(revYTD), monthOverMonthPct: revLastMonth > 0 ? Math.round(((revThisMonth - revLastMonth) / revLastMonth) * 100) : null, byService, byNeighborhood, byCustomer, trend },
-    profitability: { revenuePerLaborHour: revPerLaborHour, grossProfitYTD: round(grossProfit), grossMarginPct: pct(grossProfit, revYTD), topCustomers, topNeighborhoods, topServices, crewEfficiencyPct, routeRevPerKm, avgGrade },
+    profitability: { revenuePerLaborHour: revPerLaborHour, grossProfitYTD: round(grossProfit), grossMarginPct: pct(grossProfit, revYTD), topCustomers, topNeighborhoods, topServices, crewEfficiencyPct, routeRevPerKm, avgGrade, laborBasis: { observedJobs, assumedJobs, totalJobs: observedJobs + assumedJobs } },
     customers: { active: activeIds.size, total: customers.length, newThisMonth, churnRatePct, retentionRatePct, avgLifetimeValue, avgAnnualValue, forecastLtv, growth },
     sales: { quoteAcceptancePct: wl.decided >= 1 ? Math.round(wl.winRate * 100) : null, won: wl.won, lost: wl.lost, avgQuoteValue, lostValue: round(wl.byHood.reduce((s, h) => s + h.lostValue, 0)), byServiceType, byNeighborhood: byHoodWL, topLossReasons },
     operations: { capacityUtilizationPct, bookedUtilizationPct, laborAccuracyPct, autoMeasureAccuracyPct: null, avgRouteDensity, timedJobs: durModel.totalSamples },

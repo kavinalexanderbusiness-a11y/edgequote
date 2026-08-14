@@ -17,6 +17,7 @@ import { LeadSummary } from '@/components/leads/LeadSummary'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { bookingPhotosFromQuotes } from '@/lib/bookingPhotos'
 import { normalizeTags, propertyLabel, propertyLinks, describePropertyLinks, deleteProperty } from '@/lib/customers'
+import { describeSource } from '@/lib/attribution'
 import { PropertySelect } from '@/components/ui/PropertySelect'
 import { buildTimeline } from '@/lib/timeline'
 import {
@@ -41,10 +42,12 @@ import { Banner } from '@/components/ui/Banner'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Button, ButtonLink } from '@/components/ui/Button'
+import { IconButton } from '@/components/ui/IconButton'
+import { Menu } from '@/components/ui/Menu'
 import { Textarea } from '@/components/ui/Textarea'
 import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { formatCurrency, formatDate, cn, localTodayISO } from '@/lib/utils'
-import { ensurePortalToken, portalUrl } from '@/lib/portal'
+import { ensurePortalToken, portalUrl, rotatePortalToken } from '@/lib/portal'
 import { CustomerComms } from '@/components/customers/CustomerComms'
 import { CommsHealth } from '@/components/customers/CommsHealth'
 import { ReviewLifecycle } from '@/components/customers/ReviewLifecycle'
@@ -57,7 +60,7 @@ import {
   FileText, Send, RotateCw, Receipt, DollarSign, Sparkles, Users,
   Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet, Timer, CalendarClock,
   Link2, Check, Cake, PartyPopper, Camera, History, Globe, Plus, Home, Tag, Trash2,
-  ChevronDown,
+  ChevronDown, MoreHorizontal,
 } from 'lucide-react'
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
@@ -104,6 +107,11 @@ export default function CustomerDetailPage() {
   // events. quotes/jobs/invoices already live in their own state above, so they're
   // handed to buildTimeline directly rather than fetched twice.
   const [tlSources, setTlSources] = useState<CustomerTimelineSources & JobTimelineSources>({})
+  // Names of the timeline sources whose read failed. The history is assembled from
+  // a dozen reads and supabase-js resolves failures as empty, so without this a
+  // dropped connection renders as "No history yet" — a claim about the customer
+  // that the data never made. See lib/timelineData.
+  const [tlMissing, setTlMissing] = useState<string[]>([])
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
   // What this business does, derived from its own catalogue and jobs — never asked.
   // Starts SHOWING everything, so a lawn field can't blink out mid-load.
@@ -131,6 +139,33 @@ export default function CustomerDetailPage() {
       if (!token) { toast.error('Could not create the portal link. Run the customer-portal migration first.'); return }
       const url = portalUrl(token)
       try { await navigator.clipboard.writeText(url) } catch { toast('Portal link (copy manually): ' + url, { duration: 20000 }) }
+      setPortalCopied(true); setTimeout(() => setPortalCopied(false), 2500)
+    } finally { setPortalBusy(false) }
+  }
+
+  // Turn the old link off and hand back a new one. The portal has no password —
+  // the link IS the credential — so when one gets forwarded to the wrong person,
+  // or a phone goes missing, this is the only answer. The database has enforced
+  // `revoked` all along; until now nothing could set it.
+  async function resetPortalLink() {
+    if (!customer) return
+    const ok = await confirmDialog({
+      title: 'Reset the portal link?',
+      message: `${customer.name}’s current link stops working immediately, including any copy of it already sent. You’ll get a new link to send them.`,
+      confirmLabel: 'Reset link', destructive: true,
+    })
+    if (!ok) return
+    setPortalBusy(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      const token = await rotatePortalToken(supabase, user.id, customer.id)
+      // A failed rotate leaves the OLD link live. Saying "done" here would tell
+      // the owner a leaked link was closed when it wasn't.
+      if (!token) { toast.error('Could not reset the link — the old one is still active. Try again.'); return }
+      const url = portalUrl(token)
+      try { await navigator.clipboard.writeText(url) } catch { toast('New portal link (copy manually): ' + url, { duration: 20000 }) }
+      toast.success('Old link is off. The new link is on your clipboard.')
       setPortalCopied(true); setTimeout(() => setPortalCopied(false), 2500)
     } finally { setPortalBusy(false) }
   }
@@ -293,7 +328,14 @@ export default function CustomerDetailPage() {
 
       // Hand the engine the rows; it decides what an event is. The page no longer
       // knows how a credit differs from a refund.
-      setTlSources({ ...tlCustomer, ...tlJob })
+      setTlSources({ ...tlCustomer.sources, ...tlJob.sources })
+      // quotes/jobs/invoices are fetched by this page, not the loader, so their
+      // failures are named here — they are the three the timeline can least afford
+      // to drop silently.
+      setTlMissing([
+        ...(qRes.error ? ['Quotes'] : []), ...(jRes.error ? ['Jobs'] : []),
+        ...(iRes.error ? ['Invoices'] : []), ...tlCustomer.missing, ...tlJob.missing,
+      ])
       if (referrerRes?.data) setReferrer(referrerRes.data as { id: string; name: string })
       if (referredRevRes?.data) {
         const rev = (referredRevRes.data as { total: number; status: string }[])
@@ -342,7 +384,7 @@ export default function CustomerDetailPage() {
       const rows = (r.data as Job[]) || []
       setJobs(rows)
       const tlJob = await loadJobTimelineSources(supabase, rows.map(j => j.id))
-      setTlSources(prev => ({ ...prev, ...tlJob }))
+      setTlSources(prev => ({ ...prev, ...tlJob.sources }))
     })())
     if (scopes.has('invoices') || scopes.has('payments')) tasks.push(
       supabase.from('invoices').select('*').eq('customer_id', id).order('created_at', { ascending: false })
@@ -353,7 +395,13 @@ export default function CustomerDetailPage() {
       const uid = session?.user?.id
       if (!uid) return
       const tlCust = await loadCustomerTimelineSources(supabase, uid, id)
-      setTlSources(prev => ({ ...prev, ...tlCust }))
+      setTlSources(prev => ({ ...prev, ...tlCust.sources }))
+      // A realtime refetch that drops a source must state it too — and a clean
+      // refetch must clear a stale warning, or the card cries wolf forever.
+      setTlMissing(prev => {
+        const own = prev.filter(m => m === 'Quotes' || m === 'Jobs' || m === 'Invoices')
+        return [...own, ...tlCust.missing]
+      })
     })())
     await Promise.all(tasks)
   }, [supabase, id])
@@ -722,6 +770,20 @@ export default function CustomerDetailPage() {
               onClick={copyPortalLink}>
               {portalCopied ? <><Check className="w-3.5 h-3.5" /> Link copied</> : <><Link2 className="w-3.5 h-3.5" /> Portal link</>}
             </Button>
+            {/* Tucked behind the overflow, not beside Copy: resetting is rare and
+                it breaks a link the customer may be using right now. */}
+            <Menu align="end" width={240} ariaLabel="More customer actions" items={[
+              {
+                key: 'reset-portal', label: 'Reset portal link', icon: RotateCw, danger: true,
+                description: 'Turns the current link off and issues a new one',
+                onSelect: resetPortalLink,
+              },
+            ]}>
+              {({ toggle, triggerProps }) => (
+                <IconButton icon={MoreHorizontal} label="More customer actions" size="sm"
+                  onClick={toggle} {...triggerProps} />
+              )}
+            </Menu>
           </div>
         }
       />
@@ -776,13 +838,18 @@ export default function CustomerDetailPage() {
                 )}
               </div>
               <div className="flex items-center gap-x-3 gap-y-1 mt-1.5 flex-wrap">
-                {customer.acquisition_source && (() => {
-                  const src = customer.acquisition_source
-                  const isWeb = /website|formspree|webhook|online|booking|api|zapier/i.test(src)
-                  const label = /formspree|webhook|api|zapier/i.test(src) ? 'Website' : src
+                {/* THE source vocabulary lives in lib/attribution — this used to run
+                    its own inline regex ('formspree|webhook|api|zapier' → 'Website'),
+                    which was a second mapping of the same question in a file with no
+                    business owning one. Same badge, one engine behind it, and the raw
+                    words are still shown when they say more than the category does. */}
+                {(() => {
+                  const s = describeSource(customer.acquisition_source)
+                  if (s.category === 'unknown') return null
+                  const isWeb = s.category === 'online_form'
                   return (
                     <span className="text-[10px] uppercase tracking-wide text-ink-muted border border-border rounded px-1.5 py-0.5 inline-flex items-center gap-1">
-                      {isWeb && <Globe className="w-2.5 h-2.5 text-ink-faint" />}{isWeb ? `From ${label}` : label}
+                      {isWeb && <Globe className="w-2.5 h-2.5 text-ink-faint" />}{isWeb ? 'From website' : (s.detail ?? s.label)}
                     </span>
                   )
                 })()}
@@ -1246,7 +1313,27 @@ export default function CustomerDetailPage() {
         </CardBody>
       </Card>
 
-      {/* The comms cluster — health, AI brief, live thread, then consent + history.
+      {/* Relationship history — THE answer to "what actually happened with this
+          customer", built by lib/timeline.ts from the records that already own each
+          event. It sits OUT of the disclosure below, and that is the point of this
+          surface: understanding the relationship is why the profile gets opened, and
+          a history needing a tap on "More about this customer" (whose summary line
+          is hidden on a phone, so it never even says History there) is a history the
+          owner does not have.
+
+          Placed here deliberately: BELOW today's work (Open Items · Upcoming ·
+          Properties) because history is context, not the next action — and ABOVE the
+          AI brief and the 440px conversation pane, because those are the DETAIL and
+          this is the summary of it. Measured at 375px: this position puts it ~640px
+          nearer the top than sitting after the thread. Its own 8-event cap keeps the
+          card to ~690px, about one screen. verify:mobile-shell pins both halves.
+
+          Keyed by customer: navigating profile→profile (via "Referred by") keeps this
+          component mounted, and a search typed for one customer must not silently
+          filter the next one's history. */}
+      <TimelineCard key={id} events={allEvents} missing={tlMissing} onRetry={reload} />
+
+      {/* The comms cluster — health, AI brief, live thread, then consent + reference.
           It follows the daily-use cards above: the phone-call answers (owed · notes ·
           schedule) must never sit below a 440px conversation pane. */}
       {/* Communication health — opt-in/contact mismatches (only shows when relevant) */}
@@ -1315,12 +1402,6 @@ export default function CustomerDetailPage() {
 
       {/* Payment method + AutoPay (card-on-file for recurring customers) */}
       <PaymentMethodCard customer={customer} onCustomerChange={patch => setCustomer({ ...customer, ...patch })} />
-
-        {/* Timeline — the shared card over the shared engine (components/timeline).
-            Keyed by customer: navigating profile→profile (via "Referred by") keeps
-            this component mounted, and a search typed for one customer must not
-            silently filter the next one's history. */}
-        <TimelineCard key={id} events={allEvents} />
 
 
       {/* Referrals — advocates this customer brought in (with statuses + rewards) */}
@@ -1450,13 +1531,13 @@ function MoreAboutCustomer({ children }: { children: React.ReactNode }) {
         type="button"
         onClick={() => setOpen(o => !o)}
         aria-expanded={open}
-        className="w-full flex items-center gap-2.5 px-4 py-3.5 text-left rounded-card border border-border bg-bg-secondary hover:bg-surface/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        className="w-full flex items-center gap-2.5 px-4 py-3.5 text-left rounded-card border border-border bg-bg-secondary hover:bg-surface-raised/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
         <History className="w-4 h-4 text-ink-muted shrink-0" />
         <span className="text-sm font-semibold text-ink shrink-0">More about this customer</span>
         {!open && (
           <span className="text-xs text-ink-faint truncate min-w-0 hidden sm:inline">
-            Messages &amp; consent · Review · Scheduling preferences · Payment method · History · Referrals
+            Messages &amp; consent · Review · Scheduling preferences · Payment method · Referrals
           </span>
         )}
         <ChevronDown className={cn('w-4 h-4 text-ink-faint ml-auto shrink-0 transition-transform', open && 'rotate-180')} />

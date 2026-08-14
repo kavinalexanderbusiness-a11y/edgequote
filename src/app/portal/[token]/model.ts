@@ -22,8 +22,13 @@ import { settingsToSeasons } from '@/lib/seasons'
 // dependency is invoiceTotals, which this module already pulls.
 import { invoiceBalance } from '@/lib/payments/ledger'
 import { depositState, depositChargeAmount } from '@/lib/payments/deposit'
-import { cashAmountOf } from '@/lib/payments/analytics'
+// THE scheduling-deposit gate (lib/payments/depositGate) — the same engine the
+// /api/portal/quote-deposit charge route runs over the same ledger rows, so the
+// row's figures and Stripe's ask can never disagree.
+import { schedulingGate } from '@/lib/payments/depositGate'
+import { cashAmountOf, ledgerRowType } from '@/lib/payments/analytics'
 import { serviceLineTotals } from '@/lib/quoteServices'
+import { sortedOptions } from '@/lib/quoteOptions'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
 import { formatCurrency, parseLocalDate } from '@/lib/utils'
 import type { Job, JobRecurrence, QuoteStatus } from '@/types'
@@ -39,14 +44,33 @@ export interface PortalQuoteService { service_type: string; quantity: number; un
 // optional because a handful of live rows predate property linking — a legacy quote
 // answers `null`, and callers must degrade to the quote's own `address` text rather
 // than borrowing another property's facts.
-export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null }
+/** One alternative version of the job, as get_portal_data nests it under a quote.
+ *  ⛔ NOT additive with its siblings and NOT additive with `services` — an option's
+ *  price IS the whole job for whoever picks it, and the database refuses a quote
+ *  carrying both kinds of row. */
+export interface PortalQuoteOption { id: string; name: string; description: string | null; price: number; sort_order: number; is_recommended: boolean }
+// `accepted_price` is the consent snapshot (selected option + travel) — the
+// scheduling deposit derives from it, never from a total an edit could move.
+// `deposit_type`/`deposit_value` is the scheduling-deposit RULE; readiness is
+// derived from the ledger by lib/payments/depositGate, never stored anywhere.
+// `preferred_*` is the customer's own scheduling REQUEST — a preference, never
+// an appointment — echoed back so a reload keeps what they told us.
+export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null; options?: PortalQuoteOption[] | null; selected_option_id?: string | null; accepted_price?: number | null; deposit_type?: string | null; deposit_value?: number | null; preferred_date?: string | null; preferred_date_2?: string | null; preferred_timing?: string | null; preferred_note?: string | null }
 // `property_id` null is the HONEST answer for an invoice spanning several properties —
 // never infer one, or a combined invoice prints one address as if it were the whole bill.
 export interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; property_id?: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null; amount_paid?: number | null; deposit_amount?: number | null; deposit_requested_at?: string | null }
-export interface PortalJob { id: string; recurrence_id: string | null; property_id: string | null; quote_id: string | null; price: number | null; is_initial_visit: boolean | null; service_type: string | null; title: string; scheduled_date: string; status: string; on_my_way_at: string | null; started_at: string | null; completed_at: string | null; notes: string | null }
+// ⛔ NO `notes` FIELD, DELIBERATELY. jobs.notes is the INTERNAL access note for
+// whoever does the work (gate code, where to park) — it was selected by
+// get_portal_data and rendered verbatim here until 2026-08-11, on 49 of 78
+// completed production visits, including "dog removal, keep gate closed". It is
+// gone from the RPC's projection, so there is nothing left to render even by
+// accident. `completion_summary` is the field written FOR the customer, and
+// `completion_issue` (the internal half) is likewise not in the payload.
+// verify:completion fails the build if either internal field reappears.
+export interface PortalJob { id: string; recurrence_id: string | null; property_id: string | null; quote_id: string | null; price: number | null; is_initial_visit: boolean | null; service_type: string | null; title: string; scheduled_date: string; status: string; on_my_way_at: string | null; started_at: string | null; completed_at: string | null; completion_summary: string | null }
 export interface PortalRec { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null; start_date: string | null; end_date: string | null; end_count: number | null }
 export interface PortalPhoto { id: string; job_id: string | null; storage_path: string; kind: string; caption: string | null; taken_at: string }
-export interface PortalPayment { id: string; amount: number; status: string; paid_at: string | null; provider: string; invoice_id: string | null; created_at: string; kind?: string }
+export interface PortalPayment { id: string; amount: number; status: string; paid_at: string | null; provider: string; invoice_id: string | null; quote_id?: string | null; created_at: string; kind?: string }
 export interface PortalCard { brand: string | null; last4: string | null; exp_month: number | null; exp_year: number | null }
 // The owner's OWN catalogue (service_templates), surfaced by get_portal_data. This
 // is what makes ONE portal fit any field-service business — and it is also the
@@ -250,14 +274,55 @@ export function draftStorageKey(token: string, surface: DraftSurface): string {
   return `eqp:draft:${surface}:${token}`
 }
 
-// ── Missing contact method (the "unreachable customer" problem, portal side) ──
-// True ONLY when the file holds neither a phone nor an email with real content —
-// whitespace is not a way to reach someone. One method on file is enough: the
-// card asks for "at least one" and never nags for the second. A missing customer
-// payload is false — the portal can't claim a gap it can't see.
-export function needsContactMethod(customer: { phone: string | null; email: string | null } | null | undefined): boolean {
-  if (!customer) return false
-  return !(customer.phone ?? '').trim() && !(customer.email ?? '').trim()
+// ── Which contact detail is missing? ─────────────────────────────────────────
+// THE one answer, so the prompt, the form and the guard can't disagree about
+// what's absent. Whitespace is not a way to reach someone.
+//
+// ⚠️ A missing customer payload is 'none' — NOT 'both'. A read that failed tells
+// us nothing about the file, and the honest reading of "we don't know" is to ask
+// for nothing, never to assert a gap. (The inverse mistake — treating a failed
+// read as "profile complete" — is harmless here for the same reason: the prompt
+// is the only thing gated on this, and it reappears on the next good load.)
+//
+// This replaced needsContactMethod(), which answered only the both-missing case.
+// That left the 47 customers with a phone but no email, and the 2 with an email
+// but no phone, never asked — the commonest gap in the book was the one nobody
+// was prompted about.
+export type ContactGap = 'none' | 'phone' | 'email' | 'both'
+
+export function contactGap(customer: { phone: string | null; email: string | null } | null | undefined): ContactGap {
+  if (!customer) return 'none'
+  const noPhone = !(customer.phone ?? '').trim()
+  const noEmail = !(customer.email ?? '').trim()
+  if (noPhone && noEmail) return 'both'
+  if (noPhone) return 'phone'
+  if (noEmail) return 'email'
+  return 'none'
+}
+
+// ── What counts as a usable contact detail ───────────────────────────────────
+// ⚠️ These MIRROR portal_add_contact's validation so the customer gets an answer
+// without a round-trip. The RPC is the authority — it re-checks everything, and a
+// disagreement can only ever make this side stricter-looking, never let a bad
+// value through. verify:portal-contact pins the two thresholds against the
+// migration file so the mirror can't drift silently.
+//
+// Ten digits, not the seven that phoneMatches() will link on: seven is a local
+// number missing its area code, and a stored number that can't be dialled fails
+// at exactly the moment it's needed.
+export const PHONE_MIN_DIGITS = 10
+export const PHONE_MAX_DIGITS = 15
+
+export function isUsablePhone(raw: string): boolean {
+  const d = (raw || '').replace(/\D/g, '')
+  return d.length >= PHONE_MIN_DIGITS && d.length <= PHONE_MAX_DIGITS
+}
+
+// Same shape as the SQL check: something, @, something, dot, a real TLD. Kept
+// deliberately loose — an address the customer insists is theirs is not ours to
+// argue with, and the only failure this needs to catch is an obvious typo.
+export function isUsableEmail(raw: string): boolean {
+  return /^[^\s@]+@[^\s@.]+\.[^\s@]{2,}$/.test((raw || '').trim())
 }
 
 // Did real money land in the ledger just now? THE post-checkout confirmation test.
@@ -299,26 +364,29 @@ export function recentPaymentLanded(
   return false
 }
 
-// The request text for "add my contact details". Pure so verify pins that it
-// ALWAYS carries the typed value(s) — a message saying "update my contact info"
-// WITHOUT the info would make the owner ask for it, which is the exact
-// round-trip this card exists to remove. Null when nothing real was typed: an
-// empty request must be unsendable.
-export function contactUpdateMessage(phone: string, email: string): string | null {
-  const p = phone.trim()
-  const e = email.trim()
-  if (!p && !e) return null
-  const parts = [p ? `Phone: ${p}` : null, e ? `Email: ${e}` : null].filter(Boolean)
-  return `Please add my contact details to your file — ${parts.join(' · ')}`
-}
+// ── What portal_add_contact answered ─────────────────────────────────────────
+// The RPC returns the row state read back AFTER its write, which is the only
+// thing that entitles the portal to say "saved". `reason` is a machine code, not
+// a sentence — the wording lives with the card so copy can change without
+// touching a contract, and so the same code can read differently in two places.
+//
+// `contactUpdateMessage` / `contactSentKey` were deleted with the old card. That
+// card couldn't write anything, so it sent the typed values to the owner as a
+// REQUEST and used a sessionStorage flag to remember it had — a client-side
+// guess at a server-side fact. The file now changes for real, so "is it done?"
+// is answered by the customer row on the next load and nothing needs to remember.
+export type AddContactReason =
+  | 'invalid_token' | 'nothing_to_add' | 'already_on_file'
+  | 'bad_phone' | 'bad_email' | 'phone_taken' | 'email_taken'
+  | 'network'
 
-// Session flag "this visit already sent contact details" — token-scoped like
-// draftStorageKey (two customers on one shared device never see each other's
-// thank-you) and namespaced apart from drafts so neither key can clobber the
-// other. Session-scoped on purpose: the card should stay down while the owner
-// applies the change, but a NEW visit may ask again if the file is still empty.
-export function contactSentKey(token: string): string {
-  return `eqp:contact-sent:${token}`
+export interface AddContactResult {
+  ok: boolean
+  reason?: AddContactReason | null
+  added?: string[]
+  skipped?: string[]
+  has_phone?: boolean
+  has_email?: boolean
 }
 
 // A contextual "ask about this" seed for the message composer. It MUST carry
@@ -503,7 +571,58 @@ export function buildDerived(data: PortalData, todayISO: string): Derived {
 // DISPLAY status (lib/quoteStatus): an expired quote arrives as 'expired', which
 // is what removes the Accept button (canAccept tests 'sent') with no second
 // expiry check anywhere in the render path to forget or contradict.
-export interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; expiredOn?: string; validUntil?: string | null; dueDate?: string | null; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[]; explain?: string[]; propertyId?: string | null; address?: string | null
+export interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; expiredOn?: string; validUntil?: string | null; dueDate?: string | null; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>
+  /** Additive breakdown — these SUM to `amount`. The scope being approved. */
+  lines?: { label: string; amount: number }[]
+  /**
+   * Ongoing per-visit rates. These are ALTERNATIVES to one another and are NOT
+   * part of `amount` — kept out of `lines` because the two answer different
+   * questions and a customer cannot tell them apart once they share one list.
+   * Flattened together, a real quote showed a $50 total with "Bi-weekly plan
+   * $50" directly beneath it — the same number meaning two different things —
+   * above rows that summed to $95 against a $50 quote.
+   * Approving does NOT choose one (portal_accept_quote snapshots the quote
+   * total, never a cadence), so the UI must not present them as selectable.
+   */
+  planOptions?: { label: string; amount: number }[]
+  /**
+   * ⭐ SCOPE alternatives — Budget / Standard / Premium. The customer picks ONE
+   * and that option's price IS the quote's price.
+   *
+   * ⛔ Three different lists live on this row and a reader must never confuse
+   * them. `lines` ADD UP to `amount`. `planOptions` are ongoing per-visit rates
+   * for LATER and are not selectable at all. These are mutually exclusive
+   * versions of the job being quoted, exactly one of which is bought — and they
+   * are the only one of the three the approval flow acts on.
+   *
+   * Each `amount` is what that option costs the customer, travel included, which
+   * is the same figure `quote_apply_option_choice` writes to accepted_price. No
+   * caller sums them, and `amount` above is never their total: it is whichever
+   * single option the quote currently rests on.
+   */
+  options?: { id: string; name: string; description: string | null; amount: number; isRecommended: boolean }[]
+  /** The option the customer approved, once they have. Null while the choice is
+   *  still open — which is the fact the Approve button is gated on. */
+  selectedOptionId?: string | null
+  /**
+   * The SCHEDULING-DEPOSIT gate, present only on a quote that requires one and
+   * has been approved (or scheduled). Every figure is lib/payments/depositGate's
+   * answer over the same ledger rows the charge route reads — the row can never
+   * quote money the server won't ask for. `satisfied` is the ONE fact that
+   * separates "Deposit required" from "Deposit received"; scheduling itself is
+   * still the business's call either way.
+   */
+  schedulingDeposit?: {
+    required: number; collected: number; outstanding: number
+    percent: number | null; satisfied: boolean
+  }
+  /** The customer's scheduling preference, echoed back. Editable while the
+   *  quote is 'accepted'; read-only once a real visit exists. */
+  preference?: { date: string | null; date2: string | null; timing: string | null; note: string | null }
+  /** True while portal_set_scheduling_preference will still accept a write —
+   *  i.e. status is exactly 'accepted'. The form hides itself after that. */
+  canEditPreference?: boolean
+  explain?: string[]; propertyId?: string | null; address?: string | null
   /**
    * What the Pay button collects RIGHT NOW — depositChargeAmount's answer, the
    * SAME engine call /api/portal/pay makes server-side. Carried on the row so
@@ -528,10 +647,22 @@ export function buildDocItems(opts: {
   todayISO: string
   renderers: DocBlobRenderers
   onInvoiceOpen?: (invoiceId: string) => void
+  /** The customer's ledger rows — the scheduling-deposit gate derives from these. */
+  payments?: PortalPayment[]
 }): DocItem[] {
-  const { quotes, invoices, properties, business, todayISO, renderers, onInvoiceOpen } = opts
+  const { quotes, invoices, properties, business, todayISO, renderers, onInvoiceOpen, payments } = opts
   const gstPct = Number(business?.gst_percent) || 0
   const propsById = new Map(properties.map(p => [p.id, p]))
+  // Cash rows by the quote they secure. The gate engine applies isCashRow itself;
+  // this only groups. Rows with no quote_id (ordinary invoice payments) drop out.
+  const depositRowsByQuote = new Map<string, PortalPayment[]>()
+  for (const p of payments || []) {
+    if (p.quote_id) {
+      const list = depositRowsByQuote.get(p.quote_id) || []
+      list.push(p)
+      depositRowsByQuote.set(p.quote_id, list)
+    }
+  }
 
   const q: DocItem[] = quotes.map(qq => {
     // The property THIS quote is for. Null for a legacy quote with no
@@ -554,13 +685,31 @@ export function buildDocItems(opts: {
     // "(per visit)" is NOT optional: "Monthly plan · $260" without it says
     // $260/month all-in — at 4 visits/month that's a 4× misread the customer
     // only discovers on their first bill.
-    const planLines = [
-      Number(qq.weekly_price) > 0 ? { label: 'Weekly plan (per visit)', amount: Number(qq.weekly_price) } : null,
-      Number(qq.biweekly_price) > 0 ? { label: 'Bi-weekly plan (per visit)', amount: Number(qq.biweekly_price) } : null,
-      Number(qq.monthly_price) > 0 ? { label: 'Monthly plan (per visit)', amount: Number(qq.monthly_price) } : null,
+    // Ongoing rates are a CHOICE, so they leave the additive breakdown entirely
+    // (see DocItem.planOptions). "(per visit)" stays: "Monthly · $260" without it
+    // says $260/month all-in — at 4 visits/month a 4× misread the customer only
+    // discovers on their first bill.
+    const planOptionRows = [
+      Number(qq.weekly_price) > 0 ? { label: 'Every week', amount: Number(qq.weekly_price) } : null,
+      Number(qq.biweekly_price) > 0 ? { label: 'Every 2 weeks', amount: Number(qq.biweekly_price) } : null,
+      Number(qq.monthly_price) > 0 ? { label: 'Every month', amount: Number(qq.monthly_price) } : null,
     ].filter((l): l is { label: string; amount: number } => l !== null)
-    const allLines = [...svcLines, ...planLines]
-    const lines = allLines.length > 0 ? allLines : undefined
+    const planOptions = planOptionRows.length > 0 ? planOptionRows : undefined
+    const lines = svcLines.length > 0 ? svcLines : undefined
+    // ── The scope alternatives ────────────────────────────────────────────────
+    // Sorted by the ONE shared engine so the customer sees the owner's order —
+    // never re-sorted by price, because an owner who leads with Premium meant to.
+    // Travel is added to EACH option independently (never once to a total): it is
+    // payable whichever one they choose, and it is how the approval RPC computes
+    // accepted_price, so the button and the receipt agree by construction.
+    const qOpts = sortedOptions(qq.options || [])
+    const options = qOpts.length > 0
+      ? qOpts.map(o => ({
+          id: o.id, name: o.name, description: o.description,
+          amount: Number(o.price) + (Number(qq.travel_fee) || 0),
+          isRecommended: !!o.is_recommended,
+        }))
+      : undefined
     const manHours = Number(qq.hours) > 0 && Number(qq.crew_size) > 0 ? Number(qq.hours) * Number(qq.crew_size) : 0
     const fmtHrs = (h: number) => h < 1 ? `${Math.round(h * 60)} minutes` : h === 1 ? '1 hour' : `${Number(h.toFixed(1))} hours`
     const explainBits = [
@@ -574,13 +723,39 @@ export function buildDocItems(opts: {
       manHours > 0
         ? `About ${fmtHrs(manHours)} of work${Number(qq.crew_size) > 1 ? `, with a crew of ${Number(qq.crew_size)}` : ''}.`
         : null,
-      Number(qq.travel_fee) > 0 ? `Includes a ${formatCurrency(Number(qq.travel_fee))} travel charge to reach your property.` : null,
-      planLines.length > 0 ? 'Your first visit is priced above; ongoing visits are charged at the plan rate shown.' : null,
+      // "Includes a travel charge" is true of EVERY option (each row already has
+      // it added), so the sentence holds either way — but on an options quote it
+      // must not read as though it describes one bundled price.
+      Number(qq.travel_fee) > 0
+        ? (options
+          ? `Every option includes the ${formatCurrency(Number(qq.travel_fee))} travel charge to reach your property.`
+          : `Includes a ${formatCurrency(Number(qq.travel_fee))} travel charge to reach your property.`)
+        : null,
+      planOptionRows.length > 0 ? 'This price is for the visit above. If you want us back regularly, the ongoing rates are listed separately — you can pick one with us later.' : null,
       'Nothing is charged when you approve — you’ll get an invoice once the work is done.',
     ].filter((s): s is string => !!s)
     // THE shared expiry engine — the same call the owner's screens make.
     const display = displayQuoteStatus({ status: qq.status as QuoteStatus, valid_until: qq.valid_until }, todayISO)
     const expired = display === 'expired'
+    // ── The scheduling-deposit gate ──────────────────────────────────────────
+    // THE engine's answer (lib/payments/depositGate — the same call the charge
+    // route makes over the same rows), surfaced only once the quote is approved
+    // or scheduled: before consent there is nothing to secure, and a declined
+    // quote gates nothing. A quote with no rule carries no gate at all — it
+    // renders exactly as it did before this feature existed.
+    const gateActive = qq.status === 'accepted' || qq.status === 'scheduled'
+    const gate = gateActive ? schedulingGate(qq, depositRowsByQuote.get(qq.id)) : null
+    const schedulingDeposit = gate && gate.required > 0 ? {
+      required: gate.required, collected: gate.collected, outstanding: gate.outstanding,
+      percent: gate.percent, satisfied: gate.status === 'satisfied',
+    } : undefined
+    // The preference travels on any live approved/scheduled quote (so a reload
+    // shows it back); the FORM only opens while the RPC will still accept a
+    // write — status exactly 'accepted'.
+    const preference = gateActive ? {
+      date: qq.preferred_date ?? null, date2: qq.preferred_date_2 ?? null,
+      timing: qq.preferred_timing ?? null, note: qq.preferred_note ?? null,
+    } : undefined
     return {
       id: 'q' + qq.id, rawId: qq.id, kind: 'quote' as const, number: qq.quote_number, title: qq.service_type || 'Quote',
       date: qq.issued_date || qq.created_at, status: display, expiredOn: expired ? qq.valid_until || undefined : undefined,
@@ -588,7 +763,9 @@ export function buildDocItems(opts: {
       amount: Number(qq.total) || 0,
       amountNote: gstPct > 0 ? `+ GST (${gstPct}%) — added on your invoice` : undefined, balance: 0,
       payAmount: 0, payIsDeposit: false,
-      filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(qq), lines,
+      filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(qq), lines, planOptions,
+      options, selectedOptionId: qq.selected_option_id ?? null,
+      schedulingDeposit, preference, canEditPreference: qq.status === 'accepted',
       // Identity, not decoration: the address tells a landlord which of their six
       // quotes this is. It never becomes the row's title — service_type is the
       // real disambiguator for same-property customers.
@@ -617,6 +794,19 @@ export function buildDocItems(opts: {
     // exactly the shape quoteStatus uses for expiry. The portal must tell the
     // customer they're late before a chasing text does.
     const overdue = balance > 0 && !!ii.due_date && ii.due_date < todayISO && ii.status !== 'cancelled'
+    // The mirror of `overdue`, and it exists for the same reason: what a customer is
+    // told about a bill must follow the LEDGER, not a status column that can fall
+    // behind it. Production holds exactly one such row today — INV-0060, stored
+    // 'unpaid' with $100.00 of $100.00 received — and the portal spoke about it with
+    // two voices: the money strip and the amount-due banner (both balance-derived)
+    // correctly showed nothing owed, while this row's pill said "Due" and the Home
+    // activity feed said "$100.00 · Due". A customer's own record of a bill they had
+    // settled told them they still owed it.
+    // Display only: `ii.status` is never written, `balance` is never recomputed, and
+    // because the overlay requires balance <= 0 it cannot collide with `overdue`
+    // (which requires > 0). 'cancelled' keeps its own word — a withdrawn charge must
+    // stay explainable — and 'overpaid' is more specific than 'paid', so both stand.
+    const settled = balance <= 0 && ii.status !== 'cancelled' && ii.status !== 'overpaid'
     // The deposit picture + what Pay collects now — BOTH straight from the
     // engine /api/portal/pay answers to. The row quoting one figure while
     // Stripe charges another is the disagreement this exists to prevent, so
@@ -630,7 +820,7 @@ export function buildDocItems(opts: {
     const charge = cancelled ? null : depositChargeAmount(forDeposit(ii), { gst_percent: gstPct })
     return {
       id: 'i' + ii.id, rawId: ii.id, kind: 'invoice' as const, number: ii.invoice_number, title: ii.service_type || 'Invoice',
-      date: ii.issued_date || ii.created_at, status: overdue ? 'overdue' : ii.status, dueDate: ii.due_date, amount: total, balance,
+      date: ii.issued_date || ii.created_at, status: overdue ? 'overdue' : settled ? 'paid' : ii.status, dueDate: ii.due_date, amount: total, balance,
       payAmount: charge?.amount ?? 0, payIsDeposit: charge?.isDeposit ?? false,
       deposit: dep && dep.status !== 'none' ? {
         requested: dep.requested ?? 0, percent: dep.percent, outstanding: dep.outstanding,
@@ -771,6 +961,89 @@ export function moneySummary(invoices: PortalInvoice[], business: PortalData['bu
   return { invoiced: r(invoiced), paid: r(paid), due: r(due), owingCount }
 }
 
+// ── Recent payments (what replaced Home's "Recent activity" feed) ───────────
+// Home used to carry a five-row chronological feed of everything that had ever
+// happened. Rendered against six live portals it was, in four of them, 100%
+// records that Billing already owns — and worse, DOUBLE-ENTRY: a settled invoice
+// emitted BOTH "Invoice INV-0062 issued · $55.00 · Paid" AND "Payment received ·
+// E-transfer · $55.00", so one $55 transaction spent two of the five rows saying
+// the same thing twice. The cap was routinely filled by two or three
+// transactions.
+//
+// It could never have been otherwise: everything ACTIONABLE is deliberately
+// suppressed from it (awaiting quotes and the currently-due invoice belong to the
+// attention cards, future visits to the hero), so by construction the feed could
+// only ever hold settled history — while Home's job is "is there anything I need
+// to do, and has anything important changed".
+//
+// ⭐ ONE class of row survived that test: money moving. 33 of 58 live portals have
+// payments and most are e-transfer or cash, which the OWNER records hours or days
+// later — and the post-checkout confirmation banner only ever fires on the Stripe
+// return (`?paid=1`). So for those customers Home had no positive way to say "your
+// money arrived"; the only signal was the amount-due banner being absent, and an
+// absence is not a confirmation. Refunds and credit movements are the same story
+// pointing the other way, and a customer must not have to go looking for those.
+//
+// So: money movements only, recent only, capped, and ABSENT when nothing has
+// moved. Classification is `ledgerRowType` — the ONE ledger classifier, never the
+// sign of the amount (a $200 refund and a $200 overpayment moved to credit are
+// both negative, and only the first is money leaving). `kind === 'credit'` rows
+// stay excluded exactly as before: that is the credit LEDGER, whose story is
+// Billing's "Available credit" tile, and counting it here would state the same
+// money twice — the very thing this replacement exists to stop.
+export const RECENT_PAYMENT_DAYS = 30
+export const RECENT_PAYMENT_MAX = 3
+
+export interface RecentPayment { id: string; at: string; amount: number; label: string; isRefund: boolean }
+
+export function recentPayments(
+  payments: PortalPayment[] | null | undefined,
+  todayISO: string,
+  opts?: { days?: number; max?: number },
+): RecentPayment[] {
+  const days = opts?.days ?? RECENT_PAYMENT_DAYS
+  const max = opts?.max ?? RECENT_PAYMENT_MAX
+  const today = parseLocalDate(todayISO)
+  if (!today || !payments) return []
+  const cutoff = new Date(today.getTime() - days * 86400000)
+  const out: RecentPayment[] = []
+  for (const p of payments) {
+    if (p.kind === 'credit') continue
+    const at = p.paid_at || p.created_at
+    if (!at) continue
+    // Compared as an instant, so a `paid_at` timestamp and a date-only
+    // `created_at` are judged the same way. A row dated in the FUTURE is still
+    // "recent" — it has certainly not fallen out of the window.
+    const when = new Date(at)
+    if (isNaN(when.getTime()) || when < cutoff) continue
+    const rt = ledgerRowType(p)
+    out.push({
+      id: p.id,
+      at,
+      // Always the magnitude: the label carries the direction, so a refund reads
+      // "Refund issued · $50.00" rather than a minus sign the eye can miss.
+      amount: Math.abs(Number(p.amount) || 0),
+      label: rt === 'Refund' ? 'Refund issued'
+        : rt === 'Overpayment to credit' ? 'Overpayment moved to credit'
+        : rt === 'Settled from credit' ? 'Settled from account credit'
+        : `Payment received · ${paymentMethodLabel(p.provider)}`,
+      isRefund: rt === 'Refund',
+    })
+  }
+  return out.sort((a, b) => b.at.localeCompare(a.at)).slice(0, max)
+}
+
+// How the customer paid, in their words. Lived in HomeTab and PaymentsSection as
+// two identical copies; it belongs with the rows it labels.
+export function paymentMethodLabel(provider: string | null | undefined): string {
+  switch (provider) {
+    case 'stripe': return 'Card'
+    case 'etransfer': return 'E-transfer'
+    case 'cash': return 'Cash'
+    default: return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : 'Payment'
+  }
+}
+
 // Real cash refunded to the customer across these rows — a NEGATIVE cash movement
 // the ledger classifies as a refund, NOT an overpayment moved to their credit
 // balance (that money is shown ONCE, as Available credit). Typing a refund by the
@@ -795,7 +1068,7 @@ export function refundedTotal(payments: PortalPayment[]): number {
 // identity so a dismissal sticks until the situation actually changes.
 export interface PortalNextAction {
   key: string
-  kind: 'pay' | 'approve'
+  kind: 'pay' | 'approve' | 'pay-deposit'
   headline: string
   docsCat: 'invoice' | 'quote'
   focusDocId: string | null
@@ -816,6 +1089,19 @@ export function primaryPortalAction(docItems: DocItem[], money: MoneySummary): P
   }
   if (owing.some(d => d.status === 'overdue')) {
     return { key: `overdue:${money.due}:${owing.length}`, kind: 'pay', headline: `Past due: ${formatCurrency(money.due)}`, docsCat: 'invoice', focusDocId: oneOwing }
+  }
+  // An approved quote whose SCHEDULING DEPOSIT is still owed — the one thing
+  // standing between the customer and a confirmed booking, so it outranks an
+  // ordinary balance (which has its own due date) and sits only behind overdue.
+  // The figure is the gate's `outstanding` (the same number the charge route
+  // will ask for), so a partial payment shrinks the headline honestly.
+  const depositDue = docItems.find(d => d.kind === 'quote' && d.schedulingDeposit && !d.schedulingDeposit.satisfied && d.schedulingDeposit.outstanding > 0)
+  if (depositDue?.schedulingDeposit) {
+    return {
+      key: `qdeposit:${depositDue.schedulingDeposit.outstanding}:${depositDue.rawId}`, kind: 'pay-deposit',
+      headline: `Pay ${formatCurrency(depositDue.schedulingDeposit.outstanding)} deposit to secure scheduling`,
+      docsCat: 'quote', focusDocId: depositDue.rawId,
+    }
   }
   if (money.due > 0 && owing.length > 0) {
     return { key: `due:${money.due}:${owing.length}`, kind: 'pay', headline: `Balance due: ${formatCurrency(money.due)}`, docsCat: 'invoice', focusDocId: oneOwing }
@@ -957,7 +1243,7 @@ export function buildPortalView(data: PortalData, todayISO: string, renderers: D
     properties,
     multiProperty: properties.length > 1,
     hasProperty,
-    docItems: buildDocItems({ quotes: data.quotes, invoices: data.invoices, properties, business: data.business, todayISO, renderers, onInvoiceOpen }),
+    docItems: buildDocItems({ quotes: data.quotes, invoices: data.invoices, properties, business: data.business, todayISO, renderers, onInvoiceOpen, payments: data.payments }),
     money: moneySummary(data.invoices, data.business),
     propertyModels: buildPropertyModels(data, derived, photosByJob),
     customerSince: customerSinceYear(data),

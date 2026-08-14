@@ -338,7 +338,7 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
                       </div>
                       <div className="max-h-36 overflow-y-auto rounded-lg border border-border divide-y divide-border">
                         {result.recipients.map(r => (
-                          <label key={r.customerId} className="px-3 py-1.5 flex items-center gap-2 text-xs cursor-pointer hover:bg-surface/40">
+                          <label key={r.customerId} className="px-3 py-1.5 flex items-center gap-2 text-xs cursor-pointer hover:bg-surface-raised/40">
                             <input type="checkbox" checked={recipientIds.has(r.customerId)} onChange={() => toggleRecipient(r.customerId)} className="accent-accent w-3.5 h-3.5" />
                             <span className="font-medium text-ink truncate flex-1">{r.name}</span>
                             <span className="text-ink-faint shrink-0">{fmtDay(r.from)} → {fmtDay(r.to)}</span>
@@ -425,7 +425,7 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
                   </div>
                   <div className="max-h-44 overflow-y-auto divide-y divide-border">
                     {movable.map(j => (
-                      <label key={j.id} className="px-3 py-2 flex items-center gap-2.5 text-xs cursor-pointer hover:bg-surface/40">
+                      <label key={j.id} className="px-3 py-2 flex items-center gap-2.5 text-xs cursor-pointer hover:bg-surface-raised/40">
                         <input type="checkbox" checked={selectedJobIds.has(j.id)} onChange={() => toggleJob(j.id)} className="accent-accent w-3.5 h-3.5" />
                         <span className="min-w-0 flex-1 flex items-center gap-1.5">
                           {j.recurrence_id && <Repeat className="w-3 h-3 text-ink-faint shrink-0" />}
@@ -525,7 +525,7 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
                         {recipients.length === 0 ? (
                           <p className="px-3 py-2 text-[11px] text-ink-faint">Choose visits to move to see who gets notified.</p>
                         ) : recipients.map(r => (
-                          <label key={r.customerId} className="px-3 py-1.5 flex items-center gap-2 text-xs cursor-pointer hover:bg-surface/40">
+                          <label key={r.customerId} className="px-3 py-1.5 flex items-center gap-2 text-xs cursor-pointer hover:bg-surface-raised/40">
                             <input type="checkbox" checked={recipientIds.has(r.customerId)} onChange={() => toggleRecipient(r.customerId)} className="accent-accent w-3.5 h-3.5" />
                             <span className="font-medium text-ink truncate flex-1">{r.name}</span>
                             <span className="text-ink-faint shrink-0">{fmtDay(r.from)} → {fmtDay(r.to)}</span>

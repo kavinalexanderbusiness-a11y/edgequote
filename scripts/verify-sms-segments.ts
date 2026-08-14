@@ -17,6 +17,10 @@ import {
   analyzeSms, resolveSmsPricing, segmentPrice, smsCost, formatSmsCost,
   DEFAULT_SMS_PRICING, type SmsPricing,
 } from '../src/lib/sms/segments'
+// Section 11 measures the app's own defaults through the engine above — the
+// estimator and the messages it prices belong in one guard, or the estimator
+// stays correct about templates nobody checked.
+import { DEFAULT_TEMPLATES, renderMessage, smsSafe, type MsgType } from '../src/lib/comms/templates'
 
 let pass = 0
 let fail = 0
@@ -135,6 +139,65 @@ check('300 chars → 2 GSM-7 segments', { s: info.segments, e: info.encoding }, 
 const cost = smsCost(info.segments, info.encoding, 50, DEFAULT_SMS_PRICING)
 check('2 segments × 50 recipients × $0.015 = $1.50', cost, 1.5)
 check('…formatted for the owner', formatSmsCost(cost, DEFAULT_SMS_PRICING.currency), '~$1.50 CAD')
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 11. THE MESSAGES WE ACTUALLY SEND
+//
+// Everything above proves the ESTIMATOR is right. Nothing proved the app's own
+// defaults were cheap — and they were not. Measured through this same engine,
+// 15 of 29 defaults were forced to UCS-2 (160 chars/segment → 70) by a single
+// character: the em dash in their sign-off. `on_my_way` is 139 characters,
+// comfortably one GSM-7 segment, and cost THREE. Across the whole set: 106
+// segments, now 53.
+//
+// Pinned as CONTRACTS, not prose — rewording is fine, making the most-sent
+// messages expensive again is not.
+H('11. THE DEFAULT TEMPLATES — what they cost to send')
+{
+  const VARS = {
+    firstName: 'Christopher', businessName: 'Edge Property Services', eta: '15',
+    reviewLink: 'https://g.page/r/edge-property/review',
+    portalLink: 'https://app.edgequote.ca/portal/christopher-MB74A8ZH',
+    quoteLink: 'https://app.edgequote.ca/portal/christopher-MB74A8ZH?quote=abc',
+    invoiceLink: 'https://app.edgequote.ca/portal/christopher-MB74A8ZH?invoice=abc',
+    dateLabel: 'Mon, Aug 18', timeWindow: '9-11 AM', oldDateLabel: 'Fri, Aug 15',
+    address: '412 Silverado Way SW', amount: '$150.00',
+    confirmationNumber: 'BK-2049', directPhone: '(403) 555-0142',
+  }
+  const ALL = Object.keys(DEFAULT_TEMPLATES) as MsgType[]
+  const seg = (t: MsgType) => analyzeSms(renderMessage(t, null, VARS).sms)
+
+  // ⭐ THE regression that cost the most: one stray character doubles every bill.
+  check('no default template is forced into Unicode', ALL.filter(t => seg(t).encoding === 'Unicode'), [])
+
+  // Sent on EVERY visit, often more than once a day per customer.
+  const EVERY_VISIT: MsgType[] = ['on_my_way', 'arrived', 'job_complete', 'reminder', 'eta', 'confirm']
+  check('every-visit messages fit in ONE segment', EVERY_VISIT.filter(t => seg(t).segments > 1), [])
+
+  // Money and quote messages carry a link, so two segments is the honest ceiling.
+  const TRANSACTIONAL: MsgType[] = ['invoice', 'receipt', 'payment_reminder', 'deposit_request', 'quote', 'estimate_followup', 'review_request']
+  check('money / quote messages stay within TWO segments', TRANSACTIONAL.filter(t => seg(t).segments > 2), [])
+
+  // Nothing may regress past three, whatever it is.
+  check('no default exceeds three segments', ALL.filter(t => seg(t).segments > 3), [])
+
+  // ── The per-channel split: SMS pays for typography, email does not ──────────
+  const r = renderMessage('payment_reminder', null, VARS)
+  check('email KEEPS real typography', /—/.test(r.html), true)
+  check('…while SMS flattens it', /—/.test(r.sms), false)
+  check('…leaving the SMS in GSM-7', analyzeSms(r.sms).encoding, 'GSM-7')
+
+  // The biggest real-world win: owner copy pasted from Word or Docs arrives full
+  // of smart quotes and silently doubled their bill with no visible cause.
+  const pasted = smsSafe('Don’t worry — we’ll be there at 9 o’clock… “rain or shine”')
+  check('owner-pasted typography is flattened too', analyzeSms(pasted).encoding, 'GSM-7')
+  check('…without losing a single word', pasted, `Don't worry - we'll be there at 9 o'clock... "rain or shine"`)
+
+  // Flattening must never eat the parts that carry meaning.
+  const inv = renderMessage('invoice', null, VARS)
+  check('the amount survives flattening', /\$150\.00/.test(inv.sms), true)
+  check('the link survives flattening', inv.sms.includes(VARS.portalLink), true)
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)

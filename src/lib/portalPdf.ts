@@ -1,4 +1,4 @@
-import type { Quote, QuoteService, Invoice, BusinessSettings, QuoteLineKind } from '@/types'
+import type { Quote, QuoteService, QuoteOption, Invoice, BusinessSettings, QuoteLineKind } from '@/types'
 
 // ── Portal PDF bridge ────────────────────────────────────────────────────────
 // The portal renders the SAME quote/invoice PDFs as the dashboard. We map the
@@ -16,6 +16,12 @@ export interface PortalQuoteService {
   discount_value: number | null; notes: string | null; sort_order: number
 }
 
+// One alternative, as get_portal_data's nested `options` array returns it.
+export interface PortalQuoteOption {
+  id: string; name: string; description: string | null; price: number
+  sort_order: number; is_recommended: boolean
+}
+
 export interface PortalPdfQuote {
   quote_number: string; service_type: string; address: string; total: number
   initial_price: number | null; subtotal: number | null
@@ -23,6 +29,11 @@ export interface PortalPdfQuote {
   notes: string | null; status: string; created_at: string; issued_date: string | null
   crew_size: number | null; hours: number | null; travel_fee: number | null
   services?: PortalQuoteService[] | null
+  // The alternatives and WHICH one was taken. The customer's own copy of their
+  // quote has to show the same options table the owner's copy does, or the
+  // document they keep says something different from the one that was sent.
+  options?: PortalQuoteOption[] | null
+  selected_option_id?: string | null
 }
 export interface PortalPdfInvoice {
   invoice_number: string; service_type: string | null; amount: number; status: string
@@ -63,7 +74,11 @@ function portalQuoteToQuote(q: PortalPdfQuote, customerName: string): Quote {
     hours: num(q.hours),
     crew_size: num(q.crew_size, 1) || 1,
     travel_fee: num(q.travel_fee),
-    subtotal: num(q.subtotal ?? q.initial_price ?? q.total),
+    // Ordering fixed: this PREFERRED the stale generated column
+    // (hours * crew_size * rate) over the real price, on the CUSTOMER's own copy of
+    // their quote. `initial_price` is the price the owner actually set; `total` adds
+    // travel. The legacy column is not consulted at all — see the note in QuotePDF.
+    subtotal: num(q.initial_price ?? q.total),
     total: num(q.total),
     initial_price: q.initial_price,
     weekly_price: q.weekly_price,
@@ -72,6 +87,10 @@ function portalQuoteToQuote(q: PortalPdfQuote, customerName: string): Quote {
     status: q.status,
     issued_date: q.issued_date,
     created_at: q.created_at,
+    // WHICH alternative was approved. Without this the customer's own PDF would
+    // render an already-decided quote as though the choice were still open —
+    // "Choose One Option" on a document for a job that is already booked.
+    selected_option_id: q.selected_option_id ?? null,
   } as unknown as Quote
 }
 
@@ -137,7 +156,18 @@ export async function renderPortalQuoteBlob(q: PortalPdfQuote, customerName: str
         kind: (s as { kind?: QuoteLineKind }).kind ?? 'service',
       }))
     : undefined
-  return renderQuoteBlob(portalQuoteToQuote(q, customerName), portalBusinessToSettings(b), services)
+  // The alternatives ride through the SAME pipeline — one PDF system, so the copy
+  // the customer downloads is the copy the owner sent, options table and all.
+  const options: QuoteOption[] | undefined = q.options?.length
+    ? q.options.map(o => ({
+        id: o.id, created_at: q.created_at, updated_at: q.created_at,
+        quote_id: '', user_id: '',
+        name: o.name, description: o.description,
+        price: num(o.price), sort_order: Number(o.sort_order) || 0,
+        is_recommended: !!o.is_recommended,
+      }))
+    : undefined
+  return renderQuoteBlob(portalQuoteToQuote(q, customerName), portalBusinessToSettings(b), services, options)
 }
 // A payment row as the portal sees it — enough for the receipt document.
 export interface PortalPdfPayment {

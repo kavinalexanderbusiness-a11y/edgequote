@@ -3,8 +3,9 @@
 import {
   Document, Page, Text, View, Image, StyleSheet, pdf,
 } from '@react-pdf/renderer'
-import type { Quote, QuoteService, BusinessSettings } from '@/types'
+import type { Quote, QuoteService, QuoteOption, BusinessSettings } from '@/types'
 import { serviceLineTotals } from '@/lib/quoteServices'
+import { activeOption, hasOptions, sortedOptions } from '@/lib/quoteOptions'
 import { pdfLogoUrl } from '@/lib/photos'
 
 const COLORS = {
@@ -93,10 +94,41 @@ interface QuotePDFProps {
   // Multi-service breakdown (quote_services rows). Empty/absent = legacy single
   // service; quote.initial_price already holds the summed net either way.
   services?: QuoteService[]
+  // ── Alternatives (quote_options) ─────────────────────────────────────────
+  // Present only on a quote that offers a choice, and MUTUALLY EXCLUSIVE with
+  // `services` — the database refuses a quote holding both, because one kind of
+  // row adds up and the other replaces. Which one the customer took is
+  // quote.selected_option_id; before they choose it is null and the document
+  // leads with the recommended one.
+  options?: QuoteOption[]
 }
 
-export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
-  const initialPrice = quote.initial_price ?? quote.subtotal
+export function QuoteDocument({ quote, settings, services, options }: QuotePDFProps) {
+  // ⭐ THE rule this document must never break: a page that shows three prices
+  // must not print a number equal to their sum, and must not let the reader
+  // construct one. So when options exist the line-item table is REPLACED (not
+  // joined) by the alternatives table, no subtotal row spans them, and the grand
+  // total names the single option it is the total OF.
+  const opts = sortedOptions(options)
+  const isOptionsQuote = hasOptions(opts)
+  const chosen = quote.selected_option_id
+    ? opts.find(o => o.id === quote.selected_option_id) ?? null
+    : null
+  // Before any choice this is the recommended option (else the first) — the same
+  // answer the one engine gives every other surface, so the paper and the portal
+  // cannot disagree about which price the quote currently stands at.
+  const leading = activeOption(opts, quote.selected_option_id)
+  // ⛔ NEVER fall back to quotes.subtotal. That column is `generated always as
+  // (hours * crew_size * rate)` — the exact fabrication RUN-2026-07-16e ripped out
+  // of quotes.total after it reached real customers ("When no price was entered,
+  // the DATABASE made one up… Four rows priced this way; TWO are completed").
+  // It was removed from `total` and left alive here. On the live book it disagrees
+  // with initial_price on 84 of 93 quotes, and 61 quotes carry a NON-ZERO value for
+  // it — so the day a quote has hours but no price, this line prints an invented
+  // number on the customer's document. A priceless quote is worth 0 here, which is
+  // what it already renders today and what the send gate (quoteStatus.sendBlockedReason
+  // → 'no_price') already refuses to send.
+  const initialPrice = Number(quote.initial_price ?? 0)
   const hasMaintenance = !!(quote.weekly_price || quote.biweekly_price || quote.monthly_price)
   const lines = services && services.length ? services : null
   // The builder's toggle promises 'Travel rolled into total on PDF' — and this
@@ -187,10 +219,74 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
             <Text style={[styles.bodyText, { fontFamily: 'Helvetica-Bold' }]}>
               {lines && lines.length > 1 ? `${quote.service_type} + ${lines.length - 1} more` : quote.service_type}
             </Text>
+            {/* Say it at the TOP, before any price is read. A customer who skims
+                to the table needs to already know these are alternatives. */}
+            {isOptionsQuote ? (
+              <Text style={styles.muted}>
+                {chosen ? `${opts.length} options offered · ${chosen.name} chosen` : `${opts.length} options — choose one`}
+              </Text>
+            ) : null}
             {/* Crew/hours live in the table's Details column — not repeated here. */}
           </View>
         </View>
 
+        {/* ── Alternatives ──────────────────────────────────────────────────
+            A quote offering options prints THIS instead of the line-item table.
+            The heading has to do the work a customer would otherwise do wrong:
+            "Choose One Option" and the sentence under it say, before any number
+            is read, that these are alternatives and only one is payable. */}
+        {isOptionsQuote ? (
+          <>
+            <Text style={styles.sectionTitle}>{chosen ? 'Options Offered' : 'Choose One Option'}</Text>
+            <Text style={[styles.muted, { marginBottom: 6 }]}>
+              {chosen
+                ? `You chose ${chosen.name}. The other options are shown for your records — they were not ordered and are not charged.`
+                : 'These are alternative versions of the same job. Pick the one you want — you pay for that option only, not for all of them.'}
+            </Text>
+            <View style={styles.table}>
+              <View style={styles.tableHead} fixed>
+                <Text style={[styles.th, styles.cellDesc]}>Option</Text>
+                <Text style={[styles.th, styles.cellQty]}>{chosen ? 'Status' : ''}</Text>
+                <Text style={[styles.th, styles.cellAmt]}>Price</Text>
+              </View>
+              {opts.map(o => {
+                const isChosen = chosen?.id === o.id
+                const notChosen = !!chosen && !isChosen
+                // ⭐ Each row states the figure the customer actually pays for
+                // THAT option: its price plus travel, which is exactly what
+                // quote_apply_option_choice snapshots as accepted_price and
+                // exactly what the portal's Approve button says.
+                //
+                // ⚠️ `travelFee`, NOT `rolledTravel`. An owner who ticked "show
+                // travel separately" would otherwise get option rows at $5,400
+                // on the paper against $5,550 on the portal button and $5,550 in
+                // the record — three surfaces, three numbers, for one decision.
+                // The itemisation preference still governs the ordinary quote
+                // above; on an options quote a lone $150 row beside three all-in
+                // prices only invites adding it a second time.
+                const rowAmount = Number(o.price) + travelFee
+                return (
+                  <View key={o.id} style={styles.tableRow} wrap={false}>
+                    <View style={styles.cellDesc}>
+                      <Text style={[styles.td, isChosen ? { fontFamily: 'Helvetica-Bold' } : {}]}>
+                        {o.name}{o.is_recommended ? '  ★ Recommended' : ''}
+                      </Text>
+                      {o.description ? <Text style={styles.muted}>{o.description}</Text> : null}
+                      {travelFee > 0 ? <Text style={styles.muted}>Includes {money(travelFee)} travel</Text> : null}
+                    </View>
+                    <Text style={[styles.td, styles.cellQty, notChosen ? { color: COLORS.faint } : {}]}>
+                      {isChosen ? 'Your choice' : notChosen ? 'Not selected' : ''}
+                    </Text>
+                    <Text style={[styles.td, styles.cellAmt, notChosen ? { color: COLORS.faint } : {}]}>
+                      {money(rowAmount)}
+                    </Text>
+                  </View>
+                )
+              })}
+            </View>
+          </>
+        ) : (
+        <>
         {/* Line items */}
         <Text style={styles.sectionTitle}>Quote Details</Text>
         <View style={styles.table}>
@@ -243,6 +339,8 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
             </View>
           ) : null}
         </View>
+        </>
+        )}
 
         {/* Totals — the subtotal row only earns its place when it differs from
             the single line above it (multi-service or a travel fee); otherwise a
@@ -252,13 +350,17 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
               and only ITEMIZED travel appears here; rolled-in travel is already
               inside the line amounts above, so a subtotal excluding it would
               contradict the very rows it claims to sum. */}
-          {((lines && lines.length > 1) || shownTravel > 0) ? (
+          {/* ⛔ Suppressed entirely on an options quote. "Services subtotal" over a
+              list of alternatives is the exact sentence that would make three
+              prices read as parts of one — and `initialPrice` here is ONE option's
+              price, so the row would also be arithmetic nobody could follow. */}
+          {!isOptionsQuote && ((lines && lines.length > 1) || shownTravel > 0) ? (
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>{lines && lines.length > 1 ? 'Services subtotal' : 'First visit'}</Text>
               <Text style={styles.totalValue}>{money(initialPrice + rolledTravel)}</Text>
             </View>
           ) : null}
-          {shownTravel > 0 ? (
+          {shownTravel > 0 && !isOptionsQuote ? (
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Travel Fee</Text>
               <Text style={styles.totalValue}>{money(shownTravel)}</Text>
@@ -266,10 +368,24 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
           ) : null}
           <View style={styles.grandRow}>
             {/* "Quote Total" unless maintenance options follow — then "First Visit
-                Total" is the honest headline. Never "invoice" on a quote. */}
-            <Text style={styles.grandLabel}>{hasMaintenance ? 'First Visit Total' : 'Quote Total'}</Text>
+                Total" is the honest headline. Never "invoice" on a quote.
+                On an options quote the label NAMES the option it totals, so the
+                one large green number on the page can never be read as "all of
+                them": "Approved — Premium" after a choice, "If you choose
+                Standard" before one. */}
+            <Text style={styles.grandLabel}>
+              {isOptionsQuote
+                ? (chosen ? `Approved — ${chosen.name}` : leading ? `If you choose ${leading.name}` : 'Quote Total')
+                : hasMaintenance ? 'First Visit Total' : 'Quote Total'}
+            </Text>
             <Text style={styles.grandValue}>{money(quote.total)}</Text>
           </View>
+          {/* Said in words directly beneath the only big number on the page. */}
+          {isOptionsQuote && !chosen ? (
+            <Text style={[styles.muted, { textAlign: 'right', marginTop: 3 }]}>
+              One option only — the total depends on which you pick.
+            </Text>
+          ) : null}
           {Number(settings?.gst_percent) > 0 ? (
             // The invoice adds GST on top of this total — say so on the quote, or
             // the first bill looks like a bait-and-switch.
@@ -278,7 +394,9 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
             </Text>
           ) : null}
           <Text style={[styles.muted, { textAlign: 'right', marginTop: 6 }]}>
-            To approve this quote, open the secure link in your email.
+            {isOptionsQuote && !chosen
+              ? 'To pick your option and approve it, open the secure link in your email.'
+              : 'To approve this quote, open the secure link in your email.'}
           </Text>
         </View>
 
@@ -353,6 +471,8 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
 
 // Render the quote to a PDF blob. Imported dynamically by the caller so the
 // heavy @react-pdf library only loads when the user actually opens a PDF.
-export async function renderQuoteBlob(quote: Quote, settings: BusinessSettings | null, services?: QuoteService[]): Promise<Blob> {
-  return pdf(<QuoteDocument quote={quote} settings={settings} services={services} />).toBlob()
+export async function renderQuoteBlob(
+  quote: Quote, settings: BusinessSettings | null, services?: QuoteService[], options?: QuoteOption[],
+): Promise<Blob> {
+  return pdf(<QuoteDocument quote={quote} settings={settings} services={services} options={options} />).toBlob()
 }

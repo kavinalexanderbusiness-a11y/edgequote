@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
+import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { renderMessage, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
 import { runChaseCron } from '@/lib/automation/chase'
@@ -55,7 +56,7 @@ type QuoteChaseCtx = OwnerContext & { policy: FollowUpPolicy }
 // out mid-batch.
 const MAX_PER_RUN = 500
 
-export async function GET(req: NextRequest) {
+async function handler(req: NextRequest) {
   if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   const enabled = commsEnabled()
   if (!enabled.sms && !enabled.email) {
@@ -168,9 +169,13 @@ export async function GET(req: NextRequest) {
     },
   })
 
-  const summary = { ok: true, ...tally, truncated }
+  // Same verdict rule as the invoice chaser: a refunded attempt is a live quote that
+  // went unchased because the provider was down, which the heartbeat must carry.
+  const summary = { ok: tally.failed === 0, ...tally, truncated }
   // Log only when there was something to do, so quiet runs stay quiet in the logs.
   if (tally.chased > 0) console.log('[cron/quote-followup] run:', JSON.stringify(summary))
   if (tally.failed > 0) console.error(`[cron/quote-followup] ${tally.failed} follow-up(s) sent nothing and had their attempt REFUNDED (provider down/timeout/429/5xx, or a throw) — they are chased again next run. See notification_log rows with status 'error'.`)
   return NextResponse.json(summary)
 }
+
+export const GET = withCronSweep('quote-followup', handler, b => counts(b, undefined, 'chased', 'sent'))

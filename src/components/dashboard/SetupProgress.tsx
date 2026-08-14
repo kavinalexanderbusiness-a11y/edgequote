@@ -23,7 +23,24 @@ import { CheckCircle2, Circle, ChevronRight, Rocket, X } from 'lucide-react'
 // a dismissal — a fresh account's card would be hidden by the other's dismiss.
 const dismissKey = (uid: string) => `eq-setup-dismissed:${uid}`
 
-export function SetupProgress() {
+// `started` — has this business a customer, quote, job or invoice yet? Passed
+// down from the server loader (derived, never stored). Defaults TRUE so any
+// caller that doesn’t know keeps today’s behaviour exactly.
+//
+// NONE of the nine items is required to create, price or save a first quote:
+// they are logo, terms, home base, e-transfer, online booking, review link and
+// contact details — every one of them a "before this particular feature stops
+// silently degrading", not a "before you can work". On a brand-new account the
+// card therefore rendered SEVEN chores directly under the money band, taller
+// than the hero on desktop and filling the whole second screen on a phone,
+// while the one thing worth doing sat in a corner button. Configuration looked
+// like the product.
+//
+// So it waits. The moment the business has anything real, the card appears
+// exactly as it always has, with the same items, dismissal and copy — this is
+// a change of WHEN, not of WHAT. Existing businesses are unaffected by
+// construction: they all have data, so `started` is true on their first paint.
+export function SetupProgress({ started = true }: { started?: boolean }) {
   const supabase = useMemo(() => createClient(), [])
   const [health, setHealth] = useState<SetupHealth | null>(null)
   const [uid, setUid] = useState<string | null>(null)
@@ -46,6 +63,7 @@ export function SetupProgress() {
     return () => { alive = false }
   }, [supabase])
 
+  if (!started) return null
   if (!health || health.complete) return null
 
   const missing = health.items.filter(i => !i.done)
@@ -84,7 +102,7 @@ export function SetupProgress() {
       <div className="border-t border-border divide-y divide-border">
         {missing.map(item => (
           <Link key={item.key} href={item.href}
-            className="flex items-center gap-3 px-5 py-3 hover:bg-surface transition-colors group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-inset">
+            className="flex items-center gap-3 px-5 py-3 hover:bg-surface-raised transition-colors group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-inset">
             <Circle className="w-4 h-4 text-ink-faint shrink-0" />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium text-ink">{item.label}</p>

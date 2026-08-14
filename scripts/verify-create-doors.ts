@@ -105,6 +105,10 @@ const BARE_QUOTE_DOORS: Record<string, string> = {
   'app/dashboard/page.tsx':                'home page header — no customer is on screen yet',
   'app/dashboard/quotes/page.tsx':         'the quote list header — the list is every customer’s',
   'components/command/CommandPalette.tsx': 'global ⌘K — reachable from anywhere, belongs to nobody',
+  // Not "we forgot the customer" — there cannot be one. This card renders only
+  // while the business has no customer, quote, job or invoice at all, and the
+  // builder it opens creates the customer and property as it saves.
+  'components/dashboard/TodaysPriorities.tsx': 'the first-run card — it only renders when the business has NO customers yet',
   'components/layout/BottomNav.tsx':       'the mobile quick action — same, global',
   'components/quotes/QuoteList.tsx':       'the empty-state CTA and the "n" shortcut on the same list',
   'components/messages/LeadCard.tsx':      'looks bare, is NOT — the prefill rides in sessionStorage',

@@ -19,6 +19,9 @@ import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Textarea } from '@/components/ui/Textarea'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { getPropertyContext, type PropertyIntelligence } from '@/lib/ai/propertyContext'
+import { LocationSummaryCard } from '@/components/properties/LocationSummaryCard'
+import { loadLocationSummary } from '@/lib/locationSummaryData'
+import type { LocationSummary } from '@/lib/locationSummary'
 import { toast } from '@/lib/toast'
 import { Home, Ruler, FileText, User, MapPin, Edit2, StickyNote, Sparkles, CalendarPlus } from 'lucide-react'
 
@@ -43,6 +46,9 @@ export default function PropertyDetailPage() {
   propertyRef.current = property
   const [customer, setCustomer] = useState<{ id: string; name: string } | null>(null)
   const [events, setEvents] = useState<ReturnType<typeof buildTimeline>>([])
+  // Sources whose read failed — the card names them rather than letting a short
+  // history read as the whole history.
+  const [missing, setMissing] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   // Latest ACTIVE AI analysis of this property, through THE one read seam
@@ -55,6 +61,11 @@ export default function PropertyDetailPage() {
   const [editingNotes, setEditingNotes] = useState(false)
   const [notesDraft, setNotesDraft] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
+  // This address's operational memory. Null while it is still being read — the
+  // card renders its own small placeholder rather than blanking the page, and it
+  // carries its OWN failure state (visitsUnknown) so a broken visit read says so
+  // instead of reading as "never serviced".
+  const [summary, setSummary] = useState<LocationSummary | null>(null)
 
   useEffect(() => {
     let active = true
@@ -70,6 +81,10 @@ export default function PropertyDetailPage() {
       const isSwitch = loadedIdRef.current !== id
       loadedIdRef.current = id   // set at START, so a Retry doesn't re-skeleton
       if (isSwitch || !propertyRef.current) setLoading(true)
+      // The summary is ABOUT one address, so a switch must clear it before the
+      // new read lands — the predecessor's "next visit" sitting under a new
+      // address is the same guarantee the skeleton rule above exists for.
+      if (isSwitch) setSummary(null)
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
       // No session is a load failure, not a reason to sit on a skeleton forever.
@@ -87,14 +102,25 @@ export default function PropertyDetailPage() {
       const cust = Array.isArray(prop.customers) ? prop.customers[0] ?? null : prop.customers ?? null
       if (active) { setLoadError(null); setProperty(prop); setCustomer(cust) }
 
-      const [sources, setRes, ctx] = await Promise.all([
+      const [tl, setRes, ctx, loc] = await Promise.all([
         loadPropertyTimelineSources(supabase, user.id, id),
         supabase.from('business_settings').select('gst_percent').eq('user_id', user.id).maybeSingle(),
         getPropertyContext(supabase, id),
+        // Its own read, under its own failure contract — see lib/locationSummaryData
+        // for why this does not ride on the timeline's sources. A thrown request
+        // becomes an UNKNOWN summary, never an empty one.
+        loadLocationSummary(supabase, user.id, id)
+          .catch((): LocationSummary => ({
+            visitsUnknown: true, lastVisit: null, nextVisit: null, completedCount: null,
+            services: [], typicalDuration: null, timedVisits: null, photoCount: null,
+          })),
       ])
-      if (active) setInsight(ctx)
+      // Two independent honesty contracts, both preserved: `missing` names the
+      // timeline sources that failed, `summary.visitsUnknown` says the summary's
+      // own visit read did. Neither can speak for the other.
+      if (active) { setInsight(ctx); setMissing(tl.missing); setSummary(loc) }
       const all = buildTimeline({
-        ...sources,
+        ...tl.sources,
         gstPercent: Number((setRes.data as { gst_percent?: number | null } | null)?.gst_percent) || 0,
       })
       // Every row was fetched by property, so this is a guard, not the mechanism:
@@ -148,6 +174,19 @@ export default function PropertyDetailPage() {
       postal_code: addrDraft.postal.trim() || null,
       lat: null, lng: null, neighborhood: null,
     } : p)
+  }
+
+  // PRIVATE notes about the place. Separate write from saveNotes below and
+  // deliberately so: that one is the customer's copy. Returns whether it stuck,
+  // so the card only leaves edit mode on a write that actually landed — and the
+  // optimistic patch happens AFTER the error check, never before.
+  async function saveInternalNotes(v: string): Promise<boolean> {
+    if (!property) return false
+    const next = v.trim() || null
+    const { error } = await supabase.from('properties').update({ internal_notes: next }).eq('id', property.id)
+    if (error) { toast.error('Could not save the access notes: ' + error.message); return false }
+    setProperty(p => p ? { ...p, internal_notes: next } : p)
+    return true
   }
 
   async function saveNotes() {
@@ -241,6 +280,18 @@ export default function PropertyDetailPage() {
         </Card>
       )}
 
+      {/* What this address remembers. FIRST after identity, because it is the
+          only block on this page that is useful while standing at the gate —
+          everything below it (AI insight, customer-facing notes, the full
+          timeline) is desk reading. */}
+      <LocationSummaryCard
+        summary={summary}
+        internalNotes={property.internal_notes ?? null}
+        onSaveInternalNotes={saveInternalNotes}
+        onRetry={reload}
+        photosHref="#property-history"
+      />
+
       {/* Latest AI analysis — read through THE propertyContext seam, shown only
           when one exists. Reused, never re-run (the BeforeAfterStudio pattern). */}
       {insight && (insight.summary || (insight.detections?.length ?? 0) > 0) && (
@@ -267,7 +318,13 @@ export default function PropertyDetailPage() {
           the customer's private notes field on their profile). */}
       <Card>
         <CardHeader className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><StickyNote className="w-4 h-4 text-accent-text" /> Property notes</h2>
+          <h2 className="text-sm font-semibold text-ink flex items-center gap-2">
+            <StickyNote className="w-4 h-4 text-accent-text" /> Property notes
+            {/* The visibility is part of the NAME, not a caption revealed while
+                editing. Two note fields now live on this page and the only thing
+                that distinguishes them is who reads them, so both say so at rest. */}
+            <span className="text-xs font-normal text-ink-faint">· shared with the customer</span>
+          </h2>
           {!editingNotes && (
             <button type="button" onClick={() => { setNotesDraft(property.notes || ''); setEditingNotes(true) }}
               className="text-xs text-ink-muted hover:text-ink transition-colors inline-flex items-center gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">
@@ -295,7 +352,7 @@ export default function PropertyDetailPage() {
           ) : property.notes ? (
             <p className="text-sm text-ink-muted whitespace-pre-wrap">{property.notes}</p>
           ) : (
-            <p className="text-sm text-ink-faint">No notes yet — anything you write here also shows on the customer’s portal.</p>
+            <p className="text-sm text-ink-faint">No notes yet — anything you write here also shows on the customer’s portal. Gate codes and access details belong in “Access &amp; site notes” above.</p>
           )}
         </CardBody>
       </Card>
@@ -305,9 +362,15 @@ export default function PropertyDetailPage() {
           property cards use (?customer&property), so the target opens pre-scoped to
           THIS address, not the customer's primary. Quote and Schedule need a customer
           (a quote/visit is billed to someone); Measure is about the address alone. */}
+      {/* The summary's photo door targets this — the photos ARE timeline events,
+          so the honest destination is the history that already renders them
+          rather than a second gallery that would have to stay in sync. */}
+      <div id="property-history" className="scroll-mt-4">
       <TimelineCard
         key={id}
         events={events}
+        missing={missing}
+        onRetry={reload}
         title="Property timeline"
         emptyText="Nothing has happened at this address yet."
         actions={
@@ -335,6 +398,7 @@ export default function PropertyDetailPage() {
           </>
         }
       />
+      </div>
     </PageContainer>
   )
 }

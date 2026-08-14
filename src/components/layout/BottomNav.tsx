@@ -136,7 +136,11 @@ export function BottomNav() {
         </div>
       )}
 
-      <nav aria-label="Primary" className="eq-bottom-nav lg:hidden fixed bottom-0 inset-x-0 z-40 bg-bg-secondary/95 backdrop-blur border-t border-border pb-safe">
+      {/* data-eq-bottom-chrome: a field's dropdown must stop above this too, not
+          only above a save bar (lib/dropdownPlacement). When a fixed save bar is
+          mounted this nav is display:none — height 0 — and the rule skips it,
+          which is exactly right. */}
+      <nav aria-label="Primary" data-eq-bottom-chrome className="eq-bottom-nav lg:hidden fixed bottom-0 inset-x-0 z-40 bg-bg-secondary/95 backdrop-blur border-t border-border pb-safe">
         <div className="flex items-stretch px-1 pt-1 pb-1">
           {leftTabs.map(tab)}
           {/* Center action — visually raised so it reads as THE button. Hidden

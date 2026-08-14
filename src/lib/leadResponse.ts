@@ -95,7 +95,14 @@ export function computeLeadsNeedingResponse(pre: LeadResponsePreloaded, now: Dat
       seen.add(dedupe)
     } else if (c.last_direction === 'inbound') {
       if (c.customer_id && bookingCustomers.has(c.customer_id)) continue // the booking item below carries the real door
-      items.push({ key: `r-${c.id}`, source: 'reply', name, at, customerId: c.customer_id, href: '/dashboard/messages' })
+      // ?c=<customerId> opens THAT conversation — the door the bell and push
+      // already land on. Without it the dashboard row named the person and then
+      // dropped the owner on an unfiltered inbox to find them again. No
+      // customer_id (anonymous inbound) still falls back to the plain list.
+      items.push({
+        key: `r-${c.id}`, source: 'reply', name, at, customerId: c.customer_id,
+        href: c.customer_id ? `/dashboard/messages?c=${c.customer_id}` : '/dashboard/messages',
+      })
       seen.add(dedupe)
     }
   }

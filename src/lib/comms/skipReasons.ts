@@ -15,6 +15,9 @@ export const SKIP_REASON = {
   NO_PHONE: 'no phone',            // opted in but no phone number on file
   NO_CONTACT: 'no contact',        // neither email nor phone available
   UNSUBSCRIBED: 'unsubscribed',    // (future) inbound STOP / unsubscribe
+  // The platform hasn't granted this business the shared sender for this
+  // channel (lib/capabilities) — the sender identity belongs to another tenant.
+  NOT_ENABLED: 'channel not enabled',
   // The send governor (lib/comms/governor) — WHEN, not WHETHER:
   QUIET_HOURS: 'quiet hours',      // commercial send outside the owner-local window
   FREQUENCY_CAP: 'frequency cap',  // customer already had a commercial send too recently

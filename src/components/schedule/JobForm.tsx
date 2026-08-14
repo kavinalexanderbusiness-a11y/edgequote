@@ -19,6 +19,12 @@ import {
 } from '@/lib/seasons'
 import { WeeklyScheduler } from '@/components/schedule/WeeklyScheduler'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
+import { EstimatedVsActual } from '@/components/labor/EstimatedVsActual'
+import { ServiceEstimateLearning } from '@/components/labor/ServiceEstimateLearning'
+import { JobCostPanel } from '@/components/jobs/JobCostPanel'
+import { JobReferenceMedia } from '@/components/schedule/JobReferenceMedia'
+import { AUDIENCE_COPY } from '@/lib/noteScope'
+import { loadCompletedVisitLearning, type LearningLoad } from '@/lib/estimateVsActualData'
 import type { Cadence } from '@/lib/labor'
 import { resolvePrefs, type PrefSource } from '@/lib/preferences'
 import { findJobMatch, type JobLiteForMatch } from '@/lib/dedup'
@@ -34,6 +40,12 @@ export interface Recurrence {
   count: number
   endDate: string | null
   endCount: number | null
+  // True when the owner explicitly set the Ends control this session. Lets the
+  // save distinguish "re-asserted the same end rule" (reconcile the series
+  // against it — remove stray visits past the end) from "didn't touch it"
+  // (leave deliberately-moved visits alone). Absent on rows hydrated from the
+  // database (recFromRow), so an untouched save never reconciles by surprise.
+  endAsserted?: boolean
 }
 
 export interface SuggestionMeta {
@@ -47,6 +59,10 @@ interface JobFormProps {
   excludeJobId?: string
   // Existing series for the job being edited, so the Repeat controls pre-fill.
   initialRecurrence?: Recurrence
+  /** `job_recurrences.start_date` of the series being edited. Season End is a
+   *  property of the series, not of the visit under the editor, so it resolves
+   *  from here — every visit in a series then agrees on one season end. */
+  seriesStartDate?: string
   allowAddAnother?: boolean
   suggestedPrice?: number // quote-derived per-visit price, shown as the price hint
   // Soft cadence/preference warnings for the chosen date+time (page-supplied, so
@@ -139,7 +155,7 @@ function recurrenceToUi(r?: Recurrence) {
   }
 }
 
-export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, allowAddAnother, suggestedPrice, warnFor, onSubmit, onCancel, onDirtyChange, isEdit }: JobFormProps) {
+export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, seriesStartDate, allowAddAnother, suggestedPrice, warnFor, onSubmit, onCancel, onDirtyChange, isEdit }: JobFormProps) {
   const supabase = createClient()
   const [properties, setProperties] = useState<Property[]>([])
   const addAnotherRef = useRef(false)
@@ -153,6 +169,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   const [endDate, setEndDate] = useState(ui0.endDate)
   const [endCount, setEndCount] = useState(ui0.endCount)
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
+  const [seasonsLoaded, setSeasonsLoaded] = useState(false)
   // Existing recurring series on the selected property — for duplicate detection.
   const [propSeries, setPropSeries] = useState<{ id: string; service_type: string | null; unit: string | null; count: number | null }[]>([])
   const [dupAck, setDupAck] = useState(false) // owner chose "create anyway"
@@ -262,11 +279,20 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   const interval = presetToInterval(preset, customUnit, customCount)
 
   // ── Seasonal recurrence ──
-  // The service's season (lawn/snow), if any, and the season-end date for a
-  // series starting on the job's scheduled date.
+  // The service's season (lawn/snow), if any, and the season-end date for the
+  // series this visit belongs to.
   const serviceSeason = seasonForService(serviceType, seasons)
   const category = serviceCategory(serviceType)
-  const seasonEndDate = serviceSeason && scheduledDate ? seasonEndDateFor(scheduledDate, serviceSeason) : null
+  // Season End is a property of the SERIES, so it resolves from the series'
+  // start date — not from whichever visit happens to be open. An open-ended
+  // series pre-creates a rolling horizon of visits, so visits PAST the season
+  // end already exist on the calendar; picking "Season end" while standing on
+  // one of those resolved seasonEndDateFor's "you must mean next season" branch
+  // and stored NEXT year's end, which is no cutoff at all — the November visits
+  // the owner was looking at stayed exactly where they were. Falls back to the
+  // job's own date for a new series, where that date IS the start.
+  const seasonAnchorDate = seriesStartDate || scheduledDate
+  const seasonEndDate = serviceSeason && seasonAnchorDate ? seasonEndDateFor(seasonAnchorDate, serviceSeason) : null
   // The effective end date the series will use, given the chosen end mode.
   const effectiveEndDate =
     endMode === 'season' ? seasonEndDate
@@ -291,6 +317,22 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     if (isEdit || endTouched.current) return
     setEndMode(serviceSeason ? 'season' : 'never')
   }, [serviceSeason, isEdit])
+
+  // Editing: RECOGNISE a stored end date that IS this service's season end, and
+  // show it as "Season end" rather than a bare "Specific date". Season End is
+  // stored as a plain end_date (the engine needs no season awareness), so
+  // without this the mode could never survive a reload — the owner picked
+  // "Season end", reopened the job, saw "Specific date", and reasonably
+  // concluded the save was lost. Derived, not stored: the season config +
+  // end_date remain the only truth, so the two can never disagree. Only while
+  // the control is untouched, and only an EXACT match against the owner's
+  // LOADED season config — matching against the pre-load Calgary defaults
+  // could claim "Season end" for a hand-picked date, and season mode re-derives
+  // its date on save, so that claim would silently rewrite the stored end.
+  useEffect(() => {
+    if (!isEdit || !seasonsLoaded || endTouched.current) return
+    if (endMode === 'on' && endDate && seasonEndDate && endDate === seasonEndDate) setEndMode('season')
+  }, [isEdit, seasonsLoaded, endMode, endDate, seasonEndDate])
 
   // Saved measurement recommendation for the selected property — the pricing
   // source of truth. Maps the chosen cadence to its measured price (same custom-
@@ -320,6 +362,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
       // so the recurrence engine needs no season awareness).
       endDate: endMode === 'season' ? seasonEndDate : (endMode === 'on' && endDate ? endDate : null),
       endCount: endMode === 'after' ? Math.max(1, endCount) : null,
+      endAsserted: endTouched.current,
     }
   }
 
@@ -350,6 +393,30 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     }
   }
 
+  // What past visits of this service taught. Loaded only once the visit is
+  // marked done, because that is the only state where the block renders — an
+  // owner scheduling next week's mow should not pay for a history read.
+  //
+  // `null` means still loading and renders nothing. Every FAILURE, including a
+  // thrown auth call, resolves to an explicit `unavailable` rather than being
+  // left as null: silence would let a broken read look identical to a business
+  // that simply has no history.
+  const [learningLoad, setLearningLoad] = useState<LearningLoad | null>(null)
+  useEffect(() => {
+    if (status !== 'completed') return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        const load = await loadCompletedVisitLearning(supabase, user?.id ?? '')
+        if (!cancelled) setLearningLoad(load)
+      } catch (e) {
+        if (!cancelled) setLearningLoad({ outcome: 'unavailable', reason: String(e) })
+      }
+    })()
+    return () => { cancelled = true }
+  }, [status, supabase])
+
   // Load configured service seasons once (falls back to Calgary defaults).
   useEffect(() => {
     async function loadSeasons() {
@@ -357,6 +424,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
       if (!user) return
       const { data } = await supabase.from('business_settings').select('service_seasons').eq('user_id', user.id).maybeSingle()
       setSeasons(settingsToSeasons((data as { service_seasons: unknown } | null)?.service_seasons))
+      setSeasonsLoaded(true)
     }
     loadSeasons()
   }, [supabase])
@@ -543,7 +611,13 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
             coord={propCoord}
             address={selProp?.address ?? null}
             excludeJobId={excludeJobId}
-            targetHours={(Number(watch('duration_minutes')) || 45) / 60}
+            // NULL when the owner hasn't sized the job — the scheduler resolves
+            // it against learned service history, or says "duration unknown".
+            // (This used to coerce unknown to 45 minutes, which is how an
+            // unsized job got a confident day recommendation.)
+            durationMinutes={Number(watch('duration_minutes')) > 0 ? Number(watch('duration_minutes')) : null}
+            crewSize={Number(watch('crew_size')) > 0 ? Number(watch('crew_size')) : null}
+            serviceType={watch('service_type') || null}
             targetValue={Number(watch('price')) || suggestedPrice || 0}
             customerPreferredDays={effectivePrefs.preferredDays}
             customerAvoidDays={effectivePrefs.avoidDays}
@@ -588,12 +662,58 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         )} />
 
       {status === 'completed' && (
-        <Input label="Actual time on site (minutes)" type="number" min="0" step="5"
-          hint="Captured for future pricing intelligence — planned vs. actual time."
-          {...register('actual_minutes', { min: 0 })} />
+        <div className="space-y-2.5">
+          <Input label="Actual time on site (minutes)" type="number" min="0" step="5"
+            hint="Captured for future pricing intelligence — planned vs. actual time."
+            {...register('actual_minutes', { min: 0 })} />
+          {/* The comparison sits directly under the field that feeds it, so the
+              answer to "was I close?" appears as the number is typed rather than
+              on some report the owner has to go looking for. All arithmetic and
+              every honesty rule live in lib/estimateVsActual. */}
+          <EstimatedVsActual
+            visit={{
+              id: excludeJobId || 'current',
+              status,
+              service_type: serviceType || null,
+              duration_minutes: Number(watch('duration_minutes')) || null,
+              actual_minutes: Number(watch('actual_minutes')) || null,
+            }} />
+          {/* …and directly under it, what this service usually does. The visit
+              being edited is excluded from its own history so the "typical" it
+              is measured against is genuinely other work. */}
+          {learningLoad && (
+            <ServiceEstimateLearning
+              load={learningLoad}
+              serviceType={serviceType || null}
+              excludeJobId={excludeJobId || undefined} />
+          )}
+          {/* …and finally what it COST. Time sits above it because time is what
+              this visit already knows; cost is what somebody has to record.
+              Only on a SAVED visit: an expense needs a job id to point at, and
+              there is none until the visit exists. Creating one is not the
+              moment to think about receipts anyway. */}
+          {isEdit && excludeJobId && (
+            <JobCostPanel
+              job={{
+                id: excludeJobId,
+                status,
+                service_type: serviceType || null,
+                actual_minutes: Number(watch('actual_minutes')) || null,
+                crew_size: Number(watch('crew_size')) || null,
+              }} />
+          )}
+        </div>
       )}
 
-      <Textarea label="Notes" placeholder="Access instructions, gate codes, special requests..."
+      {/* ⭐ THE AUDIENCE, SAID OUT LOUD. This field goes to the phone of whoever
+          works the visit (crew_day ships it as stops[].notes) and to nobody
+          else — it was removed from get_portal_data on 2026-08-11 after 49 of
+          78 completed visits rendered their gate codes in the customer's
+          history. The label used to be a bare "Notes", which is the same word
+          the quote form used for a field that PRINTS. Two opposite audiences
+          cannot share one word. */}
+      <Textarea label={AUDIENCE_COPY.crew.label} hint={AUDIENCE_COPY.crew.help}
+        placeholder="Use the east gate · park on the street · don't prune the lilac"
         {...register('notes')} />
       {aiNotes.enabled === true && String(watch('notes') || '').trim() !== '' && (
         <div className="-mt-2 space-y-1.5">
@@ -629,6 +749,13 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           )}
         </div>
       )}
+
+      {/* The same instruction, shown rather than described. Sits directly under
+          the note because "use the east gate" and a photo of the east gate are
+          one thought, not two features. On CREATE there is no visit to attach a
+          file to yet, and the component says so instead of offering a control
+          that would fail. */}
+      <JobReferenceMedia jobId={isEdit ? (excludeJobId || null) : null} />
 
       {/* Time & crew — expanded while creating (the smart duration suggestion
           matters then), a one-line summary when editing. */}

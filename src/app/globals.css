@@ -8,9 +8,43 @@
   :root,
   :root[data-theme='dark'] {
     color-scheme: dark;
+    /* ── The surface ladder ────────────────────────────────────────────────────
+       FOUR rungs, each with exactly ONE meaning:
+
+         bg              the page ground — nothing else is this colour
+         bg-tertiary     a well RECESSED INTO a card (nested block, inset row,
+                         a sub-panel that belongs to its parent)
+         bg-secondary    THE card. Identical to `surface` on purpose (below).
+         surface         THE card — same rung, two names, one colour
+         surface-raised  something floating ABOVE a card (menu, popover, hover)
+
+       ⭐ WHY bg-secondary === surface. "A card" is painted 250+ times across this
+       app, and which token a given file reached for was down to who wrote it:
+       126 hand-rolled cards say `bg-bg-secondary`, 54 say `bg-surface`, and the
+       shared <Card> primitive says `bg-surface`. Those were THREE different
+       navies four channels apart — far too close to read as a hierarchy, far
+       enough apart to look like a mistake when two land side by side. Measured
+       on the real app before this change: /dashboard/grow painted 13,20,32 ×21
+       AND 17,25,39 ×12 AND 20,30,46 ×6 in one viewport, with no rule saying
+       which meant what.
+
+       The light theme ALREADY resolved this — there, bg-secondary and surface
+       are both pure white and bg-tertiary is a shade darker (a recessed well).
+       So the same component rendered as one level in light and a different level
+       in dark. This makes dark's rungs mean what light's already mean.
+
+       ⛔ No new navy is invented here and the brand palette is untouched: both
+       values below already existed in this block. 13 20 32 (the old
+       bg-secondary) is reassigned to the recessed rung, which is where a value
+       darker than the card belongs.
+
+       Consequence worth knowing: a nested block inside a card now reads as a
+       well pressed INTO the card instead of a second card floating on top of it.
+       That is the intent — "cards inside cards" was the single loudest source of
+       visual clutter on Grow, Settings and Properties. */
     --c-bg: 8 12 18;
-    --c-bg-secondary: 13 20 32;
-    --c-bg-tertiary: 17 25 39;
+    --c-bg-secondary: 20 30 46;
+    --c-bg-tertiary: 13 20 32;
     --c-surface: 20 30 46;
     --c-surface-raised: 26 38 64;
     --c-border: rgba(255, 255, 255, 0.07);

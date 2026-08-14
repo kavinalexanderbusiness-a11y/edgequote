@@ -10,11 +10,22 @@ import { loadTravelModel } from '@/lib/travelLearning'
 // Load EVERYTHING the advisor composes, in one parallel fetch, and return the
 // ranked suggestions. Shared by the Grow page Suggestions Center and the
 // dashboard top-3 widget so they never diverge.
-export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggestion[]> {
+//
+// Returns NULL when a load-bearing read fails. supabase-js RESOLVES {data:null,
+// error}, so coercing every read with `|| []` let a dead connection look like a
+// spotless business: the feed said "Nothing needs your attention" under a green
+// check. The two PARTIAL failures are worse than the total one —
+//   • invoices fail → invoicedJobIds empties → every completed job reads as
+//     UNBILLED, so the advisor tells the owner to invoice already-invoiced work.
+//   • quote_outcomes fail → priceLossRate falls to 0, DISABLING the "losing
+//     mostly on price → never tell them to raise" suppression, so the advisor
+//     recommends a price rise to a business that is losing quotes on price.
+// Enrichment reads stay deliberately tolerant — see the split below.
+export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggestion[] | null> {
   // Local session read — no auth round-trip before the parallel advisor fetch below.
   const { data: { session } } = await supabase.auth.getSession()
   const user = session?.user
-  if (!user) return []
+  if (!user) return null
   const uid = user.id
 
   // One parallel round-trip for the whole advisor. Line items are fetched by
@@ -41,7 +52,7 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
   const RECURRENCE_COLS = 'id, freq, interval_unit, interval_count'
   const LINE_ITEM_COLS = 'id, job_id, amount, service_key, description, created_at'
   const today = localTodayISO()
-  const [jRes, qRes, rRes, pRes, cRes, iRes, nRes, sRes, liRes, dRes, woRes, travelM] = await Promise.all([
+  const [jRes, qRes, rRes, pRes, cRes, iRes, nRes, sRes, liRes, dRes, woRes, tplRes, travelM] = await Promise.all([
     supabase.from('jobs')
       .select(`${JOB_COLS}, customers(id, name, phone, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)`)
       .eq('user_id', uid),
@@ -57,8 +68,28 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
     supabase.from('job_line_items').select(LINE_ITEM_COLS).eq('user_id', uid).order('created_at', { ascending: true }),
     supabase.from('suggestion_dismissals').select('suggestion_key, snooze_until').eq('user_id', uid),
     supabase.from('quote_outcomes').select('quote_id, reason, detail, competitor_price').eq('user_id', uid),
+    supabase.from('service_templates').select('name, recurrence').eq('user_id', uid),
     loadTravelModel(supabase),
   ])
+
+  // ── The honesty gate ──
+  // These eight decide WHAT the advisor claims: the work, the money, the people
+  // and the settings every figure is computed against. If any one of them failed
+  // we do not know the answer, and "we don't know" must not render as "nothing to
+  // do". Same all-or-nothing rule the dashboard loader uses.
+  const failed =
+    jRes.error || qRes.error || rRes.error || pRes.error ||
+    cRes.error || iRes.error || liRes.error || woRes.error || sRes.error ||
+    // Templates carry recurrence ELIGIBILITY (Session 46). A failed read would
+    // resurrect "make this recurring" for a service the owner marked one-time —
+    // the exact suggestion the configuration exists to forbid. Load-bearing.
+    tplRes.error
+  if (failed) return null
+  // DELIBERATELY TOLERANT — these degrade honestly rather than lying:
+  //   nRes (neighbour leads)  → one growth idea goes missing; the feed UNDER-claims.
+  //   dRes (dismissals)       → a dismissed card resurfaces; noise, not a false
+  //                             all-clear, and re-dismissing costs one tap.
+  //   travelM                 → falls back to its own documented default model.
 
   const jobs = (jRes.data as unknown as Job[]) || []
   const settings = sRes.data as Record<string, unknown> | null
@@ -105,6 +136,7 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
     invoicedJobIds,
     dismissedKeys,
     quoteOutcomes: (woRes.data as { quote_id: string; reason: string; detail: string | null; competitor_price: number | null }[]) || [],
+    serviceTemplates: (tplRes.data as { name: string; recurrence: string | null }[]) || [],
   }
 
   return buildSuggestions(ctx)

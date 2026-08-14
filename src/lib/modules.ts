@@ -152,14 +152,32 @@ export const FEATURE_MODULES: FeatureModule[] = [
     description: 'Analytics, marketing and the tools that win more work.',
     permissions: ['customers:read', 'jobs:read', 'quotes:read', 'marketing:write'],
     keywords: 'marketing analytics reports intelligence reviews referrals' },
+  // ⚠️ Category and copy both corrected 2026-08-09, and for the same reason.
+  //
+  // This sat in `growth`, beside Grow — top-level billing, level with the things
+  // an owner opens every morning — and its pitch said the rules "act (or ask) on
+  // your behalf". Neither half was true. The engine has never written a row in
+  // production (automation_signals / automation_runs / automation_sweeps were all
+  // empty when this was checked), and it CANNOT act: every registered rule is
+  // `mode: 'suggest'` and the dispatcher map is deliberately empty, which is the
+  // engine's whole safety design. A card promising action the code refuses to
+  // take is the plainest kind of overclaim.
+  //
+  // So it belongs in Setup — something you look in on, not something you run the
+  // day from — and it now describes what it actually does: watch, and flag.
   { key: 'automation', label: 'Automation', href: '/dashboard/automation', icon: Bot,
-    category: 'growth', version: 1, updatedAt: '2026-07-15', featured: true, requires: ['messages'],
-    description: 'Rules that watch the business and act (or ask) on your behalf.',
-    permissions: ['automations:read', 'automations:write', 'messages:send', 'customers:read'] },
+    category: 'admin', version: 1, updatedAt: '2026-08-09', requires: ['messages'],
+    description: 'Watches for customers due to re-book and flags them for you. It never messages anyone on its own.',
+    permissions: ['automations:read', 'automations:write', 'messages:send', 'customers:read'],
+    keywords: 'rules reminders follow up watch churn re-book suggestions' },
+  // Same overclaim, milder: this led with "REST API, signed webhooks, Zapier and
+  // Make", which is the answer to a question almost no owner is asking. The page
+  // still holds all of it — the pitch just stops opening with it.
   { key: 'integrations', label: 'Integrations', href: '/dashboard/integrations', icon: Plug,
-    category: 'admin', version: 1, updatedAt: '2026-07-16',
-    description: 'REST API, signed webhooks, Zapier and Make — connect EdgeQuote to everything else.',
-    permissions: ['customers:read', 'quotes:read', 'jobs:read', 'invoices:read', 'payments:read', 'customers:write', 'webhooks:send'] },
+    category: 'admin', version: 1, updatedAt: '2026-08-09',
+    description: 'Connect other apps to EdgeQuote — plus a developer API, if yours needs one.',
+    permissions: ['customers:read', 'quotes:read', 'jobs:read', 'invoices:read', 'payments:read', 'customers:write', 'webhooks:send'],
+    keywords: 'api webhooks zapier make connect apps developer accounts' },
 ]
 
 const byKey = new Map(FEATURE_MODULES.map(m => [m.key, m]))

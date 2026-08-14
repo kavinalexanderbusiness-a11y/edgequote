@@ -75,7 +75,7 @@ export function DayStatusMenu({ dates, current, pos, onPick, onClear, onClose }:
               role="menuitem"
               onClick={() => onPick(s as DayStatus)}
               className={cn('flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-                isCurrent ? 'bg-accent/10 text-ink ring-1 ring-accent/40' : 'text-ink-muted hover:bg-surface hover:text-ink')}>
+                isCurrent ? 'bg-accent/10 text-ink ring-1 ring-accent/40' : 'text-ink-muted hover:bg-surface-raised hover:text-ink')}>
               <span className="shrink-0 text-sm leading-none">{meta.emoji}</span>
               <span className="truncate">{meta.label}</span>
             </button>
@@ -87,7 +87,7 @@ export function DayStatusMenu({ dates, current, pos, onPick, onClear, onClose }:
           <button
             role="menuitem"
             onClick={onClear}
-            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs font-medium text-ink-muted hover:bg-surface hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs font-medium text-ink-muted hover:bg-surface-raised hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
             <RotateCcw className="w-3.5 h-3.5" /> Clear status (back to Normal)
           </button>
         </div>

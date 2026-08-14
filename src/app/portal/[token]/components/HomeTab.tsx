@@ -15,18 +15,18 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   CalendarClock, Check, CheckCircle2, ChevronDown, CreditCard, FileText, Globe,
-  Image as ImageIcon, Loader2, Mail, MessageSquare, MessageSquarePlus,
+  Loader2, Mail, MessageSquare, MessageSquarePlus,
   Navigation, PauseCircle, Phone, Receipt, Repeat, SkipForward, Star,
-  UserRound, XCircle,
+  UserRound, Wallet, XCircle,
 } from 'lucide-react'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
-import { ledgerRowType } from '@/lib/payments/analytics'
 import {
-  contactSentKey, contactUpdateMessage, daysAwayLabel, liveStatusOf, primaryPortalAction, visitToCalendarEvent, visitDay,
-  type Derived, type PortalJob, type PortalView, type SubmitRequestFn,
+  daysAwayLabel, invoiceDepositPaidNote, invoicePaymentNote, isUsableEmail, isUsablePhone,
+  liveStatusOf, primaryPortalAction, recentPayments, visitToCalendarEvent, visitDay,
+  type AddContactResult, type ContactGap, type Derived, type PortalJob, type PortalView, type SubmitRequestFn,
 } from '../model'
 import { AddToCalendar, PortalSection, StatusPill, StatusStepper, Thumb, type TabProps } from './shared'
 
@@ -56,7 +56,9 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
 
   const last = derived.lastCompleted
   const lastPhotos = last ? (view.photosByJob.get(last.id) || []).slice(0, 3) : []
-  const events = useRecentActivity(view)
+  // Money that has moved lately — the one row class the old activity feed carried
+  // that Home could not say any other way. Pure + verify-pinned in ../model.
+  const payments = useMemo(() => recentPayments(view.data.payments, todayISO), [view.data.payments, todayISO])
 
   // THE ranked next action — the one engine that knows overdue beats balance-due beats
   // quote-awaiting. It already powers the cross-tab banner; Home ignored it and always
@@ -65,11 +67,27 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
   // disagree about what matters most.
   const topAction = primaryPortalAction(view.docItems, view.money)
   const payFirst = topAction?.kind === 'pay'
+  // The ranked engine put the SCHEDULING DEPOSIT first — an approved quote whose
+  // booking isn't secured yet. One card, one figure (the gate's outstanding — the
+  // same number the charge route will ask for), one action.
+  const depositDoc = topAction?.kind === 'pay-deposit' && topAction.focusDocId
+    ? view.docItems.find(d => d.rawId === topAction.focusDocId) || null
+    : null
+  const depositGate = depositDoc?.schedulingDeposit ?? null
   // When the ranked action names exactly ONE document, the real button belongs HERE.
   // This is the surface a texted link lands on; making someone tap through to a list
   // to find the thing they came to do is a tap we can spend for them. Several
   // documents keeps the signpost — we can't guess which one they meant.
-  const oneQuoteId = topAction?.kind === 'approve' ? topAction.focusDocId : null
+  // ⛔ …but NOT when that one quote offers alternatives. Approving it takes a
+  // choice, and there is nowhere on this card to read three scopes and compare
+  // them — a one-tap Approve here would either commit the customer to a price
+  // they never picked or (correctly) be refused by the RPC and read as a broken
+  // button. The signpost above still carries them to Billing, where the
+  // comparison lives; that tap buys the decision they're being asked to make.
+  const oneQuoteDoc = topAction?.kind === 'approve' && topAction.focusDocId
+    ? view.docItems.find(d => d.rawId === topAction.focusDocId) || null
+    : null
+  const oneQuoteId = oneQuoteDoc && !(oneQuoteDoc.options?.length) ? oneQuoteDoc.rawId : null
   const oneInvoice = topAction?.kind === 'pay' && topAction.focusDocId
     ? view.docItems.find(d => d.rawId === topAction.focusDocId) || null
     : null
@@ -79,6 +97,18 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
   // Hidden while a completed checkout is still confirming — see BillingTab's note:
   // the balance shown is pre-payment, and a second tap is a second real charge.
   const canPayInline = !!oneInvoice && actions.paymentsEnabled && !actions.paymentPending && oneInvoice.balance > 0
+
+  // Money already received on the ONE invoice being asked about, in the words the
+  // Billing row already uses. Null when nothing has been paid yet (a plain bill is
+  // its own explanation) or when several invoices make up the figure.
+  const paidContext = (() => {
+    if (!oneInvoice) return null
+    const depPaid = invoiceDepositPaidNote(oneInvoice)
+    if (depPaid) return `Deposit of ${depPaid.paid} received — this is the rest of ${formatCurrency(oneInvoice.amount)}`
+    const note = invoicePaymentNote(oneInvoice)
+    if (note) return `${note.paid} already paid of ${formatCurrency(oneInvoice.amount)} — this is what’s left`
+    return null
+  })()
 
   // "Outstanding" is collections vocabulary — it lands like an accusation on the one
   // banner someone reads when they're already tense about money.
@@ -109,9 +139,20 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
                   <p className="text-sm font-semibold text-ink">
                     Amount due · <span className="tabular-nums text-amber-400">{formatCurrency(view.money.due)}</span>
                   </p>
-                  <p className="text-xs text-ink-muted">
-                    {view.money.owingCount === 1 ? '1 invoice' : `${view.money.owingCount} invoices`} — view and pay whenever you&rsquo;re ready
-                  </p>
+                  {/* What that figure is the REST OF. A customer who has already part-paid
+                      met their own payment twice on one screen with nothing linking them:
+                      "Amount due · $347.50" here, and "Payment received · Card · $347.50"
+                      in the activity feed a screen below — the same number, once as a debt
+                      and once as a receipt, which reads as the payment not having landed.
+                      Billing's row has always said it properly; this is the same sentence
+                      from the same verify-pinned helpers (invoiceDepositPaidNote /
+                      invoicePaymentNote — the engine's figures, no arithmetic here), said
+                      on the surface a texted link actually opens. Only when ONE invoice is
+                      named: with several, no single breakdown can speak for the sum. */}
+                  <p className="text-xs text-ink-muted">{paidContext ?? (
+                    view.money.owingCount === 1 ? '1 invoice — view and pay whenever you’re ready'
+                      : `${view.money.owingCount} invoices — view and pay whenever you’re ready`
+                  )}</p>
                 </>
               )}
             </div>
@@ -138,6 +179,40 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
           ranked order above; each card keeps its whole-surface tap AND, when it names
           one document, carries the real action so the decision happens right here. */}
       {payFirst && dueBanner}
+      {/* The scheduling deposit — the one thing between an approved quote and a
+          confirmed booking. States stay separate on the card itself: APPROVED is
+          said as done, the DEPOSIT is asked for, and nothing claims a schedule. */}
+      {depositDoc && depositGate && (
+        <div className="rounded-card border border-amber-500/30 bg-amber-500/[0.06] card-lift animate-rise stagger-2">
+          <button type="button" onClick={() => actions.navigate('billing', { docsCat: 'quote', focusDocId: depositDoc.rawId })}
+            className="w-full text-left p-4 rounded-card hover:border-amber-500/50 active:scale-[0.99] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0"><Wallet className="w-4 h-4" /></div>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-ink">
+                    Deposit to secure scheduling · <span className="tabular-nums text-amber-400">{formatCurrency(depositGate.outstanding)}</span>
+                  </p>
+                  <p className="text-xs text-ink-muted">
+                    {depositGate.collected > 0
+                      ? `${formatCurrency(depositGate.collected)} of ${formatCurrency(depositGate.required)} received — your quote is approved`
+                      : 'Your quote is approved — your timing is confirmed once the deposit is received'}
+                  </p>
+                </div>
+              </div>
+              <span className="text-xs font-semibold text-amber-400 shrink-0">View →</span>
+            </div>
+          </button>
+          {actions.paymentsEnabled && !actions.paymentPending && (
+            <div className="px-4 pb-4">
+              <Button className="w-full" onClick={() => actions.payQuoteDeposit(depositDoc.rawId)} loading={actions.payingQuoteId === depositDoc.rawId}>
+                <CreditCard className="w-4 h-4" /> Pay {formatCurrency(depositGate.outstanding)} deposit
+              </Button>
+              <p className="text-[11px] text-ink-faint mt-1.5 text-center">Secure checkout by Stripe — you&rsquo;ll confirm on the next screen.</p>
+            </div>
+          )}
+        </div>
+      )}
       {awaiting.length > 0 && (
         <div className="rounded-card border border-amber-500/30 bg-amber-500/10 card-lift animate-rise stagger-2">
           <button type="button" onClick={() => actions.navigate('billing', { docsCat: 'quote' })}
@@ -146,13 +221,24 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-9 h-9 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0"><FileText className="w-4 h-4" /></div>
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-ink truncate">
+                  {/* No `truncate`: this is the single sentence the whole card exists to
+                      say, and on a 390px phone it clipped to "3 quotes are ready for your
+                      re…". A headline that runs to two lines costs one line; a headline
+                      that stops mid-word costs the message. */}
+                  <p className="text-sm font-semibold text-ink">
                     {awaiting.length === 1
                       ? (awaiting[0].title !== 'Quote' ? `Your ${awaiting[0].title} quote is ready` : 'Your quote is ready')
                       : `${awaiting.length} quotes are ready for your review`}
                   </p>
                   <p className="text-xs text-ink-muted">
-                    {awaiting.length === 1 ? `${formatCurrency(awaiting[0].amount)} — review and approve when you're ready` : `Review and approve when you're ready`}
+                    {awaiting.length === 1
+                      // A quote with an unmade choice has no single price yet, so
+                      // this line says what there IS to do instead of asserting
+                      // the recommended option as the figure.
+                      ? (awaiting[0].options?.length
+                        ? `${awaiting[0].options.length} options — pick one and approve it`
+                        : `${formatCurrency(awaiting[0].amount)} — review and approve when you're ready`)
+                      : `Review and approve when you're ready`}
                   </p>
                   {/* The quote's OWN expiry, or nothing. This used to print issue-date +
                       30 days as fact — inventing a deadline for the 2 in 3 live quotes
@@ -232,10 +318,19 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
             {/* This is the screen someone stares at for days after saying yes. "Will contact
                 you shortly" gives them nothing to do but wonder — tell them where the answer
                 will land and that reaching out is welcome. */}
-            <p className="text-sm text-ink-muted mt-1">
-              We&rsquo;re arranging your first visit. The date will appear here as soon as it&rsquo;s booked
-              {biz && (biz.phone || biz.email_primary) ? ' — and you can call or email us any time using the card above.' : '.'}
-            </p>
+            {/* When a scheduling deposit is still owed, "we're arranging your
+                visit" is untrue — the ball is in the customer's court, and the
+                card above holds the action. Say which state they're actually in. */}
+            {depositGate ? (
+              <p className="text-sm text-ink-muted mt-1">
+                The {formatCurrency(depositGate.outstanding)} deposit above secures your booking — once it&rsquo;s received, we&rsquo;ll confirm your date and it will appear here.
+              </p>
+            ) : (
+              <p className="text-sm text-ink-muted mt-1">
+                We&rsquo;re arranging your first visit. The date will appear here as soon as it&rsquo;s booked
+                {biz && (biz.phone || biz.email_primary) ? ' — and you can call or email us any time using the card above.' : '.'}
+              </p>
+            )}
           </div>
         ) : (
           <div>
@@ -290,20 +385,12 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
                 <PlanRow p={p} heroDate={next?.scheduled_date ?? null} />
                 {/* The way out, on the plan itself. These SEND A REQUEST the owner
                     confirms — the plan doesn't change until a human says so, and the
-                    copy says exactly that. Free-text "send us a message" stays below
-                    for everything these don't cover. */}
-                <PlanActions plan={p} businessName={biz?.company_name || null} submitRequest={actions.submitRequest} />
+                    copy says exactly that. */}
+                <PlanActions plan={p} businessName={biz?.company_name || null} submitRequest={actions.submitRequest}
+                  phone={biz?.phone || null} onMessage={() => actions.navigate('messages')} />
               </div>
             ))}
           </div>
-          {/* An ongoing arrangement with no visible way out is what makes people feel
-              trapped — the buttons above are that way out. This line covers the asks
-              that aren't a button (change frequency, different day of week, …). */}
-          <p className="text-xs text-ink-muted mt-2.5 pt-2.5 border-t border-border/60">
-            Anything else about your plan?{' '}
-            <button type="button" onClick={() => actions.navigate('messages')} className="text-accent-text font-medium hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">Send us a message</button>
-            {biz?.phone ? <> or call <a href={`tel:${biz.phone}`} className="text-accent-text font-medium hover:underline">{biz.phone}</a>.</> : '.'}
-          </p>
         </div>
       )}
 
@@ -319,19 +406,37 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
           but it belongs with the reassurance, after the answers. */}
       <TrustCard view={view} />
 
-      {/* 6 · Recent activity — the old Timeline tab, compacted to its last 5 rows */}
-      {events.length > 0 && (
+      {/* 6 · Recent payments — money that has MOVED lately, and nothing else.
+          What this replaced, and why, is documented on model.recentPayments: the
+          general activity feed was a chronological copy of Billing that spent two
+          of its five rows restating a single transaction. This keeps the one row
+          class Home could not otherwise say — an e-transfer or cash payment is
+          recorded by the owner hours later, long after any checkout banner — and
+          absent when nothing has moved inside the window. The amount and date sit
+          on their own line so neither can be truncated (real rows once clipped to
+          "Payment received · E-transfer · $7…"). */}
+      {payments.length > 0 && (
         <div className="animate-rise stagger-6">
-          <PortalSection title="Recent activity">
+          <PortalSection title="Recent payments"
+            action={
+              <button type="button" onClick={() => actions.navigate('billing')}
+                className="text-xs font-semibold text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                Receipts &amp; history →
+              </button>
+            }>
             <div className="rounded-card border border-border bg-bg-secondary divide-y divide-border/60">
-              {events.map(e => (
-                <div key={e.id} className="flex items-center gap-2.5 px-3.5 py-2.5">
-                  <span className={cn('w-6 h-6 rounded-full border flex items-center justify-center shrink-0', e.tone)}><e.icon className="w-3 h-3" /></span>
-                  <p className="text-sm text-ink min-w-0 flex-1 truncate">
-                    {e.title}
-                    {e.sub && <span className="text-xs text-ink-muted"> · {e.sub}</span>}
-                  </p>
-                  <span className="text-[11px] text-ink-faint shrink-0">{formatDate(e.at)}</span>
+              {payments.map(p => (
+                <div key={p.id} className="flex items-start gap-2.5 px-3.5 py-2.5">
+                  <span className={cn('w-6 h-6 rounded-full border flex items-center justify-center shrink-0 mt-0.5',
+                    p.isRefund ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>
+                    <CreditCard className="w-3 h-3" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-ink truncate">{p.label}</p>
+                    <p className="text-xs text-ink-faint tabular-nums">
+                      {formatCurrency(p.amount)} · {formatDate(p.at)}
+                    </p>
+                  </div>
                 </div>
               ))}
             </div>
@@ -366,9 +471,13 @@ function TrustCard({ view }: { view: PortalView }) {
       </div>
       {(biz.phone || biz.email_primary || biz.website) && (
         <div className="flex flex-wrap gap-2 mt-3">
-          {biz.phone && <a href={`tel:${biz.phone}`} className="flex-1 min-w-[100px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-tertiary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Phone className="w-4 h-4 text-accent-text" /> Call</a>}
-          {biz.email_primary && <a href={`mailto:${biz.email_primary}`} className="flex-1 min-w-[100px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-tertiary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Mail className="w-4 h-4 text-accent-text" /> Email</a>}
-          {biz.website && <a href={biz.website.startsWith('http') ? biz.website : `https://${biz.website}`} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-[100px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-tertiary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Globe className="w-4 h-4 text-accent-text" /> Website</a>}
+          {/* `tap-target-y` (the codebase's pointer-coarse 44px floor): measured at
+              42px on a phone, so the three ways to reach a human were the only real
+              buttons on Home under the gloved-thumb minimum. Two pixels, but this is
+              the card that exists to be tapped by someone who wants a person. */}
+          {biz.phone && <a href={`tel:${biz.phone}`} className="tap-target-y flex-1 min-w-[100px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-tertiary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Phone className="w-4 h-4 text-accent-text" /> Call</a>}
+          {biz.email_primary && <a href={`mailto:${biz.email_primary}`} className="tap-target-y flex-1 min-w-[100px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-tertiary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Mail className="w-4 h-4 text-accent-text" /> Email</a>}
+          {biz.website && <a href={biz.website.startsWith('http') ? biz.website : `https://${biz.website}`} target="_blank" rel="noopener noreferrer" className="tap-target-y flex-1 min-w-[100px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-tertiary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Globe className="w-4 h-4 text-accent-text" /> Website</a>}
         </div>
       )}
     </div>
@@ -499,8 +608,22 @@ function RescheduleRequest({ job, todayISO, submitRequest }: { job: PortalJob; t
 }
 
 // ── Plan actions (skip next / pause / cancel — all requests, never mutations) ──
-function PlanActions({ plan, businessName, submitRequest }: {
+// BEHIND A DISCLOSURE, and that is the whole change here. The three buttons were
+// permanent, and on the home screen of a customer whose plan is running perfectly
+// the reddest, most eye-catching control on the page was "Cancel plan" — an exit
+// offered before anything had gone wrong. They also crowded out the answer people
+// actually come for: on a real portal the plan card carried five tap targets
+// (three of them here) directly under "Next visit Aug 14".
+//
+// They are NOT deleted. An ongoing arrangement with no visible way out is what
+// makes people feel trapped, and that reasoning still holds — the way out is one
+// tap away, named plainly, instead of standing open. The free-text line that used
+// to sit outside this card (covering the asks that aren't a button — change
+// frequency, a different weekday) moves inside it, so the default view of a
+// healthy plan is the plan, and nothing else.
+function PlanActions({ plan, businessName, submitRequest, phone, onMessage }: {
   plan: Derived['plans'][number]; businessName: string | null; submitRequest: SubmitRequestFn
+  phone?: string | null; onMessage?: () => void
 }) {
   const [busy, setBusy] = useState<string | null>(null)
   const [sent, setSent] = useState<string | null>(null)
@@ -541,142 +664,35 @@ function PlanActions({ plan, businessName, submitRequest }: {
   )
   const btn = 'inline-flex items-center gap-1 text-xs font-medium rounded-lg border border-border bg-bg-tertiary px-2.5 py-1.5 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50'
   return (
-    <div className="flex flex-wrap gap-1.5 mt-2 pl-[22px]">
-      {plan.nextVisitDate && plan.nextJobId && (
-        <button type="button" disabled={busy !== null} onClick={() => act('skip_next')} className={cn(btn, 'text-ink-muted hover:text-ink hover:border-border-strong')}>
-          {busy === 'skip_next' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <SkipForward className="w-3.5 h-3.5" />} Skip next visit
+    <details className="group mt-1.5 pl-[22px]">
+      <summary className="tap-target-y list-none cursor-pointer inline-flex items-center gap-1 text-xs font-medium text-ink-muted hover:text-ink rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+        Change or pause this plan
+        <ChevronDown className="w-3.5 h-3.5 transition-transform group-open:rotate-180" aria-hidden="true" />
+      </summary>
+      <div className="flex flex-wrap gap-1.5 mt-2">
+        {plan.nextVisitDate && plan.nextJobId && (
+          <button type="button" disabled={busy !== null} onClick={() => act('skip_next')} className={cn(btn, 'text-ink-muted hover:text-ink hover:border-border-strong')}>
+            {busy === 'skip_next' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <SkipForward className="w-3.5 h-3.5" />} Skip next visit
+          </button>
+        )}
+        <button type="button" disabled={busy !== null} onClick={() => act('pause')} className={cn(btn, 'text-ink-muted hover:text-ink hover:border-border-strong')}>
+          {busy === 'pause' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <PauseCircle className="w-3.5 h-3.5" />} Pause plan
         </button>
+        <button type="button" disabled={busy !== null} onClick={() => act('cancel')} className={cn(btn, 'text-red-400/70 hover:text-red-400 hover:border-red-500/30')}>
+          {busy === 'cancel' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />} Cancel plan
+        </button>
+      </div>
+      {/* Everything the three buttons don't cover — a different weekday, a change of
+          frequency — kept with them rather than standing permanently outside the card. */}
+      {onMessage && (
+        <p className="text-xs text-ink-muted mt-2">
+          Something else?{' '}
+          <button type="button" onClick={onMessage} className="text-accent-text font-medium hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">Send us a message</button>
+          {phone ? <> or call <a href={`tel:${phone}`} className="text-accent-text font-medium hover:underline">{phone}</a>.</> : '.'}
+        </p>
       )}
-      <button type="button" disabled={busy !== null} onClick={() => act('pause')} className={cn(btn, 'text-ink-muted hover:text-ink hover:border-border-strong')}>
-        {busy === 'pause' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <PauseCircle className="w-3.5 h-3.5" />} Pause plan
-      </button>
-      <button type="button" disabled={busy !== null} onClick={() => act('cancel')} className={cn(btn, 'text-red-400/70 hover:text-red-400 hover:border-red-500/30')}>
-        {busy === 'cancel' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />} Cancel plan
-      </button>
-    </div>
+    </details>
   )
-}
-
-// ── 6 · Recent activity (the old Timeline tab, absorbed and capped at 5) ────
-interface TLEvent { id: string; at: string; icon: typeof FileText; tone: string; title: string; sub: string | null }
-
-function paymentMethodLabel(provider: string): string {
-  switch (provider) {
-    case 'stripe': return 'Card'
-    case 'etransfer': return 'E-transfer'
-    case 'cash': return 'Cash'
-    default: return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : 'Payment'
-  }
-}
-
-// Recent activity is HISTORY — what has already happened. Anything still waiting
-// on the customer is the attention area's job, at the top of the page, with the
-// real button on it.
-//
-// They overlapped: a quote awaiting approval appeared as "Quote EPS-2026-0134
-// sent · Awaiting your approval" here AND as "3 quotes are ready for your review"
-// above, and an unpaid invoice appeared as "Invoice INV-0065 issued · Due" AND as
-// "Amount due · $347.50". On the 3-quote prospect the ENTIRE feed was the same
-// three quotes the card above already summarised — a second, weaker copy of the
-// call to action, phrased as a past event.
-//
-// Suppressing them costs no access: both are one tap away through the attention
-// card itself (it navigates to Billing, pre-filtered) and through the Billing
-// tab, which lists every document with its live status.
-function useRecentActivity(view: PortalView): TLEvent[] {
-  return useMemo<TLEvent[]>(() => {
-    const { data, photosByJob, docItems } = view
-    const ev: TLEvent[] = []
-    // The exact sets the attention area is showing. `awaiting` mirrors HomeTab's
-    // own filter (docItems, kind quote, display status 'sent'); the due set is
-    // only suppressed when the banner is actually rendered (money.due > 0), so a
-    // document nothing is currently asking about stays in the history.
-    const awaitingQuoteIds = new Set(
-      docItems.filter(d => d.kind === 'quote' && d.status === 'sent').map(d => d.rawId),
-    )
-    const dueInvoiceIds = new Set(
-      view.money.due > 0
-        ? docItems.filter(d => d.kind === 'invoice' && d.balance > 0
-            && d.status !== 'paid' && d.status !== 'overpaid' && d.status !== 'cancelled').map(d => d.id)
-        : [],
-    )
-    // Quote events read the DISPLAY status + GST-true totals off DocItem — the
-    // exact figures the documents rows show — so this feed can never disagree
-    // with the row it summarizes and never runs a second status/money engine.
-    const quoteStatusByRaw = new Map(docItems.filter(d => d.kind === 'quote').map(d => [d.rawId, d.status]))
-    // This event is stamped at the date the quote was SENT, so that's what its title has
-    // to say. "Quote Q-123 accepted" dated the day it went out is a small lie the eye
-    // doesn't catch — the customer approved it days later. The outcome belongs in the
-    // subtitle, where it reads as current state rather than as something that happened
-    // at this point on the line. Tone follows the same rule: amber means "this still
-    // wants you", so a declined or lapsed quote must not wear it.
-    for (const q of data.quotes) {
-      // Still waiting on them → it's the attention card's, not history's.
-      if (awaitingQuoteIds.has(q.id)) continue
-      const st = quoteStatusByRaw.get(q.id) ?? q.status
-      const outcome = st === 'accepted' ? 'Approved'
-        : st === 'declined' ? 'Declined'
-        : st === 'expired' ? 'Expired'
-        : st === 'sent' ? 'Awaiting your approval'
-        : null
-      ev.push({
-        id: 'q' + q.id, at: q.issued_date || q.created_at, icon: FileText,
-        tone: st === 'accepted' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
-          : st === 'sent' ? 'text-amber-400 border-amber-500/30 bg-amber-500/10'
-          : 'text-ink-muted border-border bg-bg-tertiary',
-        title: `Quote ${q.quote_number} sent`,
-        sub: [q.service_type || null, outcome].filter(Boolean).join(' · ') || null,
-      })
-    }
-    for (const j of data.jobs) {
-      if (j.completed_at || j.status === 'completed') { ev.push({ id: 'jc' + j.id, at: j.completed_at || j.scheduled_date, icon: CheckCircle2, tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', title: `${j.service_type || j.title} completed`, sub: null }); continue }
-      // A visit that hasn't happened yet is not recent ACTIVITY. The next-service
-      // hero states it in large type at the top of this very page, and the Visits
-      // tab lists every upcoming one — so "Weed Removal scheduled · Aug 11, 2026"
-      // down here was the third telling, and the second on one screen.
-      // A past date that never completed is different: that IS history (a visit
-      // that came and went), so it stays.
-      if (j.scheduled_date > view.todayISO) continue
-      ev.push({ id: 'js' + j.id, at: j.scheduled_date, icon: CalendarClock, tone: 'text-sky-400 border-sky-500/30 bg-sky-500/10', title: `${j.service_type || j.title} scheduled`, sub: null })
-    }
-    // Draft invoices are the owner's unfinished work and are filtered out of the
-    // customer's documents list (buildDocItems does it) — iterating DocItems means
-    // they cannot leak onto this feed either, and `amount` is already the
-    // discounted+GST total those rows display.
-    for (const d of docItems.filter(d => d.kind === 'invoice')) {
-      // Currently being asked for → the amount-due banner owns it.
-      if (dueInvoiceIds.has(d.id)) continue
-      const settled = d.status === 'paid' || d.status === 'overpaid'
-      ev.push({
-        id: d.id, at: d.date, icon: Receipt,
-        tone: 'text-ink-muted border-border bg-bg-tertiary',
-        title: `Invoice ${d.number} issued`,
-        // The amount alone left the customer to cross-reference whether they'd paid it.
-        sub: `${formatCurrency(d.amount)}${settled ? ' · Paid' : d.status === 'cancelled' ? ' · Cancelled' : ' · Due'}`,
-      })
-    }
-    // Classify by the ONE ledger classifier, never the sign of the amount: a $200
-    // refund and a $200 overpayment MOVED to credit are both negative, but only the
-    // first is a refund — the second is money the customer keeps as credit. Sign
-    // alone read both as "Refund issued"; ledgerRowType tells them apart. (Credit-
-    // ledger rows are skipped — availableCredit already tells that story.)
-    for (const p of data.payments) {
-      if (p.kind === 'credit') continue
-      const rt = ledgerRowType(p)
-      const isRefund = rt === 'Refund'
-      ev.push({
-        id: 'p' + p.id, at: p.paid_at || p.created_at, icon: CreditCard,
-        tone: isRefund ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
-        title: isRefund ? 'Refund issued'
-          : rt === 'Overpayment to credit' ? 'Overpayment moved to credit'
-          : rt === 'Settled from credit' ? 'Settled from account credit'
-          : `Payment received · ${paymentMethodLabel(p.provider)}`,
-        sub: formatCurrency(Math.abs(Number(p.amount))),
-      })
-    }
-    for (const [jid, ps] of photosByJob) { if (jid !== 'none' && ps.length) ev.push({ id: 'ph' + jid, at: ps[0]?.taken_at || '', icon: ImageIcon, tone: 'text-violet-400 border-violet-500/30 bg-violet-500/10', title: `${ps.length} photo${ps.length === 1 ? '' : 's'} added`, sub: null }) }
-    return ev.filter(e => e.at).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 5)
-  }, [view])
 }
 
 // ── Review ask (only after a completed visit, hidden once they've reviewed) ──
@@ -794,58 +810,113 @@ function PrefRow({ label, icon: Icon, on, onChange }: { label: string; icon: typ
   )
 }
 
-// ── Missing contact method (PortalClient mounts it on Home — model.needsContactMethod) ──
-// The one thing the portal ASKS a first-time customer for. With neither a phone
-// nor an email on file the owner cannot confirm a visit date or send the invoice
-// for the work — the relationship dead-ends the moment either side needs the
-// other. Submitting is a REQUEST like every portal action (portal_request_service
-// → the owner's ONE Messages hub): the owner applies it to the file; the portal
-// never writes customer identity itself. sessionStorage (token-scoped) keeps the
-// thank-you up across tab switches; once the owner records a method,
-// needsContactMethod hides the card for good.
-export function ContactMethodCard({ token, businessName, onSubmit }: { token: string; businessName: string | null; onSubmit: (message: string) => Promise<boolean> }) {
+// ── Missing contact detail (PortalClient mounts it on Home — model.contactGap) ──
+// Asks for the detail the file is actually missing, and writes it. The previous
+// version fired only when BOTH were absent and could not write anything: it sent
+// the typed values to the owner as a service request for them to re-type. That
+// left the commonest gap in the book — a phone on file but no email — never
+// asked, and made the owner do the work anyway.
+//
+// It stays a PROMPT, not a gate. Nothing here blocks viewing a quote, approving
+// work, paying an invoice or checking a visit; it sits under those, it can be
+// ignored forever, and it disappears the moment the row says the gap is closed.
+// Closed as one card even when both are missing: two amber warnings competing
+// over one problem is how a helpful ask starts reading like an error.
+const FIELD_HELP: Record<Exclude<ContactGap, 'none'>, { title: string; why: string }> = {
+  // Named after the value to the CUSTOMER, not to the business's database.
+  phone: { title: 'Add your phone number', why: 'so we can reach you about your visit' },
+  email: { title: 'Add your email', why: 'so your quotes, invoices and portal link can be sent to you' },
+  both: { title: 'Complete your contact info', why: 'so we can reach you and send your paperwork' },
+}
+
+export function ContactMethodCard({ gap, businessName, onSave }: {
+  gap: Exclude<ContactGap, 'none'>
+  businessName: string | null
+  onSave: (phone: string, email: string) => Promise<AddContactResult>
+}) {
   const [phone, setPhone] = useState('')
   const [email, setEmail] = useState('')
   const [busy, setBusy] = useState(false)
-  const [sent, setSent] = useState<boolean>(() => {
-    try { return typeof window !== 'undefined' && window.sessionStorage.getItem(contactSentKey(token)) === '1' } catch { return false }
-  })
-  const message = contactUpdateMessage(phone, email)
+  const [error, setError] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
 
-  if (sent) return (
+  const wantPhone = gap === 'phone' || gap === 'both'
+  const wantEmail = gap === 'email' || gap === 'both'
+  const who = businessName || 'your service provider'
+  // "both" is satisfied by EITHER — one way to reach someone is the win; demanding
+  // the second is how a helpful ask becomes a form.
+  const filled = (wantPhone && phone.trim() !== '') || (wantEmail && email.trim() !== '')
+
+  // The reasons the RPC can return, said in the customer's terms. `already_on_file`
+  // and `phone_taken` are the two that are not the customer's fault and not
+  // retryable by typing harder, so both hand off to the business.
+  function explain(r: AddContactResult): string {
+    switch (r.reason) {
+      case 'bad_phone': return 'That doesn’t look like a complete phone number — please include the area code.'
+      case 'bad_email': return 'That doesn’t look like a valid email address — please check it.'
+      case 'phone_taken': return `That number is already on file for someone else with ${who}. Send them a message below and they’ll sort it out.`
+      case 'email_taken': return `That email is already on file for someone else with ${who}. Send them a message below and they’ll sort it out.`
+      case 'already_on_file': return 'Your file was just updated elsewhere — refresh to see what’s on it now.'
+      case 'nothing_to_add': return 'Enter a phone number or an email address first.'
+      case 'invalid_token': return 'This link is no longer valid, so we couldn’t save that.'
+      default: return 'We couldn’t save that just now — your details are still here, please try again.'
+    }
+  }
+
+  if (saved) return (
     <div className="rounded-card border border-emerald-500/30 bg-emerald-500/[0.06] p-4 mt-3">
-      <p className="text-sm font-semibold text-emerald-400 flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4" /> Contact details sent</p>
-      <p className="text-xs text-ink-muted mt-0.5">{businessName || 'We'}&rsquo;ll add them to your file so you get visit confirmations and invoices.</p>
+      <p className="text-sm font-semibold text-emerald-400 flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4" /> Thanks — that’s on your file</p>
+      <p className="text-xs text-ink-muted mt-0.5">{who} can reach you here from now on.</p>
     </div>
   )
+
+  const help = FIELD_HELP[gap]
   return (
-    <div className="rounded-card border border-amber-400/30 bg-amber-400/[0.06] p-4 mt-3">
-      <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><Phone className="w-4 h-4 text-amber-400" /> How can we reach you?</p>
-      <p className="text-xs text-ink-muted mt-0.5 mb-3">
-        {businessName || 'Your service provider'} has no phone number or email on file for you — so there&rsquo;s no way to confirm a visit date or send your invoice. Add at least one:
+    // Neutral, not amber. This is a helpful ask about a detail we don't have, and
+    // an alert colour would rank it against the customer's actual quote or invoice.
+    <div className="rounded-card border border-border bg-bg-secondary p-4 mt-3">
+      <p className="text-sm font-semibold text-ink flex items-center gap-1.5">
+        {gap === 'email' ? <Mail className="w-4 h-4 text-accent-text" /> : <Phone className="w-4 h-4 text-accent-text" />}
+        {help.title}
       </p>
+      <p className="text-xs text-ink-muted mt-0.5 mb-3">Keep your details up to date {help.why}.</p>
       <form className="space-y-2" onSubmit={async e => {
         e.preventDefault()
-        if (!message || busy) return
-        setBusy(true)
-        const ok = await onSubmit(message)   // failure → PortalClient's actionError explains; the form stays for retry
+        if (!filled || busy) return
+        // Local mirror of the RPC's own rules — an obvious typo shouldn't cost a
+        // round-trip. The server re-checks and remains the authority.
+        if (wantPhone && phone.trim() && !isUsablePhone(phone)) { setError(explain({ ok: false, reason: 'bad_phone' })); return }
+        if (wantEmail && email.trim() && !isUsableEmail(email)) { setError(explain({ ok: false, reason: 'bad_email' })); return }
+        setBusy(true); setError(null)
+        const res = await onSave(phone.trim(), email.trim())
         setBusy(false)
-        if (ok) {
-          setSent(true)
-          try { window.sessionStorage.setItem(contactSentKey(token), '1') } catch { /* storage-blocked → thank-you lasts this render only */ }
-        }
+        // Success is what the ROW says, never that the call returned: the RPC reads
+        // the customer back after its write and reports that. A failure keeps the
+        // form, keeps every character typed, and says what happened.
+        if (res.ok && (res.added?.length ?? 0) > 0) setSaved(true)
+        else setError(explain(res))
       }}>
-        <input type="tel" inputMode="tel" autoComplete="tel" value={phone} onChange={e => setPhone(e.target.value)}
-          placeholder="Phone — (403) 555-0100" aria-label="Phone number"
-          className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
-        <input type="email" inputMode="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)}
-          placeholder="Email — jane@example.com" aria-label="Email address"
-          className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
-        <Button type="submit" className="w-full" loading={busy} disabled={!message}>
-          Send to {businessName || 'us'}
-        </Button>
+        {wantPhone && (
+          <input type="tel" inputMode="tel" autoComplete="tel" value={phone} onChange={e => { setPhone(e.target.value); setError(null) }}
+            placeholder="(403) 555-0100" aria-label="Phone number"
+            // text-base below the sm breakpoint: iOS zooms the whole page in on any
+            // focused input under 16px, and it does not zoom back out.
+            className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
+        )}
+        {wantEmail && (
+          <input type="email" inputMode="email" autoComplete="email" value={email} onChange={e => { setEmail(e.target.value); setError(null) }}
+            placeholder="jane@example.com" aria-label="Email address"
+            className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
+        )}
+        {error && <p className="text-xs text-red-400" role="alert">{error}</p>}
+        <Button type="submit" className="w-full" loading={busy} disabled={!filled}>Save</Button>
       </form>
-      <p className="text-[10px] text-ink-faint mt-2">Goes straight to {businessName || 'the business'} — they&rsquo;ll add it to your file. Nothing else is shared.</p>
+      {/* Says exactly what the write does. Adding a number is not agreeing to be
+          texted — portal_add_contact touches neither opt-in column — and the
+          Message preferences card below this one is where that actually changes. */}
+      <p className="text-[10px] text-ink-faint mt-2">
+        Only {who} sees this. It doesn’t change your message preferences.
+      </p>
     </div>
   )
 }

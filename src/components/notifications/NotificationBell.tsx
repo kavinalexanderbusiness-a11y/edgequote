@@ -287,7 +287,7 @@ export function NotificationBell() {
           return (
             <div key={n.id} role="button" tabIndex={0} onClick={() => openItem(n)}
               onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openItem(n) } }}
-              className={cn('w-full cursor-pointer text-left px-4 py-3 flex items-start gap-3 hover:bg-surface/40 transition-colors', !n.read && 'bg-accent/[0.04]')}>
+              className={cn('w-full cursor-pointer text-left px-4 py-3 flex items-start gap-3 hover:bg-surface-raised/40 transition-colors', !n.read && 'bg-accent/[0.04]')}>
               <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border', !n.read ? 'border-accent/30 bg-accent/10 text-accent-text' : 'border-border text-ink-muted')}>
                 <Icon className="w-4 h-4" />
               </div>
@@ -319,7 +319,7 @@ export function NotificationBell() {
   return (
     <div className="relative shrink-0">
       <button ref={btnRef} onClick={toggle} aria-label="Notifications" aria-haspopup="dialog" aria-expanded={open}
-        className="relative h-9 w-9 rounded-lg border border-border text-ink-muted hover:text-ink hover:bg-surface flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+        className="relative h-9 w-9 rounded-lg border border-border text-ink-muted hover:text-ink hover:bg-surface-raised flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
         <Bell className="w-4 h-4" />
         {unread > 0 && (
           <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-accent text-black text-[10px] font-bold flex items-center justify-center">

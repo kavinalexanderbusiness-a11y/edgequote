@@ -21,9 +21,17 @@ export function WinLossPanel() {
   const [loading, setLoading] = useState(true)
   const [savingId, setSavingId] = useState<string | null>(null)
 
+  // null from the loader now means the quotes read FAILED, which is a different
+  // fact from "no quotes decided yet" — and the two used to render identically
+  // (the panel simply vanished).
+  const [failed, setFailed] = useState(false)
+
   async function load() {
     setLoading(true)
-    try { setData(await loadWinLoss(supabase)) } finally { setLoading(false) }
+    try {
+      const next = await loadWinLoss(supabase)
+      if (next === null) { setFailed(true) } else { setData(next); setFailed(false) }
+    } finally { setLoading(false) }
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -53,6 +61,16 @@ export function WinLossPanel() {
           ))}
         </div>
       </div>
+    )
+  }
+  // A failed read says so in one line rather than disappearing — vanishing reads
+  // as "you have never quoted anyone", which on a blip is simply false.
+  if (failed) {
+    return (
+      <p className="text-xs text-amber-400 px-1">
+        Couldn’t load your quote results just now.{' '}
+        <button type="button" onClick={load} className="font-semibold underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">Try again</button>
+      </p>
     )
   }
   if (!data || data.stats.decided === 0) return null // nothing decided yet → don't take space

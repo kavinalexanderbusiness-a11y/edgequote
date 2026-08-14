@@ -24,5 +24,5 @@ export function Td({ className, children, ...props }: TdHTMLAttributes<HTMLTable
   )
 }
 
-// Canonical row hover for table bodies — matches ui/List's hover:bg-surface.
-export const tableRowHover = 'transition-colors hover:bg-surface'
+// Canonical row hover for table bodies — matches ui/List's hover:bg-surface-raised.
+export const tableRowHover = 'transition-colors hover:bg-surface-raised'

@@ -2,11 +2,12 @@
 import { toast } from '@/lib/toast'
 import { PageContainer } from '@/components/layout/PageContainer'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Property, BusinessSettings, Job, JobRecurrence } from '@/types'
+import { Property, BusinessSettings, Job, JobRecurrence, Invoice } from '@/types'
+import { invoiceBalance } from '@/lib/payments/ledger'
 import { buildServicePlans, ServicePlan } from '@/lib/recurrence'
 import { settingsToSeasons } from '@/lib/seasons'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -21,12 +22,13 @@ import { formatDate, formatCurrency, localTodayISO } from '@/lib/utils'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes, latestSavedRecommendation, recommendationIsStale, pricingConfidence } from '@/lib/pricing'
 import { resolvePrefs, prefSummary, type PrefSource } from '@/lib/preferences'
 import { computePropertyHealth } from '@/lib/propertyHealth'
+import { typicalDurationFrom, describeTypicalDuration, type TypicalDuration } from '@/lib/locationSummary'
 import { loadBusinessShape, SHAPE_LOADING, type BusinessShape } from '@/lib/businessShape'
 import { getPropertyContexts } from '@/lib/ai/propertyContext'
 import { LocatedJob, fetchLocatedUpcomingJobs, nearbyJobCount } from '@/lib/geo'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { listPhotosForProperties, type JobPhotoView } from '@/lib/photos'
-import { MapPin, Home, User, Ruler, History, RefreshCw, Trophy, DollarSign, CheckCircle2, Receipt, Timer, CalendarClock, AlertTriangle, Repeat, Camera, FileText, Clock, StickyNote, ShieldCheck, CalendarPlus, Lightbulb, Heart, SearchX } from 'lucide-react'
+import { ChevronRight, MapPin, Home, User, Ruler, History, RefreshCw, Trophy, DollarSign, CheckCircle2, Receipt, Timer, CalendarClock, AlertTriangle, Repeat, Camera, FileText, Clock, StickyNote, ShieldCheck, CalendarPlus, Lightbulb, Heart, SearchX } from 'lucide-react'
 
 // Quote statuses that count as a "won" price — the accepted-price memory.
 const QUOTE_WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
@@ -34,28 +36,33 @@ const QUOTE_WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
 // Per-property performance, aggregated from completed jobs + invoices. Reuses
 // existing data — no new tables, no new pricing math.
 interface PropPerf {
-  lifetimeRevenue: number   // sum of paid invoices for this property
+  collected: number         // money actually RECEIVED against this property's invoices
   completedVisits: number
-  avgInvoice: number        // avg paid invoice amount
-  avgActualMin: number | null
+  avgInvoice: number        // avg invoice TOTAL (tax + discount in), not avg receipt
+  // THE typical on-site time, through lib/locationSummary — a median over
+  // plausibly-timed visits, carrying the count of TIMED visits it was actually
+  // built from. Was a bare mean labelled "avg of {completedVisits}", which named
+  // a sample four times larger than the one behind the number.
+  typical: TypicalDuration | null
   lastActualMin: number | null  // actual minutes of the most recent timed completed visit
   lastServiceDate: string | null
 }
 type PerfJob = { property_id: string | null; status: string; scheduled_date: string; actual_minutes: number | null }
-type PerfInvoice = { property_id: string | null; amount: number | null; status: string }
+// The fields invoiceBalance needs — `amount` alone is the PRE-tax, PRE-discount
+// subtotal, so summing it is not what anybody was paid (see buildPerformance).
+type PerfInvoice = Pick<Invoice, 'amount' | 'amount_paid' | 'discount_type' | 'discount_value'> & { property_id: string | null; status: string }
 type InvoiceRow = { id: string; property_id: string | null; invoice_number: string; amount: number | null; status: string; issued_date: string | null; created_at: string }
 type QuoteRow = { id: string; property_id: string | null; quote_number: string; total: number | null; status: string; created_at: string }
 type LastQuote = { id: string; quote_number: string; total: number; status: string; date: string }
 type LastInvoice = { id: string; invoice_number: string; status: string; date: string }
 
-function buildPerformance(jobs: PerfJob[], invoices: PerfInvoice[]): Record<string, PropPerf> {
+function buildPerformance(jobs: PerfJob[], invoices: PerfInvoice[], settings: BusinessSettings | null): Record<string, PropPerf> {
   const out: Record<string, PropPerf> = {}
   const ensure = (id: string): PropPerf =>
-    (out[id] ||= { lifetimeRevenue: 0, completedVisits: 0, avgInvoice: 0, avgActualMin: null, lastActualMin: null, lastServiceDate: null })
+    (out[id] ||= { collected: 0, completedVisits: 0, avgInvoice: 0, typical: null, lastActualMin: null, lastServiceDate: null })
 
   // Completed visits + actual-time + last service from jobs.
-  const durSum: Record<string, number> = {}
-  const durCount: Record<string, number> = {}
+  const timedByProp: Record<string, PerfJob[]> = {}
   const lastActualDate: Record<string, string> = {} // newest timed visit per property
   for (const j of jobs) {
     if (!j.property_id || j.status !== 'completed') continue
@@ -63,29 +70,39 @@ function buildPerformance(jobs: PerfJob[], invoices: PerfInvoice[]): Record<stri
     p.completedVisits++
     if (!p.lastServiceDate || j.scheduled_date > p.lastServiceDate) p.lastServiceDate = j.scheduled_date
     if (Number(j.actual_minutes) > 0) {
-      durSum[j.property_id] = (durSum[j.property_id] || 0) + Number(j.actual_minutes)
-      durCount[j.property_id] = (durCount[j.property_id] || 0) + 1
+      ;(timedByProp[j.property_id] ||= []).push(j)
       if (!lastActualDate[j.property_id] || j.scheduled_date >= lastActualDate[j.property_id]) {
         lastActualDate[j.property_id] = j.scheduled_date
         p.lastActualMin = Number(j.actual_minutes)
       }
     }
   }
-  for (const id of Object.keys(durCount)) out[id].avgActualMin = Math.round(durSum[id] / durCount[id])
+  // ONE engine decides what a typical visit is and whether it may be claimed at
+  // all — including the plausibility bound this loop never had (production holds
+  // a 1-minute "General Landscaping" visit that a mean happily averaged in).
+  for (const [id, timed] of Object.entries(timedByProp)) out[id].typical = typicalDurationFrom(timed)
 
-  // Lifetime revenue + avg invoice from PAID invoices.
+  // Money, through the ONE ledger engine. This used to sum raw `invoices.amount`
+  // over `status === 'paid'` and call it "Lifetime revenue" — wrong three ways:
+  // `amount` is the PRE-tax, PRE-discount subtotal (invoiceBalance().total is the
+  // real figure), it ignored `amount_paid` so a part-paid property reported $0
+  // despite cash in hand, and it silently dropped 'partial'. It also ordered the
+  // whole list under "Highest value". Cancelled invoices are excluded explicitly:
+  // a cancelled invoice keeps its full balance, so it can never be inferred.
   const paidSum: Record<string, number> = {}
-  const paidCount: Record<string, number> = {}
+  const totalSum: Record<string, number> = {}
+  const invCount: Record<string, number> = {}
   for (const inv of invoices) {
-    if (!inv.property_id || inv.status !== 'paid') continue
-    const amt = Number(inv.amount) || 0
+    if (!inv.property_id || inv.status === 'cancelled' || inv.status === 'draft') continue
+    const { total, paid } = invoiceBalance(inv, settings)
     ensure(inv.property_id)
-    paidSum[inv.property_id] = (paidSum[inv.property_id] || 0) + amt
-    paidCount[inv.property_id] = (paidCount[inv.property_id] || 0) + 1
+    paidSum[inv.property_id] = (paidSum[inv.property_id] || 0) + paid
+    totalSum[inv.property_id] = (totalSum[inv.property_id] || 0) + total
+    invCount[inv.property_id] = (invCount[inv.property_id] || 0) + 1
   }
-  for (const id of Object.keys(paidSum)) {
-    out[id].lifetimeRevenue = Math.round(paidSum[id])
-    out[id].avgInvoice = Math.round(paidSum[id] / paidCount[id])
+  for (const id of Object.keys(invCount)) {
+    out[id].collected = Math.round(paidSum[id])
+    out[id].avgInvoice = Math.round(totalSum[id] / invCount[id])
   }
   return out
 }
@@ -96,6 +113,9 @@ export default function PropertiesPage() {
   const [query, setQuery] = useState('')
   const [sortBy, setSortBy] = useState<'attention' | 'recent' | 'value' | 'az'>('attention')
   const [loading, setLoading] = useState(true)
+  // A read that FAILED must never render as an empty book (see the load below).
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [partialError, setPartialError] = useState<string | null>(null)
   const [settings, setSettings] = useState<BusinessSettings | null>(null)
   const [locatedJobs, setLocatedJobs] = useState<LocatedJob[]>([])
   const [perfByProp, setPerfByProp] = useState<Record<string, PropPerf>>({})
@@ -134,7 +154,7 @@ export default function PropertiesPage() {
         supabase.from('business_settings').select('*').eq('user_id', user!.id).maybeSingle(),
         fetchLocatedUpcomingJobs(supabase, user!.id),
         supabase.from('jobs').select('property_id, status, scheduled_date, actual_minutes').eq('user_id', user!.id),
-        supabase.from('invoices').select('id, property_id, invoice_number, amount, status, issued_date, created_at').eq('user_id', user!.id),
+        supabase.from('invoices').select('id, property_id, invoice_number, amount, amount_paid, discount_type, discount_value, status, issued_date, created_at').eq('user_id', user!.id),
         // Recurring visits (full fields buildServicePlans needs) + their series.
         supabase.from('jobs').select('id, property_id, recurrence_id, service_type, scheduled_date, status').not('recurrence_id', 'is', null).eq('user_id', user!.id),
         supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
@@ -148,11 +168,19 @@ export default function PropertiesPage() {
         loadBusinessShape(supabase, user!.id).catch(() => SHAPE_LOADING),
       ])
       const settingsRow = sRes.data as BusinessSettings | null
+      // Supabase RESOLVES on failure: `data: null` and "you own no properties" are
+      // the same value unless the error is read. Without this branch a dropped
+      // request paints "No properties yet" — a confident claim about the owner's
+      // own book — and the page never loads again (one fetch, no realtime).
+      if (pRes.error) { setLoadError(pRes.error.message || 'Could not load your properties.'); setLoading(false); return }
       setProperties((pRes.data as Property[]) || [])
       setSettings(settingsRow)
       setShape(shapeRes)
       setLocatedJobs(located)
-      setPerfByProp(buildPerformance((jRes.data as PerfJob[]) || [], (iRes.data as PerfInvoice[]) || []))
+      // Jobs/invoices feed the health SCORE, so a silent [] doesn't just blank the
+      // performance strip — it drops properties into "At risk". Say so instead.
+      if (jRes.error || iRes.error) setPartialError('Some service and invoice history could not be loaded, so the figures below may be incomplete.')
+      setPerfByProp(buildPerformance((jRes.data as PerfJob[]) || [], (iRes.data as unknown as PerfInvoice[]) || [], settingsRow))
 
       // Last quote + last invoice per property (reuses the fetches above — no new tables).
       const lastQ: Record<string, LastQuote> = {}
@@ -248,33 +276,144 @@ export default function PropertiesPage() {
       const hist = Array.isArray(p.measurement_history) ? p.measurement_history : []
       const snapshot = { date: new Date().toISOString(), total_sqft: sqft, recommendation: rec }
       const nextHistory = [...hist, snapshot]
-      const { error } = await supabase.from('properties').update({ measurement_history: nextHistory }).eq('id', p.id)
+      // .select('id') so a zero-row update is not silence: PostgREST returns NO
+      // error when RLS matches nothing, and the owner was shown a saved history
+      // entry the database never received.
+      const { data: wrote, error } = await supabase.from('properties').update({ measurement_history: nextHistory }).eq('id', p.id).select('id')
       if (error) toast.error('Could not recalculate: ' + error.message)
+      else if (!wrote || wrote.length === 0) toast.error('Could not recalculate — that property could not be updated.')
       else setProperties(prev => prev.map(x => x.id === p.id ? { ...x, measurement_history: nextHistory as Property['measurement_history'] } : x))
     } finally { setRecalcId(null) }
   }
 
-  // Client-side filter over the already-loaded list — the same shape the customers
+  // Everything each card needs, derived ONCE per data change. Each item runs
+  // computePropertyHealth plus nearbyJobCount — a haversine sweep over every
+  // located job — so a 40-property book against 100 upcoming jobs is 4,000
+  // distance calculations. This used to hang off `filtered`, i.e. it re-ran the
+  // entire chain on every keystroke in the search box.
+  const rows = useMemo(() => properties.map(property => {
+    const hist = Array.isArray(property.measurement_history) ? property.measurement_history : []
+    const last = hist.length ? hist[hist.length - 1] : null
+    const saved = latestSavedRecommendation(hist)
+    const stale = saved ? recommendationIsStale(saved.date, Date.now()) : false
+    const perf = perfByProp[property.id]
+    const hasPerf = perf && (perf.completedVisits > 0 || perf.collected > 0)
+    const lastQuote = lastQuoteByProp[property.id]
+    const lastInvoice = lastInvoiceByProp[property.id]
+    const plans = plansByProp[property.id] || []
+    // Property memory (all derived from data already loaded).
+    const prefText = prefSummary(resolvePrefs(property.customers as unknown as PrefSource | null, property as unknown as PrefSource))
+    const nextVisit = nextVisitByProp[property.id]
+    const qp = quotePricingByProp[property.id]
+    const nearby = property.lat != null && property.lng != null ? nearbyJobCount({ lat: property.lat, lng: property.lng }, locatedJobs).count : 0
+    const confidence = saved ? pricingConfidence({ hasMeasurement: true, nearbyComparables: nearby }) : null
+    // Learned time wins over the saved recommendation — but only once the engine
+    // says there is enough of it to be a typical value at all.
+    const estMin = perf?.typical?.minutes ?? saved?.rec.est_minutes ?? null
+    const estFromActual = perf?.typical != null
+    const measured = !!saved || Number(property.lawn_sqft) > 0
+    const hasWonQuote = (qp?.accepted ?? 0) > 0
+
+    // Active recurring service (the dominant non-paused plan).
+    const activePlan = plans.find(p => !p.paused) ?? null
+    // Last actual visit vs the estimate (when both exist).
+    const estDur = saved?.rec.est_minutes ?? null
+    const durDelta = perf?.lastActualMin != null && estDur != null ? perf.lastActualMin - estDur : null
+    // Pricing drift: what was last accepted/quoted vs what we'd recommend now.
+    const lastPriceVal = qp?.lastAccepted?.total ?? lastQuote?.total ?? null
+    const recOneTime = saved?.rec.one_time ?? null
+    const drift = lastPriceVal && lastPriceVal > 0 && recOneTime ? Math.round(((recOneTime - lastPriceVal) / lastPriceVal) * 100) : null
+    const driftBig = drift != null && Math.abs(drift) >= 15
+    // ── One Property Health score → one recommendation → one primary
+    // action. Consolidates every signal above so the card guides instead
+    // of listing (reuses the one lib/propertyHealth engine). ──
+    const daysSinceISO = (iso: string) => Math.floor((Date.now() - new Date(iso + 'T00:00:00').getTime()) / 86400000)
+    const health = computePropertyHealth({
+      hasCustomer: !!property.customer_id,
+      measured,
+      measurementStale: stale,
+      located: property.lat != null && property.lng != null,
+      pricingConfidence: confidence,
+      completedVisits: perf?.completedVisits ?? 0,
+      hasActiveRecurring: !!activePlan,
+      recurringNothingScheduled: !!activePlan && !nextVisit,
+      daysSinceLastService: perf?.lastServiceDate ? daysSinceISO(perf.lastServiceDate) : null,
+      hasUpcoming: !!nextVisit,
+      hasWonQuote,
+      quotedCount: qp?.quoted ?? 0,
+      pricingDriftPct: drift,
+      hasVision: !!hasVisionByProp[property.id],
+      shape,
+    })
+    const measureHref = `/dashboard/properties/measure?id=${property.id}`
+    // 'view' means nothing is pressing AND this trade has no lawn to
+    // measure — so it must never fall through to measureHref, which is the
+    // default this change exists to remove. The card is already the view;
+    // the only place left worth going is the customer, and with no customer
+    // there is no destination at all, so no button renders (a primary
+    // button that goes nowhere is worse than a calm card).
+    const actionHref = health.action === 'quote' ? `/dashboard/quotes/new?customer=${property.customer_id}&property=${property.id}`
+      : health.action === 'schedule' ? `/dashboard/schedule?customer=${property.customer_id}&property=${property.id}`
+      : health.action === 'view' ? (property.customer_id ? `/dashboard/customers/${property.customer_id}` : null)
+      : measureHref
+    return { property, hist, last, saved, stale, perf, hasPerf, lastQuote, lastInvoice, plans, prefText, nextVisit, qp, confidence, estMin, estFromActual, activePlan, estDur, durDelta, recOneTime, drift, driftBig, health, measureHref, actionHref }
+  }), [properties, perfByProp, lastQuoteByProp, lastInvoiceByProp, plansByProp, nextVisitByProp, quotePricingByProp, hasVisionByProp, locatedJobs, shape])
+
+  // Client-side filter over the already-derived list — the same shape the customers
   // list uses (normalise once, match any field). A landlord book of 40+ addresses
   // was scroll-only until now: no query changes what loads, so this never touches a
   // pricing/measurement write, it only narrows what renders.
   const q = query.trim().toLowerCase()
   const filtered = q
-    ? properties.filter(p =>
+    ? rows.filter(({ property: p }) =>
         (p.address || '').toLowerCase().includes(q) ||
         [p.city, p.province, p.postal_code].filter(Boolean).join(' ').toLowerCase().includes(q) ||
         (p.customers?.name || '').toLowerCase().includes(q))
-    : properties
+    : rows
+
+  // Display sort only — same data, never a re-fetch or a write. 'Needs
+  // attention' is the default and is byte-for-byte the prior behaviour
+  // (warn-tone floats to the top, worst health first, everything else in
+  // recency order). The other three read off perf/address already in hand,
+  // so a 40+ property book can be pointed at value or freshness instead of
+  // scroll-hunted.
+  const sorted = useMemo(() => [...filtered].sort((a, b) => {
+    if (sortBy === 'recent') {
+      // Most recently serviced first; never-serviced (null) sinks to the end.
+      return (b.perf?.lastServiceDate ?? '').localeCompare(a.perf?.lastServiceDate ?? '')
+    }
+    if (sortBy === 'value') {
+      return (b.perf?.collected ?? 0) - (a.perf?.collected ?? 0)
+    }
+    if (sortBy === 'az') {
+      return (a.property.address ?? '').localeCompare(b.property.address ?? '')
+    }
+    const aw = a.health.tone === 'warn' ? 0 : 1
+    const bw = b.health.tone === 'warn' ? 0 : 1
+    if (aw !== bw) return aw - bw
+    return aw === 0 ? a.health.score - b.health.score : 0
+  }), [filtered, sortBy])
 
   return (
     <PageContainer>
       <PageHeader
         title="Properties"
-        description={`${properties.length} propert${properties.length !== 1 ? 'ies' : 'y'} on file${properties.length > 0 ? ' — created automatically from customers and quotes' : ''}`}
+        description={q && !loading && !loadError
+          ? `${filtered.length} of ${properties.length} propert${properties.length !== 1 ? 'ies' : 'y'} matching “${query.trim()}”`
+          : `${properties.length} propert${properties.length !== 1 ? 'ies' : 'y'} on file${properties.length > 0 ? ' — created automatically from customers and quotes' : ''}`}
       />
 
       {loading ? (
         <SkeletonRows count={6} />
+      ) : loadError ? (
+        // NOT an EmptyState: "No properties yet" would be a factual claim about
+        // the owner's own book, made from a request that never answered.
+        <EmptyState
+          icon={AlertTriangle}
+          title="We couldn’t load your properties"
+          description={`${loadError} This isn’t a picture of your book — nothing has changed.`}
+          action={{ label: 'Try again', onClick: () => window.location.reload() }}
+        />
       ) : properties.length === 0 ? (
         <EmptyState
           icon={Home}
@@ -284,6 +423,12 @@ export default function PropertiesPage() {
         />
       ) : (
         <div className="space-y-3">
+          {partialError && (
+            <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <p className="text-xs text-ink">{partialError}</p>
+            </div>
+          )}
           <div className="flex flex-col sm:flex-row gap-2">
             <SearchInput
               value={query}
@@ -309,97 +454,13 @@ export default function PropertiesPage() {
             <InlineEmpty icon={SearchX}>
               No property matches &ldquo;{query.trim()}&rdquo;.
             </InlineEmpty>
-          ) : filtered.map(property => {
-            const hist = Array.isArray(property.measurement_history) ? property.measurement_history : []
-            const last = hist.length ? hist[hist.length - 1] : null
-            const saved = latestSavedRecommendation(hist)
-            const stale = saved ? recommendationIsStale(saved.date, Date.now()) : false
-            const perf = perfByProp[property.id]
-            const hasPerf = perf && (perf.completedVisits > 0 || perf.lifetimeRevenue > 0)
-            const lastQuote = lastQuoteByProp[property.id]
-            const lastInvoice = lastInvoiceByProp[property.id]
-            const plans = plansByProp[property.id] || []
-            // Property memory (all derived from data already loaded).
-            const prefText = prefSummary(resolvePrefs(property.customers as unknown as PrefSource | null, property as unknown as PrefSource))
-            const nextVisit = nextVisitByProp[property.id]
-            const qp = quotePricingByProp[property.id]
-            const nearby = property.lat != null && property.lng != null ? nearbyJobCount({ lat: property.lat, lng: property.lng }, locatedJobs).count : 0
-            const confidence = saved ? pricingConfidence({ hasMeasurement: true, nearbyComparables: nearby }) : null
-            const estMin = perf?.avgActualMin ?? saved?.rec.est_minutes ?? null
-            const estFromActual = perf?.avgActualMin != null
-            const measured = !!saved || Number(property.lawn_sqft) > 0
-            const hasWonQuote = (qp?.accepted ?? 0) > 0
-
-            // Active recurring service (the dominant non-paused plan).
-            const activePlan = plans.find(p => !p.paused) ?? null
-            // Last actual visit vs the estimate (when both exist).
-            const estDur = saved?.rec.est_minutes ?? null
-            const durDelta = perf?.lastActualMin != null && estDur != null ? perf.lastActualMin - estDur : null
-            // Pricing drift: what was last accepted/quoted vs what we'd recommend now.
-            const lastPriceVal = qp?.lastAccepted?.total ?? lastQuote?.total ?? null
-            const recOneTime = saved?.rec.one_time ?? null
-            const drift = lastPriceVal && lastPriceVal > 0 && recOneTime ? Math.round(((recOneTime - lastPriceVal) / lastPriceVal) * 100) : null
-            const driftBig = drift != null && Math.abs(drift) >= 15
-            // ── One Property Health score → one recommendation → one primary
-            // action. Consolidates every signal above so the card guides instead
-            // of listing (reuses the one lib/propertyHealth engine). ──
-            const daysSinceISO = (iso: string) => Math.floor((Date.now() - new Date(iso + 'T00:00:00').getTime()) / 86400000)
-            const health = computePropertyHealth({
-              hasCustomer: !!property.customer_id,
-              measured,
-              measurementStale: stale,
-              located: property.lat != null && property.lng != null,
-              pricingConfidence: confidence,
-              completedVisits: perf?.completedVisits ?? 0,
-              hasActiveRecurring: !!activePlan,
-              recurringNothingScheduled: !!activePlan && !nextVisit,
-              daysSinceLastService: perf?.lastServiceDate ? daysSinceISO(perf.lastServiceDate) : null,
-              hasUpcoming: !!nextVisit,
-              hasWonQuote,
-              quotedCount: qp?.quoted ?? 0,
-              pricingDriftPct: drift,
-              hasVision: !!hasVisionByProp[property.id],
-              shape,
-            })
-            const measureHref = `/dashboard/properties/measure?id=${property.id}`
-            // 'view' means nothing is pressing AND this trade has no lawn to
-            // measure — so it must never fall through to measureHref, which is the
-            // default this change exists to remove. The card is already the view;
-            // the only place left worth going is the customer, and with no customer
-            // there is no destination at all, so no button renders (a primary
-            // button that goes nowhere is worse than a calm card).
-            const actionHref = health.action === 'quote' ? `/dashboard/quotes/new?customer=${property.customer_id}&property=${property.id}`
-              : health.action === 'schedule' ? `/dashboard/schedule?customer=${property.customer_id}&property=${property.id}`
-              : health.action === 'view' ? (property.customer_id ? `/dashboard/customers/${property.customer_id}` : null)
-              : measureHref
-            return { property, hist, last, saved, stale, perf, hasPerf, lastQuote, lastInvoice, plans, prefText, nextVisit, qp, confidence, estMin, estFromActual, activePlan, estDur, durDelta, recOneTime, drift, driftBig, health, measureHref, actionHref }
-          })
-          // Display sort only — same data, never a re-fetch or a write. 'Needs
-          // attention' is the default and is byte-for-byte the prior behaviour
-          // (warn-tone floats to the top, worst health first, everything else in
-          // recency order). The other three read off perf/address already in hand,
-          // so a 40+ property book can be pointed at value or freshness instead of
-          // scroll-hunted.
-          .sort((a, b) => {
-            if (sortBy === 'recent') {
-              // Most recently serviced first; never-serviced (null) sinks to the end.
-              return (b.perf?.lastServiceDate ?? '').localeCompare(a.perf?.lastServiceDate ?? '')
-            }
-            if (sortBy === 'value') {
-              return (b.perf?.lifetimeRevenue ?? 0) - (a.perf?.lifetimeRevenue ?? 0)
-            }
-            if (sortBy === 'az') {
-              return (a.property.address ?? '').localeCompare(b.property.address ?? '')
-            }
-            const aw = a.health.tone === 'warn' ? 0 : 1
-            const bw = b.health.tone === 'warn' ? 0 : 1
-            if (aw !== bw) return aw - bw
-            return aw === 0 ? a.health.score - b.health.score : 0
-          })
-          .map(({ property, hist, last, saved, stale, perf, hasPerf, lastQuote, lastInvoice, plans, prefText, nextVisit, qp, confidence, estMin, estFromActual, activePlan, estDur, durDelta, recOneTime, drift, driftBig, health, measureHref, actionHref }) => (
+          ) : sorted.map(({ property, hist, last, saved, stale, perf, hasPerf, lastQuote, lastInvoice, plans, prefText, nextVisit, qp, confidence, estMin, estFromActual, activePlan, estDur, durDelta, recOneTime, drift, driftBig, health, measureHref, actionHref }) => (
             <Card key={property.id} className="card-lift">
               <CardBody>
-                <div className="flex items-start justify-between gap-4">
+                {/* Stacks on a phone: the action column is a fixed 150px, which
+                    left the address + badges 94px at 390px — the health Badge
+                    alone ("72 · NEEDS ATTENTION") is wider than that. */}
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-start justify-between gap-3 sm:gap-4">
                   <div className="flex items-start gap-3 min-w-0">
                     <div className="w-9 h-9 rounded-lg bg-accent/10 flex items-center justify-center shrink-0 mt-0.5">
                       <Home className="w-4 h-4 text-accent-text" />
@@ -485,7 +546,7 @@ export default function PropertiesPage() {
                       )}
                     </div>
                   </div>
-                  <div className="flex flex-col items-stretch gap-1.5 shrink-0 w-[150px]">
+                  <div className="flex flex-col items-stretch gap-1.5 shrink-0 w-full sm:w-[150px]">
                     {/* The ONE primary action for this property's current state. */}
                     {health.action === 'recalc' ? (
                       <Button size="sm" loading={recalcId === property.id} onClick={() => recalculate(property)} className="w-full">
@@ -507,7 +568,7 @@ export default function PropertiesPage() {
                         whether this property has a lawn at all, so it can't become
                         the Measure nag's back door on a plumber's card. */}
                     {health.lawnApplies && health.action !== 'measure' && health.action !== 'remeasure' && (
-                      <Link href={measureHref} className="text-[11px] text-ink-faint hover:text-ink text-right">Re-measure</Link>
+                      <Link href={measureHref} className="tap-target-y text-[11px] text-ink-faint hover:text-ink sm:text-right inline-flex items-center sm:justify-end">Re-measure</Link>
                     )}
                     {property.lat && property.lng ? (
                       <p className="text-xs text-accent-text font-medium text-right flex items-center justify-end gap-1"><MapPin className="w-3 h-3" /> Located</p>
@@ -548,7 +609,7 @@ export default function PropertiesPage() {
                         </div>
                         {property.customer_id && (
                           <Link href={`/dashboard/schedule?focus=${plan.recurrenceId}`}
-                            className="text-[11px] font-medium px-2 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong transition-colors shrink-0">
+                            className="tap-target-y text-[11px] font-medium px-2.5 rounded-lg border border-border bg-surface text-ink hover:border-border-strong transition-colors shrink-0 inline-flex items-center">
                             View schedule
                           </Link>
                         )}
@@ -557,23 +618,43 @@ export default function PropertiesPage() {
                   </div>
                 )}
 
+                {/* ── Everything below is REFERENCE, not this week's work ──
+                    This page's job is triage: rank every address by what needs
+                    doing. It was doing that job underneath a full dossier —
+                    performance, paperwork, pricing memory, the measurement price
+                    list and a photo uploader rendered open on EVERY row, ~779px
+                    of history against ~150px of current state. Ten properties ran
+                    to fourteen screens. Nothing is removed: the same blocks, the
+                    same data, the same actions, one tap away. */}
+                <details className="group mt-3">
+                  <summary className="tap-target-y flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-faint hover:text-ink cursor-pointer list-none select-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                    <ChevronRight className="w-3.5 h-3.5 transition-transform group-open:rotate-90" />
+                    Details
+                    <span className="font-normal normal-case tracking-normal text-ink-faint">
+                      — history, pricing{shape.showLawnFields ? ', measurements' : ''} and photos
+                    </span>
+                  </summary>
+
                 {/* Performance — this property as a business asset */}
                 {hasPerf && (
                   <div className="mt-3 rounded-xl border border-border bg-bg-tertiary px-3 py-2.5">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-muted mb-1.5">Performance</p>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-                      <PerfStat icon={DollarSign} label="Lifetime revenue" value={formatCurrency(perf.lifetimeRevenue)} tone="text-accent-text" />
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      <PerfStat icon={DollarSign} label="Collected" value={formatCurrency(perf.collected)} tone="text-accent-text" />
                       <PerfStat icon={CheckCircle2} label="Completed visits" value={String(perf.completedVisits)} />
                       <PerfStat icon={Receipt} label="Avg invoice" value={perf.avgInvoice > 0 ? formatCurrency(perf.avgInvoice) : '—'} />
-                      <PerfStat icon={Timer} label="Avg service time" value={perf.avgActualMin != null ? `${perf.avgActualMin} min` : '—'} />
-                      <PerfStat icon={CalendarClock} label="Last service" value={perf.lastServiceDate ? formatDate(perf.lastServiceDate) : '—'} />
+                      {/* "—" is the honest reading when the engine withholds:
+                          this address has no typical time yet, not a typical
+                          time of nothing. */}
+                      <PerfStat icon={Timer} label="Typical visit" value={perf.typical != null ? `${perf.typical.minutes} min` : '—'}
+                        sub={perf.typical != null ? `${perf.typical.sampleSize} timed` : undefined} />
                     </div>
                   </div>
                 )}
 
                 {/* Last quote + last invoice — most recent paperwork at a glance */}
                 {(lastQuote || lastInvoice) && (
-                  <div className="mt-3 grid grid-cols-2 gap-2">
+                  <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {lastQuote ? (
                       <Link href={`/dashboard/quotes/${lastQuote.id}`} className="rounded-xl border border-border bg-bg-tertiary px-3 py-2 hover:border-border-strong transition-colors">
                         <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><FileText className="w-3 h-3" /> Last quote</p>
@@ -582,7 +663,7 @@ export default function PropertiesPage() {
                       </Link>
                     ) : <div />}
                     {lastInvoice ? (
-                      <Link href="/dashboard/invoices" className="rounded-xl border border-border bg-bg-tertiary px-3 py-2 hover:border-border-strong transition-colors">
+                      <Link href={`/dashboard/invoices?invoice=${encodeURIComponent(lastInvoice.invoice_number)}`} className="rounded-xl border border-border bg-bg-tertiary px-3 py-2 hover:border-border-strong transition-colors">
                         <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><Receipt className="w-3 h-3" /> Last invoice</p>
                         <p className="text-sm font-semibold text-ink truncate">{lastInvoice.invoice_number}</p>
                         <p className="text-[10px] text-ink-faint">{formatDate(lastInvoice.date)} · {lastInvoice.status}</p>
@@ -631,7 +712,7 @@ export default function PropertiesPage() {
                             card's primary action is already Create quote. */}
                         {health.action !== 'quote' && property.customer_id && (
                           <Link href={`/dashboard/quotes/new?customer=${property.customer_id}&property=${property.id}`}
-                            className="text-[11px] font-medium text-accent-text hover:underline px-1.5 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                            className="tap-target-y text-[11px] font-medium text-accent-text hover:underline px-1.5 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 inline-flex items-center">
                             Quote this →
                           </Link>
                         )}
@@ -661,7 +742,13 @@ export default function PropertiesPage() {
                             <span className={durDelta > 10 ? 'text-amber-400' : durDelta < -5 ? 'text-emerald-400' : 'text-ink-faint'}>({durDelta > 0 ? '+' : ''}{durDelta}m)</span>
                           </span>
                         ) : estMin != null ? (
-                          <span className="inline-flex items-center gap-1"><Timer className="w-3 h-3" /> Est. visit ~{estMin} min{estFromActual ? <span className="text-ink-faint"> · avg of {perf!.completedVisits}</span> : null}</span>
+                          /* When the figure is LEARNED, the sample size in the
+                             sentence is the timed-visit count the median was
+                             actually built from — not the property's total
+                             completed visits, which is what it used to name. */
+                          <span className="inline-flex items-center gap-1"><Timer className="w-3 h-3" /> {estFromActual
+                            ? <>Typical visit {describeTypicalDuration(perf!.typical!)}</>
+                            : <>Est. visit ~{estMin} min</>}</span>
                         ) : null}
                         {confidence && (
                           <span className="inline-flex items-center gap-1"><ShieldCheck className="w-3 h-3" /> {confidence[0].toUpperCase() + confidence.slice(1)} confidence</span>
@@ -684,6 +771,7 @@ export default function PropertiesPage() {
                   </p>
                   <JobPhotos propertyId={property.id} customerId={property.customer_id} variant="gallery" initialPhotos={photosLoaded ? (photosByProp[property.id] || []) : undefined} />
                 </div>
+                </details>
               </CardBody>
             </Card>
           ))}
@@ -693,13 +781,16 @@ export default function PropertiesPage() {
   )
 }
 
-function PerfStat({ icon: Icon, label, value, tone }: { icon: typeof DollarSign; label: string; value: string; tone?: string }) {
+// `sub` is the evidence line: a stat derived from a SAMPLE says how big the
+// sample was, right under the figure, so the number can never travel without it.
+function PerfStat({ icon: Icon, label, value, tone, sub }: { icon: typeof DollarSign; label: string; value: string; tone?: string; sub?: string }) {
   return (
     <div className="rounded-lg border border-border bg-surface px-2 py-1.5">
       <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1">
         <Icon className="w-3 h-3" /> {label}
       </p>
       <p className={`text-sm font-bold tabular-nums ${tone || 'text-ink'}`}>{value}</p>
+      {sub && <p className="text-[10px] text-ink-faint tabular-nums leading-tight">{sub}</p>}
     </div>
   )
 }

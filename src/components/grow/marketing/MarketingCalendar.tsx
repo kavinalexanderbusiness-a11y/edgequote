@@ -173,9 +173,9 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-1.5">
-          <button onClick={() => step(-1)} aria-label={`Previous ${view}`} title={`Previous ${view}`} className="p-2 rounded-lg hover:bg-surface text-ink-muted"><ChevronLeft className="w-4 h-4" /></button>
+          <button onClick={() => step(-1)} aria-label={`Previous ${view}`} title={`Previous ${view}`} className="p-2 rounded-lg hover:bg-surface-raised text-ink-muted"><ChevronLeft className="w-4 h-4" /></button>
           <span className="text-sm font-bold text-ink min-w-[160px] text-center">{title}</span>
-          <button onClick={() => step(1)} aria-label={`Next ${view}`} title={`Next ${view}`} className="p-2 rounded-lg hover:bg-surface text-ink-muted"><ChevronRight className="w-4 h-4" /></button>
+          <button onClick={() => step(1)} aria-label={`Next ${view}`} title={`Next ${view}`} className="p-2 rounded-lg hover:bg-surface-raised text-ink-muted"><ChevronRight className="w-4 h-4" /></button>
           <Button variant="ghost" size="sm" onClick={() => setCursor(new Date())}>Today</Button>
         </div>
         <div className="flex items-center gap-1.5">

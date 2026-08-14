@@ -1,219 +1,462 @@
 'use client'
 
-import { useState } from 'react'
-import { fieldBorder } from '@/components/ui/fieldStyles'
-import { PageContainer } from '@/components/layout/PageContainer'
-import { useRouter } from 'next/navigation'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import { ArrowLeft, Upload, Check, AlertTriangle, Monitor, Download, Info, ShieldAlert } from 'lucide-react'
+
 import { createClient } from '@/lib/supabase/client'
-import { recordImportConsent, SMS_CONSENT_WARNING } from '@/lib/consent'
+import { SMS_CONSENT_WARNING } from '@/lib/consent'
+import { ACQUISITION_SOURCES } from '@/types'
+import { PageContainer } from '@/components/layout/PageContainer'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Banner } from '@/components/ui/Banner'
+import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
-import { ArrowLeft, Upload, ShieldAlert, Check, AlertTriangle } from 'lucide-react'
+import { Select } from '@/components/ui/Select'
+import { fieldBorder } from '@/components/ui/fieldStyles'
+import { exportRowsToCsv } from '@/lib/csv'
+import type { Tone } from '@/lib/tone'
+import type { Customer } from '@/types'
+import type { AddressCarrier } from '@/lib/customers'
+import {
+  parseCsv, suggestMapping, planImport, summarize, willWrite, executeImportPlan,
+  unimportedRows, mappingNamesSomeone, IMPORT_FIELDS, IMPORT_LIMITS, EMPTY_MAPPING,
+  type ParsedCsv, type ColumnMapping, type PlannedRow, type RowStatus, type ImportOutcome,
+} from '@/lib/customerImport'
 
-// Minimal CSV parser — handles quoted fields, embedded commas, and "" escapes.
-function parseCSV(text: string): string[][] {
-  const rows: string[][] = []
-  let row: string[] = [], field = '', inQuotes = false
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]
-    if (inQuotes) {
-      if (ch === '"') { if (text[i + 1] === '"') { field += '"'; i++ } else inQuotes = false }
-      else field += ch
-    } else if (ch === '"') inQuotes = true
-    else if (ch === ',') { row.push(field); field = '' }
-    else if (ch === '\n') { row.push(field); rows.push(row); row = []; field = '' }
-    else if (ch !== '\r') field += ch
-  }
-  if (field !== '' || row.length) { row.push(field); rows.push(row) }
-  return rows.filter(r => r.some(c => c.trim() !== ''))
+type Book = Customer & AddressCarrier
+
+/**
+ * The existing book, or an honest failure.
+ *
+ * ⭐ This is the load the whole page hangs on. Duplicate detection compares each
+ * CSV row against the customers already here, so a FAILED read is not an empty
+ * book — it is no answer at all, and importing against it would re-create every
+ * customer the business already has. supabase-js resolves on failure with
+ * `{data:null,error}`, which is the same shape as "you have no customers yet",
+ * so the error is read and the two are kept apart. Import stays blocked until
+ * this succeeds.
+ */
+type BookState =
+  | { status: 'loading' }
+  | { status: 'ready'; customers: Book[] }
+  | { status: 'error'; message: string }
+
+const STATUS_TONE: Record<RowStatus, Tone> = {
+  new: 'success', existing: 'neutral', review: 'warn', invalid: 'danger',
+}
+const STATUS_LABEL: Record<RowStatus, string> = {
+  new: 'New', existing: 'Already here', review: 'Needs review', invalid: 'Can’t import',
 }
 
-const normHeader = (h: string) => h.toLowerCase().trim().replace(/[\s-]+/g, '_')
-const truthy = (v: string) => ['true', '1', 'yes', 'y', 'x', 't'].includes(v.toLowerCase().trim())
-
-interface ParsedRow {
-  name: string; email: string | null; phone: string | null; address: string | null
-  city: string | null; province: string | null; postal_code: string | null; notes: string | null
-  sms_opt_in: boolean; email_opt_in: boolean
-}
-
-function buildRows(csv: string): { rows: ParsedRow[]; error?: string } {
-  const grid = parseCSV(csv)
-  if (grid.length < 2) return { rows: [], error: 'Need a header row plus at least one customer row.' }
-  const headers = grid[0].map(normHeader)
-  const col = (name: string) => headers.indexOf(name)
-  if (col('name') < 0) return { rows: [], error: 'A "name" column is required.' }
-  const at = (r: string[], i: number) => (i >= 0 && r[i] != null ? r[i].trim() : '')
-  const rows: ParsedRow[] = []
-  for (const r of grid.slice(1)) {
-    const name = at(r, col('name'))
-    if (!name) continue
-    rows.push({
-      name,
-      email: at(r, col('email')) || null,
-      phone: at(r, col('phone')) || null,
-      address: at(r, col('address')) || null,
-      city: at(r, col('city')) || null,
-      province: at(r, col('province')) || null,
-      postal_code: at(r, col('postal_code')) || null,
-      notes: at(r, col('notes')) || null,
-      sms_opt_in: col('sms_opt_in') >= 0 ? truthy(at(r, col('sms_opt_in'))) : false,
-      email_opt_in: col('email_opt_in') >= 0 ? truthy(at(r, col('email_opt_in'))) : false,
-    })
-  }
-  return { rows }
-}
+const PREVIEW_LIMIT = 100
 
 export default function ImportCustomersPage() {
   const router = useRouter()
-  const supabase = createClient()
-  const [csv, setCsv] = useState('')
-  const [rows, setRows] = useState<ParsedRow[]>([])
-  const [parseError, setParseError] = useState<string | null>(null)
-  const [smsAck, setSmsAck] = useState(false)
+  const supabase = useMemo(() => createClient(), [])
+
+  const [book, setBook] = useState<BookState>({ status: 'loading' })
+  const [me, setMe] = useState<{ id: string; email: string } | null>(null)
+  const [raw, setRaw] = useState('')
+  const [sourceName, setSourceName] = useState<string | null>(null)
+  const [parsed, setParsed] = useState<ParsedCsv | null>(null)
+  const [mapping, setMapping] = useState<ColumnMapping>(EMPTY_MAPPING)
+  const [rows, setRows] = useState<PlannedRow[]>([])
   const [importing, setImporting] = useState(false)
-  const [done, setDone] = useState<number | null>(null)
+  const [outcome, setOutcome] = useState<ImportOutcome | null>(null)
+  // Applied ONLY to rows whose CSV carries no source of their own. '' = not
+  // sure, and those rows import with the source unrecorded, which is the truth.
+  const [defaultSource, setDefaultSource] = useState('')
+  const [smsAck, setSmsAck] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
 
-  const smsCount = rows.filter(r => r.sms_opt_in).length
-  const emailCount = rows.filter(r => r.email_opt_in).length
+  useEffect(() => {
+    let live = true
+    ;(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) { if (live) setBook({ status: 'error', message: 'You are signed out. Sign in again to import.' }); return }
+      if (live) setMe({ id: user.id, email: user.email || user.id })
+      // Archived customers are matched against too: a duplicate of someone you
+      // archived is still a duplicate, and importing one would quietly resurrect
+      // them as a second record.
+      const { data, error } = await supabase
+        .from('customers').select('*, properties(address, city, is_primary)')
+        .eq('user_id', user.id).order('name')
+      if (!live) return
+      if (error) setBook({ status: 'error', message: error.message })
+      else setBook({ status: 'ready', customers: (data as Book[]) || [] })
+    })()
+    return () => { live = false }
+  }, [supabase])
 
-  function preview(text: string) {
-    setCsv(text); setDone(null)
-    if (!text.trim()) { setRows([]); setParseError(null); return }
-    const { rows: r, error } = buildRows(text)
-    setRows(r); setParseError(error ?? null); setSmsAck(false)
+  // Re-plan whenever the file, the mapping or the book changes. The preview the
+  // owner reads and the list executeImportPlan walks are this same array.
+  useEffect(() => {
+    if (!parsed || parsed.error || book.status !== 'ready' || !mappingNamesSomeone(mapping)) { setRows([]); return }
+    setRows(planImport({ parsed, mapping, existing: book.customers }))
+  }, [parsed, mapping, book])
+
+  /**
+   * `fromFile` is the difference between "you have not typed anything yet" and
+   * "the file you chose is empty". An empty textarea is a blank slate and should
+   * say nothing; an empty FILE is an answer the owner needs — they picked
+   * something and it had nothing in it. Without this, choosing a 0-byte export
+   * looks exactly like doing nothing at all.
+   */
+  function load(text: string, name: string | null, fromFile = false) {
+    setRaw(text); setSourceName(name); setOutcome(null)
+    if (!text.trim() && !fromFile) { setParsed(null); setMapping(EMPTY_MAPPING); return }
+    const p = parseCsv(text)
+    setParsed(p)
+    setMapping(p.error ? EMPTY_MAPPING : suggestMapping(p.headers))
   }
+
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0]; if (!f) return
-    preview(await f.text())
+    const f = e.target.files?.[0]
+    if (!f) return
+    if (f.size > IMPORT_LIMITS.maxBytes) {
+      setParsed({ headers: [], rows: [], lines: [], truncated: {}, error: `That file is ${(f.size / 1024 / 1024).toFixed(1)} MB. The limit is ${IMPORT_LIMITS.maxBytes / 1024 / 1024} MB — split it and import in parts.` })
+      setRaw(''); setSourceName(f.name); return
+    }
+    load(await f.text(), f.name, true)
   }
+
+  const totals = useMemo(() => summarize(rows), [rows])
+
+  function toggle(line: number) {
+    setRows(rs => rs.map(r => (r.line === line && r.status === 'review' ? { ...r, include: !r.include } : r)))
+  }
+
+  // Consent is never granted by an import on its own. If any row being written
+  // carries an SMS opt-in, the owner acknowledges the carrier/CASL rules first —
+  // the same gate the page has always had, now counting only rows that will
+  // actually be created.
+  const smsBlocked = totals.smsOptIns > 0 && !smsAck
 
   async function runImport() {
-    if (!rows.length) return
-    if (smsCount > 0 && !smsAck) return
+    if (!me || totals.toCreate === 0 || importing || smsBlocked) return
     setImporting(true)
     try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { setImporting(false); return }
-      // Customer V2: the CSV's address column lands on the PROPERTY, and only
-      // there — the customer row carries the relationship. (customers.address
-      // survives as a legacy column until migration M4, but nothing new writes it.)
-      //
-      // Ids are generated CLIENT-SIDE so the row→property pairing never depends
-      // on RETURNING order — Postgres doesn't guarantee it, and a reordering
-      // here would silently attach every address to the wrong customer (found
-      // in review; the pre-V2 code was order-independent for the same reason).
-      const insertRows = rows.map(r => ({
-        id: crypto.randomUUID(),
-        user_id: user.id, name: r.name, email: r.email, phone: r.phone,
-        province: r.province || 'AB', notes: r.notes,
-        sms_opt_in: r.sms_opt_in, email_opt_in: r.email_opt_in,
-      }))
-      const { error } = await supabase.from('customers').insert(insertRows)
-      if (error) { setParseError('Import failed: ' + (error?.message || 'unknown error')); setImporting(false); return }
-
-      // Primary property per row that has an address — paired by the id we minted.
-      const props = rows
-        .map((r, i) => ({ r, id: insertRows[i].id }))
-        .filter(x => x.r.address)
-        .map(x => ({ customer_id: x.id, user_id: user.id, address: x.r.address, city: x.r.city, province: x.r.province || 'AB', postal_code: x.r.postal_code, is_primary: true }))
-      // Checked like the customers insert above — a failed property insert used
-      // to vanish silently, importing every customer with NO address and no hint.
-      if (props.length) {
-        const { error: propErr } = await supabase.from('properties').insert(props)
-        if (propErr) {
-          setParseError(`Customers imported, but their addresses could not be saved (${propErr.message}). Add addresses from each customer's profile.`)
-        }
-      }
-
-      // Audit every imported opt-in — paired by the SAME minted ids, so the
-      // consent trail can't drift onto the wrong customer either (the old
-      // RETURNING-order pairing had that exact latent bug).
-      await recordImportConsent(supabase, {
-        userId: user.id, changedBy: user.email || user.id,
-        rows: insertRows.map((c, i) => ({ customerId: c.id, sms: rows[i]?.sms_opt_in ?? false, email: rows[i]?.email_opt_in ?? false })),
+      const res = await executeImportPlan(supabase, {
+        userId: me.id, initiatedBy: me.email, sourceName, rows, defaultSource,
       })
-      setDone(insertRows.length)
+      setOutcome(res)
     } finally { setImporting(false) }
   }
 
-  return (
-    <PageContainer width="narrow">
-      {/* Hidden in the success state — the done card renders its own "Back to customers" CTA. */}
-      {done == null && (
-        <Link href="/dashboard/customers" className="text-sm text-ink-muted hover:text-ink flex items-center gap-1.5"><ArrowLeft className="w-4 h-4" /> Back to customers</Link>
-      )}
-      <PageHeader title="Import Customers" description="Paste or upload a CSV. Optional columns: sms_opt_in, email_opt_in." />
+  function downloadLeftovers() {
+    const list = unimportedRows(rows, outcome ?? undefined)
+    if (!list.length) return
+    // toCsv neutralizes a leading = + - @ so a cell carrying a formula cannot
+    // execute when this report is opened in Excel or Sheets.
+    exportRowsToCsv('edgequote-import-not-imported', list, [
+      { label: 'Source row', value: r => r.line },
+      { label: 'Name', value: r => r.name },
+      { label: 'Email', value: r => r.email },
+      { label: 'Phone', value: r => r.phone },
+      { label: 'Street', value: r => r.address },
+      { label: 'City', value: r => r.city },
+      { label: 'Province/State', value: r => r.province },
+      { label: 'Postal/ZIP', value: r => r.postal_code },
+      { label: 'Notes', value: r => r.notes },
+      { label: 'Source', value: r => r.source },
+      { label: 'sms_opt_in', value: r => r.sms_opt_in },
+      { label: 'email_opt_in', value: r => r.email_opt_in },
+      { label: 'What happened', value: r => r.outcome },
+    ])
+  }
 
-      {done != null ? (
+  // ── Result ─────────────────────────────────────────────────────────────────
+  if (outcome) {
+    const clean = outcome.failed.length === 0 && outcome.propertyFailures.length === 0
+    return (
+      <PageContainer width="narrow">
+        <PageHeader title="Import finished" crumb={{ label: 'Customers', href: '/dashboard/customers' }} />
         <Card>
-          <CardBody className="text-center py-10 space-y-3" role="status" aria-live="polite">
-            <Check className="w-10 h-10 text-emerald-400 mx-auto" aria-hidden="true" />
-            <p className="text-lg font-semibold text-ink">Imported {done} customer{done !== 1 ? 's' : ''}.</p>
-            <Button onClick={() => router.push('/dashboard/customers')}>Back to customers</Button>
+          <CardBody className="space-y-4" role="status" aria-live="polite">
+            <div className="flex items-start gap-3">
+              {clean
+                ? <Check className="w-8 h-8 text-emerald-400 shrink-0" aria-hidden="true" />
+                : <AlertTriangle className="w-8 h-8 text-amber-400 shrink-0" aria-hidden="true" />}
+              <div>
+                <p className="text-lg font-semibold text-ink tabular-nums">
+                  {outcome.created} customer{outcome.created !== 1 ? 's' : ''} added
+                  {outcome.propertiesCreated > 0 && <> · {outcome.propertiesCreated} address{outcome.propertiesCreated !== 1 ? 'es' : ''}</>}
+                </p>
+                {/* Every row is accounted for. A count that doesn't add up to the
+                    file is the thing this screen exists to prevent. */}
+                <p className="text-sm text-ink-muted tabular-nums">
+                  of {totals.detected} row{totals.detected !== 1 ? 's' : ''} read
+                  {outcome.skippedExisting > 0 && <> · {outcome.skippedExisting} already here</>}
+                  {outcome.skippedForReview > 0 && <> · {outcome.skippedForReview} left for review</>}
+                  {outcome.skippedInvalid > 0 && <> · {outcome.skippedInvalid} couldn’t be read</>}
+                  {outcome.failed.length > 0 && <> · <span className="text-rose-400">{outcome.failed.length} failed to save</span></>}
+                </p>
+              </div>
+            </div>
+
+            {outcome.failed.length > 0 && (
+              <Banner tone="danger" icon={AlertTriangle}>
+                <div className="space-y-1">
+                  <p className="text-xs font-semibold">These rows were not saved. Everything else was.</p>
+                  <ul className="text-xs space-y-0.5">
+                    {outcome.failed.slice(0, 8).map(f => (
+                      <li key={f.line} className="tabular-nums">Row {f.line} — {f.name}: {f.error}</li>
+                    ))}
+                    {outcome.failed.length > 8 && <li>…and {outcome.failed.length - 8} more, in the download below.</li>}
+                  </ul>
+                </div>
+              </Banner>
+            )}
+
+            {outcome.propertyFailures.length > 0 && (
+              <Banner tone="warn" icon={AlertTriangle}>
+                {outcome.propertyFailures.length} customer{outcome.propertyFailures.length !== 1 ? 's were' : ' was'} added, but their address could not be saved. Add it from the customer’s profile.
+              </Banner>
+            )}
+
+            {outcome.runError && (
+              <Banner tone="warn" icon={Info}>
+                The customers were imported, but the import record could not be written ({outcome.runError}). Nothing is lost — only the audit entry is missing.
+              </Banner>
+            )}
+
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => router.push('/dashboard/customers')}>Back to customers</Button>
+              {unimportedRows(rows, outcome).length > 0 && (
+                <Button variant="secondary" onClick={downloadLeftovers}>
+                  <Download className="w-4 h-4" /> Download the {unimportedRows(rows, outcome).length} rows not imported
+                </Button>
+              )}
+            </div>
           </CardBody>
         </Card>
-      ) : (
-        <>
-          <Card>
-            <CardBody className="space-y-3">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <p className="text-xs text-ink-muted">Columns: <span className="text-ink">name</span> (required), email, phone, address, city, province, postal_code, notes, sms_opt_in, email_opt_in</p>
-                <label className="inline-flex items-center gap-1.5 text-xs font-medium text-accent-text cursor-pointer rounded-md focus-within:ring-2 focus-within:ring-accent/40">
-                  <Upload className="w-3.5 h-3.5" /> Upload CSV file
-                  <input type="file" accept=".csv,text/csv" onChange={onFile} className="sr-only" />
-                </label>
-              </div>
-              <textarea
-                value={csv}
-                onChange={e => preview(e.target.value)}
-                rows={8}
-                aria-label="Paste CSV data"
-                placeholder={'name,email,phone,city,sms_opt_in,email_opt_in\nJane Doe,jane@example.com,403-555-0100,Calgary,false,true'}
-                className={`w-full bg-bg-tertiary border rounded-xl px-3.5 py-2.5 text-sm font-mono text-ink outline-none transition-all ${fieldBorder()}`}
-              />
-              {parseError && <Banner tone="danger" icon={AlertTriangle}>{parseError}</Banner>}
-            </CardBody>
-          </Card>
+      </PageContainer>
+    )
+  }
 
-          {rows.length > 0 && (
-            <Card>
-              <CardBody className="space-y-3">
-                <p className="text-sm font-semibold text-ink tabular-nums">{rows.length} customer{rows.length !== 1 ? 's' : ''} ready · {emailCount} email opt-in · {smsCount} SMS opt-in</p>
-                <div className="max-h-48 overflow-auto rounded-lg border border-border divide-y divide-border">
-                  {rows.slice(0, 25).map((r, i) => (
-                    <div key={i} className="flex items-center gap-3 px-3 py-1.5 text-xs">
-                      <span className="font-medium text-ink min-w-0 truncate flex-1">{r.name}</span>
-                      <span className="text-ink-faint truncate">{r.email || r.phone || ''}</span>
-                      {r.sms_opt_in && <span className="text-[10px] text-emerald-400">SMS</span>}
-                      {r.email_opt_in && <span className="text-[10px] text-emerald-400">Email</span>}
-                    </div>
-                  ))}
-                  {rows.length > 25 && <p className="px-3 py-1.5 text-[11px] text-ink-faint">…and {rows.length - 25} more</p>}
-                </div>
+  // ── Build ──────────────────────────────────────────────────────────────────
+  const canPreview = !!parsed && !parsed.error && book.status === 'ready' && mappingNamesSomeone(mapping)
 
-                {smsCount > 0 && (
-                  <Banner tone="warn" icon={ShieldAlert}>
-                    <label className="flex items-start gap-2 cursor-pointer">
-                      <input id="sms-consent-ack" type="checkbox" checked={smsAck} onChange={e => setSmsAck(e.target.checked)} className="mt-0.5 w-4 h-4 accent-accent" />
-                      <span className="text-xs text-ink-muted">{SMS_CONSENT_WARNING}</span>
-                    </label>
-                  </Banner>
-                )}
+  return (
+    <PageContainer width="narrow">
+      <Link href="/dashboard/customers" className="text-sm text-ink-muted hover:text-ink flex items-center gap-1.5">
+        <ArrowLeft className="w-4 h-4" /> Back to customers
+      </Link>
+      <PageHeader
+        title="Import customers"
+        description="Bring your customer book over from a spreadsheet, Jobber, Housecall Pro or another CRM. Nothing is written until you have seen exactly what will happen."
+      />
 
-                <Button onClick={runImport} loading={importing} disabled={smsCount > 0 && !smsAck}
-                  aria-describedby={smsCount > 0 && !smsAck ? 'sms-consent-ack' : undefined}
-                  title={smsCount > 0 && !smsAck ? 'Acknowledge the SMS consent notice above to import.' : undefined}>
-                  Import {rows.length} customer{rows.length !== 1 ? 's' : ''}
-                </Button>
-              </CardBody>
-            </Card>
+      {/* Mapping is a wide, multi-column task. The page stays usable at 375px —
+          nothing is hidden — but saying so up front beats a pinched experience
+          the owner discovers halfway through. */}
+      <div className="sm:hidden">
+        <Banner tone="info" icon={Monitor}>Import is easiest on a desktop — there are a lot of columns to line up. It works here too.</Banner>
+      </div>
+
+      {book.status === 'error' && (
+        <Banner tone="danger" icon={AlertTriangle}>
+          Your existing customers could not be loaded ({book.message}). Import is blocked until they can be —
+          without them there is no way to tell a new customer from one you already have, and importing would duplicate your whole book.
+        </Banner>
+      )}
+
+      {/* 1 — the file */}
+      <Card>
+        <CardBody className="space-y-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <p className="text-sm font-semibold text-ink">1 · Your CSV</p>
+            <label className="inline-flex items-center gap-1.5 text-xs font-medium text-accent-text cursor-pointer rounded-md focus-within:ring-2 focus-within:ring-accent/40">
+              <Upload className="w-3.5 h-3.5" /> Upload CSV file
+              <input ref={fileRef} type="file" accept=".csv,text/csv" onChange={onFile} className="sr-only" />
+            </label>
+          </div>
+          <p className="text-xs text-ink-muted">
+            Any column names — you line them up in the next step. Up to {IMPORT_LIMITS.maxRows.toLocaleString()} rows.
+          </p>
+          <textarea
+            value={raw}
+            onChange={e => load(e.target.value, sourceName)}
+            rows={6}
+            aria-label="Paste CSV data"
+            placeholder={'First Name,Last Name,Phone,Email,Street,City\nJane,Doe,(403) 555-0100,jane@example.com,84 17 St NW,Calgary'}
+            className={`w-full bg-bg-tertiary border rounded-xl px-3.5 py-2.5 text-sm font-mono text-ink outline-none transition-all ${fieldBorder()}`}
+          />
+          {parsed?.error && <Banner tone="danger" icon={AlertTriangle}>{parsed.error}</Banner>}
+          {parsed && !parsed.error && (
+            <p className="text-xs text-ink-muted tabular-nums">
+              {parsed.rows.length.toLocaleString()} row{parsed.rows.length !== 1 ? 's' : ''} · {parsed.headers.length} column{parsed.headers.length !== 1 ? 's' : ''}
+              {sourceName && <> · {sourceName}</>}
+            </p>
           )}
-        </>
+          {parsed?.truncated.rows != null && (
+            <Banner tone="warn" icon={AlertTriangle}>
+              Only the first {IMPORT_LIMITS.maxRows.toLocaleString()} rows were read — {parsed.truncated.rows.toLocaleString()} more were left out. Import these, then upload the rest.
+            </Banner>
+          )}
+          {parsed?.truncated.bytes && (
+            <Banner tone="warn" icon={AlertTriangle}>That file was larger than {IMPORT_LIMITS.maxBytes / 1024 / 1024} MB and was cut short. Split it and import in parts.</Banner>
+          )}
+          {parsed?.truncated.columns != null && (
+            <Banner tone="warn" icon={AlertTriangle}>Only the first {IMPORT_LIMITS.maxColumns} columns were read.</Banner>
+          )}
+        </CardBody>
+      </Card>
+
+      {/* 2 — the mapping */}
+      {parsed && !parsed.error && (
+        <Card>
+          <CardBody className="space-y-3">
+            <div>
+              <p className="text-sm font-semibold text-ink">2 · Line up the columns</p>
+              <p className="text-xs text-ink-muted">Guessed from your headers. Change anything that looks wrong — nothing is read from a column you leave unmapped.</p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {IMPORT_FIELDS.map(f => (
+                <Select
+                  key={f.field}
+                  label={f.label}
+                  fieldSize="sm"
+                  value={mapping[f.field] === null ? '' : String(mapping[f.field])}
+                  onChange={e => setMapping(m => ({ ...m, [f.field]: e.target.value === '' ? null : Number(e.target.value) }))}
+                  placeholder="— not imported —"
+                  hint={f.hint}
+                  options={parsed.headers.map((h, i) => ({ value: String(i), label: h || `Column ${i + 1}` }))}
+                />
+              ))}
+            </div>
+            {!mappingNamesSomeone(mapping) && (
+              <Banner tone="warn" icon={AlertTriangle}>Map a name column — a full name, or a first and last name. EdgeQuote can’t create a customer without one.</Banner>
+            )}
+          </CardBody>
+        </Card>
+      )}
+
+      {/* 3 — what will happen */}
+      {canPreview && (
+        <Card>
+          <CardBody className="space-y-4">
+            <div>
+              <p className="text-sm font-semibold text-ink">3 · What will happen</p>
+              <p className="text-xs text-ink-muted">Read against the {book.status === 'ready' ? book.customers.length : 0} customers already in EdgeQuote.</p>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <Figure n={totals.toCreate} label="will be added" tone="success" />
+              <Figure n={totals.existing} label="already here" tone="neutral" />
+              <Figure n={totals.review} label="need review" tone="warn" />
+              <Figure n={totals.invalid} label="can’t be read" tone="danger" />
+            </div>
+
+            {(totals.withAddress > 0 || totals.emailOptIns > 0 || totals.smsOptIns > 0) && (
+              <p className="text-xs text-ink-muted tabular-nums">
+                {totals.withAddress > 0 && <>{totals.withAddress} of them bring a service address, saved as their primary property. </>}
+                {totals.emailOptIns > 0 && <>{totals.emailOptIns} carry an email opt-in. </>}
+                {totals.smsOptIns > 0 && <>{totals.smsOptIns} carry an SMS opt-in.</>}
+              </p>
+            )}
+
+            {totals.review > 0 && (
+              <Banner tone="warn" icon={AlertTriangle}>
+                {totals.review} row{totals.review !== 1 ? 's' : ''} could be someone you already have. They are switched OFF — tick one to import it as a new customer anyway. EdgeQuote never merges two people on a guess.
+              </Banner>
+            )}
+
+            <div className="max-h-96 overflow-auto rounded-lg border border-border divide-y divide-border">
+              {rows.slice(0, PREVIEW_LIMIT).map(r => (
+                <div key={r.line} className="flex items-start gap-3 px-3 py-2 text-xs">
+                  <span className="text-ink-faint tabular-nums w-8 shrink-0 pt-0.5">{r.line}</span>
+                  {r.status === 'review' ? (
+                    <input
+                      type="checkbox" checked={r.include} onChange={() => toggle(r.line)}
+                      className="mt-0.5 w-4 h-4 accent-accent shrink-0"
+                      aria-label={`Import row ${r.line}, ${r.values.name}, as a new customer`}
+                    />
+                  ) : <span className="w-4 shrink-0" aria-hidden="true" />}
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium text-ink truncate">{r.values.name || <span className="text-ink-faint italic">no name</span>}</p>
+                    <p className="text-ink-faint truncate">
+                      {[r.values.phone, r.values.email, r.values.address].filter(Boolean).join(' · ') || '—'}
+                    </p>
+                    <p className="text-ink-muted">{r.reason}</p>
+                    {r.warnings.map((w, i) => <p key={i} className="text-amber-400/90">{w}</p>)}
+                  </div>
+                  <Badge tone={STATUS_TONE[r.status]} className="shrink-0">{STATUS_LABEL[r.status]}</Badge>
+                </div>
+              ))}
+              {rows.length > PREVIEW_LIMIT && (
+                <p className="px-3 py-2 text-[11px] text-ink-faint tabular-nums">
+                  …and {(rows.length - PREVIEW_LIMIT).toLocaleString()} more rows, counted in the figures above.
+                </p>
+              )}
+            </div>
+
+            {/* Optional, and only for rows the CSV itself didn't answer — a row's
+                own source column always wins. Leaving it imports them as
+                "Not recorded", which is the truth when nobody knows. */}
+            <Select
+              label="How did these customers find you?"
+              fieldSize="sm"
+              className="sm:max-w-xs"
+              value={defaultSource}
+              onChange={e => setDefaultSource(e.target.value)}
+              placeholder="Not sure"
+              hint={rows.some(r => r.values.source) ? 'Rows with their own source keep it.' : 'Applied to every row imported.'}
+              options={ACQUISITION_SOURCES.map(s => ({ value: s, label: s }))}
+            />
+
+            {totals.smsOptIns > 0 && (
+              <Banner tone="warn" icon={ShieldAlert}>
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    id="sms-consent-ack" type="checkbox" checked={smsAck}
+                    onChange={e => setSmsAck(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 accent-accent shrink-0"
+                  />
+                  <span className="text-xs text-ink-muted">
+                    {totals.smsOptIns} of these {totals.smsOptIns !== 1 ? 'rows carry' : 'row carries'} an SMS opt-in. {SMS_CONSENT_WARNING}
+                  </span>
+                </label>
+              </Banner>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                onClick={runImport} loading={importing}
+                disabled={totals.toCreate === 0 || smsBlocked}
+                aria-describedby={smsBlocked ? 'sms-consent-ack' : undefined}
+                title={smsBlocked ? 'Acknowledge the SMS consent notice above to import.' : undefined}
+              >
+                {totals.toCreate === 0 ? 'Nothing to import' : `Import ${totals.toCreate.toLocaleString()} customer${totals.toCreate !== 1 ? 's' : ''}`}
+              </Button>
+              {totals.detected - totals.toCreate > 0 && (
+                <Button variant="ghost" onClick={downloadLeftovers}>
+                  <Download className="w-4 h-4" /> Download the {(totals.detected - totals.toCreate).toLocaleString()} that won’t be
+                </Button>
+              )}
+            </div>
+            {totals.toCreate === 0 && totals.existing === totals.detected && totals.detected > 0 && (
+              <p className="text-xs text-ink-muted">Every row in this file is already in EdgeQuote. Importing it again would change nothing.</p>
+            )}
+          </CardBody>
+        </Card>
       )}
     </PageContainer>
+  )
+}
+
+function Figure({ n, label, tone }: { n: number; label: string; tone: Tone }) {
+  const colour: Record<Tone, string> = {
+    success: 'text-emerald-400', warn: 'text-amber-400', danger: 'text-rose-400',
+    neutral: 'text-ink', accent: 'text-accent-text', info: 'text-sky-400',
+  }
+  return (
+    <div className="rounded-lg border border-border px-3 py-2">
+      <p className={`text-xl font-semibold tabular-nums ${n === 0 ? 'text-ink-faint' : colour[tone]}`}>{n.toLocaleString()}</p>
+      <p className="text-[11px] text-ink-muted">{label}</p>
+    </div>
   )
 }

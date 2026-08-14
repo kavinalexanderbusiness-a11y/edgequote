@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { sendEmail, commsEnabled } from '@/lib/comms/send'
+import { sanitizeSourceInput } from '@/lib/attribution'
 
 // ── Shared lead intake ───────────────────────────────────────────────────────
 // THE single server-side door for turning ANY external submission (website
@@ -189,10 +190,31 @@ export async function submitLead(opts: {
     }
   }
 
+  // ── Automatic acquisition evidence, in strength order ──────────────────────
+  // Mirrors the booking door's rule (hear_about → utm_source → door label), so
+  // the two public doors cannot disagree about what counts as evidence:
+  //   1. The customer's own words — a hear_about answer on the form.
+  //   2. utm_source off the link that brought them (a form arriving via a
+  //      Facebook ad should not report as generic "Website").
+  //   3. The door label ('Website' / 'Formspree' / caller-supplied) — the floor,
+  //      so a lead-door customer is never source-less.
+  // No new storage: the full payload (raw utm and all) is already persisted
+  // verbatim in website_leads.raw_submission. As of 2026-08-11 the live marketing
+  // site sends NO attribution keys (0 of 18 leads ever) — this is the door being
+  // ready for them, and /api/intake callers can pass them today.
+  const saidSource = sanitizeSourceInput(leadField(payload, ['hear_about', 'hearAbout', 'how_did_you_hear', 'howDidYouHear']))
+  const utmSource = sanitizeSourceInput(leadField(payload, ['utm_source', 'utmSource']))
+
   const { data, error } = await anon.rpc('submit_website_lead', {
     p_token: token,
     p_payload: payload,
-    p_source: (opts.source || 'Website').trim() || 'Website',
+    // `source` becomes customers.acquisition_source, and /api/intake is CORS-open
+    // and unauthenticated with `source` read straight from the request body — so
+    // this is an untrusted-input boundary, not a formatting nicety. THE bound lives
+    // in lib/attribution and is mirrored by sanitize_source_input in SQL, which is
+    // the copy that actually holds: this RPC is granted to `anon` and can be called
+    // without going through any route here.
+    p_source: saidSource || utmSource || sanitizeSourceInput(opts.source) || 'Website',
   })
 
   if (error) {

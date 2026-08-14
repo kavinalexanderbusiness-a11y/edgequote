@@ -318,7 +318,7 @@ export function SendMessageDialog({
             </div>
             <div className="max-h-44 overflow-y-auto rounded-xl border border-border divide-y divide-border">
               {all.map(r => (
-                <label key={r.customerId} className="flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-surface/40">
+                <label key={r.customerId} className="flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-surface-raised/40">
                   <input type="checkbox" checked={selected.has(r.customerId)} onChange={() => toggle(r.customerId)} className="w-4 h-4 rounded border-border-strong accent-accent shrink-0" />
                   <span className="min-w-0 flex-1">
                     <span className="block text-sm text-ink truncate">{r.name}</span>

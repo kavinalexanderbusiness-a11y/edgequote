@@ -3,137 +3,148 @@
 import Link from 'next/link'
 import { PageContainer } from '@/components/layout/PageContainer'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { Card } from '@/components/ui/Card'
 import { SuggestionsCenter } from '@/components/grow/SuggestionsCenter'
 import { CustomerHealthPanel } from '@/components/grow/CustomerHealthPanel'
 import { WinLossPanel } from '@/components/grow/WinLossPanel'
 import {
-  BarChart3, Gauge, HeartPulse, Map as MapIcon, Target, ShieldCheck, CalendarCheck, ArrowRight, TrendingUp, CloudRain, Images, Sparkles, Ruler, FileText,
+  BarChart3, Gauge, HeartPulse, Map as MapIcon, Target, ShieldCheck, CalendarCheck,
+  ArrowRight, TrendingUp, CloudRain, Ruler, FileText, ChevronDown, type LucideIcon,
 } from 'lucide-react'
 
-// ── Grow hub ──────────────────────────────────────────────────────────────────
-// One home for everything that grows the business, so the sidebar stays short.
-// Grouped by INTENT (make money / get customers / keep customers / stay on top),
-// each card a one-line "what it does" + a direct link. The Suggestions Center
-// (action feed) will land at the top of this page.
+// ── Grow ─────────────────────────────────────────────────────────────────────
+// One question: "what should I do to get more work?"
+//
+// This page used to answer it with 18 blocks under a 9-pill rail — an action
+// feed, three feature cards, two analytics panels, and twelve equal-weight tool
+// cards in five groups. Everything the app can do about growth was on one
+// screen at the same size, so nothing was the next step. Three of those cards
+// (Marketing Studio, Before/After, Automations) pointed at destinations already
+// sitting in the rail directly above them, and a third of the rest were not
+// about growth at all — Weather, Data Quality, Reports, Measurement Accuracy.
+//
+// Now: the action feed, then THREE plain-language goals, then everything else
+// behind disclosure. Nothing was deleted — Grow is still the only door to these
+// routes (they are not in the sidebar registry), so every link is still on this
+// page and `verify:navigation`'s no-dead-ends rule still holds. They just stop
+// competing with the answer.
 
-interface Tool { label: string; href: string; icon: typeof BarChart3; blurb: string }
+interface Tool { label: string; href: string; icon: LucideIcon; blurb: string }
 
-const GROUPS: { title: string; tools: Tool[] }[] = [
-  {
-    title: 'Make more money',
-    tools: [
-      { label: 'Pricing Recovery', href: '/dashboard/pricing-recovery', icon: Gauge, blurb: 'Unpriced & underpriced jobs worth fixing — one-tap repairs.' },
-      { label: 'Profitability', href: '/dashboard/profitability', icon: BarChart3, blurb: 'Which routes and neighborhoods actually make money.' },
-    ],
-  },
+// THE three things an owner can actually do about growth, in the order they pay
+// off: find new work, keep the customers already won, and charge properly for
+// both. Deliberately not five — "Stay on top of it" was a drawer, not a goal.
+const GOALS: { title: string; sub: string; tools: Tool[] }[] = [
   {
     title: 'Get more customers',
+    sub: 'Find work near the routes you already drive',
     tools: [
-      { label: 'Saturation Map', href: '/dashboard/saturation', icon: MapIcon, blurb: 'Where your routes are strong and where to grow next.' },
-      { label: 'Neighbor Leads', href: '/dashboard/neighbors', icon: Target, blurb: 'Door-knock prospects right next to your best customers.' },
+      { label: 'Neighbours to door-knock', href: '/dashboard/neighbors', icon: Target, blurb: 'Prospects right next to your best customers.' },
+      { label: 'Where to grow next', href: '/dashboard/saturation', icon: MapIcon, blurb: 'Which areas your routes already own, and which are thin.' },
     ],
   },
   {
-    title: 'Show off your work',
+    title: 'Keep the customers you have',
+    sub: 'Cheaper than finding new ones',
     tools: [
-      { label: 'Marketing Studio', href: '/dashboard/grow/studio', icon: Sparkles, blurb: 'AI posts from finished jobs — draft, review and publish in one place.' },
-      { label: 'Before / After Studio', href: '/dashboard/grow/before-after', icon: Images, blurb: 'Turn job photos into branded before/after posts — AI picks the best pair.' },
+      { label: 'Win back lapsed customers', href: '/dashboard/reactivation', icon: HeartPulse, blurb: 'Who has gone quiet, and what they used to be worth.' },
+      { label: 'Who to call next', href: '/dashboard/revenue-intelligence', icon: TrendingUp, blurb: 'Every customer ranked for renewal, upsell and referral.' },
     ],
   },
   {
-    title: 'Keep customers',
+    title: 'Charge what the work is worth',
+    sub: 'Money you are already owed by your own price list',
     tools: [
-      { label: 'Reactivation', href: '/dashboard/reactivation', icon: HeartPulse, blurb: 'Lapsed and at-risk customers worth winning back.' },
-    ],
-  },
-  {
-    title: 'Stay on top of it',
-    tools: [
-      { label: 'Weekly Review', href: '/dashboard/review', icon: CalendarCheck, blurb: 'Last week’s results and this week’s moves at a glance.' },
-      { label: 'Weather', href: '/dashboard/weather', icon: CloudRain, blurb: 'Spot rain-threatened work and reschedule it — jobs, hours & revenue at stake.' },
-      { label: 'Data Quality', href: '/dashboard/data-quality', icon: ShieldCheck, blurb: 'Missing customers, prices and locations to clean up.' },
-      { label: 'Reports & Exports', href: '/dashboard/reports', icon: FileText, blurb: 'Revenue & GST for any quarter — the PDF and spreadsheets your bookkeeper asks for.' },
-      { label: 'Measurement Accuracy', href: '/dashboard/measurements', icon: Ruler, blurb: 'How close auto-measure runs to what you accept — calibration over time.' },
+      { label: 'Fix unpriced & underpriced jobs', href: '/dashboard/pricing-recovery', icon: Gauge, blurb: 'One-tap repairs on jobs earning less than they should.' },
+      { label: 'What actually makes money', href: '/dashboard/profitability', icon: BarChart3, blurb: 'Which routes and neighbourhoods are worth the drive.' },
     ],
   },
 ]
 
-// A featured destination card — the three intelligence surfaces. `group` +
-// card-lift give it the hover language of the whole Grow experience: the card
-// floats, the arrow leans in.
-function FeatureCard({ href, icon: Icon, title, blurb }: { href: string; icon: typeof BarChart3; title: string; blurb: string }) {
+// Everything that is genuinely useful but is NOT "what do I do next": reports to
+// read, and tools that belong to running the business rather than growing it.
+// One line each, behind a summary, so they cost a tap instead of a screen.
+const LOOK: Tool[] = [
+  { label: 'How the business is doing', href: '/dashboard/intelligence', icon: BarChart3, blurb: 'Revenue, profit, customers, capacity and forecasts on one page.' },
+  { label: 'Last week & this week', href: '/dashboard/review', icon: CalendarCheck, blurb: 'What happened, and the moves worth making next.' },
+  { label: 'Reports & exports', href: '/dashboard/reports', icon: FileText, blurb: 'Revenue and GST for any quarter — what your bookkeeper asks for.' },
+]
+
+const HOUSEKEEPING: Tool[] = [
+  { label: 'Weather risk', href: '/dashboard/weather', icon: CloudRain, blurb: 'Rain-threatened work worth moving.' },
+  { label: 'Data to clean up', href: '/dashboard/data-quality', icon: ShieldCheck, blurb: 'Missing prices, addresses and contact details.' },
+  { label: 'Measurement accuracy', href: '/dashboard/measurements', icon: Ruler, blurb: 'How close auto-measure runs to what you accept.' },
+]
+
+// One row. Not a card: a card says "consider me", a row says "here it is".
+function ToolRow({ label, href, icon: Icon, blurb }: Tool) {
   return (
-    <Link href={href} className="group block h-full">
-      <Card className="p-5 h-full border-accent/25 card-lift hover:border-accent/50">
-        <div className="flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
-            <Icon className="w-5 h-5 text-accent-text" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-bold tracking-tight text-ink flex items-center gap-1.5">
-              {title} <ArrowRight className="w-3.5 h-3.5 text-accent-text transition-transform group-hover:translate-x-0.5" />
-            </p>
-            <p className="text-xs text-ink-muted mt-0.5">{blurb}</p>
-          </div>
-        </div>
-      </Card>
+    <Link href={href}
+      className="group flex items-start gap-3 rounded-xl border border-border bg-bg-secondary px-3.5 py-3 transition-colors hover:border-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+      <span className="w-8 h-8 rounded-lg bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
+        <Icon aria-hidden className="w-4 h-4 text-accent-text" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-semibold tracking-tight text-ink flex items-center gap-1.5">
+          {label}
+          <ArrowRight aria-hidden className="w-3.5 h-3.5 text-ink-faint transition-transform group-hover:translate-x-0.5" />
+        </span>
+        <span className="block text-xs text-ink-muted mt-0.5">{blurb}</span>
+      </span>
     </Link>
+  )
+}
+
+// Native <details>: keyboard and screen-reader behaviour for free, no state, and
+// it degrades to plain visible content if CSS never arrives.
+function Drawer({ title, hint, tools }: { title: string; hint: string; tools: Tool[] }) {
+  return (
+    <details className="group rounded-card border border-border bg-bg-secondary/60">
+      <summary className="flex items-center gap-2 px-4 py-3 cursor-pointer list-none min-h-[48px] rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+        <ChevronDown aria-hidden className="w-4 h-4 text-ink-faint transition-transform group-open:rotate-180 shrink-0" />
+        <span className="min-w-0">
+          <span className="block text-sm font-semibold text-ink">{title}</span>
+          <span className="block text-xs text-ink-muted">{hint}</span>
+        </span>
+      </summary>
+      <div className="px-4 pb-4 pt-1 grid gap-2 sm:grid-cols-2">
+        {tools.map(t => <ToolRow key={t.href} {...t} />)}
+      </div>
+    </details>
   )
 }
 
 export default function GrowPage() {
   return (
     <PageContainer>
-      <PageHeader title="Grow" description="Your AI advisor for pricing, growth and retention — built on your own numbers." />
+      {/* Plain words. The old subtitle ("Your AI advisor for pricing, growth and
+          retention — built on your own numbers") described the software; this
+          describes the job. */}
+      <PageHeader title="Grow" description="What to do next to win more work — and keep the customers you already have." />
 
-      {/* Suggestions Center — the action feed comes FIRST: "what should I do next?"
-          leads the page; the navigation cards below are reference, not action. */}
+      {/* The answer to the page's question comes first and stays first. */}
       <SuggestionsCenter />
 
-      {/* Intelligence — the owner's command center: report (BI) + act (Revenue Intel). */}
-      <div className="grid sm:grid-cols-2 gap-4 animate-rise stagger-2">
-        <FeatureCard href="/dashboard/intelligence" icon={BarChart3} title="How the business is doing"
-          blurb="Revenue, profit, customers, sales, capacity and forecasts — the whole picture on one page." />
-        <FeatureCard href="/dashboard/revenue-intelligence" icon={TrendingUp} title="Who to call next"
-          blurb="Every customer scored for renewal, upsell, cross-sell and referral — ranked by what it's worth." />
-      </div>
+      {GOALS.map((g, i) => (
+        <section key={g.title} className={`space-y-2 animate-rise stagger-${Math.min(i + 2, 6)}`}>
+          <div className="px-1">
+            <h2 className="text-sm font-bold tracking-tight text-ink">{g.title}</h2>
+            <p className="text-xs text-ink-muted">{g.sub}</p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {g.tools.map(t => <ToolRow key={t.href} {...t} />)}
+          </div>
+        </section>
+      ))}
 
-      {/* Automations — reviews, referrals, follow-ups & campaigns. Same word as
-          the rail pill and the page title so the handshake is instant. */}
-      <div className="animate-rise stagger-3">
-        <FeatureCard href="/dashboard/grow/crm" icon={Sparkles} title="Automations"
-          blurb="Review pipeline, referral tracking, follow-up radar, and birthday/anniversary/win-back/marketing campaigns." />
-      </div>
-
-      {/* Intelligence: who's slipping / who's valuable, and why quotes are lost. */}
+      {/* Who is slipping, and why quotes are lost. Real answers rather than
+          navigation, so they sit below the goals but above the drawers — and
+          each now says plainly when it could not load, instead of rendering a
+          failed read as an all-clear. */}
       <CustomerHealthPanel />
       <WinLossPanel />
 
-      {GROUPS.map(group => (
-        <div key={group.title} className="space-y-3">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-faint px-1">{group.title}</p>
-          <div className="grid gap-4 sm:grid-cols-2">
-            {group.tools.map(({ label, href, icon: Icon, blurb }) => (
-              <Link key={href} href={href} className="group block h-full">
-                <Card className="p-5 card-lift hover:border-accent/40 h-full">
-                  <div className="flex items-start gap-3.5">
-                    <div className="w-9 h-9 rounded-xl bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-                      <Icon className="w-4 h-4 text-accent-text" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold tracking-tight text-ink flex items-center gap-1.5">
-                        {label} <ArrowRight className="w-3.5 h-3.5 text-ink-faint transition-transform group-hover:translate-x-0.5" />
-                      </p>
-                      <p className="text-xs text-ink-muted mt-0.5">{blurb}</p>
-                    </div>
-                  </div>
-                </Card>
-              </Link>
-            ))}
-          </div>
-        </div>
-      ))}
+      <Drawer title="See what's working" hint="Reports and results, when you want to read rather than act" tools={LOOK} />
+      <Drawer title="Other tools" hint="Housekeeping that keeps the numbers above honest" tools={HOUSEKEEPING} />
     </PageContainer>
   )
 }

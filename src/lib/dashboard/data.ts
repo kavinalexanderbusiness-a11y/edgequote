@@ -25,7 +25,13 @@ import { pageAll } from '@/lib/supabase/pageAll'
 import type { RJob, RRecurrence } from '@/lib/reactivation'
 import type { MoneyBandValues } from '@/components/dashboard/MoneyBand'
 
-type InvoiceRow = Pick<Invoice, 'amount' | 'status' | 'amount_paid' | 'discount_type' | 'discount_value' | 'due_date'>
+// invoice_number/customer_name/viewed_at ride along so the priority queue can
+// NAME the invoice it wants collected and deep-link to it (`?invoice=`) instead
+// of dropping the owner on the full list to find it again. Three text columns on
+// a read that was already happening — no extra query, no extra round trip.
+type InvoiceRow = Pick<Invoice,
+  'amount' | 'status' | 'amount_paid' | 'discount_type' | 'discount_value' | 'due_date'
+  | 'invoice_number' | 'customer_name' | 'viewed_at'>
 // One conversations read serves two consumers: the lead union (all non-archived)
 // and the messages priority row (the unread subset).
 type ConvRow = LeadConvRow & { unread: number }
@@ -34,8 +40,11 @@ type ConvRow = LeadConvRow & { unread: number }
 // amount fields), priorities (status/total), needsFollowUp (sent_at,
 // last_followed_up_at), reactivation (cadence prices, created_at) and dayPlan's
 // jobVisitValue. `select('*')` shipped all 45 columns for these 14.
+// deposit_type/deposit_value/accepted_price/deposit_override_at feed the
+// scheduling gate: WITHOUT them a deposit-gated quote reads as gateless and the
+// queue would urge scheduling a booking the owner deliberately gated.
 const QUOTE_COLUMNS =
-  'id, customer_id, customer_name, status, total, service_type, created_at, sent_at, last_followed_up_at, initial_price, weekly_price, biweekly_price, monthly_price, lead_meta'
+  'id, customer_id, customer_name, status, total, service_type, created_at, sent_at, last_followed_up_at, initial_price, weekly_price, biweekly_price, monthly_price, lead_meta, accepted_price, deposit_type, deposit_value, deposit_override_at'
 
 export interface DashboardData {
   money: MoneyBandValues
@@ -65,6 +74,20 @@ export interface DashboardData {
   weather: Promise<WeatherImpactReport | null>
   greeting: string
   dateLine: string
+  /** Has this business done ANYTHING yet — a customer, quote, job or invoice?
+   *
+   *  DERIVED from rows this loader already read: no extra query, no stored flag,
+   *  nothing to keep in sync (the setupHealth discipline). It is safe to treat
+   *  `false` as fact because every one of those reads is under the all-or-throw
+   *  failure check below — a transient outage takes the whole dashboard to the
+   *  error screen rather than quietly reporting an empty business. Without that
+   *  guarantee this would be exactly the "uncertain read licensing an action"
+   *  bug the seeding path was fixed for.
+   *
+   *  Consumers use it to tell a brand-new account APART from a mature one that
+   *  has cleared its queue — the two look identical in the data and must not
+   *  read identically on screen. */
+  started: boolean
 }
 
 type SettingsRow = {
@@ -108,13 +131,14 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   // ── Phase 1: read every table ONCE, all in parallel ──
   const [
     invRes, jobRes, planJobRes, quoteRes, recRes, convRes, custRes, setRes,
+    depositRowsRes,
     todayCash, weekCash, prevWeekCash, monthCash, lastMonthCash,
   ] = await Promise.all([
     // The three full-history reads are PAGED. An unbounded select silently stops
     // at 1000 rows, which would understate Owed/Collected and — via
     // priorities' scheduledQuoteIds — tell the owner to schedule work that is
     // already booked. At ~200 jobs/wk `jobs` crosses the cap within weeks.
-    pageAll<InvoiceRow>(() => sb.from('invoices').select('id, amount, status, amount_paid, discount_type, discount_value, due_date').eq('user_id', userId)),
+    pageAll<InvoiceRow>(() => sb.from('invoices').select('id, amount, status, amount_paid, discount_type, discount_value, due_date, invoice_number, customer_name, viewed_at').eq('user_id', userId)),
     // Every job, lean columns — feeds priorities (missed/unscheduled) + reactivation.
     pageAll<RJob>(() => sb.from('jobs').select('id, quote_id, customer_id, status, scheduled_date, recurrence_id, price, service_type').eq('user_id', userId)),
     // The day plan needs joins + times, but only for the days it shows, so it is a
@@ -148,6 +172,11 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     sb.from('customers').select('id, phone, email, sms_opt_in, email_opt_in, message_prefs').eq('user_id', userId).is('archived_at', null),
     // Widened with base_* so the weather engine doesn't re-read this same row.
     sb.from('business_settings').select('gst_percent, service_seasons, preferred_work_days, work_start_time, daily_capacity_hours, base_lat, base_lng, base_address').eq('user_id', userId).maybeSingle(),
+    // Quote-linked deposit ledger rows (pre-invoice booking deposits) — the
+    // scheduling gate derives readiness from these. Tiny by construction: only
+    // rows that secure a booking carry quote_id (partial index matches).
+    sb.from('payments').select('quote_id, amount, kind, provider, status')
+      .eq('user_id', userId).not('quote_id', 'is', null),
     collectedBetween(sb, { userId, startIso: dayB.start, endIso: dayB.end }),
     collectedBetween(sb, { userId, startIso: weekB.start, endIso: dayB.end }),
     // The comparison windows, through THE same ledger engine — so the
@@ -172,6 +201,11 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     : convRes.error ? `conversations: ${convRes.error.message}`
     : custRes.error ? `customers: ${custRes.error.message}`
     : setRes.error ? `settings: ${setRes.error.message}`
+    // Deposit ledger joins the all-or-throw rule: an unread ledger rendered as
+    // "no deposit received" would tell the owner to chase money already paid —
+    // or, through the gate, to schedule a booking that IS secured as if it
+    // weren't. Unknown must stay unknown, and here unknown fails the load.
+    : depositRowsRes.error ? `booking deposits: ${depositRowsRes.error.message}`
     : todayCash.error ? `today's payments: ${todayCash.error}`
     : weekCash.error ? `this week's payments: ${weekCash.error}`
     // The comparison windows join the same all-or-throw rule: a delta computed
@@ -223,9 +257,15 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   const overdue = overdueInv.reduce((s, i) => s + Math.max(0, invoiceBalance(i, settings).balance), 0)
 
   // ── Priorities (THE queue engine) ──
+  const customerRows = (custRes.data as (ReachCustomer & { id: string })[]) || []
+  // Deposit rows grouped by the booking they secure — the queue's gate input.
+  const quoteDepositRows: Record<string, { amount: number; kind?: string | null; provider?: string | null; status?: string | null }[]> = {}
+  for (const r of (depositRowsRes.data as { quote_id: string | null; amount: number; kind: string | null; provider: string | null; status: string | null }[]) || []) {
+    if (r.quote_id) (quoteDepositRows[r.quote_id] ||= []).push(r)
+  }
   const priorities = computePriorities({
-    quotes, invoices, jobs, recById,
-    customers: (custRes.data as (ReachCustomer & { id: string })[]) || [],
+    quotes, invoices, jobs, recById, quoteDepositRows,
+    customers: customerRows,
     // Only the unread ones are a "reply to messages" job. customer_id must
     // survive — the messages row uses it to exclude people leads already counted.
     conversations: conversations.filter(c => Number(c.unread || 0) > 0),
@@ -295,6 +335,10 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     weather,
     greeting: hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening',
     dateLine: now.toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' }),
+    // Four full-history reads already in hand. Any ONE row of real work — even a
+    // customer added and nothing else — means this business has begun, so the
+    // first-run framing stands down permanently and can never re-appear later.
+    started: quotes.length > 0 || jobs.length > 0 || invoices.length > 0 || customerRows.length > 0,
   }
 }
 

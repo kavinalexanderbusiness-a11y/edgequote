@@ -54,20 +54,23 @@ export async function POST(req: NextRequest) {
     // away with it; on a payment with no invoice, entity_id would flip between the
     // two rows and the notify-once dedupe would stop deduping. Ask for the row we
     // actually mean.
+    // .eq('kind','payment') keeps the pre-invoice deposit pair honest: both legs
+    // of a quote deposit carry the same intent id, and the credit leg is not the
+    // money-in row this lookup exists to find.
     const { data } = await sb.from('payments')
-      .select('id, invoice_id, user_id, customer_id, invoices(invoice_number)')
-      .eq('stripe_payment_intent', piId).gt('amount', 0).limit(1).maybeSingle()
-    const p = data as { id: string; invoice_id: string | null; user_id: string; customer_id: string | null; invoices?: { invoice_number: string } | { invoice_number: string }[] | null } | null
+      .select('id, invoice_id, quote_id, user_id, customer_id, invoices(invoice_number)')
+      .eq('stripe_payment_intent', piId).eq('kind', 'payment').gt('amount', 0).limit(1).maybeSingle()
+    const p = data as { id: string; invoice_id: string | null; quote_id: string | null; user_id: string; customer_id: string | null; invoices?: { invoice_number: string } | { invoice_number: string }[] | null } | null
     if (!p) return null
     const inv = Array.isArray(p.invoices) ? p.invoices[0] : p.invoices
     return { ...p, invoiceNumber: inv?.invoice_number ?? null }
   }
-  async function notifyOnce(userId: string, type: string, entityId: string, title: string, body: string, customerId: string | null) {
+  async function notifyOnce(userId: string, type: string, entityId: string, title: string, body: string, customerId: string | null, entityType: 'invoice' | 'quote' = 'invoice') {
     const { data: dup } = await sb.from('notifications').select('id').eq('user_id', userId).eq('type', type).eq('entity_id', entityId).limit(1)
     if (dup && dup.length) return
     await sb.from('notifications').insert({
-      user_id: userId, type, title, body, customer_id: customerId, entity_type: 'invoice', entity_id: entityId,
-      href: customerId ? `/dashboard/customers/${customerId}` : '/dashboard/invoices',
+      user_id: userId, type, title, body, customer_id: customerId, entity_type: entityType, entity_id: entityId,
+      href: customerId ? `/dashboard/customers/${customerId}` : (entityType === 'quote' ? '/dashboard/quotes' : '/dashboard/invoices'),
     })
   }
 
@@ -78,7 +81,66 @@ export async function POST(req: NextRequest) {
       payment_intent?: string | null; setup_intent?: string | null; customer?: string | null
       metadata?: Record<string, string> | null
     }
-    if (s.payment_status === 'paid') {
+    // ── Scheduling deposit on a QUOTE (no invoice exists yet) ────────────────
+    // Routed by metadata.quote_deposit — the key /api/portal/quote-deposit sets
+    // and the invoice path never does, so the two vocabularies can't cross.
+    // Records the ledger's canonical pre-invoice deposit shape (recordDeposit's
+    // two legs: the CASH that arrived + the CREDIT the business now holds for
+    // the customer), both welded to the booking by payments.quote_id. The
+    // scheduling gate derives "deposit received" from the cash leg; nothing
+    // here stores a readiness flag anywhere.
+    if (s.payment_status === 'paid' && s.metadata?.quote_deposit === '1') {
+      const quoteId = s.metadata?.quote_id
+      const userId = s.metadata?.user_id
+      const customerId = s.metadata?.customer_id ?? null
+      if (quoteId && userId) {
+        const amount = (s.amount_total ?? 0) / 100
+        const piId = typeof s.payment_intent === 'string' ? s.payment_intent : null
+        // Each leg is separately idempotent on its own stripe_session_id key —
+        // a re-delivered event no-ops both. A 500 on either write makes Stripe
+        // retry rather than lose money (both writes are safe to replay).
+        const cashRes = await sb.from('payments').upsert({
+          user_id: userId, customer_id: customerId, invoice_id: null, quote_id: quoteId,
+          amount, currency: s.currency ?? 'cad',
+          kind: 'payment', provider: 'stripe', method: 'stripe',
+          stripe_session_id: s.id, stripe_payment_intent: piId,
+          status: 'paid', paid_at: now(), notes: 'Scheduling deposit',
+        }, { onConflict: 'stripe_session_id', ignoreDuplicates: true }).select('id')
+        if (cashRes.error) {
+          console.error('[stripe] quote-deposit cash leg failed:', cashRes.error.message)
+          return NextResponse.json({ error: 'db write failed' }, { status: 500 })
+        }
+        const creditRes = await sb.from('payments').upsert({
+          user_id: userId, customer_id: customerId, invoice_id: null, quote_id: quoteId,
+          amount, currency: s.currency ?? 'cad',
+          kind: 'credit', provider: 'credit', method: 'credit',
+          stripe_session_id: `credit:${s.id}`, stripe_payment_intent: piId,
+          status: 'paid', paid_at: now(), notes: 'Scheduling deposit — held as credit',
+        }, { onConflict: 'stripe_session_id', ignoreDuplicates: true })
+        if (creditRes.error) {
+          console.error('[stripe] quote-deposit credit leg failed:', creditRes.error.message)
+          return NextResponse.json({ error: 'db write failed' }, { status: 500 })
+        }
+        const isNewPayment = (cashRes.data?.length ?? 0) > 0
+        if (isNewPayment) {
+          const num = s.metadata?.quote_number || 'their quote'
+          await notifyOnce(userId, 'deposit_received', quoteId, 'Deposit received',
+            `${cad(amount)} received toward ${num} — check whether the booking is ready to schedule.`, customerId, 'quote')
+          // The receipt template asserts only "received your payment of $X" —
+          // partial-safe by design, so a deposit can reuse it. Best-effort +
+          // time-boxed, and gated on THIS delivery inserting the row (a Stripe
+          // re-delivery no-ops above → no second message).
+          if (customerId) {
+            await Promise.race([
+              sendPaymentReceipt(sb, { userId, customerId, amount, origin }),
+              new Promise<void>(resolve => setTimeout(resolve, 6000)),
+            ])
+          }
+        }
+      }
+    }
+
+    if (s.payment_status === 'paid' && s.metadata?.quote_deposit !== '1') {
       const invoiceId = s.metadata?.invoice_id
       const userId = s.metadata?.user_id
       if (invoiceId && userId) {
@@ -320,7 +382,50 @@ export async function POST(req: NextRequest) {
         const captured = (ch.amount ?? 0) / 100
         const refunded = (ch.amount_refunded ?? 0) / 100
         const full = ch.refunded === true || (captured > 0 && refunded >= captured)
-        const entityId = p.invoice_id ?? p.id
+        const entityId = p.invoice_id ?? p.quote_id ?? p.id
+        // ── A SCHEDULING DEPOSIT refunded ──────────────────────────────────────
+        // The original row carries quote_id and no invoice_id. Both legs of the
+        // deposit reverse: a negative CASH row (drops the gate's `collected`, so
+        // the booking honestly stops being secured — the exact reason readiness
+        // is derived and never stored) and a negative CREDIT row (the held
+        // credit is gone; availableCredit must stop granting it). Same
+        // cumulative-idempotent key scheme as the invoice branch below. If the
+        // credit was already spent on the eventual invoice before this refund,
+        // the customer's credit goes negative — signed and visible, which is the
+        // honest record of refunding money that was already applied.
+        if (!p.invoice_id && p.quote_id && refunded > 0) {
+          const { data: prior } = await sb.from('payments').select('amount')
+            .eq('user_id', p.user_id).eq('quote_id', p.quote_id).eq('kind', 'payment')
+            .lt('amount', 0).like('stripe_session_id', `refund:${ch.id}:%`)
+          const already = ((prior as { amount: number }[] | null) || []).reduce((s2, r) => s2 + Math.abs(Number(r.amount) || 0), 0)
+          const delta = Math.round((refunded - already) * 100) / 100
+          if (delta > 0.005) {
+            const common = {
+              user_id: p.user_id, customer_id: p.customer_id, invoice_id: null, quote_id: p.quote_id,
+              currency: 'cad', status: 'paid', paid_at: now(), stripe_payment_intent: piId,
+            }
+            const cashRes = await sb.from('payments').upsert({
+              ...common, amount: -delta, kind: 'payment', provider: 'stripe', method: 'refund',
+              stripe_session_id: `refund:${ch.id}:${Math.round(refunded * 100)}`,
+              notes: full ? 'Scheduling deposit refunded (Stripe)' : 'Scheduling deposit partly refunded (Stripe)',
+            }, { onConflict: 'stripe_session_id', ignoreDuplicates: true })
+            if (cashRes.error) {
+              console.error('[stripe] quote-deposit refund cash leg failed:', cashRes.error.message)
+              return NextResponse.json({ error: 'db write failed' }, { status: 500 })
+            }
+            const credRes = await sb.from('payments').upsert({
+              ...common, amount: -delta, kind: 'credit', provider: 'credit', method: 'credit',
+              stripe_session_id: `refund-credit:${ch.id}:${Math.round(refunded * 100)}`,
+              notes: 'Scheduling deposit refund — held credit released',
+            }, { onConflict: 'stripe_session_id', ignoreDuplicates: true })
+            if (credRes.error) {
+              console.error('[stripe] quote-deposit refund credit leg failed:', credRes.error.message)
+              return NextResponse.json({ error: 'db write failed' }, { status: 500 })
+            }
+          }
+          await notifyOnce(p.user_id, 'payment_refunded', entityId, full ? 'Deposit refunded' : 'Deposit partly refunded',
+            `${cad(refunded)} of the scheduling deposit refunded — the booking is no longer secured by it.`, p.customer_id, 'quote')
+        }
         if (p.invoice_id && refunded > 0) {
           const { data: prior } = await sb.from('payments').select('amount')
             .eq('user_id', p.user_id).eq('invoice_id', p.invoice_id).eq('kind', 'payment')

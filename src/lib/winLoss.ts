@@ -139,7 +139,17 @@ export async function recordQuoteOutcome(
 export interface LostQuoteRow { id: string; customer_name: string; address: string; total: number | null; created_at: string; reason: string | null }
 export interface WinLossData { stats: WinLossStats; lostQuotes: LostQuoteRow[] }
 
-export async function loadWinLoss(supabase: SupabaseClient): Promise<WinLossData> {
+/**
+ * Returns NULL when the quotes read failed — never a zeroed board.
+ *
+ * Same trap as loadCustomerHealth: supabase-js resolves with { data: null, error }
+ * on a dead connection, and `|| []` turned that into "0 decided", which the panel
+ * treats as "nothing to show" and hides itself. A win-rate board that silently
+ * disappears on a network blip is indistinguishable from a business that has
+ * never quoted anyone. Properties and outcomes are enrichment (neighbourhood
+ * grouping, loss reasons) and degrade honestly, so they keep the tolerant `|| []`.
+ */
+export async function loadWinLoss(supabase: SupabaseClient): Promise<WinLossData | null> {
   const empty: WinLossData = { stats: { decided: 0, won: 0, lost: 0, winRate: 0, taggedLost: 0, untaggedLost: 0, reasonCounts: {}, byHood: [] }, lostQuotes: [] }
   // getSession (local read), not getUser (network hop): the id only scopes RLS-filtered reads.
   const { data: { session } } = await supabase.auth.getSession()
@@ -151,6 +161,7 @@ export async function loadWinLoss(supabase: SupabaseClient): Promise<WinLossData
     supabase.from('properties').select('id, postal_code, city, neighborhood').eq('user_id', uid),
     supabase.from('quote_outcomes').select('quote_id, reason, detail, competitor_price').eq('user_id', uid),
   ])
+  if (qRes.error) return null
   const quotes = (qRes.data as (WLQuote & { customer_name: string; address: string; created_at: string })[]) || []
   const props: Record<string, { postal_code: string | null; city: string | null; neighborhood: string | null }> = {}
   for (const p of (pRes.data as { id: string; postal_code: string | null; city: string | null; neighborhood: string | null }[]) || []) props[p.id] = p

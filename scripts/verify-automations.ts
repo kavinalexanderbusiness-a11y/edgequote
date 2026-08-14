@@ -462,16 +462,20 @@ async function run() {
 
     // Minimal Supabase stand-in: notification_log inserts are fire-and-forget, and
     // the conversation lookup answers "none" so nothing is threaded — correct, since
-    // every send below is meant to fail.
-    const table = () => {
+    // every send below is meant to fail. platform_capabilities answers as a fully
+    // GRANTED tenant (session 43): dispatch consults the tenant's grant before
+    // sending, and these checks are about the PROVIDER failing — a null there
+    // would read as a restricted beta tenant and turn every outage into a skip.
+    const GRANTS = { online_payments: true, inbound_sms: true, outbound_sms: true, outbound_email: true }
+    const table = (name?: string) => {
       const b: Record<string, unknown> = {}
       for (const m of ['select', 'eq', 'in', 'order', 'limit', 'update', 'upsert']) b[m] = () => b
       b.insert = async () => ({ error: null })
-      b.maybeSingle = async () => ({ data: null, error: null })
+      b.maybeSingle = async () => ({ data: name === 'platform_capabilities' ? GRANTS : null, error: null })
       b.single = async () => ({ data: null, error: null })
       return b
     }
-    const sbFake = { from: () => table() } as never
+    const sbFake = { from: (name: string) => table(name) } as never
 
     // claim/refund TRANSCRIBE the route's SQL (src/app/api/cron/quote-followup):
     //   claim  → set follow_up_count = seen + 1 ... where follow_up_count = seen
@@ -573,7 +577,7 @@ async function run() {
       // insert that throws there escapes runChaseCron entirely, which is a real
       // pre-existing gap in the batch-isolation guarantee, but not this fix's.)
       let inserts = 0
-      const sbBoom = { from: () => ({ ...table(), insert: async () => { if (++inserts === 1) throw new Error('notification_log unreachable'); return { error: null } } }) } as never
+      const sbBoom = { from: (name: string) => ({ ...table(name), insert: async () => { if (++inserts === 1) throw new Error('notification_log unreachable'); return { error: null } } }) } as never
       reset()
       const tAfter = await withFetch(async () => new Response('{"sid":"SM1"}', { status: 200 }), () =>
         runChaseCron<OutageItem, { policy: typeof P }>(sbBoom, {
@@ -844,11 +848,20 @@ async function run() {
     // list means the walk stopped seeing files rather than the graph getting smaller —
     // which is precisely how the assertions below would start passing for the wrong
     // reason. (types.ts is absent on purpose: nothing imports it except `import type`.)
-    check('no-sender', 'the engine runtime closure is exactly these 5 modules', members, [
+    //
+    // lib/cron/heartbeat.ts joined the closure when all twelve crons moved to one
+    // heartbeat writer, and this check is the reason that was a deliberate decision
+    // rather than a silent one. It is safe HERE, specifically: its only runtime edges
+    // are lib/cron/guard and lib/utils, both already members — supabase-js and
+    // next/server enter as `import type` and vanish at runtime — so the closure grew
+    // by exactly this one file and no send path came with it. The two assertions
+    // below re-prove that independently rather than taking this note's word for it.
+    check('no-sender', 'the engine runtime closure is exactly these 6 modules', members, [
       'app/api/cron/engine/route.ts',
       'lib/automation/decide.ts',
       'lib/automation/rules.ts',
       'lib/cron/guard.ts',
+      'lib/cron/heartbeat.ts',
       'lib/utils.ts',
     ])
 

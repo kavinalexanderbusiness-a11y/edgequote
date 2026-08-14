@@ -21,9 +21,18 @@
 //
 // §1 drives the REAL engine with a fake Supabase client (attemptAutoPayCharge
 // takes `sb` as a parameter, so no network and no mocking framework is needed).
-// §2 pins the route and UI gates structurally, and — just as importantly — pins
-// that the SIBLING doors still refuse, so the rule stays uniform instead of being
+// §2 pins the route and UI gates, and — just as importantly — pins that the
+// SIBLING doors still refuse, so the rule stays uniform instead of being
 // re-litigated one surface at a time.
+//
+// ⭐ UPDATED when the invoice detail got a single action ladder: the six inline
+// copies of `status !== 'cancelled' && balance > 0` that this file used to grep
+// for became ONE predicate, `invoiceDoors().owes`, which every door ANDs onto.
+// So §2 now DRIVES that predicate through the real engines for every state
+// instead of pattern-matching six conditions — a stronger check, because a
+// regex can only see the copies it was written to expect, and the seventh copy
+// is the one that goes wrong. The structural half is now "no door re-derives
+// the rule inline", which is what actually has to stay true.
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -47,13 +56,24 @@ process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test_verify_invoice_actions'
 // Imported AFTER the env is set: config.ts reads process.env at call time, but
 // keeping the order explicit makes the dependency obvious to the next reader.
 import { attemptAutoPayCharge } from '../src/lib/payments/autopay'
+import { invoiceDoors, invoiceNextActions } from '../src/lib/payments/invoiceActions'
+import { invoiceBalance } from '../src/lib/payments/ledger'
 
 // ── A fake Supabase client ───────────────────────────────────────────────────
 // Only the shape attemptAutoPayCharge actually uses: from(table) →
-// .select().eq().eq().maybeSingle(). Any table it asks for beyond `invoices`
-// means the guard did NOT fire, so those return null and the call fails loudly
-// rather than silently taking a different path.
-function fakeSupabase(invoice: Record<string, unknown> | null) {
+// .select().eq().eq().maybeSingle(). Any table it asks for beyond
+// `platform_capabilities`/`invoices` means the guard did NOT fire, so those
+// return null and the call fails loudly rather than silently taking a
+// different path.
+//
+// The engine's FIRST read (session 43) is the tenant's platform grant — the
+// cron sweeps every tenant, and a business without online_payments must never
+// reach a charge (its customers' money would settle into the founding tenant's
+// Stripe account). The fake models a GRANTED tenant by default so every check
+// below still exercises the gate it was written for; `granted: false` models a
+// private-beta tenant.
+function fakeSupabase(invoice: Record<string, unknown> | null, opts: { granted?: boolean } = {}) {
+  const granted = opts.granted !== false
   const tablesTouched: string[] = []
   const chain = (data: unknown) => {
     const c: Record<string, unknown> = {}
@@ -67,6 +87,9 @@ function fakeSupabase(invoice: Record<string, unknown> | null) {
     tablesTouched,
     from(table: string) {
       tablesTouched.push(table)
+      if (table === 'platform_capabilities') {
+        return chain(granted ? { online_payments: true, inbound_sms: true, outbound_sms: true, outbound_email: true } : null)
+      }
       return chain(table === 'invoices' ? invoice : null)
     },
   } as unknown as Parameters<typeof attemptAutoPayCharge>[0] & { tablesTouched: string[] }
@@ -91,9 +114,22 @@ H('1. THE ENGINE — a cancelled invoice is never charged')
   // Proof the guard fired EARLY: reaching the customer/job lookups would mean the
   // refusal came from something incidental (no card, not recurring) rather than
   // from the cancellation — which would silently start charging again the moment
-  // that incidental condition changed.
+  // that incidental condition changed. (The capability grant is read first, by
+  // design — see the fake's note.)
   check('…and it refused before looking up the job or the customer’s card',
-    sb.tablesTouched, ['invoices'])
+    sb.tablesTouched, ['platform_capabilities', 'invoices'])
+}
+{
+  // Session 43: a tenant WITHOUT the platform's online_payments grant — a
+  // private-beta business on the shared deployment — is refused before the
+  // engine reads anything else. A charge here would settle that business's
+  // customers' money into the founding tenant's Stripe account.
+  const sb = fakeSupabase(invoice({ status: 'unpaid' }), { granted: false })
+  const res = await attemptAutoPayCharge(sb, { invoiceId: 'inv-1', userId: 'u-beta', manual: true })
+  check('an ungranted (beta) tenant is refused with its own named reason',
+    res, { result: 'skipped', reason: 'payments-not-enabled' })
+  check('…before the invoice is even read — no charge path under a withheld grant',
+    sb.tablesTouched, ['platform_capabilities'])
 }
 {
   const sb = fakeSupabase(invoice({ status: 'cancelled', amount_paid: 0, job_id: 'job-1' }))
@@ -139,36 +175,105 @@ H('2. THE OTHER DOORS — one rule, every surface')
 }
 {
   const page = src('app/dashboard/invoices/page.tsx')
-  // The two money buttons. Both gates live on one line each; assert the status
-  // check sits in the same condition as the balance check.
-  check('"Take payment" is hidden on a cancelled invoice',
-    /inv\.status !== 'draft' && inv\.status !== 'cancelled' && invoiceBalance/.test(page), true)
-  check('"Charge card" is hidden on a cancelled invoice',
-    /cardCustomers\.has\(inv\.customer_id\) && inv\.job_id && inv\.status !== 'cancelled'/.test(page), true)
   check('a refused card charge says WHY instead of "could not charge"',
     /reason === 'cancelled'/.test(page) && /reactivate it first/i.test(page), true)
-  // The siblings that were already right — pinned so the rule can't erode from
-  // the other end.
-  // "How much is still owed" is the question the list exists to answer, and the
-  // card's headline figure is the invoice TOTAL. Overdue already appended the
-  // remaining balance; Partially Paid is the same gap and must stay covered.
-  check('both part-paid states show what is LEFT, from the ledger',
-    /\(ds === 'overdue' \|\| ds === 'partial'\)[\s\S]{0,220}invoiceBalance\(inv, settings\)\.balance/.test(page), true)
+  // The manual charge shares the AutoPay engine, which deliberately charges the
+  // FULL BALANCE, never the deposit (its one-charge-per-invoice key would make
+  // the remainder uncollectable). A confirm quoting depositChargeAmount would
+  // name a figure that is not about to leave the customer's card.
+  check('the charge-card confirm quotes the balance, not the deposit',
+    /Charge \$\{formatCurrency\(invoiceBalance\(inv, settings\)\.balance\)\}/.test(page), true)
+}
 
-  check('Send still refuses a cancelled invoice',
-    /inv\.customer_id && inv\.status !== 'cancelled'/.test(page), true)
-  check('Edit still refuses a cancelled invoice',
-    /inv\.status !== 'cancelled' \? \[/.test(page), true)
-}
+// ── EVERY money door, driven through the ONE rule ───────────────────────────
+// A cancelled invoice keeps its whole balance, so `balance > 0` is TRUE on it.
+// These assertions are what stops that from reopening a collection door.
 {
+  const S = { gst_percent: 5 }
+  const base = {
+    amount: 4000, amount_paid: 0, discount_type: null, discount_value: null,
+    due_date: '2026-09-01', deposit_amount: null, deposit_requested_at: null,
+    customer_id: 'c1', job_id: 'j1', status: 'sent',
+  }
+  const ctx = { paymentsEnabled: true, hasSavedCard: true, hasPayments: false }
+  const doorsFor = (over: Record<string, unknown>) => invoiceDoors({ ...base, ...over } as never, S, ctx)
+
+  // The trap itself, stated as a test: the balance is real, the collectability is not.
+  const cancelled = { ...base, status: 'cancelled' }
+  check('a cancelled invoice still carries its full balance (the trap is real)',
+    invoiceBalance(cancelled as never, S).balance, 4200)
+  const cd = doorsFor({ status: 'cancelled' })
+  check('…and NOTHING is collectable on it',
+    { owes: cd.owes, record: cd.canRecord, cardLink: cd.canCardLink, charge: cd.canChargeSavedCard, deposit: cd.canAskDeposit, send: cd.canSend, edit: cd.canEdit },
+    { owes: false, record: false, cardLink: false, charge: false, deposit: false, send: false, edit: false })
+
+  // …while an ordinary issued invoice opens every one of them, so the guard above
+  // cannot be satisfied by a predicate that simply returns false.
+  const sd = doorsFor({})
+  check('an issued invoice with a balance opens every door',
+    { owes: sd.owes, record: sd.canRecord, cardLink: sd.canCardLink, charge: sd.canChargeSavedCard, deposit: sd.canAskDeposit, send: sd.canSend, edit: sd.canEdit },
+    { owes: true, record: true, cardLink: true, charge: true, deposit: true, send: true, edit: true })
+
+  // The remaining per-door rules, each one a real product decision.
+  check('a DRAFT has no card link — the customer has no invoice to pay yet',
+    doorsFor({ status: 'draft' }).canCardLink, false)
+  check('…but a draft can still be recorded against (cash in the driveway)',
+    doorsFor({ status: 'draft' }).canRecord, true)
+  check('a settled invoice offers no collection door',
+    (() => { const d = doorsFor({ status: 'paid', amount_paid: 4200 }); return { owes: d.owes, record: d.canRecord, cardLink: d.canCardLink } })(),
+    { owes: false, record: false, cardLink: false })
+  check('a part-paid invoice still collects the remainder',
+    doorsFor({ status: 'partial', amount_paid: 1500 }).canRecord, true)
+  check('no saved card → no charge-card door',
+    invoiceDoors(base as never, S, { ...ctx, hasSavedCard: false }).canChargeSavedCard, false)
+  check('no job (one-off invoice) → no charge-card door',
+    doorsFor({ job_id: null }).canChargeSavedCard, false)
+  check('Stripe not configured → neither card door',
+    (() => { const d = invoiceDoors(base as never, S, { ...ctx, paymentsEnabled: false }); return { cardLink: d.canCardLink, charge: d.canChargeSavedCard } })(),
+    { cardLink: false, charge: false })
+  check('no customer → nothing can be sent',
+    doorsFor({ customer_id: null }).canSend, false)
+  check('an invoice that already has a deposit request cannot be asked twice',
+    doorsFor({ deposit_amount: 2100 }).canAskDeposit, false)
+
+  // ⭐ The regression this pass FIXED: a deposit request survives its invoice
+  // being cancelled, and the old panel kept offering "Send request" on it — a
+  // collection ask, over the owner's name, for a bill they had withdrawn.
+  check('a deposit ask on a CANCELLED invoice cannot be sent',
+    (() => {
+      const n = invoiceNextActions({ ...base, status: 'cancelled', deposit_amount: 2100 } as never, S, '2026-08-10', ctx)
+      return { primary: n.primary.kind, secondary: n.secondary }
+    })(),
+    { primary: 'none', secondary: null })
+}
+
+// ── …and no door re-derives the rule inline ─────────────────────────────────
+// The point of one predicate is that there is one place to be right. A hand-
+// written `status !== 'cancelled' && balance > 0` beside a button is how the
+// sixth copy drifts from the other five.
+{
+  const detail = src('components/payments/InvoiceDetail.tsx')
+  check('the detail asks invoiceDoors instead of testing status by hand',
+    /invoiceDoors\(inv, settings, ctx\)/.test(detail), true)
+  check('…and does not re-derive collectability at a button',
+    /status !== 'cancelled'[\s\S]{0,40}balance > 0/.test(detail), false)
+  for (const [door, needle] of [
+    ['the card link', 'doors.canCardLink'],
+    ['charge-saved-card', 'doors.canChargeSavedCard'],
+    ['record payment', 'doors.canRecord'],
+    ['the deposit ask', 'doors.canAskDeposit'],
+    ['send', 'doors.canSend'],
+    ['edit', 'doors.canEdit'],
+  ] as const) {
+    check(`${door} is gated on the shared rule`, detail.includes(needle), true)
+  }
+
   const controls = src('components/payments/InvoicePaymentControls.tsx')
-  check('Record payment still refuses a cancelled invoice',
+  check('Record payment still refuses a cancelled invoice at its own door',
     /invoice\.status !== 'cancelled'/.test(controls), true)
-}
-{
   const panel = src('components/payments/DepositRequestPanel.tsx')
-  check('Request deposit still refuses a cancelled invoice',
-    /invoice\.status !== 'cancelled'/.test(panel), true)
+  check('the deposit form still refuses a cancelled invoice at its own door',
+    /invoice\.status === 'cancelled'/.test(panel), true)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

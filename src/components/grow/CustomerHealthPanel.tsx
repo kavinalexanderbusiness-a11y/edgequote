@@ -7,7 +7,7 @@ import { loadCustomerHealth, HealthRow, HealthTier } from '@/lib/customerHealth'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { FilterPill } from '@/components/ui/FilterPill'
 import { formatCurrency, cn } from '@/lib/utils'
-import { HeartPulse, RefreshCw, Star, ArrowRight } from 'lucide-react'
+import { HeartPulse, RefreshCw, Star, ArrowRight, AlertTriangle } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
 
 const TIER: Record<HealthTier, { label: string; tone: string; dot: string }> = {
@@ -28,13 +28,20 @@ const SORTS: { key: SortKey; label: string }[] = [
 export function CustomerHealthPanel() {
   const supabase = useMemo(() => createClient(), [])
   const [rows, setRows] = useState<HealthRow[]>([])
+  // null from the loader means a load-bearing read FAILED. "Nobody needs
+  // attention" and "we couldn't check" are opposite facts, and this panel is
+  // exactly where they must not look the same.
+  const [failed, setFailed] = useState(false)
   const [loading, setLoading] = useState(true)
   const [sort, setSort] = useState<SortKey>('priority')
   const [showAll, setShowAll] = useState(false)
 
   async function load() {
     setLoading(true)
-    try { setRows(await loadCustomerHealth(supabase)) } finally { setLoading(false) }
+    try {
+      const next = await loadCustomerHealth(supabase)
+      if (next === null) { setFailed(true) } else { setRows(next); setFailed(false) }
+    } finally { setLoading(false) }
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -58,6 +65,24 @@ export function CustomerHealthPanel() {
             </div>
           ))}
         </div>
+      </div>
+    )
+  }
+  // A failed read must SAY so. Returning null here — the same thing an empty
+  // book does — would render the absence of a warning as the absence of a
+  // problem, which is the one message this panel must never send by accident.
+  if (failed) {
+    return (
+      <div className="rounded-card border border-amber-500/30 bg-amber-500/[0.06] px-5 py-4 flex items-start gap-3 animate-rise">
+        <AlertTriangle aria-hidden className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-ink">Couldn’t check your customers just now</p>
+          <p className="text-xs text-ink-muted mt-0.5">This is a connection problem, not an all-clear — no one has been assessed.</p>
+        </div>
+        <button type="button" onClick={load}
+          className="shrink-0 text-xs font-semibold text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+          Try again
+        </button>
       </div>
     )
   }

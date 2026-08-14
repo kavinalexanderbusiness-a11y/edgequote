@@ -3,8 +3,12 @@
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Quote, Customer, QuoteFormValues, QuoteService, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, STATUS_LABELS } from '@/types'
-import { sumServiceLines, serviceLineTotals, splitServices } from '@/lib/quoteServices'
+import { Quote, Customer, QuoteFormValues, QuoteService, QuoteOption, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, STATUS_LABELS, PAYMENT_METHODS } from '@/types'
+import { sumServiceLines, serviceLineTotals, splitServices, recentTemplateIdsFrom } from '@/lib/quoteServices'
+import {
+  activeOption, headlineOptionPrice, optionRowsFor, optionValueBasis, optionValueBasisLabel,
+  sortedOptions,
+} from '@/lib/quoteOptions'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { extractBookingPhotos, bookingPhotoViews } from '@/lib/bookingPhotos'
@@ -17,10 +21,12 @@ import { Card, CardBody } from '@/components/ui/Card'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { QuoteIntelligencePanel } from '@/components/quotes/QuoteIntelligencePanel'
+import { SaveAsBundleDialog } from '@/components/quotes/SaveAsBundleDialog'
 import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { nextInvoiceNumber } from '@/lib/invoicing'
 import { isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil, markSentPatch, sendBlockedReason, sendBlockedLabel, DEFAULT_QUOTE_VALID_DAYS } from '@/lib/quoteStatus'
 import { toast } from '@/lib/toast'
+import { confirm as confirmDialog } from '@/lib/confirm'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
@@ -28,7 +34,16 @@ import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { servicePricingKind } from '@/lib/servicePricing'
 import { saveManual } from '@/lib/measure/data'
-import { AlertTriangle, Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Camera, Globe, CalendarClock } from 'lucide-react'
+// THE scheduling-deposit gate (lib/payments/depositGate): required/collected/
+// outstanding derived from the ledger on every read — the same engine the portal
+// and the charge route run, so this page can never disagree with them.
+import {
+  depositRuleFromForm, gateBlocksScheduling, loadQuoteDepositRows, schedulingGate,
+  schedulingPreferenceLine, stampDepositOverride, type GateLedgerRow,
+} from '@/lib/payments/depositGate'
+import { recordDeposit } from '@/lib/payments/ledger'
+import { AlertTriangle, Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Camera, Globe, CalendarClock, Layers, Lock, Wallet, CheckCircle2 } from 'lucide-react'
+import { AUDIENCE_COPY } from '@/lib/noteScope'
 
 export default function QuoteDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -36,8 +51,15 @@ export default function QuoteDetailPage() {
   const [quote, setQuote] = useState<Quote | null>(null)
   // Multi-service breakdown (quote_services). Empty = legacy single-service quote.
   const [services, setServices] = useState<QuoteService[]>([])
+  // The alternatives (quote_options). Empty on every quote that doesn't offer a
+  // choice, which is every quote until an owner turns the switch on. MUTUALLY
+  // EXCLUSIVE with `services` — the database refuses a quote holding both.
+  const [options, setOptions] = useState<QuoteOption[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [templates, setTemplates] = useState<ServiceTemplate[]>([])
+  // Same picker, same ranking as the create door — a service list that reorders
+  // itself between "new quote" and "edit quote" is two controls wearing one name.
+  const [recentTemplateIds, setRecentTemplateIds] = useState<string[]>([])
   const [tiers, setTiers] = useState<TravelFeeTier[]>([])
   const [settings, setSettings] = useState<BusinessSettings | null>(null)
   const [editing, setEditing] = useState(false)
@@ -46,6 +68,11 @@ export default function QuoteDetailPage() {
   const [scheduling, setScheduling] = useState(false)
   const [converting, setConverting] = useState(false)
   const [duplicating, setDuplicating] = useState(false)
+  // "Save this scope as a bundle" — the one creation door for reusable scopes.
+  // Names are held here (not inside the dialog) so the collision check is ready
+  // before the dialog opens rather than after a failed save.
+  const [showSaveBundle, setShowSaveBundle] = useState(false)
+  const [bundleNames, setBundleNames] = useState<string[]>([])
   const [extending, setExtending] = useState(false)
   const [showMessage, setShowMessage] = useState(false)
   // The invoice this quote has already produced (newest, when several exist) —
@@ -53,6 +80,17 @@ export default function QuoteDetailPage() {
   const [existingInvoiceNumber, setExistingInvoiceNumber] = useState<string | null>(null)
   const [savedCustomerMsg, setSavedCustomerMsg] = useState<string | null>(null)
   const [dupMsg, setDupMsg] = useState<string | null>(null)
+  // ── Scheduling-deposit gate ────────────────────────────────────────────────
+  // The quote's deposit ledger rows (payments.quote_id). null = not loaded yet
+  // OR the read failed — and an unreadable ledger must NEVER display as "no
+  // deposit received", so the panel says "checking…" instead of a verdict.
+  const [depositRows, setDepositRows] = useState<GateLedgerRow[] | null>(null)
+  const [depositRowsError, setDepositRowsError] = useState<string | null>(null)
+  // The offline-payment recorder (e-transfer / cash / card-elsewhere).
+  const [recordingDeposit, setRecordingDeposit] = useState(false)
+  const [depAmount, setDepAmount] = useState('')
+  const [depMethod, setDepMethod] = useState('etransfer')
+  const [depBusy, setDepBusy] = useState(false)
 
 
   const supabase = createClient()
@@ -90,9 +128,11 @@ export default function QuoteDetailPage() {
       // Local session read — no auth round-trip before the batch below.
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
-      const [qRes, svcRes, cRes, tRes, tierRes, sRes, invRes] = await Promise.all([
+      const [qRes, svcRes, optRes, cRes, tRes, tierRes, sRes, invRes, recentRes, bundleRes] = await Promise.all([
         supabase.from('quotes').select('*').eq('id', id).eq('user_id', user!.id).single(),
         supabase.from('quote_services').select('*').eq('quote_id', id).order('sort_order'),
+        // The owner's own order, which is the order the customer saw.
+        supabase.from('quote_options').select('*').eq('quote_id', id).order('sort_order'),
         supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
         supabase.from('service_templates').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('travel_fee_tiers').select('*').eq('user_id', user!.id).order('sort_order'),
@@ -105,18 +145,47 @@ export default function QuoteDetailPage() {
         // recurring jobs), so name the NEWEST rather than an arbitrary row. Same
         // select the convert guard already runs, so RLS is already proven.
         supabase.from('invoices').select('invoice_number, issued_date').eq('quote_id', id).order('issued_date', { ascending: false }).limit(1),
+        // Ranking for the service picker, off rows that already exist. Nothing is
+        // recorded to build it — see recentTemplateIdsFrom.
+        supabase.from('quotes').select('service_template_id').eq('user_id', user!.id)
+          .not('service_template_id', 'is', null).order('created_at', { ascending: false }).limit(60),
+        // Names only. "Save as bundle" needs to know what would collide before
+        // the owner types anything; it does not need the bundles themselves.
+        supabase.from('service_bundles').select('name').eq('user_id', user!.id),
       ])
       setQuote(qRes.data)
       setServices((svcRes.data as QuoteService[]) || []) // error/absent table → [] (legacy)
+      setOptions((optRes.data as QuoteOption[]) || [])
       setCustomers(cRes.data || [])
       setTemplates(tRes.data || [])
+      setRecentTemplateIds(recentTemplateIdsFrom(recentRes.data))
       setTiers(tierRes.data || [])
       setSettings(sRes.data)
       setExistingInvoiceNumber((invRes.data?.[0] as { invoice_number: string } | undefined)?.invoice_number ?? null)
+      setBundleNames(((bundleRes.data as { name: string }[] | null) || []).map(b => b.name.toLowerCase()))
+      // The deposit ledger — only fetched when a rule exists (every other quote
+      // pays nothing for the feature). A failed read stays null: "couldn't
+      // check" must never render as "nothing received".
+      const qRow = qRes.data as Quote | null
+      if (qRow?.deposit_type) {
+        const { rows, error } = await loadQuoteDepositRows(supabase, qRow.id)
+        if (error) setDepositRowsError(error)
+        else setDepositRows(rows)
+      } else {
+        setDepositRows([])
+      }
       setLoading(false)
     }
     load()
   }, [id])
+
+  // Re-derive the gate's ledger picture (post-record / post-refresh).
+  async function refreshDepositRows(quoteId: string) {
+    const { rows, error } = await loadQuoteDepositRows(supabase, quoteId)
+    if (error) { setDepositRowsError(error); return }
+    setDepositRowsError(null)
+    setDepositRows(rows)
+  }
 
   // Resolves FALSE when the update failed, so the builder keeps the autosave
   // draft rather than clearing it on a save that never landed.
@@ -139,7 +208,7 @@ export default function QuoteDetailPage() {
       try {
         const ensured = await ensureCustomerAndProperty(
           supabase, user!.id,
-          { customerId: values.customer_id, name: values.customer_name, address: values.address, phone: values.customer_phone, email: values.customer_email },
+          { customerId: values.customer_id, name: values.customer_name, address: values.address, phone: values.customer_phone, email: values.customer_email, source: values.acquisition_source },
           customers,
         )
         customerId = ensured.customerId
@@ -178,6 +247,21 @@ export default function QuoteDetailPage() {
     const extrasNet = sumServiceLines(extraLines).net
     const initialWithExtras = (Number(values.initial_price) > 0 ? Number(values.initial_price) : 0) + extrasNet
 
+    // ── Alternatives ─────────────────────────────────────────────────────────
+    // ⛔ SETTLED ONCE CHOSEN. `selected_option_id` non-null means a real person
+    // approved a specific alternative at a specific price; the composite FK's
+    // ON DELETE RESTRICT would refuse the delete half of the rewrite anyway, and
+    // a save that half-applied would be worse than one that doesn't try. So the
+    // editor is read-only (optionsLockedName below) and this path leaves the rows
+    // exactly as the customer saw them. Price corrections after approval go the
+    // way they already do: edit the quote, with the "they approved $X" warning.
+    const optionsSettled = !!quote?.selected_option_id
+    const optionsOn = !!values.has_options && !optionsSettled
+    // Edit saves as-entered — fee recovery was baked in at creation, same as the
+    // single-service field one line up.
+    const optionRows = optionsOn ? optionRowsFor(values.options || [], id, user!.id) : []
+    const optionHeadline = optionsOn ? headlineOptionPrice(optionRows) : null
+
     // ADR-002: provenance moves WITH the price. Editing a quote re-uses the engine
     // surface (QuoteBuilder), so a re-applied recommendation — or a hand override —
     // strikes a NEW number under TODAY's config. When any price actually moves, record
@@ -187,8 +271,15 @@ export default function QuoteDetailPage() {
     // lie this ADR forbids on a plain duplicate. This closes the gap ADR-002 named and
     // deferred — the one path that could re-price under a newer config yet keep the old
     // version id, silently making the row unreproducible.
+    // The price this save is writing — one option's, or the classic sum of the
+    // primary line and its extras. Named once so the provenance check below and
+    // the update payload can never judge different numbers.
+    const nextInitialPrice = optionsOn
+      ? optionHeadline
+      : (optionsSettled ? (quote?.initial_price ?? null) : (initialWithExtras > 0 ? initialWithExtras : null))
+
     const priceMoved =
-      Number(initialWithExtras || 0)     !== Number(quote?.initial_price || 0) ||
+      Number(nextInitialPrice || 0)      !== Number(quote?.initial_price || 0) ||
       Number(values.weekly_price || 0)   !== Number(quote?.weekly_price || 0) ||
       Number(values.biweekly_price || 0) !== Number(quote?.biweekly_price || 0) ||
       Number(values.monthly_price || 0)  !== Number(quote?.monthly_price || 0)
@@ -215,24 +306,36 @@ export default function QuoteDetailPage() {
       }
     }
 
+    // Scheduling-deposit rule — the ONE shared mapping (lib/payments/depositGate),
+    // same fail-closed shape as provenance: an invalid rule stops the save with
+    // the reason rather than silently writing a different gate than the owner set.
+    const depositRule = depositRuleFromForm(values.deposit_type, values.deposit_value)
+    if (!depositRule.ok) {
+      toast.error(`Scheduling deposit: ${depositRule.error} Nothing was saved.`)
+      return false
+    }
+
     const { data, error } = await supabase
       .from('quotes')
       .update({
         ...provenance,
+        ...depositRule.patch,
         customer_id: customerId,
         customer_name: customerName,
         property_id: propertyId,
         address: values.address,
         service_type: values.service_type,
         service_template_id: values.service_template_id || null,
-        initial_price: initialWithExtras > 0 ? initialWithExtras : null,
+        initial_price: nextInitialPrice,
         weekly_price: Number(values.weekly_price) > 0 ? Number(values.weekly_price) : null,
         biweekly_price: Number(values.biweekly_price) > 0 ? Number(values.biweekly_price) : null,
         monthly_price: Number(values.monthly_price) > 0 ? Number(values.monthly_price) : null,
         overgrowth_multiplier: mult,
         custom_travel_required: values.custom_travel_required,
         show_travel_separately: values.show_travel_separately,
+        // Two audiences, two columns — never merged (lib/noteScope).
         notes: values.notes || null,
+        internal_notes: values.internal_notes || null,
         hours: Number(values.hours),
         crew_size: Number(values.crew_size),
         rate: finalRate,
@@ -257,6 +360,33 @@ export default function QuoteDetailPage() {
       // clean save. supabase-js reports failure in the result object, never by
       // throwing, so ignoring the result IS swallowing the error.
       const { data: { user: u2 } } = await supabase.auth.getUser()
+
+      // ── The alternatives, same clear-and-reinsert, same honesty about it ────
+      // Skipped entirely when the choice is settled (see optionsSettled above) —
+      // the rows are the record of what was offered and what was taken.
+      if (!optionsSettled) {
+        const delOpt = await supabase.from('quote_options').delete().eq('quote_id', id)
+        if (delOpt.error) {
+          toast.error('Saved the quote, but its options could not be updated: ' + delOpt.error.message + ' — press Save again.')
+          return false
+        }
+        if (optionRows.length && u2) {
+          const { data: optRows, error: optErr } = await supabase.from('quote_options')
+            .insert(optionRows.map(r => ({ ...r, user_id: u2.id }))).select('*')
+          if (optErr) {
+            // The delete landed, so the quote genuinely has no options now — and
+            // its `initial_price` was just written to one of them. Say so rather
+            // than let the screen show a priced quote with nothing to choose.
+            setOptions([])
+            toast.error('Saved the quote, but its options were lost mid-save: ' + optErr.message + ' — press Save again to restore them.')
+            return false
+          }
+          setOptions((optRows as QuoteOption[]) || [])
+        } else {
+          setOptions([])
+        }
+      }
+
       const del = await supabase.from('quote_services').delete().eq('quote_id', id)
       if (del.error) {
         // Old lines are still intact — nothing about the breakdown changed. The
@@ -271,6 +401,15 @@ export default function QuoteDetailPage() {
             service_type: values.service_type, service_template_id: values.service_template_id || null,
             quantity: 1, unit: 'each', unit_price: Number(values.initial_price) || 0,
             est_minutes: Math.round(Number(values.hours) * 60) || null,
+            // ⚠️ See the twin of this line in quotes/new. PostgREST unifies the
+            // COLUMN SET of a bulk insert and sends an explicit NULL for any key an
+            // object is missing, rather than letting the column default apply. The
+            // extras below carry `kind`, so row 0 arrived as NULL against a NOT NULL
+            // column and the insert was rejected in full. Here that was worse than
+            // in the create path: the DELETE above had already run, so editing any
+            // multi-service quote wiped its breakdown and the retry this file
+            // honestly asks for could never succeed.
+            kind: 'service',
           },
           ...extraLines.map((s, i) => ({
             user_id: u2.id, quote_id: id, sort_order: i + 1,
@@ -341,7 +480,7 @@ export default function QuoteDetailPage() {
     setPdfLoading(true)
     try {
       const { renderQuoteBlob } = await import('@/components/quotes/QuotePDF')
-      const blob = await renderQuoteBlob(quote, settings, services)
+      const blob = await renderQuoteBlob(quote, settings, services, options)
       const url = URL.createObjectURL(blob)
       // Hand the file directly to the device. On desktop this downloads the
       // PDF; on iOS it opens the PDF viewer / share sheet. Avoids the
@@ -414,6 +553,34 @@ export default function QuoteDetailPage() {
 
   async function handleScheduleJob(dateOverride?: string) {
     if (!quote) return
+    // ── The scheduling guard ───────────────────────────────────────────────
+    // An accepted quote whose required deposit hasn't been collected does not
+    // schedule silently. The owner CAN — emergencies are real — but only through
+    // an explicit, named override that stamps deposit_override_at (the audit
+    // record) and leaves the money honestly still owed. Derived fresh from the
+    // ledger AT CLICK TIME, never from the page's possibly-stale rows: the
+    // customer may have paid while this tab sat open.
+    if (quote.deposit_type && quote.status === 'accepted') {
+      const { rows, error: rowsErr } = await loadQuoteDepositRows(supabase, quote.id)
+      if (rowsErr) {
+        toast.error('Couldn’t check the deposit ledger — try again. (Scheduling was not started: an unchecked deposit must not schedule as if paid.)')
+        return
+      }
+      setDepositRows(rows)
+      const gate = schedulingGate(quote, rows)
+      if (gateBlocksScheduling(quote, gate)) {
+        const ok = await confirmDialog({
+          title: 'Schedule without the required deposit?',
+          message: `This quote requires a ${formatCurrency(gate.required)} deposit before scheduling is confirmed, and ${gate.collected > 0 ? `only ${formatCurrency(gate.collected)} has been received — ${formatCurrency(gate.outstanding)} is still outstanding` : 'none of it has been received yet'}. Scheduling anyway books the visit with the deposit still owed — the customer's portal will keep asking for it.`,
+          confirmLabel: 'Schedule without deposit',
+          destructive: true,
+        })
+        if (!ok) return
+        // The audit stamp — records that this was a decision, not an oversight.
+        // Non-fatal on failure: the confirmed intent stands either way.
+        await stampDepositOverride(supabase, quote.id)
+      }
+    }
     setScheduling(true)
     try {
       const { data: { user } } = await supabase.auth.getUser()
@@ -483,6 +650,14 @@ export default function QuoteDetailPage() {
 
       // ONE numbering engine — shared with the auto-draft and manual creation.
       const invoiceNumber = await nextInvoiceNumber(supabase, user!.id)
+      // null = the invoice ledger read failed, so the next number is unknown.
+      // Converting anyway would mint INV-0001 over an existing invoice; the quote
+      // is safer left unconverted, and the owner can simply press Convert again.
+      if (!invoiceNumber) {
+        toast.error('Could not read your existing invoice numbers, so the quote was not converted. Check your connection and try again.')
+        setConverting(false)
+        return
+      }
 
       // Local dates — UTC stamping dates evening invoices tomorrow.
       const issued = localTodayISO()
@@ -515,7 +690,13 @@ export default function QuoteDetailPage() {
         status: 'unpaid',
         issued_date: issued,
         due_date: dueISO,
+        // ⭐ AUDIENCE SURVIVES THE CONVERSION. The invoice has the same two
+        // halves the quote does (invoices.notes prints, invoices.internal_notes
+        // never does), so each side maps to its own counterpart. The one thing
+        // that must never happen here is quote.internal_notes landing in
+        // invoices.notes — that is a price floor on a customer's bill.
         notes: quote.notes,
+        internal_notes: quote.internal_notes,
       })
 
       if (error) {
@@ -571,7 +752,11 @@ export default function QuoteDetailPage() {
         overgrowth_multiplier: quote.overgrowth_multiplier,
         custom_travel_required: quote.custom_travel_required,
         show_travel_separately: quote.show_travel_separately,
+        // A duplicate is the same quote again, so BOTH halves come along and
+        // each stays on its own side. Copying `internal_notes` into `notes`
+        // (or dropping it) would be the leak and the loss respectively.
         notes: quote.notes,
+        internal_notes: quote.internal_notes,
         hours: quote.hours,
         crew_size: quote.crew_size,
         rate: quote.rate,
@@ -637,8 +822,64 @@ export default function QuoteDetailPage() {
     } finally { setActionBusy(false) }
   }
 
+  // ── "They rang and said they want the Premium" ──────────────────────────────
+  // The owner records the customer's choice through the SAME contract the portal
+  // uses: `owner_select_quote_option` and `portal_accept_quote` are two doors into
+  // one function (quote_apply_option_choice) that owns the money rule. There is no
+  // second implementation of "an option's price becomes the quote's price" — which
+  // is exactly how the owner's screen and the customer's screen would otherwise
+  // start disagreeing about what was bought.
+  const [choosing, setChoosing] = useState<string | null>(null)
+  async function acceptOptionForCustomer(optionId: string) {
+    if (!quote || choosing) return
+    const opt = options.find(o => o.id === optionId)
+    if (!opt) return
+    const priced = Number(opt.price) + (Number(quote.travel_fee) || 0)
+    const ok = await confirmDialog({
+      title: `Record ${opt.name} as the customer’s choice?`,
+      message: `This approves ${quote.quote_number} at ${formatCurrency(priced)} on ${quote.customer_name}’s behalf — the same as if they had approved it in their portal. The other options stay on the record as what was offered, and this can’t be swapped afterwards without sending a revised quote.`,
+      confirmLabel: `Approve ${opt.name} — ${formatCurrency(priced)}`,
+    })
+    if (!ok) return
+    setChoosing(optionId)
+    try {
+      const { data: applied, error } = await supabase.rpc('owner_select_quote_option', {
+        p_quote_id: quote.id, p_option_id: optionId,
+      })
+      // ⚠️ A falsy result is a REFUSAL, not a success with nothing to show, and it
+      // must never be reported as one. Re-read the row and let the database say
+      // what happened rather than assuming either way.
+      const { data: fresh } = await supabase.from('quotes').select('*').eq('id', quote.id).single()
+      if (error || !applied) {
+        if (fresh && (fresh as Quote).selected_option_id === optionId) {
+          setQuote(fresh as Quote)   // it landed (another tab, a retry) — say the true thing
+          toast.success(`${opt.name} recorded as the approved option.`)
+        } else {
+          toast.error(
+            (fresh as Quote | null)?.selected_option_id
+              ? 'This quote already has an approved option — send a revised quote to change it.'
+              : 'Could not record that choice — check your connection and try again.',
+          )
+        }
+        return
+      }
+      if (fresh) setQuote(fresh as Quote)
+      toast.success(`${opt.name} recorded — ${quote.quote_number} is approved at ${formatCurrency(priced)}.`)
+    } finally { setChoosing(null) }
+  }
+
   async function markWon() {
     if (!quote || actionBusy) return
+    // ⛔ An options quote cannot be "won" without saying WHICH option. Accepting
+    // one through the plain patch would set status='accepted' and leave
+    // selected_option_id NULL — an approved quote whose approved scope nobody can
+    // name, which is the single state this whole feature exists to make
+    // impossible. Point at the picker instead of half-recording the sale.
+    if (options.length > 0) {
+      toast.error('This quote offers options — pick the one the customer chose, just below.')
+      document.getElementById('eq-quote-options')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return
+    }
     setActionBusy(true)
     try {
       // Snapshot what was bought (Pricing v2 Phase 0). `total` is the number on the
@@ -736,6 +977,7 @@ export default function QuoteDetailPage() {
       <QuoteBuilder
         customers={customers}
         templates={templates}
+        recentTemplateIds={recentTemplateIds}
         tiers={tiers}
         settings={settings}
         defaultValues={{
@@ -774,8 +1016,22 @@ export default function QuoteDetailPage() {
           custom_travel_required: quote.custom_travel_required || false,
           show_travel_separately: quote.show_travel_separately || false,
           notes: quote.notes || '',
+          internal_notes: quote.internal_notes || '',
           status: quote.status,
+          // A quote that HAS options opens with the switch on and the rows loaded
+          // in the owner's saved order — never re-sorted, never re-seeded.
+          has_options: options.length > 0,
+          options: sortedOptions(options).map(o => ({
+            id: o.id, name: o.name, description: o.description || '',
+            price: Number(o.price) || 0, is_recommended: !!o.is_recommended,
+          })),
+          // The scheduling-deposit rule survives the edit round-trip. '' = none.
+          deposit_type: (quote.deposit_type ?? '') as '' | 'percent' | 'fixed',
+          deposit_value: Number(quote.deposit_value) || 0,
         }}
+        // Non-null ⇒ the editor goes read-only and handleUpdate leaves the rows
+        // alone. What was approved is not silently rewritten.
+        optionsLockedName={activeOption(options, quote.selected_option_id)?.name ?? null}
         onSubmit={handleUpdate}
         isEdit
         autosaveKey={`quote:${quote.id}`}
@@ -859,6 +1115,16 @@ export default function QuoteDetailPage() {
           <Button onClick={() => setEditing(true)} variant="ghost" size="sm">
             <Edit2 className="w-3.5 h-3.5" /> Edit
           </Button>
+          {/* Save the SCOPE for reuse — distinct from Duplicate, which copies
+              this whole quote (customer and all) once. Hidden on an options
+              quote: alternatives carry no line items, so there is no scope to
+              save, and offering the button would promise one. */}
+          {!options.length && (
+            <Button onClick={() => setShowSaveBundle(true)} variant="ghost" size="sm"
+              aria-label="Save this scope as a bundle" title="Save this scope as a bundle">
+              <Layers className="w-4 h-4" />
+            </Button>
+          )}
           <Button onClick={handleDuplicate} variant="ghost" size="sm" loading={duplicating} aria-label="Duplicate quote" title="Duplicate quote">
             <Copy className="w-4 h-4" />
           </Button>
@@ -928,20 +1194,143 @@ export default function QuoteDetailPage() {
         </Banner>
       )}
 
-      {quote.status === 'accepted' && (
-        <div className="flex items-center justify-between flex-wrap gap-3 text-sm bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
-          <span className="text-ink font-medium flex items-center gap-2">
-            <CalendarPlus className="w-4 h-4 shrink-0 text-accent-text" /> Accepted — this job isn’t scheduled yet.
-          </span>
-          <div className="flex items-center gap-2">
-            {/* Honest label — this books the job on TODAY's route (move it after). */}
-            <Button size="sm" onClick={() => handleScheduleJob()} loading={scheduling}>
-              <CalendarPlus className="w-3.5 h-3.5" /> Schedule for today
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => router.push(`/dashboard/schedule?quote=${quote.id}`)}>Pick a day</Button>
+      {(quote.status === 'accepted' || quote.status === 'scheduled') && (() => {
+        // The gate — derived from the ledger rows loaded above. rowsUnknown means
+        // the read failed: say "checking" rather than a verdict either way.
+        const rowsUnknown = quote.deposit_type ? depositRows == null : false
+        const gate = schedulingGate(quote, depositRows ?? [])
+        const prefLine = schedulingPreferenceLine(quote, formatDate)
+        // A SCHEDULED quote that still owes its deposit — the override case, or a
+        // payment that bounced after booking. The ask stays visible and recordable;
+        // only the "schedule anyway" affordance drops (it already happened).
+        const scheduledStillOwed = quote.status === 'scheduled'
+          && gate.required > 0 && gate.status !== 'satisfied'
+        if (quote.status === 'scheduled' && !scheduledStillOwed && !rowsUnknown) return null
+        // ── Deposit still owed: the banner leads with the money, not the button ─
+        if (quote.deposit_type && (rowsUnknown || gateBlocksScheduling(quote, gate) || scheduledStillOwed)) {
+          return (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.07] px-4 py-3 space-y-2">
+              <p className="text-sm font-medium text-ink flex items-center gap-2">
+                <Wallet className="w-4 h-4 shrink-0 text-amber-400" />
+                {rowsUnknown
+                  ? `${quote.status === 'scheduled' ? 'Scheduled' : 'Accepted'} — checking the deposit ledger…`
+                  : scheduledStillOwed
+                    ? <>Scheduled{quote.deposit_override_at ? ' (your call)' : ''} — <span className="text-amber-400">{formatCurrency(gate.outstanding)} deposit still owed</span>{gate.collected > 0 ? <> ({formatCurrency(gate.collected)} received so far)</> : null}</>
+                    : gate.collected > 0
+                      ? <>Accepted — deposit {formatCurrency(gate.collected)} of {formatCurrency(gate.required)} received · <span className="text-amber-400">{formatCurrency(gate.outstanding)} still required</span></>
+                      : <>Accepted — awaiting the <span className="text-amber-400">{formatCurrency(gate.required)}</span> deposit before scheduling</>}
+              </p>
+              {depositRowsError && <p className="text-xs text-red-400">{depositRowsError}</p>}
+              <p className="text-xs text-ink-muted">
+                {scheduledStillOwed
+                  ? 'The customer’s portal keeps asking for it — record it here when it arrives another way.'
+                  : 'Scheduling isn’t secured until the deposit is collected. The customer can pay from their portal.'}
+                {prefLine ? <> · <span className="text-ink">Customer preference: {prefLine}</span></> : null}
+                {quote.preferred_note ? <> · &ldquo;{quote.preferred_note}&rdquo;</> : null}
+              </p>
+              {!rowsUnknown && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  {!recordingDeposit ? (
+                    <Button size="sm" variant="secondary" onClick={() => { setRecordingDeposit(true); setDepAmount(String(gate.outstanding)) }}>
+                      <Check className="w-3.5 h-3.5" /> Record deposit received
+                    </Button>
+                  ) : (
+                    // Inline recorder for offline money: e-transfer, cash, a card
+                    // charged elsewhere. Goes through recordDeposit — THE ledger
+                    // door — with the quote link, so it satisfies the gate exactly
+                    // the way a Stripe payment does. No second truth.
+                    <div className="flex items-end gap-2 flex-wrap">
+                      <label className="block">
+                        <span className="block text-[11px] text-ink-muted mb-1">Amount ($)</span>
+                        <input type="number" step="0.01" min="0" value={depAmount} onChange={e => setDepAmount(e.target.value)}
+                          className="w-28 rounded-lg border border-border bg-bg-tertiary px-2.5 py-1.5 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent/40" />
+                      </label>
+                      <label className="block">
+                        <span className="block text-[11px] text-ink-muted mb-1">How it arrived</span>
+                        <select value={depMethod} onChange={e => setDepMethod(e.target.value)}
+                          className="rounded-lg border border-border bg-bg-tertiary px-2.5 py-1.5 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent/40">
+                          {PAYMENT_METHODS.filter(mm => mm.value !== 'credit').map(mm => (
+                            <option key={mm.value} value={mm.value}>{mm.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <Button size="sm" loading={depBusy} onClick={async () => {
+                        const amt = Number(depAmount)
+                        if (!(amt > 0)) { toast.error('Enter the amount that was received.'); return }
+                        if (!quote.customer_id) { toast.error('This quote has no customer to record the deposit against.'); return }
+                        setDepBusy(true)
+                        const { data: { user: u } } = await supabase.auth.getUser()
+                        const res = await recordDeposit(supabase, {
+                          userId: u!.id, customerId: quote.customer_id, amount: amt, method: depMethod,
+                          quoteId: quote.id, notes: `Scheduling deposit — ${quote.quote_number}`,
+                        })
+                        setDepBusy(false)
+                        if (res.error) { toast.error('Could not record the deposit: ' + res.error); return }
+                        setRecordingDeposit(false)
+                        await refreshDepositRows(quote.id)
+                        // Undo deletes BOTH ledger legs — removing only the cash
+                        // row would leave phantom customer credit. The delete is
+                        // CHECKED: a failed undo must say so, not report a ledger
+                        // row gone while it still stands (the undo contract).
+                        const ids = res.paymentIds || []
+                        toast.undo(`${formatCurrency(amt)} deposit recorded for ${quote.quote_number}.`, async () => {
+                          if (ids.length) {
+                            const { error: undoErr } = await supabase.from('payments').delete().in('id', ids)
+                            if (undoErr) {
+                              toast.error('Could not remove the recorded deposit — it still stands. ' + undoErr.message)
+                              return
+                            }
+                          }
+                          await refreshDepositRows(quote.id)
+                        })
+                      }}>
+                        Record
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setRecordingDeposit(false)}>Cancel</Button>
+                    </div>
+                  )}
+                  {/* The override lives behind the SAME handler the normal button
+                      uses — handleScheduleJob re-derives the gate at click time
+                      and raises the explicit confirm. No silent bypass exists.
+                      Absent once scheduled: the decision was already made. */}
+                  {!scheduledStillOwed && (
+                    <Button size="sm" variant="ghost" onClick={() => handleScheduleJob()} loading={scheduling}
+                      title="Books the visit with the deposit still owed — asks you to confirm first">
+                      Schedule without deposit…
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        }
+        if (quote.status === 'scheduled') return null
+        // ── No gate, or gate satisfied: READY TO SCHEDULE ─────────────────────
+        return (
+          <div className="flex items-center justify-between flex-wrap gap-3 text-sm bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
+            <span className="text-ink font-medium flex items-center gap-2 flex-wrap">
+              {gate.status === 'satisfied' ? (
+                <>
+                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                  <span>Ready to schedule — <span className="text-emerald-400">{formatCurrency(gate.collected)} deposit received</span>.</span>
+                </>
+              ) : (
+                <>
+                  <CalendarPlus className="w-4 h-4 shrink-0 text-accent-text" /> Accepted — this job isn’t scheduled yet.
+                </>
+              )}
+              {prefLine && <span className="text-xs text-ink-muted w-full sm:w-auto">Customer preference: {prefLine}{quote.preferred_note ? ` · “${quote.preferred_note}”` : ''}</span>}
+            </span>
+            <div className="flex items-center gap-2">
+              {/* Honest label — this books the job on TODAY's route (move it after). */}
+              <Button size="sm" onClick={() => handleScheduleJob()} loading={scheduling}>
+                <CalendarPlus className="w-3.5 h-3.5" /> Schedule for today
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => router.push(`/dashboard/schedule?quote=${quote.id}`)}>Pick a day</Button>
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* Send this quote to the customer — the ONE shared Send Message dialog. */}
       {quote.customer_id && (
@@ -998,6 +1387,17 @@ export default function QuoteDetailPage() {
               }
             }} />
         </Card>
+      )}
+
+      {showSaveBundle && (
+        <SaveAsBundleDialog
+          open
+          onClose={() => setShowSaveBundle(false)}
+          quote={quote}
+          services={services}
+          templates={templates}
+          existingNames={bundleNames}
+        />
       )}
 
       {/* Schedule/convert results flow through the ONE toast system — inline
@@ -1107,10 +1507,27 @@ export default function QuoteDetailPage() {
             )}
           </div>
 
+          {/* ⭐ THE TWO NOTES, NEVER IN ONE BOX. This is the owner's preview of a
+              document the customer receives, so the field that WILL be on it and
+              the field that must never be are labelled by audience and visually
+              separated. A shared "Notes" heading over both is precisely how a
+              price floor ends up read aloud on a phone call. */}
           {quote.notes && (
             <div className="pt-3 border-t border-border">
-              <p className="text-[10px] text-ink-faint uppercase tracking-wide font-semibold mb-1">Notes</p>
+              <p className="text-[10px] text-ink-faint uppercase tracking-wide font-semibold mb-1">
+                {AUDIENCE_COPY.customer.label} <span className="text-ink-faint/70 normal-case font-normal">· on the PDF and in their portal</span>
+              </p>
               <p className="text-sm text-ink-muted whitespace-pre-wrap">{quote.notes}</p>
+            </div>
+          )}
+
+          {quote.internal_notes && (
+            <div className="pt-3 border-t border-border">
+              <p className="text-[10px] uppercase tracking-wide font-semibold mb-1 text-amber-400/90 flex items-center gap-1">
+                <Lock className="w-3 h-3" aria-hidden /> {AUDIENCE_COPY.internal.label}
+                <span className="text-ink-faint normal-case font-normal">· only your team</span>
+              </p>
+              <p className="text-sm text-ink-muted whitespace-pre-wrap">{quote.internal_notes}</p>
             </div>
           )}
 
@@ -1123,9 +1540,65 @@ export default function QuoteDetailPage() {
             {/* Say what's actually in the list — mulch under a "Services" heading
                 reads as labour to anyone skimming. */}
             <p className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide">
-              {services.some(s => s.kind === 'material') ? 'Services & materials' : 'Services'}
+              {options.length > 0
+                ? (quote.selected_option_id ? 'Options offered' : 'Options — the customer picks one')
+                : services.some(s => s.kind === 'material') ? 'Services & materials' : 'Services'}
             </p>
-            {services.length > 0 ? (
+            {options.length > 0 ? (
+              // ── The alternatives ────────────────────────────────────────────
+              // ⛔ No subtotal, ever. These rows are alternatives to one another;
+              // a column that added them would be the one lie this whole feature
+              // was built to prevent. The quote's value is stated ONCE, below, as
+              // the single option it currently rests on.
+              <div id="eq-quote-options" className="space-y-2 scroll-mt-24">
+                {sortedOptions(options).map(o => {
+                  const chosen = quote.selected_option_id === o.id
+                  const priced = Number(o.price) + (Number(quote.travel_fee) || 0)
+                  return (
+                    <div key={o.id}
+                      className={`rounded-xl border p-3 ${chosen ? 'border-emerald-500/40 bg-emerald-500/[0.06]'
+                        : quote.selected_option_id ? 'border-border bg-bg-secondary/40 opacity-70'
+                        : o.is_recommended ? 'border-accent/30 bg-accent/[0.04]' : 'border-border bg-bg-secondary'}`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-ink">
+                            {o.name}
+                            {o.is_recommended && <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide text-accent-text">Recommended</span>}
+                            {chosen && <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-400">Chosen</span>}
+                          </p>
+                          {o.description && <p className="text-xs text-ink-muted mt-0.5 whitespace-pre-wrap">{o.description}</p>}
+                        </div>
+                        <span className="text-sm font-semibold text-ink shrink-0 tabular-nums">{formatCurrency(priced)}</span>
+                      </div>
+                      {/* Owner-side acceptance, on the SAME contract as the portal.
+                          Offered only while the quote is still undecided — after a
+                          choice these rows are history, not buttons. */}
+                      {!quote.selected_option_id && (quote.status === 'draft' || quote.status === 'sent') && (
+                        <Button type="button" variant="secondary" size="sm" className="mt-2.5"
+                          loading={choosing === o.id} disabled={!!choosing}
+                          onClick={() => acceptOptionForCustomer(o.id)}>
+                          <Check className="w-3.5 h-3.5" /> They chose {o.name}
+                        </Button>
+                      )}
+                    </div>
+                  )
+                })}
+                {/* ⭐ THE reporting sentence: is this figure PROPOSED or CHOSEN?
+                    Derived from the selection state that already exists, via the
+                    one helper every surface asks — never a second stored column. */}
+                {(() => {
+                  const basis = optionValueBasis(options, quote.selected_option_id)
+                  const active = activeOption(options, quote.selected_option_id)
+                  if (!basis || !active) return null
+                  return (
+                    <p className="text-[11px] text-ink-faint pt-0.5">
+                      {optionValueBasisLabel(basis, active.name, options.length)}
+                      {basis === 'proposed' && ' — this quote counts at that price in your pipeline until they pick.'}
+                    </p>
+                  )
+                })()}
+              </div>
+            ) : services.length > 0 ? (
               // Multi-service breakdown — one row per line (rows are the source of
               // truth; quotes.initial_price is their summed net). Service NAME
               // carries the weight; quantity/discount/notes read as muted sub-notes.
@@ -1149,7 +1622,9 @@ export default function QuoteDetailPage() {
             ) : (
               <div className="flex justify-between text-sm">
                 <span className="text-ink font-medium">First visit</span>
-                <span className="text-ink font-medium tabular-nums">{formatCurrency(quote.initial_price ?? quote.subtotal)}</span>
+                {/* Not `?? quote.subtotal` — that column is the legacy
+                    hours × crew_size × rate fabrication (see QuotePDF). */}
+                <span className="text-ink font-medium tabular-nums">{formatCurrency(Number(quote.initial_price ?? 0))}</span>
               </div>
             )}
             {quote.travel_fee > 0 && (

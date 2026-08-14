@@ -166,7 +166,7 @@ export function PushNotificationSettings() {
                 aria-checked={on}
                 disabled={!loaded}
                 onClick={() => setPref(key, !on)}
-                className="w-full flex items-center justify-between gap-3 py-2.5 px-1 text-left rounded-lg hover:bg-surface/40 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                className="w-full flex items-center justify-between gap-3 py-2.5 px-1 text-left rounded-lg hover:bg-surface-raised/40 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                 <span className="flex items-center gap-3 min-w-0">
                   <Icon className="w-4 h-4 text-ink-muted shrink-0" />
                   <span className="min-w-0">

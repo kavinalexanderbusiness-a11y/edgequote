@@ -2,6 +2,9 @@
 
 import { useEffect, useId, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
+// See lib/dropdownPlacement. This list had no height bound AT ALL — the only
+// one of the four — so it was the worst offender over the fixed Save bar.
+import { useDropdownPlacement, dropdownStyle } from '@/hooks/useDropdownPlacement'
 import { MapPin } from 'lucide-react'
 
 export interface ParsedAddress {
@@ -58,6 +61,9 @@ export function AddressAutocomplete({
   const seqRef = useRef(0)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
+  // The input's wrapper — boxRef also holds the label.
+  const anchorRef = useRef<HTMLDivElement>(null)
+  const place = useDropdownPlacement(anchorRef, open && suggestions.length > 0)
 
   const inputId = label ? label.toLowerCase().replace(/\s+/g, '-') : undefined
   // Combobox a11y ids: the input points at the listbox (aria-controls) and, as
@@ -168,7 +174,7 @@ export function AddressAutocomplete({
           {label}
         </label>
       )}
-      <div className="relative">
+      <div className="relative" ref={anchorRef}>
         <input
           id={inputId}
           autoComplete="off"
@@ -191,7 +197,9 @@ export function AddressAutocomplete({
         />
         {open && suggestions.length > 0 && (
           <div id={listId} role="listbox" aria-label={label || 'Address suggestions'}
-            className="absolute z-overlay mt-1 w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl overflow-hidden origin-top animate-pop">
+            data-eq-dropdown
+            style={dropdownStyle(place)}
+            className="absolute z-overlay w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl origin-top animate-pop overflow-y-auto overscroll-contain">
             {suggestions.map((s, i) => (
               <button
                 key={i}
@@ -202,7 +210,7 @@ export function AddressAutocomplete({
                 tabIndex={-1}
                 onMouseEnter={() => setHi(i)}
                 onClick={() => choose(s)}
-                className={cn('w-full text-left px-3.5 py-2.5 text-sm text-ink flex items-center gap-2 transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface')}
+                className={cn('w-full text-left px-3.5 py-2.5 text-sm text-ink flex items-center gap-2 transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface-raised')}
               >
                 <MapPin className="w-3.5 h-3.5 text-ink-faint shrink-0" />
                 <span className="truncate">{s.text}</span>

@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import { loadBusinessIntelligence, BIReport, NamedValue, WeekdayStat, YearComparison } from '@/lib/businessIntelligence'
 import { loadLaborInsights, LaborInsights, ServiceAccuracy, ServiceProfit } from '@/lib/labor'
 import { loadMarketingPerformance, type MarketingCampaignRow } from '@/lib/analytics/marketing'
+import { loadAcquisitionFunnel, type AcquisitionFunnel } from '@/lib/attribution'
 import { summarizeStats } from '@/lib/crm/campaignStats'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
@@ -19,7 +20,7 @@ import { AnalyticsWorkspace, WidgetChrome, useWidget } from '@/components/analyt
 import type { WidgetId } from '@/lib/analytics/layout'
 import { formatCurrency, cn } from '@/lib/utils'
 import type { Tone } from '@/lib/tone'
-import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart, Home, AlertTriangle, CalendarDays, Ban, Briefcase, Megaphone, MessageSquare } from 'lucide-react'
+import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart, Home, AlertTriangle, CalendarDays, Ban, Briefcase, Megaphone, MessageSquare, Compass } from 'lucide-react'
 
 // From THE comms insights engine (comms_insights RPC) — the History page renders
 // the same object, so the two surfaces cannot disagree about a number.
@@ -39,6 +40,15 @@ export default function IntelligencePage() {
   const [labor, setLabor] = useState<LaborInsights | null>(() => readCache<LaborInsights>('labor', CACHE_TTL.medium))
   const [marketing, setMarketing] = useState<MarketingCampaignRow[] | null>(() => readCache<MarketingCampaignRow[]>('marketing', CACHE_TTL.medium))
   const [comms, setComms] = useState<CommsInsights | null>(() => readCache<CommsInsights>('comms', CACHE_TTL.medium))
+  // THREE states, not two, and that is the point: `undefined` = still loading,
+  // `null` = the read FAILED, an object = the answer. The other supplementary
+  // widgets can collapse loading and failure into one skeleton because a missing
+  // campaign list reads as "no campaigns". Here a failed read would read as
+  // "every source produced zero customers" — a specific, confident, false verdict
+  // about the owner's marketing. Same trap loadCustomerHealth and loadWinLoss
+  // were fixed for.
+  const [acquisition, setAcquisition] = useState<AcquisitionFunnel | null | undefined>(
+    () => readCache<AcquisitionFunnel>('acquisition', CACHE_TTL.medium) ?? undefined)
 
   useEffect(() => {
     (async () => {
@@ -65,6 +75,19 @@ export default function IntelligencePage() {
     })()
   }, [supabase])
 
+  // Acquisition — alongside, never blocking the BI report. A thrown error and a
+  // returned null both mean "we could not check", and both must reach the widget
+  // as null rather than being swallowed into an empty board.
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await loadAcquisitionFunnel(supabase)
+        setAcquisition(r)
+        if (r) writeCache('acquisition', r)
+      } catch { setAcquisition(null) }
+    })()
+  }, [supabase])
+
   // Communications pulse — same terms as marketing: alongside, never blocking.
   // The RPC is THE insights engine; History renders the identical object.
   useEffect(() => {
@@ -79,7 +102,7 @@ export default function IntelligencePage() {
   if (loading && !bi) {
     return (
       <PageContainer width="wide">
-        <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" description="How your business is performing — and where to focus next." />
+        <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="How the business is doing" description="How your business is performing — and where to focus next." />
         <SkeletonTiles count={4} />
         <Skeleton className="h-32 w-full rounded-card" />
         <div className="grid md:grid-cols-3 gap-3">{[0, 1, 2].map(i => <Skeleton key={i} className="h-40 rounded-card" />)}</div>
@@ -90,7 +113,7 @@ export default function IntelligencePage() {
   // A failed load must not render a literally blank page — say so, offer retry.
   if (!bi) return (
     <PageContainer width="wide">
-      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" />
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="How the business is doing" />
       <p className="text-sm text-ink-muted">
         Could not load the report — check your connection and{' '}
         <button type="button" onClick={() => window.location.reload()} className="text-accent-text underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">try again</button>.
@@ -100,7 +123,7 @@ export default function IntelligencePage() {
 
   return (
     <PageContainer width="wide">
-      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" description={`How your business is performing — and where to focus. As of ${bi.generatedFor}.`} />
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="How the business is doing" description={`How your business is performing — and where to focus. As of ${bi.generatedFor}.`} />
 
       {/* Every section below is a workspace widget: arrangeable and hideable, but
           still rendered from the same BIReport, so customising the page can never
@@ -188,7 +211,13 @@ export default function IntelligencePage() {
           <Stat label="Jobs this year" value={String(bi.yearly.thisYear.jobs)}
             delta={bi.yearly.jobsDeltaPct} deltaLabel="vs last year to date"
             sub={bi.yearly.lastYear ? `${bi.yearly.lastYear.jobs} at this point last season` : 'season to date'} />
-          <Stat label="Profit this year" value={bi.yearly.thisYear.profit != null ? formatCurrency(bi.yearly.thisYear.profit) : '—'} sub="season to date" accent />
+          {/* Same basis problem as Gross profit YTD: this is visitEconomics over
+              route labour minutes, and a route prices assumed minutes when a visit
+              was never timed. `profitEstimated` comes off the profit engine's own
+              hasLaborData flag. Figure unchanged — only the claim it makes. */}
+          <Stat label={bi.yearly.thisYear.profitEstimated ? 'Profit this year (est.)' : 'Profit this year'}
+            value={bi.yearly.thisYear.profit != null ? formatCurrency(bi.yearly.thisYear.profit) : '—'}
+            sub={bi.yearly.thisYear.profitEstimated ? 'season to date · partly from estimated time' : 'season to date'} accent />
         </div>
         {bi.yearly.lastYear ? (
           <YearMonthList byMonth={bi.yearly.byMonth} thisYear={bi.yearly.thisYear.year} lastYear={bi.yearly.lastYear.year} />
@@ -204,7 +233,26 @@ export default function IntelligencePage() {
       <Section id="profitability" title="Profitability" icon={Gauge}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat label="Revenue / labor hour" value={`$${bi.profitability.revenuePerLaborHour}`} />
-          <Stat label="Gross profit YTD" value={formatCurrency(bi.profitability.grossProfitYTD)} sub={`${bi.profitability.grossMarginPct}% margin`} />
+          {/* The cost behind this profit is minutes × crew rate, and `laborMinOf`
+              resolves those minutes as actual || estimated || a 45-minute constant.
+              Only the first is observed. Measured when this was written: 35 of 71
+              YTD jobs (49%) had real check-in/check-out time — so calling the result
+              "Gross profit" flat was presenting a half-modelled number as a measured
+              one. The FIGURE is unchanged; it now says what it rests on, and only
+              claims to be estimated when some of it actually is. */}
+          {(() => {
+            const b = bi.profitability.laborBasis
+            const estimated = b.assumedJobs > 0
+            return (
+              <Stat
+                label={estimated ? 'Gross profit YTD (est.)' : 'Gross profit YTD'}
+                value={formatCurrency(bi.profitability.grossProfitYTD)}
+                sub={estimated
+                  ? `${bi.profitability.grossMarginPct}% margin · ${b.observedJobs}/${b.totalJobs} jobs timed`
+                  : `${bi.profitability.grossMarginPct}% margin`}
+              />
+            )
+          })()}
           <Stat label="Crew efficiency" value={bi.profitability.crewEfficiencyPct != null ? `${bi.profitability.crewEfficiencyPct}%` : '—'} sub={bi.profitability.crewEfficiencyPct != null ? (bi.profitability.crewEfficiencyPct <= 100 ? 'at/under estimate' : 'over estimate') : 'time more jobs'} />
           <Stat label="Route $/km" value={`$${bi.profitability.routeRevPerKm}`} sub={bi.profitability.avgGrade ? `avg grade ${bi.profitability.avgGrade}` : undefined} />
         </div>
@@ -463,6 +511,80 @@ export default function IntelligencePage() {
             <Link href="/dashboard/messages/scheduled" className="block rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
               <StatTile label="Scheduled" value={String(comms.scheduled_pending)} icon={CalendarDays} sub="Queued to send" />
             </Link>
+          </div>
+        )}
+      </Section>
+
+      {/* ── WHERE CUSTOMERS COME FROM ── the acquisition funnel, per SOURCE.
+          Distinct from Marketing above: that is what YOU sent, this is what
+          customers said about how they found you. Counts only — see the note on
+          AcquisitionFunnel for why no dollars appear here. */}
+      <Section id="acquisition" title="Where customers come from" icon={Compass}>
+        {acquisition === undefined ? (
+          <Skeleton className="h-24 w-full rounded-card" />
+        ) : acquisition === null ? (
+          // A failed read must not render as "nobody came from anywhere".
+          <div className="rounded-card border border-border bg-bg-secondary p-4">
+            <p className="text-sm text-ink-muted">
+              Couldn&apos;t check where your customers came from — this is a connection problem, not an empty book.{' '}
+              <button type="button" onClick={() => window.location.reload()} className="text-accent-text underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">Try again</button>.
+            </p>
+          </div>
+        ) : acquisition.customers === 0 ? (
+          <div className="rounded-card border border-border bg-bg-secondary p-4">
+            <InlineEmpty icon={Compass} className="py-3">No customers yet — this fills in as you add them.</InlineEmpty>
+          </div>
+        ) : (
+          <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
+            {/* Wide content scrolls inside its own box rather than pushing the page sideways. */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm min-w-[34rem]">
+                <thead>
+                  <tr className="text-[11px] uppercase tracking-wide text-ink-faint border-b border-border">
+                    <th scope="col" className="text-left font-semibold px-3 py-2">Source</th>
+                    <th scope="col" className="text-right font-semibold px-3 py-2">Customers</th>
+                    <th scope="col" className="text-right font-semibold px-3 py-2">Quoted</th>
+                    <th scope="col" className="text-right font-semibold px-3 py-2">Won</th>
+                    <th scope="col" className="text-right font-semibold px-3 py-2">Worked</th>
+                    <th scope="col" className="text-right font-semibold px-3 py-2">Won rate</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {acquisition.rows.map(r => (
+                    <tr key={r.category} className={cn(r.category === 'unknown' && 'bg-bg-tertiary/40')}>
+                      <td className="px-3 py-2">
+                        <span className="font-medium text-ink">{r.label}</span>
+                        {/* The raw words behind the bucket, so 'Other' is never a
+                            black box and 'Google Business Profile' isn't flattened
+                            away into 'Google'. */}
+                        {r.details.length > 0 && (
+                          <span className="block text-[11px] text-ink-faint truncate">{r.details.join(' · ')}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-ink">{r.customers}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{r.quoted}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{r.won}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{r.worked}</td>
+                      {/* Counts always; a percentage only once the cohort is big
+                          enough that one customer can't swing it. */}
+                      <td className="px-3 py-2 text-right tabular-nums text-ink-muted">
+                        {r.wonRate == null ? <span className="text-ink-faint">—</span> : `${Math.round(r.wonRate * 100)}%`}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-[11px] text-ink-faint px-3 py-2 border-t border-border">
+              {acquisition.unknownPct != null && acquisition.unknownPct > 0 ? (
+                <>
+                  <b className="text-ink-muted">{acquisition.unknownPct}% of your customers have no source recorded.</b>{' '}
+                  Every number above is only as good as that gap is small — ask on the next call and set it on the customer&apos;s profile.{' '}
+                </>
+              ) : null}
+              Won rate is customers who accepted a quote ÷ customers from that source, shown only at {acquisition.minSampleForRate}+ customers.
+              &ldquo;Worked&rdquo; means at least one completed visit. Counts are per customer, so one person is counted once however many quotes or visits they have.
+            </p>
           </div>
         )}
       </Section>

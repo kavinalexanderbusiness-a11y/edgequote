@@ -14,7 +14,7 @@ import { formatDate, cn } from '@/lib/utils'
 import {
   FileText, Send, RotateCw, CheckCircle2, XCircle, CalendarPlus, Wrench, Receipt,
   Eye, DollarSign, MessageSquare, StickyNote, Wallet, Camera, Ruler, Shield,
-  Sparkles, Globe, History, Search, X,
+  Sparkles, Globe, History, Search, X, HandCoins, AlertTriangle,
 } from 'lucide-react'
 
 // ── THE timeline UI ──────────────────────────────────────────────────────────
@@ -36,6 +36,7 @@ const EVENT_META: Record<TimelineKind, { icon: typeof FileText; color: string }>
   job_scheduled:   { icon: CalendarPlus, color: 'text-accent-text bg-accent/10 border-accent/20' },
   job_completed:   { icon: Wrench,       color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
   invoice_created: { icon: Receipt,      color: 'text-ink-muted bg-surface border-border' },
+  deposit_requested:{icon: HandCoins,    color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
   invoice_viewed:  { icon: Eye,          color: 'text-blue-400 bg-blue-500/10 border-blue-500/20' },
   invoice_paid:    { icon: DollarSign,   color: 'text-accent-text bg-accent/10 border-accent/20' },
   message_in:      { icon: MessageSquare,color: 'text-blue-400 bg-blue-500/10 border-blue-500/20' },
@@ -62,11 +63,20 @@ interface TimelineCardProps {
   emptyText?: string
   /** Quick actions for the subject, rendered in the card header. */
   actions?: ReactNode
+  /**
+   * Names of sources whose read FAILED (from the loader's `missing`). A history
+   * assembled from a dozen reads must never present itself as complete when one
+   * of them dropped — see the note in lib/timelineData.ts.
+   */
+  missing?: string[]
+  /** Re-runs the page's load. Only offered when something is actually missing. */
+  onRetry?: () => void
   className?: string
 }
 
 export function TimelineCard({
-  events: allEvents, title = 'Timeline', emptyText = 'No history yet.', actions, className,
+  events: allEvents, title = 'Timeline', emptyText = 'No history yet.', actions,
+  missing = [], onRetry, className,
 }: TimelineCardProps) {
   const [query, setQuery] = useState('')
   const [groups, setGroups] = useState<Set<TimelineGroup>>(new Set())
@@ -87,7 +97,12 @@ export function TimelineCard({
 
   return (
     <Card className={className}>
-      <CardHeader className="flex items-center gap-2">
+      {/* flex-wrap: at 390px the title + count + action links measured 400px wide
+          against a 390px viewport, so the LAST action ("Measure" on a property)
+          was clipped off the right edge — unreachable on the phone this page is
+          most used on. Wrapping only engages when the row would already
+          overflow, so nothing changes on a desktop header. */}
+      <CardHeader className="flex items-center gap-2 flex-wrap">
         <History className="w-4 h-4 text-accent-text" />
         <h2 className="text-sm font-semibold text-ink">{title}</h2>
         {allEvents.length > 0 && (
@@ -98,8 +113,31 @@ export function TimelineCard({
         {actions && <div className={cn('flex items-center gap-1.5', allEvents.length === 0 && 'ml-auto')}>{actions}</div>}
       </CardHeader>
       <CardBody>
+        {/* Says what is missing BEFORE anything below claims to be the history.
+            Rendered above both branches on purpose: the empty branch is the
+            dangerous one, because "No history yet." is a claim about the customer
+            and a failed read cannot support it. */}
+        {missing.length > 0 && (
+          <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+            <p className="text-xs text-ink-muted min-w-0">
+              This history is incomplete — {missing.join(', ')} could not be loaded.
+              {onRetry && (
+                <>
+                  {' '}
+                  <button type="button" onClick={onRetry}
+                    className="font-medium text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                    Try again
+                  </button>
+                </>
+              )}
+            </p>
+          </div>
+        )}
         {allEvents.length === 0 ? (
-          <InlineEmpty className="py-6">{emptyText}</InlineEmpty>
+          <InlineEmpty className="py-6">
+            {missing.length > 0 ? 'Nothing could be loaded for this history.' : emptyText}
+          </InlineEmpty>
         ) : (
           <div className="space-y-3">
             {/* Controls appear only once there's enough history for them to earn

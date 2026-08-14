@@ -68,6 +68,25 @@ check('localHour resolves a real timezone to a real hour',
 check('localHour is the OWNER\'s hour, not the server\'s',
   localHour('America/Edmonton', new Date('2026-01-15T15:00:00Z')), 8)
 
+// ── MIDNIGHT, pinned to a FIXED instant ──
+// The check above this block uses `new Date()`, so for one hour a day it was
+// asserting something different from the other 23 — and that hour was broken.
+// `hour12: false` alone selects the h24 cycle on older ICU (Node 20, which CI
+// pins), where midnight formats as "24"; the 0..23 range check then rejected it
+// and localHour returned 'unknown'. Commercial sends fail CLOSED on an unknown
+// hour, so the app reported an hour it knew as one it could not read. It only
+// reproduced between 00:00 and 00:59 in the owner's timezone, which is why CI
+// went red three commits in a row at 06:3x UTC and green either side.
+// Fixed instants, so this is true at every hour of every run:
+check('midnight is hour 0, never 24, never unknown  (h24/ICU trap)',
+  localHour('America/Edmonton', new Date('2026-08-10T06:30:00Z')), 0)   // 00:30 MDT
+check('…and the minute before it is still 23',
+  localHour('America/Edmonton', new Date('2026-08-10T05:59:00Z')), 23)  // 23:59 MDT
+check('…and the hour after it is 1',
+  localHour('America/Edmonton', new Date('2026-08-10T07:30:00Z')), 1)   // 01:30 MDT
+check('midnight holds across the DST boundary too',
+  localHour('America/Edmonton', new Date('2026-01-15T07:30:00Z')), 0)   // 00:30 MST
+
 // ═══════════════════════════════════════════════════════════════════════════
 H('4. FREQUENCY — the cross-sender brain none of the five dedupers had')
 check('a commercial send within the gap blocks',

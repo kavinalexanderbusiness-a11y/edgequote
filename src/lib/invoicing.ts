@@ -40,9 +40,18 @@ function serviceLineLabel(serviceType: string | null | undefined, freq: string |
 // would share it (duplicate customer-facing documents). Every path that mints an
 // invoice — the completed-job auto-draft, converting a quote, and manual creation
 // — calls this, so the sequence can't fork.
-export async function nextInvoiceNumber(supabase: Supa, userId: string): Promise<string> {
-  const { data } = await supabase.from('invoices').select('invoice_number').eq('user_id', userId)
-  const next = maxNumericSuffix(((data as { invoice_number: string }[]) || []).map(n => n.invoice_number)) + 1
+//
+// Returns NULL if the ledger could not be read. supabase-js RESOLVES {data:null,
+// error} on a dead connection, so `data || []` would report "no invoices exist",
+// mint INV-0001, and the insert would SUCCEED — there is no unique index on
+// invoice_number (only invoices(job_id)), so nothing downstream catches it. The
+// owner would end up with two different invoices carrying the same number: the
+// one document the customer, the receipt and the books all identify by. A number
+// we couldn't verify is not a number, so callers must refuse to create instead.
+export async function nextInvoiceNumber(supabase: Supa, userId: string): Promise<string | null> {
+  const { data, error } = await supabase.from('invoices').select('invoice_number').eq('user_id', userId)
+  if (error || !data) return null
+  const next = maxNumericSuffix((data as { invoice_number: string }[]).map(n => n.invoice_number)) + 1
   return `INV-${String(next).padStart(4, '0')}`
 }
 
@@ -221,7 +230,11 @@ export async function createDraftInvoiceForCompletedJob(
   if (!customerName && quote) customerName = String(quote.customer_name || '')
   if (!address && quote) address = (quote.address as string) ?? null
 
+  // No verified number → no invoice. Auto-drafting one under a fabricated number
+  // is worse than not drafting: the job stays visibly un-invoiced and the owner
+  // can retry, whereas a duplicate number is silent and lands in the books.
   const invoiceNumber = await nextInvoiceNumber(supabase, ownerId)
+  if (!invoiceNumber) return { created: false, reason: 'error' }
 
   // Local dates — evening completions must not stamp tomorrow (UTC) as issued.
   const today = localTodayISO()

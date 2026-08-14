@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { stripeEnabled, webhookConfigured, chargeSavedCardOffSession } from '@/lib/stripe/config'
 import { invoiceBalance } from '@/lib/payments/ledger'
+import { tenantCapabilities } from '@/lib/capabilities'
 
 // ── THE single AutoPay charge path ───────────────────────────────────────────
 // Called from THREE entry points, all sharing this one function so there is exactly
@@ -64,6 +65,14 @@ export async function attemptAutoPayCharge(
   // could be taken with no path to mark the invoice paid.
   if (!stripeEnabled()) return { result: 'skipped', reason: 'stripe-disabled' }
   if (!webhookConfigured()) return { result: 'skipped', reason: 'webhook-unconfigured' }
+
+  // Tenant capability, checked IN the engine because the cron sweep walks every
+  // tenant's invoices: a business without the platform's online_payments grant
+  // must never reach a charge — its customers' money would settle into the
+  // deployment's one Stripe account, which belongs to the founding tenant.
+  if (!(await tenantCapabilities(sb, userId)).onlinePayments) {
+    return { result: 'skipped', reason: 'payments-not-enabled' }
+  }
 
   // Invoice — scoped to the owner. Must be unpaid + have a payable amount.
   // amount_paid/discount are selected because the charge is the BALANCE, not the

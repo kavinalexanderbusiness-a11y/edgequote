@@ -62,7 +62,7 @@ export function List<T>({
         const active = isActive?.(item)
         return (
           <li key={getKey(item)}
-            className={cn('flex items-center gap-3 px-4 py-3 transition-colors', active && 'bg-surface', onRowClick && 'hover:bg-surface')}>
+            className={cn('flex items-center gap-3 px-4 py-3 transition-colors', active && 'bg-surface', onRowClick && 'hover:bg-surface-raised')}>
             {onToggleSelect && (
               <input
                 type="checkbox"

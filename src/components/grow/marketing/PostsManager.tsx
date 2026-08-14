@@ -223,5 +223,5 @@ function PostCard({ piece, campaignName, supabase, onFavorite, onDuplicate, onAr
 }
 
 function IconBtn({ title, onClick, children }: { title: string; onClick: () => void; children: React.ReactNode }) {
-  return <button type="button" title={title} onClick={onClick} className="p-1.5 rounded-lg text-ink-faint hover:text-ink hover:bg-surface transition-colors">{children}</button>
+  return <button type="button" title={title} onClick={onClick} className="p-1.5 rounded-lg text-ink-faint hover:text-ink hover:bg-surface-raised transition-colors">{children}</button>
 }

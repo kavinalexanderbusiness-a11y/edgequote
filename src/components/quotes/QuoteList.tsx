@@ -191,13 +191,23 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
     const eligible = sel.selectedItems.filter(q => ['accepted', 'scheduled', 'completed'].includes(q.status))
     if (!eligible.length) { toast.error('Select accepted, scheduled or completed quotes to convert.'); return }
     setBusyKey('convert')
-    const [{ data: nums }, { data: existing }, linesByQuote] = await Promise.all([
+    const [{ data: nums, error: numsErr }, { data: existing, error: existingErr }, linesByQuote] = await Promise.all([
       supabase.from('invoices').select('invoice_number').eq('user_id', user.id),
       supabase.from('invoices').select('quote_id').in('quote_id', eligible.map(q => q.id)),
       fetchLinesByQuote(supabase, eligible.map(q => q.id)),
     ])
-    const already = new Set(((existing as { quote_id: string | null }[]) || []).map(r => r.quote_id))
-    let next = maxNumericSuffix(((nums as { invoice_number: string }[]) || []).map(n => n.invoice_number)) + 1
+    // Both reads are load-bearing and both fail SILENTLY as {data:null,error}.
+    // Coerced to [], the numbering restarts at INV-0001 (nothing in the schema
+    // stops a duplicate — the only unique index is invoices(job_id)) and the
+    // already-converted set empties, so every selected quote is converted a
+    // second time. Convert nothing rather than bill a customer twice.
+    if (numsErr || !nums || existingErr || !existing) {
+      toast.error('Could not read your existing invoices, so nothing was converted. Check your connection and try again.')
+      setBusyKey(null)
+      return
+    }
+    const already = new Set((existing as { quote_id: string | null }[]).map(r => r.quote_id))
+    let next = maxNumericSuffix((nums as { invoice_number: string }[]).map(n => n.invoice_number)) + 1
     const issued = localTodayISO()
     const dueISO = formatDfn(addDays(parseISO(issued), 14), 'yyyy-MM-dd')
     let created = 0
@@ -220,7 +230,10 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
         user_id: user.id, quote_id: q.id, customer_id: q.customer_id, property_id: q.property_id,
         invoice_number: `INV-${String(next).padStart(4, '0')}`, customer_name: q.customer_name,
         address: q.address, service_type: q.service_type, amount: q.total, line_items: lineItems, status: 'unpaid',
-        issued_date: issued, due_date: dueISO, notes: q.notes,
+        // Each half maps to its own counterpart on the invoice (lib/noteScope):
+        // `notes` prints, `internal_notes` never does. Same rule as the
+        // single-quote convert on the detail page.
+        issued_date: issued, due_date: dueISO, notes: q.notes, internal_notes: q.internal_notes,
       })
       if (!error) { created++; next++ }
     }
@@ -235,11 +248,19 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
     setBusyKey('duplicate')
-    const [{ data: qnums }, linesByQuote] = await Promise.all([
+    const [{ data: qnums, error: qnumsErr }, linesByQuote] = await Promise.all([
       supabase.from('quotes').select('quote_number').eq('user_id', user.id),
       fetchLinesByQuote(supabase, sel.selectedItems.map(q => q.id)),
     ])
-    let next = maxNumericSuffix(((qnums as { quote_number: string }[]) || []).map(n => n.quote_number)) + 1
+    // A failed read coerced to [] restarts the sequence at EPS-<year>-0001, and
+    // quote_number has no unique index either — prod already carries two
+    // duplicated quote numbers, so this is not hypothetical.
+    if (qnumsErr || !qnums) {
+      toast.error('Could not read your existing quote numbers, so nothing was duplicated. Check your connection and try again.')
+      setBusyKey(null)
+      return
+    }
+    let next = maxNumericSuffix((qnums as { quote_number: string }[]).map(n => n.quote_number)) + 1
     // (The breakdown for every selected quote was batch-fetched above via
     // fetchLinesByQuote — the same helper bulkConvert uses.)
     let created = 0
@@ -255,7 +276,9 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
         price_source: q.price_source, pricing_config_version_id: q.pricing_config_version_id,
         value_grade: q.value_grade, nearby_count: q.nearby_count,
         overgrowth_multiplier: q.overgrowth_multiplier, custom_travel_required: q.custom_travel_required,
-        show_travel_separately: q.show_travel_separately, notes: q.notes, hours: q.hours, crew_size: q.crew_size,
+        // Both halves come along, each staying on its own side of the boundary.
+        show_travel_separately: q.show_travel_separately, notes: q.notes, internal_notes: q.internal_notes,
+        hours: q.hours, crew_size: q.crew_size,
         rate: q.rate, travel_fee: q.travel_fee, property_id: q.property_id,
         measured_sqft: q.measured_sqft, suggested_price: q.suggested_price, travel_distance_km: q.travel_distance_km,
         pricing_confidence: q.pricing_confidence,
@@ -375,8 +398,12 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
         quotes.length === 0 ? (
           // Truly empty (not just a filter miss) → lead to the next action.
           <Card>
+            {/* Trade-neutral on purpose: this page is every business’s quote
+                list, and the old copy told a painter, a plumber and a junk
+                hauler to "measure the lawn". Name the steps the form actually
+                asks for, in words that fit any trade. */}
             <EmptyState icon={FileText} title="No quotes yet"
-              description="Create your first quote — measure the lawn, pick a service, and send it in minutes."
+              description="Create your first quote — add the customer, pick a service, set a price, and send it in minutes."
               action={{ label: 'New quote', onClick: () => router.push('/dashboard/quotes/new') }} />
           </Card>
         ) : (

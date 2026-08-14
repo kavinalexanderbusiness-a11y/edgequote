@@ -85,8 +85,15 @@ export function computeWeatherImpact(
   today: string,
   locationLabel = 'your business location',
   usingDefaultLocation = false,
-  dayStatus: DayStatusMap = { byDate: {}, blockedDates: new Set() },  // Day Status — never recommend blocked days
+  // Day Status — never recommend blocked days. NULL means the day_statuses read
+  // FAILED, which is NOT the same as "nothing is blocked". With an empty map this
+  // function named a day the owner had closed as the best place to move a
+  // rained-out day's work (reproduced). Unknown availability suppresses the move
+  // target entirely — see findDryDay.
+  dayStatus: DayStatusMap | null = { byDate: {}, blockedDates: new Set() },
 ): WeatherImpactReport {
+  const dayStatusKnown = dayStatus != null
+  const blockedDates: ReadonlySet<string> = dayStatus?.blockedDates ?? new Set<string>()
   const pref = preferredDays.length ? new Set(preferredDays) : null
   const fByDate: Record<string, DayForecast> = {}
   for (const f of forecast) fByDate[f.date] = f
@@ -106,11 +113,15 @@ export function computeWeatherImpact(
   // multiple dry days instead of all piling onto the first dry day.
   const committedExtra: Record<string, number> = {}
   const findDryDay = (afterDate: string, neededHours: number): string | null => {
+    // Availability unknown → name no day at all. Every candidate below is
+    // filtered by `blockedDates`, so without it the first dry day wins even if
+    // the owner closed it. "Pick a date yourself" is the honest answer.
+    if (!dayStatusKnown) return null
     let firstDry: string | null = null
     for (const f of forecast) {
       if (f.date <= afterDate) continue
       if (pref && !pref.has(dow(f.date))) continue
-      if (dayStatus.blockedDates.has(f.date)) continue   // day marked unavailable — never recommend it
+      if (blockedDates.has(f.date)) continue   // day marked unavailable — never recommend it
       if (f.rainy) continue
       if (firstDry == null) firstDry = f.date
       if ((hoursByDate[f.date] || 0) + (committedExtra[f.date] || 0) + neededHours <= capacityHours) return f.date
@@ -127,7 +138,7 @@ export function computeWeatherImpact(
     // no-crew block) is suppressed here so weather NEVER adds a contradictory
     // "delay/monitor" suggestion on top. It's still surfaced — with its real
     // reason — in `blockedDays` below, so the owner sees why it isn't recommended.
-    if (dayStatus.blockedDates.has(f.date)) continue
+    if (blockedDates.has(f.date)) continue
     const dayJobs = jobsByDate[f.date] || []
     if (!dayJobs.length) continue
     const laborHours = round1(hoursByDate[f.date] || 0)
@@ -142,7 +153,11 @@ export function computeWeatherImpact(
     const recDayLabel = rec ? new Date(rec + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : null
     const recommendation: DayRecommendation = score.level === 'red'
       ? { action: 'delay', jobsAffected: dayJobs.length,
-          text: `Delay ${dayJobs.length} job${dayJobs.length !== 1 ? 's' : ''} — ${score.reason}.${recDayLabel ? ` Best move: ${recDayLabel}.` : ' No dry work day in range — pick a specific date.'}` }
+          // Two different reasons produce no suggested day, and saying the wrong
+          // one is its own false claim: "no dry work day in range" would be a
+          // statement about the forecast when the truth is that we could not read
+          // which days are closed.
+          text: `Delay ${dayJobs.length} job${dayJobs.length !== 1 ? 's' : ''} — ${score.reason}.${recDayLabel ? ` Best move: ${recDayLabel}.` : dayStatusKnown ? ' No dry work day in range — pick a specific date.' : ' Couldn’t check which days you have closed — pick a date yourself.'}` }
       : score.level === 'yellow'
       ? { action: 'monitor', jobsAffected: dayJobs.length,
           text: `Monitor ${dayJobs.length} job${dayJobs.length !== 1 ? 's' : ''} — ${score.reason}. Decide the morning of.` }
@@ -152,7 +167,10 @@ export function computeWeatherImpact(
       capacityHours, utilizationPct: capacityHours > 0 ? Math.round((laborHours / capacityHours) * 100) : 0,
       overbooked: laborHours > capacityHours,
       recommendedDay: rec, recommendedProjectedHours: recProjected, recommendedOverbooks: recOverbooks,
-      recommendedNote: !rec ? 'No dry work day in the next week — consider a specific date'
+      recommendedNote: !rec
+        ? (dayStatusKnown
+            ? 'No dry work day in the next week — consider a specific date'
+            : 'Couldn’t load your closed days, so no move is suggested — pick a date yourself')
         : recOverbooks ? `${recDayLabel} would be over capacity (${recProjected}h vs ${capacityHours}h) — split across days`
           : `Best move: ${recDayLabel} (${recProjected}h of ${capacityHours}h after)`,
     })
@@ -176,7 +194,7 @@ export function computeWeatherImpact(
 
   // Manually-blocked days within the forecast window, so the page can explain why
   // they aren't recommended ("Sunday is unavailable (Rain — manually blocked)").
-  const blockedDays = Object.values(dayStatus.byDate)
+  const blockedDays = Object.values(dayStatus?.byDate ?? {})
     .filter(r => r.blocks && fByDate[r.date])
     .map(r => ({ date: r.date, status: r.status, label: dayStatusLabel(r) }))
     .sort((a, b) => a.date.localeCompare(b.date))
@@ -226,7 +244,10 @@ export async function loadWeatherImpact(supabase: SupabaseClient, pre?: WeatherP
     supabase.from('day_statuses').select(DAY_STATUS_SELECT).eq('user_id', uid),
   ])
   // Day Status map — Weather Ops never recommends blocked days, and explains them.
-  const dayStatus = buildDayStatusMap((dRes.data as DayStatusRow[]) || [])
+  // A FAILED read becomes null, not an empty map: `|| []` here claimed "no day is
+  // blocked", which is how a rained-out day's work got recommended onto the day
+  // the owner had marked vacation.
+  const dayStatus = dRes.error ? null : buildDayStatusMap((dRes.data as DayStatusRow[]) || [])
 
   const settings = sRes.data as { base_lat?: number | null; base_lng?: number | null; base_address?: string | null; daily_capacity_hours?: number | null; preferred_work_days?: number[] | null } | null
   // Always have a location: the configured base if set, else default to Calgary.

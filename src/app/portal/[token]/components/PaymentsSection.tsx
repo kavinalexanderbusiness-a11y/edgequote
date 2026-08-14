@@ -20,17 +20,11 @@ import { receiptNumberFor } from '@/lib/payments/ledger'
 import { ledgerRowType } from '@/lib/payments/analytics'
 import { cardExpLabel, cardExpiryState } from '@/lib/payments/card'
 import { Empty, type TabProps } from './shared'
-import { etransferReference, refundedTotal, type PortalCard, type PortalInvoice, type PortalPayment } from '../model'
+import { etransferReference, paymentMethodLabel, refundedTotal, type PortalCard, type PortalInvoice, type PortalPayment } from '../model'
 
-// ── Payment history ──
-function paymentMethodLabel(provider: string): string {
-  switch (provider) {
-    case 'stripe': return 'Card'
-    case 'etransfer': return 'E-transfer'
-    case 'cash': return 'Cash'
-    default: return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : 'Payment'
-  }
-}
+// `paymentMethodLabel` lived here AND in HomeTab as two byte-identical copies.
+// Home's went with its feed; this one now imports the single definition from
+// ../model, so the word a customer reads for "how did I pay" is one string.
 
 export function PaymentsSection({ view, actions }: TabProps) {
   const { data, derived } = view
@@ -105,20 +99,37 @@ export function PaymentsSection({ view, actions }: TabProps) {
   const copyAsk = owingDocs.length === 1 && owingDocs[0].payAmount > 0
     ? { amount: owingDocs[0].payAmount, isDeposit: owingDocs[0].payIsDeposit }
     : { amount: outstanding, isDeposit: false }
+  // Instructions for settling a bill are only instructions while there IS one.
+  // This block is ~500px of Card / E-transfer / recipient address / memo guidance
+  // / Cash, and it rendered on every Billing visit — so the commonest customer
+  // here, whose invoices are all paid, scrolled half a screen of how-to-pay under
+  // a "Balance due $0.00" tile. Nothing is lost when it's hidden: there is no
+  // amount to send, no memo to quote, and the moment a bill lands it comes back
+  // by itself. Same predicate the rest of this file uses for "owing" (balance,
+  // minus cancelled/draft — a withdrawn invoice keeps its balance by construction).
+  const hasSomethingToPay = owingDocs.length > 0
   return (
     <div className="space-y-3">
       {/* ── Ways to pay — Card / E-transfer / Cash (cheque retired). E-transfer
           details come from Business Settings (one source of truth). ── */}
+      {hasSomethingToPay && (
       <div className="rounded-card border border-border bg-bg-secondary p-4 space-y-3 animate-rise">
         <p className="text-[10px] uppercase tracking-[0.14em] text-ink-faint font-semibold">Ways to pay</p>
+        {/* Card is listed as a way to pay ONLY while it is one. The old else-copy
+            ("Ask us for a secure card payment link") promised a link the pay
+            routes refuse to mint whenever payments are off — for THIS business's
+            missing platform grant or a missing deployment key alike. A restricted
+            business's portal lists e-transfer and cash, which genuinely work. */}
+        {paymentsEnabled && (
         <div className="flex items-start gap-3">
           <span aria-hidden><CreditCard className="w-4 h-4" /></span>
           <div className="min-w-0">
             <p className="text-sm font-semibold text-ink">Card</p>
-            <p className="text-xs text-ink-muted">{paymentsEnabled ? 'Pay any invoice securely online with the Pay button.' : 'Ask us for a secure card payment link.'}</p>
-            {paymentsEnabled && <p className="text-[11px] text-ink-faint mt-1 flex items-center gap-1"><ShieldCheck className="w-3 h-3 text-emerald-400 shrink-0" /> Secure checkout by Stripe — your card details never touch us.</p>}
+            <p className="text-xs text-ink-muted">Pay any invoice securely online with the Pay button.</p>
+            <p className="text-[11px] text-ink-faint mt-1 flex items-center gap-1"><ShieldCheck className="w-3 h-3 text-emerald-400 shrink-0" /> Secure checkout by Stripe — your card details never touch us.</p>
           </div>
         </div>
+        )}
         {/* Only advertise e-transfer once the business has set its address —
             never show a customer owner-facing setup instructions. */}
         {etransferEmail && (
@@ -135,23 +146,23 @@ export function PaymentsSection({ view, actions }: TabProps) {
             {owingNums.length > 1 && (
               <p className="text-xs text-ink-muted mt-1">Please include your invoice number (e.g. <span className="font-semibold text-ink">{owingNums[0]}</span>) in the e-transfer message.</p>
             )}
-            <div className="flex flex-wrap gap-2 mt-2">
-              <Button size="sm" variant="secondary" onClick={() => copyText('email', etransferEmail)}>
-                {copied === 'email' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />} {copied === 'email' ? 'Copied' : 'Copy email'}
-              </Button>
+            {/* One row, not three. Each button carried its own value in its label —
+                "Copy amount ($347.50)", "Copy invoice # (INV-0065)" — which made every
+                one too wide to sit beside the others, so three full-width rows stacked
+                down the card restating three figures printed inches above them. The
+                values stay where they're already stated (the address, the memo sentence,
+                the invoice row); these are just the taps that carry them across, so a
+                one-word name is the whole job. Same three actions, same clipboard text,
+                and the memo one still appears ONLY when a single owing invoice makes the
+                reference unambiguous. */}
+            <p className="text-[11px] text-ink-faint mt-2 mb-1.5">Copy to your bank app:</p>
+            <div className="flex flex-wrap gap-1.5">
+              <CopyChip label="Email" done={copied === 'email'} onClick={() => copyText('email', etransferEmail)} />
               {copyAsk.amount > 0 && (
-                <Button size="sm" variant="secondary" onClick={() => copyText('amount', copyAsk.amount.toFixed(2))}>
-                  {copied === 'amount' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />} {copied === 'amount' ? 'Copied' : `Copy ${copyAsk.isDeposit ? 'deposit ' : ''}amount (${formatCurrency(copyAsk.amount)})`}
-                </Button>
+                <CopyChip label={copyAsk.isDeposit ? 'Deposit amount' : 'Amount'} done={copied === 'amount'} onClick={() => copyText('amount', copyAsk.amount.toFixed(2))} />
               )}
-              {/* The memo is the one field a customer had to read off the screen and
-                  retype into their bank app — and a mistyped memo is why an
-                  e-transfer can't be matched. One tap now, and only when there's a
-                  single owing invoice (so the reference is never ambiguous). */}
               {etransferRef && (
-                <Button size="sm" variant="secondary" onClick={() => copyText('ref', etransferRef)}>
-                  {copied === 'ref' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />} {copied === 'ref' ? 'Copied' : `Copy invoice # (${etransferRef})`}
-                </Button>
+                <CopyChip label="Invoice #" done={copied === 'ref'} onClick={() => copyText('ref', etransferRef)} />
               )}
             </div>
             {/* Sending money to a copy-pasted address is the loneliest moment in this
@@ -176,6 +187,7 @@ export function PaymentsSection({ view, actions }: TabProps) {
           </div>
         </div>
       </div>
+      )}
       {paymentsEnabled && <AutoPayCard token={token} card={data.payment_method ?? null} autopayEnabled={!!data.customer.autopay_enabled} onChanged={() => { void actions.refresh() }} />}
       {availableCredit > 0 && (
         <div className="rounded-card border border-accent/25 bg-accent/[0.06] p-3.5 flex items-center justify-between gap-3 animate-rise">
@@ -252,6 +264,18 @@ export function PaymentsSection({ view, actions }: TabProps) {
         )
       })}
     </div>
+  )
+}
+
+// One copy affordance. `tap-target-y` keeps the gloved-thumb height on touch even
+// though the chip is visually small — the label shrank, the target didn't.
+function CopyChip({ label, done, onClick }: { label: string; done: boolean; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick}
+      className="tap-target-y inline-flex items-center gap-1.5 text-xs font-medium rounded-lg border border-border bg-bg-tertiary px-2.5 py-2 text-ink-muted hover:text-ink hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+      {done ? <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" /> : <Copy className="w-3.5 h-3.5 shrink-0" />}
+      {done ? 'Copied' : label}
+    </button>
   )
 }
 

@@ -231,8 +231,14 @@ H('10. STRUCTURAL — every document reads the ONE engine, and holds no maths')
   const tpl = src('lib/comms/templates.ts')
   check('the deposit template names the amount AS a deposit',
     /deposit of \*\*\{\{amount\}\}\*\*/.test(tpl), true)
+  // Comments stripped first. This asserts the templates file cannot COMPUTE a
+  // deposit — but the file also documents why, by naming the engine its callers
+  // must use instead ("its only sender fills it from depositChargeAmount()").
+  // Scanning raw source cannot tell an engine call from prose about one, and
+  // would report the explanation as the violation.
+  const tplCode = tpl.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
   check('no template does deposit arithmetic (templates interpolate, never compute)',
-    /deposit_amount|depositChargeAmount|depositState/.test(tpl), false)
+    /deposit_amount|depositChargeAmount|depositState/.test(tplCode), false)
   check('the receipt body still states the remaining balance (partial-safe, unchanged)',
     /remaining balance is/.test(tpl), true)
 }

@@ -4,21 +4,33 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency, localTodayISO } from '@/lib/utils'
 import { Kbd } from '@/components/ui/Kbd'
 import {
-  Search, CornerDownLeft, ArrowUp, ArrowDown, Loader2,
-  Users, FileText, Receipt, CalendarDays, MessageSquare, Navigation, Sprout,
+  Search, CornerDownLeft, ArrowUp, ArrowDown, Loader2, AlertTriangle, RotateCw,
+  Users, FileText, Receipt, CalendarDays, MessageSquare, Navigation,
   Settings, LayoutDashboard, UserPlus, FilePlus2, ReceiptText, Send,
-  Home, Image as ImageIcon, CreditCard, Eye, Phone, CalendarPlus, Sparkles, LifeBuoy, Store, BookOpen,
+  Home, Eye, Phone, CalendarPlus, Sparkles, LifeBuoy, Store, BookOpen,
 } from 'lucide-react'
 import { useModules } from '@/hooks/useModules'
 import { getPageCommands, subscribePageCommands, PageCommand } from '@/components/command/pageCommands'
 import { phoneSearchDigits } from '@/lib/customers'
+import {
+  MIN_QUERY_LENGTH, SEARCH_LIMIT, toSearchRecords, KIND_LABEL,
+  type SearchRow, type RecordKind,
+} from '@/lib/globalSearch'
+import type { FeeSettings } from '@/lib/invoiceTotals'
 
 type Icon = typeof Users
-interface Item { id: string; label: string; sub?: string; icon: Icon; run: () => void }
+interface Item { id: string; label: string; sub?: string; icon: Icon; run: () => void; kind?: RecordKind }
 interface Section { title: string; items: Item[] }
+
+// The record types the locator returns, and the icon each one wears. Kept beside
+// KIND_LABEL so a row always says WHAT it is — a result you can't type-identify at
+// a glance is a result you have to click to understand.
+const KIND_ICONS: Record<RecordKind, Icon> = {
+  customer: Users, property: Home, quote: FileText, invoice: Receipt, job: CalendarDays,
+}
 
 // ── Recents ───────────────────────────────────────────────────────────────────
 // The empty palette used to look identical on visit 1 and visit 1,000 — a frequent
@@ -61,8 +73,13 @@ function pushRecent(e: RecentEntry) {
 // same source and same per-business filtering as the sidebar, so the palette
 // never disagrees with navigation. Only non-module destinations live here.
 const EXTRA_NAV: { label: string; href: string; icon: Icon; keywords?: string }[] = [
-  { label: 'Marketplace', href: '/dashboard/marketplace', icon: Store },
-  { label: 'API Docs', href: '/dashboard/integrations/docs', icon: BookOpen },
+  // Was "Marketplace" → /dashboard/marketplace: an app store for features that
+  // are all included and all already on. It now points at the one surface that
+  // manages them, named for what an owner would actually be after.
+  { label: 'Turn features on or off', href: '/dashboard/settings#modules', icon: Store,
+    keywords: 'modules marketplace features hide tidy menu install uninstall' },
+  { label: 'API Docs', href: '/dashboard/integrations/docs', icon: BookOpen,
+    keywords: 'developer rest webhook zapier make integrate' },
   { label: 'Routes', href: '/dashboard/routes', icon: Navigation, keywords: 'driving distance travel stops' },
   { label: 'Measurement Accuracy', href: '/dashboard/measurements', icon: Eye },
   { label: 'Help', href: '/dashboard/help', icon: LifeBuoy },
@@ -72,6 +89,12 @@ const EXTRA_NAV: { label: string; href: string; icon: Icon; keywords?: string }[
 // A leading verb turns the palette into a command: `call jane`, `text 5875550…`,
 // `schedule`. Reuses the same customer index as search — no separate contacts store.
 const VERB_RE = /^(call|phone|text|message|msg|sms|schedule|book)\b\s*(.*)$/i
+
+// What the owner is told when the search never got an answer. Deliberately not a
+// count and not the word "no": "No matches" is a FINDING — the book was read and
+// holds nothing like this. A dropped connection is the absence of a finding, and
+// saying the two the same way is how an owner concludes a record was deleted.
+const FAILED_READ = 'Search didn’t finish — check your connection and try again.'
 
 // Global command palette — universal search (customers, properties, quotes,
 // invoices, jobs, messages, payments, photos, AI Vision) + quick actions + command
@@ -93,15 +116,24 @@ export function CommandPalette() {
   const [q, setQ] = useState('')
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState<Section[]>([])
+  // A failed read is NOT an empty result. Null means "the search answered"; a
+  // string means it never got to answer, and the UI must say so instead of
+  // rendering the same "No matches" a genuinely empty book produces.
+  const [error, setError] = useState<string | null>(null)
+  const [retryTick, setRetryTick] = useState(0)
   const [recents, setRecents] = useState<RecentEntry[]>([])
   const [sel, setSel] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const activeRef = useRef<HTMLButtonElement>(null)
   const reqRef = useRef(0)
+  // Business fee/GST settings, needed by THE balance engine before an invoice
+  // result may show money. Fetched once per session and cached — it changes about
+  // once a year, and a search must not pay for it on every keystroke.
+  const settingsRef = useRef<{ loaded: boolean; value: FeeSettings | null }>({ loaded: false, value: null })
 
   useEffect(() => { setMounted(true) }, [])
 
-  const close = useCallback(() => { setOpen(false); setQ(''); setResults([]); setSel(0) }, [])
+  const close = useCallback(() => { setOpen(false); setQ(''); setResults([]); setError(null); setSel(0) }, [])
 
   // Open via Cmd/Ctrl+K (and a custom event the sidebar button dispatches).
   useEffect(() => {
@@ -161,25 +193,39 @@ export function CommandPalette() {
     return [ps, recentSec, ...baseSections].filter((s): s is Section => s !== null)
   }, [pageSection, baseSections, recents, go])
 
-  // Debounced universal search + command verbs.
+  // ── Debounced global search + command verbs ────────────────────────────────
+  //
+  // ONE request per settled query, and the newest answer always wins.
+  //
+  // THE RACE this is built to lose safely: type "Sarah", a slow request starts;
+  // type " Brown", a fast request starts and returns; the "Sarah" request lands
+  // afterwards. `reqRef` is bumped synchronously on every keystroke, so the stale
+  // response finds its ticket number superseded and returns without touching a
+  // single piece of state — not the results, not the spinner, not the error. The
+  // AbortController on top of that stops the superseded request from finishing at
+  // all, so it costs no bandwidth either; the ticket check remains the guarantee,
+  // because an abort that loses its own race still must not paint.
   useEffect(() => {
     const query = q.trim()
-    if (!query) { setResults([]); setLoading(false); return }
+    if (!query) { setResults([]); setError(null); setLoading(false); return }
+    // Below the floor there is nothing worth asking the database — every record in
+    // the book matches one character. Say so; don't spin, and don't call it empty.
+    if (query.length < MIN_QUERY_LENGTH && !VERB_RE.test(query)) {
+      setResults([]); setError(null); setLoading(false); return
+    }
     setLoading(true)
+    setError(null)
     const myReq = ++reqRef.current
+    const ctrl = new AbortController()
     const handle = setTimeout(async () => {
-      // Search-only dependencies, loaded when someone actually searches: the
-      // full help-article text and the payments-ledger graph are ~28 kB min
-      // that every dashboard page used to carry in its layout bundle. The
-      // chunk fetches once (then cached) inside a path that already awaits
-      // the session + nine queries — same results, lighter every first paint.
-      const [{ searchHelp, helpHref }, { receiptNumberFor }] = await Promise.all([
-        import('@/lib/help/content'),
-        import('@/lib/payments/ledger'),
-      ])
+      // Search-only dependency, loaded when someone actually searches: the full
+      // help-article text is ~28 kB min that every dashboard page used to carry in
+      // its layout bundle. The chunk fetches once (then cached) inside a path that
+      // already awaits the session — same results, lighter every first paint.
+      const { searchHelp, helpHref } = await import('@/lib/help/content')
       const { data: { session } } = await supabase.auth.getSession()
       const uid = session?.user?.id
-      if (!uid) { setLoading(false); return }
+      if (!uid) { if (myReq === reqRef.current) setLoading(false); return }
 
       // ── Command verbs: call / text / schedule ──
       const verb = query.match(VERB_RE)
@@ -197,9 +243,13 @@ export function CommandPalette() {
         // canonical digits column, never the raw one (see phoneSearchDigits).
         const verbDigits = phoneSearchDigits(term)
         const verbOr = [`name.ilike.%${term}%`, verbDigits ? `phone_digits.ilike.%${verbDigits}%` : `phone.ilike.%${term}%`].join(',')
-        const { data } = await supabase.from('customers').select('id, name, phone').eq('user_id', uid).is('archived_at', null)
-          .or(verbOr).limit(8)
+        const { data, error: verbErr } = await supabase.from('customers').select('id, name, phone')
+          .eq('user_id', uid).is('archived_at', null)
+          .or(verbOr).limit(8).abortSignal(ctrl.signal)
         if (myReq !== reqRef.current) return
+        // A dropped read here used to become "no such customer", and the owner
+        // concluded the number wasn't in the book.
+        if (verbErr) { setError(FAILED_READ); setResults([]); setLoading(false); return }
         const rows = ((data as { id: string; name: string | null; phone: string | null }[]) || []).filter(r => !isCall || r.phone)
         setResults(rows.length ? [{
           title: isCall ? 'Call' : 'Message',
@@ -212,141 +262,72 @@ export function CommandPalette() {
         setSel(0); setLoading(false); return
       }
 
-      // ── Universal search ──
-      const safe = query.replace(/[,()*%]/g, ' ').trim()
-      if (!safe) { setLoading(false); return }
-      const like = `%${safe}%`
-      const amt = Number(safe.replace(/[^\d.]/g, ''))
-      const payAmt = Number.isFinite(amt) && amt > 0 ? `,amount.eq.${amt}` : ''
-      // An unknown number rings and the owner types it in whatever shape their
-      // handset showed it. `phone.ilike` compares two arbitrary formats and loses;
-      // phone_digits is the canonical form both sides reduce to. Keep the raw
-      // `phone` clause too — a query the digits rule rejects (a name) must still
-      // search phone the way it always did.
-      const digits = phoneSearchDigits(safe)
-      const custOr = [
-        `name.ilike.${like}`, `email.ilike.${like}`,
-        digits ? `phone_digits.ilike.%${digits}%` : `phone.ilike.${like}`,
-        `address.ilike.${like}`, `city.ilike.${like}`, `notes.ilike.${like}`,
-      ].join(',')
-      const [cust, prop, quo, inv, job, msg, pay, photo, vision] = await Promise.all([
-        supabase.from('customers').select('id, name, phone, city, email').eq('user_id', uid).is('archived_at', null)
-          .or(custOr).limit(6),
-        supabase.from('properties').select('id, address, city, neighborhood, customer_id').eq('user_id', uid)
-          .or(`address.ilike.${like},city.ilike.${like},neighborhood.ilike.${like},postal_code.ilike.${like},notes.ilike.${like}`).limit(5),
-        supabase.from('quotes').select('id, quote_number, customer_name, service_type, total, status').eq('user_id', uid)
-          .or(`quote_number.ilike.${like},customer_name.ilike.${like},service_type.ilike.${like},address.ilike.${like}`).order('created_at', { ascending: false }).limit(6),
-        supabase.from('invoices').select('id, invoice_number, customer_name, amount, status').eq('user_id', uid)
-          .or(`invoice_number.ilike.${like},customer_name.ilike.${like},service_type.ilike.${like}`).order('created_at', { ascending: false }).limit(6),
-        supabase.from('jobs').select('id, title, service_type, scheduled_date, status').eq('user_id', uid)
-          .or(`title.ilike.${like},service_type.ilike.${like}`).order('scheduled_date', { ascending: false }).limit(5),
-        supabase.from('messages').select('id, customer_id, body, created_at, customers(name)').eq('user_id', uid)
-          .ilike('body', like).order('created_at', { ascending: false }).limit(5),
-        supabase.from('payments').select('id, amount, customer_id, status, method, notes').eq('user_id', uid)
-          .or(`notes.ilike.${like},method.ilike.${like},provider.ilike.${like}${payAmt}`).order('created_at', { ascending: false }).limit(4),
-        supabase.from('job_photos').select('id, caption, kind, customer_id').eq('user_id', uid).ilike('caption', like).limit(4),
-        supabase.from('property_intelligence').select('id, summary, customer_id, mowing_difficulty').eq('user_id', uid).ilike('summary', like).limit(4),
-      ])
-      if (myReq !== reqRef.current) return  // a newer keystroke superseded this one
+      // ── The record locator ──
+      // ONE call. It used to be nine parallel selects — customers, properties,
+      // quotes, invoices, jobs, messages, payments, photos, AI vision — each with
+      // its own copy of the tenant predicate and each with its error discarded by
+      // `|| []`. Nine ways to half-fail and no way to say so.
+      //
+      // search_records does the finding AND the ranking server-side, scoped by
+      // auth.uid(), which it reads itself and never accepts as an argument. It
+      // returns records in one deterministic order: exact identifier, then exact
+      // phone/email, then prefix, then partial. Rendering them as one ranked list
+      // rather than per-type sections is the point — grouping by type would bury a
+      // rank-0 invoice-number hit underneath every customer.
+      const { data, error: rpcErr } = await supabase
+        .rpc('search_records', { p_query: query, p_limit: SEARCH_LIMIT })
+        .abortSignal(ctrl.signal)
+      if (myReq !== reqRef.current) return   // a newer keystroke superseded this one
+
+      if (rpcErr) {
+        // The failure the whole session exists to prevent: a dropped read reported
+        // as "No matches". "No matches" is an ANSWER — it means the book was read
+        // and holds nothing like this. This is the absence of an answer, and it
+        // gets a different sentence and a way to try again.
+        setError(FAILED_READ); setResults([]); setSel(0); setLoading(false); return
+      }
+
+      // Fee/GST settings gate the money line on an invoice result. Fetched once,
+      // and a failure is NOT fatal to the search — the records are still correct,
+      // they just arrive without a balance rather than with a guessed one.
+      if (!settingsRef.current.loaded) {
+        const { data: s, error: sErr } = await supabase.from('business_settings')
+          .select('payment_fee_strategy, fee_recovery_percent, gst_percent')
+          .eq('user_id', uid).abortSignal(ctrl.signal).maybeSingle()
+        if (myReq !== reqRef.current) return
+        if (!sErr) settingsRef.current = { loaded: true, value: (s as FeeSettings) ?? {} }
+      }
+
+      const records = toSearchRecords((data as SearchRow[]) ?? [], {
+        settings: settingsRef.current.value,
+        todayISO: localTodayISO(),
+        formatCurrency,
+        settingsLoaded: settingsRef.current.loaded,
+      })
 
       const sections: Section[] = []
-      const ps = pageSection(safe)
+      if (records.length) sections.push({
+        title: 'Results',
+        items: records.map(r => ({
+          id: `${r.kind}-${r.id}`,
+          label: r.label,
+          sub: r.sub || undefined,
+          icon: KIND_ICONS[r.kind],
+          kind: r.kind,
+          run: () => {
+            if (RECENT_KINDS.includes(r.kind as RecentKind)) {
+              pushRecent({ to: r.href, label: r.label, sub: r.sub || undefined, kind: r.kind as RecentKind })
+            }
+            go(r.href)
+          },
+        })),
+      })
+
+      // Not record search, but worth offering: the commands the CURRENT page
+      // registered. Ranks below records — someone typing a customer's name wants
+      // the customer. ("Go to" is filtered outside this effect; see navSection.)
+      const ps = pageSection(query)
       if (ps) sections.push(ps)
-      const ql = safe.toLowerCase()
-      const nav = NAV.filter(n => n.label.toLowerCase().includes(ql))
-        .map(n => ({ id: `n-${n.href}`, label: n.label, icon: n.icon as Icon, run: () => go(n.href) }))
-      if (nav.length) sections.push({ title: 'Go to', items: nav })
-
-      const cRows = (cust.data as { id: string; name: string; phone: string | null; city: string | null; email: string | null }[]) || []
-      if (cRows.length) sections.push({ title: 'Customers', items: cRows.map(c => {
-        const to = `/dashboard/customers/${c.id}`
-        const label = c.name || 'Unnamed'
-        const sub = [c.phone, c.city || c.email].filter(Boolean).join(' · ') || undefined
-        return { id: `c-${c.id}`, label, sub, icon: Users, run: () => { pushRecent({ to, label, sub, kind: 'customer' }); go(to) } }
-      }) })
-
-      const pRows = (prop.data as { id: string; address: string | null; city: string | null; neighborhood: string | null; customer_id: string | null }[]) || []
-      if (pRows.length) sections.push({ title: 'Properties', items: pRows.map(p => {
-        // Land on the PROPERTY you searched, the same way Quotes/Invoices/Payments land
-        // on their record. It used to jump to the customer, which for a landlord means
-        // searching "100 Main St" drops you on a profile listing all six addresses —
-        // re-hiding the one you just found. /properties/[id] is that address's own
-        // history and works even when the property has no customer (the old fallback
-        // went to the unsearchable list).
-        const to = `/dashboard/properties/${p.id}`
-        const label = p.address || 'Property'
-        const sub = [p.neighborhood, p.city].filter(Boolean).join(' · ') || undefined
-        return { id: `p-${p.id}`, label, sub, icon: Home, run: () => { pushRecent({ to, label, sub, kind: 'property' }); go(to) } }
-      }) })
-
-      const qRows = (quo.data as { id: string; quote_number: string | null; customer_name: string | null; service_type: string | null; total: number | null; status: string }[]) || []
-      if (qRows.length) sections.push({ title: 'Quotes', items: qRows.map(qq => {
-        const to = `/dashboard/quotes/${qq.id}`
-        const label = `${qq.quote_number || 'Quote'} · ${qq.customer_name || 'Customer'}`
-        const sub = [qq.service_type, qq.total != null ? formatCurrency(Number(qq.total)) : null, qq.status].filter(Boolean).join(' · ') || undefined
-        return { id: `q-${qq.id}`, label, sub, icon: FileText, run: () => { pushRecent({ to, label, sub, kind: 'quote' }); go(to) } }
-      }) })
-
-      const iRows = (inv.data as { id: string; invoice_number: string | null; customer_name: string | null; amount: number | null; status: string }[]) || []
-      if (iRows.length) sections.push({ title: 'Invoices', items: iRows.map(ii => {
-        // Land on the invoice, the same way Payments does above. Finding INV-0042 and
-        // then being dropped on the unfiltered list — which has no search box — meant
-        // the palette could find a record and then lose it again. The `?invoice=` focus
-        // seam already existed (invoices/page.tsx reads it and shows a "Showing…" banner);
-        // only this link never used it.
-        const to = ii.invoice_number
-          ? `/dashboard/invoices?invoice=${encodeURIComponent(ii.invoice_number)}`
-          : '/dashboard/invoices'
-        const label = `${ii.invoice_number || 'Invoice'} · ${ii.customer_name || 'Customer'}`
-        const sub = [ii.amount != null ? formatCurrency(Number(ii.amount)) : null, ii.status].filter(Boolean).join(' · ') || undefined
-        return { id: `i-${ii.id}`, label, sub, icon: Receipt, run: () => { pushRecent({ to, label, sub, kind: 'invoice' }); go(to) } }
-      }) })
-
-      const jRows = (job.data as { id: string; title: string | null; service_type: string | null; scheduled_date: string | null; status: string }[]) || []
-      if (jRows.length) sections.push({ title: 'Jobs', items: jRows.map(j => ({
-        id: `j-${j.id}`, label: j.title || j.service_type || 'Job',
-        sub: [j.scheduled_date, j.status].filter(Boolean).join(' · ') || undefined,
-        icon: CalendarDays, run: () => go('/dashboard/schedule'),
-      })) })
-
-      const payRows = (pay.data as { id: string; amount: number | null; customer_id: string | null; status: string | null; method: string | null; notes: string | null }[]) || []
-      if (payRows.length) sections.push({ title: 'Payments', items: payRows.map(p => ({
-        id: `pay-${p.id}`, label: `${p.amount != null ? formatCurrency(Number(p.amount)) : 'Payment'}${p.status ? ` · ${p.status}` : ''}`,
-        sub: [p.method, p.notes].filter(Boolean).join(' · ') || undefined,
-        // Land on the payment itself. This used to dump you on the customer page or,
-        // worse, the unfiltered invoice list — the palette could FIND a payment but had
-        // nowhere to send you, so finding it didn't help. The receipt number is derived
-        // from the row id, so it identifies exactly this one.
-        icon: CreditCard, run: () => go(`/dashboard/payments?q=${encodeURIComponent(receiptNumberFor(p.id))}`),
-      })) })
-
-      const phRows = (photo.data as { id: string; caption: string | null; kind: string | null; customer_id: string | null }[]) || []
-      if (phRows.length) sections.push({ title: 'Photos', items: phRows.map(ph => ({
-        id: `ph-${ph.id}`, label: ph.caption || 'Photo', sub: ph.kind || undefined,
-        icon: ImageIcon, run: () => go(ph.customer_id ? `/dashboard/customers/${ph.customer_id}` : '/dashboard/grow/studio'),
-      })) })
-
-      const vRows = (vision.data as { id: string; summary: string | null; customer_id: string | null; mowing_difficulty: string | null }[]) || []
-      // Property analyses land on the customer they belong to — /dashboard/grow/vision
-      // doesn't exist on this branch, so it must never be a nav target here.
-      if (vRows.length) sections.push({ title: 'AI Vision', items: vRows.map(v => ({
-        id: `v-${v.id}`, label: (v.summary || 'Property analysis').slice(0, 60), sub: v.mowing_difficulty ? `Difficulty: ${v.mowing_difficulty}` : undefined,
-        icon: Eye, run: () => go(v.customer_id ? `/dashboard/customers/${v.customer_id}` : '/dashboard/properties'),
-      })) })
-
-      // Supabase types the joined `customers` row as object-or-array depending on
-      // the relationship inference — normalise to a single name either way.
-      const mRows = (msg.data as unknown as { id: string; customer_id: string | null; body: string | null; customers: { name: string | null } | { name: string | null }[] | null }[]) || []
-      if (mRows.length) sections.push({ title: 'Messages', items: mRows.map(m => {
-        const cname = Array.isArray(m.customers) ? m.customers[0]?.name : m.customers?.name
-        return {
-          id: `m-${m.id}`, label: cname || 'Conversation', sub: (m.body || '').slice(0, 70) || undefined,
-          // Land IN the conversation, not on the bare inbox — the ?c= deep link the
-          // inbox already resolves (messages/page.tsx reads params.get('c')). Mirrors
-          // the properties result above; without it, finding a message loses it again.
-          icon: MessageSquare, run: () => go(m.customer_id ? `/dashboard/messages?c=${m.customer_id}` : '/dashboard/messages'),
-        }
-      }) })
 
       // ── Help ──
       // Last, and capped at 3: someone typing a customer's name wants the customer,
@@ -354,7 +335,7 @@ export function CommandPalette() {
       // didn't it send" has no record to find — only an answer — and this is the
       // one search box they'll try. Pure client-side (lib/help/content), so it costs
       // nothing and can't fail.
-      const help = searchHelp(safe).slice(0, 3)
+      const help = searchHelp(query).slice(0, 3)
       if (help.length) sections.push({
         title: 'Help', items: help.map(a => ({
           id: `h-${a.id}`, label: a.title, sub: a.summary, icon: LifeBuoy,
@@ -364,10 +345,37 @@ export function CommandPalette() {
 
       setResults(sections); setSel(0); setLoading(false)
     }, 180)
-    return () => clearTimeout(handle)
-  }, [q, supabase, go, tel, pageSection])
+    // Clearing the timer cancels a query that never left; aborting cancels one
+    // already in flight. Both matter: without the abort, holding a key down leaves
+    // a queue of superseded requests competing with the one whose answer is wanted.
+    return () => { clearTimeout(handle); ctrl.abort() }
+  }, [q, supabase, go, tel, pageSection, retryTick])
 
-  const sections = q.trim() ? results : emptySections
+  // "Go to" is a client-side filter over a list already in memory, so it belongs
+  // OUTSIDE the search effect — and it has to be outside.
+  //
+  // useModules() rebuilds its `visible` array on every render, so NAV is a new
+  // array on every render too. Naming it as a dependency of the debounced effect
+  // made that effect re-run on every render: each run's cleanup aborted the
+  // request the previous run had just started and restarted the 180ms timer, so
+  // the search never fired at all and the palette sat on "No matches" forever.
+  // Computing it here keeps the effect's dependencies stable and the two concerns
+  // apart: one asks the server for records, this one filters a constant.
+  const navSection = useMemo<Section | null>(() => {
+    const ql = q.trim().toLowerCase()
+    // Same floor as records. One letter matched ten destinations — "a" returned
+    // Dashboard, Dispatch, Payments, Accounting, Messages, Automation — which
+    // buried the "keep typing" hint under noise nobody asked for and made the
+    // minimum query look like it wasn't there.
+    if (ql.length < MIN_QUERY_LENGTH) return null
+    const items = NAV.filter(n => n.label.toLowerCase().includes(ql))
+      .map(n => ({ id: `n-${n.href}`, label: n.label, icon: n.icon as Icon, run: () => go(n.href) }))
+    return items.length ? { title: 'Go to', items } : null
+  }, [q, NAV, go])
+
+  const sections = q.trim()
+    ? (error ? results : [...results, ...(navSection ? [navSection] : [])])
+    : emptySections
   const flat = useMemo(() => sections.flatMap(s => s.items), [sections])
 
   // Reset the highlight whenever the query changes so it never points past the
@@ -417,9 +425,25 @@ export function CommandPalette() {
         </div>
 
         <div id="cmdk-list" role="listbox" aria-label="Results" className="flex-1 overflow-y-auto overscroll-contain py-2">
-          {flat.length === 0 ? (
+          {error ? (
+            // Three states that used to render as one sentence now render as three.
+            // This one says the search FAILED and offers the only useful next move.
+            <div role="alert" className="py-8 px-6 text-center">
+              <AlertTriangle className="w-5 h-5 mx-auto text-warning" aria-hidden />
+              <p className="mt-2 text-xs text-ink">{error}</p>
+              <button onClick={() => { setError(null); setRetryTick(t => t + 1) }}
+                className="mt-3 inline-flex items-center gap-1.5 h-9 px-3 rounded-lg border border-border bg-surface text-xs font-medium text-ink hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                <RotateCw className="w-3.5 h-3.5" aria-hidden /> Try again
+              </button>
+            </div>
+          ) : flat.length === 0 ? (
             <p className="py-10 text-center text-xs text-ink-muted">
-              {q.trim() ? (loading ? 'Searching…' : 'No matches. Try a name, address, quote #, or “call Jane”.') : 'Type to search — or a command like “call”, “text”, “schedule”.'}
+              {!q.trim() ? 'Type to search — or a command like “call”, “text”, “schedule”.'
+                : loading ? 'Searching…'
+                // Under the floor this is not an empty result, it's an unasked
+                // question — saying "no matches" would be a finding we never made.
+                : q.trim().length < MIN_QUERY_LENGTH ? `Keep typing — ${MIN_QUERY_LENGTH} characters or more.`
+                : 'No matches. Try a name, address, phone, or a quote/invoice number.'}
             </p>
           ) : sections.map(section => (
             <div key={section.title} className="px-2 pb-1">
@@ -439,12 +463,20 @@ export function CommandPalette() {
                     onMouseMove={() => setSel(myIdx)}
                     onClick={item.run}
                     className={cn('w-full flex items-center gap-3 px-2.5 py-2 rounded-lg text-left transition-colors',
-                      active ? 'bg-accent/10' : 'hover:bg-surface')}>
+                      active ? 'bg-accent/10' : 'hover:bg-surface-raised')}>
                     <span className={cn('w-7 h-7 rounded-lg flex items-center justify-center shrink-0 border transition-colors',
                       active ? 'border-accent/30 bg-accent/10 text-accent-text' : 'border-border text-ink-muted')}>
                       <Icon className="w-3.5 h-3.5" />
                     </span>
                     <span className="min-w-0 flex-1">
+                      {/* The type is stated, never inferred from an icon. One
+                          ranked list means a Customer and an Invoice sit next to
+                          each other, so the row has to say which it is. */}
+                      {item.kind && (
+                        <span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-faint leading-tight">
+                          {KIND_LABEL[item.kind]}
+                        </span>
+                      )}
                       <span className={cn('block text-sm truncate', active ? 'text-ink font-medium' : 'text-ink')}>{item.label}</span>
                       {item.sub && <span className="block text-[11px] text-ink-faint truncate">{item.sub}</span>}
                     </span>

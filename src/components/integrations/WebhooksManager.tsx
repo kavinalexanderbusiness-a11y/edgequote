@@ -5,7 +5,7 @@
 // The log updates in realtime; a test send goes through the REAL pipeline.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, Pause, Play, Plus, RefreshCw, Send, Trash2, Webhook, Zap } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, Pause, Play, Plus, RefreshCw, Send, Trash2, Webhook, Zap } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { toast } from '@/lib/toast'
@@ -32,6 +32,7 @@ const DELIVERY_TONE: Record<WebhookDeliveryRow['status'], Tone> = {
 export function WebhooksManager({ userId }: { userId: string }) {
   const supabase = createClient()
   const [endpoints, setEndpoints] = useState<WebhookEndpointRow[] | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [deliveries, setDeliveries] = useState<WebhookDeliveryRow[]>([])
   const [createOpen, setCreateOpen] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -43,6 +44,8 @@ export function WebhooksManager({ userId }: { userId: string }) {
       supabase.from('webhook_endpoints').select('*').eq('user_id', userId).order('created_at', { ascending: false }),
       supabase.from('webhook_deliveries').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(30),
     ])
+    if (eps.error || dels.error) { setLoadError((eps.error ?? dels.error)!.message); return }
+    setLoadError(null)
     setEndpoints((eps.data ?? []) as WebhookEndpointRow[])
     setDeliveries((dels.data ?? []) as WebhookDeliveryRow[])
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -122,7 +125,11 @@ export function WebhooksManager({ userId }: { userId: string }) {
           </div>
         </CardHeader>
         <CardBody className="space-y-2">
-          {endpoints === null ? <SkeletonRows count={2} /> : endpoints.length === 0 ? (
+          {loadError ? (
+            <Banner tone="danger" icon={AlertTriangle}>
+              Couldn’t load your endpoints — {loadError}. Nothing has changed; this is a display problem.
+            </Banner>
+          ) : endpoints === null ? <SkeletonRows count={2} /> : endpoints.length === 0 ? (
             <InlineEmpty icon={Webhook}>No endpoints yet. Add one — or subscribe from Zapier / Make and it shows up here.</InlineEmpty>
           ) : endpoints.map((ep) => (
             <div key={ep.id} className="rounded-lg border border-border p-3 space-y-2">

@@ -11,7 +11,7 @@ import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { FilterPill } from '@/components/ui/FilterPill'
 import { formatCurrency, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
-import { Sparkles, Check, ArrowRight, Clock, Navigation, TrendingUp, RefreshCw, HelpCircle, Calculator, X, BellOff, Undo2 } from 'lucide-react'
+import { Sparkles, Check, ArrowRight, Clock, Navigation, TrendingUp, RefreshCw, HelpCircle, Calculator, X, BellOff, Undo2, AlertTriangle } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
 import { addDays, format } from 'date-fns'
 
@@ -43,10 +43,20 @@ export function SuggestionsCenter() {
   const [appliedId, setAppliedId] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
   const [undo, setUndo] = useState<{ key: string; label: string } | null>(null)
+  // A load-bearing read failed. Separate from `items.length === 0`, which is the
+  // genuinely good news this card is allowed to deliver.
+  const [failed, setFailed] = useState(false)
 
   async function load() {
     setUndo(null)
-    try { const next = await loadSuggestions(supabase); setItems(next); writeCache('suggestions', next) } finally { setLoading(false) }
+    try {
+      const next = await loadSuggestions(supabase)
+      // null = we could not read the business. Keep whatever was last known and
+      // say so. Do NOT writeCache — caching an empty feed would persist the lie
+      // into the next visit, which paints instantly from that cache.
+      if (next == null) { setFailed(true); return }
+      setFailed(false); setItems(next); writeCache('suggestions', next)
+    } finally { setLoading(false) }
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -122,6 +132,7 @@ export function SuggestionsCenter() {
             <p className="text-lg font-bold tracking-tight text-ink">What should I do next?</p>
             <p className="text-xs text-ink-muted mt-1">
               {loading ? 'Reading your business…'
+                : failed ? 'Couldn’t read your business just now — this is a connection problem, not an all-clear.'
                 : items.length === 0 ? 'You’re all caught up — nothing pressing right now.'
                 : <>
                     {items.length} opportunit{items.length !== 1 ? 'ies' : 'y'} found in your data
@@ -167,6 +178,17 @@ export function SuggestionsCenter() {
       <div className="p-4 space-y-3">
         {loading && items.length === 0 ? (
           <SkeletonRows count={3} />
+        ) : failed && items.length === 0 ? (
+          // NOT tone="positive", NOT a checkmark: we know nothing, and the old
+          // green "Nothing needs your attention" was the most reassuring screen
+          // in the app being painted by a dropped connection.
+          <EmptyState
+            icon={AlertTriangle}
+            title="Couldn’t check your business"
+            description="Your advisor could not read your jobs, quotes or invoices, so it has nothing to tell you yet. This is a connection problem — not a clean bill of health."
+            className="py-10"
+            action={{ label: 'Try again', onClick: load }}
+          />
         ) : items.length === 0 ? (
           <EmptyState
             tone="positive"

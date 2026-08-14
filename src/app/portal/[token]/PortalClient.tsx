@@ -7,12 +7,15 @@ import { confirm as confirmDialog } from '@/lib/confirm'
 import { ConfirmHost } from '@/components/ui/ConfirmHost'
 import { cn, formatCurrency, localTodayISO } from '@/lib/utils'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
+// THE scheduling-deposit rule (lib/payments/depositGate) — the approve dialog and
+// success banner name the exact ask the charge route will make, from one engine.
+import { requiredDeposit } from '@/lib/payments/depositGate'
 import type { QuoteStatus } from '@/types'
 import { renderPortalInvoiceBlob, renderPortalQuoteBlob } from '@/lib/portalPdf'
 import {
-  buildPortalView, needsContactMethod, normalizePortal, parsePortalDeepLink, primaryPortalAction,
+  buildPortalView, contactGap, normalizePortal, parsePortalDeepLink, primaryPortalAction,
   recentPaymentLanded, tabNavTarget,
-  type PortalData, type SubmitRequestFn, type TabKey,
+  type AddContactResult, type PortalData, type SubmitRequestFn, type TabKey,
 } from './model'
 import type { PortalActions } from './components/shared'
 import { HomeTab, ReviewCard, ConsentCard, ContactMethodCard } from './components/HomeTab'
@@ -77,6 +80,11 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   // it yet; 'confirmed' = a new payment row actually landed. Never conflate the two.
   const [justPaid, setJustPaid] = useState<'confirming' | 'confirmed' | null>(null)
   const [justAccepted, setJustAccepted] = useState(false)
+  // The scheduling deposit the just-approved quote asks for (engine-derived at
+  // accept time) — the success banner names the NEXT step instead of promising
+  // "nothing else to do" about a booking that still needs securing.
+  const [acceptedDepositAsk, setAcceptedDepositAsk] = useState<number | null>(null)
+  const [payingQuoteId, setPayingQuoteId] = useState<string | null>(null)
   // Billing opens pre-filtered to what the customer came for (the quote signpost
   // filters to quotes, the balance path to invoices).
   const [docsCat, setDocsCat] = useState<'all' | 'quote' | 'invoice'>('all')
@@ -204,7 +212,11 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   useEffect(() => {
     let cancelled = false
     let paidTimer: ReturnType<typeof setTimeout> | undefined
-    fetch('/api/payments/status').then(r => r.json()).then(d => setPaymentsEnabled(!!d.enabled)).catch(() => {})
+    // ?portal=<token> — no session exists here, so the status route resolves the
+    // OWNER (and their platform online_payments grant) from the token
+    // server-side. Without it the answer would be the deployment-wide one, which
+    // is wrong for a business the platform hasn't granted online payments.
+    fetch(`/api/payments/status?portal=${encodeURIComponent(token)}`).then(r => r.json()).then(d => setPaymentsEnabled(!!d.enabled)).catch(() => {})
     if (typeof window !== 'undefined') {
       const sp = new URLSearchParams(window.location.search)
       if (sp.get('paid') === '1') {
@@ -305,7 +317,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
 
   function photoUrl(path: string) { return supabase.storage.from('job-photos').getPublicUrl(path).data.publicUrl }
 
-  async function accept(qid: string) {
+  async function accept(qid: string, optionId?: string) {
     if (accepting) return // double-click guard
     // Approving commits the customer to a quote value — never ask someone to
     // approve an amount without showing it, and always say that approving isn't
@@ -349,8 +361,37 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       setData(d => d ? { ...d } : d)
       return
     }
+    // ── Which alternative ─────────────────────────────────────────────────────
+    // Re-resolved against the FRESH payload, never trusted from the click. The
+    // refetch above exists because a tab left open can be quoting a stale price;
+    // an option id from that same stale render deserves exactly as little trust.
+    // If the named option is no longer on this quote (the owner revised it while
+    // the tab sat open), stop — approving "whatever is there now" would record
+    // consent to something the customer never read.
+    const freshOpts = q?.options ?? []
+    const chosenOpt = optionId ? freshOpts.find(o => o.id === optionId) ?? null : null
+    if (optionId && !chosenOpt) {
+      setActionError('That option isn’t on this quote any more — it may have been updated. Please refresh and take another look.')
+      return
+    }
+    if (freshOpts.length > 0 && !chosenOpt) {
+      // The button is disabled until one is picked, so this is a stale tab or a
+      // replayed request — and the RPC would refuse it anyway. Say the useful
+      // thing rather than let a silent false become "we couldn't record it".
+      setActionError('This quote has a few options — please pick the one you want, then approve it.')
+      return
+    }
+
     const svc = (q?.service_type || '').trim()
-    const amount = Number(q?.total) || 0
+    // ⭐ ONE money path. On an options quote the figure is the CHOSEN option plus
+    // travel — the identical arithmetic quote_apply_option_choice performs when
+    // it writes accepted_price — so the number in this dialog is the number the
+    // business records. `q.total` still carries the recommended option at this
+    // moment (nobody has chosen yet), and quoting it here would show one price
+    // and bank another.
+    const amount = chosenOpt
+      ? Number(chosenOpt.price) + (Number(q?.travel_fee) || 0)
+      : Number(q?.total) || 0
     // The dialog's whole job is stating what the customer commits to, so it must
     // match the doc row one tap beneath it:
     // • every plan price is PER VISIT (model.ts's own doc-row comment calls the
@@ -371,25 +412,64 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       ? `Ongoing plan options: ${planBits.join(' · ')} — we'll confirm your schedule with you.`
       : planBits.length === 1 ? `Ongoing visits after that are ${planBits[0]}.` : null
     const gst = Number((fresh ?? data)?.business?.gst_percent) || 0
-    const what = svc
-      ? `${lineCount > 1 ? `${svc} + ${lineCount - 1} more service${lineCount > 2 ? 's' : ''}` : svc} for ${formatCurrency(amount)}`
-      : formatCurrency(amount)
+    // On an options quote the dialog must name the OPTION, not the service: the
+    // whole decision the customer just made was which one, and confirming
+    // "Landscape rebuild for $5,550" would echo back the part they didn't choose.
+    const what = chosenOpt
+      ? `the ${chosenOpt.name} option${svc ? ` of ${svc}` : ''} for ${formatCurrency(amount)}`
+      : svc
+        ? `${lineCount > 1 ? `${svc} + ${lineCount - 1} more service${lineCount > 2 ? 's' : ''}` : svc} for ${formatCurrency(amount)}`
+        : formatCurrency(amount)
+    // The scheduling deposit THIS approval will call for — the engine's own
+    // figure over the amount being consented to (for an options quote, the
+    // chosen option + travel: identical to what accepted_price will become).
+    // Named at the moment of commitment: "approving doesn't charge you" must
+    // not stand unqualified when a deposit request is the very next screen.
+    const depositAsk = requiredDeposit({
+      status: q.status, total: amount, accepted_price: amount,
+      deposit_type: q.deposit_type ?? null, deposit_value: q.deposit_value ?? null,
+    })
     const confirmed = await confirmDialog({
-      title: `Approve ${formatCurrency(amount)}?`,
+      title: chosenOpt ? `Approve ${chosenOpt.name} — ${formatCurrency(amount)}?` : `Approve ${formatCurrency(amount)}?`,
       message: [
         `You're approving ${what}${gst > 0 ? `, plus GST (${gst}%) added on your invoice` : ''}.`,
+        // Say what happens to the ones they didn't pick, at the moment of
+        // commitment — "am I signing up for all three?" is the fear this whole
+        // screen exists to answer, and it deserves answering here too.
+        chosenOpt && freshOpts.length > 1
+          ? `The other ${freshOpts.length - 1} option${freshOpts.length > 2 ? 's aren’t' : ' isn’t'} ordered and won’t be charged.`
+          : null,
         plan,
-        `Approving doesn't charge you — we'll confirm a date with you first, and you'll only get an invoice after the work is done.`,
+        depositAsk > 0
+          ? `Approving doesn't charge you. A ${formatCurrency(depositAsk)} deposit is asked for next to secure your booking — we'll confirm your date once it's received.`
+          : `Approving doesn't charge you — we'll confirm a date with you first, and you'll only get an invoice after the work is done.`,
       ].filter(Boolean).join(' '),
-      confirmLabel: `Approve ${formatCurrency(amount)}`,
+      confirmLabel: chosenOpt ? `Approve ${chosenOpt.name}` : `Approve ${formatCurrency(amount)}`,
     })
     if (!confirmed) return
     setAccepting(qid)
     setActionError(null)
-    const { data: ok } = await supabase.rpc('portal_accept_quote', { p_token: token, p_quote_id: qid })
+    // The third argument is omitted, not null-defaulted, on an ordinary quote —
+    // portal_accept_quote's plain path is reached exactly as it always was.
+    const { data: ok } = await supabase.rpc('portal_accept_quote', {
+      p_token: token, p_quote_id: qid, ...(chosenOpt ? { p_option_id: chosenOpt.id } : {}),
+    })
     if (ok) {
-      setData(d => d ? { ...d, quotes: d.quotes.map(q => q.id === qid ? { ...q, status: 'accepted' } : q) } : d)
-      // Close the loop — the customer must SEE their approval registered.
+      // Carry the CHOICE into the optimistic patch, not just the status. Without
+      // it the row would flip to Approved while still rendering three tappable
+      // options — the customer's own decision missing from the screen that just
+      // took it. (`total` is left alone: the next load brings the server's, and
+      // guessing it here would be a second money path.)
+      setData(d => d ? {
+        ...d,
+        quotes: d.quotes.map(q => q.id === qid
+          ? { ...q, status: 'accepted', ...(chosenOpt ? { selected_option_id: chosenOpt.id } : {}) }
+          : q),
+      } : d)
+      // Close the loop — the customer must SEE their approval registered, and
+      // when a deposit stands between them and a booked date, the banner names
+      // it rather than promising there's nothing left to do.
+      setAcceptedDepositAsk(depositAsk > 0 ? depositAsk : null)
       setJustAccepted(true)
     } else {
       // A falsy result is NOT proof of failure. portal_accept_quote only matches a
@@ -422,6 +502,30 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     if (!ok) setActionError('Your request didn’t go through — please try again, or call us directly.')
     return !!ok
   }
+  // Self-serve contact detail — fills a MISSING phone/email on this customer's own
+  // record. Token-scoped RPC, same shape as saveConsent above: there is no customer
+  // id to pass, because the token is the only thing that decides whose row moves.
+  //
+  // NOT optimistic, unlike consent. A wrong consent toggle is visibly wrong and one
+  // tap from being fixed; a contact detail the portal *claims* to have saved and
+  // hasn't is invisible to everyone until the day someone tries to use it. So the
+  // card only reports success from the row state the RPC read back, and this
+  // refetches so the prompt disappears because the FILE changed, not because the
+  // client decided it had. A failed refetch leaves the card up — the write still
+  // landed, and asking twice is cheaper than a silent gap.
+  async function addContact(phone: string, email: string): Promise<AddContactResult> {
+    setActionError(null)
+    const { data, error } = await supabase.rpc('portal_add_contact', {
+      p_token: token, p_phone: phone || null, p_email: email || null,
+    })
+    // supabase-js RESOLVES { data: null, error } on a dropped connection, so the
+    // error object is the only thing separating "the server said no" from "we never
+    // reached the server" — the discriminator load() documents.
+    if (error) return { ok: false, reason: 'network' }
+    const res = (data ?? { ok: false, reason: 'network' }) as AddContactResult
+    if (res.ok) await load()
+    return res
+  }
   // Structured requests (appointment / reschedule / plan change) — same pipeline,
   // carrying structure alongside the human-readable message. The RPC re-verifies
   // that any referenced job/plan belongs to this token's customer.
@@ -440,6 +544,51 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   function markInvoiceViewed(invoiceId: string) {
     supabase.rpc('portal_mark_invoice_viewed', { p_token: token, p_invoice_id: invoiceId }).then(() => {}, () => {})
   }
+  // Start Stripe checkout for a quote's SCHEDULING DEPOSIT. The mirror of pay()
+  // below — same re-entry guard, same "the server decided" handling of 409s. The
+  // amount is never sent: /api/portal/quote-deposit derives the outstanding ask
+  // from the ledger server-side.
+  async function payQuoteDeposit(quoteId: string) {
+    if (payingQuoteId || payingId) return // never start two checkout sessions
+    setPayingQuoteId(quoteId)
+    try {
+      const res = await fetch('/api/portal/quote-deposit', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, quoteId }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (res.ok && d.url) { window.location.href = d.url; return } // redirecting to Stripe — stay disabled
+      // 404/409 = the server decided there is nothing to collect (already paid in
+      // another tab, or the owner recorded an e-transfer) — resync and say so.
+      if (res.status === 404 || res.status === 409) {
+        await load()
+        setActionError('This deposit looks already settled — we’ve refreshed your billing below. If you think that’s wrong, message us and we’ll check.')
+      } else {
+        setActionError('We couldn’t start the payment — please try again in a moment, or contact us and we’ll sort it out.')
+      }
+    } catch {
+      setActionError('We couldn’t start the payment — please try again in a moment, or contact us and we’ll sort it out.')
+    }
+    setPayingQuoteId(null) // only reached on failure — a successful redirect left the page
+  }
+
+  // Save (or clear) the customer's scheduling preference — token-scoped RPC, one
+  // writer. NOT optimistic: the form reports what the server kept, and a refetch
+  // makes the echoed-back preference the proof it saved.
+  async function savePreference(quoteId: string, pref: { date: string | null; date2: string | null; timing: string | null; note: string | null }): Promise<boolean> {
+    setActionError(null)
+    const { data: ok, error } = await supabase.rpc('portal_set_scheduling_preference', {
+      p_token: token, p_quote_id: quoteId,
+      p_date: pref.date, p_date_2: pref.date2, p_timing: pref.timing, p_note: pref.note,
+    })
+    if (error || !ok) {
+      setActionError('We couldn’t save your preferred timing — please check the dates and try again.')
+      return false
+    }
+    await load()
+    return true
+  }
+
   async function pay(invoiceId: string) {
     if (payingId) return // re-entry guard — never start two checkout sessions
     setPayingId(invoiceId)
@@ -500,6 +649,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   const biz = data.business
   const actions: PortalActions = {
     token, accept, accepting, pay, payingId, paymentsEnabled,
+    payQuoteDeposit, payingQuoteId, savePreference,
     paymentPending: justPaid === 'confirming',
     request: (message: string) => request(message),
     submitRequest, photoUrl, markInvoiceViewed, refresh: load,
@@ -633,13 +783,19 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
           {justAccepted && (
             <div className="mb-3 rounded-card border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-sm font-medium px-4 py-3 flex items-start justify-between gap-3">
               {/* Say who will reach out and where the answer will appear, so they
-                  can check instead of wait. */}
+                  can check instead of wait — and when a deposit stands between
+                  approval and a booked date, name that step instead of promising
+                  there's nothing left to do. */}
               <span className="flex items-start gap-2"><CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>Quote approved — thank you!{' '}
-                  <span className="font-normal">{biz?.company_name || 'We'}&rsquo;ll contact you to agree a date. Once it&rsquo;s booked, your visit appears on this page — nothing else to do for now.</span>
+                  <span className="font-normal">
+                    {acceptedDepositAsk != null
+                      ? <>Next step: pay the {formatCurrency(acceptedDepositAsk)} deposit below to secure your booking — your preferred timing is confirmed once it&rsquo;s received.</>
+                      : <>{biz?.company_name || 'We'}&rsquo;ll contact you to agree a date. Once it&rsquo;s booked, your visit appears on this page — nothing else to do for now.</>}
+                  </span>
                 </span>
               </span>
-              <button onClick={() => setJustAccepted(false)} aria-label="Dismiss" className="shrink-0 opacity-70 hover:opacity-100"><X className="w-4 h-4" /></button>
+              <button onClick={() => { setJustAccepted(false); setAcceptedDepositAsk(null) }} aria-label="Dismiss" className="shrink-0 opacity-70 hover:opacity-100"><X className="w-4 h-4" /></button>
             </div>
           )}
           {actionError && (
@@ -660,11 +816,11 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
             if (!a || a.key === dismissedAction) return null
             return (
               <div className={cn('mb-3 rounded-card border flex items-center gap-1 pr-1',
-                a.kind === 'pay' ? 'border-amber-500/30 bg-amber-500/[0.08]' : 'border-accent/25 bg-accent/[0.08]')}>
+                a.kind !== 'approve' ? 'border-amber-500/30 bg-amber-500/[0.08]' : 'border-accent/25 bg-accent/[0.08]')}>
                 <button type="button"
                   onClick={() => actions.navigate('billing', { docsCat: a.docsCat, focusDocId: a.focusDocId })}
                   className="flex-1 flex items-center gap-2.5 px-4 py-3 text-left rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                  {a.kind === 'pay' ? <Wallet className="w-4 h-4 shrink-0 text-amber-400" /> : <FileText className="w-4 h-4 shrink-0 text-accent-text" />}
+                  {a.kind !== 'approve' ? <Wallet className="w-4 h-4 shrink-0 text-amber-400" /> : <FileText className="w-4 h-4 shrink-0 text-accent-text" />}
                   <span className="text-sm font-medium text-ink">{a.headline}</span>
                   <ChevronRight className="w-4 h-4 text-ink-faint ml-auto shrink-0" />
                 </button>
@@ -678,12 +834,17 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
               banners above stay outside it (they aren't tab content). */}
           <div id="portal-panel" role="tabpanel" aria-labelledby={`porttab-${activeTab}`} tabIndex={-1} className="focus-visible:outline-none">
             {activeTab === 'home' && <HomeTab view={view} actions={actions} suppressApproved={justAccepted} />}
-            {/* Reachability outranks the review ask: with no phone AND no email on
-                file, the owner literally cannot confirm a date or send the invoice.
-                Submitting goes through the same request pipeline as everything else
-                (portal_request_service) — the owner applies it to the file. */}
-            {activeTab === 'home' && needsContactMethod(data.customer) && (
-              <ContactMethodCard token={token} businessName={biz?.company_name ?? null} onSubmit={request} />
+            {/* Reachability outranks the review ask: a missing phone or email is
+                why a visit can't be confirmed or an invoice sent. Renders nothing
+                at all when the file is complete — and nothing when the payload is
+                absent, because a read we didn't get is not a gap we can claim.
+                It sits BELOW the customer's actual quotes, invoices and visits:
+                a detail we're missing must never outrank what they came for. */}
+            {activeTab === 'home' && contactGap(data.customer) !== 'none' && (
+              <ContactMethodCard
+                gap={contactGap(data.customer) as 'phone' | 'email' | 'both'}
+                businessName={biz?.company_name ?? null}
+                onSave={addContact} />
             )}
             {activeTab === 'home' && biz?.review_url && view.derived.lastCompleted && !data.customer.reviewed_at && !reviewDeclined && (
               <ReviewCard reviewUrl={biz.review_url} businessName={biz.company_name} reviewed={markedReviewed} onReviewed={markReviewed} onDecline={declineReview} />

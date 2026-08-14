@@ -66,8 +66,18 @@ export function isCommercial(template: string): boolean {
 export function localHour(timezone: string | null | undefined, now: Date): number | 'unknown' {
   if (!timezone) return 'unknown'
   try {
-    const h = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, hour: 'numeric', hour12: false }).format(now)
-    const n = Number(h)
+    // `hourCycle: 'h23'` explicitly, because `hour12: false` ALONE is ambiguous:
+    // on older ICU (Node 20, which CI pins) it selects the h24 cycle, where
+    // midnight formats as "24" — outside the 0..23 range checked below. So the
+    // one hour a day the owner is most likely asleep resolved to 'unknown', and
+    // commercial sends fail CLOSED on an unknown hour: an hour we knew perfectly
+    // well was reported as one we could not read. Node 22+ returns "00" for the
+    // same instant, which is why this only ever appeared between 00:00 and 00:59
+    // in the owner's timezone — including on CI, which is how it was found.
+    const h = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, hour: 'numeric', hour12: false, hourCycle: 'h23' }).format(now)
+    // Belt and braces: normalise h24 midnight even if an ICU build ignores
+    // hourCycle. "24:xx" and "00:xx" are the same instant, and 0 is the hour.
+    const n = Number(h) === 24 ? 0 : Number(h)
     return Number.isInteger(n) && n >= 0 && n <= 23 ? n : 'unknown'
   } catch {
     return 'unknown'

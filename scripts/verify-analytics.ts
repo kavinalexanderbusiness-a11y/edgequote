@@ -103,6 +103,7 @@ check('reordering counts as customised',
 check('a round trip back to default is NOT customised',
   isCustomised(normalizeLayout({ order: DEFAULT_LAYOUT.order, hidden: [] })) === false)
 
+
 console.log(failures === 0
   ? '\n✅ analytics layout verified\n'
   : `\n❌ ${failures} analytics check(s) failed\n`)

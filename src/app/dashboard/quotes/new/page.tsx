@@ -15,10 +15,12 @@ import { servicePricingKind } from '@/lib/servicePricing'
 import { saveManual } from '@/lib/measure/data'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { applyFeeRecovery } from '@/lib/invoiceTotals'
-import { sumServiceLines } from '@/lib/quoteServices'
+import { sumServiceLines, recentTemplateIdsFrom } from '@/lib/quoteServices'
+import { headlineOptionPrice, optionRowsFor } from '@/lib/quoteOptions'
 import { LeadPrefillPayload, LEAD_PREFILL_KEY, closeOpenLeads } from '@/lib/leads'
 import { toast } from '@/lib/toast'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
+import { depositRuleFromForm } from '@/lib/payments/depositGate'
 
 interface MeasurementPayload {
   customerId: string | null
@@ -55,6 +57,7 @@ export default function NewQuotePage() {
   const defaultPropertyId = searchParams.get('property') || undefined
   const [customers, setCustomers] = useState<Customer[]>([])
   const [templates, setTemplates] = useState<ServiceTemplate[]>([])
+  const [recentTemplateIds, setRecentTemplateIds] = useState<string[]>([])
   const [tiers, setTiers] = useState<TravelFeeTier[]>([])
   const [settings, setSettings] = useState<BusinessSettings | null>(null)
   const [measurement, setMeasurement] = useState<MeasurementPayload | null>(null)
@@ -98,16 +101,23 @@ export default function NewQuotePage() {
       // Local session read — no auth round-trip before the builder's data batch.
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
-      const [customersRes, templatesRes, tiersRes, settingsRes] = await Promise.all([
+      const [customersRes, templatesRes, tiersRes, settingsRes, recentRes] = await Promise.all([
         supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
         supabase.from('service_templates').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('travel_fee_tiers').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('business_settings').select('*').eq('user_id', user!.id).maybeSingle(),
+        // Which services this business actually quotes — ONE indexed column off
+        // rows they already saved, so the picker can open on their usual work
+        // instead of an alphabetised catalogue. Ranking only: a failed read costs
+        // the Recent block and nothing else (see recentTemplateIdsFrom).
+        supabase.from('quotes').select('service_template_id').eq('user_id', user!.id)
+          .not('service_template_id', 'is', null).order('created_at', { ascending: false }).limit(60),
       ])
       setCustomers(customersRes.data || [])
       setTemplates(templatesRes.data || [])
       setTiers(tiersRes.data || [])
       setSettings(settingsRes.data)
+      setRecentTemplateIds(recentTemplateIdsFrom(recentRes.data))
       setLoading(false)
     }
     load()
@@ -121,11 +131,19 @@ export default function NewQuotePage() {
 
     // Next number from the highest EXISTING quote number — a row count would
     // reissue a number after any delete and two quotes would share it.
-    const { data: qnums } = await supabase
+    const { data: qnums, error: qnumsErr } = await supabase
       .from('quotes')
       .select('quote_number')
       .eq('user_id', user!.id)
-    const quote_number = generateQuoteNumber(maxNumericSuffix(((qnums as { quote_number: string }[]) || []).map(n => n.quote_number)) + 1)
+    // A failed read resolves as {data:null,error}; coerced to [] it would report
+    // "you have no quotes" and reissue EPS-<year>-0001 on top of an existing one.
+    // quote_number carries no unique index, so the duplicate would be written and
+    // never noticed. Returning false keeps the autosave draft — nothing is lost.
+    if (qnumsErr || !qnums) {
+      toast.error('Could not read your existing quote numbers, so nothing was saved. Check your connection and press Save again.')
+      return false
+    }
+    const quote_number = generateQuoteNumber(maxNumericSuffix((qnums as { quote_number: string }[]).map(n => n.quote_number)) + 1)
 
     // Every quote gets a real customer + property (create or match — no dupes, no orphans).
     let customerId: string | null = values.customer_id && values.customer_id !== '__manual' ? values.customer_id : null
@@ -149,6 +167,9 @@ export default function NewQuotePage() {
         {
           customerId: values.customer_id, name: values.customer_name, address: values.address,
           phone: values.customer_phone, email: values.customer_email,
+          // The builder's optional "how did they find you?" pick — written only if
+          // this save actually creates the customer (or fills a matched blank).
+          source: values.acquisition_source,
           // The intake door captured these; a customer created at conversion must
           // not be poorer than the lead they came from. Undefined off the manual path.
           city: lead?.city, province: lead?.province, postal_code: lead?.postalCode,
@@ -192,6 +213,25 @@ export default function NewQuotePage() {
     const extrasNet = sumServiceLines(extraLines).net
     const initialWithExtras = (recoveredPrimary ?? 0) + extrasNet
 
+    // ── Alternatives ─────────────────────────────────────────────────────────
+    // Fee recovery is applied to each option FIRST, then the headline is taken
+    // from the recovered set. Order matters and only one order is correct: the
+    // stored option price and `initial_price` must be the SAME number, because
+    // the approval RPC later sets initial_price = the chosen option's stored
+    // price. Recovering the headline separately would leave the quote priced at
+    // £5,400×1.03 while the row the customer taps says £5,400 — and the moment
+    // they chose, the total would silently move.
+    const optionsOn = !!values.has_options
+    const optionRows = optionsOn
+      ? optionRowsFor(
+          (values.options || []).map(o => ({ ...o, price: applyFeeRecovery(Number(o.price) || 0, settings) ?? 0 })),
+          '', '',   // quote_id / user_id filled once the row exists — see below
+        )
+      : []
+    // THE one engine, asked the same way every surface asks it: the recommended
+    // option, else the first. Never a sum.
+    const optionHeadline = optionsOn ? headlineOptionPrice(optionRows) : null
+
     // ADR-002 · state which configuration priced this quote, or don't write it.
     //
     // FAIL-CLOSED, and this is the whole point. A quote whose config we cannot name is
@@ -207,7 +247,17 @@ export default function NewQuotePage() {
       return false   // nothing saved — keep the autosave draft
     }
 
+    // Scheduling-deposit rule — the ONE shared mapping (lib/payments/depositGate).
+    // Invalid input stops the save with the reason; it is never silently dropped,
+    // because a rule the owner believes is set and isn't is an unsecured booking.
+    const depositRule = depositRuleFromForm(values.deposit_type, values.deposit_value)
+    if (!depositRule.ok) {
+      toast.error(`Scheduling deposit: ${depositRule.error} Nothing was saved.`)
+      return false   // nothing saved — keep the autosave draft
+    }
+
     const { data, error } = await supabase.from('quotes').insert({
+      ...depositRule.patch,
       quote_number,
       // ADR-002 provenance. `price_source: 'engine'` is truthful for every quote this
       // form writes — even one the owner priced by hand, because `suggested_price` was
@@ -228,7 +278,11 @@ export default function NewQuotePage() {
       // facing prices ONCE, here at generation. Jobs + invoices + Stripe inherit
       // these, so there's no double-application. suggested_price stays at the raw
       // engine value, so the quote page still shows "suggested → quoted".
-      initial_price: initialWithExtras > 0 ? initialWithExtras : null,
+      // An options quote is priced at ONE option — the recommended one until the
+      // customer chooses. `quotes.total` is generated over this column, so that
+      // single substitution is the entire reason invoice conversion, job costing,
+      // the deposit engine and pipeline reporting needed no change.
+      initial_price: optionsOn ? optionHeadline : (initialWithExtras > 0 ? initialWithExtras : null),
       weekly_price: applyFeeRecovery(Number(values.weekly_price) > 0 ? Number(values.weekly_price) : null, settings),
       biweekly_price: applyFeeRecovery(Number(values.biweekly_price) > 0 ? Number(values.biweekly_price) : null, settings),
       monthly_price: applyFeeRecovery(Number(values.monthly_price) > 0 ? Number(values.monthly_price) : null, settings),
@@ -236,7 +290,10 @@ export default function NewQuotePage() {
       custom_travel_required: values.custom_travel_required,
       show_travel_separately: values.show_travel_separately,
       issued_date: localTodayISO(),
+      // Two audiences, two columns — never merged (lib/noteScope). `notes` is
+      // what the customer receives; `internal_notes` never leaves the office.
       notes: values.notes || null,
+      internal_notes: values.internal_notes || null,
       hours: Number(values.hours),
       crew_size: Number(values.crew_size),
       rate: finalRate,
@@ -266,16 +323,43 @@ export default function NewQuotePage() {
     }).select().single()
 
     if (!error && data) {
+      // ── The alternatives ───────────────────────────────────────────────────
+      // Written BEFORE anything else that could return early, and their failure
+      // is reported rather than swallowed: a quote whose row saved at the
+      // recommended price with no option rows behind it is the worst possible
+      // half-state — it looks priced, it can be sent, and the customer would be
+      // shown one number with nothing to choose between. Returning false keeps
+      // the autosave draft so a second Save re-runs the whole write.
+      if (optionsOn && optionRows.length) {
+        const { error: optErr } = await supabase.from('quote_options').insert(
+          optionRows.map(r => ({ ...r, quote_id: data.id, user_id: user!.id })),
+        )
+        if (optErr) {
+          toast.error('Saved the quote, but its options could not be written: ' + optErr.message + ' — press Save again.')
+          router.push(`/dashboard/quotes/${data.id}`)
+          return false
+        }
+      }
       // Persist the service breakdown (only for multi-service quotes; single-service
       // quotes stay legacy with no child rows — identical behavior to before).
       // Row 0 = the primary service, rows 1+ = the additional lines.
       if (extraLines.length) {
-        await supabase.from('quote_services').insert([
+        const { error: lineErr } = await supabase.from('quote_services').insert([
           {
             user_id: user!.id, quote_id: data.id, sort_order: 0,
             service_type: values.service_type, service_template_id: values.service_template_id || null,
             quantity: 1, unit: 'each', unit_price: recoveredPrimary ?? 0,
             est_minutes: Math.round(Number(values.hours) * 60) || null,
+            // ⚠️ NOT redundant with the column default, and not cosmetic. PostgREST
+            // unifies the COLUMN SET of a bulk insert and sends an explicit NULL for
+            // any key an object is missing — it does not fall back to the default.
+            // The extras below carry `kind`, so omitting it here made row 0 an
+            // explicit NULL against a NOT NULL column: the whole insert was rejected
+            // and EVERY multi-service quote saved with no breakdown at all. It was
+            // silent because this call's error was never read (it is now).
+            // Same trap, same fix, in the edit path. Proven live: 0 rows written
+            // before, 2 after.
+            kind: 'service',
           },
           ...extraLines.map((s, i) => ({
             user_id: user!.id, quote_id: data.id, sort_order: i + 1,
@@ -292,6 +376,14 @@ export default function NewQuotePage() {
             kind: s.kind || 'service',
           })),
         ])
+        if (lineErr) {
+          // The quote row IS saved; only its breakdown is missing. Say exactly
+          // that, and keep the autosave draft (return false) so pressing Save
+          // again re-runs the write with every line still in hand.
+          toast.error('Saved the quote, but its service lines could not be written: ' + lineErr.message + ' — press Save again.')
+          router.push(`/dashboard/quotes/${data.id}`)
+          return false
+        }
       }
       // A measurement taken inside the builder previously lived ONLY on the quote —
       // the property stayed "unmeasured" and sqft-based pricing suggestions never
@@ -489,6 +581,7 @@ export default function NewQuotePage() {
       <QuoteBuilder
         customers={customers}
         templates={templates}
+        recentTemplateIds={recentTemplateIds}
         tiers={tiers}
         settings={settings}
         defaultCustomerId={lead?.customerId || measurement?.customerId || defaultCustomerId}

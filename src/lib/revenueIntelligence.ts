@@ -508,6 +508,19 @@ export async function loadRevenueIntel(supabase: SupabaseClient): Promise<Revenu
     supabase.from('revenue_recommendations').select('opportunity_key, kind, status, expected_value, result_value').eq('user_id', uid),
   ])
 
+  // ── The honesty gate ──
+  // "Who to call next" ranks every customer from these reads. Coerced with `|| []`
+  // a failed read became a confident answer about the WRONG people:
+  //   • customers/jobs fail → an empty ranking reads as "nobody worth calling".
+  //   • invoices fail → unpaidByCust empties, so a customer who owes money scores
+  //     as one who "pays reliably" — a great auto-pay candidate. That is the exact
+  //     mistake the deposit-awareness fix above this function was written to stop,
+  //     reachable again through a dropped connection.
+  // The page already renders a proper "could not load — try again" state for null;
+  // it simply never got one. Nothing partial is worth publishing here.
+  if (jRes.error || qRes.error || rRes.error || pRes.error || cRes.error ||
+      iRes.error || liRes.error || sRes.error || fRes.error) return null
+
   const settings = sRes.data as Record<string, unknown> | null
   const quotesById: Record<string, ProfitQuote> = {}
   for (const q of (qRes.data as (ProfitQuote & { id: string })[]) || []) quotesById[q.id] = q

@@ -175,7 +175,7 @@ function ScheduledRow({ r, onCancel }: { r: Row; onCancel: (r: Row) => void }) {
   const when = (() => { try { return format(new Date(r.send_at), 'EEE, MMM d · h:mm a') } catch { return '' } })()
   const channels = r.channels?.length ? r.channels : ['sms', 'email']
   return (
-    <div className="px-4 py-3 flex items-center gap-3 hover:bg-surface/40 transition-colors">
+    <div className="px-4 py-3 flex items-center gap-3 hover:bg-surface-raised/40 transition-colors">
       <span className={cn('inline-flex items-center gap-1 text-[10px] rounded-full px-2 py-0.5 border shrink-0', TONE_CLASS[meta.tone])}>
         <meta.Icon className="w-3 h-3 shrink-0" /> {meta.label}
       </span>

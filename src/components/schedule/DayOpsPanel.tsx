@@ -707,7 +707,7 @@ export function DayOpsPanel({
                 {active.length > 1 && baseCoord && (
                   <button type="button" onClick={optimizeRouteNow} disabled={optimizing}
                     title="Recalculate the best stop order (clears manual reordering)"
-                    className="text-xs font-medium rounded-lg border border-border-strong text-ink-muted hover:text-ink hover:bg-surface px-2.5 py-1 flex items-center gap-1 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                    className="text-xs font-medium rounded-lg border border-border-strong text-ink-muted hover:text-ink hover:bg-surface-raised px-2.5 py-1 flex items-center gap-1 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                     <Wand2 className="w-3 h-3" /> Optimize route
                   </button>
                 )}

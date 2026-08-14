@@ -13,8 +13,8 @@ import {
   requestPresetsOf, resolveDocAddress, groupPhotos, orphanPhotos, liveStatusOf, visitDay,
   daysAwayLabel, dueSoonLabel, invoiceDepositNote, invoiceDepositPaidNote, invoicePaymentNote, parsePortalDeepLink, tabNavTarget, buildVisitICS, visitToCalendarEvent,
   messageAboutDoc, primaryPortalAction, draftStorageKey, etransferReference, isSendChord,
-  needsContactMethod, contactUpdateMessage, contactSentKey, recentPaymentLanded,
-  showDocFilters, DOC_FILTER_MIN,
+  contactGap, isUsablePhone, isUsableEmail, PHONE_MIN_DIGITS, recentPaymentLanded,
+  showDocFilters, DOC_FILTER_MIN, recentPayments, RECENT_PAYMENT_MAX,
   NO_PROPERTY, MAX_REQUEST_PRESETS,
   type PortalData, type PortalJob, type PortalProperty, type DocBlobRenderers,
 } from '../src/app/portal/[token]/model'
@@ -42,7 +42,7 @@ const PROP_B: PortalProperty = { id: 'prop-b', address: '99 Rental Ave NE', city
 const job = (over: Partial<PortalJob>): PortalJob => ({
   id: 'j1', recurrence_id: null, property_id: PROP_A.id, quote_id: null, price: 65,
   is_initial_visit: null, service_type: 'Mowing', title: 'Mowing', scheduled_date: '2026-07-20',
-  status: 'scheduled', on_my_way_at: null, started_at: null, completed_at: null, notes: null, ...over,
+  status: 'scheduled', on_my_way_at: null, started_at: null, completed_at: null, completion_summary: null, ...over,
 })
 
 // A payload carrying EVERY key the live RPC sends — the round-trip tripwire.
@@ -140,7 +140,23 @@ check('count = quotes + non-draft invoices', docs.length === 4 + 3, String(docs.
   check('sent quote: display status sent', sent.status === 'sent')
   check('sent quote: measured-area claim uses ITS OWN property', sent.explain?.some(s => s.includes('4,200')) === true)
   check('sent quote: GST amountNote present', sent.amountNote?.includes('GST') === true)
-  check('sent quote: plan line says (per visit)', sent.lines?.some(l => l.label.includes('(per visit)')) === true)
+  // Ongoing rates are ALTERNATIVES to each other, so they left `lines` — which is
+  // additive and reconciles to `amount` — for `planOptions`. What this check has
+  // always protected is unchanged and now stronger: a customer must never be able
+  // to read an ongoing rate as part of what they are approving. The per-visit UNIT
+  // that prevents the "$260/month all-in" 4× misread moved to the renderer with
+  // them, and is pinned by verify:customer-comms.
+  // Asserted on VALUES, not labels: a label check written against today's wording
+  // ("Weekly plan (per visit)") silently stops catching anything the moment the
+  // wording changes, which is exactly how a flattened list would creep back.
+  // Two independent ways to fail: a rate appearing among the additive lines, or
+  // the additive lines no longer reconciling to the figure being approved.
+  const planAmts = new Set((sent.planOptions ?? []).map(o => o.amount))
+  const lineSum = (sent.lines ?? []).reduce((s, l) => s + l.amount, 0)
+  check('sent quote: ongoing rates are choices, never additive lines',
+    (sent.planOptions?.length ?? 0) > 0
+    && !(sent.lines ?? []).some(l => planAmts.has(l.amount))
+    && (sent.lines === undefined || Math.abs(lineSum - sent.amount) < 0.005))
   check('sent quote: nothing-charged promise present', sent.explain?.some(s => s.startsWith('Nothing is charged')) === true)
   check('sent quote: canonical address wins over stale copy', sent.address === PROP_A.address)
   const legacy = byId.get('q-legacy')!
@@ -413,26 +429,48 @@ console.log('\ninvoicePaymentNote (never mistakes the total for what is owed):')
   check('a quote is never a payment note', invoicePaymentNote(d.get('q-sent')!) === null)
 }
 
-// ── missing-contact prompt (asks ONLY the truly unreachable; message always carries the info) ─
-console.log('\nneedsContactMethod / contactUpdateMessage (the unreachable-customer card):')
+// ── which contact detail is missing (the prompt's ONE input) ─────────────────
+// This replaced needsContactMethod(), which only answered the both-missing case
+// and so never asked the 47 customers with a phone and no email — the commonest
+// gap in the book.
+console.log('\ncontactGap (what the portal asks for, and when it says nothing):')
 {
-  check('no phone AND no email → prompt', needsContactMethod({ phone: null, email: null }) === true)
-  check('empty strings → prompt', needsContactMethod({ phone: '', email: '' }) === true)
-  check('whitespace is not a contact method', needsContactMethod({ phone: '  ', email: ' ' }) === true)
-  check('phone alone is enough — never nags for the second', needsContactMethod({ phone: '403-555-0100', email: null }) === false)
-  check('email alone is enough', needsContactMethod({ phone: null, email: 'j@x.com' }) === false)
-  check('both on file → no prompt', needsContactMethod({ phone: '403-555-0100', email: 'j@x.com' }) === false)
-  check('missing customer payload → no claim', needsContactMethod(null) === false && needsContactMethod(undefined) === false)
+  check('neither on file → both', contactGap({ phone: null, email: null }) === 'both')
+  check('empty strings count as missing', contactGap({ phone: '', email: '' }) === 'both')
+  check('whitespace is not a contact detail', contactGap({ phone: '  ', email: ' ' }) === 'both')
+  check('phone on file, no email → asks for the email', contactGap({ phone: '403-555-0100', email: null }) === 'email')
+  check('email on file, no phone → asks for the phone', contactGap({ phone: null, email: 'j@x.com' }) === 'phone')
+  check('complete file → asks for nothing', contactGap({ phone: '403-555-0100', email: 'j@x.com' }) === 'none')
+  check('whitespace phone with a real email still asks for the phone', contactGap({ phone: '   ', email: 'j@x.com' }) === 'phone')
+  // ⚠️ THE honesty case. A payload we failed to read tells us nothing about the
+  // file — so the prompt asks for nothing rather than asserting a gap. The
+  // inverse ("failed read ⇒ profile complete") is equally covered: the only
+  // thing gated on this is the prompt, and it returns on the next good load.
+  check('missing customer payload claims no gap', contactGap(null) === 'none' && contactGap(undefined) === 'none')
+}
 
-  check('message carries the phone', contactUpdateMessage('403-555-0100', '') === 'Please add my contact details to your file — Phone: 403-555-0100')
-  check('message carries the email', contactUpdateMessage('', 'j@x.com') === 'Please add my contact details to your file — Email: j@x.com')
-  check('both → both, phone first', contactUpdateMessage('403-555-0100', 'j@x.com') === 'Please add my contact details to your file — Phone: 403-555-0100 · Email: j@x.com')
-  check('nothing typed → null (empty request unsendable)', contactUpdateMessage('', '') === null)
-  check('whitespace-only → null', contactUpdateMessage('  ', ' ') === null)
-  check('values are trimmed', contactUpdateMessage(' 403-555-0100 ', '') === 'Please add my contact details to your file — Phone: 403-555-0100')
+// ── the client-side mirror of portal_add_contact's validation ────────────────
+// The RPC is the authority and re-checks everything; these exist so an obvious
+// typo doesn't cost a round-trip. verify:portal-contact pins them against the
+// migration so the two can't drift apart silently.
+console.log('\nisUsablePhone / isUsableEmail (instant feedback, server still decides):')
+{
+  check('a full national number is usable', isUsablePhone('(403) 555-0100'))
+  check('punctuation and spacing are irrelevant', isUsablePhone('403.555.0100') && isUsablePhone('4035550100'))
+  check('a country code is fine', isUsablePhone('+1 403 555 0100'))
+  // 7 digits is what phoneMatches() will LINK on, deliberately not what this will
+  // accept: a local number with no area code cannot be dialled by the business.
+  check('a 7-digit local number is refused', !isUsablePhone('555-0100'))
+  check(`the floor is ${PHONE_MIN_DIGITS} digits`, !isUsablePhone('4035550') && isUsablePhone('4035550100'))
+  check('an absurdly long number is refused', !isUsablePhone('1234567890123456789'))
+  check('empty is not usable', !isUsablePhone('') && !isUsablePhone('   '))
 
-  check('sent-flag key is token-scoped', contactSentKey('tok-a') !== contactSentKey('tok-b'))
-  check('sent-flag key never collides with a draft key', contactSentKey('t') !== draftStorageKey('t', 'message') && !contactSentKey('t').startsWith('eqp:draft:'))
+  check('an ordinary address is usable', isUsableEmail('jane@example.com'))
+  check('surrounding whitespace is tolerated', isUsableEmail('  jane@example.com '))
+  check('no @ is refused', !isUsableEmail('jane.example.com'))
+  check('no TLD is refused', !isUsableEmail('jane@example'))
+  check('a space inside is refused', !isUsableEmail('jane doe@example.com'))
+  check('empty is refused', !isUsableEmail('') && !isUsableEmail('  '))
 }
 
 // ── doc filters: finding tools only when there's something to find ──────────
@@ -694,6 +732,168 @@ console.log('\nrecentPaymentLanded (post-checkout confirmation):')
   const paySection = read('src/app/portal/[token]/components/PaymentsSection.tsx')
   check('e-transfer owing filter excludes cancelled/draft invoices',
     /owingDocs = view\.docItems\.filter\([^)]*status !== 'cancelled'[^)]*\)/.test(paySection))
+}
+
+// 10. What a customer is TOLD about a bill follows the ledger, not the status
+//     column — plus the surface contracts of the simplification pass.
+{
+  const invOf = (over: Record<string, unknown>) => ({
+    id: 'i-x', invoice_number: 'INV-X', service_type: 'Mowing', amount: 100,
+    status: 'unpaid', issued_date: '2026-07-12', due_date: '2026-07-26', notes: null,
+    address: null, property_id: null, line_items: null, job_id: null,
+    created_at: '2026-07-12T10:00:00Z', discount_type: null, discount_value: null,
+    amount_paid: 0, ...over,
+  })
+  // No GST by default so "amount 100, paid 100" is exactly the live INV-0060
+  // shape. The GST case gets its own check below — it is the one that proves the
+  // overlay reads the ENGINE's inclusive total rather than the raw amount column.
+  // Typed as the payload's own business shape — inferring it from the no-GST
+  // literal makes `gst_percent: number`, which the real (nullable) business then
+  // fails to satisfy. tsx runs it either way; `next build` is the one that says so.
+  const noGstBiz: PortalData['business'] = { ...FULL.business!, gst_percent: 0 }
+  const docOf = (over: Record<string, unknown>, business: PortalData['business'] = noGstBiz) => buildDocItems({
+    quotes: [], invoices: [invOf(over)] as unknown as PortalData['invoices'],
+    properties: [], business, todayISO: TODAY, renderers,
+  })[0]
+
+  // The live shape this fixed: INV-0060, stored 'unpaid', $100.00 of $100.00
+  // received. Every balance-derived surface said nothing was owed while the pill
+  // and the Home feed said "Due".
+  const fullyReceived = docOf({ status: 'unpaid', amount_paid: 100 })
+  check('a fully-received invoice never reads as owing, whatever the status column says',
+    fullyReceived.status === 'paid' && fullyReceived.balance === 0)
+  check('… and the overlay changes only the WORD — balance and the ask stay 0',
+    fullyReceived.balance === 0 && fullyReceived.payAmount === 0 && fullyReceived.amount === 100)
+  // A 'sent' invoice settled by e-transfer is the same shape.
+  check('a settled-but-unsynced "sent" invoice reads Paid too',
+    docOf({ status: 'sent', amount_paid: 100 }).status === 'paid')
+  // Cancelled keeps its own word — a withdrawn charge must stay explainable.
+  check('a cancelled invoice is never relabelled Paid by the overlay',
+    docOf({ status: 'cancelled', amount_paid: 100 }).status === 'cancelled')
+  check('a cancelled UNPAID invoice still reads cancelled, not Due',
+    docOf({ status: 'cancelled', amount_paid: 0 }).status === 'cancelled')
+  // 'overpaid' is the more specific truth and outranks a generic "paid".
+  check('an overpaid invoice keeps the more specific word',
+    docOf({ status: 'overpaid', amount_paid: 130 }).status === 'overpaid')
+  // The two overlays are mutually exclusive by construction (one needs balance
+  // > 0, the other <= 0) — an unpaid, past-due bill must still shout.
+  check('the settled overlay cannot mask an overdue bill',
+    docOf({ status: 'unpaid', amount_paid: 0, due_date: '2026-07-01' }).status === 'overdue')
+  check('a part-paid past-due bill is still overdue',
+    docOf({ status: 'partial', amount_paid: 40, due_date: '2026-07-01' }).status === 'overdue')
+  // The overlay asks the balance ENGINE, which works on the GST-inclusive total.
+  // Paying the pre-tax figure does NOT settle a taxed bill — reading the raw
+  // `amount` column here would tell a customer they were square while $5 stood.
+  const taxed = docOf({ status: 'unpaid', amount_paid: 100 }, FULL.business!)
+  check('paying the pre-tax amount does not settle a GST invoice',
+    taxed.amount === 105 && taxed.balance === 5 && taxed.status === 'unpaid')
+
+  const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8')
+  const homeTab = read('src/app/portal/[token]/components/HomeTab.tsx')
+  const billingTab = read('src/app/portal/[token]/components/BillingTab.tsx')
+  const paySection = read('src/app/portal/[token]/components/PaymentsSection.tsx')
+
+  // 10a. Home's amount-due banner explains what the figure is the REST of, using
+  //      the SAME pinned helpers the Billing row uses — never fresh arithmetic.
+  //      Without it a part-paid customer met "Amount due · $347.50" and
+  //      "Payment received · $347.50" on one page with nothing linking them.
+  check('Home\'s due banner sources its paid-context from the pinned helpers',
+    homeTab.includes('invoiceDepositPaidNote(oneInvoice)') && homeTab.includes('invoicePaymentNote(oneInvoice)'))
+  // 10b. Payment INSTRUCTIONS only while there is something to pay.
+  check('Ways-to-pay renders only when a bill is actually owed',
+    paySection.includes('const hasSomethingToPay = owingDocs.length > 0') && paySection.includes('{hasSomethingToPay && ('))
+  // 10c. The plan's exit verbs (including a red "Cancel plan") stay behind one
+  //      disclosure — they must not greet a customer whose plan is running fine.
+  check('plan change/pause/cancel sit behind a disclosure, not on the home screen',
+    homeTab.includes('Change or pause this plan') && /<summary[^>]*>\s*\n?\s*Change or pause this plan/.test(homeTab))
+  // 10d. A document row's title says what the document is FOR — clipping it to
+  //      "Weed removal dep…" beside a money figure is a bill you can't identify.
+  check('a Billing row title is not truncated',
+    billingTab.includes('text-sm font-semibold text-ink tracking-tight">{d.title}')
+    && !billingTab.includes('text-ink truncate tracking-tight">{d.title}'))
+  // 10e. The payment row's amount must not share the truncating line — that was
+  //      always the part that got cut ("Payment received · E-transfer · $7…").
+  check('Home payment rows keep the amount off the truncating title line',
+    homeTab.includes('{formatCurrency(p.amount)} · {formatDate(p.at)}')
+    && !/truncate[^>]*>\s*\n?\s*\{p\.label\}\s*\n?\s*\{formatCurrency/.test(homeTab))
+}
+
+// 11. Home is not a history ledger — "Recent activity" narrowed to money that
+//     actually MOVED. These pin both halves: what the surface may contain, and
+//     what must never vanish from Home because of that narrowing.
+{
+  const pay = (over: Record<string, unknown>) => ({
+    id: 'pay-' + (over.id ?? '1'), amount: 100, status: 'completed',
+    paid_at: '2026-07-16T10:00:00Z', provider: 'etransfer', invoice_id: null,
+    created_at: '2026-07-16T10:00:00Z', ...over,
+  }) as unknown as PortalData['payments'][number]
+
+  // TODAY is 2026-07-18, so the 30-day window opens on 2026-06-18.
+  const rows = recentPayments([
+    pay({ id: 'old', paid_at: '2026-05-01T10:00:00Z' }),          // outside the window
+    pay({ id: 'new', paid_at: '2026-07-17T10:00:00Z', amount: 75 }),
+    pay({ id: 'mid', paid_at: '2026-07-10T10:00:00Z', amount: 50 }),
+  ], TODAY)
+  check('recent payments: only inside the window, newest first',
+    rows.length === 2 && rows[0].id === 'new' && rows[1].id === 'mid'
+    && rows[0].amount === 75 && rows[1].amount === 50)
+  check('recent payments: an e-transfer says how it was paid',
+    rows[0].label === 'Payment received · E-transfer')
+  check('recent payments: capped',
+    recentPayments([pay({ id: 'a' }), pay({ id: 'b' }), pay({ id: 'c' }), pay({ id: 'd' })], TODAY).length === RECENT_PAYMENT_MAX)
+  check('recent payments: nothing recent → the section has no rows to render',
+    recentPayments([pay({ id: 'old', paid_at: '2026-01-01T10:00:00Z' })], TODAY).length === 0)
+  check('recent payments: an empty/absent ledger claims nothing',
+    recentPayments([], TODAY).length === 0 && recentPayments(null, TODAY).length === 0)
+
+  // Classification is the ONE ledger classifier, never the sign of the amount —
+  // a refund and an overpayment-moved-to-credit are both negative and only the
+  // first is money leaving the business.
+  const refund = recentPayments([pay({ id: 'r', amount: -50 })], TODAY)[0]
+  check('recent payments: a refund is named as one and shows a positive magnitude',
+    refund.label === 'Refund issued' && refund.isRefund === true && refund.amount === 50)
+  const toCredit = recentPayments([pay({ id: 'c', amount: -50, provider: 'credit' })], TODAY)[0]
+  check('recent payments: an overpayment moved to credit is NOT called a refund',
+    toCredit.label === 'Overpayment moved to credit' && toCredit.isRefund === false)
+  const fromCredit = recentPayments([pay({ id: 'f', amount: 50, provider: 'credit' })], TODAY)[0]
+  check('recent payments: settling from credit says so',
+    fromCredit.label === 'Settled from account credit')
+  // The credit LEDGER stays out: Billing's "Available credit" tile is its story,
+  // and repeating it here would state the same money twice.
+  check('recent payments: credit-ledger rows are excluded',
+    recentPayments([pay({ id: 'k', kind: 'credit' })], TODAY).length === 0)
+
+  // ── The regression half: narrowing Home must not have removed an ANSWER. ──
+  const homeSrc = readFileSync(join(process.cwd(), 'src/app/portal/[token]/components/HomeTab.tsx'), 'utf8')
+  // A quote awaiting approval, and the approve action itself.
+  check('Home still surfaces quotes awaiting approval',
+    homeSrc.includes("d.kind === 'quote' && d.status === 'sent'")
+    && homeSrc.includes('quotes are ready for your review')
+    && homeSrc.includes('actions.accept(oneQuoteId)'))
+  // Money owed, and the ability to pay it.
+  check('Home still surfaces money owed and the way to pay it',
+    homeSrc.includes('view.money.due > 0') && homeSrc.includes('Amount due')
+    && homeSrc.includes('actions.pay(oneInvoice.rawId)'))
+  // Upcoming work.
+  check('Home still surfaces the next visit',
+    homeSrc.includes('NEXT SERVICE') || homeSrc.includes('Next service'))
+  // The one thing the old feed uniquely carried: an owner-recorded payment has no
+  // other confirmation on Home (the checkout banner is Stripe-return only).
+  // Not just "the code mentions payments" — the section must be gated on there
+  // BEING rows. A guard that only greps for the call survives the section being
+  // switched off, which is exactly the regression this whole check exists for.
+  check('Home still confirms a payment landed',
+    homeSrc.includes('recentPayments(') && homeSrc.includes('Recent payments')
+    && /\{\s*payments\.length\s*>\s*0\s*&&/.test(homeSrc))
+  // And the general ledger did NOT survive the narrowing.
+  check('Home no longer rebuilds a general activity feed',
+    !homeSrc.includes('useRecentActivity') && !homeSrc.includes('interface TLEvent')
+    && !/Invoice \$\{d\.number\} issued/.test(homeSrc)
+    && !/Quote \$\{q\.quote_number\} sent/.test(homeSrc))
+  // One definition of the method word, so Home and Billing cannot drift.
+  const paySrc = readFileSync(join(process.cwd(), 'src/app/portal/[token]/components/PaymentsSection.tsx'), 'utf8')
+  check('paymentMethodLabel has exactly one definition, in the model',
+    !/function paymentMethodLabel/.test(paySrc) && !/function paymentMethodLabel/.test(homeSrc))
 }
 
 console.log(`\n${fail === 0 ? '✓' : '✗'} portal checks: ${pass} passed, ${fail} failed`)

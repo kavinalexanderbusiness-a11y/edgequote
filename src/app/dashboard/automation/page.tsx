@@ -37,9 +37,17 @@ import { resolveFollowUpPolicy, followUpsExhausted, type FollowUpPolicy } from '
 import { resolveReminderPolicy, remindersExhausted, type ReminderPolicy, type RemindableInvoice } from '@/lib/payments/dunning'
 import type { Quote } from '@/types'
 
-// ── Automation Center ─────────────────────────────────────────────────────────
+// ── Automation ────────────────────────────────────────────────────────────────
 // The owner-facing READ surface over the automation engine. It is a window, not a
 // control panel: it renders what the engine recorded and nothing else.
+//
+// ⚠️ WHERE THIS SITS, AND WHY (2026-08-09). The module moved from the `growth`
+// category to `admin`/Setup. Two rules exist, both `mode: 'suggest'`; the engine
+// cannot act by construction; and in production automation_signals,
+// automation_runs and automation_sweeps were ALL empty. A six-tab console over an
+// engine that has never written a row does not belong beside the screens an owner
+// opens every morning. It is not hidden and nothing was removed — it is ranked
+// where a thing you check on belongs. See lib/modules.
 //
 // TWO THINGS THIS FILE DELIBERATELY DOES NOT DO:
 //
@@ -56,9 +64,11 @@ import type { Quote } from '@/types'
 //     whole design (two independent gates, an empty DISPATCHERS map) exists to
 //     prevent. `mode` renders as a Badge and stops there.
 //
-// The state you will actually see today: both tables are applied but EMPTY (the
-// crons live on this branch and aren't deployed). Every section therefore has to
-// explain WHY it is empty rather than show a zero that looks like a bug.
+// The state you will actually see today: every table is applied and EMPTY, and
+// the heartbeat is empty too — the crons are registered in vercel.json but have
+// never recorded a run. Every section therefore has to explain WHY it is empty
+// rather than show a zero that looks like a bug, and must distinguish THREE
+// answers: it ran and found nothing, it never ran, and we couldn't find out.
 
 // ── Bounds ───────────────────────────────────────────────────────────────────
 // PostgREST caps a response at 1000 rows and does NOT error — an unbounded select
@@ -153,6 +163,12 @@ interface CommsTest {
   appUrl: string | null
 }
 
+// One sentence, in the owner's terms, used by both the loading and loaded header
+// so they can't drift. The old one — "what the automation engine saw, decided and
+// did" — described the machine to someone who only wants to know whether anything
+// is about to be sent to their customers.
+const LEDE = 'Customers EdgeQuote thinks are due for another visit. It flags them here — it never contacts anyone on its own.'
+
 const TABS: TabItem[] = [
   { key: 'overview', label: 'Overview', icon: Gauge },
   { key: 'rules', label: 'Rules', icon: ListChecks },
@@ -182,6 +198,8 @@ export default function AutomationPage() {
   // rows — see Liveness.
   const [signalSweep, setSignalSweep] = useState<SweepRow | null>(null)
   const [engineSweep, setEngineSweep] = useState<SweepRow | null>(null)
+  /** The heartbeat couldn't be READ — which is a third answer, not a null one. */
+  const [sweepUnknown, setSweepUnknown] = useState(false)
   // The caps the AUTOMATIC chasers actually enforce. Resolved from the owner's
   // business_settings.automations through the chasers' OWN resolvers — not the bare
   // FOLLOW_UP_MAX/REMINDER_MAX constants, because an owner who tuned their cadence
@@ -260,6 +278,14 @@ export default function AutomationPage() {
     setInvoiceRetries((iRes.data as InvoiceRetryRow[] | null) || [])
     setFollowUpPolicy(resolveFollowUpPolicy(owner.automationsRaw))
     setReminderPolicy(resolveReminderPolicy(owner.automationsRaw))
+    // ⚠️ A heartbeat query that FAILED also returns data: null — indistinguishable
+    // from "no heartbeat row exists" unless the error is read. This page draws its
+    // strongest conclusion from exactly that null ("neither job has ever run
+    // here"), so a dropped request or a column-grant change would have produced a
+    // confident, alarming, wrong claim about the owner's crons. Note the interface
+    // comment above: selecting a service-role-only column 403s the WHOLE query, so
+    // this is a live failure mode, not a hypothetical one.
+    setSweepUnknown(!!(ssRes.error || esRes.error))
     setSignalSweep((ssRes.data as SweepRow | null) ?? null)
     setEngineSweep((esRes.data as SweepRow | null) ?? null)
 
@@ -322,7 +348,11 @@ export default function AutomationPage() {
   // nothing. Zero rows is the plausible happy path here (two rules, narrow conditions),
   // so the page confidently reported "never run" on a healthy night, and would have
   // gone on doing so while the sweep was provably alive for everyone else.
-  const neverRan = !loading && signalSweep === null && engineSweep === null
+  //
+  // …and there is a THIRD state the original pair missed: we asked and the answer
+  // never came back. `neverRan` is now only claimed when the heartbeat was
+  // genuinely read and genuinely absent.
+  const neverRan = !loading && !sweepUnknown && signalSweep === null && engineSweep === null
 
   // ── Per-rule stats (30d), straight off automation_runs ──────────────────────
   const statsByRule = useMemo(() => {
@@ -372,7 +402,7 @@ export default function AutomationPage() {
   if (loading) {
     return (
       <PageContainer>
-        <PageHeader title="Automation Center" description="What the automation engine saw, decided and did — and why it stayed quiet." />
+        <PageHeader title="Automation" description={LEDE} />
         <SkeletonTiles count={5} />
         <SkeletonRows count={6} />
       </PageContainer>
@@ -381,17 +411,15 @@ export default function AutomationPage() {
 
   return (
     <PageContainer>
-      <PageHeader
-        title="Automation Center"
-        description="What the automation engine saw, decided and did — and why it stayed quiet."
-      />
+      <PageHeader title="Automation" description={LEDE} />
 
       {/* The page's honest framing. Rules are code-defined and reviewed as a change;
           there is nothing to switch on here, and saying so is kinder than leaving
           people hunting for a toggle that shouldn't exist. */}
       <Banner tone="info" icon={Info}>
-        This is a read-only window on the engine. Rules are defined in code and reviewed as a change —
-        nothing on this page sends, changes or promotes anything.
+        EdgeQuote watches for customers whose recurring work has run out, or who have drifted past their usual
+        visit. It flags them here and stops — it never texts, emails or books anyone on its own, and there is
+        nothing on this page to switch on.
       </Banner>
 
       <Tabs tabs={TABS} active={tab} onChange={setTab} />
@@ -423,7 +451,9 @@ export default function AutomationPage() {
                 <InlineEmpty icon={Radar}>
                   {neverRan
                     ? 'Nothing to chart — the signal sweep has never run, so there are no days to compare.'
-                    : 'Nothing to chart — the sweep has been running and has found nothing to flag for your customers in this window.'}
+                    : sweepUnknown
+                      ? 'Nothing to chart. We couldn’t check whether the sweep is running, so this window may be genuinely quiet — or unmonitored.'
+                      : 'Nothing to chart — the sweep has been running and has found nothing to flag for your customers in this window.'}
                 </InlineEmpty>
               ) : (
                 <div className="space-y-5">
@@ -485,6 +515,11 @@ export default function AutomationPage() {
                   <code className="text-ink">automation_signals</code> is empty and no sweep has recorded a heartbeat. The nightly
                   sweep (<code className="text-ink">/api/cron/signals</code>) writes one row per condition, per customer, per day —
                   it hasn’t run yet, so there is nothing to show.
+                </>
+              ) : sweepUnknown ? (
+                <>
+                  Nothing has been flagged for your customers. We couldn’t check whether the nightly sweep is running,
+                  so this may mean it found nothing — or that it hasn’t run. Reload to check again.
                 </>
               ) : (
                 <>
@@ -564,6 +599,11 @@ export default function AutomationPage() {
                   <code className="text-ink">automation_runs</code> is empty and no run has recorded a heartbeat. The engine
                   (<code className="text-ink">/api/cron/engine</code>) reads each day’s signals and records a verdict per rule —
                   it hasn’t run yet.
+                </>
+              ) : sweepUnknown ? (
+                <>
+                  There are no verdicts to show. We couldn’t check whether the engine is running, so this may mean it
+                  had nothing to evaluate — or that it hasn’t run. Reload to check again.
                 </>
               ) : (
                 <>
@@ -741,7 +781,13 @@ export default function AutomationPage() {
                   empty for that reason rather than because there was nothing to find.
                 </Banner>
               )}
-              {!neverRan && nothingDetected && (
+              {sweepUnknown && (
+                <Banner tone="danger" icon={XCircle}>
+                  Couldn’t read the heartbeat, so nothing on this page can tell you whether these jobs are running.
+                  The empty sections below are unexplained, not reassuring.
+                </Banner>
+              )}
+              {!neverRan && !sweepUnknown && nothingDetected && (
                 <Banner tone="info" icon={Info}>
                   The jobs are running. They just haven’t found anything to flag for your customers yet — which is the
                   healthy answer, not an empty screen waiting to fill.
