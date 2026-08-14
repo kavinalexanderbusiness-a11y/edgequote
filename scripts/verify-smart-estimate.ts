@@ -208,8 +208,14 @@ console.log('\n5. Price is never a duration proxy:')
     check(`the engine never reads "${money}"`, !new RegExp(`\\b${money}`, 'i').test(src),
       `"${money}" appears in workEstimate.ts`)
   }
-  // Structural, not just textual: the type the engine consumes has no money in
-  // it, so there is nothing to read even if someone wanted to.
+  // Structural, not just textual, because a keyword scan is one rename away
+  // from blind: the entry point's options are pinned to the ONE field it takes,
+  // so growing any second input — money by any name — fails here.
+  const sig = src.match(/export function buildWorkEstimate\(([\s\S]*?)\): WorkEstimate/)?.[1] ?? '?'
+  eq('buildWorkEstimate takes a history and one option', sig.replace(/\s+/g, ' ').trim(),
+    'history: ServiceVariance, opts?: { capacityHours?: number | null },')
+  // …and the type the engine learns from has no money in it either, so there is
+  // nothing to read even if someone wanted to.
   const eva = stripComments(read('src/lib/estimateVsActual.ts'))
   const visitLike = eva.slice(eva.indexOf('interface VisitLike'), eva.indexOf('export type NotComparable'))
   check('the visit slice the learner consumes carries no money field',

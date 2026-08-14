@@ -147,11 +147,18 @@ export function SmartEstimateCard({
           question, not a bigger version of the same one. With a solo crew the
           two figures are the same number and the line would be noise. Its own
           sample size is stated because it rests on the visits that named a
-          crew, which can be fewer than the visits behind the duration. */}
+          crew, which can be fewer than the visits behind the duration.
+
+          ⚠️ THREE FACTS, NOT A SUM. Hours, crew and labour-hours are three
+          independent medians and will not multiply out to each other — every
+          visit contributes its own hours AND its own headcount, so the typical
+          of each is measured separately. The wording keeps them as separate
+          observations ("and", not "×") rather than inviting arithmetic that is
+          supposed to disagree. */}
       {est.needsCrew && est.suggestedLaborMinutes != null && (
         <p className="text-[11px] text-ink-muted tabular-nums">
-          Typically a crew of {est.typicalCrewSize} — about {formatLaborHours(est.suggestedLaborMinutes)} of work
-          {est.crewSampleSize !== est.sampleSize && ` (from ${est.crewSampleSize} of them)`}
+          Usually a crew of {est.typicalCrewSize}, and a typical job carries about {formatLaborHours(est.suggestedLaborMinutes)} of work
+          {est.crewSampleSize !== est.sampleSize && ` (${est.crewSampleSize} of them recorded a crew)`}
         </p>
       )}
 

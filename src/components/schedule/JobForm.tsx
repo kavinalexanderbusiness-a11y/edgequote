@@ -28,7 +28,7 @@ import { formatDuration, workdayMinutes } from '@/lib/workDuration'
 import { JobReferenceMedia } from '@/components/schedule/JobReferenceMedia'
 import { AUDIENCE_COPY } from '@/lib/noteScope'
 import { loadCompletedVisitLearning, type LearningLoad } from '@/lib/estimateVsActualData'
-import type { Cadence } from '@/lib/labor'
+
 import { resolvePrefs, type PrefSource } from '@/lib/preferences'
 import { findJobMatch, type JobLiteForMatch } from '@/lib/dedup'
 import { Collapsible } from '@/components/ui/Collapsible'
@@ -121,15 +121,6 @@ function presetToInterval(preset: RepeatPreset, customUnit: RecurUnit, customCou
   }
 }
 
-// Map a recurrence interval to the labor engine's cadence bucket, so the Smart
-// Labor estimate learns "weekly mow from weekly mow" (not all mows pooled).
-function intervalToCadence(iv: { unit: RecurUnit; count: number } | null): Cadence {
-  if (!iv) return 'one_time'
-  if (iv.unit === 'month') return 'monthly'
-  if (iv.unit === 'week') return iv.count <= 1 ? 'weekly' : iv.count === 2 ? 'biweekly' : 'monthly'
-  if (iv.unit === 'day') return iv.count <= 10 ? 'weekly' : iv.count <= 18 ? 'biweekly' : 'monthly'
-  return 'one_time'
-}
 
 export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, seriesStartDate, allowAddAnother, suggestedPrice, warnFor, onSubmit, onCancel, onDirtyChange, isEdit }: JobFormProps) {
   const supabase = createClient()
@@ -529,16 +520,6 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     : endMode === 'after' ? `ends after ${Math.max(1, endCount)} visit${endCount !== 1 ? 's' : ''}`
     : endMode === 'on' && endDate ? `until ${endDate}`
     : 'no end date (kept rolling on your calendar)'
-
-  // Cadence for the Smart Labor estimate: this job's own repeat, else the
-  // property's existing series cadence, else one-time. So a weekly mow's duration
-  // learns from weekly mows.
-  const laborCadence: Cadence = (() => {
-    const iv = presetToInterval(preset, customUnit, customCount)
-    if (iv) return intervalToCadence(iv)
-    const s = propSeries[0]
-    return s?.unit ? intervalToCadence({ unit: s.unit as RecurUnit, count: s.count || 1 }) : 'one_time'
-  })()
 
   return (
     <form
