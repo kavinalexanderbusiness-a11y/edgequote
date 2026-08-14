@@ -244,8 +244,12 @@ eq('no segments is no token', readResetPathToken([]), null)
 eq('undefined segments is no token', readResetPathToken(undefined), null)
 eq('a deeper path is not a link we built', readResetPathToken(['a', 'b']), null)
 eq('a blank segment is no token', readResetPathToken(['  ']), null)
+// ⚠️ Pinned on the ASSIGNMENT, not on indexOf across the file: both names appear
+// in the import block first, in a fixed order, so a whole-file indexOf compares
+// the imports and reports success no matter which the code actually prefers.
+// A mutation that swapped the two survived exactly that way.
 check('the reset page prefers the path segment over the query',
-  reset.indexOf('readResetPathToken') < reset.indexOf('readResetToken('),
+  /const token = readResetPathToken\([\s\S]{0,90}\?\?\s*readResetToken\(/.test(reset),
   'the path form is the one we email and the one that survives transport')
 
 // ── 5. The password rule exists once ─────────────────────────────────────────
