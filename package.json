@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "beta:invite": "tsx scripts/beta-invite.ts",
     "verify": "tsx scripts/verify-all.ts",
+    "verify:beta-signup": "tsx scripts/verify-beta-signup.ts",
     "verify:automations": "tsx scripts/verify-automations.ts",
     "verify:capabilities": "tsx scripts/verify-capabilities.ts",
     "verify:comms-governor": "tsx scripts/verify-comms-governor.ts",
