@@ -15,7 +15,7 @@ import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Banner } from '@/components/ui/Banner'
 import { SectionHeading } from '@/components/ui/SectionHeading'
 import { cn, timeAgo } from '@/lib/utils'
-import { Bell, Check, FileText, DollarSign, MessageSquare, Globe, Star, CreditCard, AlertTriangle, RotateCcw, ShieldAlert, ShieldCheck, ChevronDown, Clock, X, Archive } from 'lucide-react'
+import { Bell, Check, FileText, DollarSign, MessageSquare, MessagesSquare, Globe, Star, CreditCard, AlertTriangle, RotateCcw, ShieldAlert, ShieldCheck, ChevronDown, Clock, X, Archive } from 'lucide-react'
 
 const ICON: Record<string, typeof FileText> = {
   quote_accepted: FileText, invoice_paid: DollarSign,
@@ -23,6 +23,10 @@ const ICON: Record<string, typeof FileText> = {
   payment_failed: CreditCard, autopay_review: AlertTriangle, website_lead: Globe,
   payment_refunded: RotateCcw, payment_disputed: ShieldAlert,
   payment_dispute_lost: ShieldAlert, payment_dispute_won: ShieldCheck,
+  // Distinct from new_message on purpose — that is a CUSTOMER writing in, this
+  // is the crew. Same glyph would make the two most similar rows in this list
+  // mean opposite audiences.
+  crew_message: MessagesSquare,
 }
 // A website lead arrives as a portal_request whose body is the "New … lead — …"
 // summary. Detect it at the render layer so a hot prospect gets the lead treatment

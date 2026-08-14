@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { loadCrewDay, nextCrewStop, partitionCrewStops, type ActiveCrewStop, type CrewDay } from '@/lib/crewAccess'
 import { crewStartVisit, crewCompleteVisit, crewRevertVisit, crewUncompleteVisit, type VisitState } from '@/lib/crewJob'
@@ -16,6 +16,10 @@ import {
 } from 'lucide-react'
 import { CrewStopPhotos } from '@/components/crew/CrewStopPhotos'
 import { CrewStopMedia } from '@/components/crew/CrewStopMedia'
+import { CrewStopConversation } from '@/components/crew/CrewStopConversation'
+import {
+  startCrewInboxFeed, subscribeCrewInbox, getCrewInboxSnapshot, getCrewInboxServerSnapshot,
+} from '@/lib/crewMessages'
 import { CompletionSheet } from '@/components/completion/CompletionSheet'
 import { crewSaveCompletionRecord } from '@/lib/crewJob'
 
@@ -72,6 +76,17 @@ export function CrewToday() {
   // fact about the work. Missing them hides an optional section; an error banner
   // over it would push the day's real work off the screen.
   const [mediaCounts, setMediaCounts] = useState<Record<string, { photos: number; videos: number }>>({})
+  // ⭐ ONE inbox fetch feeds BOTH the per-stop "Crew chat · 2 new" badges here
+  // and the count on the Messages tab. Two components each running their own
+  // effect against the same source is the bug NotificationBell already paid for
+  // (its second bell's subscription threw and its badge was dead all session),
+  // so the feed is a ref-counted module store subscribed to from both.
+  const inboxItems = useSyncExternalStore(subscribeCrewInbox, getCrewInboxSnapshot, getCrewInboxServerSnapshot)
+  const unreadByJob = useMemo(() => {
+    const out: Record<string, number> = {}
+    for (const i of inboxItems) out[i.job_id] = i.unread || 0
+    return out
+  }, [inboxItems])
   const today = localTodayISO()
   const alive = useRef(true)
   const dayRef = useRef<CrewDay | null>(null)
@@ -134,6 +149,12 @@ export function CrewToday() {
       clearInterval(t)
     }
   }, [load])
+
+  // The conversation feed runs the same liveness contract (mount / visible /
+  // online / slow tick) and for the same reason — no realtime is available to a
+  // crew session. Its own module owns the loop; this just holds a reference so
+  // it is running while Today is on screen.
+  useEffect(() => startCrewInboxFeed(supabase), [supabase])
 
   // Returns the SAME map when the count hasn't moved, so React bails out of the
   // re-render. Without that the child's report-up effect and this setter would
@@ -344,6 +365,14 @@ export function CrewToday() {
                   photos={mediaCounts[stop.id]?.photos ?? 0}
                   videos={mediaCounts[stop.id]?.videos ?? 0}
                 />
+
+                {/* …and what is being SAID about it. Deliberately beside the work
+                    instructions and not merged with them: the note above is the
+                    standing fact ("gate code 1942", edited in place, true
+                    whoever wrote it), and this is what people said and when.
+                    Collapsing the two would bury the gate code under twenty
+                    replies. See lib/crewMessages for the full distinction. */}
+                <CrewStopConversation jobId={stop.id} unread={unreadByJob[stop.id] ?? 0} />
 
                 <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
                   <a

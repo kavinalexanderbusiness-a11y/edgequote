@@ -133,8 +133,27 @@ function walk(dir: string, out: string[] = []): string[] {
   }
   return out
 }
+// ⚠️ COMMENTS ARE STRIPPED BEFORE ANY OF THE SCANS BELOW, and that is not a
+// nicety. A crew file that DOCUMENTS the rule — "there is deliberately no
+// `.from('crew_messages')` in this tree" — contains the exact string these
+// scans look for, so a raw-text grep reports the WARNING as the BREACH: the
+// cure read as the disease. Caught for real on 2026-08-13 by
+// CrewStopConversation.tsx, whose header explains the rule it obeys.
+// `[^\n\r]` rather than `.*$`: on a CRLF checkout `.` does not match `\r`, so
+// `.*$` strips nothing and every scan below quietly starts reading comments
+// again. (The same stripper, and the same reasoning, as verify:scoped-notes.)
+const stripComments = (s: string) =>
+  s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n\r]*/g, '')
 const crewFiles = [...walk(join(SRC, 'app', 'crew')), ...walk(join(SRC, 'components', 'crew'))]
-  .map(p => ({ path: p.slice(SRC.length + 1).replace(/\\/g, '/'), text: readFileSync(p, 'utf8') }))
+  .map(p => ({ path: p.slice(SRC.length + 1).replace(/\\/g, '/'), text: stripComments(readFileSync(p, 'utf8')) }))
+
+// MECHANISM CONTROL on the stripper: if it ever became a no-op (the CRLF
+// failure), these scans would silently start matching prose again — and if it
+// over-stripped, they would match nothing at all and pass for the wrong reason.
+check('the comment stripper works, and keeps real code',
+  !stripComments("const a = 1\r\n// from('customers')\r\n").includes("from('customers')") &&
+  stripComments("supabase.from('customers') // note").includes("from('customers')"),
+  'every table/import scan below is worthless if this is wrong in either direction')
 
 check('the crew tree exists', crewFiles.length >= 5, `only ${crewFiles.length} crew files found`)
 
@@ -157,7 +176,13 @@ if (!crewFiles.some(f => OWNER_ONLY.some(m => f.text.includes(`from '${m}`)))) {
 // `customers` would carry consent + notes + lifetime value, and `technicians`
 // would carry every teammate's wage. Those fields reach the phone only through
 // crew_day(), which names its columns.
-const FORBIDDEN_TABLES = ['customers', 'technicians', 'invoices', 'payments', 'quotes', 'business_settings', 'crews']
+// crew_messages / crew_message_reads added 2026-08-13: a crew session has no
+// grants on them either, so a direct read would return an EMPTY conversation
+// rather than an error — the worst possible failure, because it looks like
+// "nobody said anything" instead of "you cannot see this". The conversation
+// reaches the phone only through crew_job_messages/crew_post_message.
+const FORBIDDEN_TABLES = ['customers', 'technicians', 'invoices', 'payments', 'quotes', 'business_settings', 'crews',
+  'crew_messages', 'crew_message_reads']
 for (const f of crewFiles) {
   for (const t of FORBIDDEN_TABLES) {
     if (f.text.includes(`from('${t}')`)) {

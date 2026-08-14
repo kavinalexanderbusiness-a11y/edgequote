@@ -79,6 +79,16 @@ export interface ScopedNoteField {
    * before believing the audience above.
    */
   enforcedBy: string
+  /**
+   * ⭐ Set when the WHOLE TABLE is one audience rather than one column of a
+   * mixed-audience table. crew_media and crew_messages are like this: there is
+   * no customer-facing column anywhere in them, so the strongest possible check
+   * is that the TABLE NAME never appears in a customer projection at all —
+   * qualified, nested, aliased or otherwise. Columns on mixed tables (jobs,
+   * quotes) cannot be checked that way, because their table legitimately does
+   * appear; those fall back to reading the projection's column list.
+   */
+  wholeTable?: true
 }
 
 /**
@@ -181,13 +191,31 @@ export const SCOPED_NOTE_FIELDS: readonly ScopedNoteField[] = [
     enforcedBy: 'Absent from get_portal_data. Shown to the crew who wrote it, never to a customer.',
   },
 
-  // ── Crew reference media (this session) ────────────────────────────────────
+  // ── Crew reference media (2026-08-11) ──────────────────────────────────────
   {
     table: 'crew_media',
     column: 'caption',
     audience: 'crew',
+    wholeTable: true,
     purpose: 'What this reference photo or video is showing — "the gate", "mulch depth here".',
     enforcedBy: 'The whole table is crew-audience: reachable only through /api/crew/media, which proves crew assignment, and the owner\'s own RLS. No portal projection selects it.',
+  },
+
+  // ── The visit conversation (Crew Communications V1) ────────────────────────
+  // ⭐ THE OTHER HALF OF A DISTINCTION THIS REGISTRY DID NOT YET HAVE A WORD FOR.
+  // Everything above is a NOTE: a standing fact about the work, edited in place,
+  // authorless, correct whoever wrote it. crew_messages is a MESSAGE: an
+  // utterance at a moment, appended, never edited, and meaningless without its
+  // author and its time. The audience model is unchanged and is the reason this
+  // is a new TABLE rather than a `kind` column on an existing one — the table IS
+  // the audience, exactly as it is for crew_media.
+  {
+    table: 'crew_messages',
+    column: 'body',
+    audience: 'crew',
+    wholeTable: true,
+    purpose: 'What the office and the assigned crew said to each other about this visit — "use the side gate", "we\'re short one bag", "approved".',
+    enforcedBy: 'The whole table is crew-audience. No portal projection, no PDF and no public API selects it; a crew session reaches it only through the crew_job_messages/crew_post_message DEFINER RPCs, which re-prove employer + crew assignment. Pinned by verify:scoped-notes and verify:crew-messages.',
   },
 ] as const
 

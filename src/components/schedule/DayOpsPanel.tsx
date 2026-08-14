@@ -22,11 +22,13 @@ import { RouteTimeline, type TimelineStop } from '@/components/schedule/RouteTim
 import { VisitAddress } from '@/components/schedule/VisitAddress'
 import { JobAddons } from '@/components/schedule/JobAddons'
 import { JobMessages } from '@/components/schedule/JobMessages'
+import { VisitConversation } from '@/components/schedule/VisitConversation'
+import { loadOwnerUnread } from '@/lib/crewMessages'
 import { SendMessageDialog, type MessageRecipient } from '@/components/comms/SendMessageDialog'
 import {
   DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
   Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send, Receipt,
-  ChevronUp, ChevronDown, Wand2, MoreHorizontal, CalendarDays, StickyNote,
+  ChevronUp, ChevronDown, Wand2, MoreHorizontal, CalendarDays, StickyNote, MessagesSquare,
 } from 'lucide-react'
 
 export interface QuoteLite {
@@ -111,8 +113,16 @@ export function DayOpsPanel({
   const [photoId, setPhotoId] = useState<string | null>(null)
   // Which job's add-on services panel is open.
   const [addonsId, setAddonsId] = useState<string | null>(null)
-  // Which job's one-tap messaging panel is open.
+  // Which job's one-tap messaging panel is open. ⚠️ This one texts the CUSTOMER.
   const [messageId, setMessageId] = useState<string | null>(null)
+  // Which job's CREW conversation is open — the internal one, which no customer
+  // surface can read. Deliberately a separate panel from `messageId` above: the
+  // two have opposite audiences and merging them is how a gate code ends up in
+  // an SMS.
+  const [chatId, setChatId] = useState<string | null>(null)
+  // Unread crew messages per visit, so a card can say "2 new" without opening
+  // every visit to find out. One pair of queries for the whole day.
+  const [chatUnread, setChatUnread] = useState<Record<string, number>>({})
   // "Message today's customers" dialog (day-level bulk send).
   const [showDayMsg, setShowDayMsg] = useState(false)
   // Job currently sending a one-tap "On my way" (locks the button against double-tap).
@@ -177,7 +187,9 @@ export function DayOpsPanel({
   function closePanels() {
     setPriceId(null); setQuickId(null); setMoveId(null)
     setPhotoId(null); setAddonsId(null); setMessageId(null); setContinueId(null)
+    setChatId(null)
   }
+  const toggleChat = (job: Job) => { const was = chatId === job.id; closePanels(); if (!was) setChatId(job.id) }
   const togglePhoto = (job: Job) => { const was = photoId === job.id; closePanels(); if (!was) setPhotoId(job.id) }
   const toggleAddons = (job: Job) => { const was = addonsId === job.id; closePanels(); if (!was) setAddonsId(job.id) }
   const toggleMessage = (job: Job) => { const was = messageId === job.id; closePanels(); if (!was) setMessageId(job.id) }
@@ -335,6 +347,26 @@ export function DayOpsPanel({
   // override while a reorder persists ('auto' = owner just reset to optimizer).
   const [localSeq, setLocalSeq] = useState<string[] | 'auto' | null>(null)
   useEffect(() => { setLocalSeq(null) }, [date])
+
+  // Unread crew messages for the visits on this day. Two queries for the whole
+  // board rather than one per card, and a failure is deliberately SILENT: an
+  // absent badge hides an affordance, while an error banner over the day's work
+  // would push the actual work off the screen. (CrewToday's media counts make
+  // the same trade for the same reason.)
+  const jobIdsKey = jobs.map(j => j.id).join(',')
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      const ids = jobIdsKey ? jobIdsKey.split(',') : []
+      if (!ids.length) { setChatUnread({}); return }
+      const { data: { session } } = await supabase.auth.getSession()
+      const uid = session?.user?.id
+      if (!uid) return
+      const counts = await loadOwnerUnread(supabase, uid, ids)
+      if (alive) setChatUnread(counts)
+    })()
+    return () => { alive = false }
+  }, [jobIdsKey]) // eslint-disable-line react-hooks/exhaustive-deps
   const savedSeq = active.some(j => j.route_order != null)
     ? [...active].sort((a, b) => (a.route_order ?? 999) - (b.route_order ?? 999)).map(j => j.id)
     : null
@@ -1031,6 +1063,13 @@ export function DayOpsPanel({
                             Main's richer overflow is kept: width + descriptions carry
                             the hierarchy a flat list can't. */}
                         <ActionBtn onClick={() => togglePhoto(job)} icon={Camera} label="Photos" />
+                        {/* ⚠️ "Crew chat" ≠ the "Message" button above it. That
+                            one TEXTS THE CUSTOMER (consent-gated, costs money,
+                            leaves the building). This one reaches the crew
+                            assigned to this visit and no customer surface can
+                            read it. Two audiences, two buttons, two words. */}
+                        <ActionBtn onClick={() => toggleChat(job)} icon={MessagesSquare}
+                          label={chatUnread[job.id] ? `Crew chat (${chatUnread[job.id]})` : 'Crew chat'} />
                         <ActionBtn onClick={() => toggleAddons(job)} icon={PlusCircle} label={addons.length ? `Services (${addons.length})` : 'Services'} />
                         <Menu align="end" width={300} items={[
                           { key: 'quick', label: 'Quick edit', description: 'Time, crew, status & notes — this visit', icon: SlidersHorizontal, onSelect: () => { quickId === job.id ? setQuickId(null) : openQuick(job) } },
@@ -1094,6 +1133,22 @@ export function DayOpsPanel({
                           <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1"><MessageSquare className="w-3 h-3" /> Message customer</p>
                           <JobMessages jobId={job.id} customerId={job.customer_id} customerName={job.customers?.name || job.title}
                             visitDate={job.scheduled_date} timeWindow={windowByJob[job.id]} address={job.properties?.address ?? undefined} />
+                        </div>
+                      )}
+
+                      {/* The crew conversation for this visit — internal, and it
+                          stays with the visit. Never customer-facing: no portal
+                          projection, no PDF, no public API selects crew_messages
+                          (verify:scoped-notes pins all three). */}
+                      {chatId === job.id && (
+                        <div className="mt-2 rounded-lg border border-border bg-bg-secondary p-2.5" onClick={e => e.stopPropagation()}>
+                          <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1">
+                            <MessagesSquare className="w-3 h-3" /> Crew conversation · your team only
+                          </p>
+                          <VisitConversation
+                            jobId={job.id}
+                            onUnreadChange={(id, n) => setChatUnread(prev => (prev[id] ?? 0) === n ? prev : { ...prev, [id]: n })}
+                          />
                         </div>
                       )}
 

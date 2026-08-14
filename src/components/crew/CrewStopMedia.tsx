@@ -30,6 +30,9 @@ import { ImageIcon, Video, ChevronDown, RotateCw, Download, X } from 'lucide-rea
 
 interface MediaItem {
   id: string
+  /** Non-null means this file hangs off a line of the visit's CONVERSATION, not
+   *  off the visit itself. Filtered out below — see fetchMedia. */
+  message_id: string | null
   kind: 'photo' | 'video'
   mime: string | null
   size_bytes: number | null
@@ -64,7 +67,13 @@ export function CrewStopMedia({ jobId, photos, videos }: {
       const d = await res.json().catch(() => ({}))
       if (!alive.current) return
       if (!res.ok || !d.ok) throw new Error(d.error || 'Couldn’t load the work instructions.')
-      setLoad({ kind: 'ok', media: (d.media || []) as MediaItem[], at: Date.now() })
+      // ⚠️ THE OFFICE'S REFERENCE MATERIAL ONLY. The door signs everything this
+      // visit is allowed, which now includes files attached to messages in the
+      // visit's conversation — and a photo of an empty pallet somebody sent at
+      // 11am is not a work instruction. The count on the button is filtered the
+      // same way, server-side, so the label and the contents agree.
+      const media = ((d.media || []) as MediaItem[]).filter(m => !m.message_id)
+      setLoad({ kind: 'ok', media, at: Date.now() })
     } catch (e) {
       if (!alive.current) return
       setLoad({ kind: 'error', message: e instanceof Error ? e.message : 'Couldn’t load the work instructions.' })
