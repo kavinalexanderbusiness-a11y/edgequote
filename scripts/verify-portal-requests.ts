@@ -59,15 +59,16 @@ const code = (p: string) => stripComments(read(p))
 // contains a `--` inside a string literal.
 const stripSql = (s: string) => s.replace(/^[^\S\n]*--[^\n]*$/gm, '').replace(/--[^\n]*$/gm, '')
 
-/** Every .sql file under a directory, recursively — EXCLUDING archived history,
- *  which by definition holds superseded bodies that must never satisfy a guard. */
-function sqlFilesUnder(dir: string, out: string[] = []): string[] {
+/** Every .sql file under a directory, recursively. Archived history is EXCLUDED
+ *  unless explicitly asked for: it holds superseded bodies by design, and a
+ *  guard satisfied by one of those passes while the live rule is gone. */
+function sqlFilesUnder(dir: string, out: string[] = [], includeArchive = false): string[] {
   const abs = join(ROOT, dir)
   if (!existsSync(abs)) return out
   for (const e of readdirSync(abs, { withFileTypes: true })) {
-    if (e.name === 'archive') continue
+    if (e.name === 'archive' && !includeArchive) continue
     const rel = `${dir}/${e.name}`
-    if (e.isDirectory()) sqlFilesUnder(rel, out)
+    if (e.isDirectory()) sqlFilesUnder(rel, out, includeArchive)
     else if (e.name.endsWith('.sql')) out.push(rel)
   }
   return out
@@ -145,20 +146,23 @@ check('a phone that reports no MIME type still works from the name',
 
 // The DATABASE is the enforcement; the TypeScript above is a render-time refusal.
 {
-  // ⭐ LAYOUT-AGNOSTIC ON PURPOSE. main currently ships SQL as
-  // `supabase/RUN-<date>-<name>.sql`; Session 41's unlanded work moves the apply
-  // path to `supabase/migrations/<version>_<name>.sql`. This guard must pass on
-  // BOTH, or it becomes the thing that has to be edited during someone else's
-  // migration — so it finds this feature's SQL by NAME wherever it lives.
-  const V1 = sqlFilesUnder('supabase').find(p => /portal[-_]requests/i.test(p))
-  check('the portal-requests SQL is in the repo', !!V1, sqlFilesUnder('supabase').slice(0, 6).join(', '))
-  // Read only THAT file. Concatenating every SQL file would make
-  // `indexOf('portal_submit_request')` find the SUPERSEDED 7-argument body in an
-  // older RUN file and scan that instead — a guard reading the very definition
-  // this change replaced, and passing.
-  const sql = stripSql(V1 ? read(V1) : '')
+  // ⭐ THE APPLY PATH IS THE SUBJECT, NOT THIS FEATURE'S OWN FILE.
+  // supabase/migrations/ is what a rebuild runs, and its baseline is GENERATED
+  // from production — so asserting against it proves the rule survives a
+  // regeneration by someone else. This feature's original migration now lives in
+  // supabase/archive/ledger/ as history; `sqlFilesUnder` deliberately skips
+  // archive/, because a guard satisfied by a superseded copy is a guard that
+  // passes while the live rule is gone.
+  const APPLY = sqlFilesUnder('supabase/migrations')
+  check('there is an apply path to check', APPLY.length > 0, 'supabase/migrations is empty')
+  const sql = stripSql(APPLY.map(read).join('\n'))
+  // The original migration is still REPRESENTED, in the archive the migration
+  // system keeps history in — losing it would mean production ran SQL the repo
+  // cannot show anyone.
+  check('the portal-requests migration is preserved in the ledger archive',
+    sqlFilesUnder('supabase/archive/ledger', [], true).some(p => /portal_requests/i.test(p)))
   check('a CHECK constraint — not app code — validates the photo column',
-    /add constraint service_requests_photos_check[\s\S]{0,120}check \(public\.portal_request_photos_ok\(photos\)\)/i.test(sql))
+    /add constraint "?service_requests_photos_check"?[\s\S]{0,120}check \((public\.)?portal_request_photos_ok\(photos\)\)/i.test(sql))
   check('the validator caps the count in SQL too',
     /portal_request_photos_ok[\s\S]{0,400}array_length\(p, 1\), 0\) <= 6/i.test(sql))
   check('the SQL validator pins the same portal/<uuid>/<uuid>.<ext> shape',
@@ -194,7 +198,7 @@ check('a phone that reports no MIME type still works from the name',
 
   H('4 · the same ask cannot land twice')
   check('a partial UNIQUE INDEX enforces it in the database',
-    /create unique index[\s\S]{0,80}service_requests_open_dedup_idx[\s\S]{0,200}\(customer_id, dedup_key\)[\s\S]{0,120}where dedup_key is not null and status = 'new'/i.test(sql))
+    /create unique index[\s\S]{0,80}service_requests_open_dedup_idx[\s\S]{0,200}\(customer_id, dedup_key\)[\s\S]{0,160}where \(*dedup_key is not null\)* and \(*status = 'new'/i.test(sql))
   check('the insert absorbs the collision instead of erroring at the customer',
     /on conflict do nothing/i.test(body))
   check('the dedup key covers the ask, the date and the visit',
@@ -203,12 +207,21 @@ check('a phone that reports no MIME type still works from the name',
     /on conflict do nothing;[\s\S]{0,200}return true;/i.test(body))
   check('the free-text door is a WRAPPER, not a second implementation',
     /FUNCTION public\.portal_request_service[\s\S]{0,400}return public\.portal_submit_request\(/i.test(sql))
-  check('the superseded 7-argument signature is dropped, not left as an overload',
-    /drop function if exists public\.portal_submit_request\(text, text, text, date, uuid, uuid, jsonb\)/i.test(sql))
-  check('the new signature is granted to anon explicitly (the drop took the old grants)',
-    /grant execute on function public\.portal_submit_request\(text, text, text, date, uuid, uuid, jsonb, text\[\]\) to anon/i.test(sql))
+  // ⭐ Stated as the INVARIANT rather than as the DROP that established it. The
+  // baseline is generated from production, so it defines what exists and never
+  // records a drop — but the thing that actually matters is that a rebuilt
+  // database has exactly ONE of these. Two overloads differing only by a
+  // defaulted trailing parameter make a 7-named-argument PostgREST call
+  // ambiguous, and every portal request would start failing with "function is
+  // not unique".
+  const submitDefs = sql.match(/FUNCTION public\.portal_submit_request\s*\(/gi) || []
+  check('the apply path defines exactly ONE portal_submit_request', submitDefs.length === 1, `${submitDefs.length} definitions`)
+  check('…and it is the 8-argument signature that takes photos',
+    /FUNCTION public\.portal_submit_request\([\s\S]{0,400}p_photos text\[\]/i.test(sql))
+  check('a rebuilt database grants it to anon (the portal is a no-login surface)',
+    /grant execute on function public\."?portal_submit_request"?\((p_token )?text, ?(p_message )?text, ?(p_kind )?text, ?(p_preferred_date )?date, ?(p_job_id )?uuid, ?(p_recurrence_id )?uuid, ?(p_details )?jsonb, ?(p_photos )?text\[\]\) to anon/i.test(sql))
   check('a closed request records when, and an open one never can',
-    /service_requests_resolved_at_check[\s\S]{0,140}resolved_at is null or status <> 'new'/i.test(sql))
+    /service_requests_resolved_at_check[\s\S]{0,140}\(*resolved_at is null\)* or \(*status <> 'new'/i.test(sql))
   check("the status vocabulary is three words, reusing production's own 'handled'",
     /service_requests_status_check[\s\S]{0,160}'new'[\s\S]{0,40}'handled'[\s\S]{0,40}'dismissed'/i.test(sql))
 }
