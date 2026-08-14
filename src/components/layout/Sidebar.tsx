@@ -258,26 +258,28 @@ export function Sidebar() {
 
   return (
     <>
-      {/* Mobile top bar */}
+      {/* Mobile top bar.
+          ⭐ The logo is the HOME link. Home used to hold a bottom-nav tab, which
+          is the most valuable real estate on a phone, to reach a screen an owner
+          opens once a morning — while a customer lookup, which a ringing phone
+          demands, had no one-tap door at all. Home moved here (the oldest
+          convention on the web) and Customers took the tab; it is also still in
+          the drawer below, so nothing is only reachable one way.
+          ⭐ The Messages icon that used to sit here is gone, not lost: the bottom
+          nav carries Messages with the SAME unread badge from the SAME engine, in
+          thumb reach rather than in the top-right corner. Two doors to one place,
+          one of them unreachable one-handed, is not redundancy worth its slot. */}
       <div className="lg:hidden sticky top-0 z-40 flex items-center justify-between h-14 px-4 bg-bg-secondary border-b border-border">
-        {logo}
+        <Link href="/dashboard" aria-label="Home" aria-current={pathname === '/dashboard' ? 'page' : undefined}
+          className="min-w-0 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+          {logo}
+        </Link>
         <div className="flex items-center gap-1.5">
-          <button onClick={openCommand} className="text-ink-muted hover:text-ink p-2" aria-label="Search">
+          <button onClick={openCommand} className="tap-target text-ink-muted hover:text-ink p-2" aria-label="Search">
             <Search className="w-5 h-5" />
           </button>
-          {/* Messages, one tap from anywhere on mobile — the unread count was
-              previously invisible until the drawer was opened. */}
-          <Link href="/dashboard/messages" aria-label={unread > 0 ? `Messages, ${unread} unread` : 'Messages'}
-            className="relative text-ink-muted hover:text-ink p-2">
-            <MessageSquare className="w-5 h-5" />
-            {unread > 0 && (
-              <span className="absolute top-0.5 right-0.5 min-w-[16px] h-4 px-0.5 rounded-full bg-accent text-black text-[9px] font-bold tabular-nums flex items-center justify-center">
-                {unread > 9 ? '9+' : unread}
-              </span>
-            )}
-          </Link>
           <NotificationBell />
-          <button onClick={() => setOpen(true)} className="text-ink p-2 -mr-2" aria-label="Open menu">
+          <button onClick={() => setOpen(true)} className="tap-target text-ink p-2 -mr-2" aria-label="Open menu">
             <Menu className="w-5 h-5" />
           </button>
         </div>

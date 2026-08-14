@@ -109,13 +109,28 @@ const BARE_QUOTE_DOORS: Record<string, string> = {
   // while the business has no customer, quote, job or invoice at all, and the
   // builder it opens creates the customer and property as it saves.
   'components/dashboard/TodaysPriorities.tsx': 'the first-run card — it only renders when the business has NO customers yet',
-  'components/layout/BottomNav.tsx':       'the mobile quick action — same, global',
+  // ⛔ NO ENTRY for the mobile +. It used to be listed here as
+  // 'components/layout/BottomNav.tsx — global, so it cannot know a customer'.
+  // That excuse expired in Session 54: the door moved into lib/quickAdd, which
+  // builds `/dashboard/quotes/new` + ?customer=&property= from whatever the
+  // surface underneath published, so it is no longer a bare door at all. The
+  // engine is still SCANNED (QUOTE_DOOR_ENGINES below) — if anyone ever
+  // hard-codes the bare path back into it, this check fails rather than shrugs.
   'components/quotes/QuoteList.tsx':       'the empty-state CTA and the "n" shortcut on the same list',
   'components/messages/LeadCard.tsx':      'looks bare, is NOT — the prefill rides in sessionStorage',
 }
 const bare: string[] = []
 const matched = new Set<string>()
-for (const f of ownerFiles) {
+// ⚠️ The surface scan above is .tsx only, and a create door no longer has to be
+// a component: lib/quickAdd builds the mobile +'s hrefs as data. A door that
+// moved into an engine must not fall out of this check by changing extension,
+// so the engines that emit one are scanned too — explicitly, by name.
+const QUOTE_DOOR_ENGINES = ['lib/quickAdd.ts']
+const quoteDoorFiles = [
+  ...ownerFiles,
+  ...QUOTE_DOOR_ENGINES.map(p => ({ path: p, text: stripComments(read('src/' + p)) })),
+]
+for (const f of quoteDoorFiles) {
   if (!/['"`]\/dashboard\/quotes\/new['"`]/.test(f.text)) continue
   if (f.path in BARE_QUOTE_DOORS) matched.add(f.path)
   else bare.push(f.path)

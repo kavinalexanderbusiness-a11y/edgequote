@@ -4,6 +4,7 @@ import { readUser } from '@/lib/authState'
 import { AuthUnavailable } from '@/components/auth/AuthUnavailable'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { BottomNav } from '@/components/layout/BottomNav'
+import { QuickAddProvider } from '@/components/layout/QuickAddProvider'
 import { RouteFocusManager } from '@/components/layout/RouteFocusManager'
 import { InstallPrompt } from '@/components/pwa/InstallPrompt'
 import { CommandPalette } from '@/components/command/CommandPalette'
@@ -45,12 +46,18 @@ export default async function DashboardLayout({ children }: { children: React.Re
         Skip to content
       </a>
       <Sidebar />
-      {/* pb-28 on mobile = clearance for the fixed BottomNav (h ~64px + safe
-          area) so no page's last row hides behind the bar. lg resets it. */}
-      <main id="main-content" tabIndex={-1} className="flex-1 min-w-0 p-4 pb-28 lg:p-8 bg-bg overflow-auto focus:outline-none">
-        {children}
-      </main>
-      <BottomNav />
+      {/* The + in the bottom bar offers what THIS surface can create, prefilled
+          with the record it is showing. The page publishes that record and the
+          nav reads it, so the two must share a provider — hence this wrapping
+          both <main> and <BottomNav> rather than sitting inside either. */}
+      <QuickAddProvider>
+        {/* pb-28 on mobile = clearance for the fixed BottomNav (h ~64px + safe
+            area) so no page's last row hides behind the bar. lg resets it. */}
+        <main id="main-content" tabIndex={-1} className="flex-1 min-w-0 p-4 pb-28 lg:p-8 bg-bg overflow-auto focus:outline-none">
+          {children}
+        </main>
+        <BottomNav />
+      </QuickAddProvider>
       {/* Moves focus to <main> on client-side navigation — the skip-link target
           above was built for this but nothing wired the focus move. */}
       <RouteFocusManager />

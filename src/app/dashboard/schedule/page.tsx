@@ -16,7 +16,7 @@ import { ScopeDialog } from '@/components/schedule/ScopeDialog'
 import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel, visitsBeyondEnd, planSeriesChange, mayRemoveRecurrence } from '@/lib/recurrence'
 import type { JobRecurrence } from '@/types'
 import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts, uncompleteJob } from '@/lib/invoicing'
-import { queueOrRun } from '@/lib/offline/outbox'
+import { queueOrRun, isNetworkError } from '@/lib/offline/outbox'
 // THE completion stamp. Every door on this page that moves a visit to
 // "completed" writes the same three fields through it — see lib/jobStatus.
 import { completionPatch } from '@/lib/jobStatus'
@@ -51,9 +51,11 @@ interface FieldBundle {
 }
 import { resolveAutomations, Automations } from '@/lib/comms/automations'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { usePublishQuickAddContext } from '@/components/layout/QuickAddProvider'
+import { readJobPanel, jobPanelAnchorId } from '@/lib/quickAdd'
+import { scrollBehavior } from '@/lib/motion'
 import { Button } from '@/components/ui/Button'
-import { StickyActionBar } from '@/components/ui/StickyActionBar'
-import { VisitAddress } from '@/components/schedule/VisitAddress'
+import { FieldStopBar } from '@/components/schedule/FieldStopBar'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Skeleton, SkeletonRows } from '@/components/ui/Skeleton'
 import { cn, minutesBetween, localTodayISO, formatCurrency, formatDate } from '@/lib/utils'
@@ -64,7 +66,7 @@ import { orderDayStops, nextFieldStop } from '@/lib/fieldStops'
 import { toast } from '@/lib/toast'
 import { confirm } from '@/lib/confirm'
 import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays, parseISO, getDay } from 'date-fns'
-import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info, Phone, MessageSquare, Navigation, User as UserIcon, FileText, Receipt, CheckCircle2, Play, PauseCircle } from 'lucide-react'
+import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info, Phone, MessageSquare, Navigation, User as UserIcon, FileText, Receipt } from 'lucide-react'
 import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
 import { RainDelayCenter } from '@/components/schedule/RainDelayCenter'
 import { WeatherStrip } from '@/components/weather/WeatherStrip'
@@ -149,6 +151,10 @@ export default function SchedulePage() {
   // The field bar reads THIS rather than re-deriving an order of its own — see
   // fieldNext below and lib/fieldStops.
   const [boardStopOrder, setBoardStopOrder] = useState<{ date: string; ids: string[] } | null>(null)
+  // Crew-message unread per visit, reported UP by the day board rather than
+  // queried again here — the field bar and the card must never disagree about
+  // whether a message is waiting. See DayOpsPanel's onChatUnread.
+  const [boardChatUnread, setBoardChatUnread] = useState<Record<string, number>>({})
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Job | null>(null)
   const [formDate, setFormDate] = useState<string>('')
@@ -966,6 +972,30 @@ export default function SchedulePage() {
       setShowForm(false)
     }
   }, [jobParam, jobs])
+
+  // ?panel=time|cost — land ON the panel, not merely on the form that contains
+  // it. The + offers "Work time" and "Cost" as one-tap doors; a door that opens
+  // a long form scrolled to the top and leaves you to find the panel has not
+  // saved anyone a tap. Both panels live inside the edit form's advanced block,
+  // which `isEdit` opens on its own, so all that is missing is the scroll.
+  //
+  // Runs on a frame AFTER the form paints (the panel does not exist during the
+  // render that opens it), and only ever scrolls — it never opens, submits or
+  // changes anything, so a stale link cannot act on a visit.
+  const panelParam = searchParams.get('panel')
+  useEffect(() => {
+    const panel = readJobPanel(panelParam)
+    if (!panel || !editing) return
+    let tries = 0
+    const id = window.setInterval(() => {
+      const el = document.getElementById(jobPanelAnchorId(panel))
+      if (el) {
+        window.clearInterval(id)
+        el.scrollIntoView({ behavior: scrollBehavior(), block: 'center' })
+      } else if (++tries > 20) window.clearInterval(id)   // give up quietly after ~2s
+    }, 100)
+    return () => window.clearInterval(id)
+  }, [panelParam, editing])
 
   function closeForm() {
     setShowForm(false)
@@ -2168,7 +2198,17 @@ export default function SchedulePage() {
     const res = await stopForToday(supabase, job, input)
     if (!res.ok) {
       setJobs(prevJobs => prevJobs.map(j => j.id === job.id ? { ...j, ...res.prev } : j))
-      setBanner('Could not stop for today: ' + (res.error ?? 'please try again.'))
+      // ⛔ Stopping is NOT queued. It banks a work session and patches the visit
+      // as one intent, and replaying that offline is a piece of engineering this
+      // session did not do — so the write is rolled back and the job stays
+      // exactly as it was, on the clock. What it must not do is blame the owner
+      // for their signal in the machine's words: "Load failed" told a contractor
+      // in a field nothing they could act on. Same question the outbox asks
+      // before queuing anything, so the two can never disagree about what
+      // "no signal" means.
+      setBanner(isNetworkError(res.error)
+        ? 'No signal — today’s time was not recorded, and the job is still on the clock. Try again once you’re back in range.'
+        : 'Could not stop for today: ' + (res.error ?? 'please try again.'))
       return
     }
     await fetchJobs()
@@ -2195,7 +2235,13 @@ export default function SchedulePage() {
     const res = await resumeWork(supabase, job)
     if (!res.ok) {
       setJobs(prevJobs => prevJobs.map(j => j.id === job.id ? { ...j, ...res.prev } : j))
-      setBanner('Could not resume the job: ' + (res.error ?? 'please try again.'))
+      // Same contract as stopping: rolled back, and named as signal when that is
+      // what it was. The clock genuinely did not start, so saying so is the
+      // whole job — a "resumed" that never reached the server would put a
+      // started_at on the record that no other device will ever see.
+      setBanner(isNetworkError(res.error)
+        ? 'No signal — the clock did not start. Try again once you’re back in range.'
+        : 'Could not resume the job: ' + (res.error ?? 'please try again.'))
       return
     }
     await fetchJobs()
@@ -2283,6 +2329,20 @@ export default function SchedulePage() {
       : null
     return nextFieldStop(orderDayStops(dayJobs, rank))
   }, [dayJobs, dayISO, boardStopOrder])
+
+  // What the mobile + is standing on. The visit being EDITED when a form is
+  // open, else the day's next stop — the same visit the field bar names, so the
+  // + and the bar can never mean different jobs. Its status decides which
+  // visit-scoped doors exist at all (lib/quickAdd).
+  const quickAddJob = editing ?? (view === 'day' ? fieldNext : undefined)
+  usePublishQuickAddContext(useMemo(() => (quickAddJob ? {
+    kind: 'job' as const,
+    jobId: quickAddJob.id,
+    status: quickAddJob.status,
+    customerId: quickAddJob.customer_id ?? null,
+    customerName: quickAddJob.customers?.name ?? null,
+    propertyId: quickAddJob.property_id ?? null,
+  } : null), [quickAddJob]))
 
   return (
     // Reserve the field bar's height on phones so the last job card can still be
@@ -2576,6 +2636,7 @@ export default function SchedulePage() {
           dateLabel={format(cursor, 'EEEE, MMMM d, yyyy')}
           jobs={dayJobs}
           onStopOrder={setBoardStopOrder}
+          onChatUnread={setBoardChatUnread}
           quotesById={quotesById}
           recurrences={recurrences}
           baseCoord={baseCoord}
@@ -2728,65 +2789,25 @@ export default function SchedulePage() {
           calls the SAME engines; it adds reach, not a second way to do things.
           Phone-only, day-view-only, and it hides itself once the day is done. */}
       {view === 'day' && fieldNext && (
-        <StickyActionBar fixed className="lg:hidden">
-          <div className="flex items-center gap-3">
-            <div className="min-w-0 flex-1">
-              {/* Three states, not two. A job that is underway with nobody on
-                  the clock — stopped for the day — is neither "in progress
-                  right now" nor "next stop", and calling it either is the lie
-                  this bar existed to avoid. */}
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
-                {fieldNext.status === 'in_progress'
-                  ? (fieldNext.started_at ? 'On the clock' : 'Underway · stopped')
-                  : 'Next stop'}
-              </p>
-              <p className="text-sm font-semibold text-ink truncate">{fieldNext.customers?.name || fieldNext.title}</p>
-              {/* WHERE, on the one control a phone user actually reaches. A name
-                  alone doesn't say which property — the same reason the cards
-                  carry the address — and this bar is often all that's on screen
-                  once you've scrolled. Same component, so it renders identically
-                  and disappears when there's no address on file. */}
-              <VisitAddress address={fieldNext.properties?.address} />
-            </div>
-            {/* On the clock, the phone gets BOTH doors: stop the day, or finish
-                the job. They are different decisions and neither may be reached
-                only through a menu — "Stop" hidden behind an overflow is how a
-                crew ends up completing a job to get out of the rain. Stop is the
-                quieter of the two, so it is the ghost button. */}
-            {fieldNext.status === 'in_progress' && fieldNext.started_at && (
-              <Button
-                size="lg" variant="ghost" className="shrink-0 tap-target"
-                disabled={fieldActing}
-                onClick={() => setStopping(fieldNext)}
-              >
-                <PauseCircle className="w-4 h-4" /> Stop
-              </Button>
-            )}
-            <Button
-              size="lg"
-              className="shrink-0 tap-target"
-              loading={fieldActing}
-              onClick={async () => {
-                if (fieldActing) return
-                setFieldActing(true)
-                try {
-                  if (fieldNext.status === 'in_progress') {
-                    // Paused: the useful next tap is picking the clock back up,
-                    // not finishing. Completing is still one tap away in the card.
-                    if (fieldNext.started_at) await completeJob(fieldNext)
-                    else await resumeJob(fieldNext)
-                  } else await startJob(fieldNext)
-                } finally { setFieldActing(false) }
-              }}
-            >
-              {fieldNext.status === 'in_progress'
-                ? (fieldNext.started_at
-                  ? <><CheckCircle2 className="w-4 h-4" /> Complete</>
-                  : <><Play className="w-4 h-4" /> Resume</>)
-                : <><Play className="w-4 h-4" /> Start</>}
-            </Button>
-          </div>
-        </StickyActionBar>
+        <FieldStopBar
+          job={fieldNext}
+          baseCoord={baseCoord}
+          unread={boardChatUnread[fieldNext.id] ?? 0}
+          busy={fieldActing}
+          onStop={() => setStopping(fieldNext)}
+          onPrimary={async () => {
+            if (fieldActing) return
+            setFieldActing(true)
+            try {
+              if (fieldNext.status === 'in_progress') {
+                // Paused: the useful next tap is picking the clock back up,
+                // not finishing. Completing is still one tap away in the card.
+                if (fieldNext.started_at) await completeJob(fieldNext)
+                else await resumeJob(fieldNext)
+              } else await startJob(fieldNext)
+            } finally { setFieldActing(false) }
+          }}
+        />
       )}
 
       {/* ONE stop sheet for the whole page — the phone bar and the day board

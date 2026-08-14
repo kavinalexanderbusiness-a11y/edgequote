@@ -308,6 +308,13 @@ const NETWORK_MESSAGE = /failed to fetch|networkerror when attempting|load faile
 
 // Would this error have been fixed by having signal?
 //
+// Exported because not every write can be queued, and the ones that cannot still
+// have to say WHY they failed. "Could not stop for today: Load failed" is what a
+// contractor with no bars used to read; "no signal" is the same fact in words
+// they can act on. ⭐ One definition of the question, so a caller that only
+// wants to phrase an error can never drift from the one that decides whether an
+// op is safe to queue.
+//
 // `navigator.onLine === false` only means the OS sees no interface. It is famously
 // TRUE on a captive portal — the hotel/coffee-shop wifi a contractor's phone joins by
 // itself at the edge of a job — where every request dies at a login page. And
@@ -316,7 +323,7 @@ const NETWORK_MESSAGE = /failed to fetch|networkerror when attempting|load faile
 // So the old check missed both halves of the commonest real-world outage: onLine lied,
 // the error wasn't a TypeError, and the write was never queued. The contractor got a
 // "couldn't save" banner on a phone in their pocket, and the work was gone.
-function isNetworkError(e: unknown): boolean {
+export function isNetworkError(e: unknown): boolean {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return true
   // fetch() throws a TypeError ("Failed to fetch") when the network is unreachable.
   if (e instanceof TypeError) return true
