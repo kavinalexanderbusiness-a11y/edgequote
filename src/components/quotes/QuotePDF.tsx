@@ -3,9 +3,12 @@
 import {
   Document, Page, Text, View, Image, StyleSheet, pdf,
 } from '@react-pdf/renderer'
-import type { Quote, QuoteService, QuoteOption, BusinessSettings } from '@/types'
+import type { Quote, QuoteService, QuoteOption, QuoteAddon, BusinessSettings } from '@/types'
 import { serviceLineTotals } from '@/lib/quoteServices'
 import { activeOption, hasOptions, sortedOptions } from '@/lib/quoteOptions'
+import {
+  ADDONS_CUSTOMER_NOTE, addonsSubtotal, isAddonEditableStatus, selectedAddons, sortedAddons,
+} from '@/lib/quoteAddons'
 import { pdfLogoUrl } from '@/lib/photos'
 
 const COLORS = {
@@ -101,9 +104,14 @@ interface QuotePDFProps {
   // quote.selected_option_id; before they choose it is null and the document
   // leads with the recommended one.
   options?: QuoteOption[]
+  // ── Optional extras (quote_addons) ────────────────────────────────────────
+  // ⭐ ADDITIVE, and additive with everything above: a quote may carry these
+  // alongside `services` OR alongside `options`, because an extra never claims
+  // to BE the price. Only the ticked ones are inside quote.total.
+  addons?: QuoteAddon[]
 }
 
-export function QuoteDocument({ quote, settings, services, options }: QuotePDFProps) {
+export function QuoteDocument({ quote, settings, services, options, addons }: QuotePDFProps) {
   // ⭐ THE rule this document must never break: a page that shows three prices
   // must not print a number equal to their sum, and must not let the reader
   // construct one. So when options exist the line-item table is REPLACED (not
@@ -129,6 +137,14 @@ export function QuoteDocument({ quote, settings, services, options }: QuotePDFPr
   // what it already renders today and what the send gate (quoteStatus.sendBlockedReason
   // → 'no_price') already refuses to send.
   const initialPrice = Number(quote.initial_price ?? 0)
+  // ── The optional extras ──────────────────────────────────────────────────
+  // `addonsDecided` is the DB's own sentence for "can these still change" —
+  // before that they are an offer, after it they are the record of what was
+  // taken, and the paper has to say which it is printing.
+  const addonRows = sortedAddons(addons)
+  const hasAddons = addonRows.length > 0
+  const addonsDecided = !isAddonEditableStatus(quote.status)
+  const takenAddons = selectedAddons(addonRows)
   const hasMaintenance = !!(quote.weekly_price || quote.biweekly_price || quote.monthly_price)
   const lines = services && services.length ? services : null
   // The builder's toggle promises 'Travel rolled into total on PDF' — and this
@@ -342,6 +358,52 @@ export function QuoteDocument({ quote, settings, services, options }: QuotePDFPr
         </>
         )}
 
+        {/* ── Optional extras ────────────────────────────────────────────────
+            Prints in ADDITION to whichever table is above — an extra adds to a
+            line-item quote and adds to whichever option is chosen, so it cannot
+            replace either. The heading and the sentence under it do the work a
+            customer would otherwise do wrong, in both directions: before a
+            decision, that ticking is theirs and nothing here is compulsory;
+            after one, that the untaken rows were not ordered and not charged.
+            ⛔ NO subtotal row for this table. The only figure that sums extras
+            is the grand total, and it sums exactly the taken ones. */}
+        {hasAddons ? (
+          <>
+            <Text style={styles.sectionTitle}>{addonsDecided ? 'Optional Extras Offered' : 'Optional Extras'}</Text>
+            <Text style={[styles.muted, { marginBottom: 6 }]}>
+              {addonsDecided
+                ? takenAddons.length
+                  ? 'The extras marked Included are part of the total below. The others were not ordered and are not charged.'
+                  : 'None of these was taken, so none is charged. The total below is for the work above only.'
+                : ADDONS_CUSTOMER_NOTE}
+            </Text>
+            <View style={styles.table}>
+              <View style={styles.tableHead} fixed>
+                <Text style={[styles.th, styles.cellDesc]}>Extra</Text>
+                <Text style={[styles.th, styles.cellQty]}>{addonsDecided ? 'Status' : ''}</Text>
+                <Text style={[styles.th, styles.cellAmt]}>Adds</Text>
+              </View>
+              {addonRows.map(a => {
+                const taken = !!a.is_selected
+                return (
+                  <View key={a.id} style={styles.tableRow} wrap={false}>
+                    <View style={styles.cellDesc}>
+                      <Text style={[styles.td, taken ? { fontFamily: 'Helvetica-Bold' } : {}]}>{a.name}</Text>
+                      {a.description ? <Text style={styles.muted}>{a.description}</Text> : null}
+                    </View>
+                    <Text style={[styles.td, styles.cellQty, !taken ? { color: COLORS.faint } : {}]}>
+                      {addonsDecided ? (taken ? 'Included' : 'Not taken') : (taken ? 'Suggested' : '')}
+                    </Text>
+                    <Text style={[styles.td, styles.cellAmt, !taken ? { color: COLORS.faint } : {}]}>
+                      + {money(Number(a.price))}
+                    </Text>
+                  </View>
+                )
+              })}
+            </View>
+          </>
+        ) : null}
+
         {/* Totals — the subtotal row only earns its place when it differs from
             the single line above it (multi-service or a travel fee); otherwise a
             one-service quote printed the same number three rows in a row. */}
@@ -364,6 +426,18 @@ export function QuoteDocument({ quote, settings, services, options }: QuotePDFPr
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Travel Fee</Text>
               <Text style={styles.totalValue}>{money(shownTravel)}</Text>
+            </View>
+          ) : null}
+          {/* ⭐ The ONE row that sums extras, and it sums exactly the taken ones —
+              from the same engine the portal's Approve button and the approval
+              RPC use. Absent when nothing was taken: a "$0 extras" row invites
+              the reader to wonder which $0. */}
+          {takenAddons.length > 0 ? (
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>
+                {takenAddons.length === 1 ? 'Optional extra' : `Optional extras (${takenAddons.length})`}
+              </Text>
+              <Text style={styles.totalValue}>{money(addonsSubtotal(addonRows))}</Text>
             </View>
           ) : null}
           <View style={styles.grandRow}>
@@ -473,6 +547,7 @@ export function QuoteDocument({ quote, settings, services, options }: QuotePDFPr
 // heavy @react-pdf library only loads when the user actually opens a PDF.
 export async function renderQuoteBlob(
   quote: Quote, settings: BusinessSettings | null, services?: QuoteService[], options?: QuoteOption[],
+  addons?: QuoteAddon[],
 ): Promise<Blob> {
-  return pdf(<QuoteDocument quote={quote} settings={settings} services={services} options={options} />).toBlob()
+  return pdf(<QuoteDocument quote={quote} settings={settings} services={services} options={options} addons={addons} />).toBlob()
 }

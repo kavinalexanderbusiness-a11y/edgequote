@@ -1,4 +1,4 @@
-import type { Quote, QuoteService, QuoteOption, Invoice, BusinessSettings, QuoteLineKind } from '@/types'
+import type { Quote, QuoteService, QuoteOption, QuoteAddon, Invoice, BusinessSettings, QuoteLineKind } from '@/types'
 
 // ── Portal PDF bridge ────────────────────────────────────────────────────────
 // The portal renders the SAME quote/invoice PDFs as the dashboard. We map the
@@ -17,6 +17,12 @@ export interface PortalQuoteService {
 }
 
 // One alternative, as get_portal_data's nested `options` array returns it.
+/** One optional extra as get_portal_data nests it. `is_selected` is the only
+ *  fact that costs money — see lib/quoteAddons. */
+export interface PortalQuoteAddon {
+  id: string; name: string; description: string | null; price: number
+  sort_order: number; is_selected: boolean
+}
 export interface PortalQuoteOption {
   id: string; name: string; description: string | null; price: number
   sort_order: number; is_recommended: boolean
@@ -33,6 +39,10 @@ export interface PortalPdfQuote {
   // quote has to show the same options table the owner's copy does, or the
   // document they keep says something different from the one that was sent.
   options?: PortalQuoteOption[] | null
+  // The optional extras and WHICH ones were taken — same reason as the options
+  // above: the copy the customer keeps must show the same extras table, with
+  // the same ticks, as the one the business holds.
+  addons?: PortalQuoteAddon[] | null
   selected_option_id?: string | null
 }
 export interface PortalPdfInvoice {
@@ -167,7 +177,22 @@ export async function renderPortalQuoteBlob(q: PortalPdfQuote, customerName: str
         is_recommended: !!o.is_recommended,
       }))
     : undefined
-  return renderQuoteBlob(portalQuoteToQuote(q, customerName), portalBusinessToSettings(b), services, options)
+  // The extras ride the SAME pipeline for the same reason. `is_selected` travels
+  // with them: on a decided quote it is the record of what the customer took,
+  // and a copy that dropped it would print every extra as if none were ordered.
+  const addons: QuoteAddon[] | undefined = q.addons?.length
+    ? q.addons.map(a => ({
+        id: a.id, created_at: q.created_at, updated_at: q.created_at,
+        quote_id: '', user_id: '',
+        name: a.name, description: a.description,
+        price: num(a.price), sort_order: Number(a.sort_order) || 0,
+        is_selected: !!a.is_selected,
+        // Not projected to the customer (get_portal_data withholds them) and not
+        // rendered — the paper says WHAT was taken, never who clicked last.
+        selected_via: null, selected_at: null,
+      }))
+    : undefined
+  return renderQuoteBlob(portalQuoteToQuote(q, customerName), portalBusinessToSettings(b), services, options, addons)
 }
 // A payment row as the portal sees it — enough for the receipt document.
 export interface PortalPdfPayment {

@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { ConfirmHost } from '@/components/ui/ConfirmHost'
 import { cn, formatCurrency, localTodayISO } from '@/lib/utils'
+import { addonSentence, addonsSubtotal, configuredAmount } from '@/lib/quoteAddons'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
 // THE scheduling-deposit rule (lib/payments/depositGate) — the approve dialog and
 // success banner name the exact ask the charge route will make, from one engine.
@@ -320,7 +321,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
 
   function photoUrl(path: string) { return supabase.storage.from('job-photos').getPublicUrl(path).data.publicUrl }
 
-  async function accept(qid: string, optionId?: string) {
+  async function accept(qid: string, optionId?: string, addonIds?: string[]) {
     if (accepting) return // double-click guard
     // Approving commits the customer to a quote value — never ask someone to
     // approve an amount without showing it, and always say that approving isn't
@@ -385,16 +386,37 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       return
     }
 
+    // ── Which extras ──────────────────────────────────────────────────────────
+    // Re-resolved against the FRESH payload for exactly the reason the option is:
+    // a tab left open can be quoting a stale price, and an id from that same
+    // stale render deserves as little trust. An id no longer on the quote STOPS
+    // the approval — the RPC refuses it outright rather than approving the
+    // subset it recognised, and this says so before the round trip.
+    const freshAddons = q?.addons ?? []
+    const wantedIds = addonIds ?? []
+    const chosenAddons = wantedIds.map(id => freshAddons.find(a => a.id === id) ?? null)
+    if (chosenAddons.some(a => a === null)) {
+      setActionError('One of the extras isn’t on this quote any more — it may have been updated. Please refresh and take another look.')
+      return
+    }
+    const takenAddons = chosenAddons.filter((a): a is NonNullable<typeof a> => a !== null)
+
     const svc = (q?.service_type || '').trim()
-    // ⭐ ONE money path. On an options quote the figure is the CHOSEN option plus
-    // travel — the identical arithmetic quote_apply_option_choice performs when
-    // it writes accepted_price — so the number in this dialog is the number the
-    // business records. `q.total` still carries the recommended option at this
-    // moment (nobody has chosen yet), and quoting it here would show one price
-    // and bank another.
-    const amount = chosenOpt
+    // ⭐ ONE money path, through the ONE engine. On an options quote the base is
+    // the CHOSEN option plus travel; on any quote the ticked extras are added on
+    // top — the identical arithmetic quote_apply_choice performs when it writes
+    // accepted_price, so the number in this dialog is the number the business
+    // records. ⛔ NOT `q.total`: before a choice that still carries the
+    // recommended option and whatever the BUSINESS pre-ticked, and quoting it
+    // here would show one price and bank another.
+    const baseAmount = chosenOpt
       ? Number(chosenOpt.price) + (Number(q?.travel_fee) || 0)
-      : Number(q?.total) || 0
+      : (Number(q?.total) || 0) - addonsSubtotal(freshAddons)
+    const amount = configuredAmount({
+      base: baseAmount,
+      addons: freshAddons.map(a => ({ id: a.id, name: a.name, price: a.price })),
+      selectedIds: wantedIds,
+    })
     // The dialog's whole job is stating what the customer commits to, so it must
     // match the doc row one tap beneath it:
     // • every plan price is PER VISIT (model.ts's own doc-row comment calls the
@@ -442,6 +464,12 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
         chosenOpt && freshOpts.length > 1
           ? `The other ${freshOpts.length - 1} option${freshOpts.length > 2 ? 's aren’t' : ' isn’t'} ordered and won’t be charged.`
           : null,
+        // ⭐ Name the extras, one by one, at the moment of commitment. "Approve
+        // $1,775" is not consent to an extra visit unless the extra visit is on
+        // screen when they tap — and the extras they DIDN'T tick get said too,
+        // because "am I paying for the ones I left alone?" is the same fear the
+        // options sentence above exists to answer.
+        addonSentence(freshAddons.length, takenAddons.map(a => `${a.name} (+${formatCurrency(Number(a.price))})`)),
         plan,
         depositAsk > 0
           ? `Approving doesn't charge you. A ${formatCurrency(depositAsk)} deposit is asked for next to secure your booking — we'll confirm your date once it's received.`
@@ -452,10 +480,15 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     if (!confirmed) return
     setAccepting(qid)
     setActionError(null)
-    // The third argument is omitted, not null-defaulted, on an ordinary quote —
-    // portal_accept_quote's plain path is reached exactly as it always was.
+    // Absent arguments are OMITTED, not null-defaulted, so a quote with neither
+    // options nor extras reaches portal_accept_quote exactly as it always did.
+    // ⚠️ `p_addon_ids` is sent whenever the quote HAS extras, including as an
+    // empty array: omitting it there would leave whatever the business pre-ticked
+    // selected, and "I unticked it and approved" would have billed them anyway.
     const { data: ok } = await supabase.rpc('portal_accept_quote', {
-      p_token: token, p_quote_id: qid, ...(chosenOpt ? { p_option_id: chosenOpt.id } : {}),
+      p_token: token, p_quote_id: qid,
+      ...(chosenOpt ? { p_option_id: chosenOpt.id } : {}),
+      ...(freshAddons.length ? { p_addon_ids: wantedIds } : {}),
     })
     if (ok) {
       // Carry the CHOICE into the optimistic patch, not just the status. Without
@@ -463,10 +496,20 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       // options — the customer's own decision missing from the screen that just
       // took it. (`total` is left alone: the next load brings the server's, and
       // guessing it here would be a second money path.)
+      // Same for the extras: the ticked set is the customer's own decision, and a
+      // row that flipped to Approved still showing the BUSINESS's suggestions
+      // would be the screen contradicting the tap that just happened.
+      const takenIds = new Set(wantedIds)
       setData(d => d ? {
         ...d,
         quotes: d.quotes.map(q => q.id === qid
-          ? { ...q, status: 'accepted', ...(chosenOpt ? { selected_option_id: chosenOpt.id } : {}) }
+          ? {
+              ...q, status: 'accepted',
+              ...(chosenOpt ? { selected_option_id: chosenOpt.id } : {}),
+              ...(freshAddons.length
+                ? { addons: (q.addons || []).map(a => ({ ...a, is_selected: takenIds.has(a.id) })) }
+                : {}),
+            }
           : q),
       } : d)
       // Close the loop — the customer must SEE their approval registered, and

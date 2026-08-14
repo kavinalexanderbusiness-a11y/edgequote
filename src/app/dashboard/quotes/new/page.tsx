@@ -17,6 +17,7 @@ import { ensureCustomerAndProperty } from '@/lib/customers'
 import { applyFeeRecovery } from '@/lib/invoiceTotals'
 import { sumServiceLines, recentTemplateIdsFrom } from '@/lib/quoteServices'
 import { headlineOptionPrice, optionRowsFor } from '@/lib/quoteOptions'
+import { addonRowsFor } from '@/lib/quoteAddons'
 import { LeadPrefillPayload, LEAD_PREFILL_KEY, closeOpenLeads } from '@/lib/leads'
 import { toast } from '@/lib/toast'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
@@ -232,6 +233,18 @@ export default function NewQuotePage() {
     // option, else the first. Never a sum.
     const optionHeadline = optionsOn ? headlineOptionPrice(optionRows) : null
 
+    // ── Optional extras ──────────────────────────────────────────────────────
+    // Fee recovery applies here for the same reason it applies to every other
+    // price on this insert: an extra that skipped it would be the one line on
+    // the quote quietly sold at cost of card. `is_selected` carries the owner's
+    // pre-tick and nothing else — the DB fills selected_via/selected_at from it,
+    // and `addons_total` (hence `quotes.total`) follows from the trigger, so
+    // nothing here computes money.
+    const addonRows = addonRowsFor(
+      (values.addons || []).map(a => ({ ...a, price: applyFeeRecovery(Number(a.price) || 0, settings) ?? 0 })),
+      '', '',   // quote_id / user_id filled once the row exists — see below
+    )
+
     // ADR-002 · state which configuration priced this quote, or don't write it.
     //
     // FAIL-CLOSED, and this is the whole point. A quote whose config we cannot name is
@@ -336,6 +349,21 @@ export default function NewQuotePage() {
         )
         if (optErr) {
           toast.error('Saved the quote, but its options could not be written: ' + optErr.message + ' — press Save again.')
+          router.push(`/dashboard/quotes/${data.id}`)
+          return false
+        }
+      }
+      // ── The optional extras ────────────────────────────────────────────────
+      // Same honesty as the alternatives above: reported, never swallowed. A
+      // quote saved without the extras the owner just wrote is a quote that goes
+      // out offering nothing — and if any of them were pre-ticked, the price on
+      // the document would be lower than the one on this screen.
+      if (addonRows.length) {
+        const { error: addErr } = await supabase.from('quote_addons').insert(
+          addonRows.map(r => ({ ...r, quote_id: data.id, user_id: user!.id })),
+        )
+        if (addErr) {
+          toast.error('Saved the quote, but its optional extras could not be written: ' + addErr.message + ' — press Save again.')
           router.push(`/dashboard/quotes/${data.id}`)
           return false
         }

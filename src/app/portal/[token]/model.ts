@@ -31,7 +31,12 @@ import { serviceLineTotals } from '@/lib/quoteServices'
 import { sortedOptions } from '@/lib/quoteOptions'
 // THE authorized-value engine — the same function the owner's job card runs, so
 // "$5,500 + $575 = $6,075" is one calculation with two audiences, not two.
+// ⛔ It answers a DIFFERENT question from lib/quoteAddons below: this one is
+// "what has been authorised on this JOB since the quote was approved" (change
+// orders), that one is "what optional extras were taken as part of the approval
+// itself". The two never feed each other and never appear in one figure.
 import { authorizedValue } from '@/lib/changeOrders'
+import { ADDONS_CUSTOMER_NOTE, addonsSubtotal, sortedAddons } from '@/lib/quoteAddons'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
 import { formatCurrency, parseLocalDate } from '@/lib/utils'
 // THE request engine (lib/portalRequests) — the same module the owner's request
@@ -57,13 +62,20 @@ export interface PortalQuoteService { service_type: string; quantity: number; un
  *  price IS the whole job for whoever picks it, and the database refuses a quote
  *  carrying both kinds of row. */
 export interface PortalQuoteOption { id: string; name: string; description: string | null; price: number; sort_order: number; is_recommended: boolean }
+/** One optional extra, as get_portal_data nests it under a quote.
+ *  ⭐ ADDITIVE, and additive with EVERYTHING — with its siblings, with `services`,
+ *  and with whichever option the customer picks. `is_selected` is the only fact
+ *  that costs money: an extra sitting on a quote unticked is on offer, not on the
+ *  bill. Before approval a ticked one is the BUSINESS's suggestion; after, it is
+ *  what the customer bought, and the database will not let it change again. */
+export interface PortalQuoteAddon { id: string; name: string; description: string | null; price: number; sort_order: number; is_selected: boolean }
 // `accepted_price` is the consent snapshot (selected option + travel) — the
 // scheduling deposit derives from it, never from a total an edit could move.
 // `deposit_type`/`deposit_value` is the scheduling-deposit RULE; readiness is
 // derived from the ledger by lib/payments/depositGate, never stored anywhere.
 // `preferred_*` is the customer's own scheduling REQUEST — a preference, never
 // an appointment — echoed back so a reload keeps what they told us.
-export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null; options?: PortalQuoteOption[] | null; selected_option_id?: string | null; accepted_price?: number | null; deposit_type?: string | null; deposit_value?: number | null; preferred_date?: string | null; preferred_date_2?: string | null; preferred_timing?: string | null; preferred_note?: string | null }
+export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null; options?: PortalQuoteOption[] | null; addons?: PortalQuoteAddon[] | null; selected_option_id?: string | null; accepted_price?: number | null; deposit_type?: string | null; deposit_value?: number | null; preferred_date?: string | null; preferred_date_2?: string | null; preferred_timing?: string | null; preferred_note?: string | null }
 // `property_id` null is the HONEST answer for an invoice spanning several properties —
 // never infer one, or a combined invoice prints one address as if it were the whole bill.
 export interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; property_id?: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null; amount_paid?: number | null; deposit_amount?: number | null; deposit_requested_at?: string | null }
@@ -691,6 +703,34 @@ export interface DocItem { id: string; rawId: string; kind: DocKind; number: str
    *  still open — which is the fact the Approve button is gated on. */
   selectedOptionId?: string | null
   /**
+   * ⭐ OPTIONAL EXTRAS — the FOURTH list on this row, and the reader must not
+   * confuse it with the other three. `lines` add up to `amount` and are not
+   * optional. `planOptions` are ongoing rates for later and are not selectable.
+   * `options` are alternatives, exactly one of which is bought. These are extras
+   * the customer may take ANY NUMBER of, including none, ON TOP of whichever of
+   * those applies.
+   *
+   * `amount` here is what the extra ADDS — never a whole-job price, and never
+   * included in the row's `amount` unless `selected` is true. `selected` is the
+   * server's current answer; while the quote is open the customer's own ticking
+   * lives in the screen's state, and the Approve button sends that set.
+   */
+  addons?: { id: string; name: string; description: string | null; amount: number; selected: boolean }[]
+  /**
+   * `amount` with the currently-ticked extras taken back out — the price of this
+   * quote before any of them. Present only when the row HAS extras.
+   *
+   * ⭐ It exists so no screen ever has to do that subtraction itself. A row
+   * whose customer is mid-tick needs a base to add their own choices to, and the
+   * one place that arithmetic is allowed to happen is here, once, next to the
+   * rows it is derived from.
+   */
+  amountBeforeAddons?: number
+  /** True while the extras can still be ticked — the quote is out for approval
+   *  and undecided. The SAME sentence the database enforces, so the tick-boxes
+   *  exist exactly when a write would be accepted. */
+  addonsSelectable?: boolean
+  /**
    * The SCHEDULING-DEPOSIT gate, present only on a quote that requires one and
    * has been approved (or scheduled). Every figure is lib/payments/depositGate's
    * answer over the same ledger rows the charge route reads — the row can never
@@ -796,6 +836,18 @@ export function buildDocItems(opts: {
           isRecommended: !!o.is_recommended,
         }))
       : undefined
+    // ── The optional extras ───────────────────────────────────────────────────
+    // ⛔ Travel is NOT added to these. It is already inside `amount` (or inside
+    // each option's amount), and adding it per-extra would charge it once per
+    // tick. An extra's figure is exactly what it ADDS — the same number the
+    // approval RPC sums into accepted_price.
+    const qAddons = sortedAddons(qq.addons || [])
+    const addons = qAddons.length > 0
+      ? qAddons.map(a => ({
+          id: a.id, name: a.name, description: a.description,
+          amount: Number(a.price), selected: !!a.is_selected,
+        }))
+      : undefined
     const manHours = Number(qq.hours) > 0 && Number(qq.crew_size) > 0 ? Number(qq.hours) * Number(qq.crew_size) : 0
     const fmtHrs = (h: number) => h < 1 ? `${Math.round(h * 60)} minutes` : h === 1 ? '1 hour' : `${Number(h.toFixed(1))} hours`
     const explainBits = [
@@ -818,6 +870,10 @@ export function buildDocItems(opts: {
           : `Includes a ${formatCurrency(Number(qq.travel_fee))} travel charge to reach your property.`)
         : null,
       planOptionRows.length > 0 ? 'This price is for the visit above. If you want us back regularly, the ongoing rates are listed separately — you can pick one with us later.' : null,
+      // Said in the explanation as well as beside the tick-boxes: the customer
+      // most at risk here is the one who skims to the total, sees a figure that
+      // includes a suggestion, and never learns it was optional.
+      addons ? ADDONS_CUSTOMER_NOTE : null,
       'Nothing is charged when you approve — you’ll get an invoice once the work is done.',
     ].filter((s): s is string => !!s)
     // THE shared expiry engine — the same call the owner's screens make.
@@ -851,6 +907,22 @@ export function buildDocItems(opts: {
       payAmount: 0, payIsDeposit: false,
       filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(qq), lines, planOptions,
       options, selectedOptionId: qq.selected_option_id ?? null,
+      // ⭐ `amount` above already carries the ticked extras: `quotes.total` is a
+      // generated column over `addons_total`, which a trigger maintains from
+      // these very rows. Nothing here adds them a second time — the list is for
+      // SAYING what the figure is made of, and for letting the customer change it.
+      addons,
+      // `quotes.total` minus what the server currently has ticked. THE one place
+      // that subtraction happens, so no screen has to reverse-engineer a base
+      // price out of a total. Undefined when there are no extras — a caller with
+      // nothing to add has nothing to add it to.
+      amountBeforeAddons: addons
+        ? (Number(qq.total) || 0) - addonsSubtotal(qq.addons || [])
+        : undefined,
+      // Tick-boxes exist exactly when a write would be accepted. `display` is
+      // used, not the raw status, so an EXPIRED quote's extras go read-only for
+      // the same reason its Approve button does.
+      addonsSelectable: !!addons && display === 'sent',
       schedulingDeposit, preference, canEditPreference: qq.status === 'accepted',
       // Identity, not decoration: the address tells a landlord which of their six
       // quotes this is. It never becomes the row's title — service_type is the

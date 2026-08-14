@@ -36,6 +36,8 @@ import {
   EXAMPLE_OPTION_NAMES, OPTIONS_VS_LINES_MESSAGE, headlineOptionPrice, optionProblemMessage,
   optionSetProblem, optionsConflictWithLines, recommendedOption,
 } from '@/lib/quoteOptions'
+import { QuoteAddonsEditor } from '@/components/quotes/QuoteAddonsEditor'
+import { addonProblemMessage, addonSetProblem, addonsSubtotal } from '@/lib/quoteAddons'
 import { loadServiceUnits, SYSTEM_UNITS, type ServiceUnit } from '@/lib/units'
 import { formatCurrency, formatDate, suggestTravelFee, cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
@@ -52,7 +54,7 @@ import type { MeasurementSnapshot, SavedRecommendation } from '@/types'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { PriceIntelligence } from '@/components/pricing/PriceIntelligence'
-import { Clock, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp, ChevronDown, Package, Wallet } from 'lucide-react'
+import { Clock, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp, ChevronDown, Package, Wallet, PlusCircle } from 'lucide-react'
 
 interface QuoteBuilderProps {
   customers: Customer[]
@@ -83,6 +85,13 @@ interface QuoteBuilderProps {
    *  approved row can't be deleted (ON DELETE RESTRICT) and rewriting the others
    *  would change what the record says the customer was shown. */
   optionsLockedName?: string | null
+  /** This quote has been decided, so its optional extras are the record of what
+   *  was actually bought. Present → the extras editor goes read-only, which is
+   *  the same sentence the database enforces (quote_addons_write_guard refuses
+   *  any write once status leaves draft/sent). ⛔ Not the same fact as
+   *  `optionsLockedName`: options settle when an option is CHOSEN, extras settle
+   *  when the quote is DECIDED — a quote can be accepted with no option at all. */
+  addonsLocked?: boolean
   /** Where Cancel goes. The EDIT flow is a same-route state toggle (the detail
       page flips `editing`), so its Cancel must return to the quote VIEW — the
       default router.back() pops history right out of the quote (or the app
@@ -121,7 +130,7 @@ type PitchCadence = 'one_time' | 'weekly' | 'biweekly'
 
 export function QuoteBuilder({
   customers, templates, recentTemplateIds, tiers, settings, defaultCustomerId, defaultPropertyId, defaultValues, onSubmit, isEdit,
-  autosaveKey, autosaveBaselineUpdatedAt, optionsLockedName, onCancel,
+  autosaveKey, autosaveBaselineUpdatedAt, optionsLockedName, addonsLocked, onCancel,
 }: QuoteBuilderProps) {
   const router = useRouter()
   // One workday, in minutes, for THIS business — the same figure the calendar's
@@ -188,6 +197,11 @@ export function QuoteBuilder({
         // every existing quote and every new plain one behaves byte-identically.
         has_options: false,
         options: [],
+        // Empty, and there is no switch to turn on — an extra either exists or it
+        // doesn't. A normal quote never touches this and the save paths write no
+        // add-on rows for an empty list, so every existing quote and every new
+        // plain one behaves byte-identically.
+        addons: [],
         // Scheduling deposit OFF by default — a normal quote gains no extra
         // step, no fake deposit state, nothing. '' = no rule (both columns null).
         deposit_type: '',
@@ -273,6 +287,10 @@ export function QuoteBuilder({
   const [materialsOpen, setMaterialsOpen] = useState(
     () => (defaultValues?.services || []).some(s => s?.kind === 'material'),
   )
+  // Same rule, same reason: a quote that already offers extras opens showing
+  // them. A pre-ticked extra is money the owner is about to send out — it must
+  // not be behind a shut door.
+  const [addonsOpen, setAddonsOpen] = useState(() => (defaultValues?.addons || []).length > 0)
 
   // Which section owns each pricing field — a validation error routes to (and
   // opens) exactly the section holding the invalid input. Union of the three ==
@@ -309,6 +327,12 @@ export function QuoteBuilder({
         const p = optionSetProblem(v.options || [])
         if (p) { toast.error(optionProblemMessage(p)); return }
       }
+      // ── Extras: same rule, same reason ────────────────────────────────────
+      // Checked whether or not options are on, because extras compose with both
+      // kinds of quote — an unnamed or unpriced tick-box is a customer being
+      // asked to agree to a blank.
+      const addonProblem = addonSetProblem(v.addons || [])
+      if (addonProblem) { setAddonsOpen(true); toast.error(addonProblemMessage(addonProblem)); return }
       // Warn-never-block on a $0 first-visit total. Saving it is LEGAL (a
       // weekly-only pitch deliberately has no first-visit price) — but it saves
       // as a quote that Send/PDF/invoice will hard-block one screen later as
@@ -500,12 +524,29 @@ export function QuoteBuilder({
   const optionsClashWithLines = optionsConflictWithLines(optionsOn, watchedServices?.length ?? 0)
   const recommended = recommendedOption(watchedOptions)
 
+  // ── Optional extras ─────────────────────────────────────────────────────────
+  // No declared-intent switch: the array IS the state (see QuoteFormValues).
+  // `addonsTicked` is THE shared sum over the rows the owner has pre-ticked —
+  // asked of the engine, never re-derived, so the drawer summary, the editor's
+  // own figure and the saved `addons_total` cannot disagree.
+  const watchedAddons = watch('addons') || []
+  const addonsTicked = addonsSubtotal(watchedAddons)
+
   // With options on, the quote's value IS one option's price plus travel —
   // additive lines cannot coexist (the DB refuses them), so `extras` is not part
   // of this branch by construction rather than by being left out of a sum.
-  const effectiveTotal = optionsOn
+  // The price BEFORE any optional extra — what `initial_price + travel_fee`
+  // will be. Named separately because the extras editor states its own
+  // arithmetic on top of it, and handing it a figure that already included
+  // them would count every pre-ticked extra twice.
+  const baseTotal = optionsOn
     ? (optionsHeadline ?? 0) + Number(travelFee || 0)
     : initialPrice + extras.net + Number(travelFee || 0)
+  // ⭐ Pre-ticked extras are INSIDE this figure, because they will be inside
+  // `quotes.total` the moment this saves (the DB's addons_total feeds the same
+  // generated column). A header saying $1,500 over a row the customer will see
+  // at $1,680 is the drift this whole feature has to avoid.
+  const effectiveTotal = baseTotal + addonsTicked
   // A price arriving disarms the $0-save warning — Save is one tap again.
   useEffect(() => { if (zeroTotalArmed && effectiveTotal > 0) setZeroTotalArmed(false) }, [zeroTotalArmed, effectiveTotal])
 
@@ -758,6 +799,14 @@ export function QuoteBuilder({
     // The drawer’s own title already says "Services & materials"; this line
     // only has to read as optional.
     : 'Optional — extra services, or materials you’ll bill for'
+  // ⭐ The summary states both facts a shut door hides, and keeps them apart:
+  // how many extras are OFFERED, and how much is already TICKED. "3 extras" with
+  // $180 silently pre-ticked is the shape of a customer paying for something
+  // nobody discussed.
+  const addonsSummary = watchedAddons.length > 0
+    ? `${watchedAddons.length} extra${watchedAddons.length !== 1 ? 's' : ''}`
+      + (addonsTicked > 0 ? ` · ${formatCurrency(addonsTicked)} pre-ticked` : ' · none pre-ticked')
+    : 'Optional — tick-box extras the customer can add when they approve'
   // Every part states where it stands, so a shut door reads as answered rather
   // than as two more questions. "Best days to schedule" is deliberately NOT in
   // here: it is a lookup, not a setting — nothing about it is stored on the
@@ -2172,6 +2221,25 @@ export function QuoteBuilder({
             </div>
           </Collapsible>
           )}
+
+          {/* ── Optional extras ───────────────────────────────────────────────
+              ⭐ Renders for EVERY kind of quote — plain, multi-service, and
+              options — because an extra is additive and collides with none of
+              them. That is the whole difference from the drawer above, which is
+              hidden while options are on: a service line and an option both
+              claim to BE the price, so they cannot coexist; an extra never
+              claims that.
+              Closed by default and empty by default, so a quote that offers no
+              extras is exactly the quote it was before this existed. ── */}
+          <Collapsible title="Optional extras" icon={PlusCircle} summary={addonsSummary}
+            open={addonsOpen} onOpenChange={setAddonsOpen}>
+            <QuoteAddonsEditor
+              addons={watchedAddons}
+              onChange={next => setValue('addons', next, { shouldDirty: true })}
+              baseAmount={baseTotal}
+              locked={addonsLocked}
+            />
+          </Collapsible>
 
 
           {/* ── More options — the set-it-and-forget-it end of a quote ──

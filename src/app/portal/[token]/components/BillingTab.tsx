@@ -12,6 +12,7 @@ import {
   MapPin, MessageSquare, Receipt, Search, ShieldCheck, Wallet,
 } from 'lucide-react'
 import { cn, formatCurrency, formatDate, localTodayISO } from '@/lib/utils'
+import { ADDONS_CUSTOMER_NOTE, configuredAmount } from '@/lib/quoteAddons'
 import { Button } from '@/components/ui/Button'
 import { dueSoonLabel, invoiceDepositNote, invoiceDepositPaidNote, invoicePaymentNote, messageAboutDoc, NO_PROPERTY, quoteJourney, showDocFilters, type DocItem, type DocKind } from '../model'
 import {
@@ -284,6 +285,35 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
   // same rule the database enforces (portal_accept_quote refuses an options quote
   // with no choice), stated here as a disabled button rather than a failed call.
   const approveReady = !hasOpts || !!pickedOpt
+  // ── Optional extras ─────────────────────────────────────────────────────────
+  // ⭐ Unlike the alternatives above, an extra CAN legitimately arrive ticked —
+  // the business explicitly suggested it while writing the quote. So the initial
+  // state is the server's answer, not empty, and the customer's job is to
+  // confirm or remove it rather than to discover it. `addonsSelectable` is the
+  // model's read of the same sentence the database enforces.
+  const addons = d.addons ?? []
+  const addonsSelectable = !!d.addonsSelectable
+  const [tickedAddons, setTickedAddons] = useState<Set<string>>(
+    () => new Set(addons.filter(a => a.selected).map(a => a.id)),
+  )
+  function toggleAddon(addonId: string) {
+    setTickedAddons(prev => {
+      const next = new Set(prev)
+      if (next.has(addonId)) next.delete(addonId); else next.add(addonId)
+      return next
+    })
+  }
+  // ⭐ THE figure this row is offering to commit to, from the ONE engine — the
+  // identical arithmetic `quote_apply_choice` performs when it writes
+  // accepted_price. ⛔ NOT `d.amount`: that carries whatever the SERVER has
+  // ticked right now, which stops being true the instant the customer touches a
+  // box. The base comes from the picked option (travel already inside its
+  // figure) or from `amountBeforeAddons`, which the model derived once.
+  const approveAmount = configuredAmount({
+    base: pickedOpt ? pickedOpt.amount : d.amountBeforeAddons ?? d.amount,
+    addons: addons.map(a => ({ id: a.id, name: a.name, price: a.amount })),
+    selectedIds: tickedAddons,
+  })
   const isExpired = d.kind === 'quote' && d.status === 'expired'
   // `!actions.paymentPending`: while a just-completed checkout is still being
   // confirmed, this row's balance is the PRE-payment one and a second Pay tap
@@ -494,6 +524,72 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
           </div>
         </div>
       )}
+      {/* ── Optional extras ────────────────────────────────────────────────────
+          ⭐ TICK-BOXES, not radios, and that difference is the whole point: the
+          block above asks "which ONE", this one asks "any of these?", and a
+          customer who cannot tell them apart will get one of the two questions
+          wrong. Nothing is pre-ticked here unless the business deliberately
+          suggested it, and the row says so when it did.
+          Extras sit BELOW the alternatives because they apply on top of whichever
+          one is picked — the reading order is the arithmetic. */}
+      {addons.length > 0 && (
+        <div className="mt-3 pt-3 border-t border-border/60">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">
+            {addonsSelectable ? 'Optional extras' : 'Optional extras offered'}
+          </p>
+          <p className="text-[11px] text-ink-muted mt-0.5 mb-2">
+            {addonsSelectable
+              ? ADDONS_CUSTOMER_NOTE
+              : 'Shown for your records — anything not taken wasn’t ordered and wasn’t charged.'}
+          </p>
+          <div className="space-y-2">
+            {addons.map(a => {
+              const on = addonsSelectable ? tickedAddons.has(a.id) : a.selected
+              const Wrapper = addonsSelectable ? 'button' : 'div'
+              return (
+                <Wrapper
+                  key={a.id}
+                  {...(addonsSelectable
+                    ? { type: 'button' as const, onClick: () => toggleAddon(a.id), 'aria-pressed': on }
+                    : {})}
+                  className={cn(
+                    'w-full text-left rounded-xl border p-3 transition-colors',
+                    addonsSelectable && 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 tap-target-y',
+                    on ? 'border-accent bg-accent/[0.07]'
+                      : addonsSelectable ? 'border-border bg-bg-tertiary/40 hover:border-border-strong'
+                      : 'border-border bg-bg-tertiary/30 opacity-70',
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex items-start gap-2">
+                      {/* A real checkbox look, so "you may take several, or none"
+                          is visible before anything is tapped. */}
+                      <span className={cn('mt-0.5 w-4 h-4 rounded border-2 shrink-0 flex items-center justify-center',
+                        on ? 'border-accent bg-accent' : 'border-border-strong')} aria-hidden>
+                        {on && <Check className="w-2.5 h-2.5 text-white" />}
+                      </span>
+                      <div className="min-w-0">
+                        <p className={cn('text-sm font-semibold', on ? 'text-ink' : 'text-ink-muted')}>{a.name}</p>
+                        {!addonsSelectable && (
+                          <span className={cn('text-[10px] font-semibold uppercase tracking-wide', on ? 'text-emerald-400' : 'text-ink-faint')}>
+                            {on ? 'You added this' : 'Not added'}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <span className={cn('text-sm font-bold shrink-0 tabular-nums', on ? 'text-ink' : 'text-ink-muted')}>
+                      +{formatCurrency(a.amount)}
+                    </span>
+                  </div>
+                  {a.description && (
+                    <p className="text-xs text-ink-muted mt-1.5 whitespace-pre-wrap leading-relaxed">{a.description}</p>
+                  )}
+                </Wrapper>
+              )
+            })}
+          </div>
+        </div>
+      )}
       {/* The additive breakdown — these add up to the figure above. */}
       {d.lines && d.lines.length > 0 && (
         <div className="mt-3 pt-2.5 border-t border-border/60 space-y-1">
@@ -647,18 +743,24 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
               <Button
                 className="w-full sm:w-auto"
                 disabled={!approveReady}
-                onClick={() => actions.accept(d.rawId, picked ?? undefined)}
+                onClick={() => actions.accept(d.rawId, picked ?? undefined, addonsSelectable ? [...tickedAddons] : undefined)}
                 loading={actions.accepting === d.rawId}
               >
                 <Check className="w-4 h-4" />
                 {hasOpts
-                  ? (pickedOpt ? `Approve ${pickedOpt.name} — ${formatCurrency(pickedOpt.amount)}` : 'Choose an option above')
-                  : `Approve — ${formatCurrency(d.amount)}`}
+                  ? (pickedOpt ? `Approve ${pickedOpt.name} — ${formatCurrency(approveAmount)}` : 'Choose an option above')
+                  : `Approve — ${formatCurrency(approveAmount)}`}
               </Button>
               <p className="text-[11px] text-ink-faint mt-1.5">
                 {hasOpts && !pickedOpt
                   ? 'Pick the option you want, then approve it.'
-                  : 'You’ll confirm on the next step — we’ll then reach out to schedule.'}
+                  // Say what the figure is made of at the moment of commitment,
+                  // and say what happens to the boxes left empty.
+                  : addonsSelectable && addons.length > 0
+                    ? tickedAddons.size > 0
+                      ? `Includes ${tickedAddons.size} extra${tickedAddons.size === 1 ? '' : 's'}. The ones you left unticked aren’t ordered.`
+                      : 'No extras included. You can tick any you want above.'
+                    : 'You’ll confirm on the next step — we’ll then reach out to schedule.'}
               </p>
             </>
           )}

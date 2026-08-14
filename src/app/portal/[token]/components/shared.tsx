@@ -22,8 +22,14 @@ export interface PortalActions {
    *  `optionId` names WHICH alternative, on a quote that offers a choice. It is
    *  required for those and absent for every ordinary quote — the RPC refuses an
    *  options quote with no choice, so passing nothing there is a failed approval,
-   *  not a default. */
-  accept: (quoteId: string, optionId?: string) => void
+   *  not a default.
+   *
+   *  `addonIds` names WHICH optional extras, and it is the FULL set the customer
+   *  wants — not a delta. An id omitted here is an extra they did NOT take, and
+   *  the RPC unticks it, so passing `undefined` on a quote that offers extras
+   *  would approve it with none. ⛔ An id the quote doesn't own is a refusal of
+   *  the whole approval, never a silent drop. */
+  accept: (quoteId: string, optionId?: string, addonIds?: string[]) => void
   accepting: string | null
   /** Start Stripe checkout for one invoice (POST /api/portal/pay). */
   pay: (invoiceId: string) => void

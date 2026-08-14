@@ -1133,8 +1133,18 @@ export interface Quote {
   travel_fee: number
   man_hours: number
   subtotal: number
+  /** ⭐ THE figure. A STORED GENERATED column:
+   *  `initial_price + travel_fee + addons_total`. Every downstream — invoice
+   *  conversion, job costing, the deposit engine, pipeline reporting — reads
+   *  this and nothing else, which is why options and add-ons could both be
+   *  added without any of them changing. ⛔ Never written by app code. */
   total: number
   initial_price: number | null
+  /** Σ of the SELECTED optional extras (quote_addons). Written ONLY by the
+   *  `quote_addons_sync_total` trigger — app code reads it, never writes it.
+   *  0 on every quote that offers no extras, and on every quote whose extras
+   *  nobody has ticked, which is the same thing as far as money is concerned. */
+  addons_total: number
   weekly_price: number | null
   biweekly_price: number | null
   monthly_price: number | null
@@ -1249,6 +1259,51 @@ export interface QuoteOption {
   is_recommended: boolean
 }
 
+// ── Optional extras the customer picks BEFORE approving ──────────────────────
+// ⛔ NOT a QuoteOption: an option is an ALTERNATIVE (its price REPLACES the
+//    quote's, exactly one is bought). An add-on ADDS, and any number of them —
+//    including none — can be. The two compose, and the database is happy to
+//    hold both on one quote:  accepted = (chosen option ?? base) + travel + Σ ticked.
+// ⛔ NOT a ChangeOrder: that is scope authorised AFTER approval, and it mints
+//    its own billable line. These are decided BEFORE approval and the database
+//    freezes them the instant the quote is decided.
+export interface QuoteAddon {
+  id: string
+  created_at: string
+  updated_at: string
+  quote_id: string
+  user_id: string
+  /** What the customer is ticking — "Extra visit", "Haul away the debris". */
+  name: string
+  /** What it covers, in the owner's words. Optional. */
+  description: string | null
+  /** What this extra ADDS to the quote when it is chosen. Never a whole-job price. */
+  price: number
+  sort_order: number
+  /** ⭐ THE fact that costs money. False by default: an extra is never charged
+   *  for because it exists, only because somebody chose it. */
+  is_selected: boolean
+  /** WHO chose it — 'default' (the owner pre-ticked it while writing the quote),
+   *  'portal' (the customer ticked it), 'owner' (recorded on their behalf).
+   *  ⛔ Never inferred; the database fills it from `is_selected` and refuses a
+   *  row where the two disagree. Null exactly when `is_selected` is false. */
+  selected_via: 'default' | 'portal' | 'owner' | null
+  selected_at: string | null
+}
+
+/** An extra as the builder form holds it. Saved by delete-and-reinsert (the same
+ *  shape quote_options and quote_services use), so `id` is carried only to render
+ *  a stable key — never written back. `is_selected` here is the owner's
+ *  PRE-TICK, and it is off unless they deliberately turned it on. */
+export interface QuoteAddonInput {
+  /** Present only for an extra already on the quote; blank for a new row. */
+  id?: string
+  name: string
+  description: string
+  price: number
+  is_selected: boolean
+}
+
 export interface QuoteService {
   id: string
   created_at: string
@@ -1358,6 +1413,15 @@ export interface QuoteFormValues {
   // a service line ADDS to it. The database refuses a quote holding both.
   has_options: boolean
   options: QuoteOptionInput[]
+  // ── Optional extras (add-ons) ─────────────────────────────────────────────
+  // ⭐ NO `has_addons` switch, deliberately — unlike options, which need one
+  // because "off" and "not typed yet" are genuinely different states there (an
+  // options quote prices differently). An extra either exists or it doesn't:
+  // an empty list IS "no extras", so a second declared-intent flag would only
+  // create a state where extras are typed, saved and invisible.
+  // ⛔ COMPOSES with everything. Extras sit on top of a plain quote, on top of
+  // a multi-service quote, and on top of whichever option the customer picks.
+  addons: QuoteAddonInput[]
   // ── Scheduling deposit (deposit-gated scheduling) ─────────────────────────
   // The owner's per-quote rule: require this much collected before the booking
   // is secured. '' = off (the default — a normal quote gains no extra step).
