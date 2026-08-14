@@ -108,7 +108,61 @@ export interface VisitLike {
    * every crew figure rather than counted as 1.
    */
   crew_size?: number | null
+  /**
+   * What this visit's WORK SESSIONS say (Session 47), already totalled by
+   * lib/workSession's own `sessionTotals` so there is one arithmetic for
+   * person-minutes in the product. Undefined/null = the sessions were not read,
+   * or this visit has none — either way the crew fallback below applies.
+   */
+  sessions?: VisitSessionFacts | null
 }
+
+/**
+ * The slice of Session 47's work-session record this engine judges.
+ *
+ * ⭐⭐ WHY `attendanceStated` EXISTS, AND WHY IT IS NOT ALWAYS TRUE.
+ * `job_work_sessions.workers` is NOT NULL DEFAULT 1, so `labour_minutes`
+ * (generated as `minutes * workers`) always has a value — but that value is only
+ * an OBSERVATION when a person put it there. Read from the live triggers:
+ *   • `bank_job_clock_session` writes `workers = coalesce(new.crew_size,
+ *     old.crew_size, 1)` — the PLANNED crew, banked when a clock stretch closes.
+ *   • `carry_forward_job_actual_minutes` writes `workers = coalesce(
+ *     j.crew_size, 1)` — the PLANNED crew, on the legacy total it carries.
+ *   • a hand-logged session takes the worker count the person typed.
+ * So a clock or carried session's labour is `real minutes × the plan`, which is
+ * exactly the figure that must not be dressed up as actual labour. The flag
+ * carries that distinction to the surface instead of losing it in a sum.
+ */
+export interface VisitSessionFacts {
+  /** How many sessions. 0 = this visit has none recorded. */
+  count: number
+  /** Σ session minutes. Must reconcile with the visit's own actual_minutes. */
+  elapsedMinutes: number
+  /** Σ(minutes × workers) — `sessionTotals().labourMinutes`. */
+  laborMinutes: number
+  /** A stretch is still running (started, not ended): the set is INCOMPLETE. */
+  open: boolean
+  /** Every session was hand-logged, so its worker count was stated by a person
+   *  rather than copied from `jobs.crew_size` by a trigger. */
+  attendanceStated: boolean
+  /** The one worker count every session shares; null when they varied — a job
+   *  worked by one person on Monday and two on Tuesday has no single crew, and
+   *  saying it does would be the invention this whole engine refuses. */
+  workers: number | null
+}
+
+/**
+ * Where a labour figure came from. Never collapsed, because the three answer
+ * different questions and only one of them is a measurement of attendance.
+ */
+export type LaborEvidence =
+  /** Σ(session minutes × session workers), every worker count stated. ACTUAL. */
+  | 'work_sessions'
+  /** Derived from the PLANNED crew — the job's crew_size, or a clock/carried
+   *  session's copy of it. True, useful, and ⛔ never priced. */
+  | 'planned_crew'
+  /** Not defensible from anything recorded. */
+  | 'none'
 
 /** Why a visit yields no comparison. Never collapsed into a zero. */
 export type NotComparable =
@@ -129,10 +183,15 @@ export interface LaborComparison {
   varianceMinutes: number
   /** (actual − estimated) / estimated × 100, signed, 1dp. */
   variancePct: number
-  /** Planned crew. NULL when the visit did not state one — never defaulted to 1. */
+  /**
+   * People on site. From the work sessions when they agree on a count,
+   * otherwise the visit's planned crew. NULL when the visit never stated one, or
+   * when its sessions disagree — never defaulted to 1.
+   */
   crewSize: number | null
   /**
-   * PERSON-minutes: elapsed × planned crew. NULL exactly when `crewSize` is.
+   * PERSON-minutes. NULL when nothing recorded supports one — see `laborSource`
+   * for which of the two derivations produced it.
    *
    * ⚠️ A DIFFERENT QUESTION FROM `actualMinutes`, NOT A BIGGER VERSION OF IT.
    * Elapsed answers "how long is this day blocked" (scheduling); labour answers
@@ -143,6 +202,8 @@ export interface LaborComparison {
    * multiplying at the call site is how the confusion starts.
    */
   laborMinutes: number | null
+  /** Which derivation produced `laborMinutes`. 'none' exactly when it is null. */
+  laborSource: LaborEvidence
 }
 
 export interface VisitLaborRead {
@@ -175,11 +236,7 @@ export function readVisitLabor(v: VisitLike): VisitLaborRead {
   }
 
   const key = serviceKey(v.service_type)
-  // A visit that never stated a crew contributes NO crew evidence and NO labour
-  // evidence. Coercing the null to 1 would manufacture a "typical crew of 1"
-  // out of silence, and then manufacture person-hours from it.
-  const crewRaw = Number(v.crew_size)
-  const crewSize = Number.isFinite(crewRaw) && crewRaw >= 1 ? Math.round(crewRaw) : null
+  const { crewSize, laborMinutes, laborSource } = readVisitLabourEvidence(v, actualMinutes)
   return {
     estimatedMinutes,
     actualMinutes,
@@ -194,8 +251,68 @@ export function readVisitLabor(v: VisitLike): VisitLaborRead {
       varianceMinutes: actualMinutes - estimatedMinutes,
       variancePct: round1(((actualMinutes - estimatedMinutes) / estimatedMinutes) * 100),
       crewSize,
-      laborMinutes: crewSize == null ? null : actualMinutes * crewSize,
+      laborMinutes,
+      laborSource,
     },
+  }
+}
+
+/**
+ * ⭐⭐ THE LABOUR PRECEDENCE — where person-minutes come from, in order.
+ *
+ *   1. WORK SESSIONS (Session 47), when they can be trusted: the sum of each
+ *      day's own minutes × that day's own worker count. This is the only
+ *      derivation that survives a job worked by one person on Monday and two on
+ *      Tuesday — 200m×1 + 310m×2 is 510 elapsed and 820 labour, and no
+ *      job-level multiplication can produce that pair.
+ *   2. THE PLANNED CREW, labelled as such: the visit's own `crew_size` times its
+ *      elapsed time, which is what the product could say before sessions
+ *      existed. Still true, still useful for capacity — ⛔ and still not a
+ *      statement about who turned up, so it never wears the other label.
+ *   3. UNKNOWN. Not zero, not a crew of one.
+ *
+ * TWO THINGS DISQUALIFY A SESSION SET, and both fail to UNKNOWN rather than
+ * quietly falling back — a partial set is worse than no set, because its sum
+ * looks like an answer:
+ *   • an OPEN stretch (started, not ended) means the record is still being
+ *     written; its minutes are not final.
+ *   • a set whose elapsed minutes DISAGREE with the visit's `actual_minutes`.
+ *     Session 47 makes the database enforce that equality, so a mismatch here
+ *     means these are not all the sessions — a truncated page, a filtered read —
+ *     and summing part of a job's days understates its labour without saying so.
+ */
+function readVisitLabourEvidence(
+  v: VisitLike,
+  actualMinutes: number,
+): { crewSize: number | null; laborMinutes: number | null; laborSource: LaborEvidence } {
+  const s = v.sessions
+  if (s && s.count > 0) {
+    if (s.open || s.elapsedMinutes !== actualMinutes) {
+      return { crewSize: null, laborMinutes: null, laborSource: 'none' }
+    }
+    const labor = Number(s.laborMinutes)
+    if (!Number.isFinite(labor) || labor <= 0) {
+      return { crewSize: null, laborMinutes: null, laborSource: 'none' }
+    }
+    const w = Number(s.workers)
+    return {
+      crewSize: Number.isFinite(w) && w >= 1 ? Math.round(w) : null,
+      laborMinutes: labor,
+      // The worker counts behind this sum came from a person, or from the plan
+      // via a trigger. Same arithmetic, different claim.
+      laborSource: s.attendanceStated ? 'work_sessions' : 'planned_crew',
+    }
+  }
+
+  // No sessions. A visit that never stated a crew contributes NO crew evidence
+  // and NO labour evidence: coercing the null to 1 would manufacture a "typical
+  // crew of 1" out of silence, and then manufacture person-hours from it.
+  const crewRaw = Number(v.crew_size)
+  const crewSize = Number.isFinite(crewRaw) && crewRaw >= 1 ? Math.round(crewRaw) : null
+  return {
+    crewSize,
+    laborMinutes: crewSize == null ? null : actualMinutes * crewSize,
+    laborSource: crewSize == null ? 'none' : 'planned_crew',
   }
 }
 
@@ -249,8 +366,21 @@ export interface VarianceRollup {
    * established" failure. Consumers gate crew/labour on THIS count.
    */
   crewSampleSize: number
-  /** Typical planned crew. Null when no visit stated one — never 1 by default. */
+  /** Typical crew. Null when no visit stated one — never 1 by default. */
   medianCrewSize: number | null
+  /**
+   * Visits whose LABOUR is known — its own count again, and not the same as
+   * `crewSampleSize`: a multi-day job whose crew varied has honest labour and no
+   * single crew size, so it backs one claim and not the other.
+   */
+  laborSampleSize: number
+  /**
+   * What the labour figures rest on across the bucket. 'work_sessions' ONLY when
+   * every contributing visit's labour was measured from stated attendance —
+   * mixed evidence takes the weaker label, because a bucket is only as actual as
+   * its least actual member and the safe direction is to under-claim.
+   */
+  laborSource: LaborEvidence
   /**
    * Typical PERSON-minutes per visit — the median of each visit's own
    * elapsed × its own crew.
@@ -274,10 +404,12 @@ function median(xs: number[]): number {
 export function rollupLaborVariance(cs: LaborComparison[]): VarianceRollup {
   const totalEstimatedMinutes = cs.reduce((s, c) => s + c.estimatedMinutes, 0)
   const totalActualMinutes = cs.reduce((s, c) => s + c.actualMinutes, 0)
-  // Only visits that stated a crew. Filtered, not defaulted — a visit with no
-  // crew is missing evidence, and missing evidence must shrink the sample rather
-  // than quietly join it as a one-person job.
-  const crewed = cs.filter(c => c.crewSize != null && c.laborMinutes != null)
+  // Two INDEPENDENT samples, filtered rather than defaulted — missing evidence
+  // must shrink a sample rather than quietly join it as a one-person job. They
+  // are not the same set: a multi-day visit whose crew varied day to day has
+  // real labour and no single crew size.
+  const crewed = cs.filter(c => c.crewSize != null)
+  const laboured = cs.filter(c => c.laborMinutes != null)
   return {
     sampleSize: cs.length,
     totalEstimatedMinutes,
@@ -297,7 +429,13 @@ export function rollupLaborVariance(cs: LaborComparison[]): VarianceRollup {
     established: cs.length >= MIN_SERVICE_SAMPLE,
     crewSampleSize: crewed.length,
     medianCrewSize: crewed.length ? round1(median(crewed.map(c => c.crewSize as number))) : null,
-    medianLaborMinutes: crewed.length ? round1(median(crewed.map(c => c.laborMinutes as number))) : null,
+    laborSampleSize: laboured.length,
+    // ALL, not SOME: one planned-crew visit in the set means the bucket's labour
+    // is not wholly measured, and the honest label is the weaker one.
+    laborSource: laboured.length === 0 ? 'none'
+      : laboured.every(c => c.laborSource === 'work_sessions') ? 'work_sessions'
+      : 'planned_crew',
+    medianLaborMinutes: laboured.length ? round1(median(laboured.map(c => c.laborMinutes as number))) : null,
   }
 }
 

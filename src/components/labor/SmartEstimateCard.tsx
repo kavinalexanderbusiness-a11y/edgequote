@@ -8,7 +8,8 @@ import { Button } from '@/components/ui/Button'
 import { serviceHistory, MIN_SERVICE_SAMPLE } from '@/lib/estimateVsActual'
 import type { LearningLoad } from '@/lib/estimateVsActualData'
 import {
-  buildWorkEstimate, describeConfidence, formatLaborHours, formatWorkDuration,
+  buildWorkEstimate, describeConfidence, describeLaborBasis, formatLaborHours,
+  formatEstimatedDuration,
 } from '@/lib/workEstimate'
 import { loadWorkdayMinutes } from '@/lib/workEstimateData'
 
@@ -118,7 +119,7 @@ export function SmartEstimateCard({
       <>
         <p className="text-sm font-semibold text-ink tabular-nums">
           {est.sampleSize === 1 ? 'One ' : `${est.sampleSize} `}{svc} job{est.sampleSize === 1 ? '' : 's'} recorded
-          <span className="font-normal text-ink-muted"> · {formatWorkDuration(est.observedElapsedMinutes, est.workdayMinutes)} on site</span>
+          <span className="font-normal text-ink-muted"> · {formatEstimatedDuration(est.observedElapsedMinutes, est.workdayMinutes)} on site</span>
         </p>
         {note(est.sampleSize === 1
           ? `One job is an observation, not a pattern, so EdgeQuote will not suggest a duration from it. It starts suggesting at ${MIN_SERVICE_SAMPLE}.`
@@ -139,15 +140,22 @@ export function SmartEstimateCard({
           hours kept alongside, because "960 minutes" is a number the reader has
           to convert before it means anything. */}
       <p className="text-xl font-black text-ink leading-none tabular-nums">
-        ~{formatWorkDuration(minutes, est.workdayMinutes)}
+        ~{formatEstimatedDuration(minutes, est.workdayMinutes)}
         <span className="text-xs font-semibold text-ink-muted"> on site</span>
       </p>
 
-      {/* LABOUR, only when the work needs a crew — and worded as a different
-          question, not a bigger version of the same one. With a solo crew the
-          two figures are the same number and the line would be noise. Its own
-          sample size is stated because it rests on the visits that named a
-          crew, which can be fewer than the visits behind the duration.
+      {/* LABOUR — a different question, not a bigger version of the same one.
+          Shown whenever it says something the elapsed line does not; on solo
+          work the two figures are the same number and the line is noise.
+          ⭐ That condition is "labour ≠ elapsed", NOT "crew > 1", because a
+          multi-day job worked by one person on Monday and two on Tuesday has
+          real labour and NO single crew size — gating on the crew would hide
+          the one figure only work sessions can produce.
+
+          ⭐ THE BASIS IS SAID OUT LOUD. "actually worked" is reserved for
+          labour summed from work sessions whose worker counts a person stated.
+          A figure derived from the PLANNED crew — including a clock session's
+          copy of it — is worded as such and never as what happened.
 
           ⚠️ THREE FACTS, NOT A SUM. Hours, crew and labour-hours are three
           independent medians and will not multiply out to each other — every
@@ -155,10 +163,13 @@ export function SmartEstimateCard({
           of each is measured separately. The wording keeps them as separate
           observations ("and", not "×") rather than inviting arithmetic that is
           supposed to disagree. */}
-      {est.needsCrew && est.suggestedLaborMinutes != null && (
+      {est.suggestedLaborMinutes != null && est.suggestedLaborMinutes !== minutes && (
         <p className="text-[11px] text-ink-muted tabular-nums">
-          Usually a crew of {est.typicalCrewSize}, and a typical job carries about {formatLaborHours(est.suggestedLaborMinutes)} of work
-          {est.crewSampleSize !== est.sampleSize && ` (${est.crewSampleSize} of them recorded a crew)`}
+          {est.typicalCrewSize != null
+            ? `Usually a crew of ${est.typicalCrewSize}, and a`
+            : 'The crew varied from day to day; a'}
+          {' '}typical job carries about {formatLaborHours(est.suggestedLaborMinutes)} {describeLaborBasis(est)}
+          {est.laborSampleSize !== est.sampleSize && ` (${est.laborSampleSize} of them recorded it)`}
         </p>
       )}
 

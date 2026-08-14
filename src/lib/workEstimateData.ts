@@ -13,7 +13,8 @@
 // defaulted the same way for the same reason.
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { workdayMinutes } from '@/lib/workEstimate'
+// Session 47's canonical workday, not this session's copy of it.
+import { workdayMinutes } from '@/lib/workDuration'
 
 /**
  * Minutes in this owner's working day. Falls back to the product default on any

@@ -31,14 +31,24 @@
 //  13  Day Suggestions (Session 46) is unchanged and still consumes the
 //      canonical primitive
 //  14  the card stays a card — no dashboard on a 375px form
+//  15  only completed, plausible visits teach
+//  16  the learner cannot read its own output
+//
+// SESSION 47 (work sessions + multi-day) added the labour half's real source:
+//  17  ACTUAL work-session labour outranks the planned crew
+//  18  a clock or carried session's worker count IS the plan, and says so
+//  19  a partial or still-open session set fails to UNKNOWN, never to zero and
+//      never to a fallback that looks like an answer
+//  20  a multi-day project learns end to end, and no name changes the answer
+//  21  the card and Day Suggestions agree about established vs unknown
 //
 // Deterministic, no network: every fixture is hand-derived below.
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  buildWorkEstimate, workdayMinutes, formatWorkDuration, formatLaborHours,
-  describeConfidence, type WorkEstimate,
+  buildWorkEstimate, workdayMinutes, formatEstimatedDuration, formatLaborHours,
+  describeConfidence, describeLaborBasis, type WorkEstimate,
 } from '../src/lib/workEstimate'
 import {
   serviceHistory, learnFromCompletedVisits, readVisitLabor, rollupLaborVariance,
@@ -46,6 +56,7 @@ import {
 } from '../src/lib/estimateVsActual'
 import { resolveDuration } from '../src/lib/dayFit'
 import { DEFAULT_CAPACITY_HOURS } from '../src/lib/route'
+import { WORKDAY_FALLBACK_HOURS, formatDuration } from '../src/lib/workDuration'
 
 let failures = 0
 const ok = (n: string) => console.log(`  ✓ ${n}`)
@@ -110,7 +121,7 @@ console.log('\n2. Unknown stays unknown — never 0, never 45, never a crew of 1
   eq('…scale is unknown, not "short"', none.scale, 'unknown')
   eq('…sample size is 0', none.sampleSize, 0)
   eq('…and it is worded as absence', describeConfidence(none), 'Not enough history yet')
-  eq('a null duration formats as an em dash, never a number', formatWorkDuration(null, 480), '—')
+  eq('a null duration formats as an em dash, never a number', formatEstimatedDuration(null, 480), '—')
   eq('null labour formats as an em dash', formatLaborHours(null), '—')
 
   // A visit that never stated a crew contributes NO crew evidence — silence is
@@ -237,9 +248,14 @@ console.log('\n6. One sample threshold — the canonical one, reused:')
   // would be a rule this module invented rather than composed.
   const decls = src.match(/^\s*(?:export\s+)?const\s+[A-Z_]+\s*=\s*[\d.]+/gm) || []
   check('no numeric constant is declared in the engine', decls.length === 0, decls.join(' · '))
-  check('the working day comes from the canonical route default',
-    /DEFAULT_CAPACITY_HOURS/.test(src), 'the 8-hour day was re-typed instead of imported')
-  eq('…which is the same number dayLoad has always used', DEFAULT_CAPACITY_HOURS, 8)
+  // Session 47 owns the working day. This module held its own copy for one
+  // commit; keeping both would let "9 hours" mean two different things.
+  check('the working day comes from Session 47 lib/workDuration',
+    /from '@\/lib\/workDuration'/.test(src), 'the workday was re-implemented locally')
+  check('…and this module declares no workday of its own',
+    !/function workdayMinutes/.test(src), 'a rival workdayMinutes came back')
+  eq('…which is the same fallback every capacity reader uses', WORKDAY_FALLBACK_HOURS, 8)
+  eq('…and dayLoad still agrees with it', DEFAULT_CAPACITY_HOURS, WORKDAY_FALLBACK_HOURS)
 
   // Crew is held to the SAME bar, on its own count — not a looser one.
   const mixed = learnFromCompletedVisits([
@@ -283,9 +299,9 @@ console.log('\n8. The labour median is paired:')
   // large one, so multiplying the median hours by the median headcount reports
   // 4 labour-hours where the typical visit really carries 8.
   const cs: LaborComparison[] = [
-    { jobId: 'a', serviceKey: 'k', serviceLabel: 'K', serviceDate: null, estimatedMinutes: 60, actualMinutes: 60,  varianceMinutes: 0,   variancePct: 0,   crewSize: 1, laborMinutes: 60 },
-    { jobId: 'b', serviceKey: 'k', serviceLabel: 'K', serviceDate: null, estimatedMinutes: 60, actualMinutes: 120, varianceMinutes: 60,  variancePct: 100, crewSize: 4, laborMinutes: 480 },
-    { jobId: 'c', serviceKey: 'k', serviceLabel: 'K', serviceDate: null, estimatedMinutes: 60, actualMinutes: 600, varianceMinutes: 540, variancePct: 900, crewSize: 2, laborMinutes: 1200 },
+    { jobId: 'a', serviceKey: 'k', serviceLabel: 'K', serviceDate: null, estimatedMinutes: 60, actualMinutes: 60,  varianceMinutes: 0,   variancePct: 0,   crewSize: 1, laborMinutes: 60 , laborSource: 'planned_crew' },
+    { jobId: 'b', serviceKey: 'k', serviceLabel: 'K', serviceDate: null, estimatedMinutes: 60, actualMinutes: 120, varianceMinutes: 60,  variancePct: 100, crewSize: 4, laborMinutes: 480 , laborSource: 'planned_crew' },
+    { jobId: 'c', serviceKey: 'k', serviceLabel: 'K', serviceDate: null, estimatedMinutes: 60, actualMinutes: 600, varianceMinutes: 540, variancePct: 900, crewSize: 2, laborMinutes: 1200 , laborSource: 'planned_crew' },
   ]
   const r = rollupLaborVariance(cs)
   eq('typical elapsed is the median elapsed', r.medianActualMinutes, 120)
@@ -300,22 +316,32 @@ console.log('\n8. The labour median is paired:')
 console.log('\n9. Multi-day durations are spoken in workdays:')
 {
   const day = 480
-  check('960 minutes is never shown as minutes', !/\d{3,}m/.test(formatWorkDuration(960, day)),
-    formatWorkDuration(960, day))
-  eq('16h on an 8h day → 2 workdays, hours kept alongside', formatWorkDuration(960, day), '2 workdays · 16h')
-  eq('exactly one day is still spoken in hours', formatWorkDuration(480, day), '8h')
-  eq('under an hour stays in minutes', formatWorkDuration(45, day), '45m')
-  eq('…and mid-range keeps the canonical formatter', formatWorkDuration(150, day), '2h 30m')
-  // Rounding direction: 9h is MORE than a working day, and "1 workday" is a
-  // promise the day cannot keep.
-  eq('9h ceils to 1.5 workdays, never rounds down to 1', formatWorkDuration(540, day), '1.5 workdays · 9h')
-  eq('…and 10h likewise', formatWorkDuration(600, day), '1.5 workdays · 10h')
-  eq('24h is 3 workdays', formatWorkDuration(1440, day), '3 workdays · 24h')
+  // ⭐ These are Session 47's answers, not this session's. The estimate formats
+  // through lib/workDuration's formatDuration; a divergence here means a rival
+  // formatter has grown back and "9 hours" now means two things in one product.
+  check('960 minutes is never shown as minutes', !/\d{3,}m/.test(formatEstimatedDuration(960, day)),
+    formatEstimatedDuration(960, day))
+  eq('16h on an 8h day → 2 days', formatEstimatedDuration(960, day), '2 days')
+  eq('exactly one day is one day', formatEstimatedDuration(480, day), '1 day')
+  eq('under an hour stays in minutes', formatEstimatedDuration(45, day), '45m')
+  eq('…and mid-range stays in hours', formatEstimatedDuration(150, day), '2h 30m')
+  // A part-day remainder is CARRIED, never dropped: "1 day" for nine hours would
+  // be a promise the day cannot keep.
+  eq('9h is a day and an hour, not "1 day"', formatEstimatedDuration(540, day), '1 day 1h')
+  eq('…and 10h likewise', formatEstimatedDuration(600, day), '1 day 2h')
+  eq('24h is 3 days', formatEstimatedDuration(1440, day), '3 days')
   // The owner's OWN day is the unit.
-  eq('on a 10h day, 9h is within the day', formatWorkDuration(540, 600), '9h')
+  eq('on a 10h day, 9h is within the day', formatEstimatedDuration(540, 600), '9h')
   eq('workdayMinutes reads the owner\'s setting', workdayMinutes(10), 600)
-  eq('…an unset day falls back to the shared default', workdayMinutes(null), DEFAULT_CAPACITY_HOURS * 60)
-  eq('…and a blocked (0) day is not a zero-length unit', workdayMinutes(0), DEFAULT_CAPACITY_HOURS * 60)
+  eq('…an unset day falls back to the shared default', workdayMinutes(null), WORKDAY_FALLBACK_HOURS * 60)
+  eq('…and a blocked (0) day is not a zero-length unit', workdayMinutes(0), WORKDAY_FALLBACK_HOURS * 60)
+  // Every one of the above IS lib/workDuration's own answer, asserted rather
+  // than assumed — one formatter, proven, not two kept in step by hand.
+  for (const m of [45, 150, 480, 540, 600, 960, 1440]) {
+    check(`${m}m formats exactly as lib/workDuration says`,
+      formatEstimatedDuration(m, day) === formatDuration(m, day),
+      `${formatEstimatedDuration(m, day)} vs ${formatDuration(m, day)}`)
+  }
   // Scale follows the same unit.
   eq('11h is multi-day on an 8h day', estFor('Warehouse Fit-Out', 8).scale, 'multi_day')
   eq('…and within-day for a 12-hour operator', estFor('Warehouse Fit-Out', 12).scale, 'within_day')
@@ -376,8 +402,25 @@ console.log('\n11. Tenancy — one business never estimates from another\'s work
   scoped(eva, 'the completed-visit loader', 1)
   check('…and it now reads crew_size, or labour could never be known',
     /select\('[^']*crew_size[^']*'\)/.test(eva), 'crew_size missing from the select')
+  // ⭐ Work sessions arrive through Session 47's own bulk loader, and are then
+  // filtered to this owner in memory. Not theatre: the composite FK
+  // (job_id, user_id) → jobs(id, user_id) already makes a foreign session
+  // unable to point at one of these jobs, but the filter is what stands if a
+  // service-role client is ever passed, exactly as the visits read carries one.
+  check('sessions are read through Session 47\'s canonical loader',
+    /loadWorkSessionsForJobs\(/.test(eva), 'a rival work-session read appeared')
+  check('…and person-minutes come from Session 47\'s own arithmetic',
+    /sessionTotals\(/.test(eva), 'labour was re-summed locally')
+  check('…and every session row is checked against this owner',
+    /if \(s\.user_id !== userId\) continue/.test(eva), 'foreign sessions are not filtered out')
+  check('…and no session is loaded without a user id',
+    /if \(!userId \|\| jobIds\.length === 0\) return out/.test(eva), '')
+  // The engine has no idea who the owner is. ("session" is no longer a usable
+  // token for this check — Session 47 gave the product `work_sessions`, and the
+  // engine legitimately names them — so the test is for the ways an identity
+  // could actually be obtained.)
   check('the engine learns only from rows it is handed',
-    !/user_id|auth|session/i.test(stripComments(read('src/lib/workEstimate.ts'))), '')
+    !/user_id|getUser|getSession|auth\./i.test(stripComments(read('src/lib/workEstimate.ts'))), '')
 }
 
 console.log('\n12. A failed read is not an empty history:')
@@ -396,6 +439,29 @@ console.log('\n12. A failed read is not an empty history:')
   const data = stripComments(read('src/lib/workEstimateData.ts'))
   check('a failed capacity read falls back to the shared default',
     /if \(error \|\| !data\) return workdayMinutes\(null\)/.test(data), '')
+
+  // ⭐ A work-session read that fails costs the LABOUR claim and nothing else.
+  // The elapsed half needs nothing from it — jobs.actual_minutes already carries
+  // the multi-day total — so darkening the whole card would be an overreaction,
+  // and silently keeping a measured label would be a lie. It degrades to
+  // planned_crew, which is a true statement about the figure that remains.
+  const eva2 = stripComments(read('src/lib/estimateVsActualData.ts'))
+  check('a thrown session read is caught, not propagated',
+    /try \{[\s\S]*loadWorkSessionsForJobs[\s\S]*\} catch \{[\s\S]*return out/.test(eva2),
+    'a session read that throws would take the whole estimate down')
+  check('…and a failed one returns no facts rather than partial ones',
+    /if \(load\.failed\) return out/.test(eva2), '')
+  // Behaviour, not just shape: a visit with no session facts still learns.
+  const noFacts = learnFromCompletedVisits(
+    Array.from({ length: 6 }, (_, i) => ({
+      id: `nf${i}`, status: 'completed', service_type: 'Bench Fitting',
+      duration_minutes: 200, actual_minutes: 240, crew_size: 3,
+    })) as VisitLike[])
+  const degraded = buildWorkEstimate(serviceHistory('Bench Fitting', noFacts.comparisons), { capacityHours: 8 })
+  eq('sessions unavailable → elapsed is unaffected', degraded.suggestedElapsedMinutes, 240)
+  eq('…labour still offered, from the plan', degraded.suggestedLaborMinutes, 720)
+  eq('…and labelled as the plan, never as measured', degraded.laborSource, 'planned_crew')
+  eq('…worded as the plan on screen', describeLaborBasis(degraded), 'at the planned crew size')
 }
 
 console.log('\n13. Session 46 is unchanged and still the canonical primitive:')
@@ -496,6 +562,177 @@ console.log('\n16. The feedback loop cannot eat itself:')
     !/status !== 'completed'/.test(effect), 'the estimate card would be starved on a new job')
   check('…and runs once per form, not on every status change',
     /\}, \[supabase\]\)/.test(effect), 'status is a dependency of the learning read')
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SESSION 47 — WORK SESSIONS. The labour half of this engine now has a real
+// source, and the whole risk is that it gets confused with the elapsed half or
+// wears a claim it has not earned.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** A visit whose work sessions are known. Mirrors what the loader builds from
+ *  lib/workSession's sessionTotals — days of (minutes × workers). */
+const withSessions = (
+  id: string, service: string, plan: number,
+  days: { minutes: number; workers: number }[],
+  opts?: { stated?: boolean; open?: boolean; crewSize?: number | null },
+): VisitLike => {
+  const elapsed = days.reduce((s, d) => s + d.minutes, 0)
+  const labour = days.reduce((s, d) => s + d.minutes * d.workers, 0)
+  const w = new Set(days.map(d => d.workers))
+  return {
+    id, status: 'completed', service_type: service,
+    duration_minutes: plan, actual_minutes: elapsed,
+    crew_size: opts?.crewSize === undefined ? 1 : opts.crewSize,
+    sessions: {
+      count: days.length, elapsedMinutes: elapsed, laborMinutes: labour,
+      open: opts?.open ?? false,
+      attendanceStated: opts?.stated ?? true,
+      workers: w.size === 1 ? days[0].workers : null,
+    },
+  }
+}
+
+console.log('\n17. Work-session labour beats planned crew:')
+{
+  // The owner's own example: 200m × 1 worker, then 310m × 2 workers.
+  // Elapsed 510m. Labour 820m. No job-level multiplication can produce that pair.
+  const v = withSessions('mix', 'Deck Rebuild', 480,
+    [{ minutes: 200, workers: 1 }, { minutes: 310, workers: 2 }], { crewSize: 1 })
+  const r = readVisitLabor(v)
+  eq('elapsed is the summed session time', r.comparison!.actualMinutes, 510)
+  eq('labour is Σ(each day × that day\'s workers)', r.comparison!.laborMinutes, 820)
+  eq('…and it is labelled as measured', r.comparison!.laborSource, 'work_sessions')
+  check('⛔ NOT actual_minutes × planned crew_size',
+    r.comparison!.laborMinutes !== r.comparison!.actualMinutes * 1, 'the plan was used instead')
+  eq('…crew is null, because it VARIED day to day', r.comparison!.crewSize, null)
+  check('…so labour is known while crew is not — separately knowable',
+    r.comparison!.laborMinutes != null && r.comparison!.crewSize == null)
+
+  // The same visit with a planned crew of 3 must not move the labour figure.
+  const planted = readVisitLabor({ ...v, crew_size: 3 })
+  eq('a different planned crew cannot change measured labour', planted.comparison!.laborMinutes, 820)
+}
+
+console.log('\n18. Clock and carried sessions are the PLAN, and say so:')
+{
+  // Read from the live triggers: bank_job_clock_session and
+  // carry_forward_job_actual_minutes both write workers = jobs.crew_size. Their
+  // labour is real minutes × the plan, which is exactly the figure that must not
+  // be dressed up as attendance.
+  const clocked = withSessions('c1', 'Duct Run', 300,
+    [{ minutes: 240, workers: 2 }], { stated: false, crewSize: 2 })
+  const r = readVisitLabor(clocked)
+  eq('the arithmetic still uses the sessions', r.comparison!.laborMinutes, 480)
+  eq('…but the CLAIM is planned_crew, not work_sessions', r.comparison!.laborSource, 'planned_crew')
+  eq('…and the crew is reported, because the sessions agree', r.comparison!.crewSize, 2)
+
+  const stated = readVisitLabor({ ...clocked, id: 'c2', sessions: { ...clocked.sessions!, attendanceStated: true } })
+  eq('the same numbers, hand-logged, ARE measured', stated.comparison!.laborSource, 'work_sessions')
+  eq('…with the identical figure', stated.comparison!.laborMinutes, 480)
+}
+
+console.log('\n19. A partial session set never contaminates learning:')
+{
+  const open = withSessions('o1', 'Site Prep', 300, [{ minutes: 200, workers: 2 }], { open: true })
+  const ro = readVisitLabor(open)
+  eq('an OPEN stretch → labour unknown', ro.comparison!.laborMinutes, null)
+  eq('…not zero', ro.comparison!.laborSource, 'none')
+  eq('…and no crew claim either', ro.comparison!.crewSize, null)
+  check('…while the ELAPSED comparison still stands', ro.comparison!.actualMinutes === 200)
+
+  // Sessions that do not add up to the visit's own actual_minutes are not all
+  // of them. Session 47 makes the database enforce that equality, so a mismatch
+  // means a truncated or filtered read — and summing part of a job understates
+  // its labour without saying so.
+  const partial: VisitLike = {
+    id: 'p1', status: 'completed', service_type: 'Site Prep',
+    duration_minutes: 300, actual_minutes: 510, crew_size: 2,
+    sessions: { count: 1, elapsedMinutes: 200, laborMinutes: 400, open: false, attendanceStated: true, workers: 2 },
+  }
+  const rp = readVisitLabor(partial)
+  eq('sessions that disagree with actual_minutes → labour unknown', rp.comparison!.laborMinutes, null)
+  eq('…and NOT the planned-crew fallback, which would look like an answer', rp.comparison!.laborSource, 'none')
+  check('⛔ and never 0', rp.comparison!.laborMinutes !== 0)
+
+  // Those unknowns must shrink the labour sample, not join it.
+  const l = learnFromCompletedVisits([open, partial,
+    ...Array.from({ length: 5 }, (_, i) => withSessions(`g${i}`, 'Site Prep', 300, [{ minutes: 200, workers: 2 }]))])
+  const h = serviceHistory('Site Prep', l.comparisons)
+  eq('7 comparable visits', h.sampleSize, 7)
+  eq('…but only 5 back the labour figure', h.laborSampleSize, 5)
+  eq('…and the median is of those 5 alone', h.medianLaborMinutes, 400)
+}
+
+console.log('\n20. Multi-day project learning, end to end:')
+{
+  // Six comparable completed projects, each two days: 8h with 2 workers then
+  // 4h with 2. Elapsed 720m = 1.5 working days on an 8h day; labour 1440m = 24h.
+  const projects = Array.from({ length: 6 }, (_, i) =>
+    withSessions(`mp${i}`, 'Warehouse Fit-Out', 600,
+      [{ minutes: 480, workers: 2 }, { minutes: 240, workers: 2 }], { crewSize: 2 }))
+  const l = learnFromCompletedVisits(projects)
+  const e = buildWorkEstimate(serviceHistory('Warehouse Fit-Out', l.comparisons), { capacityHours: 8 })
+  eq('confidence is established', e.confidence, 'established')
+  eq('…elapsed is 12h', e.suggestedElapsedMinutes, 720)
+  eq('…which is multi-day', e.scale, 'multi_day')
+  eq('…and reads as a day and a half', formatEstimatedDuration(720, e.workdayMinutes), '1 day 4h')
+  eq('…typical crew 2', e.typicalCrewSize, 2)
+  eq('…and 24 labour-hours', formatLaborHours(e.suggestedLaborMinutes), '24 labour-hours')
+  eq('…measured, not planned', e.laborSource, 'work_sessions')
+  eq('…backed by all six', e.laborSampleSize, 6)
+  check('⛔ nothing is clamped to the old 240-minute ceiling',
+    (e.suggestedElapsedMinutes ?? 0) > 240, `got ${e.suggestedElapsedMinutes}`)
+
+  // ⛔ Same numbers, any name. Session 47 changed nothing about that.
+  for (const n of ['Warehouse Fit-Out', 'Mulch Delivery', 'Weekly Mowing', 'Interior Painting']) {
+    const rows = Array.from({ length: 6 }, (_, i) =>
+      withSessions(`k${i}`, n, 600, [{ minutes: 480, workers: 2 }, { minutes: 240, workers: 2 }], { crewSize: 2 }))
+    const k = buildWorkEstimate(serviceHistory(n, learnFromCompletedVisits(rows).comparisons), { capacityHours: 8 })
+    check(`"${n}" gets the identical answer`,
+      k.suggestedElapsedMinutes === 720 && k.suggestedLaborMinutes === 1440 && k.scale === 'multi_day',
+      `${k.suggestedElapsedMinutes}/${k.suggestedLaborMinutes}/${k.scale}`)
+  }
+
+  // A mixed bucket takes the WEAKER label: one planned-crew visit among five
+  // measured ones means the bucket's labour is not wholly measured.
+  const mixed = learnFromCompletedVisits([
+    ...projects.slice(0, 5),
+    withSessions('mx', 'Warehouse Fit-Out', 600, [{ minutes: 720, workers: 2 }], { stated: false, crewSize: 2 }),
+  ])
+  eq('one planned-crew visit downgrades the bucket',
+    serviceHistory('Warehouse Fit-Out', mixed.comparisons).laborSource, 'planned_crew')
+}
+
+console.log('\n21. Day Suggestions and the Smart Estimate agree:')
+{
+  // Session 46 is not rewritten; it is the SAME function. Established or
+  // unknown, both surfaces must say the same word about the same history —
+  // otherwise a card offers a duration the scheduler will not fit, or refuses
+  // one the scheduler is happy to use.
+  const cases: { name: string; visits: VisitLike[] }[] = [
+    { name: 'multi-day project (n=6)', visits: Array.from({ length: 6 }, (_, i) =>
+        withSessions(`a${i}`, 'Warehouse Fit-Out', 600, [{ minutes: 480, workers: 2 }, { minutes: 240, workers: 2 }])) },
+    { name: 'short repeat work (n=9)', visits: short },
+    { name: 'thin history (n=2)', visits: short.slice(0, 2) },
+    { name: 'no history', visits: [] },
+  ]
+  for (const c of cases) {
+    const svc = c.visits[0]?.service_type ?? 'Nothing At All'
+    const h = serviceHistory(svc, learnFromCompletedVisits(c.visits).comparisons)
+    const card = buildWorkEstimate(h, { capacityHours: 8 })
+    const scheduler = resolveDuration(null, h)
+    eq(`${c.name}: same minutes`, card.suggestedElapsedMinutes, scheduler.minutes)
+    eq(`${c.name}: same provenance`, card.suggestedSource, scheduler.source)
+    check(`${c.name}: "established" means the same thing on both`,
+      (card.confidence === 'established') === (scheduler.source === 'learned'),
+      `card ${card.confidence} vs scheduler ${scheduler.source}`)
+  }
+  // And the scheduler still prefers the owner's own estimate over any of it.
+  const h = serviceHistory('Filter Swap', learned.comparisons)
+  eq('the owner\'s own estimate still outranks history', resolveDuration(90, h).minutes, 90)
+  check('Session 46 owns no threshold of its own',
+    /MIN_SERVICE_SAMPLE|established/.test(read('src/lib/dayFit.ts')), '')
 }
 
 console.log(failures ? `\n✗ ${failures} failure(s)` : '\n✓ smart-estimate: every rule holds')

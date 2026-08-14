@@ -12,8 +12,14 @@
 //                          resolves a candidate with, so the card in the job form
 //                          and the "Fits Tuesday" claim cannot disagree about
 //                          when history may be leaned on.
-//   • the working day    → lib/route DEFAULT_CAPACITY_HOURS + the owner's own
-//                          business_settings.daily_capacity_hours.
+//   • the working day    → lib/workDuration (Session 47) — `workdayMinutes` and
+//                          `formatDuration`, reading the owner's own
+//                          business_settings.daily_capacity_hours. This module
+//                          held its own copy of both for exactly one session,
+//                          before Session 47 landed the canonical pair; they are
+//                          gone rather than kept in step by hand.
+//   • the labour figure  → lib/workSession `sessionTotals` (Session 47), via the
+//                          loader. Person-minutes have ONE arithmetic.
 // There is no threshold, no median and no sample rule of its own. Adding one
 // would create exactly the second brain this module exists to avoid.
 //
@@ -60,20 +66,14 @@
 // flag — hence no "was this learned?" column that would have to be kept honest.
 
 import { resolveDuration, type DurationSource } from '@/lib/dayFit'
-import { DEFAULT_CAPACITY_HOURS } from '@/lib/route'
+import { workdayMinutes, formatDuration } from '@/lib/workDuration'
 import {
-  MIN_SERVICE_SAMPLE, formatMinutes, type ServiceVariance,
+  MIN_SERVICE_SAMPLE, type ServiceVariance, type LaborEvidence,
 } from '@/lib/estimateVsActual'
 
-/** Minutes in the owner's working day; the unit "~2 workdays" is counted in. */
-export function workdayMinutes(capacityHours: number | null | undefined): number {
-  const h = Number(capacityHours)
-  // An explicit 0 means a blocked DAY on the schedule (lib/route dayLoad's rule)
-  // — it is not a statement that a working day is zero minutes long. As a UNIT
-  // of measurement, 0 would make "workdays" a division by zero, so the shared
-  // default stands in. This is a scale, not a capacity check.
-  return (Number.isFinite(h) && h > 0 ? h : DEFAULT_CAPACITY_HOURS) * 60
-}
+// Re-exported so a consumer of the estimate does not have to know which module
+// owns the working day — but it IS lib/workDuration's, not a copy.
+export { workdayMinutes } from '@/lib/workDuration'
 
 /**
  * How much the history may be leaned on. Three states because there are three
@@ -129,18 +129,23 @@ export interface WorkEstimate {
   /** Visits behind the crew figures — ≤ sampleSize, because a visit may not
    *  have stated a crew. The crew claim is worth THIS number, not sampleSize. */
   crewSampleSize: number
-  /** Typical planned crew. Null when too few visits stated one. */
+  /** Typical crew. Null when too few visits stated one. */
   typicalCrewSize: number | null
-  /** Typical person-minutes. Null when too few visits stated a crew. */
+  /** Visits behind the LABOUR figure — its own count, not the crew one: a
+   *  multi-day visit whose crew varied has honest labour and no single crew. */
+  laborSampleSize: number
+  /** Typical person-minutes. Null when too few visits have defensible labour. */
   suggestedLaborMinutes: number | null
   /**
-   * Where the person-minutes came from. 'planned_crew' = elapsed × the crew the
-   * visit was PLANNED for, because nothing in the product records attendance.
-   * ⛔ A planned-crew labour figure may never be priced (lib/jobCost's rule for
-   * the identical derivation). When real work sessions land, a 'work_sessions'
-   * source slots in here and every consumer keeps compiling.
+   * Where the person-minutes came from — the claim, not just the number.
+   *   'work_sessions' — Σ(each day's minutes × that day's stated worker count).
+   *                     ACTUAL attendance, from Session 47's records.
+   *   'planned_crew'  — elapsed × the crew the work was PLANNED for (the job's
+   *                     crew_size, or a clock/carried session's copy of it).
+   *                     ⛔ never priced, per lib/jobCost's rule for the identical
+   *                     derivation, and never worded as what happened.
    */
-  laborSource: 'planned_crew' | 'none'
+  laborSource: LaborEvidence
 
   // ── Shape ──────────────────────────────────────────────────────────────────
   scale: WorkScale
@@ -174,13 +179,18 @@ export function buildWorkEstimate(
   // and it answers null unless the history is established.
   const resolved = resolveDuration(null, history)
 
-  // Crew and labour are held to the SAME canonical bar as duration, applied to
-  // their OWN count. Six comparable visits of which two named a crew back a crew
-  // claim with two — presenting that at the sample size of the duration claim is
-  // how a thin figure inherits a thick one's credibility.
-  const crewEstablished = history.crewSampleSize >= MIN_SERVICE_SAMPLE
-  const typicalCrewSize = crewEstablished ? history.medianCrewSize : null
-  const suggestedLaborMinutes = crewEstablished && history.medianLaborMinutes != null
+  // Crew and labour are held to the SAME canonical bar as duration, each applied
+  // to its OWN count. Six comparable visits of which two named a crew back a
+  // crew claim with two — presenting that at the sample size of the duration
+  // claim is how a thin figure inherits a thick one's credibility. Crew and
+  // labour are gated SEPARATELY because they are separately knowable: a job
+  // worked by one person on Monday and two on Tuesday has real labour and no
+  // single crew size, and it must be able to contribute the fact it has.
+  const typicalCrewSize = history.crewSampleSize >= MIN_SERVICE_SAMPLE
+    ? history.medianCrewSize
+    : null
+  const laborEstablished = history.laborSampleSize >= MIN_SERVICE_SAMPLE
+  const suggestedLaborMinutes = laborEstablished && history.medianLaborMinutes != null
     ? Math.round(history.medianLaborMinutes)
     : null
 
@@ -203,8 +213,10 @@ export function buildWorkEstimate(
 
     crewSampleSize: history.crewSampleSize,
     typicalCrewSize,
+    laborSampleSize: history.laborSampleSize,
     suggestedLaborMinutes,
-    laborSource: suggestedLaborMinutes == null ? 'none' : 'planned_crew',
+    // The bucket's own verdict, carried through rather than re-decided here.
+    laborSource: suggestedLaborMinutes == null ? 'none' : history.laborSource,
 
     scale,
     workdayMinutes: dayMin,
@@ -215,35 +227,48 @@ export function buildWorkEstimate(
 // ── Saying a duration out loud ───────────────────────────────────────────────
 
 /**
- * A duration in the units a person schedules in.
+ * A suggested duration in the units a person schedules in — "45m", "2h 30m",
+ * "1 day 1h", "3 days".
  *
- *   45m  ·  2h 30m  ·  ~1.5 workdays (9h)  ·  ~3 workdays (24h)
+ * ⭐ This is Session 47's `formatDuration`, not a second opinion. That module
+ * owns how a duration is SAID: days appear only at a whole working day, the
+ * working day is the owner's own `daily_capacity_hours`, and the unit never
+ * leaks into storage. This session shipped a rival for one commit — days ceiled
+ * to the half, hours pinned alongside — and it is deleted rather than kept in
+ * step by hand, because two formatters disagreeing about "9 hours" is precisely
+ * the drift both modules exist to prevent.
  *
- * Under a working day this IS lib/estimateVsActual's formatMinutes — the one
- * duration formatter the product already uses, not a rival with its own rounding.
- * Past a working day, minutes stop being a unit anyone can act on: "1,440
- * minutes" is a number an owner has to convert before it means anything, and
- * conversion at reading time is where a three-day job gets heard as a long
- * afternoon. The raw hours stay alongside the workday count so nothing is hidden
- * behind the friendlier unit.
+ * ⚠️ A SUGGESTION IS A PLAN, so `formatDuration` (which may speak in days) is
+ * the right half of Session 47's pair. `formatWorked` is for time already
+ * recorded and never says days — a measured 8 hours stays "8h" forever rather
+ * than being re-stated through a setting that could change tomorrow.
  *
- * Workdays are CEILED to the half day. Rounding a commitment DOWN understates
- * it — 9 hours shown as "1 workday" is a promise the day cannot keep — and the
- * half-day granularity is a display grain, not a threshold that gates any claim.
+ * The em dash for null is this module's own: an absent estimate must render as
+ * visibly absent, where `formatDuration` returns an empty string.
  */
-export function formatWorkDuration(minutes: number | null, dayMin: number): string {
+export function formatEstimatedDuration(minutes: number | null, dayMin: number): string {
   if (minutes == null || !Number.isFinite(minutes)) return '—'
-  if (minutes <= dayMin || !(dayMin > 0)) return formatMinutes(minutes)
-  const days = Math.ceil((minutes / dayMin) * 2) / 2
-  const hours = Math.round((minutes / 60) * 10) / 10
-  return `${days} workday${days === 1 ? '' : 's'} · ${hours}h`
+  return formatDuration(minutes, dayMin) || '—'
 }
 
-/** "15 labour-hours" · "2.5 labour-hours" · "—". Person-hours, never elapsed. */
+/** "15 labour-hours" · "2.5 labour-hours" · "—". Person-hours, never elapsed.
+ *  ⭐ Never days: person-hours are not a working day, and "2 days of labour"
+ *  would be read as elapsed by everyone who saw it. */
 export function formatLaborHours(minutes: number | null): string {
   if (minutes == null || !Number.isFinite(minutes)) return '—'
   const h = Math.round((minutes / 60) * 10) / 10
   return `${h} labour-hour${h === 1 ? '' : 's'}`
+}
+
+/**
+ * How the labour figure may be SPOKEN, given where it came from. The number is
+ * the same; the claim is not, and the claim is the part that can be false.
+ */
+export function describeLaborBasis(e: WorkEstimate): string | null {
+  if (e.suggestedLaborMinutes == null) return null
+  return e.laborSource === 'work_sessions'
+    ? 'actually worked'          // stated attendance, per day, from work sessions
+    : 'at the planned crew size' // real minutes × the crew that was planned for
 }
 
 /**

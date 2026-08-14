@@ -370,9 +370,9 @@ console.log('\nDurations read the way an owner says them:')
 console.log('\nThe typical miss is measured per visit, not by subtracting two medians:')
 {
   const cs: LaborComparison[] = [
-    { jobId: 'a', serviceKey: 'mowing', serviceLabel: 'Mowing', serviceDate: null, estimatedMinutes: 60,  actualMinutes: 60,  varianceMinutes: 0,  variancePct: 0,   crewSize: null, laborMinutes: null },
-    { jobId: 'b', serviceKey: 'mowing', serviceLabel: 'Mowing', serviceDate: null, estimatedMinutes: 30,  actualMinutes: 45,  varianceMinutes: 15, variancePct: 50,  crewSize: null, laborMinutes: null },
-    { jobId: 'c', serviceKey: 'mowing', serviceLabel: 'Mowing', serviceDate: null, estimatedMinutes: 120, actualMinutes: 130, varianceMinutes: 10, variancePct: 8.3, crewSize: null, laborMinutes: null },
+    { jobId: 'a', serviceKey: 'mowing', serviceLabel: 'Mowing', serviceDate: null, estimatedMinutes: 60,  actualMinutes: 60,  varianceMinutes: 0,  variancePct: 0,   crewSize: null, laborMinutes: null , laborSource: 'none' },
+    { jobId: 'b', serviceKey: 'mowing', serviceLabel: 'Mowing', serviceDate: null, estimatedMinutes: 30,  actualMinutes: 45,  varianceMinutes: 15, variancePct: 50,  crewSize: null, laborMinutes: null , laborSource: 'none' },
+    { jobId: 'c', serviceKey: 'mowing', serviceLabel: 'Mowing', serviceDate: null, estimatedMinutes: 120, actualMinutes: 130, varianceMinutes: 10, variancePct: 8.3, crewSize: null, laborMinutes: null , laborSource: 'none' },
   ]
   const r = rollupLaborVariance(cs)
   eq('typical plan is the median estimate', r.medianEstimatedMinutes, 60)
