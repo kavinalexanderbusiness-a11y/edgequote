@@ -16,6 +16,7 @@
 //
 // Style follows the other verify scripts: deterministic, no network, no DB.
 
+import { baselineSql } from './lib/schema-source'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { displayAddress, normalizeTags, findCustomerMatch, phoneMatches, phoneSearchDigits, addressMatches } from '../src/lib/customers'
@@ -91,8 +92,26 @@ check('CSV import puts the address on the PROPERTY, not the customer row',
 
 // ═══════════════════════════════════════════════════════════════════════════
 H('4. DERIVED PLANS — attribution has one path')
-const schema = readFileSync(join(__dirname, '..', 'supabase', 'schema.sql'), 'utf8')
-const recBlock = schema.slice(schema.indexOf('create table if not exists public.job_recurrences'), schema.indexOf(');', schema.indexOf('create table if not exists public.job_recurrences')))
+// 2026-08-14: reads the generated baseline, not the retired supabase/schema.sql
+// snapshot. Stronger — "the column is absent" now means absent from the LIVE table
+// rather than absent from a file that had drifted seven weeks behind production.
+// The generator quotes identifiers, so match public."job_recurrences" too.
+const schema = baselineSql()
+const recStart = (() => {
+  for (const pat of ['create table if not exists public."job_recurrences"',
+                     'create table if not exists public.job_recurrences']) {
+    const i = schema.indexOf(pat)
+    if (i >= 0) return i
+  }
+  return -1
+})()
+const recBlock = recStart < 0 ? '' : schema.slice(recStart, schema.indexOf(');', recStart))
+// ANTI-VACUITY, same reasoning as the import payload above: an absence check over an
+// empty string passes for the wrong reason. If the table can no longer be located —
+// a renamed table, a changed quoting style in the generator — that is a broken guard,
+// not a satisfied one.
+check('the job_recurrences table is locatable in the baseline',
+  recBlock.length > 0 && recBlock.includes('user_id'), true)
 check('job_recurrences has NO property_id column (plans derive from jobs.property_id — buildServicePlans)',
   recBlock.includes('property_id'), false)
 

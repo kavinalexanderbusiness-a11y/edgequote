@@ -296,7 +296,7 @@ console.log('\n═══ The boundaries, over the real source ═══')
 
 const engine = src('src/lib/workSession.ts')
 const sheet = src('src/components/jobs/StopForTodaySheet.tsx')
-const migration = src('supabase/RUN-2026-08-13-work-sessions.sql')
+const migration = src('supabase/archive/run/RUN-2026-08-13-work-sessions.sql')
 const durationEngine = src('src/lib/workDuration.ts')
 
 // ⛔ STOP MUST NOT COMPLETE. Asserted over the code, not the comments.

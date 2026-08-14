@@ -42,7 +42,7 @@ function read(p: string): string { return readFileSync(join(ROOT, p), 'utf8').re
 // ═══════════════════════════════════════════════════════════════════════════
 H('1. THE CONTRACT FILE — the applied DDL says what the table and resolver are')
 
-const sql = read('supabase/RUN-2026-08-13-platform-capabilities.sql')
+const sql = read('supabase/archive/run/RUN-2026-08-13-platform-capabilities.sql')
 check('grants table exists with all four capability columns',
   sql.includes('create table if not exists public.platform_capabilities')
   && ['online_payments', 'inbound_sms', 'outbound_sms', 'outbound_email']

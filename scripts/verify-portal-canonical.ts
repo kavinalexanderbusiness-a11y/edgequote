@@ -44,7 +44,7 @@ const check = (name: string, ok: boolean, detail?: string) => {
 }
 
 const SUPA = 'supabase'
-const CANONICAL = join(SUPA, 'CANONICAL-get_portal_data.sql')
+const MIGRATIONS = join(SUPA, 'migrations')
 const FN = 'get_portal_data'
 
 // A runnable definition header, in any casing/spacing SQL permits.
@@ -52,16 +52,33 @@ const DEF_HEADER = /create\s+(or\s+replace\s+)?function\s+(public\.)?get_portal_
 // The tombstone INF-2 left behind in every migration that used to define it.
 const TOMBSTONE = /SUPERSEDED\s+—\s+DO\s+NOT\s+RESTORE\s+THIS\s+BODY|now has exactly ONE definition/i
 
-const src = existsSync(CANONICAL) ? readFileSync(CANONICAL, 'utf8') : ''
+// 2026-08-13: the canonical file is gone and its job moved into the baseline.
+// It existed because "run this last, it wins" was the only way to guarantee the
+// newest body survived a rebuild — which is also precisely how a STALE copy could
+// roll production backward. The baseline removes the dilemma: it is generated FROM
+// production, so there is no second copy that can be older than the first.
+//
+// What still has to be true, and is what this guard now checks:
+//   · exactly one file IN THE APPLY PATH (supabase/migrations/) defines the RPC
+//   · supabase/archive/ is NOT in the apply path — it holds ~10 older bodies
+const migrationFiles = existsSync(MIGRATIONS)
+  ? readdirSync(MIGRATIONS).filter(f => f.endsWith('.sql')).map(f => join(MIGRATIONS, f))
+  : []
+const definers = migrationFiles.filter(f => DEF_HEADER.test(readFileSync(f, 'utf8')))
 
-console.log('\n── the canonical file is the only definition ──')
-check('supabase/CANONICAL-get_portal_data.sql exists', src.length > 0)
+console.log('\n── one definition, and it is in the apply path ──')
+check('supabase/migrations/ exists and holds a baseline', migrationFiles.length > 0)
+check('exactly one migration defines get_portal_data', definers.length === 1, definers.join(', ') || 'none')
 
-// 1. Exactly one runnable definition in the whole repo, and it is the canonical file.
-const sqlFiles = readdirSync(SUPA).filter(f => f.endsWith('.sql')).map(f => join(SUPA, f))
-const definers = sqlFiles.filter(f => DEF_HEADER.test(readFileSync(f, 'utf8')))
-check('exactly one file defines get_portal_data', definers.length === 1, definers.join(', ') || 'none')
-check('… and it is the canonical file', definers[0] === CANONICAL, definers[0])
+// Extract just this function's body from the baseline. The baseline defines ~93
+// functions; running the contract regexes over all 468 KB would let a phrase from
+// a neighbouring function satisfy a check meant for this one.
+const baselineSrc = definers[0] ? readFileSync(definers[0], 'utf8') : ''
+const fnMatch = baselineSrc.match(
+  /CREATE OR REPLACE FUNCTION public\.get_portal_data[\s\S]*?\$function\$[\s\S]*?\$function\$/i)
+const src = fnMatch?.[0] ?? ''
+check('the baseline body for get_portal_data can be isolated', src.length > 0,
+  'no $function$-quoted body found — has the generator changed its output format?')
 
 // 2. The migrations that ONCE held a runnable body must keep their tombstone.
 //    Pinned by name rather than discovered, because a tombstone that has been
@@ -82,8 +99,15 @@ const TOMBSTONED = [
   'RUN-2026-07-17-portal-property-identity.sql',
   'schema.sql',
 ]
+const ARCHIVE = join(SUPA, 'archive')
 const lostTombstone = TOMBSTONED.filter(f => {
-  const p = join(SUPA, f)
+  // Archived 2026-08-13 — the RUN files moved under supabase/archive/run/ and the
+  // 2026-06-25 snapshot was renamed. Tombstones still matter: archiving keeps them
+  // out of the apply path, but someone WILL open one of these looking for "the real
+  // definition", and the tombstone is what tells them not to paste it into a shell.
+  const p = f === 'schema.sql'
+    ? join(ARCHIVE, 'schema-2026-06-25-snapshot.sql')
+    : join(ARCHIVE, 'run', f)
   return !existsSync(p) || !TOMBSTONE.test(readFileSync(p, 'utf8'))
 })
 check(`all ${TOMBSTONED.length} migrations that once defined it keep their tombstone`,
@@ -111,10 +135,16 @@ check('quotes keep their own draft filter', /qt\.status\s*<>\s*'draft'/.test(quo
 for (const field of ['deposit_amount', 'deposit_requested_at']) {
   check(`invoice projection still carries ${field}`, invoiceSelect.includes(field))
 }
-// The 12 top-level keys. `services` is the one that has actually been dropped before
+// The 13 top-level keys. `services` is the one that has actually been dropped before
 // (it renders an empty catalogue — "this business offers nothing" — without erroring).
+//
+// `change_orders` (2026-08-14) is pinned here for a specific reason. Production began
+// serving it at 05:33; the repo's hand-maintained canonical file did not have it, and
+// the deploy checklist said to run that file LAST so it wins. Re-running it as
+// documented would have deleted the projection from the live portal. The offline pin
+// below and the live sweep further down now catch that from both directions.
 const KEYS = ['customer', 'business', 'property', 'properties', 'quotes', 'invoices',
-  'jobs', 'recurrences', 'photos', 'payments', 'payment_method', 'services']
+  'jobs', 'recurrences', 'photos', 'payments', 'payment_method', 'services', 'change_orders']
 const missingKeys = KEYS.filter(k => !new RegExp(`'${k}',`).test(sqlOnly))
 check(`all ${KEYS.length} top-level payload keys are built`, missingKeys.length === 0, `missing: ${missingKeys.join(', ')}`)
 check('still SECURITY DEFINER with a pinned search_path',
@@ -174,10 +204,11 @@ live()
   .then(() => {
     console.log(`\n${fail === 0 ? '✓' : '✗'} portal canonical checks: ${pass} passed, ${fail} failed`)
     if (fail > 0) {
-      console.error('\n  ⛔ supabase/CANONICAL-get_portal_data.sql is the ONLY definition of the portal RPC,')
-      console.error('     and DEPLOY_CHECKLIST runs it LAST so it wins. A stale or weakened body here')
-      console.error('     rolls production backward silently. Resync it from production before shipping:')
-      console.error("     select pg_get_functiondef(oid) from pg_proc where proname='get_portal_data';")
+      console.error('\n  ⛔ The baseline in supabase/migrations/ holds the ONLY definition of the portal RPC.')
+      console.error('     A weakened body there rebuilds a portal that leaks or omits. It is GENERATED,')
+      console.error('     so do not hand-edit it — resync from production and regenerate:')
+      console.error('       npm run schema:contract   # re-read production into supabase/contract/')
+      console.error('       npm run schema:baseline   # rewrite the baseline from that capture')
     }
     process.exit(fail === 0 ? 0 : 1)
   })

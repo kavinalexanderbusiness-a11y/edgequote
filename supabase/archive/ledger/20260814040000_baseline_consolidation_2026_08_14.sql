@@ -1,0 +1,29 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ARCHIVED MIGRATION — HISTORY ONLY. DO NOT RE-RUN.
+--
+--   version : 20260814040000
+--   name    : baseline_consolidation_2026_08_14
+--
+-- Recovered 2026-08-14 from supabase_migrations.schema_migrations — the SQL
+-- production actually executed, not a repo file believed to match it.
+--
+-- Its effects are already folded into supabase/migrations/*_baseline.sql. This
+-- copy exists so "why is this column here?" is answerable, and for nothing else.
+-- Re-running one replaces a live object with an older body — silently, no error.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- BASELINE MARKER — recorded, not executed.
+--
+-- The full text is supabase/migrations/20260814040000_baseline.sql in the repo
+-- (~511 KB). It is recorded here as APPLIED because production already IS this
+-- schema — the baseline was generated FROM this database, not applied to it.
+--
+-- Why the row exists: without it, tooling that reconciles supabase/migrations/
+-- against this ledger would see the baseline as pending and try to run it. It is
+-- idempotent for tables and functions but NOT for `alter table ... add constraint`,
+-- so that attempt would fail partway through and leave a confusing half-state.
+--
+-- Every migration recorded BEFORE this row is superseded by it: their effects are
+-- folded in. Their SQL is preserved under supabase/archive/ledger/ for provenance
+-- and must never be re-run.
+select 1;

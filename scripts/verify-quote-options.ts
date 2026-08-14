@@ -294,9 +294,9 @@ check('OWNER — a falsy RPC result is never reported as success',
 
 // ── 4. The schema is what enforces it, not the app ───────────────────────────
 console.log('\n═══ The database refuses what no screen should have to remember ═══')
-const SQL = read('supabase/RUN-2026-08-11-quote-options.sql')
+const SQL = read('supabase/archive/run/RUN-2026-08-11-quote-options.sql')
 const SQL_CODE = SQL.split('\n').filter(l => !l.trim().startsWith('--')).join('\n')
-const SEL_SQL = read('supabase/RUN-2026-08-11b-quote-options-selection.sql')
+const SEL_SQL = read('supabase/archive/run/RUN-2026-08-11b-quote-options-selection.sql')
 const SEL_CODE = SEL_SQL.split('\n').filter(l => !l.trim().startsWith('--')).join('\n')
 
 check('the selection is a COMPOSITE foreign key',

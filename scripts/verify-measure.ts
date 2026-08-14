@@ -59,8 +59,8 @@ const sorted = (a: readonly string[]) => [...a].sort()
 const ROOT = process.cwd()
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8')
 
-const MIGRATION = read('supabase/RUN-2026-07-16-measurement-engine-v2.sql')
-const LAWN_GUARD = read('supabase/RUN-2026-07-17-meas1-lawn-sqft-guard.sql')
+const MIGRATION = read('supabase/archive/run/RUN-2026-07-16-measurement-engine-v2.sql')
+const LAWN_GUARD = read('supabase/archive/run/RUN-2026-07-17-meas1-lawn-sqft-guard.sql')
 
 /** Every quoted token in a slice of SQL. */
 const quoted = (s: string): string[] => (s.match(/'[^']*'/g) ?? []).map(t => t.slice(1, -1))

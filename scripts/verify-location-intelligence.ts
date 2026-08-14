@@ -22,6 +22,7 @@
 // Runs the REAL modules against hand-derived fixtures, plus source assertions for
 // the invariants a fixture cannot reach. Deterministic, no network.
 
+import { portalDataSql } from './lib/schema-source'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -301,7 +302,7 @@ console.log('\nOne business cannot summarise another\'s property:')
 // This asserts nobody has.
 console.log('\nAccess notes never reach the customer portal:')
 {
-  const sql = read('supabase/CANONICAL-get_portal_data.sql')
+  const sql = portalDataSql()
   check('the canonical portal RPC does not return internal_notes',
         !/internal_notes/.test(sql), 'internal_notes is being sent to the portal')
 

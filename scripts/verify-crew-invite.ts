@@ -190,7 +190,7 @@ check('an incomplete account scan is an error, not a miss',
 
 // ── 5. The migration keeps the boundary ──────────────────────────────────────
 console.log('\n═══ The RPC-only crew boundary is untouched ═══')
-const sql = read('supabase/RUN-2026-08-09-crew-invite.sql')
+const sql = read('supabase/archive/run/RUN-2026-08-09-crew-invite.sql')
 check('no crew RLS policy is introduced', !/create policy[^\n]*crew/i.test(sql),
   'crew data access stays RPC-only — see verify:crew-access')
 check('no owner policy is dropped', !/drop policy[^\n]*(select own|update own|insert own|delete own)/i.test(sql))

@@ -1,0 +1,587 @@
+[
+ {
+  "ext": "pg_net",
+  "kind": "function",
+  "name": "_await_response(request_id bigint)"
+ },
+ {
+  "ext": "pg_net",
+  "kind": "function",
+  "name": "_encode_url_with_params_array(url text, params_array text[])"
+ },
+ {
+  "ext": "pg_net",
+  "kind": "function",
+  "name": "_http_collect_response(request_id bigint, async boolean)"
+ },
+ {
+  "ext": "pg_net",
+  "kind": "r",
+  "name": "_http_response"
+ },
+ {
+  "ext": "pg_net",
+  "kind": "function",
+  "name": "_urlencode_string(string character varying)"
+ },
+ {
+  "ext": "pg_net",
+  "kind": "function",
+  "name": "check_worker_is_up()"
+ },
+ {
+  "ext": "pg_net",
+  "kind": "function",
+  "name": "http_collect_response(request_id bigint, async boolean)"
+ },
+ {
+  "ext": "pg_net",
+  "kind": "function",
+  "name": "http_delete(url text, params jsonb, headers jsonb, timeout_milliseconds integer, body jsonb)"
+ },
+ {
+  "ext": "pg_net",
+  "kind": "function",
+  "name": "http_get(url text, params jsonb, headers jsonb, timeout_milliseconds integer)"
+ },
+ {
+  "ext": "pg_net",
+  "kind": "function",
+  "name": "http_post(url text, body jsonb, params jsonb, headers jsonb, timeout_milliseconds integer)"
+ },
+ {
+  "ext": "pg_net",
+  "kind": "r",
+  "name": "http_request_queue"
+ },
+ {
+  "ext": "pg_net",
+  "kind": "S",
+  "name": "http_request_queue_id_seq"
+ },
+ {
+  "ext": "pg_net",
+  "kind": "function",
+  "name": "wait_until_running()"
+ },
+ {
+  "ext": "pg_net",
+  "kind": "function",
+  "name": "wake()"
+ },
+ {
+  "ext": "pg_net",
+  "kind": "function",
+  "name": "worker_restart()"
+ },
+ {
+  "ext": "pg_stat_statements",
+  "kind": "v",
+  "name": "pg_stat_statements"
+ },
+ {
+  "ext": "pg_stat_statements",
+  "kind": "function",
+  "name": "pg_stat_statements(showtext boolean, OUT userid oid, OUT dbid oid, OUT toplevel boolean, OUT queryid bigint, OUT query text, OUT plans bigint, OUT total_plan_time double precision, OUT min_plan_time double precision, OUT max_plan_time double precision, OUT mean_plan_time double precision, OUT stddev_plan_time double precision, OUT calls bigint, OUT total_exec_time double precision, OUT min_exec_time double precision, OUT max_exec_time double precision, OUT mean_exec_time double precision, OUT stddev_exec_time double precision, OUT rows bigint, OUT shared_blks_hit bigint, OUT shared_blks_read bigint, OUT shared_blks_dirtied bigint, OUT shared_blks_written bigint, OUT local_blks_hit bigint, OUT local_blks_read bigint, OUT local_blks_dirtied bigint, OUT local_blks_written bigint, OUT temp_blks_read bigint, OUT temp_blks_written bigint, OUT shared_blk_read_time double precision, OUT shared_blk_write_time double precision, OUT local_blk_read_time double precision, OUT local_blk_write_time double precision, OUT temp_blk_read_time double precision, OUT temp_blk_write_time double precision, OUT wal_records bigint, OUT wal_fpi bigint, OUT wal_bytes numeric, OUT jit_functions bigint, OUT jit_generation_time double precision, OUT jit_inlining_count bigint, OUT jit_inlining_time double precision, OUT jit_optimization_count bigint, OUT jit_optimization_time double precision, OUT jit_emission_count bigint, OUT jit_emission_time double precision, OUT jit_deform_count bigint, OUT jit_deform_time double precision, OUT stats_since timestamp with time zone, OUT minmax_stats_since timestamp with time zone)"
+ },
+ {
+  "ext": "pg_stat_statements",
+  "kind": "v",
+  "name": "pg_stat_statements_info"
+ },
+ {
+  "ext": "pg_stat_statements",
+  "kind": "function",
+  "name": "pg_stat_statements_info(OUT dealloc bigint, OUT stats_reset timestamp with time zone)"
+ },
+ {
+  "ext": "pg_stat_statements",
+  "kind": "function",
+  "name": "pg_stat_statements_reset(userid oid, dbid oid, queryid bigint, minmax_only boolean)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "operator",
+  "name": "%"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "operator",
+  "name": "%>"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "operator",
+  "name": "%>>"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "operator",
+  "name": "<%"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "operator",
+  "name": "<->"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "operator",
+  "name": "<->>"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "operator",
+  "name": "<->>>"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "operator",
+  "name": "<<%"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "operator",
+  "name": "<<->"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "operator",
+  "name": "<<<->"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "gin_extract_query_trgm(text, internal, smallint, internal, internal, internal, internal)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "gin_extract_value_trgm(text, internal)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "gin_trgm_consistent(internal, smallint, text, integer, internal, internal, internal, internal)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "gin_trgm_triconsistent(internal, smallint, text, integer, internal, internal, internal)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "gtrgm_compress(internal)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "gtrgm_consistent(internal, text, smallint, oid, internal)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "gtrgm_decompress(internal)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "gtrgm_distance(internal, text, smallint, oid, internal)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "gtrgm_in(cstring)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "gtrgm_options(internal)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "gtrgm_out(gtrgm)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "gtrgm_penalty(internal, internal, internal)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "gtrgm_picksplit(internal, internal)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "gtrgm_same(gtrgm, gtrgm, internal)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "gtrgm_union(internal, internal)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "set_limit(real)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "show_limit()"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "show_trgm(text)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "similarity(text, text)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "similarity_dist(text, text)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "similarity_op(text, text)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "strict_word_similarity(text, text)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "strict_word_similarity_commutator_op(text, text)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "strict_word_similarity_dist_commutator_op(text, text)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "strict_word_similarity_dist_op(text, text)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "strict_word_similarity_op(text, text)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "word_similarity(text, text)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "word_similarity_commutator_op(text, text)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "word_similarity_dist_commutator_op(text, text)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "word_similarity_dist_op(text, text)"
+ },
+ {
+  "ext": "pg_trgm",
+  "kind": "function",
+  "name": "word_similarity_op(text, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "armor(bytea)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "armor(bytea, text[], text[])"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "crypt(text, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "dearmor(text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "decrypt(bytea, bytea, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "decrypt_iv(bytea, bytea, bytea, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "digest(bytea, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "digest(text, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "encrypt(bytea, bytea, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "encrypt_iv(bytea, bytea, bytea, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "gen_random_bytes(integer)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "gen_random_uuid()"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "gen_salt(text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "gen_salt(text, integer)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "hmac(bytea, bytea, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "hmac(text, text, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_armor_headers(text, OUT key text, OUT value text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_key_id(bytea)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_pub_decrypt(bytea, bytea)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_pub_decrypt(bytea, bytea, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_pub_decrypt(bytea, bytea, text, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_pub_decrypt_bytea(bytea, bytea)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_pub_decrypt_bytea(bytea, bytea, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_pub_decrypt_bytea(bytea, bytea, text, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_pub_encrypt(text, bytea)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_pub_encrypt(text, bytea, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_pub_encrypt_bytea(bytea, bytea)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_pub_encrypt_bytea(bytea, bytea, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_sym_decrypt(bytea, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_sym_decrypt(bytea, text, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_sym_decrypt_bytea(bytea, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_sym_decrypt_bytea(bytea, text, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_sym_encrypt(text, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_sym_encrypt(text, text, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_sym_encrypt_bytea(bytea, text)"
+ },
+ {
+  "ext": "pgcrypto",
+  "kind": "function",
+  "name": "pgp_sym_encrypt_bytea(bytea, text, text)"
+ },
+ {
+  "ext": "plpgsql",
+  "kind": "function",
+  "name": "plpgsql_call_handler()"
+ },
+ {
+  "ext": "plpgsql",
+  "kind": "function",
+  "name": "plpgsql_inline_handler(internal)"
+ },
+ {
+  "ext": "plpgsql",
+  "kind": "function",
+  "name": "plpgsql_validator(oid)"
+ },
+ {
+  "ext": "supabase_vault",
+  "kind": "function",
+  "name": "_crypto_aead_det_decrypt(message bytea, additional bytea, key_id bigint, context bytea, nonce bytea)"
+ },
+ {
+  "ext": "supabase_vault",
+  "kind": "function",
+  "name": "_crypto_aead_det_encrypt(message bytea, additional bytea, key_id bigint, context bytea, nonce bytea)"
+ },
+ {
+  "ext": "supabase_vault",
+  "kind": "function",
+  "name": "_crypto_aead_det_noncegen()"
+ },
+ {
+  "ext": "supabase_vault",
+  "kind": "function",
+  "name": "create_secret(new_secret text, new_name text, new_description text, new_key_id uuid)"
+ },
+ {
+  "ext": "supabase_vault",
+  "kind": "v",
+  "name": "decrypted_secrets"
+ },
+ {
+  "ext": "supabase_vault",
+  "kind": "r",
+  "name": "secrets"
+ },
+ {
+  "ext": "supabase_vault",
+  "kind": "function",
+  "name": "update_secret(secret_id uuid, new_secret text, new_name text, new_description text, new_key_id uuid)"
+ },
+ {
+  "ext": "uuid-ossp",
+  "kind": "function",
+  "name": "uuid_generate_v1()"
+ },
+ {
+  "ext": "uuid-ossp",
+  "kind": "function",
+  "name": "uuid_generate_v1mc()"
+ },
+ {
+  "ext": "uuid-ossp",
+  "kind": "function",
+  "name": "uuid_generate_v3(namespace uuid, name text)"
+ },
+ {
+  "ext": "uuid-ossp",
+  "kind": "function",
+  "name": "uuid_generate_v4()"
+ },
+ {
+  "ext": "uuid-ossp",
+  "kind": "function",
+  "name": "uuid_generate_v5(namespace uuid, name text)"
+ },
+ {
+  "ext": "uuid-ossp",
+  "kind": "function",
+  "name": "uuid_nil()"
+ },
+ {
+  "ext": "uuid-ossp",
+  "kind": "function",
+  "name": "uuid_ns_dns()"
+ },
+ {
+  "ext": "uuid-ossp",
+  "kind": "function",
+  "name": "uuid_ns_oid()"
+ },
+ {
+  "ext": "uuid-ossp",
+  "kind": "function",
+  "name": "uuid_ns_url()"
+ },
+ {
+  "ext": "uuid-ossp",
+  "kind": "function",
+  "name": "uuid_ns_x500()"
+ }
+]

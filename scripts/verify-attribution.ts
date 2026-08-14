@@ -71,7 +71,7 @@ const ROOT = join(__dirname, '..')
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8').replace(/\r\n?/g, '\n')
 
 const LIB = read('src/lib/attribution.ts')
-const SQL = read('supabase/RUN-2026-08-11-source-attribution.sql')
+const SQL = read('supabase/archive/run/RUN-2026-08-11-source-attribution.sql')
 const INTAKE = read('src/lib/intake.ts')
 const BOOKING = read('src/app/book/[token]/BookingClient.tsx')
 const PAGE = read('src/app/dashboard/intelligence/page.tsx')
@@ -87,7 +87,7 @@ const IMPORT = read('src/app/dashboard/customers/import/page.tsx')
 // The importer's rules moved into the engine; the page is now the surface only.
 const IMPORT_LIB = read('src/lib/customerImport.ts')
 const TYPES = read('src/types/index.ts')
-const BACKFILL = read('supabase/RUN-2026-08-11-backfill-lead-source.sql')
+const BACKFILL = read('supabase/archive/run/RUN-2026-08-11-backfill-lead-source.sql')
 
 /**
  * Strip comments before asserting that something is ABSENT.

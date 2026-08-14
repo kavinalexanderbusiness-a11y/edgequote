@@ -1,0 +1,3670 @@
+[
+ {
+  "def": "UNIQUE (key_hash)",
+  "tbl": "api_keys",
+  "conname": "api_keys_key_hash_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "api_keys",
+  "conname": "api_keys_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "api_keys",
+  "conname": "api_keys_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((decision = ANY (ARRAY['fired'::text, 'suppressed'::text])))",
+  "tbl": "automation_runs",
+  "conname": "automation_runs_decision_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "automation_runs",
+  "conname": "automation_runs_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (signal_id) REFERENCES automation_signals(id) ON DELETE SET NULL",
+  "tbl": "automation_runs",
+  "conname": "automation_runs_signal_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((suppressed_reason = ANY (ARRAY['mode_off'::text, 'mode_suggest'::text, 'quiet_hours'::text, 'frequency_cap'::text, 'no_consent'::text, 'deduped'::text, 'signal_absent'::text])))",
+  "tbl": "automation_runs",
+  "conname": "automation_runs_suppressed_reason_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "automation_runs",
+  "conname": "automation_runs_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "automation_signals",
+  "conname": "automation_signals_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "automation_signals",
+  "conname": "automation_signals_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (job, ran_on)",
+  "tbl": "automation_sweeps",
+  "conname": "automation_sweeps_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL",
+  "tbl": "beta_invites",
+  "conname": "beta_invites_created_by_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "beta_invites",
+  "conname": "beta_invites_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (redeemed_by) REFERENCES auth.users(id) ON DELETE SET NULL",
+  "tbl": "beta_invites",
+  "conname": "beta_invites_redeemed_by_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (reserved_by) REFERENCES auth.users(id) ON DELETE SET NULL",
+  "tbl": "beta_invites",
+  "conname": "beta_invites_reserved_by_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((token_hash ~ '^[0-9a-f]{64}$'::text))",
+  "tbl": "beta_invites",
+  "conname": "beta_invites_token_hash_is_sha256",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (token_hash)",
+  "tbl": "beta_invites",
+  "conname": "beta_invites_token_hash_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((autopay_charge_mode = ANY (ARRAY['auto'::text, 'manual_review'::text])))",
+  "tbl": "business_settings",
+  "conname": "business_settings_autopay_charge_mode_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((business_type ~ '^[a-z][a-z0-9_]*$'::text))",
+  "tbl": "business_settings",
+  "conname": "business_settings_business_type_format",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((payment_fee_strategy = ANY (ARRAY['absorb'::text, 'global_price_increase'::text, 'etransfer_discount'::text])))",
+  "tbl": "business_settings",
+  "conname": "business_settings_fee_strategy_chk",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((ot_daily_hours IS NULL) OR ((ot_daily_hours > (0)::numeric) AND (ot_daily_hours <= (24)::numeric))))",
+  "tbl": "business_settings",
+  "conname": "business_settings_ot_daily_range",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((ot_multiplier >= (1)::numeric))",
+  "tbl": "business_settings",
+  "conname": "business_settings_ot_multiplier_min",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((ot_weekly_hours IS NULL) OR ((ot_weekly_hours > (0)::numeric) AND (ot_weekly_hours <= (168)::numeric))))",
+  "tbl": "business_settings",
+  "conname": "business_settings_ot_weekly_range",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((pay_period = ANY (ARRAY['weekly'::text, 'biweekly'::text, 'semimonthly'::text, 'monthly'::text])))",
+  "tbl": "business_settings",
+  "conname": "business_settings_pay_period_kind",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((pay_week_starts_on >= 0) AND (pay_week_starts_on <= 6)))",
+  "tbl": "business_settings",
+  "conname": "business_settings_pay_week_start_range",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "business_settings",
+  "conname": "business_settings_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "business_settings",
+  "conname": "business_settings_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id)",
+  "tbl": "business_settings",
+  "conname": "business_settings_user_id_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((amount > (0)::numeric))",
+  "tbl": "change_orders",
+  "conname": "change_orders_amount_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id, customer_id) REFERENCES customers(user_id, id) ON DELETE CASCADE",
+  "tbl": "change_orders",
+  "conname": "change_orders_customer_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((decided_via IS NULL) OR (decided_via = ANY (ARRAY['portal'::text, 'owner'::text]))))",
+  "tbl": "change_orders",
+  "conname": "change_orders_decided_via_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((status = ANY (ARRAY['approved'::text, 'declined'::text])) = (decided_via IS NOT NULL)))",
+  "tbl": "change_orders",
+  "conname": "change_orders_decided_via_present",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((length(btrim(description)) > 0))",
+  "tbl": "change_orders",
+  "conname": "change_orders_description_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (id, user_id)",
+  "tbl": "change_orders",
+  "conname": "change_orders_id_user_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE CASCADE",
+  "tbl": "change_orders",
+  "conname": "change_orders_job_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "change_orders",
+  "conname": "change_orders_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id, quote_id) REFERENCES quotes(user_id, id) ON DELETE SET NULL",
+  "tbl": "change_orders",
+  "conname": "change_orders_quote_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['draft'::text, 'pending'::text, 'approved'::text, 'declined'::text, 'cancelled'::text])))",
+  "tbl": "change_orders",
+  "conname": "change_orders_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((((status = 'draft'::text) AND (sent_at IS NULL) AND (approved_at IS NULL) AND (declined_at IS NULL) AND (cancelled_at IS NULL)) OR ((status = 'pending'::text) AND (sent_at IS NOT NULL) AND (approved_at IS NULL) AND (declined_at IS NULL) AND (cancelled_at IS NULL)) OR ((status = 'approved'::text) AND (approved_at IS NOT NULL) AND (declined_at IS NULL) AND (cancelled_at IS NULL)) OR ((status = 'declined'::text) AND (declined_at IS NOT NULL) AND (approved_at IS NULL) AND (cancelled_at IS NULL)) OR ((status = 'cancelled'::text) AND (cancelled_at IS NOT NULL) AND (approved_at IS NULL) AND (declined_at IS NULL))))",
+  "tbl": "change_orders",
+  "conname": "change_orders_status_stamps",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "change_orders",
+  "conname": "change_orders_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "consent_changes",
+  "conname": "consent_changes_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "consent_changes",
+  "conname": "consent_changes_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "consent_changes",
+  "conname": "consent_changes_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (asset_id) REFERENCES marketing_assets(id) ON DELETE CASCADE",
+  "tbl": "content_pieces",
+  "conname": "content_pieces_asset_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (campaign_id) REFERENCES marketing_campaigns(id) ON DELETE SET NULL",
+  "tbl": "content_pieces",
+  "conname": "content_pieces_campaign_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "content_pieces",
+  "conname": "content_pieces_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL",
+  "tbl": "content_pieces",
+  "conname": "content_pieces_job_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((kind = ANY (ARRAY['organic'::text, 'ad'::text, 'print'::text])))",
+  "tbl": "content_pieces",
+  "conname": "content_pieces_kind_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "content_pieces",
+  "conname": "content_pieces_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['draft'::text, 'approved'::text, 'published'::text, 'scheduled'::text, 'failed'::text])))",
+  "tbl": "content_pieces",
+  "conname": "content_pieces_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "content_pieces",
+  "conname": "content_pieces_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (assigned_to) REFERENCES technicians(id) ON DELETE SET NULL",
+  "tbl": "conversations",
+  "conname": "conversations_assigned_to_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE",
+  "tbl": "conversations",
+  "conname": "conversations_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "conversations",
+  "conname": "conversations_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, customer_id)",
+  "tbl": "conversations",
+  "conname": "conversations_user_id_customer_id_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "conversations",
+  "conname": "conversations_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE",
+  "tbl": "crew_media",
+  "conname": "crew_media_job_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((kind = ANY (ARRAY['photo'::text, 'video'::text])))",
+  "tbl": "crew_media",
+  "conname": "crew_media_kind_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (message_id) REFERENCES crew_messages(id) ON DELETE CASCADE",
+  "tbl": "crew_media",
+  "conname": "crew_media_message_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "crew_media",
+  "conname": "crew_media_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (storage_path)",
+  "tbl": "crew_media",
+  "conname": "crew_media_storage_path_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "crew_media",
+  "conname": "crew_media_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE",
+  "tbl": "crew_message_reads",
+  "conname": "crew_message_reads_job_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (job_id, reader_id)",
+  "tbl": "crew_message_reads",
+  "conname": "crew_message_reads_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "crew_message_reads",
+  "conname": "crew_message_reads_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((author_kind = ANY (ARRAY['owner'::text, 'crew'::text, 'system'::text])))",
+  "tbl": "crew_messages",
+  "conname": "crew_messages_author_kind",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (author_technician_id) REFERENCES technicians(id) ON DELETE SET NULL",
+  "tbl": "crew_messages",
+  "conname": "crew_messages_author_technician_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((char_length(body) <= 2000))",
+  "tbl": "crew_messages",
+  "conname": "crew_messages_body_length",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((btrim(body) <> ''::text))",
+  "tbl": "crew_messages",
+  "conname": "crew_messages_body_nonblank",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE",
+  "tbl": "crew_messages",
+  "conname": "crew_messages_job_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "crew_messages",
+  "conname": "crew_messages_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "crew_messages",
+  "conname": "crew_messages_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "crews",
+  "conname": "crews_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "crews",
+  "conname": "crews_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (campaign_id, customer_id, period_key)",
+  "tbl": "crm_campaign_log",
+  "conname": "crm_campaign_log_campaign_id_customer_id_period_key_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (campaign_id) REFERENCES crm_campaigns(id) ON DELETE CASCADE",
+  "tbl": "crm_campaign_log",
+  "conname": "crm_campaign_log_campaign_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE",
+  "tbl": "crm_campaign_log",
+  "conname": "crm_campaign_log_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL",
+  "tbl": "crm_campaign_log",
+  "conname": "crm_campaign_log_message_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "crm_campaign_log",
+  "conname": "crm_campaign_log_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "crm_campaign_log",
+  "conname": "crm_campaign_log_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((kind = ANY (ARRAY['birthday'::text, 'anniversary'::text, 'win_back'::text, 'broadcast'::text, 'seasonal'::text, 'referral'::text, 'review'::text])))",
+  "tbl": "crm_campaign_presets",
+  "conname": "crm_campaign_presets_kind_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "crm_campaign_presets",
+  "conname": "crm_campaign_presets_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "crm_campaign_presets",
+  "conname": "crm_campaign_presets_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, name)",
+  "tbl": "crm_campaign_presets",
+  "conname": "crm_campaign_presets_user_id_name_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((kind = ANY (ARRAY['birthday'::text, 'anniversary'::text, 'win_back'::text, 'broadcast'::text, 'seasonal'::text, 'referral'::text, 'review'::text])))",
+  "tbl": "crm_campaigns",
+  "conname": "crm_campaigns_kind_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "crm_campaigns",
+  "conname": "crm_campaigns_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "crm_campaigns",
+  "conname": "crm_campaigns_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((rows_detected >= 0) AND (customers_created >= 0) AND (rows_skipped_existing >= 0) AND (rows_failed >= 0) AND (properties_created >= 0)))",
+  "tbl": "customer_imports",
+  "conname": "customer_imports_counts_sane",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((initiated_by IS NULL) OR (char_length(initiated_by) <= 200)))",
+  "tbl": "customer_imports",
+  "conname": "customer_imports_initiated_by_len",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "customer_imports",
+  "conname": "customer_imports_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((source_name IS NULL) OR (char_length(source_name) <= 200)))",
+  "tbl": "customer_imports",
+  "conname": "customer_imports_source_name_len",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "customer_imports",
+  "conname": "customer_imports_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE",
+  "tbl": "customer_portal_tokens",
+  "conname": "customer_portal_tokens_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (token)",
+  "tbl": "customer_portal_tokens",
+  "conname": "customer_portal_tokens_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "customer_portal_tokens",
+  "conname": "customer_portal_tokens_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((autopay_charge_mode = ANY (ARRAY['auto'::text, 'manual_review'::text])))",
+  "tbl": "customers",
+  "conname": "customers_autopay_charge_mode_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "customers",
+  "conname": "customers_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (referred_by_customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "customers",
+  "conname": "customers_referred_by_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "customers",
+  "conname": "customers_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, id)",
+  "tbl": "customers",
+  "conname": "customers_user_id_id_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "data_exports",
+  "conname": "data_exports_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "data_exports",
+  "conname": "data_exports_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "day_statuses",
+  "conname": "day_statuses_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, date)",
+  "tbl": "day_statuses",
+  "conname": "day_statuses_user_id_date_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "day_statuses",
+  "conname": "day_statuses_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE CASCADE",
+  "tbl": "dispatch_notes",
+  "conname": "dispatch_notes_crew_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE NULLS NOT DISTINCT (user_id, date, crew_id)",
+  "tbl": "dispatch_notes",
+  "conname": "dispatch_notes_day_crew_unique",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "dispatch_notes",
+  "conname": "dispatch_notes_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "dispatch_notes",
+  "conname": "dispatch_notes_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL",
+  "tbl": "equipment",
+  "conname": "equipment_crew_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "equipment",
+  "conname": "equipment_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "equipment",
+  "conname": "equipment_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE CASCADE",
+  "tbl": "equipment_docs",
+  "conname": "equipment_docs_equipment_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "equipment_docs",
+  "conname": "equipment_docs_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "equipment_docs",
+  "conname": "equipment_docs_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE CASCADE",
+  "tbl": "equipment_service",
+  "conname": "equipment_service_equipment_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "equipment_service",
+  "conname": "equipment_service_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "equipment_service",
+  "conname": "equipment_service_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((kind = ANY (ARRAY['operating'::text, 'owner_draw'::text])))",
+  "tbl": "expense_categories",
+  "conname": "expense_categories_kind_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "expense_categories",
+  "conname": "expense_categories_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "expense_categories",
+  "conname": "expense_categories_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((amount >= (0)::numeric))",
+  "tbl": "expenses",
+  "conname": "expenses_amount_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (category_id) REFERENCES expense_categories(id) ON DELETE SET NULL",
+  "tbl": "expenses",
+  "conname": "expenses_category_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE SET NULL (job_id)",
+  "tbl": "expenses",
+  "conname": "expenses_job_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "expenses",
+  "conname": "expenses_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((tax_amount >= (0)::numeric))",
+  "tbl": "expenses",
+  "conname": "expenses_tax_amount_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((tax_amount <= amount))",
+  "tbl": "expenses",
+  "conname": "expenses_tax_within_amount",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "expenses",
+  "conname": "expenses_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE SET NULL",
+  "tbl": "expenses",
+  "conname": "expenses_vendor_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((cost >= (0)::numeric))",
+  "tbl": "fixed_assets",
+  "conname": "fixed_assets_cost_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((method <> 'declining_balance'::text) OR (declining_rate IS NOT NULL)))",
+  "tbl": "fixed_assets",
+  "conname": "fixed_assets_db_needs_rate",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((declining_rate > (0)::numeric) AND (declining_rate <= (100)::numeric)))",
+  "tbl": "fixed_assets",
+  "conname": "fixed_assets_declining_rate_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((disposed_at IS NULL) OR (disposed_at >= in_service_date)))",
+  "tbl": "fixed_assets",
+  "conname": "fixed_assets_disposal_after_service",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE SET NULL",
+  "tbl": "fixed_assets",
+  "conname": "fixed_assets_equipment_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (expense_id) REFERENCES expenses(id) ON DELETE SET NULL",
+  "tbl": "fixed_assets",
+  "conname": "fixed_assets_expense_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((method = ANY (ARRAY['straight_line'::text, 'declining_balance'::text, 'none'::text])))",
+  "tbl": "fixed_assets",
+  "conname": "fixed_assets_method_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "fixed_assets",
+  "conname": "fixed_assets_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((salvage_value >= (0)::numeric))",
+  "tbl": "fixed_assets",
+  "conname": "fixed_assets_salvage_value_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((salvage_value <= cost))",
+  "tbl": "fixed_assets",
+  "conname": "fixed_assets_salvage_within_cost",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((method <> 'straight_line'::text) OR (useful_life_years IS NOT NULL)))",
+  "tbl": "fixed_assets",
+  "conname": "fixed_assets_sl_needs_life",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((tax_amount >= (0)::numeric))",
+  "tbl": "fixed_assets",
+  "conname": "fixed_assets_tax_amount_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((tax_amount <= cost))",
+  "tbl": "fixed_assets",
+  "conname": "fixed_assets_tax_within_cost",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((useful_life_years > (0)::numeric))",
+  "tbl": "fixed_assets",
+  "conname": "fixed_assets_useful_life_years_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "fixed_assets",
+  "conname": "fixed_assets_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE SET NULL",
+  "tbl": "fixed_assets",
+  "conname": "fixed_assets_vendor_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((((status = 'open'::text) AND (completed_at IS NULL)) OR ((status = 'done'::text) AND (completed_at IS NOT NULL))))",
+  "tbl": "follow_ups",
+  "conname": "follow_ups_completion_consistent",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id, customer_id) REFERENCES customers(user_id, id) ON DELETE CASCADE",
+  "tbl": "follow_ups",
+  "conname": "follow_ups_customer_same_tenant",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "follow_ups",
+  "conname": "follow_ups_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id, quote_id) REFERENCES quotes(user_id, id) ON DELETE SET NULL (quote_id)",
+  "tbl": "follow_ups",
+  "conname": "follow_ups_quote_same_tenant",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((length(btrim(reason)) >= 1) AND (length(btrim(reason)) <= 500)))",
+  "tbl": "follow_ups",
+  "conname": "follow_ups_reason_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((source = ANY (ARRAY['customer'::text, 'quote'::text, 'conversation'::text])))",
+  "tbl": "follow_ups",
+  "conname": "follow_ups_source_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['open'::text, 'done'::text])))",
+  "tbl": "follow_ups",
+  "conname": "follow_ups_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "follow_ups",
+  "conname": "follow_ups_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((default_hours >= (0)::numeric) AND (default_hours <= (24)::numeric)))",
+  "tbl": "holidays",
+  "conname": "holidays_hours_range",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, date)",
+  "tbl": "holidays",
+  "conname": "holidays_one_per_day",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "holidays",
+  "conname": "holidays_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "holidays",
+  "conname": "holidays_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (hook_id) REFERENCES inbound_webhooks(id) ON DELETE CASCADE",
+  "tbl": "inbound_events",
+  "conname": "inbound_events_hook_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "inbound_events",
+  "conname": "inbound_events_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "inbound_events",
+  "conname": "inbound_events_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((action = ANY (ARRAY['lead'::text, 'customer'::text])))",
+  "tbl": "inbound_webhooks",
+  "conname": "inbound_webhooks_action_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "inbound_webhooks",
+  "conname": "inbound_webhooks_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (token)",
+  "tbl": "inbound_webhooks",
+  "conname": "inbound_webhooks_token_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "inbound_webhooks",
+  "conname": "inbound_webhooks_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "integration_events",
+  "conname": "integration_events_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "integration_events",
+  "conname": "integration_events_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "integrations_config",
+  "conname": "integrations_config_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((id = 1))",
+  "tbl": "integrations_config",
+  "conname": "integrations_config_singleton",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "invoices",
+  "conname": "invoices_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((deposit_amount IS NULL) OR (deposit_amount > (0)::numeric)))",
+  "tbl": "invoices",
+  "conname": "invoices_deposit_amount_positive",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((discount_type IS NULL) OR (discount_type = ANY (ARRAY['amount'::text, 'percent'::text]))))",
+  "tbl": "invoices",
+  "conname": "invoices_discount_type_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL",
+  "tbl": "invoices",
+  "conname": "invoices_job_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((payment_method IS NULL) OR (payment_method = ANY (ARRAY['stripe'::text, 'etransfer'::text, 'cash'::text, 'cheque'::text]))))",
+  "tbl": "invoices",
+  "conname": "invoices_payment_method_chk",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "invoices",
+  "conname": "invoices_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL",
+  "tbl": "invoices",
+  "conname": "invoices_property_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL",
+  "tbl": "invoices",
+  "conname": "invoices_quote_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['draft'::text, 'unpaid'::text, 'sent'::text, 'partial'::text, 'paid'::text, 'overpaid'::text, 'cancelled'::text])))",
+  "tbl": "invoices",
+  "conname": "invoices_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "invoices",
+  "conname": "invoices_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (change_order_id, user_id) REFERENCES change_orders(id, user_id) ON DELETE CASCADE",
+  "tbl": "job_line_items",
+  "conname": "job_line_items_change_order_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE CASCADE",
+  "tbl": "job_line_items",
+  "conname": "job_line_items_job_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "job_line_items",
+  "conname": "job_line_items_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "job_line_items",
+  "conname": "job_line_items_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "job_photos",
+  "conname": "job_photos_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL",
+  "tbl": "job_photos",
+  "conname": "job_photos_job_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "job_photos",
+  "conname": "job_photos_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE",
+  "tbl": "job_photos",
+  "conname": "job_photos_property_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "job_photos",
+  "conname": "job_photos_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL",
+  "tbl": "job_price_changes",
+  "conname": "job_price_changes_job_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "job_price_changes",
+  "conname": "job_price_changes_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL",
+  "tbl": "job_price_changes",
+  "conname": "job_price_changes_quote_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "job_price_changes",
+  "conname": "job_price_changes_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "job_recurrences",
+  "conname": "job_recurrences_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((freq = ANY (ARRAY['weekly'::text, 'biweekly'::text, 'monthly'::text])))",
+  "tbl": "job_recurrences",
+  "conname": "job_recurrences_freq_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((interval_unit = ANY (ARRAY['day'::text, 'week'::text, 'month'::text])))",
+  "tbl": "job_recurrences",
+  "conname": "job_recurrences_interval_unit_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "job_recurrences",
+  "conname": "job_recurrences_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "job_recurrences",
+  "conname": "job_recurrences_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, id)",
+  "tbl": "job_recurrences",
+  "conname": "job_recurrences_user_id_id_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((ended_at IS NULL) OR (started_at IS NULL) OR (ended_at >= started_at)))",
+  "tbl": "job_work_sessions",
+  "conname": "job_work_sessions_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE CASCADE",
+  "tbl": "job_work_sessions",
+  "conname": "job_work_sessions_job_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((minutes > 0) AND (minutes <= 10080)))",
+  "tbl": "job_work_sessions",
+  "conname": "job_work_sessions_minutes_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((note IS NULL) OR (char_length(note) <= 280)))",
+  "tbl": "job_work_sessions",
+  "conname": "job_work_sessions_note_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "job_work_sessions",
+  "conname": "job_work_sessions_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((source = ANY (ARRAY['clock'::text, 'manual'::text, 'carried'::text])))",
+  "tbl": "job_work_sessions",
+  "conname": "job_work_sessions_source_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "job_work_sessions",
+  "conname": "job_work_sessions_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((workers >= 1) AND (workers <= 50)))",
+  "tbl": "job_work_sessions",
+  "conname": "job_work_sessions_workers_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL",
+  "tbl": "jobs",
+  "conname": "jobs_crew_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "jobs",
+  "conname": "jobs_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (id, user_id)",
+  "tbl": "jobs",
+  "conname": "jobs_id_user_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "jobs",
+  "conname": "jobs_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL",
+  "tbl": "jobs",
+  "conname": "jobs_property_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL",
+  "tbl": "jobs",
+  "conname": "jobs_quote_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (recurrence_id) REFERENCES job_recurrences(id) ON DELETE SET NULL",
+  "tbl": "jobs",
+  "conname": "jobs_recurrence_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['scheduled'::text, 'in_progress'::text, 'completed'::text, 'cancelled'::text])))",
+  "tbl": "jobs",
+  "conname": "jobs_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "jobs",
+  "conname": "jobs_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL",
+  "tbl": "labor_observations",
+  "conname": "labor_observations_job_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "labor_observations",
+  "conname": "labor_observations_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL",
+  "tbl": "labor_observations",
+  "conname": "labor_observations_property_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "labor_observations",
+  "conname": "labor_observations_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, job_id)",
+  "tbl": "labor_observations",
+  "conname": "labor_observations_user_id_job_id_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((current_balance >= (0)::numeric))",
+  "tbl": "liabilities",
+  "conname": "liabilities_current_balance_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((interest_rate >= (0)::numeric))",
+  "tbl": "liabilities",
+  "conname": "liabilities_interest_rate_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((kind = ANY (ARRAY['loan'::text, 'credit_card'::text, 'line_of_credit'::text, 'other'::text])))",
+  "tbl": "liabilities",
+  "conname": "liabilities_kind_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "liabilities",
+  "conname": "liabilities_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "liabilities",
+  "conname": "liabilities_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (best_after_photo_id) REFERENCES job_photos(id) ON DELETE SET NULL",
+  "tbl": "marketing_assets",
+  "conname": "marketing_assets_best_after_photo_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (best_before_photo_id) REFERENCES job_photos(id) ON DELETE SET NULL",
+  "tbl": "marketing_assets",
+  "conname": "marketing_assets_best_before_photo_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "marketing_assets",
+  "conname": "marketing_assets_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE",
+  "tbl": "marketing_assets",
+  "conname": "marketing_assets_job_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "marketing_assets",
+  "conname": "marketing_assets_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL",
+  "tbl": "marketing_assets",
+  "conname": "marketing_assets_property_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['candidate'::text, 'used'::text, 'dismissed'::text])))",
+  "tbl": "marketing_assets",
+  "conname": "marketing_assets_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "marketing_assets",
+  "conname": "marketing_assets_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, job_id)",
+  "tbl": "marketing_assets",
+  "conname": "marketing_assets_user_id_job_id_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((kind = ANY (ARRAY['spring'::text, 'summer'::text, 'fall'::text, 'winter'::text, 'holiday'::text, 'rain_delay'::text, 'referral'::text, 'review'::text, 'winback'::text, 'custom'::text])))",
+  "tbl": "marketing_campaigns",
+  "conname": "marketing_campaigns_kind_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "marketing_campaigns",
+  "conname": "marketing_campaigns_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['draft'::text, 'active'::text, 'completed'::text, 'archived'::text])))",
+  "tbl": "marketing_campaigns",
+  "conname": "marketing_campaigns_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "marketing_campaigns",
+  "conname": "marketing_campaigns_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "measurements",
+  "conname": "measurements_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "measurements",
+  "conname": "measurements_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL",
+  "tbl": "measurements",
+  "conname": "measurements_property_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL",
+  "tbl": "measurements",
+  "conname": "measurements_quote_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "measurements",
+  "conname": "measurements_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (user_id, client_message_id)",
+  "tbl": "message_sends",
+  "conname": "message_sends_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "message_sends",
+  "conname": "message_sends_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE",
+  "tbl": "messages",
+  "conname": "messages_conversation_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "messages",
+  "conname": "messages_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "messages",
+  "conname": "messages_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "messages",
+  "conname": "messages_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (converted_customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "neighbor_leads",
+  "conname": "neighbor_leads_converted_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "neighbor_leads",
+  "conname": "neighbor_leads_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (source_customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "neighbor_leads",
+  "conname": "neighbor_leads_source_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (source_property_id) REFERENCES properties(id) ON DELETE SET NULL",
+  "tbl": "neighbor_leads",
+  "conname": "neighbor_leads_source_property_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (source_quote_id) REFERENCES quotes(id) ON DELETE SET NULL",
+  "tbl": "neighbor_leads",
+  "conname": "neighbor_leads_source_quote_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['prospect'::text, 'contacted'::text, 'quoted'::text, 'won'::text, 'lost'::text])))",
+  "tbl": "neighbor_leads",
+  "conname": "neighbor_leads_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "neighbor_leads",
+  "conname": "neighbor_leads_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "notification_log",
+  "conname": "notification_log_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL",
+  "tbl": "notification_log",
+  "conname": "notification_log_job_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL",
+  "tbl": "notification_log",
+  "conname": "notification_log_message_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "notification_log",
+  "conname": "notification_log_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "notification_log",
+  "conname": "notification_log_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "notifications",
+  "conname": "notifications_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "notifications",
+  "conname": "notifications_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "notifications",
+  "conname": "notifications_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (equipment_service_id) REFERENCES equipment_service(id) ON DELETE CASCADE",
+  "tbl": "part_movements",
+  "conname": "part_movements_equipment_service_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (part_id) REFERENCES parts(id) ON DELETE CASCADE",
+  "tbl": "part_movements",
+  "conname": "part_movements_part_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "part_movements",
+  "conname": "part_movements_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (purchase_order_item_id) REFERENCES purchase_order_items(id) ON DELETE CASCADE",
+  "tbl": "part_movements",
+  "conname": "part_movements_purchase_order_item_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "part_movements",
+  "conname": "part_movements_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "parts",
+  "conname": "parts_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL",
+  "tbl": "parts",
+  "conname": "parts_supplier_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "parts",
+  "conname": "parts_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "password_reset_requests",
+  "conname": "password_reset_requests_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((regular_minutes >= 0) AND (ot_minutes >= 0)))",
+  "tbl": "pay_run_lines",
+  "conname": "pay_run_lines_minutes_nonneg",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((length(TRIM(BOTH FROM technician_name)) > 0))",
+  "tbl": "pay_run_lines",
+  "conname": "pay_run_lines_name_present",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (pay_run_id, technician_id)",
+  "tbl": "pay_run_lines",
+  "conname": "pay_run_lines_one_per_tech",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (pay_run_id) REFERENCES pay_runs(id) ON DELETE CASCADE",
+  "tbl": "pay_run_lines",
+  "conname": "pay_run_lines_pay_run_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "pay_run_lines",
+  "conname": "pay_run_lines_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (technician_id)",
+  "tbl": "pay_run_lines",
+  "conname": "pay_run_lines_technician_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "pay_run_lines",
+  "conname": "pay_run_lines_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((period_kind = ANY (ARRAY['weekly'::text, 'biweekly'::text, 'semimonthly'::text, 'monthly'::text])))",
+  "tbl": "pay_runs",
+  "conname": "pay_runs_kind_known",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((regular_minutes >= 0) AND (ot_minutes >= 0)))",
+  "tbl": "pay_runs",
+  "conname": "pay_runs_minutes_nonneg",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((ot_multiplier >= (1)::numeric))",
+  "tbl": "pay_runs",
+  "conname": "pay_runs_multiplier_min",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, period_start, period_end)",
+  "tbl": "pay_runs",
+  "conname": "pay_runs_one_per_period",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((period_end >= period_start))",
+  "tbl": "pay_runs",
+  "conname": "pay_runs_period_order",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "pay_runs",
+  "conname": "pay_runs_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "pay_runs",
+  "conname": "pay_runs_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((pay_week_starts_on >= 0) AND (pay_week_starts_on <= 6)))",
+  "tbl": "pay_runs",
+  "conname": "pay_runs_week_start_range",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE",
+  "tbl": "payment_methods",
+  "conname": "payment_methods_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "payment_methods",
+  "conname": "payment_methods_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (stripe_payment_method_id)",
+  "tbl": "payment_methods",
+  "conname": "payment_methods_stripe_payment_method_id_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "payment_methods",
+  "conname": "payment_methods_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "payments",
+  "conname": "payments_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE SET NULL",
+  "tbl": "payments",
+  "conname": "payments_invoice_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((kind = ANY (ARRAY['payment'::text, 'credit'::text, 'refund'::text])))",
+  "tbl": "payments",
+  "conname": "payments_kind_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "payments",
+  "conname": "payments_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id, quote_id) REFERENCES quotes(user_id, id) ON DELETE SET NULL (quote_id)",
+  "tbl": "payments",
+  "conname": "payments_quote_tenant_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (stripe_session_id)",
+  "tbl": "payments",
+  "conname": "payments_stripe_session_id_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "payments",
+  "conname": "payments_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (user_id)",
+  "tbl": "platform_capabilities",
+  "conname": "platform_capabilities_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "platform_capabilities",
+  "conname": "platform_capabilities_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (user_id)",
+  "tbl": "platform_operators",
+  "conname": "platform_operators_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "platform_operators",
+  "conname": "platform_operators_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "portal_access_requests",
+  "conname": "portal_access_requests_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((base_charge >= (0)::numeric))",
+  "tbl": "pricing_config_versions",
+  "conname": "pricing_config_versions_base_charge_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((budget_mult > (0)::numeric))",
+  "tbl": "pricing_config_versions",
+  "conname": "pricing_config_versions_budget_mult_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((crew_cost_per_hour >= (0)::numeric))",
+  "tbl": "pricing_config_versions",
+  "conname": "pricing_config_versions_crew_cost_per_hour_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((fee_recovery_percent >= (0)::numeric))",
+  "tbl": "pricing_config_versions",
+  "conname": "pricing_config_versions_fee_recovery_percent_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((market_mult > (0)::numeric))",
+  "tbl": "pricing_config_versions",
+  "conname": "pricing_config_versions_market_mult_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((mow_rate_per_1000 >= (0)::numeric))",
+  "tbl": "pricing_config_versions",
+  "conname": "pricing_config_versions_mow_rate_per_1000_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "pricing_config_versions",
+  "conname": "pricing_config_versions_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((premium_mult > (0)::numeric))",
+  "tbl": "pricing_config_versions",
+  "conname": "pricing_config_versions_premium_mult_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((recommended_mult > (0)::numeric))",
+  "tbl": "pricing_config_versions",
+  "conname": "pricing_config_versions_recommended_mult_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((source = ANY (ARRAY['recorded'::text, 'reconstructed'::text])))",
+  "tbl": "pricing_config_versions",
+  "conname": "pricing_config_versions_source_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((travel_rate_per_km >= (0)::numeric))",
+  "tbl": "pricing_config_versions",
+  "conname": "pricing_config_versions_travel_rate_per_km_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "pricing_config_versions",
+  "conname": "pricing_config_versions_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE",
+  "tbl": "properties",
+  "conname": "properties_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (id, user_id)",
+  "tbl": "properties",
+  "conname": "properties_id_user_unique",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "properties",
+  "conname": "properties_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "properties",
+  "conname": "properties_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "property_intelligence",
+  "conname": "property_intelligence_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL",
+  "tbl": "property_intelligence",
+  "conname": "property_intelligence_job_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "property_intelligence",
+  "conname": "property_intelligence_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE",
+  "tbl": "property_intelligence",
+  "conname": "property_intelligence_property_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((source = ANY (ARRAY['satellite'::text, 'photos'::text, 'combined'::text])))",
+  "tbl": "property_intelligence",
+  "conname": "property_intelligence_source_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['active'::text, 'superseded'::text, 'archived'::text])))",
+  "tbl": "property_intelligence",
+  "conname": "property_intelligence_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "property_intelligence",
+  "conname": "property_intelligence_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((action = ANY (ARRAY['measured'::text, 'removed'::text])))",
+  "tbl": "property_measurement_events",
+  "conname": "property_measurement_events_action_known",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((kind = ANY (ARRAY['lawn'::text, 'mulch'::text, 'gravel'::text, 'rock'::text, 'concrete'::text, 'fencing'::text, 'hedges'::text, 'trees'::text, 'snow'::text])))",
+  "tbl": "property_measurement_events",
+  "conname": "property_measurement_events_kind_known",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "property_measurement_events",
+  "conname": "property_measurement_events_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "property_measurement_events",
+  "conname": "property_measurement_events_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((value >= (0)::numeric))",
+  "tbl": "property_measurement_events",
+  "conname": "property_measurement_events_value_nonneg",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text])))",
+  "tbl": "property_measurements",
+  "conname": "property_measurements_confidence_known",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((kind = ANY (ARRAY['lawn'::text, 'mulch'::text, 'gravel'::text, 'rock'::text, 'concrete'::text, 'fencing'::text, 'hedges'::text, 'trees'::text, 'snow'::text])))",
+  "tbl": "property_measurements",
+  "conname": "property_measurements_kind_known",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (property_id, kind)",
+  "tbl": "property_measurements",
+  "conname": "property_measurements_one_per_kind",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "property_measurements",
+  "conname": "property_measurements_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (property_id, user_id) REFERENCES properties(id, user_id) ON DELETE CASCADE",
+  "tbl": "property_measurements",
+  "conname": "property_measurements_property_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((length(TRIM(BOTH FROM confidence_reason)) > 0))",
+  "tbl": "property_measurements",
+  "conname": "property_measurements_reason_present",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((source = ANY (ARRAY['traced'::text, 'auto'::text, 'manual'::text])))",
+  "tbl": "property_measurements",
+  "conname": "property_measurements_source_known",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((unit = ANY (ARRAY['sqft'::text, 'linear_ft'::text, 'count'::text])))",
+  "tbl": "property_measurements",
+  "conname": "property_measurements_unit_known",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((((kind = ANY (ARRAY['lawn'::text, 'mulch'::text, 'gravel'::text, 'rock'::text, 'concrete'::text, 'snow'::text])) AND (unit = 'sqft'::text)) OR ((kind = ANY (ARRAY['fencing'::text, 'hedges'::text])) AND (unit = 'linear_ft'::text)) OR ((kind = 'trees'::text) AND (unit = 'count'::text))))",
+  "tbl": "property_measurements",
+  "conname": "property_measurements_unit_matches_kind",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "property_measurements",
+  "conname": "property_measurements_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((value >= (0)::numeric))",
+  "tbl": "property_measurements",
+  "conname": "property_measurements_value_nonneg",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (analysis_id) REFERENCES property_intelligence(id) ON DELETE SET NULL",
+  "tbl": "property_observations",
+  "conname": "property_observations_analysis_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "property_observations",
+  "conname": "property_observations_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE",
+  "tbl": "property_observations",
+  "conname": "property_observations_property_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['active'::text, 'archived'::text])))",
+  "tbl": "property_observations",
+  "conname": "property_observations_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "property_observations",
+  "conname": "property_observations_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "property_twin",
+  "conname": "property_twin_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (latest_analysis_id) REFERENCES property_intelligence(id) ON DELETE SET NULL",
+  "tbl": "property_twin",
+  "conname": "property_twin_latest_analysis_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "property_twin",
+  "conname": "property_twin_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE",
+  "tbl": "property_twin",
+  "conname": "property_twin_property_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "property_twin",
+  "conname": "property_twin_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, property_id)",
+  "tbl": "property_twin",
+  "conname": "property_twin_user_id_property_id_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (holiday_id) REFERENCES holidays(id) ON DELETE SET NULL",
+  "tbl": "pto_entries",
+  "conname": "pto_entries_holiday_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((hours > (0)::numeric) AND (hours <= (24)::numeric)))",
+  "tbl": "pto_entries",
+  "conname": "pto_entries_hours_range",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((kind = ANY (ARRAY['vacation'::text, 'sick'::text, 'holiday'::text, 'personal'::text, 'bereavement'::text])))",
+  "tbl": "pto_entries",
+  "conname": "pto_entries_kind_known",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (technician_id, date, kind)",
+  "tbl": "pto_entries",
+  "conname": "pto_entries_one_per_day_kind",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "pto_entries",
+  "conname": "pto_entries_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((hourly_rate IS NULL) OR (hourly_rate >= (0)::numeric)))",
+  "tbl": "pto_entries",
+  "conname": "pto_entries_rate_nonneg",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (technician_id)",
+  "tbl": "pto_entries",
+  "conname": "pto_entries_technician_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "pto_entries",
+  "conname": "pto_entries_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (connection_id) REFERENCES social_connections(id) ON DELETE SET NULL",
+  "tbl": "publish_jobs",
+  "conname": "publish_jobs_connection_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (content_piece_id) REFERENCES content_pieces(id) ON DELETE CASCADE",
+  "tbl": "publish_jobs",
+  "conname": "publish_jobs_content_piece_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (idempotency_key)",
+  "tbl": "publish_jobs",
+  "conname": "publish_jobs_idempotency_key_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((mode = ANY (ARRAY['manual'::text, 'api'::text])))",
+  "tbl": "publish_jobs",
+  "conname": "publish_jobs_mode_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "publish_jobs",
+  "conname": "publish_jobs_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['draft'::text, 'scheduled'::text, 'queued'::text, 'publishing'::text, 'published'::text, 'failed'::text, 'canceled'::text])))",
+  "tbl": "publish_jobs",
+  "conname": "publish_jobs_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "publish_jobs",
+  "conname": "publish_jobs_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (part_id) REFERENCES parts(id) ON DELETE RESTRICT",
+  "tbl": "purchase_order_items",
+  "conname": "purchase_order_items_part_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "purchase_order_items",
+  "conname": "purchase_order_items_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id) ON DELETE CASCADE",
+  "tbl": "purchase_order_items",
+  "conname": "purchase_order_items_purchase_order_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "purchase_order_items",
+  "conname": "purchase_order_items_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "purchase_orders",
+  "conname": "purchase_orders_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['draft'::text, 'ordered'::text, 'cancelled'::text])))",
+  "tbl": "purchase_orders",
+  "conname": "purchase_orders_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE RESTRICT",
+  "tbl": "purchase_orders",
+  "conname": "purchase_orders_supplier_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "purchase_orders",
+  "conname": "purchase_orders_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "push_config",
+  "conname": "push_config_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((id = 1))",
+  "tbl": "push_config",
+  "conname": "push_config_singleton",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "push_subscriptions",
+  "conname": "push_subscriptions_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, endpoint)",
+  "tbl": "push_subscriptions",
+  "conname": "push_subscriptions_user_id_endpoint_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "push_subscriptions",
+  "conname": "push_subscriptions_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (id, quote_id)",
+  "tbl": "quote_options",
+  "conname": "quote_options_id_quote_unique",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((btrim(name) <> ''::text))",
+  "tbl": "quote_options",
+  "conname": "quote_options_name_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "quote_options",
+  "conname": "quote_options_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((price >= (0)::numeric))",
+  "tbl": "quote_options",
+  "conname": "quote_options_price_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE",
+  "tbl": "quote_options",
+  "conname": "quote_options_quote_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "TRIGGER DEFERRABLE INITIALLY DEFERRED",
+  "tbl": "quote_options",
+  "conname": "quote_options_shape_trg",
+  "contype": "t",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "quote_options",
+  "conname": "quote_options_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "quote_outcomes",
+  "conname": "quote_outcomes_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE",
+  "tbl": "quote_outcomes",
+  "conname": "quote_outcomes_quote_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "quote_outcomes",
+  "conname": "quote_outcomes_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, quote_id)",
+  "tbl": "quote_outcomes",
+  "conname": "quote_outcomes_user_id_quote_id_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((discount_type = ANY (ARRAY['amount'::text, 'percent'::text])))",
+  "tbl": "quote_services",
+  "conname": "quote_services_discount_type_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((kind = ANY (ARRAY['service'::text, 'material'::text])))",
+  "tbl": "quote_services",
+  "conname": "quote_services_kind_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "quote_services",
+  "conname": "quote_services_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE",
+  "tbl": "quote_services",
+  "conname": "quote_services_quote_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (service_template_id) REFERENCES service_templates(id) ON DELETE SET NULL",
+  "tbl": "quote_services",
+  "conname": "quote_services_service_template_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "TRIGGER DEFERRABLE INITIALLY DEFERRED",
+  "tbl": "quote_services",
+  "conname": "quote_services_shape_trg",
+  "contype": "t",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "quote_services",
+  "conname": "quote_services_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "quotes",
+  "conname": "quotes_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((((deposit_type IS NULL) = (deposit_value IS NULL)) AND ((deposit_type IS NULL) OR (deposit_type = ANY (ARRAY['percent'::text, 'fixed'::text]))) AND ((deposit_value IS NULL) OR (deposit_value > (0)::numeric)) AND ((deposit_type IS DISTINCT FROM 'percent'::text) OR (deposit_value <= (100)::numeric))))",
+  "tbl": "quotes",
+  "conname": "quotes_deposit_rule_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((price_source IS DISTINCT FROM 'engine'::text) OR (pricing_config_version_id IS NOT NULL)))",
+  "tbl": "quotes",
+  "conname": "quotes_engine_price_needs_config",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((nearby_count IS NULL) OR (nearby_count >= 0)))",
+  "tbl": "quotes",
+  "conname": "quotes_nearby_count_nonneg",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "quotes",
+  "conname": "quotes_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((preferred_note IS NULL) OR (char_length(preferred_note) <= 500)))",
+  "tbl": "quotes",
+  "conname": "quotes_preferred_note_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((preferred_timing IS NULL) OR (preferred_timing = ANY (ARRAY['morning'::text, 'afternoon'::text]))))",
+  "tbl": "quotes",
+  "conname": "quotes_preferred_timing_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((price_source IS NULL) OR (price_source = ANY (ARRAY['engine'::text, 'template_rate'::text]))))",
+  "tbl": "quotes",
+  "conname": "quotes_price_source_valid",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((pricing_confidence IS NULL) OR (pricing_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text]))))",
+  "tbl": "quotes",
+  "conname": "quotes_pricing_confidence_chk",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (pricing_config_version_id) REFERENCES pricing_config_versions(id)",
+  "tbl": "quotes",
+  "conname": "quotes_pricing_config_version_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL",
+  "tbl": "quotes",
+  "conname": "quotes_property_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id, renewal_of_recurrence_id) REFERENCES job_recurrences(user_id, id) ON UPDATE CASCADE ON DELETE SET NULL (renewal_of_recurrence_id)",
+  "tbl": "quotes",
+  "conname": "quotes_renewal_of_recurrence_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((selected_cadence IS NULL) OR (selected_cadence = ANY (ARRAY['one_time'::text, 'weekly'::text, 'biweekly'::text, 'monthly'::text]))))",
+  "tbl": "quotes",
+  "conname": "quotes_selected_cadence_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (selected_option_id, id) REFERENCES quote_options(id, quote_id) ON DELETE RESTRICT",
+  "tbl": "quotes",
+  "conname": "quotes_selected_option_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (service_template_id) REFERENCES service_templates(id) ON DELETE SET NULL",
+  "tbl": "quotes",
+  "conname": "quotes_service_template_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['draft'::text, 'sent'::text, 'accepted'::text, 'scheduled'::text, 'completed'::text, 'paid'::text, 'declined'::text])))",
+  "tbl": "quotes",
+  "conname": "quotes_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "quotes",
+  "conname": "quotes_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, id)",
+  "tbl": "quotes",
+  "conname": "quotes_user_id_id_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((value_grade IS NULL) OR (value_grade = ANY (ARRAY['A+'::text, 'A'::text, 'B'::text, 'C'::text, 'D'::text, 'F'::text]))))",
+  "tbl": "quotes",
+  "conname": "quotes_value_grade_valid",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "referrals",
+  "conname": "referrals_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (referred_customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "referrals",
+  "conname": "referrals_referred_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (referrer_customer_id) REFERENCES customers(id) ON DELETE CASCADE",
+  "tbl": "referrals",
+  "conname": "referrals_referrer_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['invited'::text, 'joined'::text, 'rewarded'::text, 'declined'::text])))",
+  "tbl": "referrals",
+  "conname": "referrals_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "referrals",
+  "conname": "referrals_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((kind = ANY (ARRAY['daily'::text, 'weekly'::text, 'monthly'::text, 'yearly'::text])))",
+  "tbl": "report_schedules",
+  "conname": "report_schedules_kind_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "report_schedules",
+  "conname": "report_schedules_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "report_schedules",
+  "conname": "report_schedules_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, kind)",
+  "tbl": "report_schedules",
+  "conname": "report_schedules_user_id_kind_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE",
+  "tbl": "revenue_recommendations",
+  "conname": "revenue_recommendations_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "revenue_recommendations",
+  "conname": "revenue_recommendations_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "revenue_recommendations",
+  "conname": "revenue_recommendations_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, opportunity_key)",
+  "tbl": "revenue_recommendations",
+  "conname": "revenue_recommendations_user_id_opportunity_key_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "road_distance_cache",
+  "conname": "road_distance_cache_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "road_distance_cache",
+  "conname": "road_distance_cache_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, from_key, to_key)",
+  "tbl": "road_distance_cache",
+  "conname": "road_distance_cache_user_id_from_key_to_key_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "schedule_health_ignored",
+  "conname": "schedule_health_ignored_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "schedule_health_ignored",
+  "conname": "schedule_health_ignored_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, issue_key)",
+  "tbl": "schedule_health_ignored",
+  "conname": "schedule_health_ignored_user_id_issue_key_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (converted_quote_id) REFERENCES quotes(id) ON DELETE SET NULL",
+  "tbl": "schedule_items",
+  "conname": "schedule_items_converted_quote_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "schedule_items",
+  "conname": "schedule_items_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "schedule_items",
+  "conname": "schedule_items_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL",
+  "tbl": "schedule_items",
+  "conname": "schedule_items_property_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "schedule_items",
+  "conname": "schedule_items_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE",
+  "tbl": "scheduled_messages",
+  "conname": "scheduled_messages_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL",
+  "tbl": "scheduled_messages",
+  "conname": "scheduled_messages_job_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL",
+  "tbl": "scheduled_messages",
+  "conname": "scheduled_messages_message_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "scheduled_messages",
+  "conname": "scheduled_messages_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "scheduled_messages",
+  "conname": "scheduled_messages_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (bundle_id, user_id) REFERENCES service_bundles(id, user_id) ON DELETE CASCADE",
+  "tbl": "service_bundle_items",
+  "conname": "service_bundle_items_bundle_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((kind = ANY (ARRAY['service'::text, 'material'::text])))",
+  "tbl": "service_bundle_items",
+  "conname": "service_bundle_items_kind_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((est_minutes IS NULL) OR (est_minutes >= 0)))",
+  "tbl": "service_bundle_items",
+  "conname": "service_bundle_items_minutes_not_negative",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((btrim(name) <> ''::text))",
+  "tbl": "service_bundle_items",
+  "conname": "service_bundle_items_name_not_blank",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "service_bundle_items",
+  "conname": "service_bundle_items_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((unit_price IS NULL) OR (unit_price >= (0)::numeric)))",
+  "tbl": "service_bundle_items",
+  "conname": "service_bundle_items_price_not_negative",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((quantity > (0)::numeric))",
+  "tbl": "service_bundle_items",
+  "conname": "service_bundle_items_quantity_positive",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (service_template_id, user_id) REFERENCES service_templates(id, user_id) ON DELETE SET NULL (service_template_id)",
+  "tbl": "service_bundle_items",
+  "conname": "service_bundle_items_template_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "service_bundle_items",
+  "conname": "service_bundle_items_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (id, user_id)",
+  "tbl": "service_bundles",
+  "conname": "service_bundles_id_user_uk",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((btrim(name) <> ''::text))",
+  "tbl": "service_bundles",
+  "conname": "service_bundles_name_not_blank",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "service_bundles",
+  "conname": "service_bundles_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "service_bundles",
+  "conname": "service_bundles_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "service_requests",
+  "conname": "service_requests_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL",
+  "tbl": "service_requests",
+  "conname": "service_requests_job_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((kind = ANY (ARRAY['service'::text, 'appointment'::text, 'reschedule'::text, 'plan_change'::text, 'additional_work'::text])))",
+  "tbl": "service_requests",
+  "conname": "service_requests_kind_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (portal_request_photos_ok(photos))",
+  "tbl": "service_requests",
+  "conname": "service_requests_photos_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "service_requests",
+  "conname": "service_requests_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (recurrence_id) REFERENCES job_recurrences(id) ON DELETE SET NULL",
+  "tbl": "service_requests",
+  "conname": "service_requests_recurrence_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((resolved_at IS NULL) OR (status <> 'new'::text)))",
+  "tbl": "service_requests",
+  "conname": "service_requests_resolved_at_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['new'::text, 'handled'::text, 'dismissed'::text])))",
+  "tbl": "service_requests",
+  "conname": "service_requests_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "service_requests",
+  "conname": "service_requests_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (id, user_id)",
+  "tbl": "service_templates",
+  "conname": "service_templates_id_user_uk",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "service_templates",
+  "conname": "service_templates_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((pricing_display_type = ANY (ARRAY['starting_from'::text, 'hourly'::text, 'per_sqft'::text, 'per_linear_ft'::text, 'starting_from_materials'::text, 'hourly_materials'::text])))",
+  "tbl": "service_templates",
+  "conname": "service_templates_pricing_display_type_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((recurrence IS NULL) OR (recurrence = ANY (ARRAY['one_time'::text, 'recurring_ok'::text, 'usually_recurring'::text]))))",
+  "tbl": "service_templates",
+  "conname": "service_templates_recurrence_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "service_templates",
+  "conname": "service_templates_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "service_units",
+  "conname": "service_units_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "service_units",
+  "conname": "service_units_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((mode = ANY (ARRAY['manual'::text, 'api'::text])))",
+  "tbl": "social_connections",
+  "conname": "social_connections_mode_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "social_connections",
+  "conname": "social_connections_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['connected'::text, 'expired'::text, 'revoked'::text])))",
+  "tbl": "social_connections",
+  "conname": "social_connections_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "social_connections",
+  "conname": "social_connections_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "suggestion_dismissals",
+  "conname": "suggestion_dismissals_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, suggestion_key)",
+  "tbl": "suggestion_dismissals",
+  "conname": "suggestion_dismissals_user_id_suggestion_key_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "suppliers",
+  "conname": "suppliers_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "suppliers",
+  "conname": "suppliers_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (auth_user_id) REFERENCES auth.users(id) ON DELETE SET NULL",
+  "tbl": "technicians",
+  "conname": "technicians_auth_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL",
+  "tbl": "technicians",
+  "conname": "technicians_crew_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((ended_on IS NULL) OR (hired_on IS NULL) OR (ended_on >= hired_on)))",
+  "tbl": "technicians",
+  "conname": "technicians_employment_dates_ordered",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((hourly_wage IS NULL) OR (hourly_wage >= (0)::numeric)))",
+  "tbl": "technicians",
+  "conname": "technicians_hourly_wage_nonneg",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (id, user_id)",
+  "tbl": "technicians",
+  "conname": "technicians_id_user_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "technicians",
+  "conname": "technicians_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((pto_annual_hours IS NULL) OR (pto_annual_hours >= (0)::numeric)))",
+  "tbl": "technicians",
+  "conname": "technicians_pto_allowance_nonneg",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['available'::text, 'en_route'::text, 'on_job'::text, 'break'::text, 'off'::text])))",
+  "tbl": "technicians",
+  "conname": "technicians_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "technicians",
+  "conname": "technicians_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((break_minutes >= 0))",
+  "tbl": "time_entries",
+  "conname": "time_entries_break_nonneg",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((clock_out IS NULL) OR (clock_out > clock_in)))",
+  "tbl": "time_entries",
+  "conname": "time_entries_clock_order",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE SET NULL (job_id)",
+  "tbl": "time_entries",
+  "conname": "time_entries_job_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "time_entries",
+  "conname": "time_entries_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((hourly_rate IS NULL) OR (hourly_rate >= (0)::numeric)))",
+  "tbl": "time_entries",
+  "conname": "time_entries_rate_nonneg",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (technician_id)",
+  "tbl": "time_entries",
+  "conname": "time_entries_technician_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "time_entries",
+  "conname": "time_entries_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "travel_fee_tiers",
+  "conname": "travel_fee_tiers_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "travel_fee_tiers",
+  "conname": "travel_fee_tiers_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "vendors",
+  "conname": "vendors_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "vendors",
+  "conname": "vendors_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (user_id)",
+  "tbl": "verify_fixture_tenants",
+  "conname": "verify_fixture_tenants_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "verify_fixture_tenants",
+  "conname": "verify_fixture_tenants_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((old_wage IS DISTINCT FROM new_wage))",
+  "tbl": "wage_history",
+  "conname": "wage_history_actually_changed",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "wage_history",
+  "conname": "wage_history_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (technician_id)",
+  "tbl": "wage_history",
+  "conname": "wage_history_technician_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "wage_history",
+  "conname": "wage_history_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((((old_wage IS NULL) OR (old_wage >= (0)::numeric)) AND ((new_wage IS NULL) OR (new_wage >= (0)::numeric))))",
+  "tbl": "wage_history",
+  "conname": "wage_history_wages_nonneg",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (endpoint_id) REFERENCES webhook_endpoints(id) ON DELETE CASCADE",
+  "tbl": "webhook_deliveries",
+  "conname": "webhook_deliveries_endpoint_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (event_id) REFERENCES integration_events(id) ON DELETE SET NULL",
+  "tbl": "webhook_deliveries",
+  "conname": "webhook_deliveries_event_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "webhook_deliveries",
+  "conname": "webhook_deliveries_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['pending'::text, 'processing'::text, 'success'::text, 'dead'::text])))",
+  "tbl": "webhook_deliveries",
+  "conname": "webhook_deliveries_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "webhook_deliveries",
+  "conname": "webhook_deliveries_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "webhook_endpoints",
+  "conname": "webhook_endpoints_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((source = ANY (ARRAY['manual'::text, 'api'::text, 'zapier'::text, 'make'::text])))",
+  "tbl": "webhook_endpoints",
+  "conname": "webhook_endpoints_source_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "webhook_endpoints",
+  "conname": "webhook_endpoints_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE SET NULL",
+  "tbl": "website_leads",
+  "conname": "website_leads_conversation_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "tbl": "website_leads",
+  "conname": "website_leads_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "website_leads",
+  "conname": "website_leads_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL",
+  "tbl": "website_leads",
+  "conname": "website_leads_quote_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "website_leads",
+  "conname": "website_leads_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ }
+]

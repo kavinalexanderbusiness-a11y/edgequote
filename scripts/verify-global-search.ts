@@ -34,7 +34,7 @@ const H = (t: string) => console.log(`\n── ${t} ──`)
 const ROOT = join(__dirname, '..')
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8').replace(/\r\n/g, '\n')
 
-const SQL = read('supabase/RUN-2026-08-11-global-search.sql')
+const SQL = read('supabase/archive/run/RUN-2026-08-11-global-search.sql')
 const PALETTE = read('src/components/command/CommandPalette.tsx')
 const SCHEDULE = read('src/app/dashboard/schedule/page.tsx')
 const INVOICES = read('src/app/dashboard/invoices/page.tsx')

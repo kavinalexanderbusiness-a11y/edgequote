@@ -118,7 +118,12 @@
     "verify:fixture-isolation": "tsx scripts/verify-fixture-isolation.ts",
     "verify:deposit-scheduling": "tsx scripts/verify-deposit-scheduling.ts",
     "verify:day-fit": "tsx scripts/verify-day-fit.ts",
-    "verify:work-sessions": "tsx scripts/verify-work-sessions.ts"
+    "verify:work-sessions": "tsx scripts/verify-work-sessions.ts",
+    "schema:contract": "tsx scripts/schema/capture-contract.mts",
+    "schema:baseline": "tsx scripts/schema/generate-baseline.ts",
+    "verify:rebuild": "tsx scripts/verify-rebuild.ts",
+    "verify:schema": "tsx scripts/verify-schema.ts",
+    "verify:migrations": "tsx scripts/verify-migrations.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

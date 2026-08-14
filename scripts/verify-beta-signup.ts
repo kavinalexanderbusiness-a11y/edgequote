@@ -43,7 +43,7 @@ const read = (p: string) => readFileSync(join(ROOT, p), 'utf8')
 // file must not fail on its own prose. [^\n] keeps this CRLF-safe.
 const stripComments = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
 
-const SQL = read('supabase/RUN-2026-08-13-beta-invites.sql')
+const SQL = read('supabase/archive/run/RUN-2026-08-13-beta-invites.sql')
 const SIGNUP_ROUTE = read('src/app/api/beta/signup/route.ts')
 const RESEND_ROUTE = read('src/app/api/beta/resend/route.ts')
 const SIGNUP_PAGE = read('src/app/signup/page.tsx')

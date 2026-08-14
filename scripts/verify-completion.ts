@@ -28,6 +28,7 @@
 // Half the checks run the REAL module against fixtures; half read the real
 // source files. Deterministic, no network.
 
+import { portalDataSql } from './lib/schema-source'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -141,7 +142,7 @@ console.log('\n═══ Evidence describes only what is there ═══')
 // ═══ 4. ⭐ THE VISIBILITY BOUNDARY, at the source ════════════════════════════
 console.log('\n═══ Internal fields never reach the customer ═══')
 {
-  const canonical = read('supabase/CANONICAL-get_portal_data.sql')
+  const canonical = portalDataSql()
   // The `jobs` projection line specifically — checking the whole file would pass
   // on the word "notes" appearing in the properties or invoices projections,
   // both of which legitimately carry one.
@@ -226,7 +227,7 @@ console.log('\n═══ Recording is not a transition ═══')
 // ═══ 6. The crew door ════════════════════════════════════════════════════════
 console.log('\n═══ A crew session writes through a typed RPC only ═══')
 {
-  const sql = read('supabase/RUN-2026-08-11-proof-of-work.sql')
+  const sql = read('supabase/archive/run/RUN-2026-08-11-proof-of-work.sql')
   const fn = sql.split('create or replace function public.crew_set_completion_record')[1] ?? ''
   check('the crew record RPC is defined', fn.length > 0)
   check('it takes TYPED parameters, never a jsonb patch',
@@ -303,7 +304,7 @@ console.log('\n═══ One primitive, not two ═══')
 // ═══ 8. The crew read path ═══════════════════════════════════════════════════
 console.log('\n═══ The sheet opens on the real row ═══')
 {
-  const crewSql = read('supabase/RUN-2026-08-07-crew-mode.sql')
+  const crewSql = read('supabase/archive/run/RUN-2026-08-07-crew-mode.sql')
   check('crew_day returns the recorded summary', crewSql.includes("'completion_summary', j.completion_summary"))
   check('crew_day returns the recorded issue', crewSql.includes("'completion_issue', j.completion_issue"))
   const access = readCode('src/lib/crewAccess.ts')

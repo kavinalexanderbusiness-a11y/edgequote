@@ -63,7 +63,7 @@ check('keeps real code',
   stripSql('select body -- a comment\nfrom crew_messages').includes('crew_messages'),
   'over-stripping would make these checks vacuous in the other direction')
 
-const SQL_PATH = 'supabase/RUN-2026-08-13-crew-messages.sql'
+const SQL_PATH = 'supabase/archive/run/RUN-2026-08-13-crew-messages.sql'
 check(`${SQL_PATH} exists`, has(SQL_PATH))
 const sqlRaw = has(SQL_PATH) ? read(SQL_PATH) : ''
 const sql = stripSql(sqlRaw)
