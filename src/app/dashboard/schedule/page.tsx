@@ -13,7 +13,7 @@ import { DayOpsPanel, QuoteLite, QuickPatch } from '@/components/schedule/DayOps
 import { Coord, geocodeAddress } from '@/lib/geo'
 import { JobForm, Recurrence, SuggestionMeta } from '@/components/schedule/JobForm'
 import { ScopeDialog } from '@/components/schedule/ScopeDialog'
-import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel, visitsBeyondEnd, planSeriesChange } from '@/lib/recurrence'
+import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel, visitsBeyondEnd, planSeriesChange, mayRemoveRecurrence } from '@/lib/recurrence'
 import type { JobRecurrence } from '@/types'
 import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts, uncompleteJob } from '@/lib/invoicing'
 import { queueOrRun } from '@/lib/offline/outbox'
@@ -1443,6 +1443,19 @@ export default function SchedulePage() {
         await reconcileSeriesEnd(job, recurrence.endDate)
       }
     } else if (!will) {
+      // "Does not repeat" on a job that HAS a series deletes every sibling visit
+      // and the series row. That is only ever safe when the form was actually
+      // showing the series: if the rule never loaded (the ?focus= deep link
+      // opens this modal as soon as `jobs` arrives, which can beat the
+      // `recurrences` read), the form shows "Does not repeat" because it knows
+      // nothing — not because the owner asked for it. Acting on that silence
+      // destroyed a customer's whole schedule. Refuse and re-read instead.
+      if (!mayRemoveRecurrence(job.recurrence_id, recurrences)) {
+        setBanner('This job\'s repeat schedule had not finished loading — nothing was changed. Reopen the visit and try again.')
+        await fetchJobs()
+        setEditing(null)
+        return
+      }
       await applyFieldEdits(job, values, 'this')
       await removeRecurrence(job, scope)
     } else {

@@ -18,7 +18,7 @@
 
 import {
   generateOccurrences, recurrenceLabel, recurringCustomerLabel,
-  jobsInScope, shiftDate, dayDelta, buildServicePlans, visitsBeyondEnd, planSeriesChange,
+  jobsInScope, shiftDate, dayDelta, buildServicePlans, visitsBeyondEnd, planSeriesChange, recurrenceToUi, mayRemoveRecurrence,
 } from '../src/lib/recurrence'
 import { DEFAULT_SEASONS, DEFAULT_LAWN_SEASON, DEFAULT_SNOW_SEASON, seasonEndDateFor } from '../src/lib/seasons'
 import type { Job, JobRecurrence } from '../src/types'
@@ -306,6 +306,31 @@ check('…and that reading left the series with no 2026 cutoff whatsoever',
   generateOccurrences(seriesStart, 'week', 1, seasonEndDateFor('2026-11-25', DEFAULT_SEASONS.lawn), null).length > 60, true)
 check('the series-anchored end DOES cut the series at the season',
   generateOccurrences(seriesStart, 'week', 1, lawnEnd, null).slice(-1), ['2026-10-30'])
+
+// ═══════════════════════════════════════════════════════════════════════════
+H('13. AN UNLOADED SERIES IS NOT AN EMPTY ONE (Session 39 incident)')
+// The schedule page opens its editor from a ?focus= deep link as soon as `jobs`
+// arrives, which can beat the `recurrences` read. JobForm seeds its Repeat
+// controls from initialRecurrence in useState initializers — read ONCE — so a
+// recurring job rendered as "Does not repeat" and stayed that way. Saving that
+// took the form at its word: removeRecurrence(scope 'all') deleted every
+// sibling visit and the series row. It destroyed 67 real visits before this
+// guard existed. Both halves are pinned: the page must not treat a missing
+// snapshot as "no recurrence", and recurrenceToUi must round-trip a real one.
+const loadedSeries: Record<string, unknown> = { r1: { unit: 'week', count: 1 } }
+check('a job whose series HAS loaded may be un-recurred', mayRemoveRecurrence('r1', loadedSeries), true)
+check('a job whose series has NOT loaded may not — silence is not consent',
+  mayRemoveRecurrence('r-not-loaded', loadedSeries), false)
+check('a genuinely one-time job is always safe to save', mayRemoveRecurrence(null, loadedSeries), true)
+// The round-trip the late re-seed depends on: a loaded series must map back to
+// a repeating preset, never to 'none'.
+check('a weekly series maps back to a REPEATING preset, never "none"',
+  recurrenceToUi({ unit: 'week', count: 1, endDate: null, endCount: null }).preset, 'w1')
+check('a biweekly series too', recurrenceToUi({ unit: 'week', count: 2, endDate: null, endCount: null }).preset, 'w2')
+check('a season-ended series round-trips its end date',
+  recurrenceToUi({ unit: 'week', count: 1, endDate: '2026-10-31', endCount: null }).endDate, '2026-10-31')
+check('only a genuinely absent series reads as "does not repeat"',
+  recurrenceToUi(undefined).preset, 'none')
 
 console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)
 if (fail > 0) process.exit(1)
