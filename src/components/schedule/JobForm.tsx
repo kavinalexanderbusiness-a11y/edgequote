@@ -390,9 +390,14 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     }
   }
 
-  // What past visits of this service taught. Loaded only once the visit is
-  // marked done, because that is the only state where the block renders — an
-  // owner scheduling next week's mow should not pay for a history read.
+  // What past visits of this service taught. Read ONCE when the form opens.
+  //
+  // It used to be gated on `status === 'completed'`, which was right when the
+  // only reader was the estimate-vs-actual block on a finished visit. The smart
+  // estimate reads the same history while the visit is still being PLANNED —
+  // that is the whole point of an estimate — so the gate silently starved it and
+  // the card rendered nothing at all on every new job. (Caught by driving the
+  // real form, not by any source check: both halves were individually correct.)
   //
   // `null` means still loading and renders nothing. Every FAILURE, including a
   // thrown auth call, resolves to an explicit `unavailable` rather than being
@@ -400,7 +405,6 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   // that simply has no history.
   const [learningLoad, setLearningLoad] = useState<LearningLoad | null>(null)
   useEffect(() => {
-    if (status !== 'completed') return
     let cancelled = false
     ;(async () => {
       try {
@@ -412,7 +416,10 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
       }
     })()
     return () => { cancelled = true }
-  }, [status, supabase])
+    // `supabase` is the cached browser singleton, so this runs once per form.
+    // Status is deliberately NOT a dependency: marking a visit done must not
+    // re-read the history it is about to become part of.
+  }, [supabase])
 
   // Load configured service seasons once (falls back to Calgary defaults), plus
   // the length of this business's WORKDAY — the same daily_capacity_hours the
