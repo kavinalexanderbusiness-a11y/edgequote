@@ -48,7 +48,14 @@ async function main() {
 // ── load PGlite, or skip clean ───────────────────────────────────────────────
 let PGlite: any, contribs: any = {}
 try {
-  ;({ PGlite } = await import('@electric-sql/pglite'))
+  // Specifier held in a variable ON PURPOSE. PGlite is an OPTIONAL dependency — it is
+  // deliberately not in package.json (~100 MB, and Vercel builds already OOM), so on
+  // CI and on a fresh clone the package is simply absent. A literal import specifier
+  // would make `tsc`/`next build` demand its types and fail the build for a guard
+  // that is designed to skip. A non-literal one is unresolvable at compile time and
+  // resolved at runtime, which is exactly the semantics this needs.
+  const PGLITE = '@electric-sql/pglite'
+  ;({ PGlite } = await import(PGLITE))
   const load = async (p: string, k: string) => { try { return (await import(p))[k] } catch { return undefined } }
   contribs = {
     pg_trgm: await load('@electric-sql/pglite/contrib/pg_trgm', 'pg_trgm'),
