@@ -50,7 +50,12 @@ export const JOB_EXPENSE_LIMIT = 200
 // join that omits it returns undefined — which reads as "not a draw", quietly
 // putting an owner's drawings back in as a cost of the job. `name` carries the
 // materials split. Both are load-bearing; neither may be trimmed to save bytes.
-const EXPENSE_SELECT =
+// Exported because lib/jobProfitData costs MANY visits in one pass and must ask
+// for exactly these columns. A second spelling of this select is a second chance
+// to drop `kind` (every owner draw silently back in as a cost) or `name` (the
+// materials split gone) — the two omissions this constant's own note records as
+// live bugs.
+export const EXPENSE_SELECT =
   '*, vendors(id, name), expense_categories(id, name, tax_deductible, kind, external_account)'
 
 export interface JobCostLoad {
@@ -63,6 +68,13 @@ export interface JobCostLoad {
   expenses: ExpenseWithRelations[]
   /** Completed visits of the SAME service that already carry recorded spend. */
   pricedPeers: number
+  /**
+   * The settings this cost was read under — returned so a caller that also needs
+   * the tax split (lib/jobProfitData, for the invoice figures) uses the SAME row
+   * rather than reading it a second time and risking two answers to "is this
+   * business GST-registered" on one screen. Null on `unavailable`.
+   */
+  settings: BusinessSettings | null
   reason?: string
 }
 
@@ -93,6 +105,7 @@ export async function loadJobCost(
     cost: readJobActualCost({ job, expenses: [], timeEntries: [], registrant: false, readFailed: true }),
     expenses: [],
     pricedPeers: 0,
+    settings: null,
     reason,
   })
 
@@ -145,6 +158,7 @@ export async function loadJobCost(
 
   const expenses = expenseRes.data as unknown as ExpenseWithRelations[]
   const timeEntries = timeRes.data as unknown as TimeEntry[]
+  const settings = (settingsRes.data as BusinessSettings | null) ?? null
 
   return {
     outcome: 'ok',
@@ -152,10 +166,11 @@ export async function loadJobCost(
       job,
       expenses,
       timeEntries,
-      registrant: isGstRegistrant(settingsRes.data as BusinessSettings | null),
+      registrant: isGstRegistrant(settings),
     }),
     expenses,
     pricedPeers: countPricedPeers(peerRes.data, job),
+    settings,
   }
 }
 

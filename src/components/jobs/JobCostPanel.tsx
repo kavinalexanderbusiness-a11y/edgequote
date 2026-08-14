@@ -53,10 +53,17 @@ import { formatMinutes } from '@/lib/estimateVsActual'
 // type="button" for exactly this reason; do not override it here.
 
 export function JobCostPanel({
-  job, className,
+  job, className, onChange,
 }: {
   job: JobCostTarget
   className?: string
+  /**
+   * Fired after a cost is recorded or an undo removes it. The profit review
+   * below this panel reads the same rows, so without it the two panels sit on
+   * screen disagreeing about the same visit until the form is reopened — and the
+   * one showing the stale answer is the one with the margin on it.
+   */
+  onChange?: () => void
 }) {
   const supabase = createClient()
   const [load, setLoad] = useState<JobCostLoad | null>(null)
@@ -141,8 +148,10 @@ export function JobCostPanel({
       const { error: undoError } = await archiveExpense(supabase, expense.id)
       if (undoError) { toast.error(`Could not remove that cost: ${undoError}`); return }
       if (userId) await refresh(userId)
+      onChange?.()
     })
     await refresh(userId)
+    onChange?.()
   }
 
   return shell(className, (
