@@ -736,6 +736,33 @@ console.log('\n21. Day Suggestions and the Smart Estimate agree:')
     /MIN_SERVICE_SAMPLE|established/.test(read('src/lib/dayFit.ts')), '')
 }
 
+console.log('\n23. The labour line is gated on the CREW, not on a median comparison:')
+{
+  // ⚠️ A regression this session shipped for one build. The condition was
+  // "labour ≠ elapsed", which looks equivalent and is measured wrong against the
+  // real book: solo mowing has INDEPENDENT medians of 26m elapsed and 30m labour
+  // (a couple of mows ran two-up), so the card printed "Usually a crew of 1, and
+  // a typical job carries about 0.5 labour-hours" on every mow — noise, and 55px
+  // of it on a 375px screen (143 → 198px). The CDP harness caught it; nothing in
+  // this file did.
+  const card = read('src/components/labor/SmartEstimateCard.tsx')
+  check('the condition is the crew one',
+    /\{\(est\.needsCrew \|\| est\.typicalCrewSize == null\) && est\.suggestedLaborMinutes != null && \(/.test(card),
+    'the labour line condition changed — re-measure the card height at 375px')
+  // …and the two cases that condition exists to separate.
+  const soloE = estFor('Filter Swap')
+  check('solo work: no crew line, and the medians disagree anyway',
+    soloE.needsCrew === false && soloE.typicalCrewSize === 1)
+  const varied = learnFromCompletedVisits(Array.from({ length: 6 }, (_, i) =>
+    withSessions(`vc${i}`, 'Deck Rebuild', 480,
+      [{ minutes: 200, workers: 1 }, { minutes: 310, workers: 2 }])))
+  const variedE = buildWorkEstimate(serviceHistory('Deck Rebuild', varied.comparisons), { capacityHours: 8 })
+  check('a varied-crew job DOES show one — crew null, labour known',
+    variedE.typicalCrewSize == null && variedE.suggestedLaborMinutes === 820,
+    `${variedE.typicalCrewSize}/${variedE.suggestedLaborMinutes}`)
+  eq('…and it is measured, so it says so', describeLaborBasis(variedE), 'actually worked')
+}
+
 // ── 22. THE LOADER'S OWN WIRING ──────────────────────────────────────────────
 // Everything above hands the engine hand-built session facts, which proves the
 // JUDGEMENT and not the PLUMBING. A mutation that swapped the loader's

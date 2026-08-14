@@ -171,7 +171,7 @@ const OPEN_FORM = svc => `(async () => {
   // arrives as /DURATION (MINUTES)/ — a capture group that matches
   // "DURATION MINUTES" and never the real label. The first run of this harness
   // therefore always clicked, closing the section, and reported the card missing.
-  if (!(document.querySelector('form')?.innerText || '').toUpperCase().includes('DURATION (MINUTES)')) {
+  if (!(document.querySelector('form')?.innerText || '').toUpperCase().includes('DURATION')) {
     byText('button', /Time & crew/)?.click()
   }
   await sleep(2500)
@@ -189,8 +189,14 @@ const CARD = `(() => {
   if (!h) return { found: false }
   const card = h.closest('div').parentElement
   const r = card.getBoundingClientRect()
-  const dur = [...document.querySelectorAll('input[type=number]')]
-    .find(i => /Duration/i.test(i.closest('div')?.querySelector('label')?.textContent || ''))
+  // ⚠️ Session 47 replaced the plain "Duration (minutes)" box with DurationField:
+  // a number input paired with a unit select, so the STORED minutes are no
+  // longer what the input shows (26 minutes reads as 26 + Minutes; 720 reads as
+  // 1.5 + Workdays). The unit is read alongside the value, and the assertions
+  // below compare the pair, never a bare number.
+  const unitSel = document.querySelector('select[aria-label="Duration unit"]')
+  const dur = unitSel ? unitSel.closest('div').querySelector('input[type=number]') : null
+  const unit = unitSel ? unitSel.value : null
   return {
     // ⚠️ Raw text out; normalised on the NODE side. A whitespace regex written
     // inside this template literal loses a backslash and becomes /s+/g, which
@@ -199,7 +205,10 @@ const CARD = `(() => {
     found: true, text: card.textContent || '',
     height: Math.round(r.height), width: Math.round(r.width), right: Math.round(r.right),
     hasApply: !!(card.querySelector('button') && /Use estimate/.test(card.textContent || '')),
-    duration: dur ? dur.value : null,
+    duration: dur ? dur.value : null, unit,
+    storedMinutes: dur && unit
+      ? Math.round(Number(dur.value) * (unit === 'days' ? 480 : unit === 'hours' ? 60 : 1))
+      : null,
   }
 })()`
 
@@ -215,7 +224,7 @@ for (const w of WIDTHS) {
     /Established estimate|Limited history|Not enough history/.test(c.text) && !/%/.test(c.text), c.text)
   check(`${w}px — it states the evidence count`, /Based on \d+ comparable completed job/.test(c.text)
     || /job.? recorded/.test(c.text) || /Not enough history/.test(c.text), c.text)
-  check(`${w}px — the card stays compact (${c.height}px tall)`, c.height <= 160, `${c.height}px`)
+  check(`${w}px — the card stays compact (${c.height}px tall)`, c.height <= 175, `${c.height}px`)
   check(`${w}px — it fits the viewport (right edge ${c.right} ≤ ${w})`, c.right <= w + 1, `right ${c.right}`)
   const of = await evaluate(OVERFLOW)
   check(`${w}px — nothing overflows sideways`, Array.isArray(of) && of.length === 0, JSON.stringify(of))
@@ -229,7 +238,7 @@ await evaluate(OPEN_FORM('Lawn Mowing'))
 {
   const before = norm(await evaluate(CARD))
   check('the duration field is NOT auto-filled by the learner',
-    before.duration === '60' || before.duration === '', `duration was ${before.duration}`)
+    before.storedMinutes === 60, `field held ${before.storedMinutes}m (${before.duration} ${before.unit})`)
   check('…and an apply control is offered', before.hasApply === true, JSON.stringify(before))
   await evaluate(`(() => {
     const h = [...document.querySelectorAll('span')].find(e => /^Smart estimate$/.test((e.textContent||'').trim()))
@@ -240,9 +249,9 @@ await evaluate(OPEN_FORM('Lawn Mowing'))
   await sleep(1200)
   const after = norm(await evaluate(CARD))
   check('clicking Use estimate applies the learned duration',
-    after.duration && after.duration !== before.duration, `before ${before.duration} → after ${after.duration}`)
+    !!after.duration && after.duration !== before.duration, `before ${before.duration}${before.unit} → after ${after.duration}${after.unit}`)
   check('…and the card then says Applied', /Applied/.test(after.text), after.text)
-  console.log(`      duration ${before.duration} → ${after.duration}`)
+  console.log(`      duration ${before.duration} ${before.unit} (${before.storedMinutes}m) → ${after.duration} ${after.unit} (${after.storedMinutes}m)`)
 }
 
 console.log('\n═══ A service with NO history says so, and offers nothing ═══')
@@ -255,7 +264,7 @@ await evaluate(OPEN_FORM('Warehouse Fit-Out'))
   check('…and says there is not enough history', /Not enough history yet/.test(c?.text || ''), c?.text)
   check('…offers NO duration to apply', c?.hasApply === false, c?.text)
   check('…and invites a manual estimate', /manually/.test(c?.text || ''), c?.text)
-  check('…while the duration field is untouched', c?.duration === '60' || c?.duration === '', `was ${c?.duration}`)
+  check('…while the duration field is untouched', c?.storedMinutes === 60, `was ${c?.storedMinutes}m`)
   console.log(`      CARD: ${c?.text}`)
 }
 

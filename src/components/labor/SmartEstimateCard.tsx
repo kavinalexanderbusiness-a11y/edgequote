@@ -145,12 +145,19 @@ export function SmartEstimateCard({
       </p>
 
       {/* LABOUR — a different question, not a bigger version of the same one.
-          Shown whenever it says something the elapsed line does not; on solo
-          work the two figures are the same number and the line is noise.
-          ⭐ That condition is "labour ≠ elapsed", NOT "crew > 1", because a
-          multi-day job worked by one person on Monday and two on Tuesday has
-          real labour and NO single crew size — gating on the crew would hide
-          the one figure only work sessions can produce.
+          Shown when the work takes MORE THAN ONE PERSON, which is the only case
+          where person-hours tell the owner something the elapsed line does not.
+          ⭐ …OR when the crew is unknown while the labour is not, which is
+          exactly the multi-day job worked by one person on Monday and two on
+          Tuesday: no single crew size exists, and the labour figure is the one
+          thing only work sessions can produce. Gating on `crew > 1` alone would
+          hide it.
+          ⚠️ NOT "labour ≠ elapsed" — that condition looked equivalent and was
+          measured wrong on the real book: solo mowing has a labour median of 30m
+          against an elapsed median of 26m (they are independent medians and a
+          couple of visits ran two-up), so it printed "Usually a crew of 1, and a
+          typical job carries about 0.5 labour-hours" — noise on every mow, and
+          55px of it on a 375px screen.
 
           ⭐ THE BASIS IS SAID OUT LOUD. "actually worked" is reserved for
           labour summed from work sessions whose worker counts a person stated.
@@ -163,7 +170,7 @@ export function SmartEstimateCard({
           of each is measured separately. The wording keeps them as separate
           observations ("and", not "×") rather than inviting arithmetic that is
           supposed to disagree. */}
-      {est.suggestedLaborMinutes != null && est.suggestedLaborMinutes !== minutes && (
+      {(est.needsCrew || est.typicalCrewSize == null) && est.suggestedLaborMinutes != null && (
         <p className="text-[11px] text-ink-muted tabular-nums">
           {est.typicalCrewSize != null
             ? `Usually a crew of ${est.typicalCrewSize}, and a`
