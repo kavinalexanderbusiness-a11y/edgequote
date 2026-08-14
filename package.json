@@ -44,6 +44,7 @@
     "verify:density": "tsx scripts/verify-density.ts",
     "verify:learning": "tsx scripts/verify-learning.ts",
     "verify:estimate-actual": "tsx scripts/verify-estimate-actual.ts",
+    "verify:smart-estimate": "tsx scripts/verify-smart-estimate.ts",
     "verify:export": "tsx scripts/verify-export.ts",
     "verify:analytics": "tsx scripts/verify-analytics.ts",
     "verify:integrations": "tsx scripts/verify-integrations.ts",
@@ -118,7 +119,8 @@
     "verify:fixture-isolation": "tsx scripts/verify-fixture-isolation.ts",
     "verify:deposit-scheduling": "tsx scripts/verify-deposit-scheduling.ts",
     "verify:day-fit": "tsx scripts/verify-day-fit.ts",
-    "verify:work-sessions": "tsx scripts/verify-work-sessions.ts"
+    "verify:work-sessions": "tsx scripts/verify-work-sessions.ts",
+    "verify:account-recovery": "tsx scripts/verify-account-recovery.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

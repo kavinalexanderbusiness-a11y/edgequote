@@ -18,7 +18,7 @@ import {
   seasonEndDateFor, estimateSeasonVisits, seasonLabel,
 } from '@/lib/seasons'
 import { WeeklyScheduler } from '@/components/schedule/WeeklyScheduler'
-import { SmartLaborField } from '@/components/labor/SmartLaborField'
+import { SmartEstimateCard } from '@/components/labor/SmartEstimateCard'
 import { EstimatedVsActual } from '@/components/labor/EstimatedVsActual'
 import { ServiceEstimateLearning } from '@/components/labor/ServiceEstimateLearning'
 import { JobCostPanel } from '@/components/jobs/JobCostPanel'
@@ -28,7 +28,7 @@ import { formatDuration, workdayMinutes } from '@/lib/workDuration'
 import { JobReferenceMedia } from '@/components/schedule/JobReferenceMedia'
 import { AUDIENCE_COPY } from '@/lib/noteScope'
 import { loadCompletedVisitLearning, type LearningLoad } from '@/lib/estimateVsActualData'
-import type { Cadence } from '@/lib/labor'
+
 import { resolvePrefs, type PrefSource } from '@/lib/preferences'
 import { findJobMatch, type JobLiteForMatch } from '@/lib/dedup'
 import { Collapsible } from '@/components/ui/Collapsible'
@@ -121,15 +121,6 @@ function presetToInterval(preset: RepeatPreset, customUnit: RecurUnit, customCou
   }
 }
 
-// Map a recurrence interval to the labor engine's cadence bucket, so the Smart
-// Labor estimate learns "weekly mow from weekly mow" (not all mows pooled).
-function intervalToCadence(iv: { unit: RecurUnit; count: number } | null): Cadence {
-  if (!iv) return 'one_time'
-  if (iv.unit === 'month') return 'monthly'
-  if (iv.unit === 'week') return iv.count <= 1 ? 'weekly' : iv.count === 2 ? 'biweekly' : 'monthly'
-  if (iv.unit === 'day') return iv.count <= 10 ? 'weekly' : iv.count <= 18 ? 'biweekly' : 'monthly'
-  return 'one_time'
-}
 
 export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, seriesStartDate, allowAddAnother, suggestedPrice, warnFor, onSubmit, onCancel, onDirtyChange, isEdit }: JobFormProps) {
   const supabase = createClient()
@@ -399,9 +390,14 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     }
   }
 
-  // What past visits of this service taught. Loaded only once the visit is
-  // marked done, because that is the only state where the block renders — an
-  // owner scheduling next week's mow should not pay for a history read.
+  // What past visits of this service taught. Read ONCE when the form opens.
+  //
+  // It used to be gated on `status === 'completed'`, which was right when the
+  // only reader was the estimate-vs-actual block on a finished visit. The smart
+  // estimate reads the same history while the visit is still being PLANNED —
+  // that is the whole point of an estimate — so the gate silently starved it and
+  // the card rendered nothing at all on every new job. (Caught by driving the
+  // real form, not by any source check: both halves were individually correct.)
   //
   // `null` means still loading and renders nothing. Every FAILURE, including a
   // thrown auth call, resolves to an explicit `unavailable` rather than being
@@ -409,7 +405,6 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   // that simply has no history.
   const [learningLoad, setLearningLoad] = useState<LearningLoad | null>(null)
   useEffect(() => {
-    if (status !== 'completed') return
     let cancelled = false
     ;(async () => {
       try {
@@ -421,7 +416,10 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
       }
     })()
     return () => { cancelled = true }
-  }, [status, supabase])
+    // `supabase` is the cached browser singleton, so this runs once per form.
+    // Status is deliberately NOT a dependency: marking a visit done must not
+    // re-read the history it is about to become part of.
+  }, [supabase])
 
   // Load configured service seasons once (falls back to Calgary defaults), plus
   // the length of this business's WORKDAY — the same daily_capacity_hours the
@@ -529,16 +527,6 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     : endMode === 'after' ? `ends after ${Math.max(1, endCount)} visit${endCount !== 1 ? 's' : ''}`
     : endMode === 'on' && endDate ? `until ${endDate}`
     : 'no end date (kept rolling on your calendar)'
-
-  // Cadence for the Smart Labor estimate: this job's own repeat, else the
-  // property's existing series cadence, else one-time. So a weekly mow's duration
-  // learns from weekly mows.
-  const laborCadence: Cadence = (() => {
-    const iv = presetToInterval(preset, customUnit, customCount)
-    if (iv) return intervalToCadence(iv)
-    const s = propSeries[0]
-    return s?.unit ? intervalToCadence({ unit: s.unit as RecurUnit, count: s.count || 1 }) : 'one_time'
-  })()
 
   return (
     <form
@@ -833,15 +821,26 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           hint="How many people are on site at once. Duration stays the time on site — two people for an hour is one hour, not two."
           {...register('crew_size', { min: { value: 1, message: 'Min 1' } })} />
 
-        {/* Smart Labor Calculator V2 — learns duration from history; fills the field
-            above (never overwrites a typed value, never affects price). */}
-        <SmartLaborField
-          sqft={Number(selProp?.lawn_sqft) || 0}
+        {/* What this kind of work has actually taken. Built on the SAME learning
+            engine the estimate-vs-actual comparison above uses and the SAME
+            duration rule Day Suggestions fits a candidate with, so the card, the
+            history and "fits Tuesday" can never quote different numbers.
+
+            It replaces the sqft-per-1000 labour widget on this form, which could
+            not describe the work this session is about: its output was clamped
+            to 240 minutes (a two-day project was unrepresentable), it rendered
+            nothing at all without a lawn measurement, it reported a percentage
+            confidence, and its buckets were keyword tables. That engine still
+            serves the quote builder's pricing help, which is frozen — this form
+            is scheduling, and scheduling asks a different question.
+
+            ⭐ It only ever SUGGESTS. Applying is a button; nothing here writes
+            duration_minutes on its own, so a saved visit's duration is never
+            silently re-estimated when the learner moves. */}
+        <SmartEstimateCard
+          load={learningLoad}
           serviceType={serviceType}
-          crewSize={Number(watch('crew_size')) || 1}
-          propertyId={selectedPropertyId || null}
-          cadence={laborCadence}
-          price={Number(watch('price')) || (measuredPrice ?? 0)}
+          excludeJobId={excludeJobId || undefined}
           value={Number(watch('duration_minutes')) || null}
           onApply={(min) => setValue('duration_minutes', min, { shouldValidate: true })}
         />
