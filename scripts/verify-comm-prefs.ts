@@ -229,7 +229,14 @@ check('preference cannot write a blocked verdict (no SKIP_REASON in the ordering
 const cardSrc = read('components', 'customers', 'PreferredChannel.tsx')
 check('the customer card uses resolveReach', /resolveReach\s*\(/.test(cardSrc), true)
 check('the customer card uses the shared sentence', /reachSummary\s*\(/.test(cardSrc), true)
-check('the customer card passes tenant capabilities', /tenantCapabilities\s*\(/.test(cardSrc), true)
+check('the customer card reads tenant capabilities', /tenantCapabilities\s*\(/.test(cardSrc), true)
+// Reading them is not using them. A card that fetched capabilities and then
+// asked resolveReach without them would silently promise a channel this
+// business may not send on — green on the check above, wrong on screen. Assert
+// the value reaches the VERDICT, which is the only thing the owner sees.
+const rrCall = /resolveReach\(([\s\S]{0,600}?)\n\s*\)/.exec(cardSrc)
+check('the customer card FEEDS those capabilities into the verdict',
+  !!rrCall && /\bcaps\b/.test(rrCall[1]), true)
 check('the customer card never writes a consent column',
   /sms_opt_in\s*:|email_opt_in\s*:\s*(true|false)/.test(cardSrc.replace(/sms_opt_in: !!customer\.sms_opt_in, email_opt_in: !!customer\.email_opt_in,/, '')), false)
 check('the customer card writes ONLY preferred_channel',
@@ -259,6 +266,70 @@ const mig = readFileSync(join(ROOT, 'supabase', 'migrations', '20260814120000_cu
 check('the migration constrains the value set in the database',
   /check\s*\(preferred_channel is null or preferred_channel in \('sms', 'email', 'phone'\)\)/.test(mig), true)
 check('the column is nullable (no preference is a real state)', /not null/i.test(mig), false)
+
+// ═══════════════════════════════════════════════════════════════════════════
+H('10. THE SCREEN, RENDERED — what an owner actually reads, on a phone')
+// Asserting the FUNCTION is honest is not the same as asserting the SCREEN is.
+// The card is rendered for real (renderToStaticMarkup — the technique
+// verify:mobile-shell and verify:team use for UI a script cannot see), so the
+// sentence and the tap targets are checked as shipped rather than as intended.
+//
+// Offline and deterministic: useEffect does not run during SSR, so the
+// capability read never fires; createClient only needs the env vars to exist to
+// construct, and makes no request.
+process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'https://verify.invalid'
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= 'verify-anon-key'
+const React = require('react') as typeof import('react')
+;(globalThis as Record<string, unknown>).React = React
+const { renderToStaticMarkup } = require('react-dom/server') as typeof import('react-dom/server')
+const { PreferredChannelCard } =
+  require('../src/components/customers/PreferredChannel') as typeof import('../src/components/customers/PreferredChannel')
+
+const render = (over: Record<string, unknown>) => renderToStaticMarkup(
+  React.createElement(PreferredChannelCard, {
+    customer: {
+      id: 'c1', name: 'Sam', phone: '+15875550100', email: 's@example.com',
+      sms_opt_in: true, email_opt_in: true, preferred_channel: null, ...over,
+    } as never,
+  }),
+)
+const strip = (h: string) => h.replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/\s+/g, ' ').trim()
+
+// ⭐ The brief's example, on screen: preferred = SMS, SMS consent = false.
+// The card must NOT read as permission to text.
+const overruledHtml = render({ preferred_channel: 'sms', sms_opt_in: false })
+check('the card SHOWS the overruled truth, not the preference',
+  strip(overruledHtml).includes('Prefers text, but no opt-in — messages go by email instead.'), true)
+check('…and it never tells the owner a text will be sent',
+  /messages use|go by text/.test(strip(overruledHtml)), false)
+const deadHtml = render({ preferred_channel: 'sms', sms_opt_in: false, email_opt_in: false })
+check('no reachable channel is stated plainly on screen',
+  strip(deadHtml).includes('No way to reach this customer'), true)
+check('the unreachable card is toned as a problem', /border-red-500\/30/.test(deadHtml), true)
+check('a call preference tells the owner to ring them',
+  strip(render({ preferred_channel: 'phone' })).includes('give them a ring'), true)
+
+// The consent boundary, stated on the surface itself — the sentence a future
+// reader needs before they "improve" this card into a consent editor.
+check('the card says a preference is not a permission',
+  strip(render({})).includes('A preference, not a permission'), true)
+
+// Mobile: four options must WRAP on a 375px handset rather than overflow, and
+// every one must be a real tap target. A row that overflows is unreachable in
+// exactly the place this CRM is used — standing in a driveway.
+const chipRow = /<div class="([^"]*flex flex-wrap[^"]*)" role="group"/.exec(overruledHtml)
+check('the option row wraps instead of overflowing', !!chipRow, true)
+const buttons = [...overruledHtml.matchAll(/<button[^>]*class="([^"]*)"/g)].map(m => m[1])
+check('all four options render', buttons.length, 4)
+check('every option is a 40px+ tap target', buttons.every(c => /min-h-\[40px\]/.test(c)), true)
+check('every option is a type="button" (never a stray form submit)',
+  [...overruledHtml.matchAll(/<button[^>]*>/g)].every(m => m[0].includes('type="button"')), true)
+// Nothing fixed-width: a hard px width is what pushes a card past a 375px screen.
+check('the card sets no fixed pixel width', /\bw-\[\d+px\]|\bmin-w-\[\d{3,}px\]/.test(overruledHtml), false)
+// The selected option must be announced, not merely coloured — colour alone is
+// not an answer for a screen reader or in bright sun.
+check('the chosen option is announced via aria-pressed',
+  /aria-pressed="true"/.test(render({ preferred_channel: 'email' })), true)
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)
