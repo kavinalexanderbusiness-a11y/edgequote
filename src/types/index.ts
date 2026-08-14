@@ -1628,6 +1628,11 @@ export interface ServiceTemplate {
   unit_cost: number | null      // labour / subcontract
   material_cost: number | null  // materials consumed
   is_favorite: boolean
+  // Recurrence eligibility (Session 46) — the ONE place a service may be
+  // declared repeatable or one-time. null = the owner hasn't said; suggestions
+  // then require behavioural cadence evidence (lib/serviceRecurrence). Never
+  // inferred from the service's name.
+  recurrence: 'one_time' | 'recurring_ok' | 'usually_recurring' | null
 }
 
 export interface ServiceTemplateFormValues {
@@ -1645,6 +1650,9 @@ export interface ServiceTemplateFormValues {
   unit_cost: string
   material_cost: string
   is_favorite: boolean
+  // '' = not set (maps to null on submit) — same blank-vs-zero discipline as
+  // the cost fields above.
+  recurrence: string
 }
 
 // ── Service bundles ──────────────────────────────────────────────────────────

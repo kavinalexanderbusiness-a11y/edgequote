@@ -2368,7 +2368,19 @@ export function QuoteBuilder({
                   <Sparkles className="w-3.5 h-3.5" /> Find best days
                 </Button>
               ) : (
-                <BestDaySuggestions address={address} />
+                /* The quote's own sizing feeds the day-fit engine: primary hours
+                   + additional lines' scheduling minutes (the same sum
+                   scheduleQuoteAsJob writes to the job), crew, and the service
+                   for learned-history fallback. hours 0 = unknown, passed as
+                   null — the suggester then says so instead of assuming. */
+                <BestDaySuggestions
+                  address={address}
+                  durationMinutes={Number(hours) > 0
+                    ? Math.round(Number(hours) * 60) + (watchedServices || []).reduce((m, s) => m + (Number(s?.est_minutes) || 0), 0)
+                    : null}
+                  crewSize={Number(crewSize) > 0 ? Number(crewSize) : null}
+                  serviceType={watch('service_type') || null}
+                />
               )}
             </div>
             </div>

@@ -611,7 +611,13 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
             coord={propCoord}
             address={selProp?.address ?? null}
             excludeJobId={excludeJobId}
-            targetHours={(Number(watch('duration_minutes')) || 45) / 60}
+            // NULL when the owner hasn't sized the job — the scheduler resolves
+            // it against learned service history, or says "duration unknown".
+            // (This used to coerce unknown to 45 minutes, which is how an
+            // unsized job got a confident day recommendation.)
+            durationMinutes={Number(watch('duration_minutes')) > 0 ? Number(watch('duration_minutes')) : null}
+            crewSize={Number(watch('crew_size')) > 0 ? Number(watch('crew_size')) : null}
+            serviceType={watch('service_type') || null}
             targetValue={Number(watch('price')) || suggestedPrice || 0}
             customerPreferredDays={effectivePrefs.preferredDays}
             customerAvoidDays={effectivePrefs.avoidDays}
