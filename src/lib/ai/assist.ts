@@ -5,6 +5,7 @@ import { loadBusinessContext, contextLine, type BusinessContext } from '@/lib/ma
 import { MSG_VARIABLES } from '@/lib/comms/templates'
 import { serviceKey, serviceLabel } from '@/lib/labor'
 import { isQuoteExpired } from '@/lib/quoteStatus'
+import { isWon, NON_DRAFT_QUOTE_STATUSES } from '@/lib/salesStage'
 import { invoiceBalance } from '@/lib/payments/ledger'
 import { depositChargeAmount } from '@/lib/payments/deposit'
 
@@ -437,7 +438,7 @@ async function quoteIntelContext(supabase: SupabaseClient, userId: string, quote
     // There is NO 'expired' status in this schema — expiry is display-only,
     // derived from valid_until on a still-'sent' quote (lib/quoteStatus is THE rule).
     supabase.from('quotes').select('service_type, status, total, customer_id, created_at, valid_until')
-      .eq('user_id', userId).neq('id', quoteId).in('status', ['accepted', 'scheduled', 'completed', 'paid', 'declined', 'sent'])
+      .eq('user_id', userId).neq('id', quoteId).in('status', NON_DRAFT_QUOTE_STATUSES)
       .order('created_at', { ascending: false }).limit(400),
     supabase.from('labor_observations').select('service_type, estimated_minutes, actual_minutes')
       .eq('user_id', userId).order('service_date', { ascending: false }).limit(500),
@@ -450,14 +451,13 @@ async function quoteIntelContext(supabase: SupabaseClient, userId: string, quote
   const label = serviceLabel(key) || primaryType || 'this service'
 
   // ── Win/loss for this service (whole book) — code-computed facts ────────────
-  // Won = the house WON set (accepted/scheduled/completed/paid — a quote that
-  // progressed IS a win, same rule as lib/timeline). Lost = explicit decline.
+  // Won = THE house rule (lib/salesStage isWon: accepted/scheduled/completed/paid
+  // — a quote that progressed IS a win). Lost = explicit decline.
   // Neutral, tracked separately per the owner's ruling: still-'sent' quotes,
   // split into expired (valid_until passed — silence, not a no) and awaiting.
-  const WON_STATUSES = new Set(['accepted', 'scheduled', 'completed', 'paid'])
   const hist = ((histRes.data as Array<{ service_type: string | null; status: string; total: number | null; customer_id: string | null; created_at: string; valid_until: string | null }> | null) || [])
   const same = hist.filter(h => serviceKey(h.service_type || '') === key)
-  const accepted = same.filter(h => WON_STATUSES.has(h.status))
+  const accepted = same.filter(h => isWon(h.status))
   const declined = same.filter(h => h.status === 'declined')
   // Expiry via THE rule (lib/quoteStatus), never re-derived here.
   const expired = same.filter(h => isQuoteExpired({ status: h.status as never, valid_until: h.valid_until }, todayISO()))
@@ -468,7 +468,7 @@ async function quoteIntelContext(supabase: SupabaseClient, userId: string, quote
   const medLost = median(declined.map(h => Number(h.total) || 0))
   // This customer's own record with us, service-agnostic.
   const custDecided = q.customer_id ? hist.filter(h => h.customer_id === q.customer_id) : []
-  const custAccepted = custDecided.filter(h => WON_STATUSES.has(h.status)).length
+  const custAccepted = custDecided.filter(h => isWon(h.status)).length
   const custDeclined = custDecided.filter(h => h.status === 'declined').length
 
   // ── Time: the builder's own estimate + how estimates have actually landed ───

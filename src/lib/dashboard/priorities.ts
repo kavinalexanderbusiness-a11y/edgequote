@@ -143,8 +143,13 @@ export interface PrioritiesInput {
 // $5 unpaid invoice (100_000 floor) would outrank it too — silently inverting
 // the order this file documents. Clamping keeps ordering WITHIN a tier by value
 // while the tier order stays exactly as written.
-const TIER_GAP = 10_000
-const adder = (n: number) => Math.min(Math.max(n, 0), TIER_GAP - 1_000)
+export const TIER_GAP = 10_000
+/** Clamp a dollar/urgency figure so it can order rows WITHIN a tier but can
+ *  never jump one. Exported because lib/pipeline ranks per-deal rows on the same
+ *  tier discipline — two copies of this clamp is two ways for the ordering to
+ *  silently invert. */
+export const tierAdder = (n: number) => Math.min(Math.max(n, 0), TIER_GAP - 1_000)
+const adder = tierAdder
 
 // ── Naming the one record a row opens ────────────────────────────────────────
 
@@ -242,6 +247,17 @@ export function isMissed(job: { scheduled_date: string | null; status: string },
     && (job.status === 'scheduled' || job.status === 'in_progress')
 }
 
+// Which quotes already have work on the calendar. A CANCELLED job must not count
+// as scheduled — that is the whole trap this predicate exists to hold, and the
+// per-deal pipeline asks the identical question ("does this won deal still need
+// booking?"). Two copies would let the dashboard queue say "schedule 3 accepted
+// quotes" while the pipeline shows 4, off one `!== 'cancelled'`.
+export function scheduledQuoteIds(jobs: { quote_id: string | null; status: string }[]): Set<string> {
+  const s = new Set<string>()
+  for (const j of jobs) if (j.quote_id && j.status !== 'cancelled') s.add(j.quote_id)
+  return s
+}
+
 export function computePriorities(i: PrioritiesInput): Priority[] {
   const { quotes, invoices, jobs, recById, customers, conversations, requests, leads, seasons, feeSettings, today } = i
   const next: Priority[] = []
@@ -308,8 +324,8 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
   //    verb is chase/record, the door is the quote page where both live);
   //    everything else keeps the schedule-now row it always had, and once a
   //    gated quote's deposit lands it moves up here labelled as ready.
-  const scheduledQuoteIds = new Set(jobs.filter(j => j.quote_id && j.status !== 'cancelled').map(j => j.quote_id))
-  const acceptedUnscheduled = quotes.filter(q => q.status === 'accepted' && !scheduledQuoteIds.has(q.id))
+  const booked = scheduledQuoteIds(jobs)
+  const acceptedUnscheduled = quotes.filter(q => q.status === 'accepted' && !booked.has(q.id))
   const gateOf = (q: Quote) => schedulingGate(q, i.quoteDepositRows?.[q.id] ?? [])
   const readyToSchedule = acceptedUnscheduled.filter(q => !gateBlocksScheduling(q, gateOf(q)))
   const waitingOnDeposit = acceptedUnscheduled.filter(q => gateBlocksScheduling(q, gateOf(q)))

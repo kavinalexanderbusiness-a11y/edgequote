@@ -11,6 +11,7 @@ import { CommandPalette } from '@/components/command/CommandPalette'
 import { OfflineStatus } from '@/components/pwa/OfflineStatus'
 import { Toaster } from '@/components/ui/Toaster'
 import { ConfirmHost } from '@/components/ui/ConfirmHost'
+import { LostReasonHost } from '@/components/quotes/LostReasonHost'
 import { UploadQueueWidget } from '@/components/photos/UploadQueueWidget'
 import { InboundToast } from '@/components/messages/InboundToast'
 
@@ -67,6 +68,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
       <InboundToast />
       <Toaster />
       <ConfirmHost />
+      {/* The optional "why was this lost?" sheet. Mounted here, like ConfirmHost,
+          so it outlives the component that asked — the decline door remounts on
+          the very status change that triggers the question. */}
+      <LostReasonHost />
       <UploadQueueWidget />
     </div>
   )

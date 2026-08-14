@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { neighborhoodKey } from '@/lib/profitability'
+import { isWon, isLost } from '@/lib/salesStage'
 
 // ── Win/Loss analysis (Growth) ──────────────────────────────────────────────────
 // The win side is already in the data (quotes.status accepted vs declined). This
@@ -58,31 +59,15 @@ export interface WinLossStats {
   byHood: HoodWinLoss[]     // sorted: most price-loss first
 }
 
-// THE canonical won/lost classification (reused by quoteLearning — never duplicated).
-//
-// A quote is DECIDED only when someone answered it. `sent` is neither won nor lost, so
-// it falls out of `decided` and out of `acceptance = won / decided` — which is how the
-// owner's rule (2026-07-16) that **expired quotes do not count toward acceptance** is
-// satisfied: an expired quote is still `sent`, so it was never counted in the first
-// place. That is deliberate, not incidental. Do not "fix" it by adding expiry here.
-//
-// ⚠️ READ BEFORE CHANGING EITHER LINE. Excluding the unanswered is not free — it
-// INFLATES acceptance, and only ever upward. Measured on the live book 2026-07-16:
-//
-//     won 34 · lost 6 · unanswered 14
-//     acceptance = 34/40 = 0.850          ← what the learner sees
-//     with ghosts counted = 34/54 = 0.630 ← what actually happened
-//
-// quoteLearning:231 raises the price when `acceptance >= 0.85`. It is sitting EXACTLY
-// on that boundary, contributing +0.000 today. One more won quote → 0.854 → targetRatio
-// 0.923, which finally clears the 0.92 floor. So the first price this learner ever
-// moves, it moves UP, on a number that is 63% true.
-//
-// Whether a ghost is a loss is a Phase 5 decision for the owner (see the Quote V2
-// roadmap) — NOT something to settle by editing this line. It is recorded here because
-// this is where someone will come looking.
-export const isWon = (s: string) => s === 'accepted' || s === 'scheduled' || s === 'completed' || s === 'paid'
-export const isLost = (s: string) => s === 'declined'
+// THE canonical won/lost classification now lives in lib/salesStage — a tiny,
+// dependency-free module, because six OTHER surfaces had each hand-rolled the same
+// Set locally (customers/[id], properties, timeline, businessIntelligence,
+// ai/assist, quotes/[id]) and a client component must be able to ask the question
+// without pulling a Supabase client and the pricing engine into its bundle.
+// Re-exported here so every existing `from '@/lib/winLoss'` import is unchanged.
+// The ⚠️ reasoning about acceptance inflation moved WITH the predicate — read it
+// there before touching either line.
+export { isWon, isLost }
 
 // Aggregate wins/losses. `hoodOf` maps a quote to its neighbourhood key (the
 // caller resolves property → neighbourhood with the shared naming engine).
