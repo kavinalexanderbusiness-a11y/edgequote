@@ -64,7 +64,11 @@ export async function loadCompletedVisitLearning(
 
   const { data, error } = await supabase
     .from('jobs')
-    .select('id, status, service_type, scheduled_date, duration_minutes, actual_minutes')
+    // crew_size rides along because elapsed time alone cannot answer a
+    // costing question: 5 hours with 3 people is 15 labour-hours, and the
+    // engine cannot derive that from a column it never read. It is the PLANNED
+    // crew (nothing records attendance), and lib/estimateVsActual labels it so.
+    .select('id, status, service_type, scheduled_date, duration_minutes, actual_minutes, crew_size')
     .eq('user_id', userId)
     .eq('status', 'completed')
     .order('scheduled_date', { ascending: false })

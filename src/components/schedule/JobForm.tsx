@@ -18,7 +18,7 @@ import {
   seasonEndDateFor, estimateSeasonVisits, seasonLabel,
 } from '@/lib/seasons'
 import { WeeklyScheduler } from '@/components/schedule/WeeklyScheduler'
-import { SmartLaborField } from '@/components/labor/SmartLaborField'
+import { SmartEstimateCard } from '@/components/labor/SmartEstimateCard'
 import { EstimatedVsActual } from '@/components/labor/EstimatedVsActual'
 import { ServiceEstimateLearning } from '@/components/labor/ServiceEstimateLearning'
 import { JobCostPanel } from '@/components/jobs/JobCostPanel'
@@ -820,15 +820,26 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           hint="How many people are on site at once. Duration stays the time on site — two people for an hour is one hour, not two."
           {...register('crew_size', { min: { value: 1, message: 'Min 1' } })} />
 
-        {/* Smart Labor Calculator V2 — learns duration from history; fills the field
-            above (never overwrites a typed value, never affects price). */}
-        <SmartLaborField
-          sqft={Number(selProp?.lawn_sqft) || 0}
+        {/* What this kind of work has actually taken. Built on the SAME learning
+            engine the estimate-vs-actual comparison above uses and the SAME
+            duration rule Day Suggestions fits a candidate with, so the card, the
+            history and "fits Tuesday" can never quote different numbers.
+
+            It replaces the sqft-per-1000 labour widget on this form, which could
+            not describe the work this session is about: its output was clamped
+            to 240 minutes (a two-day project was unrepresentable), it rendered
+            nothing at all without a lawn measurement, it reported a percentage
+            confidence, and its buckets were keyword tables. That engine still
+            serves the quote builder's pricing help, which is frozen — this form
+            is scheduling, and scheduling asks a different question.
+
+            ⭐ It only ever SUGGESTS. Applying is a button; nothing here writes
+            duration_minutes on its own, so a saved visit's duration is never
+            silently re-estimated when the learner moves. */}
+        <SmartEstimateCard
+          load={learningLoad}
           serviceType={serviceType}
-          crewSize={Number(watch('crew_size')) || 1}
-          propertyId={selectedPropertyId || null}
-          cadence={laborCadence}
-          price={Number(watch('price')) || (measuredPrice ?? 0)}
+          excludeJobId={excludeJobId || undefined}
           value={Number(watch('duration_minutes')) || null}
           onApply={(min) => setValue('duration_minutes', min, { shouldValidate: true })}
         />

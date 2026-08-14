@@ -95,8 +95,19 @@ export interface VisitLike {
   scheduled_date?: string | null
   /** The plan: estimated on-site minutes (jobs.duration_minutes). */
   duration_minutes?: number | null
-  /** What happened: recorded on-site minutes (jobs.actual_minutes). */
+  /** What happened: recorded ELAPSED on-site minutes (jobs.actual_minutes). */
   actual_minutes?: number | null
+  /**
+   * How many people the visit was PLANNED for (jobs.crew_size).
+   *
+   * ⚠️ THE PLAN, NOT THE ATTENDANCE. Nothing in the product records who actually
+   * turned up; crew_size is what was typed when the visit was made. So anything
+   * derived from it is a planned-crew figure and carries that label all the way
+   * to the screen — and per lib/jobCost it may never be priced. A null here is
+   * NOT a one-person crew: it is a visit that never said, and it is excluded from
+   * every crew figure rather than counted as 1.
+   */
+  crew_size?: number | null
 }
 
 /** Why a visit yields no comparison. Never collapsed into a zero. */
@@ -112,11 +123,26 @@ export interface LaborComparison {
   serviceLabel: string
   serviceDate: string | null
   estimatedMinutes: number
+  /** ELAPSED minutes on site — the stopwatch, not the person-hours. */
   actualMinutes: number
   /** actual − estimated. Positive = ran long. */
   varianceMinutes: number
   /** (actual − estimated) / estimated × 100, signed, 1dp. */
   variancePct: number
+  /** Planned crew. NULL when the visit did not state one — never defaulted to 1. */
+  crewSize: number | null
+  /**
+   * PERSON-minutes: elapsed × planned crew. NULL exactly when `crewSize` is.
+   *
+   * ⚠️ A DIFFERENT QUESTION FROM `actualMinutes`, NOT A BIGGER VERSION OF IT.
+   * Elapsed answers "how long is this day blocked" (scheduling); labour answers
+   * "how much work is in it" (costing/capacity). 3 people for 5 hours is 5 hours
+   * elapsed and 15 labour-hours, and the two are never interchangeable: putting
+   * labour into a calendar triples the job, putting elapsed into a cost divides
+   * it by three. Both figures travel together so no consumer has to multiply —
+   * multiplying at the call site is how the confusion starts.
+   */
+  laborMinutes: number | null
 }
 
 export interface VisitLaborRead {
@@ -149,6 +175,11 @@ export function readVisitLabor(v: VisitLike): VisitLaborRead {
   }
 
   const key = serviceKey(v.service_type)
+  // A visit that never stated a crew contributes NO crew evidence and NO labour
+  // evidence. Coercing the null to 1 would manufacture a "typical crew of 1"
+  // out of silence, and then manufacture person-hours from it.
+  const crewRaw = Number(v.crew_size)
+  const crewSize = Number.isFinite(crewRaw) && crewRaw >= 1 ? Math.round(crewRaw) : null
   return {
     estimatedMinutes,
     actualMinutes,
@@ -162,6 +193,8 @@ export function readVisitLabor(v: VisitLike): VisitLaborRead {
       actualMinutes,
       varianceMinutes: actualMinutes - estimatedMinutes,
       variancePct: round1(((actualMinutes - estimatedMinutes) / estimatedMinutes) * 100),
+      crewSize,
+      laborMinutes: crewSize == null ? null : actualMinutes * crewSize,
     },
   }
 }
@@ -206,6 +239,30 @@ export interface VarianceRollup {
   medianVarianceMinutes: number | null
   /** sampleSize >= MIN_SERVICE_SAMPLE — is this a finding or an observation? */
   established: boolean
+
+  // ── The crew dimension ─────────────────────────────────────────────────────
+  /**
+   * How many of `sampleSize`'s visits actually STATED a crew. Its own number
+   * because it is its own evidence: six comparable visits of which two named a
+   * crew back the crew figures with two, not six, and a claim shown at n=6 that
+   * really rests on n=2 is precisely the "unreliable sample presented as
+   * established" failure. Consumers gate crew/labour on THIS count.
+   */
+  crewSampleSize: number
+  /** Typical planned crew. Null when no visit stated one — never 1 by default. */
+  medianCrewSize: number | null
+  /**
+   * Typical PERSON-minutes per visit — the median of each visit's own
+   * elapsed × its own crew.
+   *
+   * ⚠️ PAIRED, and it does NOT equal `medianActualMinutes × medianCrewSize`.
+   * Same rule as the three medians above: every visit contributes its own
+   * elapsed AND its own crew, so unpairing them would multiply one visit's hours
+   * by another visit's headcount. A surface showing elapsed, crew and labour
+   * together must word them as three facts and must not invite the reader to
+   * check the multiplication — it will not come out, and that is correct.
+   */
+  medianLaborMinutes: number | null
 }
 
 function median(xs: number[]): number {
@@ -217,6 +274,10 @@ function median(xs: number[]): number {
 export function rollupLaborVariance(cs: LaborComparison[]): VarianceRollup {
   const totalEstimatedMinutes = cs.reduce((s, c) => s + c.estimatedMinutes, 0)
   const totalActualMinutes = cs.reduce((s, c) => s + c.actualMinutes, 0)
+  // Only visits that stated a crew. Filtered, not defaulted — a visit with no
+  // crew is missing evidence, and missing evidence must shrink the sample rather
+  // than quietly join it as a one-person job.
+  const crewed = cs.filter(c => c.crewSize != null && c.laborMinutes != null)
   return {
     sampleSize: cs.length,
     totalEstimatedMinutes,
@@ -234,6 +295,9 @@ export function rollupLaborVariance(cs: LaborComparison[]): VarianceRollup {
     medianActualMinutes: cs.length ? round1(median(cs.map(c => c.actualMinutes))) : null,
     medianVarianceMinutes: cs.length ? round1(median(cs.map(c => c.varianceMinutes))) : null,
     established: cs.length >= MIN_SERVICE_SAMPLE,
+    crewSampleSize: crewed.length,
+    medianCrewSize: crewed.length ? round1(median(crewed.map(c => c.crewSize as number))) : null,
+    medianLaborMinutes: crewed.length ? round1(median(crewed.map(c => c.laborMinutes as number))) : null,
   }
 }
 
