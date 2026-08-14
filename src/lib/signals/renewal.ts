@@ -220,27 +220,59 @@ export function planRenewal(f: PlanFacts, seasons: ServiceSeasons, today: string
   const dates = [...f.liveDates].sort()
   const planEnd = dates[dates.length - 1]
   const planStart = f.planStart || dates[0]
+  const cadence = cadenceDays(f.cadence, f.interval)
 
   const season = seasonForService(f.serviceType, seasons)
-  // A season gives a plan its ending only if the plan actually respects it. An
-  // open-ended series pre-creates a rolling horizon that can run PAST the season
-  // close, and a plan whose visits ignore the season was not ended by it.
   const seasonEnd = season ? seasonEndDateFor(planStart, season) : null
-  const endedBySeason = !!seasonEnd && planEnd <= seasonEnd
+
+  // ⭐⭐ HAVING AN END DATE IS NOT REACHING IT.
+  //
+  // This distinction was found in the live book, and getting it wrong is worse
+  // than not having the feature. Three real mowing plans all carried an end date
+  // of Oct 31. One had run its visits out to Aug 7 and genuinely finished. The
+  // other two had an end date of Oct 31 and last mowed on Aug 8 and Jun 15 —
+  // they had run DRY, twelve and twenty weeks early, and testing only "was an end
+  // date set" filed both of them as "ran its full term and finished". A weekly
+  // customer six days without a mow would have been quietly reclassified from an
+  // urgent re-book into a calm nothing.
+  //
+  // So the test is whether the last visit actually ARRIVED at the stated end.
+  // Tolerance is one cadence, and that is exact rather than generous: occurrences
+  // are generated up to the last one on or before the end date, so a plan that
+  // ran its course always stops within one interval of its own end. Overshooting
+  // counts — a plan past its end has certainly reached it.
+  const reached = (target: string) => daysBetween(planEnd, target) <= cadence
+
+  const endedByDate = !!f.endDate && reached(f.endDate)
+  const endedBySeason = !!seasonEnd && reached(seasonEnd)
   const endedByCount = !!f.endCount && f.endCount > 0 && f.liveDates.length >= f.endCount
-  const hasPlannedEnd = !!f.endDate || endedByCount || endedBySeason
+  const hasPlannedEnd = endedByDate || endedByCount || endedBySeason
 
   // ⭐ Evidence of a DECISION: visits cancelled AFTER the plan's last live one.
   // Somebody stopped this deliberately, and a decision must not be handed back
   // as an opportunity on a timer.
   const endedByCancellation = f.cancelledDates.some(d => d > planEnd)
 
-  // A season repeats once a year whatever the visit spacing inside it; a term
-  // plan rolls over the day after it ends. Asking a weekly customer about next
-  // spring seven days out is asking far too late, which is why the cycle is the
-  // SEASON here and never the gap between two visits.
-  const nextCycleStart = season ? nextSeasonStartISO(season, today) : addDaysISO(planEnd, 1)
-  const cycleDays = season
+  // A season repeats once a year whatever the visit spacing inside it, so a plan
+  // that ran to its season's close renews NEXT season — asking a weekly customer
+  // about next spring seven days out is asking far too late.
+  //
+  // But the season is the cycle only for a plan that actually ended WITH it. A
+  // three-visit block booked inside a season is not a season; its cycle is its
+  // own fifteen days, and its renewal question is "another block, now" rather
+  // than "see you next April". Keying this off `endedBySeason` rather than off
+  // "the service has a season" is what tells those two apart.
+  //
+  // Anchored on the PLAN'S END, never on today. Anchoring on today looks
+  // equivalent and is not: once the season has actually opened, "the next season
+  // start after today" jumps a whole year, and the renewal window would slam
+  // shut on the exact morning the work becomes bookable — the one day the owner
+  // most needs to see the list. The cycle being renewed is the one that follows
+  // the plan that ended, and that is a fixed date the clock cannot move.
+  const nextCycleStart = endedBySeason && season
+    ? nextSeasonStartISO(season, planEnd)
+    : addDaysISO(planEnd, 1)
+  const cycleDays = endedBySeason
     ? RENEWAL_SEASON_CYCLE_DAYS
     : Math.max(1, daysBetween(planStart, planEnd) + 1)
 
@@ -265,11 +297,11 @@ export function planRenewal(f: PlanFacts, seasons: ServiceSeasons, today: string
     endedByCancellation,
     nextCycleStart,
     cycleDays,
-    cadenceDays: cadenceDays(f.cadence, f.interval),
+    cadenceDays: cadence,
     // The next cycle is the same SHAPE as the one that just finished: a season
     // ends when that season ends, a term runs the same length again. Proposed to
     // the owner, never applied on its own.
-    renewedEndDate: season
+    renewedEndDate: endedBySeason && season
       ? seasonEndDateFor(nextCycleStart, season)
       : (hasPlannedEnd ? addDaysISO(nextCycleStart, cycleDays - 1) : null),
   }

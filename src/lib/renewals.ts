@@ -317,7 +317,7 @@ export function computeRenewals<C extends { id: string } = Customer>(
       renewedEndDate: plan.renewedEndDate,
       daysToNextCycle: signal.daysToNextCycle ?? daysBetween(today, plan.nextCycleStart),
       reason: renewalReason({
-        stage, season, endedByCount: plan.endedByCount, planEnd,
+        stage, endedBySeason: plan.endedBySeason, endedByCount: plan.endedByCount, planEnd,
         nextCycleStart: plan.nextCycleStart, today, offerDate,
       }),
       evidence: renewalEvidence({
@@ -347,7 +347,7 @@ export function computeRenewals<C extends { id: string } = Customer>(
 // One line the mobile queue can show whole. States the FACT that put the row
 // here — never a prediction, never a score.
 function renewalReason(a: {
-  stage: RenewalStage; season: ServiceSeason | null; endedByCount: boolean
+  stage: RenewalStage; endedBySeason: boolean; endedByCount: boolean
   planEnd: string; nextCycleStart: string; today: string; offerDate: string | null
 }): string {
   if (a.stage === 'accepted') return 'They accepted — create the plan'
@@ -355,7 +355,10 @@ function renewalReason(a: {
   if (a.stage === 'sent') return `Renewal sent ${formatDate(a.offerDate ?? a.today)} — awaiting their reply`
   if (a.stage === 'expired') return 'Renewal quote expired — send it again'
   const days = daysBetween(a.today, a.nextCycleStart)
-  if (a.season) {
+  // "The season ended" only when the SEASON is what ended it. A short block that
+  // happened to sit inside a season ended on its own date, and saying otherwise
+  // would point the owner at next April for work they could re-book this week.
+  if (a.endedBySeason) {
     return a.today > a.planEnd
       ? `Season ended ${formatDate(a.planEnd)} · next starts in ${days}d`
       : `Season ends ${formatDate(a.planEnd)} · nothing booked after`

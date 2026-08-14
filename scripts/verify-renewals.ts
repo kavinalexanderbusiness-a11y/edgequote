@@ -27,8 +27,8 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { computeRenewals, renewalStageFor, type RnJob, type RnQuote, type RnRecurrence } from '../src/lib/renewals'
-import { computeReactivation, type RJob, type RQuote, type RRecurrence } from '../src/lib/reactivation'
+import { computeRenewals, loadRenewals, renewalStageFor, type RnJob, type RnQuote, type RnRecurrence } from '../src/lib/renewals'
+import { computeReactivation, loadReactivation, type RJob, type RQuote, type RRecurrence } from '../src/lib/reactivation'
 import { planRenewal, ranOut, renewalDue, renewalLeadDays } from '../src/lib/signals'
 import { DEFAULT_SEASONS, type ServiceSeasons } from '../src/lib/seasons'
 
@@ -215,7 +215,13 @@ const OLD_QUOTE: RnQuote = {
   sent_at: null, valid_until: null, service_type: 'Weekly Mowing', initial_price: 90,
   weekly_price: 60, biweekly_price: null, monthly_price: null, renewal_of_recurrence_id: null,
 }
-const VISITS = ['2026-04-15', '2026-05-15', '2026-06-15', '2026-07-15', '2026-08-15', '2026-09-15', '2026-10-15'].map(d => visit(d))
+// Weekly visits that actually run to the season's close — the shape a plan has
+// when it finishes rather than falls over. The last one is Oct 28, three days
+// short of the Oct 31 end, which is where a weekly rule always lands.
+const VISIT_DATES = [
+  '2026-04-15', '2026-05-13', '2026-06-10', '2026-07-08', '2026-08-05', '2026-09-30', '2026-10-28',
+]
+const VISITS = VISIT_DATES.map(d => visit(d))
 const rows = (over: Partial<{ jobs: RnJob[]; quotes: RnQuote[]; recurrences: RnRecurrence[] }> = {}) => ({
   customers: [cust('c1', 'Dana Fields')],
   jobs: over.jobs ?? VISITS,
@@ -234,6 +240,29 @@ const rows = (over: Partial<{ jobs: RnJob[]; quotes: RnQuote[]; recurrences: RnR
   check('…and it counts as needing the owner', r.actionable, 1)
   ok('…the reason is one plain line', /Season ended/.test(r.opportunities[0].reason), r.opportunities[0].reason)
   ok('…the evidence is dated facts', r.opportunities[0].evidence.length >= 3)
+}
+
+// ⭐⭐ AN END DATE IS NOT AN ENDING. The same plan, the same Oct 31 end date, but
+// its visits stopped in August — it ran DRY twelve weeks early. Found in the live
+// book: two real mowing customers were being filed as "ran its full term and
+// finished" while one of them was six days without a mow.
+const DRY = ['2026-04-15', '2026-05-13', '2026-06-10', '2026-07-08', '2026-08-05']
+{
+  const r = computeRenewals({ ...rows({ jobs: DRY.map(d => visit(d)) }), today: '2026-08-14' })
+  check('a plan that stopped 12 weeks short of its end date is NOT a renewal', r.opportunities.length, 0)
+}
+
+// A short BLOCK booked inside a season is not a season. Its cycle is its own
+// fifteen days, so it renews now — not next April.
+{
+  const block: RnRecurrence = { ...REC, start_date: '2026-07-24', end_date: '2026-08-07' }
+  const jobs = ['2026-07-24', '2026-07-31', '2026-08-07'].map(d => visit(d))
+  const r = computeRenewals({ ...rows({ jobs, recurrences: [block] }), today: '2026-08-14' })
+  check('a 3-visit block that finished last week is due NOW', r.opportunities.length, 1)
+  check('…its next cycle is the day after it ended, not next season',
+    r.opportunities[0]?.nextCycleStart, '2026-08-08')
+  ok('…and the reason says the plan ended, not the season',
+    /Plan ended/.test(r.opportunities[0]?.reason ?? ''), r.opportunities[0]?.reason)
 }
 
 // The anchor visit's setup price must not become the renewal figure.
@@ -281,9 +310,14 @@ const offer = (status: string, extra: Partial<RnQuote> = {}): RnQuote => ({
   check('already re-booked → nothing to ask', r.opportunities.length, 0)
 }
 
-// Cancelled remainder → never offered.
+// Cancelled remainder → never offered. The plan's live visits stop on Oct 7 and
+// the two that would have followed were cancelled: somebody stopped this.
 {
-  const stopped = [...VISITS, visit('2026-10-22', { id: 'jx', status: 'cancelled' })]
+  const stopped = [
+    ...VISIT_DATES.slice(0, 5).map(d => visit(d)),
+    visit('2026-10-14', { id: 'jx1', status: 'cancelled' }),
+    visit('2026-10-21', { id: 'jx2', status: 'cancelled' }),
+  ]
   const r = computeRenewals(rows({ jobs: stopped }))
   check('⛔ a plan somebody cancelled out of is never offered back', r.opportunities.length, 0)
 }
@@ -352,6 +386,32 @@ const reactRows = (today: string, jobs: RJob[] = VISITS.map(v => rj(v.scheduled_
 }
 
 {
+  // ⭐ THE OVERLAP THAT WOULD OTHERWISE PRINT ONE CUSTOMER TWICE. Their season
+  // plan ended last Oct 31, it is now late April — so their season is BACK (no
+  // dormancy to hide behind), it is 171 days since their last visit (deep in the
+  // 6+ month bucket), and their renewal window is open. Exactly one queue may
+  // claim them, and it is the one with a price and a button.
+  const r = computeReactivation(reactRows('2027-04-20'))
+  check('renewal window open, in season, 171 days quiet → not in a lapse bucket', r.risks.length, 0)
+  check('…not in the urgent queue either', r.ranOuts.length, 0)
+  check('…not counted as at risk', r.atRisk, 0)
+  check('…reported once, pointing at the renewals list', r.dormant.map(d => d.reason), ['renewal_open'])
+  // And the renewal queue is the one holding them.
+  const q = computeRenewals({ ...rows(), today: '2027-04-20' })
+  check('…and the renewal queue does hold them', q.opportunities.length, 1)
+}
+
+{
+  // ⭐⭐ The live-book case, from the other side. Same Oct 31 end date, visits
+  // stopped Aug 5: this customer must stay in the URGENT queue and must not be
+  // described as finished.
+  const r = computeReactivation(reactRows('2026-08-14', DRY.map(d => rj(d))))
+  check('a plan that ran dry short of its end date is still urgent', r.ranOuts.length, 1)
+  check('…and is NOT filed as "ran its full term"', r.dormant.length, 0)
+  check('…so the at-risk count still counts them', r.atRisk, 1)
+}
+
+{
   // The SAME dates with no end date on the series: this plan fell over, and that
   // IS urgent. The distinction the whole feature rests on.
   const noEnd = { ...rrec, end_date: null }
@@ -382,6 +442,51 @@ const reactRows = (today: string, jobs: RJob[] = VISITS.map(v => rj(v.scheduled_
   check('⛔ cancelled remainder → reported as ended on purpose', r.dormant[0].reason, 'ended_deliberately')
   check('⛔ …and not counted as at risk', r.atRisk, 0)
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// A FAILED READ IS NOT AN ANSWER.
+// supabase-js RESOLVES with { data: null, error } on a dead connection, so a
+// tolerant `|| []` turns a network blip into "no plans need renewing" and
+// "every customer is booked or recently served" — a confident all-clear about
+// next year's revenue, manufactured by a dropped socket. Asserted by CALLING the
+// loaders against a client that fails, because the claim is about behaviour and
+// a grep for the error branch would pass on a branch that returned the wrong thing.
+//
+// Declared here (beside the sections it belongs with) and awaited at the very
+// end: tsx runs these guards as CommonJS, where top-level await is a syntax error.
+async function honestyChecks() {
+  H('11. A FAILED READ IS NOT AN ANSWER')
+  // One chainable stub: every query shape the loaders use (.select().eq(),
+  // .is(), .maybeSingle()) returns the same thenable.
+  const client = (result: { data: unknown; error: { message: string } | null }) => {
+    const chain: Record<string, unknown> = {}
+    for (const m of ['select', 'eq', 'is', 'order', 'limit', 'maybeSingle']) chain[m] = () => chain
+    chain.then = (res: (v: unknown) => void) => res(result)
+    return {
+      auth: { getSession: async () => ({ data: { session: { user: { id: 'u1' } } } }) },
+      from: () => chain,
+    } as never
+  }
+
+  const brokenRenewals = await loadRenewals(client({ data: null, error: { message: 'network down' } }))
+  check('loadRenewals on a failed read does NOT report an empty queue', brokenRenewals.ok, false)
+  ok('…and there is no report field to render an all-clear from',
+    !('report' in brokenRenewals), JSON.stringify(brokenRenewals))
+  ok('…it hands the caller the reason', !brokenRenewals.ok && /network down/.test(brokenRenewals.error))
+
+  const brokenReact = await loadReactivation(client({ data: null, error: { message: 'network down' } }))
+  check('loadReactivation on a failed read does NOT report "everyone is fine"', brokenReact.ok, false)
+  ok('…with no report field either', !('report' in brokenReact))
+
+  // The control: an EMPTY book is a real answer and must still succeed, or the
+  // honesty fix would have turned every new business into an error page.
+  const emptyRenewals = await loadRenewals(client({ data: [], error: null }))
+  check('an genuinely empty book still answers', emptyRenewals.ok, true)
+  check('…with an empty queue', emptyRenewals.ok && emptyRenewals.report.opportunities.length, 0)
+  const emptyReact = await loadReactivation(client({ data: [], error: null }))
+  check('…and reactivation says zero at risk, truthfully', emptyReact.ok && emptyReact.report.atRisk, 0)
+}
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 H('7. ⛔ NO RECURRENCE WITHOUT APPROVAL — every write path, enumerated')
@@ -524,5 +629,7 @@ function execFiles(): string[] {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)
-if (fail > 0) process.exit(1)
+honestyChecks().then(() => {
+  console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)
+  if (fail > 0) process.exit(1)
+})
