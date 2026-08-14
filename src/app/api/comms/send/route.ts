@@ -10,6 +10,7 @@ import { SENT_STATES } from '@/lib/comms/delivery'
 import { logSend } from '@/lib/comms/log'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { claimSend, finalizeSend } from '@/lib/comms/idempotency'
+import { tenantCapabilities } from '@/lib/capabilities'
 
 // Manual send — fired by an owner action (Day Ops one-tap buttons, the editable
 // scheduler composer, Weather Ops notifications, quote/invoice send). Uses the
@@ -42,13 +43,21 @@ export async function POST(req: NextRequest) {
   if (!cust) return NextResponse.json({ error: 'customer not found' }, { status: 404 })
   const c = cust as { id: string; name: string; phone: string | null; email: string | null; sms_opt_in: boolean; email_opt_in: boolean }
 
+  // What THIS business may send: the deployment credential AND the tenant's
+  // platform grant on the shared sender (lib/capabilities). This is the
+  // `enabled` every response carries, so the composer's channel chips tell a
+  // restricted tenant the truth instead of the deployment-wide answer.
+  const caps = await tenantCapabilities(supabase, user.id)
+  const env = commsEnabled()
+  const enabled = { sms: env.sms && caps.outboundSms, email: env.email && caps.outboundEmail, push: false }
+
   // Automated sends pass dedupe:true so the same template can't fire twice for the
   // same job (e.g. a job completed, undone, completed again).
   if (body.dedupe && jobId) {
     // SENT_STATES, not status='sent': a delivery webhook may have already moved a
     // prior send to 'delivered', and an equality check would miss it and resend.
     const { data: prior } = await supabase.from('notification_log').select('id').eq('user_id', user.id).eq('job_id', jobId).eq('template', template).in('status', SENT_STATES as unknown as string[]).limit(1)
-    if (prior && prior.length) return NextResponse.json({ enabled: commsEnabled(), results: {}, skipped: 'duplicate' })
+    if (prior && prior.length) return NextResponse.json({ enabled, results: {}, skipped: 'duplicate' })
   }
 
   // Reserve this send exactly once BEFORE dispatching any SMS/email (skipped for a
@@ -57,7 +66,7 @@ export async function POST(req: NextRequest) {
   // duplicate SMS AND no duplicate email.
   if (clientMessageId && !body.previewOnly) {
     const { claimed } = await claimSend(supabase, user.id, clientMessageId, channels.join('+'))
-    if (!claimed) return NextResponse.json({ enabled: commsEnabled(), results: {}, deduped: true })
+    if (!claimed) return NextResponse.json({ enabled, results: {}, deduped: true })
   }
 
   const { data: bizRow } = await supabase.from('business_settings')
@@ -102,9 +111,8 @@ export async function POST(req: NextRequest) {
   const outHtml = out.html
 
   // Caller can preview the fully-rendered text without sending (no I/O side effects).
-  if (body.previewOnly) return NextResponse.json({ enabled: commsEnabled(), preview: outText })
+  if (body.previewOnly) return NextResponse.json({ enabled, preview: outText })
 
-  const enabled = commsEnabled()
   const results: Record<string, unknown> = {}
   // Collect every channel attempt; log + thread once at the end so a sent message
   // can be linked to its log rows.
@@ -133,16 +141,30 @@ export async function POST(req: NextRequest) {
     attempts.push({ channel: g.channel, status: 'skipped', detail: g.blocked, sent: false })
   }
 
+  // Tenant capability — WHICH CHANNELS this business may use, after consent and
+  // before the governor, mirroring dispatchToCustomer exactly. 'not-enabled'
+  // extends the public reason contract the same way 'governed' did; the shared
+  // sender belongs to another tenant, and no owner action can change that from
+  // here (it is a platform grant, not a setting).
+  for (const ch of channels) {
+    if (blocked.get(ch)) continue
+    const off = (ch === 'sms' && !caps.outboundSms) || (ch === 'email' && !caps.outboundEmail)
+    if (!off) continue
+    blocked.set(ch, SKIP_REASON.NOT_ENABLED)
+    results[ch] = { sent: false, reason: 'not-enabled' }
+    attempts.push({ channel: ch, status: 'skipped', detail: SKIP_REASON.NOT_ENABLED, sent: false })
+  }
+
   // The governor: WHEN and AGAIN, after consent decides WHETHER — the same
   // brain dispatchToCustomer consults (lib/comms/governor), called here because
   // this route deliberately owns its own send. A manual send and an automated
   // one must never reach different verdicts about timing or frequency. Only
   // consulted when a channel could actually go out.
-  if (gate.some(g => !g.blocked)) {
+  if (gate.some(g => !blocked.get(g.channel))) {
     const gov = await governCheck(supabase, { userId: user.id, customerId, template })
     if (!gov.allowed) {
       for (const g of gate) {
-        if (g.blocked) continue
+        if (blocked.get(g.channel)) continue
         blocked.set(g.channel, gov.reason!)
         // 'governed' extends the public reason contract; `detail` carries the
         // specific verdict for summarizeSendOutcome's honest one-liner.

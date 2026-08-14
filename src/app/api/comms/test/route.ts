@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { commsEnabled, sendSms, sendEmail } from '@/lib/comms/send'
+import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
 
 // Communications self-test. Owner-only. NEVER touches customers — the POST sends
 // ONLY to the number/email typed into the Settings test page.
@@ -36,7 +37,15 @@ export async function GET() {
     RESEND_API_KEY: !!process.env.RESEND_API_KEY,
     RESEND_FROM: !!process.env.RESEND_FROM,
   }
-  const enabled = commsEnabled()
+  // Tenant-aware: `enabled` = the deployment credential AND this business's
+  // platform grant on the shared sender (lib/capabilities). `restricted` names
+  // the case where the deployment could send but this business may not, so the
+  // Settings page says "isn't enabled for this business" instead of walking the
+  // owner through env vars that are not theirs to set.
+  const caps = await tenantCapabilities(supabase, user.id)
+  const env = commsEnabled()
+  const enabled = { sms: env.sms && caps.outboundSms, email: env.email && caps.outboundEmail, push: false }
+  const restricted = { sms: env.sms && !caps.outboundSms, email: env.email && !caps.outboundEmail }
 
   // Validate Twilio credentials WITHOUT sending — fetch the account resource.
   let twilioCreds: { valid: boolean; detail: string } | null = null
@@ -111,9 +120,12 @@ export async function GET() {
 
   return NextResponse.json({
     enabled,
+    restricted,
     vars,
-    twilioFrom: mask(process.env.TWILIO_FROM),
-    resendFrom: process.env.RESEND_FROM || null,
+    // Sender identities belong to the tenant that holds the grant — never shown
+    // to a business the platform hasn't granted that channel.
+    twilioFrom: caps.outboundSms ? mask(process.env.TWILIO_FROM) : null,
+    resendFrom: caps.outboundEmail ? (process.env.RESEND_FROM || null) : null,
     twilioCreds,
     resendCreds,
     recentSends,
@@ -131,6 +143,16 @@ export async function POST(req: NextRequest) {
   const channel = body.channel === 'email' ? 'email' : 'sms'
   if (!to) return NextResponse.json({ error: 'Enter a recipient.' }, { status: 400 })
 
+  // Tenant capability first: for a restricted business the honest answer is
+  // "not enabled for this business", never a walkthrough of env vars that
+  // configure another tenant's sender.
+  const caps = await tenantCapabilities(supabase, user.id)
+  if (channel === 'sms' && !caps.outboundSms) {
+    return NextResponse.json({ sent: false, reason: 'not-enabled', error: CAPABILITY_MESSAGE.sms })
+  }
+  if (channel === 'email' && !caps.outboundEmail) {
+    return NextResponse.json({ sent: false, reason: 'not-enabled', error: CAPABILITY_MESSAGE.email })
+  }
   const enabled = commsEnabled()
   if (channel === 'sms' && !enabled.sms) {
     return NextResponse.json({ sent: false, reason: 'disabled', error: 'SMS is disabled — set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM.' })
