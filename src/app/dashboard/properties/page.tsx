@@ -28,10 +28,11 @@ import { getPropertyContexts } from '@/lib/ai/propertyContext'
 import { LocatedJob, fetchLocatedUpcomingJobs, nearbyJobCount } from '@/lib/geo'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { listPhotosForProperties, type JobPhotoView } from '@/lib/photos'
+import { isWon } from '@/lib/salesStage'
 import { ChevronRight, MapPin, Home, User, Ruler, History, RefreshCw, Trophy, DollarSign, CheckCircle2, Receipt, Timer, CalendarClock, AlertTriangle, Repeat, Camera, FileText, Clock, StickyNote, ShieldCheck, CalendarPlus, Lightbulb, Heart, SearchX } from 'lucide-react'
 
-// Quote statuses that count as a "won" price — the accepted-price memory.
-const QUOTE_WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
+// Quote statuses that count as a "won" price — the accepted-price memory. THE
+// rule (lib/salesStage), not a local Set: this page's copy was one of seven.
 
 // Per-property performance, aggregated from completed jobs + invoices. Reuses
 // existing data — no new tables, no new pricing math.
@@ -217,7 +218,7 @@ export default function PropertiesPage() {
         if (!q.property_id) continue
         const e = (qp[q.property_id] ||= { quoted: 0, accepted: 0, lastAccepted: null })
         e.quoted++
-        if (QUOTE_WON.has(q.status)) {
+        if (isWon(q.status)) {
           e.accepted++
           if (!e.lastAccepted || q.created_at > e.lastAccepted.date) e.lastAccepted = { total: Number(q.total) || 0, quote_number: q.quote_number, date: q.created_at }
         }

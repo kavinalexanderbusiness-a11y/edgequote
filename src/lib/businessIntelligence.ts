@@ -10,6 +10,7 @@ import { learnDurations, learnedDurationFor } from '@/lib/duration'
 import { densityFor, locatedStops } from '@/lib/routeDensity'
 import { cadenceDays, daysBetween, isSeasonallyDormant, lifetimeValue, ranOut } from '@/lib/signals'
 import { analyzeWinLoss, WLQuote, QuoteOutcomeRow } from '@/lib/winLoss'
+import { isWon, isLost } from '@/lib/salesStage'
 import {
   ProfitJob, ProfitContext, ProfitQuote, RecInfo,
   jobValue, neighborhoodProfitability, dayProfitability, monthlyTrends, neighborhoodKey, MonthTrend, Grade,
@@ -399,13 +400,14 @@ export function computeBI(inp: BIInput): BIReport {
   const hoodOf = (q: WLQuote) => { const p = q.property_id ? propById[q.property_id] : undefined; return p ? neighborhoodKey(p.postal_code, p.city, p.neighborhood) : 'Unknown' }
   const wlQuotes: WLQuote[] = quotes.map(q => ({ id: q.id, status: q.status, total: q.total, property_id: q.property_id }))
   const wl = analyzeWinLoss(wlQuotes, quoteOutcomes, hoodOf)
-  const decidedQuotes = quotes.filter(q => ['accepted', 'scheduled', 'completed', 'paid', 'declined'].includes(q.status))
+  // Decided = answered either way — THE rule (lib/salesStage), not a local array.
+  const decidedQuotes = quotes.filter(q => isWon(q.status) || isLost(q.status))
   const avgQuoteValue = decidedQuotes.length ? round(decidedQuotes.reduce((s, q) => s + Number(q.total || 0), 0) / decidedQuotes.length) : 0
   // Win rate by service type.
   const svcWL: Record<string, { won: number; dec: number }> = {}
   for (const q of quotes) {
-    const won = ['accepted', 'scheduled', 'completed', 'paid'].includes(q.status)
-    const lost = q.status === 'declined'
+    const won = isWon(q.status)
+    const lost = isLost(q.status)
     if (!won && !lost) continue
     const k = q.service_type || 'Other'
     const e = (svcWL[k] ||= { won: 0, dec: 0 })

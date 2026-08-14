@@ -8,6 +8,7 @@ import { confirm as confirmDialog } from '@/lib/confirm'
 import { QuoteStatus, STATUS_LABELS, STATUS_COLORS } from '@/types'
 import { markSentPatch, isSystemAdvancedQuoteStatus, QUOTE_STATUS_MEANING } from '@/lib/quoteStatus'
 import { markWonPatch } from '@/lib/followup'
+import { askLostReason } from '@/lib/lostReason'
 import { localTodayISO } from '@/lib/utils'
 import { ChevronDown, Loader2 } from 'lucide-react'
 
@@ -25,10 +26,13 @@ interface Props {
   /** The price on the document, snapshotted if this control marks the quote won.
    *  Absent → the snapshot records null rather than a guess (see markWonPatch). */
   total?: number | null
+  /** Only to address the lost-reason question by name ("Why did Dana say no?").
+   *  Absent simply drops the name from the title. */
+  customerName?: string
   onChanged?: (s: QuoteStatus) => void
 }
 
-export function QuoteStatusControl({ quoteId, status, followUpCount, sentAt, validUntil, total, onChanged }: Props) {
+export function QuoteStatusControl({ quoteId, status, followUpCount, sentAt, validUntil, total, customerName, onChanged }: Props) {
   const supabase = createClient()
   const [current, setCurrent] = useState<QuoteStatus>(status)
   const [saving, setSaving] = useState(false)
@@ -120,6 +124,17 @@ export function QuoteStatusControl({ quoteId, status, followUpCount, sentAt, val
       // change too). Firing this from `finally` propagated a status the write had
       // REJECTED — the pill reverted while the page kept the new status.
       onChanged?.(s)
+      // ── The one moment the reason is actually known ────────────────────────
+      // Ask AFTER the write lands, never before: the reason is a note ABOUT a
+      // decline, so offering it on a decline that failed would record why a quote
+      // was lost that is in fact still marked sent. Fire-and-forget through the
+      // shared store (lib/lostReason) — this control is about to be REMOUNTED by
+      // the very status change that triggered the question (the quote page renders
+      // it with key={quote.status}), so the dialog cannot live here. Not awaited:
+      // nothing about the status write depends on the answer.
+      if (s === 'declined' && current !== 'declined') {
+        void askLostReason({ quoteId, customerName })
+      }
     } catch {
       setCurrent(status)   // hard failure → revert the optimistic status
       toast.error('Could not update the status — check your connection and try again.')

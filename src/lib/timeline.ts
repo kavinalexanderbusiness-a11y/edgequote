@@ -1,5 +1,8 @@
 import { formatCurrency, formatDate, parseLocalDate } from '@/lib/utils'
 import { formatWorked } from '@/lib/workDuration'
+// THE won/lost rule (lib/salesStage) — this file used to carry its own local Set,
+// one of seven copies of the same four statuses across the app.
+import { isWon } from '@/lib/salesStage'
 
 // ── THE customer/property timeline engine ────────────────────────────────────
 // One chronological history, built from the tables that ALREADY hold the events.
@@ -111,7 +114,6 @@ export interface TlCampaignLog { id: string; campaign_name?: string | null; camp
  *  count a job's sessions before deciding whether any of them are worth a row. */
 export interface TlWorkSession { id: string; job_id: string; worked_on: string; minutes: number; workers?: number | null; note?: string | null; property_id?: string | null }
 
-const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
 const money = (n: unknown) => formatCurrency(Number(n) || 0)
 const clip = (s: string | null | undefined, n: number) => (s || '').trim().slice(0, n)
 const join = (...parts: (string | null | undefined | false)[]) => parts.filter(Boolean).join(' · ') || undefined
@@ -139,7 +141,7 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
     if (q.sent_at) out.push({ at: q.sent_at, kind: 'quote_sent', title: `Quote ${q.quote_number} sent`, href, propertyId: pid })
     if (q.last_followed_up_at) out.push({ at: q.last_followed_up_at, kind: 'followup', title: `Followed up on ${q.quote_number}`, sub: `${q.follow_up_count ?? 0} total`, href, propertyId: pid })
     // quotes has no accepted_at/declined_at — updated_at is the only timestamp there is.
-    if (WON.has(q.status)) out.push({ at: q.updated_at, kind: 'quote_accepted', title: `Quote ${q.quote_number} accepted`, sub: money(q.total), href, propertyId: pid })
+    if (isWon(q.status)) out.push({ at: q.updated_at, kind: 'quote_accepted', title: `Quote ${q.quote_number} accepted`, sub: money(q.total), href, propertyId: pid })
     // A declined quote used to just stop appearing — losing the sale left no trace.
     if (q.status === 'declined') out.push({ at: q.updated_at, kind: 'quote_declined', title: `Quote ${q.quote_number} declined`, sub: money(q.total), href, propertyId: pid })
   }
