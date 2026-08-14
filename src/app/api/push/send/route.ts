@@ -36,6 +36,12 @@ const PREF_KEY: Record<string, string> = {
   // itself is already deduped per unread visit by the DB trigger, so this
   // cannot fan out one push per reply.)
   crew_message: 'crew_message',
+  // ONE key for both answers, for the same "turn-off-able" reason: an unmapped
+  // type is ON with no switch anywhere. Yes and no are the same event to an owner
+  // deciding whether they want to be interrupted, so they share a preference —
+  // and it is the customer answering, which is worth hearing by default.
+  change_order_approved: 'change_order',
+  change_order_declined: 'change_order',
 }
 
 function vapidReady(): boolean {

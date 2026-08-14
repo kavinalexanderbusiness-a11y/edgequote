@@ -23,6 +23,11 @@ interface Props {
   // (required so no consumer can silently fall back to a trade's chips). Must
   // include the 'custom' key — it is special-cased to a free-text description.
   addonTemplates: AddonTemplate[]
+  // Approved change orders on this visit. They are add-ons too — the approval
+  // trigger mints the line item — but they are NOT in `items`, because a
+  // customer-approved change is not the owner's to edit or bin from here. Passed
+  // as a figure only, so this panel's "Total visit value" still tells the truth.
+  approvedChanges?: number
 }
 
 const SCOPES: { scope: RecurrenceScope; label: string }[] = [
@@ -31,7 +36,7 @@ const SCOPES: { scope: RecurrenceScope; label: string }[] = [
   { scope: 'all', label: 'Entire plan' },
 ]
 
-export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, previousAddons, onCopyPrevious, addonTemplates }: Props) {
+export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, previousAddons, onCopyPrevious, addonTemplates, approvedChanges = 0 }: Props) {
   const [picked, setPicked] = useState<AddonTemplate | null>(null)
   const [desc, setDesc] = useState('')      // used when Custom is picked
   const [amount, setAmount] = useState('')
@@ -52,7 +57,7 @@ export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, prev
     setCopyBusy(false)
   }
 
-  const total = baseValue + addonsTotal(items)
+  const total = baseValue + addonsTotal(items) + (Number(approvedChanges) || 0)
   const effectiveDesc = picked ? (picked.key === 'custom' ? desc.trim() : picked.label) : desc.trim()
   const recommendRecurring = isRecurring && (!!picked?.recurringByDefault || isRecurringProgramService(effectiveDesc))
 
@@ -170,9 +175,17 @@ export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, prev
       )}
 
       {/* Total Job Value — always visible */}
-      <div className="flex items-center justify-between border-t border-border pt-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Total visit value</span>
-        <span className="text-base font-bold text-accent-text">{formatCurrency(total)}</span>
+      <div className="border-t border-border pt-2 space-y-1">
+        {approvedChanges > 0 && (
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-ink-muted">Approved changes (in Changes)</span>
+            <span className="font-semibold text-emerald-300">+{formatCurrency(approvedChanges)}</span>
+          </div>
+        )}
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Total visit value</span>
+          <span className="text-base font-bold text-accent-text">{formatCurrency(total)}</span>
+        </div>
       </div>
     </div>
   )

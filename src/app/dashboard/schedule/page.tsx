@@ -8,6 +8,11 @@ import { AddonTemplate, Customer, Job, JobFormValues, JobLineItem, Quote, Recurr
 // page is on verify:trades' reviewed allowlist for exactly this consumption.
 import { tradePack, NEUTRAL_PACK } from '@/lib/trades'
 import { listLineItemsByJob, addLineItems, deleteLineItem, recordPriceChange, addonsTotal, normalizeServiceKey } from '@/lib/jobPricing'
+import {
+  ChangeOrder, listChangeOrders, createChangeOrder, sendChangeOrder, cancelChangeOrder,
+  recordOwnerDecision, changeOrderSendRequest,
+} from '@/lib/changeOrders'
+import { changeOrderMessageBody } from '@/lib/comms/templates'
 import { Calendar, CalendarView } from '@/components/schedule/Calendar'
 import { DayOpsPanel, QuoteLite, QuickPatch } from '@/components/schedule/DayOpsPanel'
 import { Coord, geocodeAddress } from '@/lib/geo'
@@ -44,6 +49,10 @@ interface FieldSettings {
 interface FieldBundle {
   jobs: Job[]
   addons: Record<string, JobLineItem[]>
+  // Cached for the same reason add-ons are: offline, an EMPTY change-order panel
+  // is not "no changes", it is "we couldn't ask" — and a visit whose customer is
+  // waiting on an approval must still say so in a driveway with no signal.
+  changeOrders: Record<string, ChangeOrder[]>
   quotes: QuoteLite[]          // prices for recurring visits derive from these
   recurrences: JobRecurrence[] // cadence labels
   dayStatuses: DayStatusRow[]
@@ -192,6 +201,9 @@ export default function SchedulePage() {
   const [invoicedJobIds, setInvoicedJobIds] = useState<Set<string>>(new Set())
   // Extra-service add-ons per visit (Day Ops). Kept in sync with the draft invoice.
   const [addonsByJobId, setAddonsByJobId] = useState<Record<string, JobLineItem[]>>({})
+  // Change orders per visit — the AUTHORIZATION for scope added after approval.
+  // The money they become lives in addonsByJobId (the approval trigger mints it).
+  const [changeOrdersByJobId, setChangeOrdersByJobId] = useState<Record<string, ChangeOrder[]>>({})
   const [baseCoord, setBaseCoord] = useState<Coord | null>(null)
   const [preferredWorkDays, setPreferredWorkDays] = useState<number[]>([5, 6, 0])
   const [workStartTime, setWorkStartTime] = useState('08:00')
@@ -481,13 +493,14 @@ export default function SchedulePage() {
     setHealthBusyKey(issue.key)
     const rows = jobs.filter(j => issue.removableJobIds.includes(j.id)).map(jobInsertRow)
     const addons = addonInsertRows(issue.removableJobIds)
+    const cos = changeOrderInsertRows(issue.removableJobIds)
     const { error } = await supabase.from('jobs').delete().in('id', issue.removableJobIds)
     if (error) { setBanner('Could not remove the duplicate: ' + error.message); setHealthBusyKey(null); return }
     await fetchJobs()
     setHealthBusyKey(null)
     offerUndo(`Removed ${rows.length} ${issue.isMow ? 'mowing ' : ''}visit${rows.length !== 1 ? 's' : ''}`, async () => {
       if (rows.length) await supabase.from('jobs').insert(rows)
-      if (addons.length) await supabase.from('job_line_items').insert(addons)
+      await restoreVisitExtras(cos, addons)
     })
   }
 
@@ -504,6 +517,7 @@ export default function SchedulePage() {
       && j.scheduled_date >= today && (j.status === 'scheduled' || j.status === 'in_progress') && !invoicedJobIds.has(j.id))
     const futureRows = futureJobs.map(jobInsertRow)
     const futureAddons = addonInsertRows(futureJobs.map(j => j.id))
+    const futureChangeOrders = changeOrderInsertRows(futureJobs.map(j => j.id))
     const futureIds = new Set(futureJobs.map(j => j.id))
     const pastReattach = jobs.filter(j => j.recurrence_id && otherSet.has(j.recurrence_id) && !futureIds.has(j.id))
       .map(j => ({ id: j.id, recurrence_id: j.recurrence_id as string }))
@@ -525,6 +539,7 @@ export default function SchedulePage() {
       const res: { error: unknown }[] = []
       if (recRows.length) res.push(await supabase.from('job_recurrences').insert(recRows))
       if (futureRows.length) res.push(await supabase.from('jobs').insert(futureRows))
+      if (futureChangeOrders.length) res.push(await supabase.from('change_orders').insert(futureChangeOrders))
       if (futureAddons.length) res.push(await supabase.from('job_line_items').insert(futureAddons))
       for (const p of pastReattach) res.push(await supabase.from('jobs').update({ recurrence_id: p.recurrence_id }).eq('id', p.id))
       await fetchJobs()
@@ -563,7 +578,7 @@ export default function SchedulePage() {
     for (let from = 0; ; from += PAGE_ROWS) {
       const { data, error } = await supabase
         .from('jobs')
-        .select('*, customers(id, name, phone, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)')
+        .select('*, customers(id, name, phone, email, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)')
         .eq('user_id', userId)
         .order('scheduled_date')
         .order('id')
@@ -606,6 +621,7 @@ export default function SchedulePage() {
     // finish refreshing (so loading always resolves).
     let fieldJobs: Job[] | null = null
     let fieldAddons: Record<string, JobLineItem[]> | null = null
+    let fieldChangeOrders: Record<string, ChangeOrder[]> | null = null
     if (jRes.error) {
       setBanner('Could not load the schedule — check your connection and refresh. Showing the last data loaded.')
     } else {
@@ -618,6 +634,15 @@ export default function SchedulePage() {
       fieldJobs = loadedJobs.filter(j => j.scheduled_date >= from && j.scheduled_date <= to)
       const addons = await listLineItemsByJob(supabase, user!.id, loadedJobs.map(j => j.id))
       setAddonsByJobId(addons)
+      // Change orders are a small table by nature (an exception, not a per-visit
+      // row), so this is ONE request for the whole book rather than a chunked
+      // by-job sweep. A failed read must not read as "nothing is waiting on the
+      // customer" — it leaves the last known map standing and says so.
+      try {
+        const cos = await listChangeOrders(supabase, user!.id)
+        setChangeOrdersByJobId(cos)
+        fieldChangeOrders = Object.fromEntries(fieldJobs.map(j => [j.id, cos[j.id]]).filter(([, v]) => v)) as Record<string, ChangeOrder[]>
+      } catch { setBanner('Could not load change orders — what you see may be out of date.') }
       // Only the field window's add-ons — the map is keyed by every job id in the book.
       fieldAddons = Object.fromEntries(fieldJobs.map(j => [j.id, addons[j.id]]).filter(([, v]) => v)) as Record<string, JobLineItem[]>
     }
@@ -655,6 +680,7 @@ export default function SchedulePage() {
       writeCache<FieldBundle>(FIELD_BUNDLE_KEY, {
         jobs: fieldJobs,
         addons: fieldAddons ?? {},
+        changeOrders: fieldChangeOrders ?? {},
         // Only what this window references — the whole quote book would blow quota.
         quotes: ((qRes.data as QuoteLite[]) || []).filter(q => quoteIds.has(q.id)),
         recurrences: ((rRes.data as JobRecurrence[]) || []).filter(r => recIds.has(r.id)),
@@ -696,6 +722,7 @@ export default function SchedulePage() {
     if (b?.jobs?.length) {
       setJobs(b.jobs)
       setAddonsByJobId(b.addons || {})
+      setChangeOrdersByJobId(b.changeOrders || {})
       const qMap: Record<string, QuoteLite> = {}
       for (const q of b.quotes || []) qMap[q.id] = q
       setQuotesById(qMap)
@@ -1529,6 +1556,7 @@ export default function SchedulePage() {
     const targets = jobsInScope(job, jobs, scope)
     const snapshot = targets.map(jobInsertRow)
     const addons = addonInsertRows(targets.map(t => t.id))
+    const cos = changeOrderInsertRows(targets.map(t => t.id))
     // Snapshot invoice links (FK sets job_id NULL on delete) so undo re-stamps them.
     const invTargets = targets.filter(t => invoicedJobIds.has(t.id)).map(t => t.id)
     const linkedInv = invTargets.length
@@ -1551,6 +1579,7 @@ export default function SchedulePage() {
       const res: { error: unknown }[] = []
       if (recRow) res.push(await supabase.from('job_recurrences').insert(recRow))
       if (snapshot.length) res.push(await supabase.from('jobs').insert(snapshot))
+      if (cos.length) res.push(await supabase.from('change_orders').insert(cos))
       if (addons.length) res.push(await supabase.from('job_line_items').insert(addons))
       for (const inv of linkedInv) res.push(await supabase.from('invoices').update({ job_id: inv.job_id }).eq('id', inv.id))
       await fetchJobs()
@@ -1588,6 +1617,7 @@ export default function SchedulePage() {
     }
     const row = jobInsertRow(job)
     const addons = addonInsertRows([job.id])
+    const cos = changeOrderInsertRows([job.id])
     // Deleting sets invoices.job_id NULL (FK) — snapshot the links so undo can
     // re-stamp them, or the visit stops counting as invoiced (double-invoice risk).
     const linkedInvoices = invoicedJobIds.has(job.id)
@@ -1598,7 +1628,7 @@ export default function SchedulePage() {
     setEditing(prev => (prev?.id === job.id ? null : prev))
     offerUndo('Job deleted', async () => {
       await supabase.from('jobs').insert(row) // job first — FKs point at it
-      if (addons.length) await supabase.from('job_line_items').insert(addons)
+      await restoreVisitExtras(cos, addons)
       if (linkedInvoices.length) await supabase.from('invoices').update({ job_id: job.id }).in('id', linkedInvoices.map(i => i.id))
     })
   }
@@ -2033,6 +2063,104 @@ export default function SchedulePage() {
     await fetchJobs()
   }
 
+  // ── Change orders ───────────────────────────────────────────────────────────
+  // Scope priced AFTER the original approval. This page owns the OWNER's doors;
+  // lib/changeOrders owns the writes and the database owns the lifecycle, so
+  // nothing below can invent a state or mint money on its own.
+
+  // The ask, over the ONE comms pipeline. Returns null on success, else a
+  // sentence to show — a send that silently fails is a customer who is never
+  // asked and a job that never gets approved.
+  async function askApproval(co: ChangeOrder, attempt: number): Promise<string | null> {
+    const original = valueByJobId[co.job_id] ?? null
+    const req = changeOrderSendRequest({
+      co, originalTotal: original, attempt, body: changeOrderMessageBody, money: formatCurrency,
+    })
+    try {
+      const res = await fetch('/api/comms/send', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req),
+      })
+      const out = await res.json().catch(() => ({}))
+      if (!res.ok) return 'the message could not be sent'
+      // The route answers per channel. "Nothing was delivered" must not read as sent.
+      const results = (out.results || {}) as Record<string, { ok?: boolean }>
+      const anySent = Object.values(results).some(r => r?.ok)
+      return anySent ? null : 'no channel was available to reach this customer'
+    } catch {
+      return 'the message could not be sent'
+    }
+  }
+
+  async function createChangeOrderForJob(job: Job, input: { description: string; amount: number; send: boolean }) {
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
+    if (!user) throw new Error('Session expired — sign in again.')
+    if (!job.customer_id) throw new Error('Link a customer to this visit first — somebody has to approve the change.')
+    // Created as a DRAFT first, then sent: the row must exist (and have its
+    // CO number) before anything is said about it to a customer. `send` moves it
+    // to pending inside createChangeOrder, so a failed SEND still leaves an
+    // asked-for change on record rather than losing the owner's typing.
+    const co = await createChangeOrder(supabase, {
+      userId: user.id, jobId: job.id, customerId: job.customer_id, quoteId: job.quote_id,
+      description: input.description, amount: input.amount, serviceType: job.service_type,
+      send: input.send,
+    })
+    setChangeOrdersByJobId(prev => ({ ...prev, [job.id]: [...(prev[job.id] || []), co] }))
+    if (input.send) {
+      const failed = await askApproval(co, 0)
+      setBanner(failed
+        ? `${co.co_number} is saved and waiting on the customer, but ${failed} — reach them another way.`
+        : `${co.co_number} sent — ${formatCurrency(co.amount)} awaiting the customer's approval. It isn't counted or billed until they say yes.`)
+    } else {
+      setBanner(`${co.co_number} saved. It isn't sent, counted or billed until you send it and the customer approves.`)
+    }
+    await fetchJobs()
+  }
+
+  async function sendChange(co: ChangeOrder) {
+    const sent = await sendChangeOrder(supabase, co.id)
+    setChangeOrdersByJobId(prev => ({ ...prev, [co.job_id]: (prev[co.job_id] || []).map(c => c.id === sent.id ? sent : c) }))
+    const failed = await askApproval(sent, 0)
+    setBanner(failed
+      ? `${co.co_number} is waiting on the customer, but ${failed} — reach them another way.`
+      : `${co.co_number} sent — awaiting the customer's approval.`)
+    await fetchJobs()
+  }
+
+  async function remindChange(co: ChangeOrder) {
+    // A reminder is a NEW send, not a retry — the attempt counter keeps the
+    // idempotency key distinct so the pipeline doesn't dedupe it away.
+    const failed = await askApproval(co, Date.now())
+    setBanner(failed ? `Could not ask again — ${failed}.` : `Asked again about ${co.co_number}.`)
+  }
+
+  async function cancelChange(co: ChangeOrder) {
+    const done = await cancelChangeOrder(supabase, co.id)
+    setChangeOrdersByJobId(prev => ({ ...prev, [co.job_id]: (prev[co.job_id] || []).map(c => c.id === done.id ? done : c) }))
+    setBanner(`${co.co_number} withdrawn. Nothing was added or billed.`)
+    await fetchJobs()
+  }
+
+  // The owner recording the customer's answer. On approval the DATABASE mints the
+  // line item — so all this has to do afterwards is re-read, and re-price a draft
+  // invoice if this visit already has one.
+  async function ownerChangeDecision(co: ChangeOrder, decision: 'approve' | 'decline') {
+    const done = await recordOwnerDecision(supabase, co.id, decision)
+    setChangeOrdersByJobId(prev => ({ ...prev, [co.job_id]: (prev[co.job_id] || []).map(c => c.id === done.id ? done : c) }))
+    if (decision === 'decline') {
+      setBanner(`${co.co_number} recorded as declined. It won't be added or billed.`)
+    } else {
+      const { changed, failed } = await syncDraftInvoiceAmounts(supabase, [co.job_id], { reason: `approved change ${co.co_number}` })
+      setBanner(
+        failed > 0 ? `${co.co_number} approved, but its draft invoice still shows the old amount — open the invoice to re-price it.`
+          : changed > 0 ? `${co.co_number} approved — ${formatCurrency(co.amount)} added, and this visit's draft invoice was re-priced to match.`
+            : invoicedJobIds.has(co.job_id)
+              ? `${co.co_number} approved — ${formatCurrency(co.amount)} added. This visit is already invoiced, so check that bill covers it.`
+              : `${co.co_number} approved — ${formatCurrency(co.amount)} added to this visit and it will be on its invoice.`)
+    }
+    await fetchJobs()
+  }
+
   // ── Undo ────────────────────────────────────────────────────────────────────
   // THE shared undo toast — fixed to the viewport, so it's reachable no matter
   // how far down the day list the action happened.
@@ -2053,8 +2181,28 @@ export default function SchedulePage() {
   // Insertable add-on rows for these visits, snapshotted from the already-loaded
   // cache (the ONE listLineItemsByJob engine) — job deletion CASCADE-deletes
   // job_line_items, so delete-undo must restore them or priced extras vanish.
+  //
+  // ⭐ CHANGE-ORDER-BACKED ROWS ARE EXCLUDED, and restored by
+  // changeOrderInsertRows below instead. A CO-backed line item's FK points at its
+  // change order, which the same job deletion also cascaded away — so re-inserting
+  // it alongside the plain add-ons would violate that FK and, because PostgREST
+  // sends one bulk insert, take EVERY add-on down with it. The change orders are
+  // re-inserted first (see the undo sites), which is what makes these rows legal.
   function addonInsertRows(ids: string[]): JobLineItem[] {
-    return ids.flatMap(id => addonsByJobId[id] || [])
+    return ids.flatMap(id => (addonsByJobId[id] || []).filter(a => !a.change_order_id))
+  }
+  // The approved-change half of the same snapshot. Restored BEFORE the add-ons:
+  // job → change orders → line items is the FK order, and undoing a delete has to
+  // put back the customer's approvals, not just the money they authorised.
+  function changeOrderInsertRows(ids: string[]): ChangeOrder[] {
+    return ids.flatMap(id => changeOrdersByJobId[id] || [])
+  }
+  // Re-insert a deleted visit's change orders and add-ons, in FK order. One
+  // helper, because four undo paths delete visits and every one of them owes the
+  // customer the same restoration.
+  async function restoreVisitExtras(changeOrders: ChangeOrder[], addons: JobLineItem[]) {
+    if (changeOrders.length) await supabase.from('change_orders').insert(changeOrders)
+    if (addons.length) await supabase.from('job_line_items').insert(addons)
   }
 
   // Apply a batch of date moves (optimizer or rain delay): grouped by target
@@ -2654,6 +2802,12 @@ export default function SchedulePage() {
           getPreviousAddons={getPreviousAddons}
           onCopyPreviousAddons={copyPreviousAddons}
           addonTemplates={addonTemplates}
+          changeOrdersByJobId={changeOrdersByJobId}
+          onCreateChangeOrder={createChangeOrderForJob}
+          onSendChangeOrder={sendChange}
+          onCancelChangeOrder={cancelChange}
+          onOwnerChangeDecision={ownerChangeDecision}
+          onRemindChangeOrder={remindChange}
           workStartTime={dayView.start}
           capacityHours={dayView.laborHours}
           onRainDelay={() => rainDelayDay(dayISO)}

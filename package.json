@@ -118,6 +118,7 @@
     "verify:location-intelligence": "tsx scripts/verify-location-intelligence.ts",
     "verify:global-search": "tsx scripts/verify-global-search.ts",
     "verify:fixture-isolation": "tsx scripts/verify-fixture-isolation.ts",
+    "verify:change-orders": "tsx scripts/verify-change-orders.ts",
     "verify:deposit-scheduling": "tsx scripts/verify-deposit-scheduling.ts",
     "verify:day-fit": "tsx scripts/verify-day-fit.ts",
     "verify:work-sessions": "tsx scripts/verify-work-sessions.ts",

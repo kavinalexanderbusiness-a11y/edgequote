@@ -35,6 +35,14 @@ const PRIORITY: Record<string, NotifPriority> = {
   // deduped at the source — the DB trigger will not ring again for a visit that
   // already has an UNREAD bell waiting.
   crew_message: 'update',
+  // A customer's own answer on added scope. 'update', not 'action': when they
+  // say yes the money is already added (the approval trigger mints the line), so
+  // there is nothing here for the owner to repair — which is exactly what
+  // separates this tier from a failed payment.
+  change_order_approved: 'update',
+  // A no is not a problem either: nothing was added and nothing is owed. Whether
+  // to re-price it is a decision, not a repair.
+  change_order_declined: 'update',
 }
 export function notifPriority(type: string): NotifPriority {
   return PRIORITY[type] ?? 'update'
@@ -58,6 +66,10 @@ const ACTION_VERB: Record<string, string> = {
   // Its href is the visit (/dashboard/schedule?job=…), which is where the
   // conversation lives — so the verb promises what the tap actually does.
   crew_message: 'Open visit',
+  // Both hrefs are the visit the change belongs to, so the verb promises what
+  // the tap actually does.
+  change_order_approved: 'Open visit',
+  change_order_declined: 'Open visit',
 }
 export function notificationActionLabel(type: string): string {
   return ACTION_VERB[type] ?? 'View'
@@ -78,6 +90,8 @@ const TYPE_NOUN: Record<string, string> = {
   payment_dispute_lost: 'dispute lost',
   payment_dispute_won: 'dispute resolved',
   crew_message: 'crew message',
+  change_order_approved: 'change approved',
+  change_order_declined: 'change declined',
 }
 function groupTitle(type: string, n: number): string {
   const noun = TYPE_NOUN[type] ?? type.replace(/_/g, ' ')
