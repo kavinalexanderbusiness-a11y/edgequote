@@ -10,7 +10,7 @@ import { toast } from '@/lib/toast'
 import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import type { Quote } from '@/types'
 import { InlineEmpty } from '@/components/ui/EmptyState'
-import { Bell, Check, FileText, DollarSign, MessageSquare, Globe, Star, CreditCard, AlertTriangle, RotateCcw, ShieldAlert, ShieldCheck, CalendarPlus, Loader2 } from 'lucide-react'
+import { Bell, Check, FileText, DollarSign, MessageSquare, MessagesSquare, Globe, Star, CreditCard, AlertTriangle, RotateCcw, ShieldAlert, ShieldCheck, CalendarPlus, Loader2 } from 'lucide-react'
 
 export interface AppNotification {
   id: string
@@ -36,6 +36,11 @@ const ICON: Record<string, typeof FileText> = {
   payment_failed: CreditCard, autopay_review: AlertTriangle, website_lead: Globe,
   payment_refunded: RotateCcw, payment_disputed: ShieldAlert,
   payment_dispute_lost: ShieldAlert, payment_dispute_won: ShieldCheck,
+  // ⚠️ Deliberately a DIFFERENT icon from new_message (MessageSquare, singular).
+  // That one is a CUSTOMER writing in; this one is the crew, internal to the
+  // business. Same glyph for both would make the bell's two most similar-looking
+  // rows mean opposite audiences.
+  crew_message: MessagesSquare,
 }
 
 // Fixed-position coordinates for the dropdown panel, measured from the bell.

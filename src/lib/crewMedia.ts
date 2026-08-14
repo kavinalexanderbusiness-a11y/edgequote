@@ -43,6 +43,20 @@ export interface CrewMedia {
   id: string
   user_id: string
   job_id: string
+  /**
+   * ⭐ NULL is this table's ORIGINAL and primary meaning: reference material the
+   * OFFICE attached to the visit — "this gate", "mulch to here" — shown under
+   * the work instructions. Non-null means the file hangs off one line of the
+   * visit's conversation instead (Crew Communications V1).
+   *
+   * One column rather than a second table or a second bucket, because the
+   * privacy story is identical for both: same PRIVATE bucket, same 50 MB
+   * ceiling and MIME allowlist enforced ON THE BUCKET, same signed-URL door in
+   * /api/crew/media. Splitting them would have meant keeping four guarantees in
+   * step across two places. ⚠️ Readers MUST filter on it, or an attachment on
+   * "we're short one bag" renders as a work instruction for the visit.
+   */
+  message_id: string | null
   storage_path: string
   kind: CrewMediaKind
   mime: string | null
@@ -117,13 +131,19 @@ function mediaPath(userId: string, jobId: string, file: File): string {
   return `${userId}/${jobId}/${crypto.randomUUID()}.${ext}`
 }
 
-/** The catalogue for one visit, oldest first — reference material reads as a
- *  sequence ("gate, then the bed, then the shrub"), not a newest-first feed. */
+/** The OFFICE's reference material for one visit, oldest first — it reads as a
+ *  sequence ("gate, then the bed, then the shrub"), not a newest-first feed.
+ *
+ *  ⚠️ `message_id is null` is load-bearing: without it, every photo anyone
+ *  attached to the visit's conversation would appear in the owner's "work
+ *  instructions" box and be sent to the crew as an instruction. Conversation
+ *  attachments are read by the conversation, keyed on their message. */
 export async function listCrewMedia(
   supabase: SupabaseClient, userId: string, jobId: string,
 ): Promise<{ media: CrewMedia[]; error: boolean }> {
   const { data, error } = await supabase.from('crew_media').select('*')
     .eq('user_id', userId).eq('job_id', jobId)
+    .is('message_id', null)
     .order('created_at', { ascending: true })
   // An empty list and a failed read are different facts and must not collapse:
   // "no instructions" is a statement about the visit, "couldn't load" is not.
@@ -157,7 +177,12 @@ export interface UploadCrewMediaResult {
  */
 export async function uploadCrewMedia(
   supabase: SupabaseClient,
-  opts: { userId: string; jobId: string; file: File; caption?: string | null; uploadedBy?: string | null },
+  opts: {
+    userId: string; jobId: string; file: File; caption?: string | null; uploadedBy?: string | null
+    /** Set to hang this file off one line of the visit's conversation instead of
+     *  filing it as the office's reference material for the visit. */
+    messageId?: string | null
+  },
 ): Promise<UploadCrewMediaResult> {
   const kind = kindOf(opts.file.type)
   if (!kind) return { error: 'That file type can’t be attached — use a photo or a video.' }
@@ -183,6 +208,7 @@ export async function uploadCrewMedia(
   const { data, error } = await supabase.from('crew_media').insert({
     user_id: opts.userId,
     job_id: opts.jobId,
+    message_id: opts.messageId ?? null,
     storage_path: path,
     kind,
     mime: opts.file.type || null,

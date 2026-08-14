@@ -28,6 +28,14 @@ const PREF_KEY: Record<string, string> = {
   daily_reminder: 'daily_reminder',
   schedule_change: 'schedule_change',
   schedule_changed: 'schedule_change',
+  // ⭐ MAPPED SO IT IS TURN-OFF-ABLE. An unmapped type falls back to its own
+  // string, which is ON and — because Settings only lists the keys in PREFS —
+  // has no switch anywhere in the product. A crew conversation is the one
+  // notification an owner is most likely to want quiet during a busy morning,
+  // so it gets a real preference rather than an invisible default. (The bell
+  // itself is already deduped per unread visit by the DB trigger, so this
+  // cannot fan out one push per reply.)
+  crew_message: 'crew_message',
 }
 
 function vapidReady(): boolean {

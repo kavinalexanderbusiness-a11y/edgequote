@@ -1,7 +1,7 @@
 'use client'
 
 import { Suspense, useCallback, useEffect, useState } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -14,6 +14,12 @@ import type { BetaClaimStatus } from '@/lib/betaInvite'
 // whatever browser the email opened in). Then claim_beta_invite() redeems the
 // invite — the step that licenses business_settings creation — and we hand off
 // to /setup.
+//
+// The canonical link shape is PATH segments — /signup/confirm/<type>/<hash> —
+// because an emailed query string is at the mercy of every quoted-printable
+// decoder in transit: `=73` is a valid QP escape, and a `?token_hash=73…`
+// link measurably lost bytes on the way to a real inbox (2026-08-13). The
+// optional catch-all also still honours the old ?token_hash=&type= form.
 //
 // Every branch here assumes it may run twice: a reload after verification
 // finds the token consumed but the SESSION present, so it skips straight to
@@ -32,9 +38,14 @@ type Phase = 'working' | 'dead' | 'revoked' | 'no-invite' | 'error'
 
 function ConfirmFlow() {
   const router = useRouter()
-  const params = useSearchParams()
-  const tokenHash = params.get('token_hash')
-  const rawType = params.get('type') ?? 'signup'
+  const params = useParams<{ link?: string[] }>()
+  const search = useSearchParams()
+
+  // Path form first (the emailed shape), query form as the fallback. Segment
+  // values can arrive percent-encoded; decoding is a no-op for hex/pkce hashes.
+  const seg = Array.isArray(params.link) ? params.link.map(s => decodeURIComponent(s)) : []
+  const tokenHash = seg.length >= 2 ? seg[1] : search.get('token_hash')
+  const rawType = (seg.length >= 2 ? seg[0] : search.get('type')) ?? 'signup'
   const type: OtpType = (OTP_TYPES as readonly string[]).includes(rawType) ? (rawType as OtpType) : 'signup'
 
   const [phase, setPhase] = useState<Phase>('working')

@@ -164,11 +164,16 @@ if (has(PORTAL_SQL)) {
     SCOPED_NOTE_FIELDS.filter(f => f.audience === 'customer').map(f => f.column))
 
   for (const f of hidden) {
-    if (f.table === 'crew_media') {
-      // No projection reads it at all — assert the TABLE never appears.
-      check('portal payload omits crew_media entirely',
-        !/\bcrew_media\b/.test(portal),
-        'crew reference media is not customer-facing at any point, including after completion')
+    if (f.wholeTable) {
+      // No projection reads any column of it — so assert the TABLE NAME never
+      // appears. This is the strongest check available and it is immune to the
+      // nested-projection problem below; it is only usable because these tables
+      // have no customer-facing column at all. Driven by the registry flag, not
+      // by a hand-kept list of table names, so a new whole-table audience is
+      // protected the moment it is declared.
+      check(`portal payload omits ${f.table} entirely`,
+        !new RegExp(`\\b${f.table}\\b`).test(portal),
+        `${f.table} is not customer-facing at any point, including after completion`)
       continue
     }
     if (!customerFacingColumns.has(f.column)) {
@@ -215,7 +220,15 @@ for (const p of PDFS) {
     !/internal_notes/.test(src),
     'an internal note printed on a customer document cannot be recalled')
   check(`${p} never renders completion_issue`, !/completion_issue/.test(src))
-  check(`${p} never renders crew_media`, !/crew_media|crew-media/.test(src))
+  // Whole-table audiences, from the registry rather than hand-listed — so a new
+  // one is kept off the customer's documents the moment it is declared. The
+  // hyphenated form catches the storage bucket name beside the table name.
+  for (const f of hidden.filter(h => h.wholeTable)) {
+    const hyphen = f.table.replace(/_/g, '-')
+    check(`${p} never renders ${f.table}`,
+      !new RegExp(`${f.table}|${hyphen}`).test(src),
+      `${f.purpose}`)
+  }
 }
 // Positive control on the same files.
 if (has(PDFS[0])) {

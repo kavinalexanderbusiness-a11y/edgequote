@@ -27,6 +27,7 @@ import {
   DispatchSheet, SheetLane, sheetCsvRows, SHEET_CSV_COLUMNS, openPrintSheet,
 } from '@/lib/dispatchOps'
 import { startVisit, completeVisit, revertVisit } from '@/lib/jobStatus'
+import { formatDuration, formatWorked, workdayMinutes } from '@/lib/workDuration'
 import { resolveAutomations, Automations } from '@/lib/comms/automations'
 import { usePageCommands, PageCommand } from '@/components/command/pageCommands'
 import { exportRowsToCsv } from '@/lib/csv'
@@ -1316,6 +1317,8 @@ export default function DispatchPage() {
 
   // ── Render ──
   const dateLabel = format(parseISO(date + 'T00:00:00'), 'EEEE, MMM d')
+  // One workday, this business's own — so a long visit reads "1 day 2h", not "600m".
+  const dispatchWorkdayMin = workdayMinutes(settings.dailyHours)
   const dayNote = notes.find(n => n.crew_id === null)
 
   const bulkActions: BulkAction[] = [
@@ -1547,6 +1550,7 @@ export default function DispatchPage() {
                 note={laneAux[lane.laneId]?.note ?? null}
                 crews={crews}
                 crewSpare={crewSpareMin}
+                workdayMin={dispatchWorkdayMin}
                 nowMin={nowMin}
                 base={settings.base}
                 index={i}
@@ -1801,8 +1805,12 @@ const CrewLaneCard = memo(function CrewLaneCard({
   lane, route, technicians, vehicles, note, crews, crewSpare, nowMin, base, index, conflictBadge, savingsKm, statusVisible,
   isDropTarget, dropOverload, dropAnchor, dragging, kbGrabbedId, flashJobId, selectedSet, onToggleSelect,
   onDragHandleDown, onGripKeyDown, onNudge, onMoveTo, onBestOrder, optimizing, onSetTechStatus, onSaveNote,
-  statusBusy, onQuickStart, onQuickComplete, onRecord, onPrintLane, onCopyItinerary,
+  statusBusy, onQuickStart, onQuickComplete, onRecord, onPrintLane, onCopyItinerary, workdayMin,
 }: {
+  /** Minutes in ONE workday for this business, so a long visit reads "1 day 2h"
+   *  rather than "600m". Passed in rather than read here — the settings live on
+   *  the page, and this card is memoised. */
+  workdayMin: number
   lane: CrewLaneData
   route: LaneRoute | undefined
   technicians: Technician[]
@@ -2146,11 +2154,20 @@ const CrewLaneCard = memo(function CrewLaneCard({
                           stale figure that never updates. */}
                       {job.status === 'in_progress' && job.started_at && nowMin != null
                         ? <span className="text-sky-300">on site {Math.max(1, Math.round((Date.now() - new Date(job.started_at).getTime()) / 60000))}m</span>
+                        // ⭐ Underway, nobody on the clock — stopped for the day.
+                        // Neither "on site" nor an ETA: the crew has been and is
+                        // coming back, and an ETA here would be a lie about a
+                        // visit that is already part-worked. Says the time
+                        // already recorded instead.
+                        : job.status === 'in_progress'
+                          ? <span className="text-amber-300">
+                              stopped{job.actual_minutes ? ` · ${formatWorked(job.actual_minutes)} so far` : ''}
+                            </span>
                         : eta ? `ETA ${eta.arrival}` : 'ETA —'}
                       {promisedMin != null && job.status !== 'in_progress' && (
                         <span className={late ? 'text-red-400 font-semibold' : undefined}> · promised {minutesToTime12(promisedMin)}</span>
                       )}
-                      {' '}· {job.duration_minutes || DEFAULT_JOB_MIN}m
+                      {' '}· {formatDuration(job.duration_minutes || DEFAULT_JOB_MIN, workdayMin)}
                       {job.service_type ? ` · ${job.service_type}` : ''}
                     </p>
                     {/* The gate code finally shows up where the truck is. job.notes

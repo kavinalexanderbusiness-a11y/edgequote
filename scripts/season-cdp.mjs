@@ -180,6 +180,16 @@ console.log(JSON.stringify({ width, phase: 'probe', ...probe1 }, null, 1))
 
 if (doSave) {
   // Re-assert Season end through the REAL control (fires onChange → endTouched).
+  // ABORT rather than click Save blind. This used to fall through to "Update
+  // job" when the Ends control wasn't found — and a form that isn't showing the
+  // Repeat controls is a form that reads as "Does not repeat", so the save
+  // removed the series and deleted every sibling visit. A driver that cannot
+  // see the control it came to set has no business pressing Save.
+  const seen = await evalx(`(function(){ ${HELPERS} return !!labelled('Ends') })()`)
+  if (!seen) {
+    console.log(JSON.stringify({ width, phase: 'save', aborted: 'Ends control not present — refusing to save blind' }))
+    chrome.kill(); process.exit(3)
+  }
   const set = await evalx(`(function(){ ${HELPERS}
     var sel = labelled('Ends')
     if (!sel) return 'no select'

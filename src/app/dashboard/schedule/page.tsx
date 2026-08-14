@@ -13,13 +13,16 @@ import { DayOpsPanel, QuoteLite, QuickPatch } from '@/components/schedule/DayOps
 import { Coord, geocodeAddress } from '@/lib/geo'
 import { JobForm, Recurrence, SuggestionMeta } from '@/components/schedule/JobForm'
 import { ScopeDialog } from '@/components/schedule/ScopeDialog'
-import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel, visitsBeyondEnd, planSeriesChange } from '@/lib/recurrence'
+import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel, visitsBeyondEnd, planSeriesChange, mayRemoveRecurrence } from '@/lib/recurrence'
 import type { JobRecurrence } from '@/types'
 import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts, uncompleteJob } from '@/lib/invoicing'
 import { queueOrRun } from '@/lib/offline/outbox'
 // THE completion stamp. Every door on this page that moves a visit to
 // "completed" writes the same three fields through it — see lib/jobStatus.
 import { completionPatch } from '@/lib/jobStatus'
+import { stopForToday, resumeWork, deleteWorkSession, type StopForTodayInput } from '@/lib/workSession'
+import { formatWorked } from '@/lib/workDuration'
+import StopForTodaySheet from '@/components/jobs/StopForTodaySheet'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 // THE words for the work (lib/vocabulary): a `jobs` row is one VISIT, and this
 // page is where every job's visits live — the subtitle has to say both.
@@ -61,7 +64,7 @@ import { orderDayStops, nextFieldStop } from '@/lib/fieldStops'
 import { toast } from '@/lib/toast'
 import { confirm } from '@/lib/confirm'
 import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays, parseISO, getDay } from 'date-fns'
-import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info, Phone, MessageSquare, Navigation, User as UserIcon, FileText, Receipt, CheckCircle2, Play } from 'lucide-react'
+import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info, Phone, MessageSquare, Navigation, User as UserIcon, FileText, Receipt, CheckCircle2, Play, PauseCircle } from 'lucide-react'
 import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
 import { RainDelayCenter } from '@/components/schedule/RainDelayCenter'
 import { WeatherStrip } from '@/components/weather/WeatherStrip'
@@ -138,6 +141,10 @@ export default function SchedulePage() {
   // In-flight guard for the field bar's primary (it shares startJob/completeJob
   // with the cards, which keep their own `acting` guard inside the panel).
   const [fieldActing, setFieldActing] = useState(false)
+  // The visit whose "Stop for today" sheet is open. One sheet, opened from the
+  // phone bar and from the day board, so the two doors ask the same questions.
+  const [stopping, setStopping] = useState<Job | null>(null)
+  const [stopBusy, setStopBusy] = useState(false)
   // The stop order the day board actually rendered, reported by DayOpsPanel.
   // The field bar reads THIS rather than re-deriving an order of its own — see
   // fieldNext below and lib/fieldStops.
@@ -1443,6 +1450,19 @@ export default function SchedulePage() {
         await reconcileSeriesEnd(job, recurrence.endDate)
       }
     } else if (!will) {
+      // "Does not repeat" on a job that HAS a series deletes every sibling visit
+      // and the series row. That is only ever safe when the form was actually
+      // showing the series: if the rule never loaded (the ?focus= deep link
+      // opens this modal as soon as `jobs` arrives, which can beat the
+      // `recurrences` read), the form shows "Does not repeat" because it knows
+      // nothing — not because the owner asked for it. Acting on that silence
+      // destroyed a customer's whole schedule. Refuse and re-read instead.
+      if (!mayRemoveRecurrence(job.recurrence_id, recurrences)) {
+        setBanner('This job\'s repeat schedule had not finished loading — nothing was changed. Reopen the visit and try again.')
+        await fetchJobs()
+        setEditing(null)
+        return
+      }
       await applyFieldEdits(job, values, 'this')
       await removeRecurrence(job, scope)
     } else {
@@ -2118,36 +2138,70 @@ export default function SchedulePage() {
     })
   }
 
-  // Continue an in-progress visit on another day WITHOUT completing it — for the
-  // landscaping job that runs long (upsell, weather, materials, daylight). Reuses
-  // the pieces that already exist rather than adding a new system:
-  //   • time tracking — banks the session worked so far into actual_minutes and
-  //     pauses the timer (clears started_at) so it can't run overnight; completeJob
-  //     later ADDS the final session to this banked total.
-  //   • status — returns to 'scheduled' so the visit shows Start again on the new
-  //     day (no new "carryover" status to teach the rest of the app about).
-  //   • routing — a plain scheduled_date change; the day's route recomputes from it.
-  //   • photos/notes/price/quote link — all keyed to the same job row, untouched.
-  //   • invoicing — nothing is billed; the draft is only created on completion.
-  // This-occurrence only: a recurring series is not rescheduled, just this visit.
-  async function continueJobAnotherDay(job: Job, newDate: string) {
-    if (newDate === job.scheduled_date) return
-    const now = new Date().toISOString()
-    const banked = job.started_at ? (job.actual_minutes || 0) + minutesBetween(job.started_at, now) : job.actual_minutes
-    const patch = { status: 'scheduled' as const, started_at: null, actual_minutes: banked, scheduled_date: newDate }
-    const prev = { status: job.status, started_at: job.started_at, actual_minutes: job.actual_minutes, scheduled_date: job.scheduled_date, route_order: job.route_order ?? null }
-    // Optimistic patch mirrors the move: a date change clears the manual route slot.
-    setJobs(prevJobs => prevJobs.map(j => j.id === job.id ? { ...j, ...patch, route_order: null } : j))
-    const { error } = await supabase.from('jobs').update(patch).eq('id', job.id)
-    if (error) {
-      setJobs(prevJobs => prevJobs.map(j => j.id === job.id ? { ...j, ...prev } : j))
-      setBanner('Could not continue the job on another day: ' + error.message)
+  // ⭐ STOP FOR TODAY — the day ends, the job does not. For work that runs past
+  // one visit for any reason a trade recognises: a part didn't arrive, the light
+  // went, the scope grew, or it was simply always a four-day job.
+  //
+  // ⛔ IT MUST NOT COMPLETE THE JOB, and it doesn't: nothing is invoiced, no
+  // "we're finished" message goes out, and the accepted quote value, invoices
+  // and payments already attached to this job are not touched. The status stays
+  // `in_progress` — the job IS underway, it just has nobody on the clock — so
+  // every board, filter, report and portal mapping that already understands
+  // in_progress keeps being right. No new status was invented for this.
+  //
+  // The time worked is banked by the DATABASE as the check-in is cleared, into a
+  // dated work session, so this page, the dispatch board and a crew phone can
+  // never disagree about the day's total. See lib/workSession.
+  //
+  // The next work day is OPTIONAL: "not scheduled yet" leaves the visit where it
+  // is, reading as unfinished. Inventing "tomorrow" would put work on a day
+  // nobody agreed to. This-occurrence only — a recurring series is not touched.
+  async function stopJobForToday(job: Job, input: StopForTodayInput) {
+    const optimistic: Partial<Job> = {
+      status: 'in_progress',
+      started_at: null,
+      ...(input.nextDate && input.nextDate !== job.scheduled_date
+        ? { scheduled_date: input.nextDate, route_order: null }
+        : {}),
+    }
+    setJobs(prevJobs => prevJobs.map(j => j.id === job.id ? { ...j, ...optimistic } : j))
+    const res = await stopForToday(supabase, job, input)
+    if (!res.ok) {
+      setJobs(prevJobs => prevJobs.map(j => j.id === job.id ? { ...j, ...res.prev } : j))
+      setBanner('Could not stop for today: ' + (res.error ?? 'please try again.'))
       return
     }
-    offerUndo(`Continuing on ${format(parseISO(newDate + 'T00:00:00'), 'EEE, MMM d')} — today’s time and photos are kept`, async () => {
-      const { error: undoErr } = await supabase.from('jobs').update(prev).eq('id', job.id)
+    await fetchJobs()
+    const worked = res.session ? formatWorked(res.session.minutes) : ''
+    const back = input.nextDate
+      ? ` — back ${format(parseISO(input.nextDate + 'T00:00:00'), 'EEE, MMM d')}`
+      : ' — no day set yet'
+    offerUndo(`${worked ? `${worked} recorded` : 'Stopped'}${back}`, async () => {
+      // Undo restores the job fields AND removes the session this stop banked —
+      // a stop that never happened must not leave time on the record.
+      const { error: undoErr } = await supabase.from('jobs').update(res.prev).eq('id', job.id)
+      if (res.session) await deleteWorkSession(supabase, res.session)
       await fetchJobs()
       if (undoErr) setBanner('Could not undo — check the job’s day and status.')
+    })
+  }
+
+  // ▶ Resume — the clock starts again on a job already underway. Distinct from
+  // Start only in what it must NOT do: the sessions already banked and the
+  // total they add up to stay exactly as they are.
+  async function resumeJob(job: Job) {
+    const patch = { status: 'in_progress' as const, started_at: new Date().toISOString() }
+    setJobs(prevJobs => prevJobs.map(j => j.id === job.id ? { ...j, ...patch } : j))
+    const res = await resumeWork(supabase, job)
+    if (!res.ok) {
+      setJobs(prevJobs => prevJobs.map(j => j.id === job.id ? { ...j, ...res.prev } : j))
+      setBanner('Could not resume the job: ' + (res.error ?? 'please try again.'))
+      return
+    }
+    await fetchJobs()
+    offerUndo('Back on the clock', async () => {
+      await supabase.from('jobs').update(res.prev).eq('id', job.id)
+      await fetchJobs()
     })
   }
 
@@ -2529,7 +2583,8 @@ export default function SchedulePage() {
           onStartJob={startJob}
           onMarkDone={completeJob}
           onMove={(job, iso) => moveJobToDate(job, new Date(iso + 'T00:00:00'))}
-          onContinue={continueJobAnotherDay}
+          onStopForToday={stopJobForToday}
+          onResume={resumeJob}
           onDeleteJob={deleteJob}
           onSetPrice={setJobPrice}
           addonsByJobId={addonsByJobId}
@@ -2676,8 +2731,14 @@ export default function SchedulePage() {
         <StickyActionBar fixed className="lg:hidden">
           <div className="flex items-center gap-3">
             <div className="min-w-0 flex-1">
+              {/* Three states, not two. A job that is underway with nobody on
+                  the clock — stopped for the day — is neither "in progress
+                  right now" nor "next stop", and calling it either is the lie
+                  this bar existed to avoid. */}
               <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
-                {fieldNext.status === 'in_progress' ? 'In progress' : 'Next stop'}
+                {fieldNext.status === 'in_progress'
+                  ? (fieldNext.started_at ? 'On the clock' : 'Underway · stopped')
+                  : 'Next stop'}
               </p>
               <p className="text-sm font-semibold text-ink truncate">{fieldNext.customers?.name || fieldNext.title}</p>
               {/* WHERE, on the one control a phone user actually reaches. A name
@@ -2687,6 +2748,20 @@ export default function SchedulePage() {
                   and disappears when there's no address on file. */}
               <VisitAddress address={fieldNext.properties?.address} />
             </div>
+            {/* On the clock, the phone gets BOTH doors: stop the day, or finish
+                the job. They are different decisions and neither may be reached
+                only through a menu — "Stop" hidden behind an overflow is how a
+                crew ends up completing a job to get out of the rain. Stop is the
+                quieter of the two, so it is the ghost button. */}
+            {fieldNext.status === 'in_progress' && fieldNext.started_at && (
+              <Button
+                size="lg" variant="ghost" className="shrink-0 tap-target"
+                disabled={fieldActing}
+                onClick={() => setStopping(fieldNext)}
+              >
+                <PauseCircle className="w-4 h-4" /> Stop
+              </Button>
+            )}
             <Button
               size="lg"
               className="shrink-0 tap-target"
@@ -2695,17 +2770,40 @@ export default function SchedulePage() {
                 if (fieldActing) return
                 setFieldActing(true)
                 try {
-                  if (fieldNext.status === 'in_progress') await completeJob(fieldNext)
-                  else await startJob(fieldNext)
+                  if (fieldNext.status === 'in_progress') {
+                    // Paused: the useful next tap is picking the clock back up,
+                    // not finishing. Completing is still one tap away in the card.
+                    if (fieldNext.started_at) await completeJob(fieldNext)
+                    else await resumeJob(fieldNext)
+                  } else await startJob(fieldNext)
                 } finally { setFieldActing(false) }
               }}
             >
               {fieldNext.status === 'in_progress'
-                ? <><CheckCircle2 className="w-4 h-4" /> Complete</>
+                ? (fieldNext.started_at
+                  ? <><CheckCircle2 className="w-4 h-4" /> Complete</>
+                  : <><Play className="w-4 h-4" /> Resume</>)
                 : <><Play className="w-4 h-4" /> Start</>}
             </Button>
           </div>
         </StickyActionBar>
+      )}
+
+      {/* ONE stop sheet for the whole page — the phone bar and the day board
+          both open it, so "Stop for today" asks the same three questions
+          wherever it is reached. */}
+      {stopping && (
+        <StopForTodaySheet
+          open
+          onClose={() => setStopping(null)}
+          jobTitle={stopping.customers?.name || stopping.title}
+          crewSize={stopping.crew_size ?? 1}
+          runningSince={stopping.started_at}
+          busy={stopBusy}
+          onStop={async input => {
+            setStopBusy(true)
+            try { await stopJobForToday(stopping, input) } finally { setStopBusy(false); setStopping(null) }
+          }} />
       )}
     </div>
   )

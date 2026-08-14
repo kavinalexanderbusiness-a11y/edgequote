@@ -1,9 +1,9 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { loadCrewDay, nextCrewStop, partitionCrewStops, type ActiveCrewStop, type CrewDay } from '@/lib/crewAccess'
-import { crewStartVisit, crewCompleteVisit, crewRevertVisit, crewUncompleteVisit, type VisitState } from '@/lib/crewJob'
+import { crewStartVisit, crewCompleteVisit, crewStopForToday, crewRevertVisit, crewUncompleteVisit, type VisitState } from '@/lib/crewJob'
 import { localTodayISO, cn } from '@/lib/utils'
 import { directionsUrl } from '@/lib/route'
 import { toast } from '@/lib/toast'
@@ -12,10 +12,14 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import { StickyActionBar } from '@/components/ui/StickyActionBar'
 import {
   CheckCircle2, Play, Navigation, Phone, StickyNote, Users, Check, Clock, AlertTriangle, Megaphone,
-  NotebookPen, Eye, Lock,
+  NotebookPen, Eye, Lock, PauseCircle,
 } from 'lucide-react'
 import { CrewStopPhotos } from '@/components/crew/CrewStopPhotos'
 import { CrewStopMedia } from '@/components/crew/CrewStopMedia'
+import { CrewStopConversation } from '@/components/crew/CrewStopConversation'
+import {
+  startCrewInboxFeed, subscribeCrewInbox, getCrewInboxSnapshot, getCrewInboxServerSnapshot,
+} from '@/lib/crewMessages'
 import { CompletionSheet } from '@/components/completion/CompletionSheet'
 import { crewSaveCompletionRecord } from '@/lib/crewJob'
 
@@ -72,6 +76,17 @@ export function CrewToday() {
   // fact about the work. Missing them hides an optional section; an error banner
   // over it would push the day's real work off the screen.
   const [mediaCounts, setMediaCounts] = useState<Record<string, { photos: number; videos: number }>>({})
+  // ⭐ ONE inbox fetch feeds BOTH the per-stop "Crew chat · 2 new" badges here
+  // and the count on the Messages tab. Two components each running their own
+  // effect against the same source is the bug NotificationBell already paid for
+  // (its second bell's subscription threw and its badge was dead all session),
+  // so the feed is a ref-counted module store subscribed to from both.
+  const inboxItems = useSyncExternalStore(subscribeCrewInbox, getCrewInboxSnapshot, getCrewInboxServerSnapshot)
+  const unreadByJob = useMemo(() => {
+    const out: Record<string, number> = {}
+    for (const i of inboxItems) out[i.job_id] = i.unread || 0
+    return out
+  }, [inboxItems])
   const today = localTodayISO()
   const alive = useRef(true)
   const dayRef = useRef<CrewDay | null>(null)
@@ -135,6 +150,12 @@ export function CrewToday() {
     }
   }, [load])
 
+  // The conversation feed runs the same liveness contract (mount / visible /
+  // online / slow tick) and for the same reason — no realtime is available to a
+  // crew session. Its own module owns the loop; this just holds a reference so
+  // it is running while Today is on screen.
+  useEffect(() => startCrewInboxFeed(supabase), [supabase])
+
   // Returns the SAME map when the count hasn't moved, so React bails out of the
   // re-render. Without that the child's report-up effect and this setter would
   // chase each other forever (new object → re-render → new callback → effect).
@@ -158,7 +179,7 @@ export function CrewToday() {
   const next = nextCrewStop(active)
   const done = active.filter(s => s.status === 'completed').length
 
-  async function act(stop: ActiveCrewStop, kind: 'start' | 'complete') {
+  async function act(stop: ActiveCrewStop, kind: 'start' | 'complete' | 'stop') {
     if (acting) return
     setActing(stop.id)
     try {
@@ -168,20 +189,35 @@ export function CrewToday() {
       }
       const res = kind === 'start'
         ? await crewStartVisit(supabase, stop)
-        : await crewCompleteVisit(supabase, stop)
+        : kind === 'stop'
+          ? await crewStopForToday(supabase, stop)
+          : await crewCompleteVisit(supabase, stop)
       if (!res.ok) { toast.error(res.error || 'That didn’t save. Try again.'); await load(); return }
       const who = stop.customer?.name || stop.title
-      toast.undo(kind === 'start' ? `Started ${who}` : `${who} — done`, async () => {
-        // Undoing a COMPLETION goes through the server route: the draft invoice
-        // this completion just created must die WITH the status (only the
-        // server may touch invoices). Undoing a start is a plain field revert.
-        const reverted = { ...stop, updated_at: res.nextUpdatedAt ?? stop.updated_at }
-        const r = kind === 'complete'
-          ? await crewUncompleteVisit(supabase, reverted, prev)
-          : await crewRevertVisit(supabase, reverted, prev)
-        if (!r.ok) toast.error(r.error || 'Couldn’t undo that.')
-        await load()
-      })
+      // ⛔ "Done for today" must never read as "done". The words are as different
+      // as the writes are.
+      toast.undo(
+        kind === 'start' ? `Started ${who}`
+          : kind === 'stop' ? `${who} — today’s time recorded, still to finish`
+          : `${who} — done`,
+        async () => {
+          // Undoing a COMPLETION goes through the server route: the draft invoice
+          // this completion just created must die WITH the status (only the
+          // server may touch invoices). Undoing a start or a stop is a plain
+          // field revert — neither one billed anything.
+          //
+          // ⚠️ Undoing a STOP puts the four lifecycle fields back, and the work
+          // session the database banked stays. That is deliberate: the time WAS
+          // worked, and a crew tapping undo means "I'm not done for the day
+          // after all", not "that hour didn't happen". The office can correct
+          // the session in the job's work history if it really was a mis-tap.
+          const reverted = { ...stop, updated_at: res.nextUpdatedAt ?? stop.updated_at }
+          const r = kind === 'complete'
+            ? await crewUncompleteVisit(supabase, reverted, prev)
+            : await crewRevertVisit(supabase, reverted, prev)
+          if (!r.ok) toast.error(r.error || 'Couldn’t undo that.')
+          await load()
+        })
       await load()
     } finally {
       if (alive.current) setActing(null)
@@ -285,7 +321,13 @@ export function CrewToday() {
       {active.map((stop, i) => {
         const isNext = next?.id === stop.id
         const finished = stop.status === 'completed'
+        // `running` = this visit is UNDERWAY (it may have been worked on an
+        // earlier day). `onClock` = somebody is on it right now. They came apart
+        // the moment a job could be stopped for the day without being finished,
+        // and conflating them is what would put "Finish" under a job nobody has
+        // started today.
         const running = stop.status === 'in_progress'
+        const onClock = running && !!stop.started_at
         return (
           <section
             key={stop.id}
@@ -345,6 +387,14 @@ export function CrewToday() {
                   videos={mediaCounts[stop.id]?.videos ?? 0}
                 />
 
+                {/* …and what is being SAID about it. Deliberately beside the work
+                    instructions and not merged with them: the note above is the
+                    standing fact ("gate code 1942", edited in place, true
+                    whoever wrote it), and this is what people said and when.
+                    Collapsing the two would bury the gate code under twenty
+                    replies. See lib/crewMessages for the full distinction. */}
+                <CrewStopConversation jobId={stop.id} unread={unreadByJob[stop.id] ?? 0} />
+
                 <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
                   <a
                     href={directionsUrl({ lat: stop.property?.lat ?? null, lng: stop.property?.lng ?? null, address: stop.property?.address }, null)}
@@ -373,16 +423,35 @@ export function CrewToday() {
                     <NotebookPen className="w-3.5 h-3.5" aria-hidden />
                     {stop.completion_summary || stop.completion_issue ? 'Edit note' : 'Add note'}
                   </button>
+                  {/* ⭐ A WAY OUT OF THE DAY THAT ISN'T "FINISH". On the clock,
+                      a worker gets both: Done for today (records the time,
+                      leaves the job open) and Finish (which hands off to
+                      billing). Without the first, the only single tap available
+                      to somebody coming back tomorrow was the one that tells
+                      the office the work is complete. */}
+                  {onClock && (
+                    <Button
+                      size="sm" variant="secondary" className="tap-target h-10"
+                      disabled={acting !== null}
+                      onClick={() => act(stop, 'stop')}
+                    >
+                      <PauseCircle className="w-4 h-4" aria-hidden /> Done for today
+                    </Button>
+                  )}
                   {!finished && (
                     <Button
                       size="sm"
-                      variant={running ? 'primary' : 'secondary'}
+                      variant={onClock ? 'primary' : 'secondary'}
                       className="tap-target h-10"
                       loading={acting === stop.id}
                       disabled={acting !== null && acting !== stop.id}
-                      onClick={() => act(stop, running ? 'complete' : 'start')}
+                      onClick={() => act(stop, onClock ? 'complete' : 'start')}
                     >
-                      {running ? <><CheckCircle2 className="w-4 h-4" aria-hidden /> Finish</> : <><Play className="w-4 h-4" aria-hidden /> Start</>}
+                      {onClock
+                        ? <><CheckCircle2 className="w-4 h-4" aria-hidden /> Finish</>
+                        : running
+                          ? <><Play className="w-4 h-4" aria-hidden /> Resume</>
+                          : <><Play className="w-4 h-4" aria-hidden /> Start</>}
                     </Button>
                   )}
                 </div>
@@ -448,20 +517,35 @@ export function CrewToday() {
           <div className="mx-auto flex max-w-lg items-center gap-3">
             <div className="min-w-0 flex-1">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
-                {next.status === 'in_progress' ? 'On the clock' : 'Next stop'}
+                {next.status === 'in_progress'
+                  ? (next.started_at ? 'On the clock' : 'Started earlier')
+                  : 'Next stop'}
               </p>
               <p className="text-sm font-semibold text-ink truncate">{next.customer?.name || next.title}</p>
               {next.property?.address && <p className="text-[11px] text-ink-muted truncate">{next.property.address}</p>}
             </div>
+            {next.status === 'in_progress' && next.started_at && (
+              <Button
+                size="lg" variant="secondary" className="shrink-0 tap-target"
+                disabled={acting !== null}
+                onClick={() => act(next, 'stop')}
+              >
+                <PauseCircle className="w-4 h-4" aria-hidden /> Stop
+              </Button>
+            )}
             <Button
               size="lg"
               className="shrink-0 tap-target"
               loading={acting === next.id}
               disabled={acting !== null && acting !== next.id}
-              onClick={() => act(next, next.status === 'in_progress' ? 'complete' : 'start')}
+              onClick={() => act(next, next.status === 'in_progress'
+                ? (next.started_at ? 'complete' : 'start')
+                : 'start')}
             >
               {next.status === 'in_progress'
-                ? <><CheckCircle2 className="w-4 h-4" aria-hidden /> Finish</>
+                ? (next.started_at
+                  ? <><CheckCircle2 className="w-4 h-4" aria-hidden /> Finish</>
+                  : <><Play className="w-4 h-4" aria-hidden /> Resume</>)
                 : <><Play className="w-4 h-4" aria-hidden /> Start</>}
             </Button>
           </div>

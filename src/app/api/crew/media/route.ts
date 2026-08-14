@@ -2,10 +2,16 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { resolveAppRole } from '@/lib/crewAccess'
-import { CREW_MEDIA_BUCKET, type CrewMedia } from '@/lib/crewMedia'
+import {
+  CREW_MEDIA_ACCEPT, CREW_MEDIA_BUCKET, CREW_MEDIA_MAX_BYTES, kindOf, sizeLabel, type CrewMedia,
+} from '@/lib/crewMedia'
 
 export const runtime = 'nodejs'          // the service role must never run at the edge
 export const dynamic = 'force-dynamic'
+
+/** Shape-checked before either id reaches the database, so a bad value is a bad
+ *  request rather than a 500 from a failed cast. */
+const UUID = /^[0-9a-f-]{36}$/i
 
 // ── A worker opens the work instructions ─────────────────────────────────────
 // THE crew-authenticated read door for reference media, and the reason it has to
@@ -81,7 +87,7 @@ export async function GET(req: NextRequest) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return NextResponse.json({ error: 'bad request' }, { status: 400 })
     }
-  } else if (!/^[0-9a-f-]{36}$/i.test(jobId)) {
+  } else if (!UUID.test(jobId)) {
     return NextResponse.json({ error: 'bad request' }, { status: 400 })
   }
 
@@ -105,8 +111,14 @@ export async function GET(req: NextRequest) {
   // count can only ever describe a visit this worker is already assigned to.
   // ⛔ No paths, no URLs, nothing signed — a count is not a key.
   if (wantSummary) {
+    // ⚠️ `message_id is null` is load-bearing HERE TOO. This count drives the
+    // "2 photos · 1 video" label on the WORK INSTRUCTIONS disclosure; without
+    // the filter, a photo somebody sent in the conversation would inflate it,
+    // and a worker would open the instructions looking for a file that the
+    // instructions do not contain.
     const { data: dayRows, error: dayErr } = await admin.from('crew_media')
       .select('job_id, kind, jobs!inner(id, user_id, crew_id, scheduled_date)')
+      .is('message_id', null)
       .eq('user_id', t.user_id)
       .eq('jobs.user_id', t.user_id)
       .eq('jobs.crew_id', t.crew_id)
@@ -142,14 +154,21 @@ export async function GET(req: NextRequest) {
   // The catalogue, scoped by BOTH the visit and its owner. job_id alone would be
   // enough given the check above; carrying user_id too means a future bug that
   // widened the job lookup still cannot cross a tenant boundary here.
+  // ⭐ message_id RIDES ALONG SO THE TWO KINDS NEVER RENDER AS EACH OTHER.
+  // NULL is what this table has always held: reference material the OFFICE
+  // attached to the visit, shown under the work instructions. Non-null is an
+  // attachment on one thing somebody said in the conversation. Same bucket, same
+  // ceiling, same MIME allowlist, same signing — one door, because a second
+  // private bucket would have been a second set of all four to keep in step.
+  // The CLIENT filters; the server signs everything this visit is allowed.
   const { data: rows, error: rowsErr } = await admin.from('crew_media')
-    .select('id, job_id, kind, mime, size_bytes, caption, created_at, storage_path')
+    .select('id, job_id, message_id, kind, mime, size_bytes, caption, created_at, storage_path')
     .eq('job_id', j.id).eq('user_id', j.user_id)
     .order('created_at', { ascending: true })
   if (rowsErr) return NextResponse.json({ error: 'Couldn’t load the work instructions — try again.' }, { status: 502 })
 
   const media = (rows || []) as Pick<CrewMedia,
-    'id' | 'job_id' | 'kind' | 'mime' | 'size_bytes' | 'caption' | 'created_at' | 'storage_path'>[]
+    'id' | 'job_id' | 'message_id' | 'kind' | 'mime' | 'size_bytes' | 'caption' | 'created_at' | 'storage_path'>[]
   if (!media.length) return NextResponse.json({ ok: true, media: [] })
 
   const { data: signed, error: signErr } = await admin.storage.from(CREW_MEDIA_BUCKET)
@@ -181,6 +200,7 @@ export async function GET(req: NextRequest) {
     // something after the signature expired.
     media: media.map((m, i) => ({
       id: m.id,
+      message_id: m.message_id ?? null,
       kind: m.kind,
       mime: m.mime,
       size_bytes: m.size_bytes,
@@ -190,4 +210,126 @@ export async function GET(req: NextRequest) {
     })),
     expires_in: SIGNED_URL_SECONDS,
   })
+}
+
+// ── A worker attaches a photo to something they said ─────────────────────────
+// POST is the WRITE half of the same door, and it asks the SAME four questions
+// in the SAME order as the GET above and as /api/crew/photos. It exists for the
+// same reason that route does: a crew session holds no table grants and no
+// storage grants, so neither the object nor the catalogue row can be written
+// client-side, and the file must be filed under the OWNER's identity or the
+// owner's own gallery and policies will never find it.
+//
+// ⭐ THE MESSAGE MUST ALREADY EXIST, AND IT MUST BE THIS CREW'S OWN MESSAGE.
+// The client posts the message first (through crew_post_message, which proves
+// assignment in SQL) and then attaches to the id it got back. So this route
+// re-proves BOTH: the visit is this crew's work, AND the message belongs to that
+// visit. A message id from another business, or from another visit, matches
+// nothing — there is no way to hang a file off somebody else's conversation.
+//
+// ⛔ NOT PROOF OF WORK. This lands in crew_media (private bucket, signed URLs,
+// no customer surface), never in job_photos (public bucket, rendered in the
+// portal). A photo of an empty pallet sent to the office is not evidence for the
+// customer, and the two must not share a table — see lib/crewMedia.
+
+export async function POST(req: NextRequest) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Sign in first.' }, { status: 401 })
+
+  const role = await resolveAppRole(supabase)
+  if (role !== 'crew') {
+    return NextResponse.json({ error: 'Only crew members attach files here.' }, { status: 403 })
+  }
+
+  const form = await req.formData().catch(() => null)
+  if (!form) return NextResponse.json({ error: 'bad request' }, { status: 400 })
+  const jobId = String(form.get('jobId') || '')
+  const messageId = String(form.get('messageId') || '')
+  const file = form.get('file')
+  if (!UUID.test(jobId) || !UUID.test(messageId) || !(file instanceof File)) {
+    return NextResponse.json({ error: 'bad request' }, { status: 400 })
+  }
+
+  // Checked here so a 50 MB upload is refused before the bytes are stored. The
+  // bucket enforces both again — that is the copy that actually guarantees it,
+  // because a crafted request cannot talk past storage itself.
+  const kind = kindOf(file.type)
+  if (!kind) return NextResponse.json({ error: 'Attach a photo or a video.' }, { status: 415 })
+  if (!(CREW_MEDIA_ACCEPT.split(',') as string[]).includes(file.type)) {
+    return NextResponse.json({ error: 'That file type isn’t accepted — use MP4 video, or a JPEG/PNG photo.' }, { status: 415 })
+  }
+  if (file.size > CREW_MEDIA_MAX_BYTES) {
+    return NextResponse.json({ error: `That file is too large — the limit is ${sizeLabel(CREW_MEDIA_MAX_BYTES)}.` }, { status: 413 })
+  }
+
+  const admin = createAdminClient()
+  if (!admin) return NextResponse.json({ error: 'Attachments aren’t available right now.' }, { status: 503 })
+
+  const { data: tech, error: techErr } = await admin.from('technicians')
+    .select('id, user_id, crew_id')
+    .eq('auth_user_id', user.id).eq('is_active', true).is('archived_at', null)
+    .maybeSingle()
+  if (techErr) return NextResponse.json({ error: 'Couldn’t verify your crew access — try again.' }, { status: 502 })
+  const t = tech as { id: string; user_id: string; crew_id: string | null } | null
+  if (!t || !t.crew_id) return NextResponse.json({ error: 'Your account is no longer active on a crew.' }, { status: 403 })
+
+  const { data: job, error: jobErr } = await admin.from('jobs')
+    .select('id, user_id')
+    .eq('id', jobId).eq('user_id', t.user_id).eq('crew_id', t.crew_id)
+    .maybeSingle()
+  if (jobErr) return NextResponse.json({ error: 'Couldn’t check that visit — try again.' }, { status: 502 })
+  const j = job as { id: string; user_id: string } | null
+  if (!j) return NextResponse.json({ error: 'That visit isn’t on your board.' }, { status: 404 })
+
+  // The message, proven to be on THAT visit and in THAT business. Both columns
+  // carried, so a future bug that widened one still cannot cross the other.
+  const { data: msg, error: msgErr } = await admin.from('crew_messages')
+    .select('id')
+    .eq('id', messageId).eq('job_id', j.id).eq('user_id', j.user_id)
+    .maybeSingle()
+  if (msgErr) return NextResponse.json({ error: 'Couldn’t check that message — try again.' }, { status: 502 })
+  if (!msg) return NextResponse.json({ error: 'That message isn’t on this visit.' }, { status: 404 })
+
+  // Store, then catalogue — and roll the object back if the row fails, so
+  // storage never drifts from the catalogue (lib/crewMedia + uploadPhoto's rule:
+  // a stored object with no row is invisible to the product and still occupies
+  // the business's storage behind a signable path).
+  const dot = file.name.lastIndexOf('.')
+  const rawExt = dot > 0 ? file.name.slice(dot + 1) : ''
+  const ext = /^[a-zA-Z0-9]{1,5}$/.test(rawExt) ? rawExt.toLowerCase() : (kind === 'video' ? 'mp4' : 'jpg')
+  const path = `${j.user_id}/${j.id}/${crypto.randomUUID()}.${ext}`
+
+  const bytes = Buffer.from(await file.arrayBuffer())
+  const { error: upErr } = await admin.storage.from(CREW_MEDIA_BUCKET)
+    .upload(path, bytes, { upsert: false, contentType: file.type || undefined })
+  if (upErr) {
+    const m = upErr.message || ''
+    if (/exceeded|too large|maximum/i.test(m)) {
+      return NextResponse.json({ error: `That file is too large — the limit is ${sizeLabel(CREW_MEDIA_MAX_BYTES)}.` }, { status: 413 })
+    }
+    return NextResponse.json({ error: 'The file didn’t upload — check your signal and try again.' }, { status: 502 })
+  }
+
+  const { data: row, error: rowErr } = await admin.from('crew_media').insert({
+    // ⭐ Every identity here comes from the VERIFIED job row, never from the
+    // form. The client named a visit and a message; it named no owner.
+    user_id: j.user_id,
+    job_id: j.id,
+    message_id: messageId,
+    storage_path: path,
+    kind,
+    mime: file.type || null,
+    size_bytes: file.size ?? null,
+    created_by: user.id,
+  }).select('id').single()
+  if (rowErr || !row) {
+    await admin.storage.from(CREW_MEDIA_BUCKET).remove([path])
+    return NextResponse.json({ error: 'The file uploaded but didn’t attach — try again.' }, { status: 502 })
+  }
+
+  // ⛔ No URL is returned. The client re-asks the GET above, which is the one
+  // place that mints a signature — so there is exactly one signing path to audit
+  // and a fresh 5-minute window rather than one that started at upload time.
+  return NextResponse.json({ ok: true, id: (row as { id: string }).id })
 }

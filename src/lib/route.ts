@@ -491,8 +491,13 @@ export function roughFinishEstimate(startHHmm: string | null | undefined, totalL
 // Soft load signal vs the owner's daily capacity. spareMin >= 60 → room for more.
 // An EXPLICIT 0 means a blocked day (zero labour available) and must not fall
 // back to the 8h default — booked work on a blocked day is genuinely over.
+// The working day when the owner has not set one. Named rather than inlined so
+// "how long is a workday" has ONE answer — the day-load bar, day fit and the
+// smart estimate's "~2 workdays" all read this same number.
+export const DEFAULT_CAPACITY_HOURS = 8
+
 export function dayLoad(totalWorkMin: number, capacityHours: number | null | undefined): { state: 'overloaded' | 'full' | 'room'; spareMin: number } {
-  const cap = (capacityHours == null || capacityHours < 0 ? 8 : capacityHours) * 60
+  const cap = (capacityHours == null || capacityHours < 0 ? DEFAULT_CAPACITY_HOURS : capacityHours) * 60
   const spare = Math.round(cap - totalWorkMin)
   return { state: spare < 0 ? 'overloaded' : spare >= 60 ? 'room' : 'full', spareMin: spare }
 }

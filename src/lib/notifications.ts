@@ -26,6 +26,15 @@ const PRIORITY: Record<string, NotifPriority> = {
   website_lead: 'update',
   portal_request: 'update',
   new_message: 'info',
+  // The crew said something about a visit. NOT 'action' — that tier is reserved
+  // for money and trust problems and is shown item-by-item, never buried, which
+  // is exactly the wrong treatment for a conversation: a chatty morning would
+  // fill the "needs you" list and push a lost payment out of sight. As an
+  // 'update' it groups ("3 crew messages") and sorts unread-first, which is the
+  // anti-spam behaviour this feature was asked to have. The bell is also
+  // deduped at the source — the DB trigger will not ring again for a visit that
+  // already has an UNREAD bell waiting.
+  crew_message: 'update',
 }
 export function notifPriority(type: string): NotifPriority {
   return PRIORITY[type] ?? 'update'
@@ -46,6 +55,9 @@ const ACTION_VERB: Record<string, string> = {
   payment_disputed: 'Review',
   payment_dispute_lost: 'Review',
   payment_dispute_won: 'View',
+  // Its href is the visit (/dashboard/schedule?job=…), which is where the
+  // conversation lives — so the verb promises what the tap actually does.
+  crew_message: 'Open visit',
 }
 export function notificationActionLabel(type: string): string {
   return ACTION_VERB[type] ?? 'View'
@@ -65,6 +77,7 @@ const TYPE_NOUN: Record<string, string> = {
   payment_disputed: 'dispute',
   payment_dispute_lost: 'dispute lost',
   payment_dispute_won: 'dispute resolved',
+  crew_message: 'crew message',
 }
 function groupTitle(type: string, n: number): string {
   const noun = TYPE_NOUN[type] ?? type.replace(/_/g, ' ')

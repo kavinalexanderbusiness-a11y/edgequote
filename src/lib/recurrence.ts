@@ -135,6 +135,66 @@ export function planSeriesChange(
   return { kind: 'end', cutoff: endDate ?? dates[dates.length - 1] }
 }
 
+// ── The stored rule ⇄ the Repeat controls ────────────────────────────────────
+// Lives here, not in the form, because it IS part of the recurrence contract:
+// it decides whether an existing series reads back as repeating at all. When
+// the editor rendered a real weekly series as "Does not repeat" (its snapshot
+// hadn't loaded yet), saving deleted the entire series — so this mapping is
+// guarded rather than left inline in a component no script can import.
+export type RepeatPreset = 'none' | 'w1' | 'w2' | 'w3' | 'w4' | 'm1' | 'custom'
+export type EndMode = 'season' | 'on' | 'after' | 'never'
+
+export interface RecurrenceUi {
+  preset: RepeatPreset
+  customUnit: RecurUnit
+  customCount: number
+  endMode: EndMode
+  endDate: string
+  endCount: number
+}
+
+export interface RecurrenceLike {
+  unit: RecurUnit | null
+  count: number
+  endDate: string | null
+  endCount: number | null
+}
+
+/** Map an existing series back onto the Repeat UI controls so editing pre-fills. */
+export function recurrenceToUi(r?: RecurrenceLike): RecurrenceUi {
+  if (!r || !r.unit) {
+    return { preset: 'none', customUnit: 'week', customCount: 3, endMode: 'never', endDate: '', endCount: 10 }
+  }
+  let preset: RepeatPreset = 'custom'
+  if (r.unit === 'week' && r.count === 1) preset = 'w1'
+  else if (r.unit === 'week' && r.count === 2) preset = 'w2'
+  else if (r.unit === 'week' && r.count === 3) preset = 'w3'
+  else if (r.unit === 'week' && r.count === 4) preset = 'w4'
+  else if (r.unit === 'month' && r.count === 1) preset = 'm1'
+  // An existing end_date pre-fills as a specific date; the editor re-derives
+  // "Season end" from it by comparing against the series' own season end.
+  const endMode: EndMode = r.endDate ? 'on' : r.endCount ? 'after' : 'never'
+  return {
+    preset,
+    customUnit: r.unit,
+    customCount: Math.max(1, r.count),
+    endMode,
+    endDate: r.endDate || '',
+    endCount: r.endCount || 10,
+  }
+}
+
+/**
+ * May a save that says "does not repeat" actually REMOVE this job's series?
+ * Only when the series was genuinely loaded. A missing snapshot means the form
+ * never knew about the series — treating that silence as the owner's intent
+ * deletes every sibling visit.
+ */
+export function mayRemoveRecurrence(recurrenceId: string | null | undefined, loaded: Record<string, unknown>): boolean {
+  if (!recurrenceId) return true
+  return !!loaded[recurrenceId]
+}
+
 /** Shift a date string by a number of days, returning yyyy-MM-dd. */
 export function shiftDate(iso: string, deltaDays: number): string {
   return format(addDays(parseISO(iso), deltaDays), 'yyyy-MM-dd')

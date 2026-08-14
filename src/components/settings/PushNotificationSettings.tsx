@@ -8,11 +8,11 @@ import { cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { enablePush, disablePush, getPushState, isIos, isStandalone, type PushState } from '@/lib/push'
 import {
-  Bell, BellRing, Check, MessageSquare, FileText, DollarSign, Globe, Star,
+  Bell, BellRing, Check, MessageSquare, MessagesSquare, FileText, DollarSign, Globe, Star,
   CloudRain, CalendarClock, Sun, Smartphone,
 } from 'lucide-react'
 
-// The eight owner-facing preference rows. `key` matches the notif_prefs jsonb keys
+// The nine owner-facing preference rows. `key` matches the notif_prefs jsonb keys
 // the send endpoint reads; absent/true = ON (opt-out model).
 const PREFS = [
   { key: 'sms', label: 'New text messages', hint: 'When a customer replies by SMS', Icon: MessageSquare },
@@ -23,6 +23,10 @@ const PREFS = [
   { key: 'weather', label: 'Weather alerts', hint: 'Rain delays & weather disruptions', Icon: CloudRain },
   { key: 'daily_reminder', label: 'Daily reminders', hint: 'Your morning schedule summary', Icon: Sun },
   { key: 'schedule_change', label: 'Schedule changes', hint: 'A job is moved or rescheduled', Icon: CalendarClock },
+  // ⚠️ 'New text messages' above is a CUSTOMER writing in. This is your own crew,
+  // on a visit — different people, different urgency, its own switch. The key
+  // matches PREF_KEY.crew_message in /api/push/send.
+  { key: 'crew_message', label: 'Crew messages', hint: 'Your crew writes about a visit', Icon: MessagesSquare },
 ] as const
 
 export function PushNotificationSettings() {
