@@ -84,6 +84,11 @@ interface Props {
   // page's field bar can name the same next stop. Optional: the board renders
   // identically without it.
   onStopOrder?: (order: { date: string; ids: string[] }) => void
+  // …and the crew-message unread counts it already loaded, for the same reason:
+  // the field bar shows the next stop's badge, and a SECOND query for the same
+  // answer is how two surfaces start disagreeing about whether there is a
+  // message waiting. One pair of queries for the whole day, shared.
+  onChatUnread?: (counts: Record<string, number>) => void
 }
 
 export interface QuickPatch {
@@ -99,7 +104,7 @@ export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
   onOpenJob, onStartJob, onMarkDone, onMove, onStopForToday, onResume, onSetPrice, workStartTime, capacityHours, onRainDelay, onAddJob, onQuickSave,
   addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons, addonTemplates,
-  onStopOrder,
+  onStopOrder, onChatUnread,
 }: Props) {
   const supabase = createClient()
   // Guards Start/Complete against a double-tap (which would double-stamp the job
@@ -377,6 +382,10 @@ export function DayOpsPanel({
     })()
     return () => { alive = false }
   }, [jobIdsKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Publish the counts upward whenever they change — including the clear-to-zero
+  // that opening a conversation causes, so the field bar's badge disappears at
+  // the same moment the card's does.
+  useEffect(() => { onChatUnread?.(chatUnread) }, [chatUnread, onChatUnread])
   const savedSeq = active.some(j => j.route_order != null)
     ? [...active].sort((a, b) => (a.route_order ?? 999) - (b.route_order ?? 999)).map(j => j.id)
     : null
@@ -734,7 +743,12 @@ export function DayOpsPanel({
           {/* Route intelligence — the dispatcher board. (The old 4-stat "day
               operations" grid repeated the metric strip and settings bar — gone.) */}
           <div className="rounded-xl border border-border bg-bg-tertiary px-3 py-2.5">
-            <div className="flex items-center justify-between gap-2">
+            {/* flex-wrap: measured at 375px, this row ran to x=390 — 15px past the
+                screen — because the right-hand span is shrink-0 (correctly: its
+                two buttons must not be squashed) while "Open in Maps (next 10)"
+                is as long as it is. Wrapping is the fix that keeps both true;
+                nothing here shrinks, it just takes a second line on a phone. */}
+            <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
               <span className="flex items-center gap-1.5 text-xs font-semibold text-ink-muted uppercase tracking-wide">
                 <RouteIcon className="w-3.5 h-3.5 text-accent-text" /> Route
                 {manualSeq && (
@@ -1073,7 +1087,7 @@ export function DayOpsPanel({
                         >
                           <Navigation className="w-3.5 h-3.5" /> Route to
                         </a>
-                        <ActionBtn onClick={() => toggleMessage(job)} icon={MessageSquare} label="Message" />
+                        <ActionBtn className="hidden sm:inline-flex" onClick={() => toggleMessage(job)} icon={MessageSquare} label="Message" />
                         {job.status === 'scheduled' && job.on_my_way_at && (
                           <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : `On my way · ${ONE_TAP_ETA_MIN}m`}
                             title={`Texts ${job.customers?.name || 'the customer'} that you'll arrive in about ${ONE_TAP_ETA_MIN} minutes. Use Message to send a different ETA.`} />
@@ -1089,16 +1103,41 @@ export function DayOpsPanel({
                             close the panels whose setters they happened to list.
                             Main's richer overflow is kept: width + descriptions carry
                             the hierarchy a flat list can't. */}
-                        <ActionBtn onClick={() => togglePhoto(job)} icon={Camera} label="Photos" />
+                        {/* ── PANEL OPENERS FOLD ON A PHONE ─────────────────
+                            Measured on the shipped build at 375×844 with a real
+                            11-visit day: the first card carried TWELVE controls
+                            in 347px, and the whole board ran 6.6 screens. Three
+                            of those twelve open an inline panel — Photos,
+                            Services, and Message above — and none of them is
+                            what a person standing on site taps. The doors that
+                            change the WORK (On my way · Start · Stop for today ·
+                            Complete) and the one that gets you there (Route to)
+                            stay buttons at every width.
+                            `sm:hidden` menu twins rather than a width hook: a
+                            hook is false during SSR and the first paint, so the
+                            row would render full and then collapse under the
+                            thumb that was already moving. */}
+                        <ActionBtn className="hidden sm:inline-flex" onClick={() => togglePhoto(job)} icon={Camera} label="Photos" />
                         {/* ⚠️ "Crew chat" ≠ the "Message" button above it. That
                             one TEXTS THE CUSTOMER (consent-gated, costs money,
                             leaves the building). This one reaches the crew
                             assigned to this visit and no customer surface can
-                            read it. Two audiences, two buttons, two words. */}
-                        <ActionBtn onClick={() => toggleChat(job)} icon={MessagesSquare}
+                            read it. Two audiences, two buttons, two words.
+                            It folds like the others — EXCEPT when it is carrying
+                            unread messages. An unread count is news, and news
+                            does not go behind a menu. */}
+                        <ActionBtn className={cn(!chatUnread[job.id] && 'hidden sm:inline-flex')}
+                          onClick={() => toggleChat(job)} icon={MessagesSquare}
                           label={chatUnread[job.id] ? `Crew chat (${chatUnread[job.id]})` : 'Crew chat'} />
-                        <ActionBtn onClick={() => toggleAddons(job)} icon={PlusCircle} label={addons.length ? `Services (${addons.length})` : 'Services'} />
+                        <ActionBtn className="hidden sm:inline-flex" onClick={() => toggleAddons(job)} icon={PlusCircle} label={addons.length ? `Services (${addons.length})` : 'Services'} />
                         <Menu align="end" width={300} items={[
+                          // The phone twins of the three buttons above. They
+                          // exist ONLY below sm, so no width ever shows the same
+                          // action twice.
+                          { key: 'p-message', className: 'sm:hidden', label: 'Message', description: 'Text this customer', icon: MessageSquare, onSelect: () => toggleMessage(job) },
+                          { key: 'p-photos', className: 'sm:hidden', label: 'Photos', description: 'Before & after for this visit', icon: Camera, onSelect: () => togglePhoto(job) },
+                          ...(chatUnread[job.id] ? [] : [{ key: 'p-chat', className: 'sm:hidden', label: 'Crew chat', description: 'The crew conversation for this visit', icon: MessagesSquare, onSelect: () => toggleChat(job) }]),
+                          { key: 'p-services', className: 'sm:hidden', label: addons.length ? `Services (${addons.length})` : 'Services', description: 'Extra work billed with this visit', icon: PlusCircle, onSelect: () => toggleAddons(job) },
                           { key: 'quick', label: 'Quick edit', description: 'Time, crew, status & notes — this visit', icon: SlidersHorizontal, onSelect: () => { quickId === job.id ? setQuickId(null) : openQuick(job) } },
                           { key: 'edit', label: 'Edit job', description: 'Property, title & the recurring schedule', icon: Pencil, onSelect: () => onOpenJob(job) },
                           // Stop for today is a first-class button on the card
@@ -1257,14 +1296,17 @@ function Metric({ icon: Icon, label, value, tone }: { icon: typeof DollarSign; l
 // `tap-target` lifts that 40px to the 44px minimum on a coarse pointer — the last
 // 4px matter with a glove on — while `sm:h-8` keeps the mouse density identical.
 // 'primary' = THE next action for the stage; 'complete' = the finish action.
-function ActionBtn({ onClick, icon: Icon, label, tone, disabled, title }: { onClick: () => void; icon: typeof Pencil; label: string; tone?: 'emerald' | 'sky' | 'primary' | 'complete'; disabled?: boolean; title?: string }) {
+function ActionBtn({ onClick, icon: Icon, label, tone, disabled, title, className }: { onClick: () => void; icon: typeof Pencil; label: string; tone?: 'emerald' | 'sky' | 'primary' | 'complete'; disabled?: boolean; title?: string; className?: string }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       title={title}
       className={cn(
-        'tap-target h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border text-xs font-medium flex items-center justify-center gap-1 active:scale-95 transition-transform disabled:opacity-50 disabled:pointer-events-none',
+        // `inline-flex`, not `flex`: a caller folding this button on phones does
+        // it with `hidden sm:inline-flex`, and a base `flex` later in the class
+        // list would win and un-hide it at every width.
+        'tap-target h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border text-xs font-medium inline-flex items-center justify-center gap-1 active:scale-95 transition-transform disabled:opacity-50 disabled:pointer-events-none',
         tone === 'primary'
           ? 'bg-accent border-accent text-black font-semibold hover:opacity-90'
           : tone === 'complete'
@@ -1273,7 +1315,8 @@ function ActionBtn({ onClick, icon: Icon, label, tone, disabled, title }: { onCl
               ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25'
               : tone === 'sky'
                 ? 'bg-sky-400/15 border-sky-400/30 text-sky-300 hover:bg-sky-400/25'
-                : 'border-current/30 hover:bg-black/10'
+                : 'border-current/30 hover:bg-black/10',
+        className,
       )}
     >
       <Icon className="w-3.5 h-3.5" /> {label}

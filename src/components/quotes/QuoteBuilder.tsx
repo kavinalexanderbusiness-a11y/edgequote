@@ -5,6 +5,8 @@ import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Input } from '@/components/ui/Input'
+import DurationField from '@/components/jobs/DurationField'
+import { workdayMinutes } from '@/lib/workDuration'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { CustomerPicker } from '@/components/ui/CustomerPicker'
 import { ServicePicker } from '@/components/ui/ServicePicker'
@@ -122,6 +124,10 @@ export function QuoteBuilder({
   autosaveKey, autosaveBaselineUpdatedAt, optionsLockedName, onCancel,
 }: QuoteBuilderProps) {
   const router = useRouter()
+  // One workday, in minutes, for THIS business — the same figure the calendar's
+  // capacity bar and every scheduling engine read. Falls back to the shared 8h
+  // default when settings haven't resolved, exactly as workdayMinutes defines.
+  const workdayMin = workdayMinutes(settings?.daily_capacity_hours)
   const { register, handleSubmit, watch, setValue, getValues, reset, control, setFocus, formState: { errors, isSubmitting } } =
     useForm<QuoteFormValues>({
       defaultValues: {
@@ -2021,9 +2027,23 @@ export function QuoteBuilder({
                         Duration, discount &amp; notes
                       </summary>
                       <div className="pt-2 space-y-3">
-                        <Input label="Duration (min)" type="number" step="5" min="0"
-                          hint="Only affects scheduling — not the price."
-                          {...register(`services.${i}.est_minutes` as const, { min: 0 })} />
+                        {/* Duration is a VALUE + a UNIT here too — the same
+                            control the job form uses (Session 47), and the same
+                            stored integer of minutes. This box used to be a bare
+                            "Duration (min)", which made a two-day landscaping
+                            line "960" and turned an estimate into arithmetic on
+                            a phone. ⛔ "Workdays" is this business's own day
+                            (daily_capacity_hours), never 24 hours. */}
+                        <Controller name={`services.${i}.est_minutes` as const} control={control}
+                          render={({ field }) => (
+                            <DurationField
+                              label="Duration"
+                              workdayMin={workdayMin}
+                              value={Number(field.value) > 0 ? Number(field.value) : null}
+                              onChange={m => field.onChange(m ?? '')}
+                            />
+                          )} />
+                        <p className="text-xs text-ink-faint -mt-1.5">Only affects scheduling — not the price.</p>
                         {lineDiscountRow(i)}
                       </div>
                     </details>

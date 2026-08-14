@@ -27,6 +27,13 @@ export interface MenuItem {
   onSelect: () => void
   disabled?: boolean
   danger?: boolean   // destructive item — red text/icon so danger is visible before hover
+  // Applied to the item's own row. Its reason for existing is the day board: a
+  // control that is a first-class button on a wide screen has to fold into this
+  // menu on a phone, and `sm:hidden` here is what lets it do that WITHOUT
+  // existing twice on desktop. CSS rather than a width hook on purpose — a hook
+  // reads false during SSR and the first paint, so the row would render full and
+  // then visibly collapse.
+  className?: string
 }
 
 interface TriggerApi {
@@ -176,6 +183,7 @@ export function Menu({ items, align = 'start', width = 288, ariaLabel = 'Menu', 
                     // panel's own fill, so it read as no highlight at all.
                     : (i === active ? 'bg-surface-raised text-ink' : 'text-ink-muted hover:bg-surface-raised hover:text-ink'),
                   it.disabled && 'opacity-50 pointer-events-none',
+                  it.className,
                 )}>
                 {Icon && <Icon className={cn('w-4 h-4 shrink-0 mt-0.5', it.danger ? 'text-red-400' : 'text-accent-text')} />}
                 <span className="min-w-0">
