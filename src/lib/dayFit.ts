@@ -42,7 +42,7 @@
 // project phrasing is derived from the day's structure (stop count), never from
 // what the work is called.
 
-import { DEFAULT_JOB_MIN, estimateDayLoad } from '@/lib/route'
+import { DEFAULT_CAPACITY_HOURS, DEFAULT_JOB_MIN, estimateDayLoad } from '@/lib/route'
 import type { ServiceVariance } from '@/lib/estimateVsActual'
 
 // Same per-stop drive/setup allowance estimateDayLoad charges. Named here for
@@ -151,6 +151,154 @@ export interface DayFit {
 
 const crewOf = (n: number | null | undefined) => Math.max(1, Number(n) || 1)
 
+// ── What a day is ALREADY committed to ───────────────────────────────────────
+// Extracted from dayFit() so the two questions share one arithmetic:
+//
+//   "does this CANDIDATE fit here?"   → dayFit()      (Session 46)
+//   "is THIS DAY, as booked, real?"   → lib/dayPlan   (Session 60)
+//
+// The second question has no candidate, so it cannot be asked through dayFit()
+// — and a second copy of "labour = minutes × crew, capacity = hours × workers"
+// is exactly how the day board and the suggester would start quoting different
+// spare hours for the same Tuesday. There is one copy, and it is here.
+
+export interface DayCommitmentOpts {
+  /**
+   * Real travel minutes to each visit, in the SAME order as `input.visits`,
+   * when the caller has a resolved route (lib/dayPlan does; the suggesters do
+   * not). Absent → every stop is charged STOP_OVERHEAD_MIN, which is exactly
+   * what estimateDayLoad charges, so the default path stays the canonical
+   * day-load number to the minute.
+   *
+   * This is the ONE seam through which better evidence enters the formula.
+   * Without it a route-aware surface would have to re-implement "labour =
+   * (minutes + travel) × crew" to spend its better numbers, and then the day
+   * board and the suggester would quote different spare hours for one Tuesday.
+   */
+  legMinutes?: (number | null | undefined)[]
+  /**
+   * Minutes ALREADY banked against a visit by an earlier day's work sessions
+   * (Session 47 `jobs.actual_minutes`), same order as `input.visits`. Only what
+   * remains is charged to this day — planning the full estimate again would
+   * book the same hours twice.
+   *
+   * Never negative and never below zero remaining: an over-run visit has no
+   * work LEFT, but it still occupies a stop on the route.
+   */
+  alreadyWorkedMinutes?: (number | null | undefined)[]
+}
+
+export interface DayCommitment {
+  /** Per-visit on-site minutes actually used, in input order (cancelled dropped). */
+  visitMinutes: number[]
+  /** Travel minutes charged to each visit (the allowance, or the route's own). */
+  travelMinutes: number[]
+  /** Where each visit's minutes came from — 'assumed' is the shared fallback. */
+  visitSources: ('stated' | 'learned' | 'assumed')[]
+  /** Active (non-cancelled) visits. */
+  stops: number
+  /** estimateDayLoad's committed clock minutes (labour + per-stop allowance). */
+  usedClockMin: number
+  /** Clock minutes still open (never negative — an overrun reads as 0 spare). */
+  spareClockMin: number
+  /** The day's own length: capacityHours × 60. An 11h job never fits an 8h day. */
+  capWindowMin: number
+  /** Workers available: a positive count, 0 for "everyone booked off", or null
+   *  for "not known" — which is NOT zero and never free capacity. */
+  workers: number | null
+  /** Person-minutes committed (crew-weighted), null when workers are unknown. */
+  laborUsedMin: number | null
+  /** Person-minutes available: capWindowMin × workers. Null when unknown. */
+  laborCapMin: number | null
+  /** Person-minutes still open, floored at 0. Null when workers are unknown. */
+  spareLaborMin: number | null
+  /** The largest crew any single active visit asks for (1 when none stated). */
+  maxCrewSize: number
+}
+
+/**
+ * Everything a day has already promised, before any new work is considered.
+ *
+ * Duration precedence for an EXISTING visit is the calendar bar's, not rule 1's:
+ * stated → established history → DEFAULT_JOB_MIN. That is deliberate (honesty
+ * rule 5) — the visit is committed either way, so the number the owner already
+ * sees is the number that must be totalled. `visitSources` records which visits
+ * only got there by assumption, so a surface can DISCLOSE the assumption instead
+ * of quietly banking on it.
+ */
+export function dayCommitment(input: DayFitInput, opts?: DayCommitmentOpts): DayCommitment {
+  const active = input.visits.filter(v => v.status !== 'cancelled')
+
+  const visitMinutes: number[] = []
+  const visitSources: DayCommitment['visitSources'] = []
+  active.forEach((v, i) => {
+    let minutes: number
+    const stated = Number(v.duration_minutes)
+    const learned = input.learnedFor?.(v.service_type) ?? null
+    if (Number.isFinite(stated) && stated > 0) {
+      minutes = Math.round(stated); visitSources.push('stated')
+    } else if (learned != null && learned > 0) {
+      minutes = Math.round(learned); visitSources.push('learned')
+    } else {
+      minutes = DEFAULT_JOB_MIN; visitSources.push('assumed')
+    }
+    // Session 47: subtract what earlier work sessions already banked.
+    const worked = Number(opts?.alreadyWorkedMinutes?.[i])
+    if (Number.isFinite(worked) && worked > 0) minutes = Math.max(0, minutes - Math.round(worked))
+    visitMinutes.push(minutes)
+  })
+
+  // Travel charged to each stop: the route's own leg when the caller has one,
+  // else the flat allowance estimateDayLoad has always charged.
+  const travelMinutes = active.map((_, i) => {
+    const leg = opts?.legMinutes?.[i]
+    return leg != null && Number.isFinite(leg) && leg >= 0 ? Math.round(leg) : STOP_OVERHEAD_MIN
+  })
+  const routeAware = Array.isArray(opts?.legMinutes) && opts.legMinutes.length > 0
+
+  const capWindowMin = (input.capacityHours == null || Number(input.capacityHours) < 0
+    ? DEFAULT_CAPACITY_HOURS : Number(input.capacityHours)) * 60
+
+  // CLOCK — estimateDayLoad IS the definition, and with the default allowance
+  // this branch reproduces it to the minute (it charges the same 10 min/stop).
+  // With real leg times the same expression is evaluated against better travel
+  // numbers rather than a second formula being invented next to it.
+  const clock = estimateDayLoad(
+    active.map((v, i) => ({ duration_minutes: visitMinutes[i], status: v.status })),
+    input.capacityHours,
+  )
+  const usedClockMin = routeAware
+    ? visitMinutes.reduce((s, m, i) => s + m + travelMinutes[i], 0)
+    : clock.usedMin
+  const spareClockMin = Math.max(0, capWindowMin - usedClockMin)
+
+  // LABOUR — the same visits, crew-weighted. Travel is crew-weighted too: the
+  // whole crew rides the leg.
+  const workers = input.workers != null && input.workers > 0
+    ? Math.floor(input.workers)
+    : input.workers === 0 ? 0 : null
+  let laborUsedMin: number | null = null
+  let laborCapMin: number | null = null
+  let spareLaborMin: number | null = null
+  if (workers != null) {
+    laborCapMin = capWindowMin * workers
+    laborUsedMin = Math.round(active.reduce((s, v, i) =>
+      s + (visitMinutes[i] + travelMinutes[i]) * crewOf(v.crew_size), 0))
+    spareLaborMin = Math.max(0, laborCapMin - laborUsedMin)
+  }
+
+  return {
+    visitMinutes, travelMinutes, visitSources,
+    stops: active.length,
+    usedClockMin,
+    spareClockMin,
+    capWindowMin,
+    workers,
+    laborUsedMin, laborCapMin, spareLaborMin,
+    maxCrewSize: active.reduce((m, v) => Math.max(m, crewOf(v.crew_size)), 1),
+  }
+}
+
 /**
  * Compare one candidate against one day. TWO dimensions, both must pass:
  *
@@ -172,38 +320,16 @@ const crewOf = (n: number | null | undefined) => Math.max(1, Number(n) || 1)
  * physically impossible in person-hours.
  */
 export function dayFit(candidate: CandidateWork, input: DayFitInput): DayFit {
-  const active = input.visits.filter(v => v.status !== 'cancelled')
-
-  // CLOCK — the canonical day-load calc, with learned durations filling untyped
-  // visits before the shared fallback (same precedence the candidate gets, minus
-  // the unknown-honesty: an existing visit is already committed either way).
-  const clockVisits = active.map(v => ({
-    duration_minutes: (Number(v.duration_minutes) > 0
-      ? Number(v.duration_minutes)
-      : input.learnedFor?.(v.service_type) ?? null) ?? DEFAULT_JOB_MIN,
-    status: v.status,
-  }))
-  const clock = estimateDayLoad(clockVisits, input.capacityHours)
-  const spareClockMin = Math.max(0, clock.spareMin)
-
-  // LABOUR — the same visits, crew-weighted. Per-stop allowance is crew-weighted
-  // too: the whole crew rides the leg.
-  const workers = input.workers != null && input.workers > 0 ? Math.floor(input.workers) : input.workers === 0 ? 0 : null
-  let spareLaborMin: number | null = null
-  if (workers != null) {
-    const capMinPerWorker = (input.capacityHours == null || Number(input.capacityHours) < 0 ? 8 : Number(input.capacityHours)) * 60
-    const laborCap = capMinPerWorker * workers
-    const laborUsed = active.reduce((s, v, i) =>
-      s + (clockVisits[i].duration_minutes + STOP_OVERHEAD_MIN) * crewOf(v.crew_size), 0)
-    spareLaborMin = Math.max(0, Math.round(laborCap - laborUsed))
-  }
+  // The day's existing promises — ONE arithmetic, shared with lib/dayPlan.
+  const day = dayCommitment(input)
+  const { workers, spareClockMin, spareLaborMin } = day
 
   const base = {
-    usedClockMin: clock.usedMin,
+    usedClockMin: day.usedClockMin,
     spareClockMin,
     spareLaborMin,
     workers,
-    stops: active.length,
+    stops: day.stops,
   }
 
   // Rule 1: no duration, no claim.
@@ -232,7 +358,7 @@ export function dayFit(candidate: CandidateWork, input: DayFitInput): DayFit {
   //            committed route's clock spare binds too.
   // Unknown workforce with a solo-sized candidate falls back to the serial
   // clock alone — that IS today's canonical single-crew model.
-  const capWindowMin = (input.capacityHours == null || Number(input.capacityHours) < 0 ? 8 : Number(input.capacityHours)) * 60
+  const capWindowMin = day.capWindowMin
   let spare: number
   let demand: number
   if (workers != null) {

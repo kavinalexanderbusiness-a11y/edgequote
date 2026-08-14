@@ -12,6 +12,21 @@ import { Coord, haversineKm } from '@/lib/geo'
 
 export type RoadDist = (a: Coord, b: Coord) => number
 
+// ── Measured drive MINUTES, not modelled ones ────────────────────────────────
+// The Distance Matrix answers every element with a distance AND a duration, and
+// this module has always persisted both (`road_distance_cache.seconds`). Only
+// the kilometres were ever read back, so every arrival time in the product was
+// re-derived as `overhead + km × minPerKm` from a speed model — even for the
+// legs Google had already timed. Measured on production 2026-08-14: 1,282 of
+// 1,282 cached pairs carry a duration, and not one of them reached a screen.
+//
+// A leg with a recorded duration can be stated as drive time. A leg without one
+// is a MODEL, and lib/dayPlan is required to label it as such — which is the
+// whole reason this returns null rather than a fallback number.
+export type RoadSeconds = (a: Coord, b: Coord) => number | null
+/** True when this pair's kilometres are real-road rather than the haversine fallback. */
+export type RoadHas = (a: Coord, b: Coord) => boolean
+
 // ~11 m grid — coordinates this close share a cache entry (geocodes are stable to
 // well within this, so two visits at the same property reuse one measurement).
 export function distKey(lat: number, lng: number): string {
@@ -76,23 +91,25 @@ export async function buildRoadDistance(
   supabase: SupabaseClient,
   userId: string,
   coords: Coord[],
-): Promise<{ dist: RoadDist; usedRoad: boolean }> {
+): Promise<{ dist: RoadDist; seconds: RoadSeconds; hasRoad: RoadHas; usedRoad: boolean }> {
   const pts = dedupeByKey(coords.filter(c => c && c.lat != null && c.lng != null))
-  if (pts.length < 2) return { dist: haversineKm, usedRoad: false }
+  if (pts.length < 2) return { dist: haversineKm, seconds: () => null, hasRoad: () => false, usedRoad: false }
 
   const keys = pts.map(p => distKey(p.lat, p.lng))
   const cache = new Map<string, number>() // "from|to" → km
+  const secs = new Map<string, number>()  // "from|to" → measured drive seconds
 
   // 1) Load whatever pairs we've already measured.
   try {
     const { data } = await supabase
       .from('road_distance_cache')
-      .select('from_key, to_key, km')
+      .select('from_key, to_key, km, seconds')
       .eq('user_id', userId)
       .in('from_key', keys)
       .in('to_key', keys)
-    for (const r of (data as { from_key: string; to_key: string; km: number }[] | null) || []) {
+    for (const r of (data as { from_key: string; to_key: string; km: number; seconds: number | null }[] | null) || []) {
       cache.set(`${r.from_key}|${r.to_key}`, Number(r.km))
+      if (r.seconds != null && Number(r.seconds) > 0) secs.set(`${r.from_key}|${r.to_key}`, Number(r.seconds))
     }
   } catch { /* cache read failed — proceed, we'll just fetch / fall back */ }
 
@@ -108,6 +125,8 @@ export async function buildRoadDistance(
   // 3) Fetch the missing pairs in one (batched) pass and persist them.
   if (anyMissing) {
     const fetched = await fetchMatrix(pts, cache)
+    // Legs measured just now are as measured as legs measured last week.
+    for (const f of fetched) if (f.seconds != null && f.seconds > 0) secs.set(`${f.from_key}|${f.to_key}`, f.seconds)
     if (fetched.length) {
       try {
         await supabase.from('road_distance_cache')
@@ -120,7 +139,19 @@ export async function buildRoadDistance(
     const v = cache.get(`${distKey(a.lat, a.lng)}|${distKey(b.lat, b.lng)}`)
     return v != null ? v : haversineKm(a, b)
   }
-  return { dist, usedRoad: cache.size > 0 }
+  // Directional, and deliberately NOT symmetric-fallback: a one-way system can
+  // make A→B and B→A genuinely different drives, and the honest answer for an
+  // unmeasured direction is "not measured", which lib/dayPlan then models and
+  // labels. (Distance falls back to haversine because a straight line is still
+  // a defensible distance; there is no defensible guess at a duration.)
+  const seconds: RoadSeconds = (a, b) => secs.get(`${distKey(a.lat, a.lng)}|${distKey(b.lat, b.lng)}`) ?? null
+  // Whether THIS pair's kilometres are a real road distance or the haversine
+  // fallback `dist` quietly substitutes. Per-pair, because a day is routinely
+  // mixed: an established customer's leg is measured and the new property added
+  // this morning is not, and "the day used road distances" is not a claim you
+  // can make from one cached pair.
+  const hasRoad: RoadHas = (a, b) => cache.has(`${distKey(a.lat, a.lng)}|${distKey(b.lat, b.lng)}`)
+  return { dist, seconds, hasRoad, usedRoad: cache.size > 0 }
 }
 
 // ── Routing road distances for the OPTIMIZER (cost-bounded) ───────────────────

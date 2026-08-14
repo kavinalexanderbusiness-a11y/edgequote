@@ -6,13 +6,15 @@ import { confirm } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
 import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, AddonTemplate, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
-import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, sequenceRoute, roundTripMapsUrl, MAX_MAPS_WAYPOINTS, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
+import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, sequenceRoute, roundTripMapsUrl, MAX_MAPS_WAYPOINTS, directionsUrl, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
+import { planDay, type DayPlanStopInput } from '@/lib/dayPlan'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
-import { buildRoadDistance } from '@/lib/distance'
+import { buildRoadDistance, type RoadDist, type RoadSeconds, type RoadHas } from '@/lib/distance'
 import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
 import { addonsTotal } from '@/lib/jobPricing'
 import { formatCurrency, cn, localTodayISO } from '@/lib/utils'
-import { orderDayStops } from '@/lib/fieldStops'
+import { orderDayStops, crewOrderStatus } from '@/lib/fieldStops'
+import { DayPlanPanel } from '@/components/schedule/DayPlanPanel'
 import { scrollBehavior } from '@/lib/motion'
 import { Button } from '@/components/ui/Button'
 import { Menu } from '@/components/ui/Menu'
@@ -28,8 +30,8 @@ import { VisitConversation } from '@/components/schedule/VisitConversation'
 import { loadOwnerUnread } from '@/lib/crewMessages'
 import { SendMessageDialog, type MessageRecipient } from '@/components/comms/SendMessageDialog'
 import {
-  DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
-  Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send, Receipt,
+  DollarSign, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
+  Plus, Pencil, Move, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send, Receipt,
   ChevronUp, ChevronDown, Wand2, MoreHorizontal, CalendarDays, StickyNote, MessagesSquare, PauseCircle,
   FileSignature,
 } from 'lucide-react'
@@ -69,6 +71,12 @@ interface Props {
   onSetPrice: (job: Job, price: number | null, reason?: string) => Promise<void>
   workStartTime: string
   capacityHours: number
+  // ⭐ Who can actually work this day, and what history says a service takes —
+  // Session 46's loader (lib/dayFitLoad), loaded once by the page for its
+  // horizon rather than per day board. `undefined`/null means NOT KNOWN, which
+  // lib/dayPlan reports as a caveat; it never reads as a fully-staffed day.
+  workersOnDay?: number | null
+  learnedDurationFor?: (serviceType: string | null | undefined) => number | null
   onRainDelay: () => void
   onAddJob: () => void
   onQuickSave: (job: Job, patch: QuickPatch) => Promise<void>
@@ -115,7 +123,8 @@ export interface QuickPatch {
 
 export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
-  onOpenJob, onStartJob, onMarkDone, onMove, onStopForToday, onResume, onSetPrice, workStartTime, capacityHours, onRainDelay, onAddJob, onQuickSave,
+  onOpenJob, onStartJob, onMarkDone, onMove, onStopForToday, onResume, onSetPrice, workStartTime, capacityHours,
+  workersOnDay, learnedDurationFor, onRainDelay, onAddJob, onQuickSave,
   addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons, addonTemplates,
   changeOrdersByJobId, onCreateChangeOrder, onSendChangeOrder, onCancelChangeOrder, onOwnerChangeDecision, onRemindChangeOrder,
   onStopOrder, onChatUnread,
@@ -287,6 +296,16 @@ export function DayOpsPanel({
     setQuickId(null)
   }
   const [route, setRoute] = useState<{ ordered: OrderedRouteStop[]; totalKm: number; mapsUrl: string | null; usedGoogle: boolean; usedRoad: boolean } | null>(null)
+  // The day's road data, HELD rather than consumed inside the routing effect.
+  //
+  // ⚠️ It used to be discarded the moment the optimized order was built, so a
+  // manual reorder re-ran sequenceRoute with the DEFAULT haversine distance:
+  // dragging one stop silently swapped every kilometre and every arrival time
+  // on the day from real-road to straight-line, and the only tell was the
+  // "Real-road" badge quietly disappearing. Keeping it means the owner's order
+  // and the optimizer's order are measured the same way — which is the least a
+  // reorder should be able to assume.
+  const [road, setRoad] = useState<{ dist: RoadDist; seconds: RoadSeconds; hasRoad: RoadHas; usedRoad: boolean } | null>(null)
   const [routing, setRouting] = useState(false)
   // Learned drive speed + load/unload overhead from completed routes — sharpens the
   // route's drive minutes and per-stop ETAs over time (falls back to 2 min/km).
@@ -328,11 +347,10 @@ export function DayOpsPanel({
     }
     return out
   })()
-  // Same coalesce as laborTotalMin below (and dayLoad, and the ETA chain): unknown
-  // duration = DEFAULT_JOB_MIN, not 0. These two totals describe the same day, so
-  // they must not disagree — with `|| 0` the work chip vanished on exactly the days
-  // dayLoad still counted as 45 min of work apiece.
-  const totalMin = active.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
+  // The day's work minutes are no longer totalled here: lib/dayPlan resolves
+  // each visit's duration (own estimate → learned → the shared default) and
+  // reports how many it had to assume, so a second `|| DEFAULT_JOB_MIN` sum on
+  // this screen could only drift from the one the plan is judged against.
   const totalRevenue = active.reduce((s, j) => s + jobTotal(j), 0)
   const revenueCompleted = completed.reduce((s, j) => s + jobTotal(j), 0)
   const revenueRemaining = remaining.reduce((s, j) => s + jobTotal(j), 0)
@@ -365,13 +383,16 @@ export function DayOpsPanel({
       // km; fall back to the Directions API / haversine when none are available.
       const { data: { user } } = await supabase.auth.getUser()
       if (user && located.length > 1) {
-        const { dist, usedRoad } = await buildRoadDistance(supabase, user.id, [baseCoord, ...located.map(s => ({ lat: s.lat as number, lng: s.lng as number }))])
+        const { dist, seconds, hasRoad, usedRoad } = await buildRoadDistance(supabase, user.id, [baseCoord, ...located.map(s => ({ lat: s.lat as number, lng: s.lng as number }))])
+        if (alive) setRoad({ dist, seconds, hasRoad, usedRoad })
         if (usedRoad) {
           const nn = nearestNeighborRoute(baseCoord, located, dist)
           if (alive) setRoute({ ordered: nn.ordered, totalKm: nn.totalKm, mapsUrl: roundTripMapsUrl(baseCoord, nn.ordered), usedGoogle: true, usedRoad: true })
           if (alive) setRouting(false)
           return
         }
+      } else if (alive) {
+        setRoad(null)
       }
       const res = await optimizeRoute(baseCoord, stops)
       if (alive) setRoute({ ordered: res.ordered, totalKm: res.totalKm, mapsUrl: res.mapsUrl, usedGoogle: res.usedGoogle, usedRoad: false })
@@ -428,10 +449,9 @@ export function DayOpsPanel({
         propertyId: job.properties?.id ?? null,
         lat: job.properties?.lat ?? null,
         lng: job.properties?.lng ?? null,
-      })), manualSeq)
+      })), manualSeq, road?.dist)   // ⭐ the SAME distances the optimizer used
     : null
   const effOrdered: OrderedRouteStop[] = manualRoute ? manualRoute.ordered : route?.ordered ?? []
-  const effTotalKm = manualRoute ? manualRoute.totalKm : route?.totalKm ?? 0
   // Navigation link: the REMAINING stops in the current (manual or optimized)
   // order — completed stops don't need directions, and Google caps the URL at
   // MAX_MAPS_WAYPOINTS anyway, so mid-day re-opens always cover what's next.
@@ -454,7 +474,24 @@ export function DayOpsPanel({
   useEffect(() => {
     onStopOrder?.({ date, ids: stopOrderKey ? stopOrderKey.split('|') : [] })
   }, [date, stopOrderKey, onStopOrder])
-  const stats = (manualRoute || route) && locatedCoords.length > 0 ? routeStats(locatedCoords, effTotalKm, travel) : null
+  // ── Does the crew have THIS order? ──────────────────────────────────────────
+  // The board re-resolves an order on every render; a crew phone cannot — its
+  // day arrives pre-sorted by the crew_day RPC, which sorts on jobs.route_order
+  // and falls through to booking order when none is saved. So the plan on this
+  // screen only reaches the field if it has been WRITTEN. lib/fieldStops mirrors
+  // the RPC's ordering so this comparison is against what the crew really sees.
+  const crewOrder = crewOrderStatus(sortedJobs)
+  const [sendingOrder, setSendingOrder] = useState(false)
+  async function sendOrderToCrew() {
+    if (sendingOrder) return
+    setSendingOrder(true)
+    // The SAME write the drag/chevron reorder uses — one path to route_order, so
+    // "publish" can never mean something subtly different from "reorder".
+    const ok = await applyOrder(sortedJobs.map(j => j.id))
+    setSendingOrder(false)
+    // applyOrder already says so when it fails; don't claim a delivery on top of it.
+    if (ok) toast.success('Sent — the crew’s screen now lists these stops in this order.')
+  }
 
   // Reorder: swap instantly (optimistic), then persist the whole day's sequence.
   // Writes are CHAINED so two quick drags can't interleave their per-row updates
@@ -469,13 +506,17 @@ export function DayOpsPanel({
   const propsVersion = useRef(0)
   const settledAtVersion = useRef(0)
   useEffect(() => { propsVersion.current++ }, [jobs])
-  async function applyOrder(seq: string[]) {
+  // Returns whether the sequence actually persisted, so a caller that ANNOUNCES
+  // the write ("sent to the crew") cannot announce one that failed.
+  async function applyOrder(seq: string[]): Promise<boolean> {
+    let ok = true
     setLocalSeq(seq)
     pendingOrderWrites.current++
     orderWrite.current = orderWrite.current.then(async () => {
       try {
         const results = await Promise.all(seq.map((id, i) => supabase.from('jobs').update({ route_order: i + 1 }).eq('id', id)))
         if (results.some(r => r.error)) {
+          ok = false
           // Reconcile, don't diverge: drop the optimistic order and fall back to
           // the last persisted sequence from props (realtime refetch confirms it).
           setLocalSeq(null)
@@ -486,7 +527,12 @@ export function DayOpsPanel({
         if (pendingOrderWrites.current === 0) settledAtVersion.current = propsVersion.current
       }
     })
-    await orderWrite.current
+    // Await the promise THIS call chained, not whatever the ref points at by
+    // now — a second reorder landing mid-flight would otherwise decide our
+    // return value.
+    const mine = orderWrite.current
+    await mine
+    return ok
   }
   // Release the optimistic override once the DB is the right authority again:
   // • props MATCH the optimistic order (our write round-tripped) → release;
@@ -554,20 +600,71 @@ export function DayOpsPanel({
       return
     }
     if (prevSeq) {
-      toast.undo('Route re-optimized — manual order cleared.', () => applyOrder(prevSeq))
+      toast.undo('Route re-optimized — manual order cleared.', () => { void applyOrder(prevSeq) })
     } else {
       toast.success('Route is optimized.')
     }
   }
 
-  // Real-world timing: work start + route order + drive legs + job durations →
-  // an arrival time per stop and the day's estimated finish (ONE engine, lib/route).
-  const durByJob: Record<string, number> = {}
-  for (const j of active) durByJob[j.id] = j.duration_minutes || DEFAULT_JOB_MIN
-  const etas = effOrdered.length > 0 ? computeDayEtas(workStartTime, effOrdered, durByJob, travel) : null
+  // ── The day as a PLAN ───────────────────────────────────────────────────────
+  // ONE call answers what used to be four separate derivations on this screen
+  // (ETAs, the load pill, the work chip, the finish estimate) — and it answers
+  // them against the evidence actually available, rather than assuming a 45-min
+  // visit, a 2-min/km drive and a serial day are all safe. lib/dayPlan.
+  //
+  // Legs are read off the RESOLVED route (`effOrdered` — manual order or the
+  // optimizer's) in the SAME sequence the cards render, walking coordinates
+  // forward so each leg's measured duration can be looked up for its own pair.
+  const legByJob = new Map(effOrdered.map(s => [s.jobId, s]))
+  const planStops: DayPlanStopInput[] = (() => {
+    const out: DayPlanStopInput[] = []
+    let prev: Coord | null = baseCoord
+    for (const j of sortedJobs) {
+      const lat = j.properties?.lat ?? null
+      const lng = j.properties?.lng ?? null
+      const located = lat != null && lng != null
+      const here: Coord | null = located ? { lat, lng } : null
+      const legKm = legByJob.get(j.id)?.legKm ?? null
+      out.push({
+        jobId: j.id,
+        durationMinutes: j.duration_minutes,
+        crewSize: j.crew_size,
+        serviceType: j.service_type,
+        status: j.status,
+        // Session 47: hours already banked against a carried-over visit, so
+        // tomorrow plans the remainder rather than the whole estimate again.
+        workedMinutes: j.actual_minutes,
+        legKm,
+        legSeconds: prev && here && road ? road.seconds(prev, here) : null,
+        legIsRoad: !!(prev && here && road?.hasRoad(prev, here)),
+        located,
+      })
+      if (here) prev = here
+    }
+    return out
+  })()
+  const plan = planDay({
+    stops: planStops,
+    startTime: workStartTime,
+    capacityHours,
+    workers: workersOnDay ?? null,
+    learnedFor: learnedDurationFor,
+    speed: travel,
+    locatedCoords,
+    hasBase: !!baseCoord,
+  })
+  // Every arrival on this screen comes from that ONE walk.
+  const etas = plan.stopCount > 0
+    ? { startMin: plan.startMin, finishMin: plan.finishMin, finish: plan.finish, stops: plan.stops }
+    : null
   const etaByJob: Record<string, string> = {}
   const arrivalMinByJob: Record<string, number> = {}
-  if (etas) for (const s of etas.stops) { etaByJob[s.jobId] = s.arrival; arrivalMinByJob[s.jobId] = s.arrivalMin }
+  const durByJob: Record<string, number> = {}
+  for (const s of plan.stops) {
+    etaByJob[s.jobId] = s.arrival
+    arrivalMinByJob[s.jobId] = s.arrivalMin
+    durByJob[s.jobId] = s.minutes
+  }
   // A 2-hour arrival window per visit for the "Send ETA" message: anchored on the
   // committed start time when set, else the route-computed arrival.
   const windowByJob: Record<string, string> = {}
@@ -575,27 +672,31 @@ export function DayOpsPanel({
     const startMin = j.start_time ? timeToMinutes(j.start_time) : (arrivalMinByJob[j.id] ?? null)
     if (startMin != null) windowByJob[j.id] = `${minutesToTime12(startMin)}–${minutesToTime12(startMin + 120)}`
   }
-  const laborTotalMin = active.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
-  const usedMin = laborTotalMin + (stats ? stats.driveMinutes : active.length * 10)
+  // The load pill reads the plan's OWN clock total (work + the route's real
+  // drive legs), through the same dayLoad state function the calendar uses — so
+  // "Room for ~2h" is now a statement about this day's actual route rather than
+  // about a flat 10-minutes-per-stop allowance.
+  const usedMin = plan.usedClockMin
   const load = dayLoad(usedMin, capacityHours)
-  // Capacity % for the always-visible header badge (used ÷ day capacity).
-  const dayCapMin = usedMin + load.spareMin
-  const loadPct = dayCapMin > 0 ? Math.round((usedMin / dayCapMin) * 100) : null
+  const loadPct = plan.capacityMin > 0 ? Math.round((usedMin / plan.capacityMin) * 100) : null
+  // ⭐ A clock with room is not a day that can happen: a visit needing 3 people
+  // on a 1-person day used to show "Room for ~2h" in green. When the plan says
+  // something blocking, the pill says THAT instead of a spare-hours figure it
+  // cannot honour.
+  const blocking = plan.warnings.find(w => w.severity === 'blocking') ?? null
 
   // The timeline reads the ETA chain the route engine already produced above —
   // no second ordering, no second distance lookup. Capacity ends at work start +
   // the day's labour budget, which is the same number the load pill uses.
-  const timelineStops: TimelineStop[] = etas
-    ? etas.stops
-        .map(s => {
-          const job = active.find(j => j.id === s.jobId)
-          return job
-            ? { jobId: job.id, name: job.customers?.name || job.title, arrivalMin: s.arrivalMin, durMin: durByJob[job.id] ?? DEFAULT_JOB_MIN, status: job.status }
-            : null
-        })
-        .filter((s): s is TimelineStop => s !== null)
-    : []
-  const capacityEndMin = (etas?.startMin ?? timeToMinutes(workStartTime)) + Math.round((capacityHours > 0 ? capacityHours : 8) * 60)
+  const timelineStops: TimelineStop[] = plan.stops
+    .map(s => {
+      const job = active.find(j => j.id === s.jobId)
+      return job
+        ? { jobId: job.id, name: job.customers?.name || job.title, arrivalMin: s.arrivalMin, durMin: s.minutes, status: job.status }
+        : null
+    })
+    .filter((s): s is TimelineStop => s !== null)
+  const capacityEndMin = plan.capacityEndMin
 
   // Tapping a block on the timeline brings its card into view — the timeline is a
   // map of the day, so it should navigate the day. scrollBehavior() honours the
@@ -641,12 +742,19 @@ export function DayOpsPanel({
   else if (live) {
     const now = new Date()
     const curElapsed = inProgress?.started_at ? elapsedMin(inProgress.started_at) : 0
-    const remainingLabor = remaining.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
-      - (inProgress ? Math.min(curElapsed, inProgress.duration_minutes || DEFAULT_JOB_MIN) : 0)
-    const remainingLegs = remaining.filter(j => j.id !== inProgress?.id).length * 10
+    // Live: now + what is left. Durations come from the PLAN (own estimate →
+    // learned → the shared default), so the live finish and the planned finish
+    // read the same minutes for the same visit — and the legs still to drive
+    // are that day's real legs, not a flat allowance per remaining stop.
+    const remainingLabor = remaining.reduce((s, j) => s + (durByJob[j.id] ?? DEFAULT_JOB_MIN), 0)
+      - (inProgress ? Math.min(curElapsed, durByJob[inProgress.id] ?? DEFAULT_JOB_MIN) : 0)
+    const legMinById = new Map(plan.stops.map(s => [s.jobId, s.leg.minutes]))
+    const remainingLegs = remaining
+      .filter(j => j.id !== inProgress?.id)
+      .reduce((s, j) => s + (legMinById.get(j.id) ?? 10), 0)
     estFinish = minutesToTime12(now.getHours() * 60 + now.getMinutes() + Math.max(5, remainingLabor) + remainingLegs)
   } else {
-    estFinish = etas?.finish ?? roughFinishEstimate(workStartTime, laborTotalMin, active.length).finish
+    estFinish = plan.stopCount > 0 ? plan.finish : '—'
   }
 
   return (
@@ -660,13 +768,14 @@ export function DayOpsPanel({
         <div className="min-w-0 flex items-center gap-2">
           <p className="text-sm font-semibold tracking-tight text-ink truncate">{dateLabel}</p>
           {active.length > 0 && (
-            <span className={cn(
+            <span title={blocking ? blocking.message : undefined} className={cn(
               'text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border shrink-0',
-              load.state === 'overloaded' ? 'text-red-400 border-red-500/30 bg-red-500/10'
+              blocking || load.state === 'overloaded' ? 'text-red-400 border-red-500/30 bg-red-500/10'
                 : load.state === 'room' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
                 : 'text-ink-muted border-border bg-bg-tertiary'
             )}>
-              {load.state === 'overloaded' ? `Over by ${Math.round(-load.spareMin / 6) / 10}h`
+              {blocking ? 'Won’t fit'
+                : load.state === 'overloaded' ? `Over by ${Math.round(-load.spareMin / 6) / 10}h`
                 : load.state === 'room' ? `Room for ~${Math.round(load.spareMin / 6) / 10}h`
                 : 'Full day'}
               {loadPct != null && ` · ${loadPct}%`}
@@ -765,24 +874,32 @@ export function DayOpsPanel({
               </p>
             </div>
           ))}
-          {/* Route intelligence — the dispatcher board. (The old 4-stat "day
-              operations" grid repeated the metric strip and settings bar — gone.) */}
-          <div className="rounded-xl border border-border bg-bg-tertiary px-3 py-2.5">
-            {/* flex-wrap: measured at 375px, this row ran to x=390 — 15px past the
-                screen — because the right-hand span is shrink-0 (correctly: its
-                two buttons must not be squashed) while "Open in Maps (next 10)"
-                is as long as it is. Wrapping is the fix that keeps both true;
-                nothing here shrinks, it just takes a second line on a phone. */}
-            <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
-              <span className="flex items-center gap-1.5 text-xs font-semibold text-ink-muted uppercase tracking-wide">
-                <RouteIcon className="w-3.5 h-3.5 text-accent-text" /> Route
-                {manualSeq && (
-                  <span className="normal-case tracking-normal text-[10px] font-semibold text-amber-300 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5">
-                    Custom order
-                  </span>
-                )}
+          {/* The day as a plan — ordered stops, what it will really take, what
+              is left of the day, and what had to be assumed to say so.
+              (lib/dayPlan; the old stats-only "Route" strip said ~km / ~min /
+              ~h work and stood behind all three equally.) */}
+          <DayPlanPanel
+            plan={plan}
+            crew={crewOrder}
+            onSendOrderToCrew={sendOrderToCrew}
+            sendingOrder={sendingOrder}
+            resolving={routing && !manualRoute}
+            noBase={!baseCoord}
+            actions={<>
+              {/* ⭐ CONFIRMED vs SUGGESTED. A saved sequence is the owner's
+                  decision and is what the field drives; without one, what is on
+                  screen is the optimizer's proposal. Naming which is which is
+                  what stops a ranking algorithm from quietly appearing to be a
+                  confirmed plan — and "Optimize route" still asks before it
+                  replaces a confirmed one. */}
+              <span className={cn(
+                'text-[10px] font-semibold rounded px-1.5 py-0.5 border',
+                manualSeq
+                  ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
+                  : 'text-ink-faint border-border bg-bg-secondary',
+              )}>
+                {manualSeq ? 'Confirmed order' : 'Suggested order'}
               </span>
-              <span className="flex items-center gap-3 shrink-0">
                 {/* Persistent "reset to best route" — reuses the continuously-computed
                     optimized order; confirms only when a manual order would be lost. */}
                 {active.length > 1 && baseCoord && (
@@ -799,23 +916,8 @@ export function DayOpsPanel({
                     <ExternalLink className="w-3 h-3" /> {mapsCapped ? `Open in Maps (next ${MAX_MAPS_WAYPOINTS})` : 'Open in Maps'}
                   </a>
                 )}
-              </span>
-            </div>
-            {!baseCoord ? (
-              <p className="text-xs text-amber-400 mt-1.5">Set your base address in Settings to optimize the route.</p>
-            ) : routing && !manualRoute ? (
-              <p className="text-xs text-ink-faint mt-1.5">Optimizing route…</p>
-            ) : (manualRoute || route) && stats ? (
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1.5 text-xs text-ink-muted">
-                <span className="flex items-center gap-1"><Navigation className="w-3 h-3" /> ~{effTotalKm} km</span>
-                {!manualRoute && route?.usedRoad && <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5">Real-road</span>}
-                <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> ~{stats.driveMinutes} min driving</span>
-                {totalMin > 0 && <span className="flex items-center gap-1"><Hourglass className="w-3 h-3" /> ~{Math.round(totalMin / 6) / 10}h work</span>}
-              </div>
-            ) : (
-              <p className="text-xs text-ink-faint mt-1.5">No locatable stops yet.</p>
-            )}
-          </div>
+            </>}
+          />
 
           {/* The same route, as time: where the day goes, how much is driving,
               and whether it runs past capacity. Reads the ETAs computed above. */}
