@@ -252,7 +252,7 @@ const knownLine = (category: CostCategory, amount: number, sources: number): Cos
  * `expenses`, `time_entries` and `jobs` are all RLS own-row, and since
  * 2026-08-11 all three job pointers carry a COMPOSITE foreign key
  * `(job_id, user_id) → jobs(id, user_id)` (see
- * supabase/RUN-2026-08-11c-job-cost-tenancy.sql), so a row from another business
+ * supabase/archive/run/RUN-2026-08-11c-job-cost-tenancy.sql), so a row from another business
  * cannot name this job in the first place. Never hand this rows from a
  * service-role query without a user_id filter.
  */

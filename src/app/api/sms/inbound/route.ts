@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
     // A Twilio webhook carries no tenant, and the shared number belongs to ONE
     // business, so resolution is structurally restricted to tenants holding the
     // platform's inbound_sms grant (today: exactly that business — see
-    // supabase/RUN-2026-08-13-platform-capabilities.sql). A phone known only to
+    // supabase/archive/run/RUN-2026-08-13-platform-capabilities.sql). A phone known only to
     // a non-granted tenant resolves to nothing and takes the unknown-number
     // path below: nothing stored, no STOP flip — a beta tenant's thread can
     // never be written to, and another tenant's STOP can never flip its opt-in.

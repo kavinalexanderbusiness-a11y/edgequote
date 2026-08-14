@@ -14,7 +14,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 //
 // Layer 2 is read from `platform_capabilities`, a platform-managed table with no
 // write path from any signed-in role (SELECT-own is its only policy — see
-// supabase/RUN-2026-08-13-platform-capabilities.sql). A business cannot grant
+// supabase/archive/run/RUN-2026-08-13-platform-capabilities.sql). A business cannot grant
 // itself a capability, and the customer portal cannot reach around it: every
 // server door re-derives the answer from the tenant it resolved, never from the
 // client. A missing row means NO capabilities — each future tenant starts

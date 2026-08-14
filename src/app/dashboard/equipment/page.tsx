@@ -62,7 +62,7 @@ export default function EquipmentPage() {
       ])
       if (eRes.error) {
         setLoadError(eRes.error.message.includes('does not exist')
-          ? 'Equipment isn’t set up yet — run supabase/RUN-2026-07-15-equipment.sql, then reload.'
+          ? 'Equipment isn’t set up yet — your database is missing the equipment tables — see docs/MIGRATIONS.md, then reload.'
           : 'Could not load your equipment: ' + eRes.error.message)
         return
       }

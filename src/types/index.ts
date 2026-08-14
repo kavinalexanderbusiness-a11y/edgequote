@@ -278,7 +278,7 @@ export interface Job {
   //
   // ⭐ ONE CONTRACT, enforced by the database: once a job has work sessions, this
   // IS the sum of their `minutes` — a total that disagrees with its parts is
-  // corrected on the way in (see supabase/RUN-2026-08-13-work-sessions.sql, and
+  // corrected on the way in (see supabase/archive/run/RUN-2026-08-13-work-sessions.sql, and
   // lib/workSession for the doors). A job with no sessions keeps whatever the
   // check-in clock or the owner recorded, exactly as before. null = nothing
   // recorded, never 0.

@@ -86,7 +86,7 @@ async function handler(req: NextRequest) {
     console.error('[cron/invoice-reminders] invoice query failed:', error.message)
     // Most likely the reminder columns aren't there yet — say so plainly instead
     // of failing as an opaque 500.
-    return NextResponse.json({ ok: false, error: error.message, note: 'Run supabase/RUN-2026-07-14-invoice-reminders.sql.' }, { status: 500 })
+    return NextResponse.json({ ok: false, error: error.message, note: 'The invoice-reminder columns are missing — rebuild from supabase/migrations (see docs/MIGRATIONS.md).' }, { status: 500 })
   }
   const fetched = (rows as unknown as ReminderRow[]) || []
   const truncated = fetched.length > MAX_PER_RUN
