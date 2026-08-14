@@ -162,6 +162,7 @@ function VisitCard({ j, view, actions, photos, invoice }: {
   // overdue overlay already applied) — this tab never runs money maths.
   const invDoc = invoice ? view.docItems.find(d => d.kind === 'invoice' && d.rawId === invoice.id) ?? null : null
   const address = view.multiProperty ? resolveDocAddress(view.propsById, j.property_id, null) : null
+  const changes = view.changesByJob.get(j.id) ?? null
 
   return (
     <div className="rounded-card border border-border bg-bg-secondary p-4">
@@ -234,6 +235,15 @@ function VisitCard({ j, view, actions, photos, invoice }: {
             <InvoiceStatusPill status={invDoc ? invDoc.status : invoice.status} />
           </span>
         </button>
+      )}
+      {/* ONE sentence, not a second breakdown. This is the exact spot a customer
+          asks "why is the bill more than the quote?", and the answer is theirs:
+          they approved it. The full three-figure record lives once, in Billing —
+          duplicating it here would be a second money surface to keep in step. */}
+      {changes && changes.approvedChanges > 0 && (
+        <p className="text-[11px] text-ink-faint mt-1.5">
+          Includes {fmtMoney(changes.approvedChanges)} of {changes.approved.length === 1 ? 'a change' : 'changes'} you approved, on top of the {fmtMoney(changes.original)} originally agreed.
+        </p>
       )}
     </div>
   )

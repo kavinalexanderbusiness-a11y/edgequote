@@ -29,6 +29,9 @@ import { schedulingGate } from '@/lib/payments/depositGate'
 import { cashAmountOf, ledgerRowType } from '@/lib/payments/analytics'
 import { serviceLineTotals } from '@/lib/quoteServices'
 import { sortedOptions } from '@/lib/quoteOptions'
+// THE authorized-value engine — the same function the owner's job card runs, so
+// "$5,500 + $575 = $6,075" is one calculation with two audiences, not two.
+import { authorizedValue } from '@/lib/changeOrders'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
 import { formatCurrency, parseLocalDate } from '@/lib/utils'
 // THE request engine (lib/portalRequests) — the same module the owner's request
@@ -77,6 +80,15 @@ export interface PortalRec { id: string; freq: string | null; interval_unit: str
 export interface PortalPhoto { id: string; job_id: string | null; storage_path: string; kind: string; caption: string | null; taken_at: string }
 export interface PortalPayment { id: string; amount: number; status: string; paid_at: string | null; provider: string; invoice_id: string | null; quote_id?: string | null; created_at: string; kind?: string }
 export interface PortalCard { brand: string | null; last4: string | null; exp_month: number | null; exp_year: number | null }
+// A change to a visit's scope, priced and awaiting (or carrying) the customer's
+// own decision. `status` is the raw lifecycle — the portal only ever renders
+// pending / approved / declined / cancelled, never a draft (the RPC filters it).
+export interface PortalChangeOrder {
+  id: string; co_number: string; job_id: string; quote_id: string | null
+  description: string; amount: number; status: string
+  decided_via: string | null
+  created_at: string; sent_at: string | null; approved_at: string | null; declined_at: string | null
+}
 // The owner's OWN catalogue (service_templates), surfaced by get_portal_data. This
 // is what makes ONE portal fit any field-service business — and it is also the
 // portal's ONE honest "recommendations" surface: things this business actually
@@ -101,6 +113,10 @@ export interface PortalData {
   // Every property, primary first (same ordering as `property`, so properties[0] is it).
   properties?: PortalProperty[] | null
   quotes: PortalQuote[]; invoices: PortalInvoice[]; jobs: PortalJob[]; recurrences: PortalRec[]; photos: PortalPhoto[]; payments: PortalPayment[]
+  // Scope priced AFTER the original approval. get_portal_data omits DRAFTS — an
+  // unsent change is the business's unfinished thought, not a price anybody has
+  // decided to charge. Absent on a payload from before this feature.
+  change_orders?: PortalChangeOrder[] | null
   payment_method?: PortalCard | null
   services?: PortalService[] | null
 }
@@ -451,6 +467,10 @@ export function normalizePortal(d: unknown): PortalData | null {
     photos: Array.isArray(raw.photos) ? raw.photos : [],
     payments: Array.isArray(raw.payments) ? raw.payments : [],
     payment_method: raw.payment_method ?? null,
+    // A payload from before this feature has no key at all — [] is the honest
+    // reading of "this business has never raised a change", and it is also what
+    // an older get_portal_data returns, so the portal renders identically.
+    change_orders: Array.isArray(raw.change_orders) ? raw.change_orders : [],
   }
 }
 
@@ -571,6 +591,61 @@ export function buildDerived(data: PortalData, todayISO: string): Derived {
     planValueOf,
   ).map(p => ({ ...p, nextJobId: upcoming.find(j => j.recurrence_id === p.recurrenceId)?.id || null }))
   return { upcoming, completed, nextService, lastCompleted, outstanding, plans }
+}
+
+// ── Changes to a visit ───────────────────────────────────────────────────────
+//
+// The customer's half of change orders. THREE figures that must stay apart on
+// every screen, which is the whole point of the feature:
+//
+//   original    what they approved when the work was agreed — never rewritten
+//   approved    changes they have since said yes to
+//   authorized  the two added up: everything they have agreed to pay
+//
+// …and `pending`, which is asked and NOT in any of those totals. The arithmetic
+// is lib/changeOrders.authorizedValue — the SAME function the owner's job card
+// runs, so the two sides of the same job cannot report different totals.
+export interface VisitChanges {
+  jobId: string
+  original: number
+  approvedChanges: number
+  authorized: number
+  pending: PortalChangeOrder[]
+  approved: PortalChangeOrder[]
+  /** Answered "no", kept visible so a customer can see what they turned down. */
+  declined: PortalChangeOrder[]
+}
+
+/** Every visit that has a non-draft change order, keyed by job id. Visits with
+ *  none are absent — there is nothing to say about them. */
+export function buildVisitChanges(
+  data: PortalData, valueOf: (job: PortalJob) => number,
+): Map<string, VisitChanges> {
+  const out = new Map<string, VisitChanges>()
+  const byJob = new Map<string, PortalChangeOrder[]>()
+  for (const co of data.change_orders || []) {
+    // 'cancelled' is deliberately dropped from the customer's view: the business
+    // withdrew the ask, so there is nothing for them to do or to have agreed to.
+    if (co.status === 'cancelled' || co.status === 'draft') continue
+    const list = byJob.get(co.job_id) || []
+    list.push(co)
+    byJob.set(co.job_id, list)
+  }
+  for (const [jobId, list] of byJob) {
+    const job = (data.jobs || []).find(j => j.id === jobId)
+    if (!job) continue   // a change order for a visit this payload can't see says nothing
+    const av = authorizedValue({ originalValue: valueOf(job), changeOrders: list.map(c => ({ status: c.status as never, amount: c.amount })) })
+    out.set(jobId, {
+      jobId,
+      original: av.original,
+      approvedChanges: av.approvedChanges,
+      authorized: av.authorized,
+      pending: list.filter(c => c.status === 'pending').sort((a, b) => a.created_at.localeCompare(b.created_at)),
+      approved: list.filter(c => c.status === 'approved').sort((a, b) => a.created_at.localeCompare(b.created_at)),
+      declined: list.filter(c => c.status === 'declined').sort((a, b) => a.created_at.localeCompare(b.created_at)),
+    })
+  }
+  return out
 }
 
 // ── Documents (quotes + invoices as one records list) ───────────────────────
@@ -1079,13 +1154,15 @@ export function refundedTotal(payments: PortalPayment[]): number {
 // identity so a dismissal sticks until the situation actually changes.
 export interface PortalNextAction {
   key: string
-  kind: 'pay' | 'approve' | 'pay-deposit'
+  kind: 'pay' | 'approve' | 'pay-deposit' | 'approve-change'
   headline: string
   docsCat: 'invoice' | 'quote'
   focusDocId: string | null
 }
 
-export function primaryPortalAction(docItems: DocItem[], money: MoneySummary): PortalNextAction | null {
+export function primaryPortalAction(
+  docItems: DocItem[], money: MoneySummary, pendingChanges: PortalChangeOrder[] = [],
+): PortalNextAction | null {
   const owing = docItems.filter(d => d.kind === 'invoice' && d.balance > 0 && d.status !== 'cancelled' && d.status !== 'draft')
   const oneOwing = owing.length === 1 ? owing[0].rawId : null
   // When the ONE owing bill's ask is a deposit, the banner names the deposit —
@@ -1116,6 +1193,20 @@ export function primaryPortalAction(docItems: DocItem[], money: MoneySummary): P
   }
   if (money.due > 0 && owing.length > 0) {
     return { key: `due:${money.due}:${owing.length}`, kind: 'pay', headline: `Balance due: ${formatCurrency(money.due)}`, docsCat: 'invoice', focusDocId: oneOwing }
+  }
+  // A change awaiting an answer outranks a quote awaiting one: the work it
+  // belongs to is already underway or booked, so somebody is usually waiting on
+  // this decision today. It sits BELOW the money asks for the same reason the
+  // rest of this ladder does — an unpaid bill has a date attached, this doesn't.
+  if (pendingChanges.length > 0) {
+    const total = pendingChanges.reduce((s, c) => s + (Number(c.amount) || 0), 0)
+    return {
+      key: `change:${pendingChanges.length}:${total}`, kind: 'approve-change',
+      headline: pendingChanges.length === 1
+        ? `Extra work needs your approval: ${formatCurrency(total)}`
+        : `${pendingChanges.length} changes need your approval: ${formatCurrency(total)}`,
+      docsCat: 'quote', focusDocId: null,
+    }
   }
   const quotes = docItems.filter(d => d.kind === 'quote' && d.status === 'sent')
   if (quotes.length > 0) {
@@ -1237,6 +1328,10 @@ export interface PortalView {
   requestPresets: string[]
   // Photos not shown inside a completed-visit card (loose + not-yet-completed jobs).
   orphanPhotos: PortalPhoto[]
+  /** Per-visit change picture (original / approved / authorized + the open asks). */
+  changesByJob: Map<string, VisitChanges>
+  /** Every change awaiting THIS customer's answer, oldest first. Home leads with it. */
+  pendingChanges: PortalChangeOrder[]
 }
 
 export function buildPortalView(data: PortalData, todayISO: string, renderers: DocBlobRenderers, onInvoiceOpen?: (id: string) => void): PortalView {
@@ -1245,6 +1340,17 @@ export function buildPortalView(data: PortalData, todayISO: string, renderers: D
   const photosByJob = groupPhotos(data.photos)
   const completedJobIds = new Set(derived.completed.map(j => j.id))
   const hasProperty = !!(data.property && (data.property.address || data.property.lawn_sqft || data.property.fence_length || data.property.neighborhood)) || properties.length > 0
+  // The originally-approved value of a visit, from the SAME engine buildDerived's
+  // plans use — jobVisitValue over the visit's own price and its quote's cadence.
+  // Never the quote total: a weekly plan's original for THIS visit is one visit.
+  const quoteById = new Map((data.quotes || []).map(q => [q.id, q]))
+  const changesByJob = buildVisitChanges(data, (j: PortalJob) => {
+    const q = j.quote_id ? quoteById.get(j.quote_id) : null
+    const freq = (data.recurrences || []).find(r => r.id === j.recurrence_id)?.freq ?? null
+    return jobVisitValue(j.price, q as unknown as Record<string, unknown>, freq, j.is_initial_visit ?? undefined)
+  })
+  const pendingChanges = [...changesByJob.values()].flatMap(v => v.pending)
+    .sort((a, b) => a.created_at.localeCompare(b.created_at))
   return {
     data, derived, todayISO,
     firstName: (data.customer?.name || '').trim().split(' ')[0] || 'there',
@@ -1260,5 +1366,7 @@ export function buildPortalView(data: PortalData, todayISO: string, renderers: D
     customerSince: customerSinceYear(data),
     requestPresets: requestPresetsOf(data),
     orphanPhotos: orphanPhotos(data.photos, completedJobIds),
+    changesByJob,
+    pendingChanges,
   }
 }
