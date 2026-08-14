@@ -57,6 +57,9 @@ export type PriorityKind =
   // Separate from `followups` because the verb is different: find a number, not
   // send a message.
   | 'drafts' | 'followups' | 'followups_blocked' | 'reactivation' | 'lapsed' | 'messages'
+  // requests = a customer asked for something from their portal and is waiting.
+  // Distinct from `messages` because reading it does not answer it.
+  | 'requests'
 
 export interface Priority {
   kind: PriorityKind
@@ -113,6 +116,12 @@ export interface PrioritiesInput {
   // canChaseCustomer reads. They ride along in a query that was already going out.
   customers: (ReachCustomer & { id: string })[]
   conversations: { unread: number; customer_id?: string | null }[]
+  /**
+   * OPEN portal requests only — the caller filters with lib/portalRequests
+   * `openRequests`, so this engine never has to re-decide what "open" means and
+   * cannot drift from the card that renders them.
+   */
+  requests: { customer_id: string | null }[]
   leads: LeadResponseReport
   seasons: ServiceSeasons
   feeSettings: FeeSettings | null
@@ -234,7 +243,7 @@ export function isMissed(job: { scheduled_date: string | null; status: string },
 }
 
 export function computePriorities(i: PrioritiesInput): Priority[] {
-  const { quotes, invoices, jobs, recById, customers, conversations, leads, seasons, feeSettings, today } = i
+  const { quotes, invoices, jobs, recById, customers, conversations, requests, leads, seasons, feeSettings, today } = i
   const next: Priority[] = []
 
   // 1) Money already owed — invoices sent/unpaid. The single most valuable thing
@@ -454,7 +463,27 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
     })
   }
 
-  // 8) Unread messages — time-sensitive but lower raw dollar value, so it sits
+  // 8) Portal requests a customer is still waiting on. Ranked just above unread
+  //    messages: a request is an unanswered message that also names something the
+  //    customer wants DONE, and unlike a text it does not clear itself by being
+  //    read — the owner has to quote it, book it, or say no.
+  //
+  //    `requests` arrives pre-filtered to open PORTAL rows (lib/portalRequests
+  //    isOpenRequest); service_requests is shared with website leads and online
+  //    bookings, which close in their own lifecycles and must never appear here.
+  const requestCustomerIds = new Set(requests.map(r => r.customer_id).filter(Boolean) as string[])
+  if (requests.length > 0) {
+    next.push({
+      kind: 'requests', label: 'Answer customer requests',
+      detail: `${requests.length} request${requests.length !== 1 ? 's' : ''} from your customers`,
+      // `?f=` is the inbox's filter param (see leadResponse's website_lead link
+      // and the intelligence page). `?filter=` is silently ignored, which would
+      // land the owner on All with nothing explaining why.
+      href: '/dashboard/messages?f=requests', score: 32_000 + adder(requests.length * 100),
+    })
+  }
+
+  // 9) Unread messages — time-sensitive but lower raw dollar value, so it sits
   //    below the money rows unless nothing else is up.
   //
   //    An unanswered inbound conversation is ALREADY counted by the leads row
@@ -462,10 +491,16 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
   //    lead). Left alone, the same customers appeared in two rows pointing at the
   //    same inbox — the queue telling the owner to do one thing twice. Anyone the
   //    leads row already owns is excluded here; the higher tier keeps them.
+  //
+  //    A portal request is the same shape of double count and is excluded the
+  //    same way: submitting one writes an inbound portal message, so without this
+  //    the queue would say "answer 1 request" AND "reply to 1 message" about one
+  //    customer asking for one thing, both linking to the same thread.
   const leadCustomerIds = new Set(
     leads.items.filter(l => l.source === 'reply' && l.customerId).map(l => l.customerId),
   )
-  const otherUnread = conversations.filter(c => !(c.customer_id && leadCustomerIds.has(c.customer_id)))
+  const otherUnread = conversations.filter(c =>
+    !(c.customer_id && (leadCustomerIds.has(c.customer_id) || requestCustomerIds.has(c.customer_id))))
   const unreadTotal = otherUnread.reduce((s, c) => s + Number(c.unread || 0), 0)
   if (otherUnread.length > 0) {
     next.push({

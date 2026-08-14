@@ -8,11 +8,11 @@ import { Input } from '@/components/ui/Input'
 import { Banner } from '@/components/ui/Banner'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { HardHat, ShieldCheck } from 'lucide-react'
-
-// The shortest password Supabase will accept by default. Stated up front rather
-// than discovered by rejection — a worker setting this up in a truck should not
-// have to guess twice.
-const MIN_PASSWORD = 8
+// ONE password rule for the whole application. This file used to carry its own
+// number (8, described as "the shortest Supabase will accept by default", which
+// was never true — the project floor is 6). Two numbers in two files is how a
+// policy quietly becomes a suggestion, so both doors now read the same one.
+import { MIN_PASSWORD, passwordProblem } from '@/lib/passwordRecovery'
 
 export function CrewWelcomeForm() {
   return <Suspense fallback={<Skeleton className="h-64 rounded-card" />}><Form /></Suspense>
@@ -49,8 +49,8 @@ function Form() {
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setError('')
-    if (pw.length < MIN_PASSWORD) { setError(`Use at least ${MIN_PASSWORD} characters.`); return }
-    if (pw !== pw2) { setError('Those two don’t match.'); return }
+    const problem = passwordProblem(pw, pw2)
+    if (problem) { setError(problem); return }
     setBusy(true)
     const supabase = createClient()
     const { error: uErr } = await supabase.auth.updateUser({ password: pw })

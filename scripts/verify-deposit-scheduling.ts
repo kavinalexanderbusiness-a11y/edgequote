@@ -29,6 +29,7 @@
 // (Session 33 is separately repairing fixture isolation — this guard deliberately
 // writes nothing anywhere).
 
+import { portalDataSql } from './lib/schema-source'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -246,14 +247,14 @@ console.log('\n■ 6. Structural: every door is on the ONE engine')
   check('schedule page ?quote= door runs the same guard',
     /gateBlocksScheduling\(/.test(schedulePage) && /stampDepositOverride\(/.test(schedulePage))
 
-  const canonical = read('supabase/CANONICAL-get_portal_data.sql')
+  const canonical = portalDataSql()
   check('portal RPC serves the rule + preference + accepted_price on quotes',
     /qt\.accepted_price,\s*qt\.deposit_type,\s*qt\.deposit_value/.test(canonical)
     && /qt\.preferred_date,\s*qt\.preferred_date_2,\s*qt\.preferred_timing,\s*qt\.preferred_note/.test(canonical))
   check('portal RPC serves payments.quote_id (the gate\'s portal-side input)',
     /invoice_id,\s*quote_id,\s*created_at\s+from\s+public\.payments/.test(canonical))
 
-  const migration = read('supabase/RUN-2026-08-11-deposit-gated-scheduling.sql')
+  const migration = read('supabase/archive/run/RUN-2026-08-11-deposit-gated-scheduling.sql')
   check('preference writer is token-scoped and accepted-only',
     /portal_set_scheduling_preference/.test(migration)
     && /customer_id\s*=\s*v_customer/.test(migration)

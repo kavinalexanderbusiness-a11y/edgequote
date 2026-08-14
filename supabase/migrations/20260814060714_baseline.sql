@@ -1,0 +1,8634 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- EdgeQuote — SCHEMA BASELINE
+--
+-- Generated from the live production catalogue on 2026-08-13 by
+-- scripts/schema/generate-baseline.ts. DO NOT EDIT BY HAND: regenerate instead
+-- (npm run schema:contract && npm run schema:baseline), or the next regeneration
+-- silently discards your edit.
+--
+-- This file is the ONE starting point for a database. Applying it to an empty
+-- Postgres 17 database produces the production schema contract:
+--   103 tables · 111 functions · 82 triggers · 332 policies
+--   522 constraints · 265 standalone indexes · 7 storage buckets
+--
+-- IT DOES NOT RESTORE DATA. Not one row. Rebuilding a working production system
+-- is: this file, THEN a backup restore, THEN storage objects, THEN env config.
+-- See docs/DISASTER_RECOVERY.md — do not improvise the order.
+--
+-- Migrations that ship after this file live beside it in supabase/migrations/ and
+-- are applied in filename order. Everything that ran BEFORE it is history and
+-- lives in supabase/archive/ — never re-run those; several are older copies of
+-- objects this file defines, and re-running one rolls production backward.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- The extensions schema must be on the search_path BEFORE the tables are created:
+-- 73 column defaults call uuid_generate_v4() unqualified and resolve through it. Production
+-- gets this from a role setting on postgres; stating it here is what makes the file
+-- runnable anywhere, including as a different role.
+set search_path to public, extensions;
+set check_function_bodies = off;
+
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 1 · EXTENSIONS
+-- Schema placement is load-bearing: pgcrypto/uuid-ossp live in `extensions`,
+-- and gen_random_uuid() defaults resolve through it.
+-- ══════════════════════════════════════════════════════════════════════════
+
+create schema if not exists extensions;
+create extension if not exists "pg_net" with schema public;
+create extension if not exists "pg_stat_statements" with schema extensions;
+create extension if not exists "pg_trgm" with schema public;
+create extension if not exists "pgcrypto" with schema extensions;
+-- supabase_vault 0.3.1 — platform-managed, not created here
+create extension if not exists "uuid-ossp" with schema extensions;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 2 · TABLES
+-- Columns only. Every constraint is added in section 3 so that foreign keys can
+-- be declared after all tables exist, regardless of dependency order.
+-- ══════════════════════════════════════════════════════════════════════════
+
+create table if not exists public."api_keys" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "name" text not null,
+  "prefix" text not null,
+  "key_hash" text not null,
+  "scopes" text[] default '{read}'::text[] not null,
+  "last_used_at" timestamp with time zone,
+  "usage_count" bigint default 0 not null,
+  "rl_window_start" timestamp with time zone,
+  "rl_count" integer default 0 not null,
+  "revoked_at" timestamp with time zone
+);
+create table if not exists public."automation_runs" (
+  "id" uuid default gen_random_uuid() not null,
+  "user_id" uuid not null,
+  "rule_key" text not null,
+  "signal_id" uuid,
+  "subject_type" text,
+  "subject_id" uuid,
+  "evaluated_on" date not null,
+  "decision" text not null,
+  "suppressed_reason" text,
+  "created_at" timestamp with time zone default now() not null
+);
+create table if not exists public."automation_signals" (
+  "id" uuid default gen_random_uuid() not null,
+  "user_id" uuid not null,
+  "signal" text not null,
+  "subject_type" text not null,
+  "subject_id" uuid not null,
+  "detected_on" date not null,
+  "payload" jsonb default '{}'::jsonb not null,
+  "created_at" timestamp with time zone default now() not null
+);
+create table if not exists public."automation_sweeps" (
+  "job" text not null,
+  "ran_on" date not null,
+  "ran_at" timestamp with time zone default now() not null,
+  "ok" boolean not null,
+  "owners" integer,
+  "detected" integer,
+  "written" integer,
+  "ms" integer,
+  "error" text,
+  "request_id" text
+);
+create table if not exists public."beta_invites" (
+  "id" uuid default gen_random_uuid() not null,
+  "token_hash" text not null,
+  "label" text not null,
+  "email" text,
+  "created_by" uuid,
+  "created_at" timestamp with time zone default now() not null,
+  "expires_at" timestamp with time zone not null,
+  "revoked_at" timestamp with time zone,
+  "reserved_by" uuid,
+  "reserved_at" timestamp with time zone,
+  "redeemed_by" uuid,
+  "redeemed_at" timestamp with time zone,
+  "send_count" integer default 0 not null,
+  "last_sent_at" timestamp with time zone
+);
+create table if not exists public."business_settings" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "company_name" text default ''::text not null,
+  "owner_name" text,
+  "phone" text,
+  "email_primary" text,
+  "email_secondary" text,
+  "website" text,
+  "logo_url" text,
+  "base_address" text,
+  "base_lat" numeric(10,7),
+  "base_lng" numeric(10,7),
+  "default_rate" numeric(8,2) default 50.00 not null,
+  "terms_text" text,
+  "user_id" uuid not null,
+  "pricing_base_charge" numeric default 28,
+  "pricing_mow_rate" numeric default 15,
+  "pricing_recommended_mult" numeric default 1.0,
+  "pricing_premium_mult" numeric default 1.2,
+  "pricing_travel_rate" numeric default 1.5,
+  "preferred_work_days" integer[] default '{5,6,0}'::integer[],
+  "work_start_time" text default '08:00'::text,
+  "daily_capacity_hours" numeric default 8,
+  "logo_scale" numeric default 100,
+  "dashboard_cards" jsonb,
+  "service_seasons" jsonb,
+  "target_rev_per_hour" numeric default 60,
+  "crew_cost_per_hour" numeric default 40,
+  "message_templates" jsonb,
+  "review_url" text,
+  "automations" jsonb,
+  "payment_fee_strategy" text default 'global_price_increase'::text not null,
+  "fee_recovery_percent" numeric default 3 not null,
+  "etransfer_discount_percent" numeric default 0 not null,
+  "gst_percent" numeric default 0 not null,
+  "smart_labor_enabled" boolean default true not null,
+  "notif_prefs" jsonb default '{}'::jsonb not null,
+  "sms_pricing" jsonb,
+  "default_crew_size" integer default 1 not null,
+  "autopay_charge_mode" text default 'auto'::text not null,
+  "autopay_variance_pct" integer default 40 not null,
+  "booking_enabled" boolean default false not null,
+  "booking_token" text,
+  "website_lead_hourly_limit" integer default 30 not null,
+  "etransfer_email" text,
+  "analytics_layout" jsonb,
+  "gst_number" text,
+  "enabled_modules" jsonb,
+  "business_type" text default 'general'::text not null,
+  "module_meta" jsonb,
+  "ot_daily_hours" numeric(4,2),
+  "ot_weekly_hours" numeric(5,2),
+  "ot_multiplier" numeric(4,2) default 1.5 not null,
+  "pay_period" text default 'biweekly'::text not null,
+  "pay_period_anchor" date,
+  "pay_week_starts_on" integer default 1 not null,
+  "opening_bank_balance" numeric(12,2),
+  "opening_balance_date" date,
+  "opening_equity" numeric(12,2),
+  "timezone" text default 'America/Edmonton'::text not null
+);
+create table if not exists public."change_orders" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "job_id" uuid not null,
+  "customer_id" uuid not null,
+  "quote_id" uuid,
+  "co_number" text not null,
+  "description" text not null,
+  "amount" numeric(12,2) not null,
+  "service_key" text,
+  "service_category" text,
+  "status" text default 'draft'::text not null,
+  "decided_via" text,
+  "decline_reason" text,
+  "sent_at" timestamp with time zone,
+  "approved_at" timestamp with time zone,
+  "declined_at" timestamp with time zone,
+  "cancelled_at" timestamp with time zone
+);
+create table if not exists public."consent_changes" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "customer_id" uuid,
+  "channel" text not null,
+  "old_value" boolean,
+  "new_value" boolean,
+  "source" text not null,
+  "changed_by" text
+);
+create table if not exists public."content_pieces" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "asset_id" uuid,
+  "job_id" uuid,
+  "customer_id" uuid,
+  "channel" text not null,
+  "kind" text default 'organic'::text not null,
+  "title" text,
+  "body" text default ''::text not null,
+  "hashtags" text[] default '{}'::text[] not null,
+  "variant_label" text,
+  "status" text default 'draft'::text not null,
+  "model" text,
+  "prompt_version" text,
+  "scheduled_for" timestamp with time zone,
+  "published_at" timestamp with time zone,
+  "external_ref" text,
+  "meta" jsonb default '{}'::jsonb not null,
+  "campaign_id" uuid,
+  "season" text,
+  "favorite" boolean default false not null,
+  "archived_at" timestamp with time zone
+);
+create table if not exists public."conversations" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "customer_id" uuid not null,
+  "last_message_at" timestamp with time zone default now() not null,
+  "last_preview" text,
+  "last_direction" text,
+  "unread" integer default 0 not null,
+  "archived_at" timestamp with time zone,
+  "pinned_at" timestamp with time zone,
+  "muted" boolean default false not null,
+  "lead_status" text,
+  "last_channel" text,
+  "labels" text[] default '{}'::text[] not null,
+  "snoozed_until" timestamp with time zone,
+  "assigned_to" uuid
+);
+create table if not exists public."crew_media" (
+  "id" uuid default gen_random_uuid() not null,
+  "user_id" uuid not null,
+  "job_id" uuid not null,
+  "storage_path" text not null,
+  "kind" text not null,
+  "mime" text,
+  "size_bytes" bigint,
+  "caption" text,
+  "created_by" uuid,
+  "created_at" timestamp with time zone default now() not null,
+  "message_id" uuid
+);
+create table if not exists public."crew_message_reads" (
+  "user_id" uuid not null,
+  "job_id" uuid not null,
+  "reader_id" uuid not null,
+  "last_read_at" timestamp with time zone default now() not null
+);
+create table if not exists public."crew_messages" (
+  "id" uuid default gen_random_uuid() not null,
+  "user_id" uuid not null,
+  "job_id" uuid not null,
+  "body" text not null,
+  "author_kind" text not null,
+  "author_technician_id" uuid,
+  "author_name" text not null,
+  "created_by" uuid,
+  "event_type" text,
+  "client_token" text,
+  "created_at" timestamp with time zone default now() not null
+);
+create table if not exists public."crews" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "name" text not null,
+  "color" text default 'emerald'::text not null,
+  "day_start" time without time zone,
+  "day_end" time without time zone,
+  "capacity_minutes" integer,
+  "is_active" boolean default true not null,
+  "sort_order" integer default 0 not null
+);
+create table if not exists public."crm_campaign_log" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "campaign_id" uuid not null,
+  "customer_id" uuid not null,
+  "period_key" text not null,
+  "channel" text,
+  "status" text,
+  "detail" text,
+  "message_id" uuid
+);
+create table if not exists public."crm_campaign_presets" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "name" text not null,
+  "kind" text not null,
+  "channels" text[] default '{email}'::text[] not null,
+  "template_key" text,
+  "custom_body" text,
+  "subject" text,
+  "audience" jsonb default '{}'::jsonb not null,
+  "schedule" jsonb default '{}'::jsonb not null
+);
+create table if not exists public."crm_campaigns" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "name" text not null,
+  "kind" text not null,
+  "enabled" boolean default false not null,
+  "channels" text[] default '{sms,email}'::text[] not null,
+  "template_key" text,
+  "custom_body" text,
+  "audience" jsonb default '{}'::jsonb not null,
+  "schedule" jsonb default '{}'::jsonb not null,
+  "last_run_at" timestamp with time zone,
+  "subject" text,
+  "archived_at" timestamp with time zone
+);
+create table if not exists public."customer_imports" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "initiated_by" text,
+  "source_name" text,
+  "rows_detected" integer default 0 not null,
+  "customers_created" integer default 0 not null,
+  "rows_skipped_existing" integer default 0 not null,
+  "rows_failed" integer default 0 not null,
+  "properties_created" integer default 0 not null
+);
+create table if not exists public."customer_portal_tokens" (
+  "token" text not null,
+  "customer_id" uuid not null,
+  "user_id" uuid not null,
+  "created_at" timestamp with time zone default now() not null,
+  "revoked" boolean default false not null
+);
+create table if not exists public."customers" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "name" text not null,
+  "email" text,
+  "phone" text,
+  "address" text,
+  "city" text,
+  "province" text default 'AB'::text,
+  "postal_code" text,
+  "notes" text,
+  "user_id" uuid not null,
+  "tags" text[] default '{}'::text[] not null,
+  "acquisition_source" text,
+  "referred_by_customer_id" uuid,
+  "preferred_days" integer[],
+  "avoid_days" integer[],
+  "pref_time_start" text,
+  "pref_time_end" text,
+  "sms_opt_in" boolean default false not null,
+  "email_opt_in" boolean default false not null,
+  "reviewed_at" timestamp with time zone,
+  "archived_at" timestamp with time zone,
+  "stripe_customer_id" text,
+  "autopay_enabled" boolean default false not null,
+  "autopay_charge_mode" text,
+  "photo_marketing_consent" boolean default false not null,
+  "photo_marketing_consent_at" timestamp with time zone,
+  "review_requested_at" timestamp with time zone,
+  "review_source" text,
+  "review_rating" integer,
+  "review_declined_at" timestamp with time zone,
+  "birthday" date,
+  "anniversary" date,
+  "last_contacted_at" timestamp with time zone,
+  "message_prefs" jsonb,
+  "phone_digits" text generated always as (regexp_replace(COALESCE(phone, ''::text), '\D'::text, ''::text, 'g'::text)) stored
+);
+create table if not exists public."data_exports" (
+  "id" uuid default gen_random_uuid() not null,
+  "user_id" uuid not null,
+  "created_at" timestamp with time zone default now() not null,
+  "format_version" integer not null,
+  "total_rows" integer not null,
+  "bytes" bigint not null,
+  "files" jsonb default '[]'::jsonb not null
+);
+create table if not exists public."day_statuses" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "date" date not null,
+  "status" text default 'custom'::text not null,
+  "label" text,
+  "blocks" boolean default true not null,
+  "notes" text,
+  "starts_at" time without time zone,
+  "ends_at" time without time zone,
+  "created_by" text,
+  "crew_size" integer
+);
+create table if not exists public."dispatch_notes" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "date" date not null,
+  "crew_id" uuid,
+  "body" text default ''::text not null
+);
+create table if not exists public."equipment" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "name" text not null,
+  "category" text default 'other'::text not null,
+  "make" text,
+  "model" text,
+  "serial_number" text,
+  "purchase_date" date,
+  "purchase_price" numeric,
+  "status" text default 'active'::text not null,
+  "hours" numeric default 0 not null,
+  "service_interval_hours" integer,
+  "service_interval_days" integer,
+  "last_service_at" date,
+  "last_service_hours" numeric,
+  "notes" text,
+  "warranty_expires" date,
+  "warranty_provider" text,
+  "useful_life_years" integer,
+  "salvage_value" numeric,
+  "crew_id" uuid
+);
+create table if not exists public."equipment_docs" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "equipment_id" uuid not null,
+  "path" text not null,
+  "name" text not null,
+  "kind" text default 'other'::text not null,
+  "mime" text,
+  "size_bytes" bigint
+);
+create table if not exists public."equipment_service" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "equipment_id" uuid not null,
+  "service_date" date default CURRENT_DATE not null,
+  "kind" text default 'other'::text not null,
+  "hours" numeric,
+  "cost" numeric,
+  "notes" text
+);
+create table if not exists public."expense_categories" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "name" text not null,
+  "tax_deductible" boolean default true not null,
+  "external_account" text,
+  "sort_order" integer default 0 not null,
+  "archived_at" timestamp with time zone,
+  "kind" text default 'operating'::text not null
+);
+create table if not exists public."expenses" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "vendor_id" uuid,
+  "category_id" uuid,
+  "job_id" uuid,
+  "amount" numeric(10,2) not null,
+  "tax_amount" numeric(10,2) default 0 not null,
+  "spent_at" date,
+  "description" text,
+  "payment_method" text,
+  "reference" text,
+  "receipt_path" text,
+  "notes" text,
+  "archived_at" timestamp with time zone,
+  "bill_date" date not null,
+  "is_capital" boolean default false not null
+);
+create table if not exists public."fixed_assets" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "name" text not null,
+  "equipment_id" uuid,
+  "vendor_id" uuid,
+  "cost" numeric(12,2) not null,
+  "tax_amount" numeric(12,2) default 0 not null,
+  "in_service_date" date not null,
+  "method" text default 'straight_line'::text not null,
+  "useful_life_years" numeric(4,1),
+  "salvage_value" numeric(12,2) default 0 not null,
+  "declining_rate" numeric(5,2),
+  "disposed_at" date,
+  "disposal_proceeds" numeric(12,2),
+  "notes" text,
+  "archived_at" timestamp with time zone,
+  "expense_id" uuid
+);
+create table if not exists public."follow_ups" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "user_id" uuid not null,
+  "customer_id" uuid not null,
+  "due_on" date not null,
+  "reason" text not null,
+  "status" text default 'open'::text not null,
+  "completed_at" timestamp with time zone,
+  "quote_id" uuid,
+  "source" text default 'customer'::text not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null
+);
+create table if not exists public."holidays" (
+  "id" uuid default gen_random_uuid() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "date" date not null,
+  "name" text not null,
+  "is_paid" boolean default true not null,
+  "default_hours" numeric(5,2) default 8 not null
+);
+create table if not exists public."inbound_events" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "hook_id" uuid not null,
+  "ok" boolean not null,
+  "summary" text,
+  "entity_id" uuid,
+  "payload" jsonb default '{}'::jsonb not null
+);
+create table if not exists public."inbound_webhooks" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "name" text not null,
+  "token" text not null,
+  "action" text default 'lead'::text not null,
+  "active" boolean default true not null,
+  "received_count" integer default 0 not null,
+  "last_received_at" timestamp with time zone
+);
+create table if not exists public."integration_events" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "event" text not null,
+  "entity_type" text not null,
+  "entity_id" uuid,
+  "payload" jsonb default '{}'::jsonb not null
+);
+create table if not exists public."integrations_config" (
+  "id" integer default 1 not null,
+  "deliver_url" text,
+  "secret" text
+);
+create table if not exists public."invoices" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "quote_id" uuid,
+  "customer_id" uuid,
+  "property_id" uuid,
+  "invoice_number" text not null,
+  "customer_name" text not null,
+  "address" text,
+  "service_type" text,
+  "amount" numeric(10,2) default 0 not null,
+  "status" text default 'unpaid'::text not null,
+  "issued_date" date default now(),
+  "due_date" date,
+  "notes" text,
+  "job_id" uuid,
+  "line_items" jsonb,
+  "paid_at" timestamp with time zone,
+  "payment_method" text,
+  "amount_paid" numeric(10,2) default 0 not null,
+  "discount_type" text,
+  "discount_value" numeric(10,2),
+  "viewed_at" timestamp with time zone,
+  "last_reminded_at" timestamp with time zone,
+  "reminder_count" integer default 0 not null,
+  "internal_notes" text,
+  "line_items_edited" boolean default false not null,
+  "deposit_amount" numeric,
+  "deposit_requested_at" timestamp with time zone
+);
+create table if not exists public."job_line_items" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "job_id" uuid not null,
+  "description" text not null,
+  "amount" numeric default 0 not null,
+  "service_key" text,
+  "service_category" text,
+  "group_id" uuid,
+  "recurring" boolean default false not null,
+  "change_order_id" uuid
+);
+create table if not exists public."job_photos" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "job_id" uuid,
+  "property_id" uuid,
+  "customer_id" uuid,
+  "storage_path" text not null,
+  "kind" text default 'after'::text not null,
+  "caption" text,
+  "taken_at" timestamp with time zone default now() not null,
+  "content_hash" text
+);
+create table if not exists public."job_price_changes" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "job_id" uuid,
+  "quote_id" uuid,
+  "scope" text,
+  "old_amount" numeric,
+  "new_amount" numeric,
+  "reason" text,
+  "changed_by_email" text
+);
+create table if not exists public."job_recurrences" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "freq" text,
+  "start_date" date not null,
+  "end_date" date,
+  "customer_id" uuid,
+  "interval_unit" text,
+  "interval_count" integer,
+  "end_count" integer
+);
+create table if not exists public."job_work_sessions" (
+  "id" uuid default gen_random_uuid() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "job_id" uuid not null,
+  "worked_on" date not null,
+  "started_at" timestamp with time zone,
+  "ended_at" timestamp with time zone,
+  "minutes" integer not null,
+  "workers" integer default 1 not null,
+  "labour_minutes" integer generated always as ((minutes * workers)) stored,
+  "note" text,
+  "source" text default 'manual'::text not null
+);
+create table if not exists public."jobs" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "customer_id" uuid,
+  "property_id" uuid,
+  "quote_id" uuid,
+  "title" text not null,
+  "service_type" text,
+  "scheduled_date" date not null,
+  "start_time" time without time zone,
+  "end_time" time without time zone,
+  "duration_minutes" integer,
+  "crew_size" integer default 1 not null,
+  "status" text default 'scheduled'::text not null,
+  "notes" text,
+  "recurrence_id" uuid,
+  "suggested_date" date,
+  "suggested_nearby_count" integer,
+  "actual_minutes" integer,
+  "price" numeric,
+  "started_at" timestamp with time zone,
+  "completed_at" timestamp with time zone,
+  "is_initial_visit" boolean default false not null,
+  "on_my_way_at" timestamp with time zone,
+  "route_order" integer,
+  "crew_id" uuid,
+  "completion_summary" text,
+  "completion_issue" text
+);
+create table if not exists public."labor_observations" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "job_id" uuid,
+  "property_id" uuid,
+  "service_date" date,
+  "sqft" numeric,
+  "service_type" text,
+  "crew_size" integer default 1 not null,
+  "frequency" text,
+  "is_initial_visit" boolean default false not null,
+  "overgrowth" numeric,
+  "estimated_minutes" integer,
+  "actual_minutes" integer not null
+);
+create table if not exists public."liabilities" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "name" text not null,
+  "kind" text default 'loan'::text not null,
+  "current_balance" numeric(12,2) not null,
+  "as_of_date" date not null,
+  "interest_rate" numeric(5,2),
+  "notes" text,
+  "archived_at" timestamp with time zone
+);
+create table if not exists public."marketing_assets" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "job_id" uuid not null,
+  "customer_id" uuid,
+  "property_id" uuid,
+  "service_type" text,
+  "neighborhood" text,
+  "season" text,
+  "quality_score" numeric,
+  "has_before" boolean default false not null,
+  "has_after" boolean default false not null,
+  "best_before_photo_id" uuid,
+  "best_after_photo_id" uuid,
+  "status" text default 'candidate'::text not null,
+  "ai_rationale" text,
+  "archived_at" timestamp with time zone
+);
+create table if not exists public."marketing_campaigns" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "name" text not null,
+  "kind" text default 'custom'::text not null,
+  "status" text default 'draft'::text not null,
+  "description" text,
+  "season" text,
+  "channels" text[] default '{}'::text[] not null,
+  "starts_on" date,
+  "ends_on" date,
+  "meta" jsonb default '{}'::jsonb not null,
+  "archived_at" timestamp with time zone
+);
+create table if not exists public."measurements" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "property_id" uuid,
+  "quote_id" uuid,
+  "customer_id" uuid,
+  "lat" double precision,
+  "lng" double precision,
+  "neighborhood" text,
+  "context" text,
+  "source" text,
+  "confidence" text,
+  "building_sqft" numeric,
+  "auto_sqft" numeric,
+  "accepted_sqft" numeric,
+  "adjusted" boolean,
+  "diff_pct" numeric
+);
+create table if not exists public."message_sends" (
+  "user_id" uuid not null,
+  "client_message_id" text not null,
+  "created_at" timestamp with time zone default now() not null,
+  "channel" text,
+  "status" text
+);
+create table if not exists public."messages" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "conversation_id" uuid not null,
+  "customer_id" uuid,
+  "direction" text not null,
+  "channel" text default 'sms'::text not null,
+  "body" text not null,
+  "twilio_sid" text,
+  "status" text,
+  "meta" jsonb,
+  "provider" text,
+  "provider_message_id" text,
+  "delivered_at" timestamp with time zone
+);
+create table if not exists public."neighbor_leads" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "address" text not null,
+  "latitude" double precision,
+  "longitude" double precision,
+  "neighborhood" text,
+  "notes" text,
+  "status" text default 'prospect'::text not null,
+  "source_customer_id" uuid,
+  "source_property_id" uuid,
+  "source_quote_id" uuid,
+  "converted_customer_id" uuid
+);
+create table if not exists public."notification_log" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "customer_id" uuid,
+  "job_id" uuid,
+  "channel" text not null,
+  "template" text not null,
+  "status" text default 'sent'::text not null,
+  "detail" text,
+  "message_id" uuid,
+  "provider" text,
+  "provider_message_id" text,
+  "delivered_at" timestamp with time zone,
+  "opened_at" timestamp with time zone
+);
+create table if not exists public."notifications" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "type" text not null,
+  "title" text not null,
+  "body" text,
+  "customer_id" uuid,
+  "entity_type" text,
+  "entity_id" uuid,
+  "amount" numeric,
+  "href" text,
+  "read" boolean default false not null,
+  "read_at" timestamp with time zone,
+  "snoozed_until" timestamp with time zone,
+  "archived_at" timestamp with time zone
+);
+create table if not exists public."part_movements" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "part_id" uuid not null,
+  "kind" text default 'restock'::text not null,
+  "qty" numeric not null,
+  "unit_cost" numeric,
+  "equipment_service_id" uuid,
+  "notes" text,
+  "purchase_order_item_id" uuid
+);
+create table if not exists public."parts" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "name" text not null,
+  "sku" text,
+  "category" text default 'other'::text not null,
+  "unit" text default 'each'::text not null,
+  "qty_on_hand" numeric default 0 not null,
+  "reorder_at" numeric,
+  "unit_cost" numeric,
+  "supplier" text,
+  "notes" text,
+  "supplier_id" uuid
+);
+create table if not exists public."password_reset_requests" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "email_key" text not null,
+  "created_at" timestamp with time zone default now() not null,
+  "matched" boolean default false not null,
+  "sent" boolean default false not null
+);
+create table if not exists public."pay_run_lines" (
+  "id" uuid default gen_random_uuid() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "pay_run_id" uuid not null,
+  "technician_id" uuid,
+  "technician_name" text not null,
+  "technician_role" text,
+  "regular_minutes" integer default 0 not null,
+  "ot_minutes" integer default 0 not null,
+  "blended_rate" numeric(10,2) default 0 not null,
+  "regular_pay" numeric(12,2) default 0 not null,
+  "ot_pay" numeric(12,2) default 0 not null,
+  "pto_hours" numeric(8,2) default 0 not null,
+  "pto_pay" numeric(12,2) default 0 not null,
+  "gross_pay" numeric(12,2) default 0 not null,
+  "shifts" integer default 0 not null,
+  "unrated_minutes" integer default 0 not null
+);
+create table if not exists public."pay_runs" (
+  "id" uuid default gen_random_uuid() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "period_start" date not null,
+  "period_end" date not null,
+  "period_kind" text not null,
+  "finalized_at" timestamp with time zone default now() not null,
+  "note" text,
+  "ot_daily_hours" numeric(4,2),
+  "ot_weekly_hours" numeric(5,2),
+  "ot_multiplier" numeric(4,2) not null,
+  "pay_week_starts_on" integer not null,
+  "regular_minutes" integer default 0 not null,
+  "ot_minutes" integer default 0 not null,
+  "worked_pay" numeric(12,2) default 0 not null,
+  "pto_hours" numeric(8,2) default 0 not null,
+  "pto_pay" numeric(12,2) default 0 not null,
+  "gross_pay" numeric(12,2) default 0 not null,
+  "employee_count" integer default 0 not null
+);
+create table if not exists public."payment_methods" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "customer_id" uuid not null,
+  "stripe_customer_id" text,
+  "stripe_payment_method_id" text not null,
+  "brand" text,
+  "last4" text,
+  "exp_month" integer,
+  "exp_year" integer,
+  "is_default" boolean default true not null
+);
+create table if not exists public."payments" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "customer_id" uuid,
+  "invoice_id" uuid,
+  "amount" numeric default 0 not null,
+  "currency" text default 'cad'::text not null,
+  "provider" text default 'stripe'::text not null,
+  "stripe_session_id" text,
+  "stripe_payment_intent" text,
+  "status" text default 'paid'::text not null,
+  "paid_at" timestamp with time zone,
+  "kind" text default 'payment'::text not null,
+  "method" text,
+  "notes" text,
+  "quote_id" uuid
+);
+create table if not exists public."platform_capabilities" (
+  "user_id" uuid not null,
+  "online_payments" boolean default false not null,
+  "inbound_sms" boolean default false not null,
+  "outbound_sms" boolean default false not null,
+  "outbound_email" boolean default false not null,
+  "note" text,
+  "updated_at" timestamp with time zone default now() not null
+);
+create table if not exists public."platform_operators" (
+  "user_id" uuid not null,
+  "note" text,
+  "created_at" timestamp with time zone default now() not null
+);
+create table if not exists public."portal_access_requests" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "email_key" text not null,
+  "created_at" timestamp with time zone default now() not null,
+  "matched" boolean default false not null,
+  "sent" boolean default false not null
+);
+create table if not exists public."pricing_config_versions" (
+  "id" uuid default gen_random_uuid() not null,
+  "user_id" uuid not null,
+  "created_at" timestamp with time zone default now() not null,
+  "valid_from" timestamp with time zone not null,
+  "source" text not null,
+  "note" text,
+  "engine_version" text not null,
+  "base_charge" numeric not null,
+  "mow_rate_per_1000" numeric not null,
+  "budget_mult" numeric not null,
+  "market_mult" numeric not null,
+  "recommended_mult" numeric not null,
+  "premium_mult" numeric not null,
+  "travel_rate_per_km" numeric not null,
+  "crew_cost_per_hour" numeric not null,
+  "fee_recovery_percent" numeric not null,
+  "payment_fee_strategy" text not null
+);
+create table if not exists public."properties" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "customer_id" uuid not null,
+  "user_id" uuid not null,
+  "address" text not null,
+  "city" text,
+  "province" text default 'AB'::text,
+  "postal_code" text,
+  "lat" double precision,
+  "lng" double precision,
+  "lot_size" numeric(10,2),
+  "lawn_sqft" numeric(10,2),
+  "fence_length" numeric(10,2),
+  "mulch_area" numeric(10,2),
+  "rock_area" numeric(10,2),
+  "driveway_area" numeric(10,2),
+  "notes" text,
+  "measurement_history" jsonb default '[]'::jsonb,
+  "is_primary" boolean default true not null,
+  "neighborhood" text,
+  "preferred_days" integer[],
+  "avoid_days" integer[],
+  "pref_time_start" text,
+  "pref_time_end" text,
+  "lawn_polygon" jsonb,
+  "google_place_id" text,
+  "maps_url" text,
+  "property_travel_distance_km" numeric,
+  "property_travel_fee" numeric,
+  "internal_notes" text
+);
+create table if not exists public."property_intelligence" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "property_id" uuid not null,
+  "customer_id" uuid,
+  "job_id" uuid,
+  "source" text default 'combined'::text not null,
+  "image_count" integer default 0 not null,
+  "image_signature" text,
+  "analysis" jsonb default '{}'::jsonb not null,
+  "summary" text,
+  "detections" text[] default '{}'::text[] not null,
+  "upsell_keys" text[] default '{}'::text[] not null,
+  "mowing_difficulty" text,
+  "difficulty_score" numeric,
+  "est_labour_min" numeric,
+  "est_trimming_min" numeric,
+  "est_edging_ft" numeric,
+  "confidence" numeric,
+  "confidence_band" text,
+  "model" text,
+  "prompt_version" text,
+  "status" text default 'active'::text not null,
+  "inputs" jsonb default '[]'::jsonb not null,
+  "observed_at" timestamp with time zone
+);
+create table if not exists public."property_measurement_events" (
+  "id" uuid default gen_random_uuid() not null,
+  "created_at" timestamp with time zone default clock_timestamp() not null,
+  "seq" bigint generated by default as identity not null,
+  "user_id" uuid not null,
+  "property_id" uuid not null,
+  "measurement_id" uuid,
+  "kind" text not null,
+  "unit" text not null,
+  "value" numeric(12,2) not null,
+  "shapes" jsonb default '[]'::jsonb not null,
+  "source" text not null,
+  "confidence" text not null,
+  "confidence_reason" text not null,
+  "action" text not null,
+  "measured_at" timestamp with time zone not null
+);
+create table if not exists public."property_measurements" (
+  "id" uuid default gen_random_uuid() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "property_id" uuid not null,
+  "kind" text not null,
+  "unit" text not null,
+  "value" numeric(12,2) not null,
+  "shapes" jsonb default '[]'::jsonb not null,
+  "source" text not null,
+  "confidence" text not null,
+  "confidence_reason" text not null,
+  "needs_review" boolean default false not null,
+  "notes" text,
+  "measured_at" timestamp with time zone default now() not null
+);
+create table if not exists public."property_observations" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "property_id" uuid not null,
+  "analysis_id" uuid,
+  "observed_at" timestamp with time zone default now() not null,
+  "source_kind" text default 'vision'::text not null,
+  "attribute_key" text not null,
+  "value_text" text,
+  "value_num" numeric,
+  "unit" text,
+  "confidence" numeric,
+  "model" text,
+  "detail" jsonb default '{}'::jsonb not null,
+  "status" text default 'active'::text not null
+);
+create table if not exists public."property_twin" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "property_id" uuid not null,
+  "customer_id" uuid,
+  "first_analyzed_at" timestamp with time zone,
+  "last_analyzed_at" timestamp with time zone,
+  "analysis_count" integer default 0 not null,
+  "latest_analysis_id" uuid,
+  "attributes" jsonb default '{}'::jsonb not null,
+  "change_summary" jsonb default '{}'::jsonb not null,
+  "seasonal" jsonb default '{}'::jsonb not null,
+  "forecast" jsonb default '{}'::jsonb not null,
+  "opportunities" jsonb default '{}'::jsonb not null,
+  "marketing" jsonb default '{}'::jsonb not null,
+  "crm" jsonb default '{}'::jsonb not null,
+  "digest" text,
+  "model" text,
+  "prompt_version" text
+);
+create table if not exists public."pto_entries" (
+  "id" uuid default gen_random_uuid() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "technician_id" uuid,
+  "date" date not null,
+  "hours" numeric(5,2) not null,
+  "kind" text default 'vacation'::text not null,
+  "is_paid" boolean default true not null,
+  "hourly_rate" numeric(10,2),
+  "holiday_id" uuid,
+  "notes" text
+);
+create table if not exists public."publish_jobs" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "content_piece_id" uuid not null,
+  "connection_id" uuid,
+  "platform" text not null,
+  "mode" text default 'manual'::text not null,
+  "status" text default 'queued'::text not null,
+  "scheduled_for" timestamp with time zone,
+  "attempts" integer default 0 not null,
+  "max_attempts" integer default 3 not null,
+  "last_attempt_at" timestamp with time zone,
+  "published_at" timestamp with time zone,
+  "external_post_id" text,
+  "external_url" text,
+  "error" text,
+  "idempotency_key" text not null,
+  "meta" jsonb default '{}'::jsonb not null
+);
+create table if not exists public."purchase_order_items" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "purchase_order_id" uuid not null,
+  "part_id" uuid not null,
+  "qty_ordered" numeric default 0 not null,
+  "unit_cost" numeric,
+  "notes" text
+);
+create table if not exists public."purchase_orders" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "supplier_id" uuid,
+  "po_number" text,
+  "status" text default 'draft'::text not null,
+  "ordered_at" date,
+  "expected_at" date,
+  "notes" text
+);
+create table if not exists public."push_config" (
+  "id" integer default 1 not null,
+  "endpoint_url" text,
+  "secret" text
+);
+create table if not exists public."push_subscriptions" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "user_id" uuid not null,
+  "endpoint" text not null,
+  "p256dh" text not null,
+  "auth" text not null,
+  "user_agent" text,
+  "created_at" timestamp with time zone default now() not null,
+  "last_seen_at" timestamp with time zone default now() not null
+);
+create table if not exists public."quote_options" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "quote_id" uuid not null,
+  "user_id" uuid not null,
+  "name" text not null,
+  "description" text,
+  "price" numeric(10,2) not null,
+  "sort_order" integer default 0 not null,
+  "is_recommended" boolean default false not null
+);
+create table if not exists public."quote_outcomes" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "quote_id" uuid not null,
+  "reason" text not null,
+  "detail" text,
+  "competitor_price" numeric
+);
+create table if not exists public."quote_services" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "quote_id" uuid not null,
+  "service_type" text not null,
+  "service_template_id" uuid,
+  "quantity" numeric default 1 not null,
+  "unit" text,
+  "unit_price" numeric default 0 not null,
+  "est_minutes" integer,
+  "discount_type" text,
+  "discount_value" numeric,
+  "notes" text,
+  "sort_order" integer default 0 not null,
+  "kind" text default 'service'::text not null
+);
+create table if not exists public."quotes" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "quote_number" text not null,
+  "customer_id" uuid,
+  "customer_name" text not null,
+  "address" text not null,
+  "service_type" text not null,
+  "notes" text,
+  "hours" numeric(6,2) default 1 not null,
+  "crew_size" integer default 1 not null,
+  "rate" numeric(8,2) default 50.00 not null,
+  "travel_fee" numeric(8,2) default 0 not null,
+  "man_hours" numeric(8,2) generated always as ((hours * (crew_size)::numeric)) stored,
+  "subtotal" numeric(10,2) generated always as (((hours * (crew_size)::numeric) * rate)) stored,
+  "status" text default 'draft'::text not null,
+  "user_id" uuid not null,
+  "service_template_id" uuid,
+  "overgrowth_multiplier" numeric(4,2) default 1.0 not null,
+  "issued_date" date,
+  "initial_price" numeric(10,2),
+  "custom_travel_required" boolean default false not null,
+  "show_travel_separately" boolean default false not null,
+  "property_id" uuid,
+  "weekly_price" numeric(10,2),
+  "biweekly_price" numeric(10,2),
+  "monthly_price" numeric(10,2),
+  "sent_at" timestamp with time zone,
+  "last_followed_up_at" timestamp with time zone,
+  "follow_up_count" integer default 0 not null,
+  "accepted_after_followup" boolean default false not null,
+  "follow_up_count_at_acceptance" integer,
+  "measured_sqft" numeric,
+  "suggested_price" numeric,
+  "front_lawn_sqft" numeric,
+  "back_lawn_sqft" numeric,
+  "left_side_sqft" numeric,
+  "right_side_sqft" numeric,
+  "boulevard_sqft" numeric,
+  "other_sqft" numeric,
+  "travel_distance_km" numeric,
+  "pricing_confidence" text,
+  "lead_meta" jsonb,
+  "valid_until" date,
+  "accepted_price" numeric(10,2),
+  "selected_cadence" text,
+  "total" numeric(10,2) generated always as ((initial_price + COALESCE(travel_fee, (0)::numeric))) stored,
+  "pricing_config_version_id" uuid,
+  "value_grade" text,
+  "nearby_count" integer,
+  "price_source" text,
+  "selected_option_id" uuid,
+  "internal_notes" text,
+  "deposit_type" text,
+  "deposit_value" numeric(10,2),
+  "preferred_date" date,
+  "preferred_date_2" date,
+  "preferred_timing" text,
+  "preferred_note" text,
+  "deposit_override_at" timestamp with time zone,
+  "renewal_of_recurrence_id" uuid
+);
+create table if not exists public."referrals" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "referrer_customer_id" uuid not null,
+  "referred_customer_id" uuid,
+  "referred_name" text,
+  "referred_contact" text,
+  "status" text default 'invited'::text not null,
+  "reward" text,
+  "notes" text,
+  "joined_at" timestamp with time zone,
+  "rewarded_at" timestamp with time zone
+);
+create table if not exists public."report_schedules" (
+  "id" uuid default gen_random_uuid() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "kind" text not null,
+  "enabled" boolean default true not null,
+  "recipient" text,
+  "last_period_to" date,
+  "last_sent_at" timestamp with time zone,
+  "last_error" text
+);
+create table if not exists public."revenue_recommendations" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "opportunity_key" text not null,
+  "kind" text not null,
+  "customer_id" uuid,
+  "expected_value" numeric,
+  "status" text default 'acted'::text not null,
+  "result_value" numeric,
+  "acted_at" timestamp with time zone
+);
+create table if not exists public."road_distance_cache" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "from_key" text not null,
+  "to_key" text not null,
+  "km" numeric not null,
+  "seconds" integer
+);
+create table if not exists public."schedule_health_ignored" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "issue_key" text not null
+);
+create table if not exists public."schedule_items" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "type" text not null,
+  "title" text not null,
+  "customer_id" uuid,
+  "property_id" uuid,
+  "scheduled_date" date not null,
+  "start_time" time without time zone,
+  "duration_minutes" integer,
+  "notes" text,
+  "phone" text,
+  "due_at" timestamp with time zone,
+  "status" text default 'scheduled'::text not null,
+  "converted_quote_id" uuid,
+  "completed_at" timestamp with time zone,
+  "reminded_at" timestamp with time zone
+);
+create table if not exists public."scheduled_messages" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "customer_id" uuid not null,
+  "job_id" uuid,
+  "template" text not null,
+  "channels" text[] default '{sms,email}'::text[] not null,
+  "body" text,
+  "vars" jsonb,
+  "send_at" timestamp with time zone not null,
+  "status" text default 'pending'::text not null,
+  "sent_at" timestamp with time zone,
+  "detail" text,
+  "message_id" uuid,
+  "claimed_at" timestamp with time zone
+);
+create table if not exists public."service_bundle_items" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "bundle_id" uuid not null,
+  "service_template_id" uuid,
+  "name" text not null,
+  "quantity" numeric default 1 not null,
+  "unit" text,
+  "unit_price" numeric,
+  "est_minutes" integer,
+  "notes" text,
+  "kind" text default 'service'::text not null,
+  "sort_order" integer default 0 not null
+);
+create table if not exists public."service_bundles" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "name" text not null,
+  "description" text,
+  "sort_order" integer default 0 not null
+);
+create table if not exists public."service_requests" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "customer_id" uuid,
+  "message" text not null,
+  "status" text default 'new'::text not null,
+  "kind" text default 'service'::text not null,
+  "preferred_date" date,
+  "job_id" uuid,
+  "recurrence_id" uuid,
+  "details" jsonb,
+  "from_portal" boolean default false not null,
+  "photos" text[] default '{}'::text[] not null,
+  "dedup_key" text,
+  "resolved_at" timestamp with time zone
+);
+create table if not exists public."service_templates" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "name" text not null,
+  "category" text default 'General'::text not null,
+  "default_rate" numeric(8,2) default 50.00 not null,
+  "default_description" text,
+  "notes" text,
+  "is_active" boolean default true not null,
+  "sort_order" integer default 0 not null,
+  "user_id" uuid not null,
+  "pricing_display_type" text default 'starting_from'::text not null,
+  "unit_cost" numeric,
+  "material_cost" numeric,
+  "is_favorite" boolean default false not null,
+  "recurrence" text
+);
+create table if not exists public."service_units" (
+  "id" uuid default gen_random_uuid() not null,
+  "user_id" uuid,
+  "code" text not null,
+  "label" text not null,
+  "abbrev" text not null,
+  "step" numeric default 1 not null,
+  "decimals" integer default 0 not null,
+  "sort_order" integer default 0 not null,
+  "active" boolean default true not null,
+  "created_at" timestamp with time zone default now() not null
+);
+create table if not exists public."social_connections" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "platform" text not null,
+  "provider" text default 'manual'::text not null,
+  "mode" text default 'manual'::text not null,
+  "account_id" text,
+  "account_name" text not null,
+  "account_url" text,
+  "avatar_url" text,
+  "status" text default 'connected'::text not null,
+  "access_token" text,
+  "refresh_token" text,
+  "token_expires_at" timestamp with time zone,
+  "scopes" text[] default '{}'::text[] not null,
+  "meta" jsonb default '{}'::jsonb not null
+);
+create table if not exists public."suggestion_dismissals" (
+  "id" uuid default gen_random_uuid() not null,
+  "user_id" uuid not null,
+  "suggestion_key" text not null,
+  "snoozed_until" timestamp with time zone,
+  "dismissed" boolean default false not null,
+  "created_at" timestamp with time zone default now() not null
+);
+create table if not exists public."suppliers" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "name" text not null,
+  "contact_name" text,
+  "phone" text,
+  "email" text,
+  "website" text,
+  "account_number" text,
+  "address" text,
+  "notes" text,
+  "archived_at" timestamp with time zone
+);
+create table if not exists public."technicians" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "crew_id" uuid,
+  "name" text not null,
+  "phone" text,
+  "email" text,
+  "role" text,
+  "status" text default 'available'::text not null,
+  "status_changed_at" timestamp with time zone default now() not null,
+  "is_active" boolean default true not null,
+  "hourly_wage" numeric(10,2),
+  "hired_on" date,
+  "ended_on" date,
+  "pto_annual_hours" numeric(6,2),
+  "archived_at" timestamp with time zone,
+  "auth_user_id" uuid,
+  "invite_code" text,
+  "invite_expires_at" timestamp with time zone,
+  "invite_sent_at" timestamp with time zone
+);
+create table if not exists public."time_entries" (
+  "id" uuid default gen_random_uuid() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "technician_id" uuid,
+  "job_id" uuid,
+  "clock_in" timestamp with time zone default now() not null,
+  "clock_out" timestamp with time zone,
+  "break_minutes" integer default 0 not null,
+  "hourly_rate" numeric(10,2),
+  "notes" text,
+  "minutes_worked" integer generated always as (
+CASE
+    WHEN (clock_out IS NULL) THEN NULL::integer
+    ELSE GREATEST(0, (((EXTRACT(epoch FROM (clock_out - clock_in)) / (60)::numeric))::integer - break_minutes))
+END) stored
+);
+create table if not exists public."travel_fee_tiers" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "min_km" numeric(6,2) not null,
+  "max_km" numeric(6,2),
+  "fee" numeric(8,2),
+  "is_custom" boolean default false not null,
+  "sort_order" integer default 0 not null,
+  "user_id" uuid not null
+);
+create table if not exists public."vendors" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "name" text not null,
+  "contact_name" text,
+  "phone" text,
+  "email" text,
+  "website" text,
+  "account_number" text,
+  "notes" text,
+  "archived_at" timestamp with time zone
+);
+create table if not exists public."verify_fixture_tenants" (
+  "user_id" uuid not null,
+  "created_at" timestamp with time zone default now() not null,
+  "note" text
+);
+create table if not exists public."wage_history" (
+  "id" uuid default gen_random_uuid() not null,
+  "created_at" timestamp with time zone default clock_timestamp() not null,
+  "user_id" uuid not null,
+  "technician_id" uuid,
+  "old_wage" numeric(10,2),
+  "new_wage" numeric(10,2),
+  "note" text,
+  "seq" bigint generated by default as identity not null
+);
+create table if not exists public."webhook_deliveries" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "endpoint_id" uuid not null,
+  "event_id" uuid,
+  "event" text not null,
+  "payload" jsonb default '{}'::jsonb not null,
+  "status" text default 'pending'::text not null,
+  "attempts" integer default 0 not null,
+  "next_attempt_at" timestamp with time zone default now() not null,
+  "last_attempt_at" timestamp with time zone,
+  "delivered_at" timestamp with time zone,
+  "response_status" integer,
+  "response_body" text,
+  "duration_ms" integer,
+  "last_error" text
+);
+create table if not exists public."webhook_endpoints" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "url" text not null,
+  "description" text,
+  "secret" text not null,
+  "events" text[] default '{*}'::text[] not null,
+  "source" text default 'manual'::text not null,
+  "active" boolean default true not null,
+  "disabled_reason" text,
+  "consecutive_failures" integer default 0 not null,
+  "last_success_at" timestamp with time zone,
+  "last_failure_at" timestamp with time zone
+);
+create table if not exists public."website_leads" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "customer_id" uuid,
+  "conversation_id" uuid,
+  "quote_id" uuid,
+  "status" text default 'new'::text not null,
+  "raw_submission" jsonb not null,
+  "submitted_at" timestamp with time zone,
+  "contact_first" text,
+  "contact_last" text,
+  "contact_name" text,
+  "phone" text,
+  "email" text,
+  "preferred_contact" text,
+  "address" text,
+  "city" text,
+  "province" text,
+  "postal_code" text,
+  "place_id" text,
+  "maps_url" text,
+  "lat" double precision,
+  "lng" double precision,
+  "lawn_sqft" numeric,
+  "lawn_polygon" jsonb,
+  "sections" jsonb,
+  "travel_distance_km" numeric,
+  "travel_fee" numeric,
+  "requested_services" text,
+  "frequency" text,
+  "yard_condition" text,
+  "website_estimated_price" numeric,
+  "notes" text,
+  "budget" text,
+  "preferred_schedule" text
+);
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 3 · FUNCTIONS
+-- 111 application functions, verbatim from pg_get_functiondef.
+-- Emitted BEFORE constraints: a CHECK constraint can call one, and the dependency
+-- is resolved when the constraint is added.
+-- SECURITY DEFINER + `set search_path` is not decoration here: these functions are
+-- the ONLY door a crew session or a portal token has to the data. Section 8 revokes
+-- and re-grants EXECUTE explicitly — a function is not safe merely by being defined.
+-- ══════════════════════════════════════════════════════════════════════════
+
+CREATE OR REPLACE FUNCTION public.authenticate_api_key(p_hash text)
+ RETURNS TABLE(key_id uuid, key_user_id uuid, key_name text, key_scopes text[], rate_limited boolean)
+ LANGUAGE sql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  update public.api_keys k set
+    last_used_at    = now(),
+    usage_count     = k.usage_count + 1,
+    rl_count        = case when k.rl_window_start is null or k.rl_window_start < now() - interval '1 minute'
+                           then 1 else k.rl_count + 1 end,
+    rl_window_start = case when k.rl_window_start is null or k.rl_window_start < now() - interval '1 minute'
+                           then now() else k.rl_window_start end
+  where k.key_hash = p_hash and k.revoked_at is null
+  returning k.id, k.user_id, k.name, k.scopes, (k.rl_count > 120);
+$function$;
+
+CREATE OR REPLACE FUNCTION public.bank_job_clock_session()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_has_sessions boolean;
+  v_closing      boolean;
+  v_minutes      integer;
+  v_sum          integer;
+begin
+  select exists (select 1 from public.job_work_sessions where job_id = new.id)
+    into v_has_sessions;
+
+  v_closing := old.started_at is not null
+               and (
+                 (new.status = 'completed' and old.status is distinct from 'completed')
+                 or new.started_at is null
+               );
+
+  if v_closing then
+    v_minutes := greatest(1, least(1440,
+      (extract(epoch from (now() - old.started_at)) / 60)::integer));
+    insert into public.job_work_sessions
+      (user_id, job_id, worked_on, started_at, ended_at, minutes, workers, source)
+    values
+      (old.user_id, old.id, old.scheduled_date,
+       old.started_at, now(), v_minutes,
+       greatest(1, coalesce(new.crew_size, old.crew_size, 1)), 'clock')
+    on conflict (job_id, started_at) where started_at is not null
+    do update set
+      ended_at = excluded.ended_at,
+      minutes  = greatest(public.job_work_sessions.minutes, excluded.minutes);
+    v_has_sessions := true;
+    new.started_at := null;
+  end if;
+
+  if v_has_sessions then
+    v_sum := public.job_session_minutes(new.id);
+    if new.actual_minutes is distinct from v_sum then
+      new.actual_minutes := v_sum;
+    end if;
+  end if;
+
+  return new;
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.book_service(p_token text, p_payload jsonb)
+ RETURNS json
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_user uuid; v_customer uuid; v_prop uuid; v_returning boolean := false;
+  v_name text; v_email text; v_phone text; v_digits text;
+  v_address text; v_city text; v_postal text; v_province text;
+  v_service text; v_sqft numeric; v_date date; v_notes text;
+  v_rate numeric; v_job uuid; v_quote uuid; v_num int; v_qnum text := null; v_mode text;
+begin
+  select user_id into v_user from public.business_settings where booking_token = p_token and booking_enabled = true;
+  if v_user is null then return null; end if;
+  if (select count(*) from public.service_requests where user_id = v_user and created_at > now() - interval '1 hour') >= 30 then
+    return json_build_object('error','rate_limited'); end if;
+
+  v_name    := nullif(trim(coalesce(p_payload->>'name', p_payload->>'fullName', concat_ws(' ', p_payload->>'firstName', p_payload->>'lastName'))), '');
+  v_email   := lower(nullif(trim(coalesce(p_payload->>'email','')), ''));
+  v_phone   := nullif(trim(coalesce(p_payload->>'phone','')), '');
+  v_address := nullif(trim(coalesce(p_payload->>'address', p_payload->>'serviceAddress','')), '');
+  v_city    := nullif(trim(coalesce(p_payload->>'city','')), '');
+  v_postal  := nullif(trim(coalesce(p_payload->>'postalCode', p_payload->>'postal_code','')), '');
+  v_province := coalesce(nullif(trim(p_payload->>'province',''),''), 'AB');
+  v_service := nullif(trim(coalesce(p_payload->>'serviceType', p_payload->>'service', p_payload->>'requestedServices','')), '');
+  v_notes   := nullif(trim(coalesce(p_payload->>'notes', p_payload->>'message','')), '');
+  begin v_sqft := nullif((p_payload->>'sqft')::numeric, 0); exception when others then v_sqft := null; end;
+  begin v_date := (p_payload->>'requestedDate')::date; exception when others then v_date := null; end;
+  if v_name is null then return json_build_object('error','missing_name'); end if;
+
+  v_digits := right(regexp_replace(coalesce(v_phone,''),'\D','','g'),10);
+  if length(v_digits)=10 then select id into v_customer from public.customers where user_id=v_user and phone is not null and right(regexp_replace(phone,'\D','','g'),10)=v_digits order by created_at desc limit 1; end if;
+  if v_customer is null and v_email is not null then select id into v_customer from public.customers where user_id=v_user and lower(coalesce(email,''))=v_email order by created_at desc limit 1; end if;
+  if v_customer is null and v_address is not null then select id into v_customer from public.customers where user_id=v_user and lower(coalesce(address,''))=lower(v_address) order by created_at desc limit 1; end if;
+
+  if v_customer is not null then
+    v_returning := true;
+    update public.customers set phone=coalesce(phone,v_phone), email=coalesce(email,v_email) where id=v_customer;
+  else
+    insert into public.customers (user_id, name, email, phone, address, city, province, postal_code, acquisition_source)
+      values (v_user, left(v_name,200), v_email, v_phone, v_address, v_city, v_province, v_postal, 'Online Booking') returning id into v_customer;
+  end if;
+
+  if v_address is not null then
+    select id into v_prop from public.properties where customer_id=v_customer and lower(coalesce(address,''))=lower(v_address) limit 1;
+    if v_prop is null then
+      insert into public.properties (user_id, customer_id, address, city, province, postal_code, lawn_sqft, is_primary)
+        values (v_user, v_customer, v_address, v_city, v_province, v_postal, v_sqft, not exists(select 1 from public.properties where customer_id=v_customer)) returning id into v_prop;
+    end if;
+  end if;
+
+  if v_service is not null then select default_rate into v_rate from public.service_templates where user_id=v_user and lower(name)=lower(v_service) and is_active=true order by sort_order limit 1; end if;
+
+  if v_date is not null and v_date >= current_date and v_service is not null then
+    v_mode := 'booked';
+    insert into public.jobs (user_id, customer_id, property_id, title, service_type, scheduled_date, status, price, notes, is_initial_visit)
+      values (v_user, v_customer, v_prop, left(v_service,120), v_service, v_date, 'scheduled', v_rate, v_notes, not v_returning) returning id into v_job;
+  else
+    v_mode := 'quote';
+    select coalesce(max((regexp_match(quote_number,'([0-9]+)$'))[1]::int),0)+1 into v_num from public.quotes where user_id=v_user and quote_number like 'EPS-'||extract(year from now())::text||'-%';
+    v_qnum := 'EPS-'||extract(year from now())::text||'-'||lpad(v_num::text,4,'0');
+    -- ADR-002: price_source='template_rate' and NO config version, because that is the
+    -- truth — this price came from service_templates.default_rate and the pricing
+    -- config never touched it. resolveQuoteProvenance() reads this as
+    -- 'not_engine_priced' and says so, instead of implying a rate card it never used.
+    insert into public.quotes (user_id, quote_number, customer_id, customer_name, address, service_type, initial_price, status, measured_sqft, property_id, sent_at, price_source)
+      values (v_user, v_qnum, v_customer, left(v_name,200), v_address, coalesce(v_service,'Lawn Mowing'), v_rate, 'sent', v_sqft, v_prop, now(), 'template_rate') returning id into v_quote;
+  end if;
+
+  insert into public.service_requests (user_id, customer_id, message)
+    values (v_user, v_customer, case when v_mode='booked'
+      then 'New online booking — '||left(v_name,80)||' · '||coalesce(v_service,'service')||' on '||to_char(v_date,'Mon DD')||coalesce(' · '||v_address,'')
+      else 'New quote request — '||left(v_name,80)||coalesce(' · '||v_service,'')||coalesce(' · '||v_address,'') end);
+
+  return json_build_object('ok',true,'mode',v_mode,'returning',v_returning,'customer_id',v_customer,'job_id',v_job,'quote_id',v_quote,'quote_number',v_qnum);
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.booking_set_consent(p_token text, p_quote_id uuid, p_sms_opt_in boolean, p_email_opt_in boolean, p_prefs jsonb DEFAULT NULL::jsonb)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_user uuid; v_customer uuid; v_old_sms boolean; v_old_email boolean;
+begin
+  select user_id into v_user from public.business_settings
+   where booking_token = p_token and booking_enabled = true;
+  if v_user is null then return false; end if;
+  select customer_id into v_customer from public.quotes where id = p_quote_id and user_id = v_user;
+  if v_customer is null then return false; end if;
+  select sms_opt_in, email_opt_in into v_old_sms, v_old_email from public.customers where id = v_customer;
+  update public.customers
+     set sms_opt_in = p_sms_opt_in, email_opt_in = p_email_opt_in,
+         message_prefs = coalesce(p_prefs, message_prefs)
+   where id = v_customer and user_id = v_user;
+  if v_old_sms is distinct from p_sms_opt_in then
+    insert into public.consent_changes (user_id, customer_id, channel, old_value, new_value, source, changed_by)
+    values (v_user, v_customer, 'sms', v_old_sms, p_sms_opt_in, 'portal', 'customer (website booking)');
+  end if;
+  if v_old_email is distinct from p_email_opt_in then
+    insert into public.consent_changes (user_id, customer_id, channel, old_value, new_value, source, changed_by)
+    values (v_user, v_customer, 'email', v_old_email, p_email_opt_in, 'portal', 'customer (website booking)');
+  end if;
+  return true;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.bump_conversation()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  update public.conversations set
+    last_message_at = new.created_at,
+    last_preview    = left(new.body, 140),
+    last_direction  = new.direction,
+    last_channel    = new.channel,
+    unread          = case when new.direction = 'inbound' then unread + 1 else unread end,
+    archived_at     = case when new.direction in ('inbound','outbound') then null else archived_at end,
+    snoozed_until   = case when new.direction = 'inbound' then null else snoozed_until end
+  where id = new.conversation_id;
+  return new;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.can_provision_business()
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  select public.current_app_role() = 'owner'
+      or exists (select 1 from public.beta_invites i where i.redeemed_by = auth.uid())
+$function$;
+
+CREATE OR REPLACE FUNCTION public.capture_integration_event()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_event text; v_entity text; v_id uuid; v_user uuid; v_payload jsonb;
+begin
+  if tg_table_name = 'customers' then
+    v_entity := 'customer'; v_id := new.id; v_user := new.user_id;
+    if tg_op = 'INSERT' then
+      v_event := 'customer.created';
+      v_payload := jsonb_build_object('id', new.id, 'name', new.name, 'email', new.email,
+        'phone', new.phone, 'address', new.address, 'city', new.city,
+        'acquisition_source', new.acquisition_source, 'created_at', new.created_at);
+    end if;
+  elsif tg_table_name = 'quotes' then
+    v_entity := 'quote'; v_id := new.id; v_user := new.user_id;
+    v_payload := jsonb_build_object('id', new.id, 'quote_number', new.quote_number,
+      'customer_id', new.customer_id, 'customer_name', new.customer_name,
+      'property_id', new.property_id,
+      'service_type', new.service_type, 'status', new.status, 'total', new.total,
+      'address', new.address, 'created_at', new.created_at);
+    if tg_op = 'INSERT' then
+      v_event := 'quote.created';
+    elsif tg_op = 'UPDATE' and new.status is distinct from old.status then
+      if new.status = 'accepted' then v_event := 'quote.accepted';
+      elsif new.status = 'declined' then v_event := 'quote.declined';
+      end if;
+    end if;
+  elsif tg_table_name = 'jobs' then
+    v_entity := 'job'; v_id := new.id; v_user := new.user_id;
+    v_payload := jsonb_build_object('id', new.id, 'customer_id', new.customer_id,
+      'property_id', new.property_id,
+      'title', new.title, 'service_type', new.service_type, 'status', new.status,
+      'scheduled_date', new.scheduled_date, 'price', new.price, 'crew_id', new.crew_id,
+      'created_at', new.created_at);
+    if tg_op = 'INSERT' then
+      v_event := 'job.created';
+    elsif tg_op = 'UPDATE' and new.status = 'completed' and old.status is distinct from 'completed' then
+      v_event := 'job.completed';
+      v_payload := v_payload || jsonb_build_object('completed_at', new.completed_at, 'actual_minutes', new.actual_minutes);
+    end if;
+  elsif tg_table_name = 'invoices' then
+    v_entity := 'invoice'; v_id := new.id; v_user := new.user_id;
+    v_payload := jsonb_build_object('id', new.id, 'invoice_number', new.invoice_number,
+      'customer_id', new.customer_id, 'customer_name', new.customer_name,
+      'property_id', new.property_id,
+      'status', new.status, 'amount', new.amount, 'amount_paid', new.amount_paid,
+      'due_date', new.due_date, 'created_at', new.created_at);
+    if tg_op = 'INSERT' then
+      v_event := 'invoice.created';
+    elsif tg_op = 'UPDATE'
+      and new.status in ('paid', 'overpaid')
+      and coalesce(old.status, '') not in ('paid', 'overpaid') then
+      v_event := 'invoice.paid';
+      v_payload := v_payload || jsonb_build_object('paid_at', new.paid_at);
+    end if;
+  elsif tg_table_name = 'payments' then
+    v_entity := 'payment'; v_id := new.id; v_user := new.user_id;
+    if tg_op = 'INSERT'
+      and coalesce(new.status, 'paid') in ('paid', 'succeeded')
+      and coalesce(new.kind, 'payment') = 'payment' then
+      v_event := 'payment.recorded';
+      v_payload := jsonb_build_object('id', new.id, 'customer_id', new.customer_id,
+        'invoice_id', new.invoice_id, 'amount', new.amount, 'currency', new.currency,
+        'method', new.method, 'kind', new.kind, 'paid_at', new.paid_at, 'created_at', new.created_at);
+    end if;
+  elsif tg_table_name = 'service_requests' then
+    v_entity := 'request'; v_id := new.id; v_user := new.user_id;
+    if tg_op = 'INSERT' then
+      v_event := 'request.created';
+      v_payload := jsonb_build_object('id', new.id, 'customer_id', new.customer_id,
+        'kind', coalesce(new.kind, 'service'),
+        'message', new.message, 'status', new.status, 'created_at', new.created_at);
+    end if;
+  end if;
+
+  if v_event is null or v_user is null then return new; end if;
+
+  if not exists (select 1 from public.webhook_endpoints e where e.user_id = v_user and e.active)
+     and not exists (select 1 from public.api_keys k where k.user_id = v_user and k.revoked_at is null)
+  then return new; end if;
+
+  begin
+    insert into public.integration_events (user_id, event, entity_type, entity_id, payload)
+    values (v_user, v_event, v_entity, v_id, v_payload);
+  exception when others then
+    null;
+  end;
+  return new;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.capture_labor_observation()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_sqft numeric; v_overgrowth numeric; v_freq text;
+begin
+  if new.actual_minutes is not null and new.actual_minutes > 0
+     and (old.actual_minutes is distinct from new.actual_minutes) then
+    select p.lawn_sqft into v_sqft from public.properties p where p.id = new.property_id;
+    select q.overgrowth_multiplier into v_overgrowth from public.quotes q where q.id = new.quote_id;
+    select r.freq into v_freq from public.job_recurrences r where r.id = new.recurrence_id;
+    insert into public.labor_observations
+      (user_id, job_id, property_id, service_date, sqft, service_type, crew_size, frequency, is_initial_visit, overgrowth, estimated_minutes, actual_minutes)
+    values
+      (new.user_id, new.id, new.property_id, new.scheduled_date, v_sqft, new.service_type, coalesce(new.crew_size,1), v_freq, coalesce(new.is_initial_visit,false), v_overgrowth, new.duration_minutes, new.actual_minutes)
+    on conflict (user_id, job_id) do update set
+      actual_minutes = excluded.actual_minutes, estimated_minutes = excluded.estimated_minutes,
+      sqft = excluded.sqft, crew_size = excluded.crew_size, overgrowth = excluded.overgrowth,
+      frequency = excluded.frequency, is_initial_visit = excluded.is_initial_visit,
+      service_date = excluded.service_date, created_at = now();
+  end if;
+  return new;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.carry_forward_job_actual_minutes()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_prior integer;
+  v_crew  integer;
+  v_day   date;
+begin
+  -- 'carried' is the row this function itself writes — without this it recurses.
+  if new.source = 'carried' then
+    return new;
+  end if;
+  if exists (select 1 from public.job_work_sessions where job_id = new.job_id) then
+    return new;
+  end if;
+  select j.actual_minutes, greatest(1, coalesce(j.crew_size, 1)), j.scheduled_date
+    into v_prior, v_crew, v_day
+    from public.jobs j where j.id = new.job_id;
+  if coalesce(v_prior, 0) > 0 then
+    insert into public.job_work_sessions
+      (user_id, job_id, worked_on, minutes, workers, source)
+    values (new.user_id, new.job_id, v_day, least(10080, v_prior), v_crew, 'carried');
+  end if;
+  return new;
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.change_order_apply_approval()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  if new.status = 'approved' and old.status is distinct from 'approved' then
+    insert into public.job_line_items
+      (user_id, job_id, description, amount, service_key, service_category, recurring, change_order_id)
+    values
+      (new.user_id, new.job_id, new.description, new.amount,
+       coalesce(new.service_key, 'change_order'), new.service_category, false, new.id)
+    on conflict (change_order_id) where change_order_id is not null do nothing;
+  end if;
+  return null;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.change_order_assign_number()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_next int;
+begin
+  if new.co_number is not null and btrim(new.co_number) <> '' then return new; end if;
+  select coalesce(max((regexp_replace(co_number, '\D', '', 'g'))::int), 0) + 1
+    into v_next
+    from public.change_orders
+   where user_id = new.user_id and co_number ~ '\d';
+  new.co_number := 'CO-' || lpad(v_next::text, 4, '0');
+  return new;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.change_order_guard_transition()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  -- A DECIDED change order is a record of what was asked and what was answered.
+  -- Nothing about it may move again -- including decided_via, which is the
+  -- difference between "the customer tapped approve" and "the business says they
+  -- agreed". Without this an owner-recorded approval could be silently rewritten
+  -- as the customer's own, which is the one claim this whole feature exists to
+  -- keep honest. An exact no-op update is allowed; anything else is refused.
+  if old.status in ('approved', 'declined', 'cancelled') then
+    if new is distinct from old then
+      raise exception 'a % change order is a record of what was answered and cannot be edited', old.status
+        using errcode = '42501';
+    end if;
+    return new;
+  end if;
+
+  if new.job_id is distinct from old.job_id
+     or new.user_id is distinct from old.user_id
+     or new.customer_id is distinct from old.customer_id then
+    raise exception 'a change order cannot be moved to another job, customer or business'
+      using errcode = 'check_violation';
+  end if;
+
+  if new.status is distinct from old.status then
+    if not (
+         (old.status = 'draft'   and new.status in ('pending', 'cancelled'))
+      or (old.status = 'pending' and new.status in ('approved', 'declined', 'cancelled'))
+    ) then
+      raise exception 'a % change order cannot become %', old.status, new.status
+        using errcode = 'check_violation';
+    end if;
+    if new.status = 'pending'   then new.sent_at      := coalesce(old.sent_at, now()); end if;
+    if new.status = 'approved'  then new.approved_at  := now(); end if;
+    if new.status = 'declined'  then new.declined_at  := now(); end if;
+    if new.status = 'cancelled' then new.cancelled_at := now(); end if;
+  end if;
+
+  if old.status <> 'draft'
+     and (new.amount is distinct from old.amount or new.description is distinct from old.description) then
+    raise exception 'the scope and price of a change order are fixed once it is sent for approval'
+      using errcode = 'check_violation';
+  end if;
+
+  new.updated_at := now();
+  return new;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.claim_beta_invite()
+ RETURNS text
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_uid       uuid := auth.uid();
+  v_confirmed timestamptz;
+  v_inv       public.beta_invites%rowtype;
+begin
+  if v_uid is null then
+    return 'not-signed-in';
+  end if;
+
+  select u.email_confirmed_at into v_confirmed from auth.users u where u.id = v_uid;
+  if v_confirmed is null then
+    return 'email-unverified';
+  end if;
+
+  select * into v_inv
+    from public.beta_invites i
+   where i.reserved_by = v_uid or i.redeemed_by = v_uid
+   order by (i.redeemed_by = v_uid) desc
+   limit 1
+     for update;
+
+  if not found then
+    return case when public.current_app_role() = 'owner' then 'already-owner' else 'no-invite' end;
+  end if;
+
+  if v_inv.redeemed_by = v_uid then
+    return 'already-claimed';
+  end if;
+
+  if v_inv.revoked_at is not null then
+    return 'revoked';
+  end if;
+
+  update public.beta_invites
+     set redeemed_by = v_uid, redeemed_at = now()
+   where id = v_inv.id;
+
+  return 'claimed';
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.claim_webhook_deliveries(p_limit integer DEFAULT 25, p_user uuid DEFAULT NULL::uuid)
+ RETURNS SETOF webhook_deliveries
+ LANGUAGE sql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  update public.webhook_deliveries d
+  set status = 'processing', attempts = d.attempts + 1, last_attempt_at = now()
+  where d.id in (
+    select id from public.webhook_deliveries
+    where status = 'pending' and next_attempt_at <= now()
+      and (p_user is null or user_id = p_user)
+    order by next_attempt_at
+    limit greatest(1, least(coalesce(p_limit, 25), 50))
+    for update skip locked
+  )
+  returning d.*;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.clear_route_order_on_move()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+begin
+  if new.scheduled_date is distinct from old.scheduled_date
+     and new.route_order is not distinct from old.route_order then
+    new.route_order := null;
+  end if;
+  return new;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.comms_insights(p_days integer DEFAULT 30)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE
+AS $function$
+  select jsonb_build_object(
+    'sends', (select count(*) from public.notification_log
+              where user_id = auth.uid() and created_at > now() - make_interval(days => p_days)
+                and status in ('sent','delivered','opened','clicked')),
+    'delivered', (select count(*) from public.notification_log
+                  where user_id = auth.uid() and created_at > now() - make_interval(days => p_days)
+                    and status in ('delivered','opened','clicked')),
+    'failed', (select count(*) from public.notification_log
+               where user_id = auth.uid() and created_at > now() - make_interval(days => p_days)
+                 and status in ('error','failed','bounced','spam')),
+    'skipped', (select count(*) from public.notification_log
+                where user_id = auth.uid() and created_at > now() - make_interval(days => p_days)
+                  and status in ('skipped','disabled')),
+    'inbound', (select count(*) from public.messages
+                where user_id = auth.uid() and direction = 'inbound'
+                  and created_at > now() - make_interval(days => p_days)),
+    'needs_reply', (select count(*) from public.conversations
+                    where user_id = auth.uid() and archived_at is null and last_direction = 'inbound'),
+    'scheduled_pending', (select count(*) from public.scheduled_messages
+                          where user_id = auth.uid() and status = 'pending'),
+    'median_reply_minutes', (
+      with pairs as (
+        select m.created_at as in_at,
+               (select min(o.created_at) from public.messages o
+                 where o.user_id = m.user_id and o.customer_id = m.customer_id
+                   and o.direction = 'outbound' and o.created_at > m.created_at) as out_at
+        from public.messages m
+        where m.user_id = auth.uid() and m.direction = 'inbound'
+          and m.created_at > now() - make_interval(days => p_days)
+      )
+      select round((percentile_cont(0.5) within group (order by extract(epoch from (out_at - in_at)) / 60))::numeric, 1)
+      from pairs
+      where out_at is not null and out_at - in_at < interval '7 days'
+    )
+  );
+$function$;
+
+CREATE OR REPLACE FUNCTION public.create_beta_invite(p_token_hash text, p_label text, p_email text DEFAULT NULL::text, p_days integer DEFAULT 14)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_id  uuid;
+  v_exp timestamptz;
+begin
+  if auth.uid() is null
+     or not exists (select 1 from public.platform_operators o where o.user_id = auth.uid()) then
+    raise exception 'only a platform operator can issue beta invites' using errcode = '42501';
+  end if;
+  if p_token_hash is null or p_token_hash !~ '^[0-9a-f]{64}$' then
+    raise exception 'token_hash must be sha256 hex — never send the raw token' using errcode = '22023';
+  end if;
+  if p_label is null or btrim(p_label) = '' then
+    raise exception 'label is required — an invite must say who it is for' using errcode = '22023';
+  end if;
+
+  v_exp := now() + make_interval(days => greatest(1, least(90, coalesce(p_days, 14))));
+
+  insert into public.beta_invites (token_hash, label, email, created_by, expires_at)
+  values (p_token_hash, btrim(p_label), nullif(lower(btrim(coalesce(p_email, ''))), ''), auth.uid(), v_exp)
+  returning id into v_id;
+
+  return jsonb_build_object('id', v_id, 'expires_at', v_exp);
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_access_states()
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  select coalesce(
+    jsonb_object_agg(
+      t.id::text,
+      jsonb_build_object(
+        'linked', t.auth_user_id is not null,
+        'email', u.email,
+        'last_sign_in_at', u.last_sign_in_at,
+        'invite_sent_at', t.invite_sent_at,
+        'has_code', t.invite_code is not null and coalesce(t.invite_expires_at, now()) > now()
+      )
+    ),
+    '{}'::jsonb
+  )
+  from public.technicians t
+  left join auth.users u on u.id = t.auth_user_id
+  where t.user_id = auth.uid()
+    and exists (select 1 from public.business_settings b where b.user_id = auth.uid())
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_crew_id()
+ RETURNS uuid
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  select t.crew_id from public.technicians t
+  where t.auth_user_id = auth.uid() and t.is_active and t.archived_at is null limit 1
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_day(p_date date)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_employer uuid := public.crew_employer();
+  v_crew     uuid := public.crew_crew_id();
+  v_tech     uuid := public.crew_technician_id();
+  v_out      jsonb;
+begin
+  if v_employer is null then
+    return null;
+  end if;
+  select jsonb_build_object(
+    'date', p_date,
+    'me', (
+      select jsonb_build_object('id', t.id, 'name', t.name, 'role', t.role, 'status', t.status)
+      from public.technicians t where t.id = v_tech
+    ),
+    'crew', (
+      select jsonb_build_object('id', c.id, 'name', c.name, 'color', c.color, 'day_start', c.day_start)
+      from public.crews c where c.id = v_crew and c.user_id = v_employer
+    ),
+    'business', (
+      select jsonb_build_object('name', b.company_name, 'phone', b.phone, 'work_start_time', b.work_start_time)
+      from public.business_settings b where b.user_id = v_employer
+    ),
+    'teammates', coalesce((
+      select jsonb_agg(jsonb_build_object('id', t.id, 'name', t.name, 'role', t.role) order by t.name)
+      from public.technicians t
+      where t.user_id = v_employer and t.crew_id = v_crew
+        and t.is_active and t.archived_at is null and t.id is distinct from v_tech
+    ), '[]'::jsonb),
+    'day_note', (
+      select d.body from public.dispatch_notes d
+      where d.user_id = v_employer and d.date = p_date and d.crew_id is null
+    ),
+    'crew_note', (
+      select d.body from public.dispatch_notes d
+      where d.user_id = v_employer and d.date = p_date and d.crew_id = v_crew
+    ),
+    'stops', coalesce((
+      select jsonb_agg(x.stop order by x.route_rank, x.start_key, x.created_at)
+      from (
+        select
+          jsonb_build_object(
+            'id', j.id,
+            'title', j.title,
+            'service_type', j.service_type,
+            'scheduled_date', j.scheduled_date,
+            'start_time', j.start_time,
+            'duration_minutes', j.duration_minutes,
+            'crew_size', j.crew_size,
+            'status', j.status,
+            'started_at', j.started_at,
+            'completed_at', j.completed_at,
+            'actual_minutes', j.actual_minutes,
+            'on_my_way_at', j.on_my_way_at,
+            'route_order', j.route_order,
+            'updated_at', j.updated_at,
+            'notes', j.notes,
+            'completion_summary', j.completion_summary,
+            'completion_issue', j.completion_issue,
+            'customer', case when cu.id is null then null else
+              jsonb_build_object('name', cu.name, 'phone', cu.phone) end,
+            'property', case when p.id is null then null else
+              jsonb_build_object('address', p.address, 'lat', p.lat, 'lng', p.lng) end
+          ) as stop,
+          coalesce(j.route_order, 999999) as route_rank,
+          coalesce(j.start_time::text, '99:99') as start_key,
+          j.created_at
+        from public.jobs j
+        left join public.customers cu on cu.id = j.customer_id
+        left join public.properties p on p.id = j.property_id
+        where j.user_id = v_employer
+          and j.crew_id = v_crew
+          and j.scheduled_date = p_date
+      ) x
+    ), '[]'::jsonb)
+  ) into v_out;
+  return v_out;
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_employer()
+ RETURNS uuid
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  select t.user_id from public.technicians t
+  where t.auth_user_id = auth.uid() and t.is_active and t.archived_at is null limit 1
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_issue_invite(p_technician_id uuid, p_hours integer DEFAULT 72)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_code text := '';
+  v_exp  timestamptz;
+  v_byte int;
+  v_alphabet constant text := 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+begin
+  if auth.uid() is null then
+    raise exception 'not signed in' using errcode = '42501';
+  end if;
+  if not exists (
+    select 1 from public.technicians t
+    where t.id = p_technician_id and t.user_id = auth.uid() and t.archived_at is null
+  ) then
+    raise exception 'no such person on your roster' using errcode = '42501';
+  end if;
+
+  while length(v_code) < 8 loop
+    v_byte := get_byte(extensions.gen_random_bytes(1), 0);
+    if v_byte < 248 then
+      v_code := v_code || substr(v_alphabet, 1 + (v_byte % 31), 1);
+    end if;
+  end loop;
+
+  v_exp := now() + make_interval(hours => greatest(1, least(720, p_hours)));
+
+  update public.technicians
+     set invite_code = v_code, invite_expires_at = v_exp
+   where id = p_technician_id;
+
+  return jsonb_build_object('code', v_code, 'expires_at', v_exp);
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_job_field_guard()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+begin
+  if auth.uid() is null or auth.uid() = new.user_id then
+    return new;
+  end if;
+  if public.crew_employer() is null then
+    return new;
+  end if;
+
+  if row(new.user_id, new.customer_id, new.property_id, new.quote_id, new.recurrence_id,
+         new.title, new.service_type, new.scheduled_date, new.start_time, new.end_time,
+         new.duration_minutes, new.crew_size, new.price, new.notes, new.crew_id,
+         new.route_order, new.is_initial_visit)
+     is distinct from
+     row(old.user_id, old.customer_id, old.property_id, old.quote_id, old.recurrence_id,
+         old.title, old.service_type, old.scheduled_date, old.start_time, old.end_time,
+         old.duration_minutes, old.crew_size, old.price, old.notes, old.crew_id,
+         old.route_order, old.is_initial_visit)
+  then
+    raise exception 'crew may only change a visit''s status and its timestamps'
+      using errcode = '42501';
+  end if;
+
+  if new.status not in ('scheduled', 'in_progress', 'completed') then
+    raise exception 'crew may not set a visit to %', new.status using errcode = '42501';
+  end if;
+
+  return new;
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_job_messages(p_job_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_employer uuid := public.crew_employer();
+  v_crew     uuid := public.crew_crew_id();
+  v_uid      uuid := auth.uid();
+  v_job      record;
+  v_msgs     jsonb;
+  v_high     timestamptz;
+begin
+  if v_employer is null or v_crew is null then
+    return null;
+  end if;
+
+  select j.id, j.title, j.scheduled_date, j.status, c.name as customer_name
+    into v_job
+    from public.jobs j
+    left join public.customers c on c.id = j.customer_id
+   where j.id = p_job_id and j.user_id = v_employer and j.crew_id = v_crew;
+
+  if not found then
+    return jsonb_build_object('ok', false, 'reason', 'not_found');
+  end if;
+
+  select jsonb_agg(m.msg order by m.created_at), max(m.created_at)
+    into v_msgs, v_high
+    from (
+      select jsonb_build_object(
+               'id', x.id,
+               'body', x.body,
+               'author_kind', x.author_kind,
+               'author_name', x.author_name,
+               'author_technician_id', x.author_technician_id,
+               'event_type', x.event_type,
+               'mine', x.created_by is not distinct from v_uid,
+               'created_at', x.created_at
+             ) as msg,
+             x.created_at
+        from public.crew_messages x
+       where x.job_id = v_job.id and x.user_id = v_employer
+    ) m;
+
+  if v_high is not null then
+    insert into public.crew_message_reads (user_id, job_id, reader_id, last_read_at)
+    values (v_employer, v_job.id, v_uid, v_high)
+    on conflict (job_id, reader_id) do update
+      set last_read_at = greatest(public.crew_message_reads.last_read_at, excluded.last_read_at);
+  end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'job_id', v_job.id,
+    'title', v_job.title,
+    'customer_name', v_job.customer_name,
+    'scheduled_date', v_job.scheduled_date,
+    'status', v_job.status,
+    'messages', coalesce(v_msgs, '[]'::jsonb)
+  );
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_message_identity()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_uid  uuid := auth.uid();
+  v_tech uuid;
+  v_name text;
+begin
+  if new.event_type is not null then
+    new.author_kind          := 'system';
+    new.author_technician_id := null;
+    new.created_by           := null;
+    new.author_name          := coalesce(nullif(btrim(new.author_name), ''), 'Schedule');
+    return new;
+  end if;
+
+  if v_uid is null then
+    raise exception 'a message needs a signed-in author' using errcode = '42501';
+  end if;
+
+  if v_uid = new.user_id then
+    select coalesce(nullif(btrim(b.owner_name), ''), nullif(btrim(b.company_name), ''), 'Office')
+      into v_name
+      from public.business_settings b
+     where b.user_id = new.user_id;
+    new.author_kind          := 'owner';
+    new.author_technician_id := null;
+    new.created_by           := v_uid;
+    new.author_name          := coalesce(v_name, 'Office');
+    return new;
+  end if;
+
+  if public.crew_employer() is distinct from new.user_id then
+    raise exception 'you cannot post to that visit' using errcode = '42501';
+  end if;
+  v_tech := public.crew_technician_id();
+  select t.name into v_name from public.technicians t where t.id = v_tech;
+
+  new.author_kind          := 'crew';
+  new.author_technician_id := v_tech;
+  new.created_by           := v_uid;
+  new.author_name          := coalesce(nullif(btrim(v_name), ''), 'Crew');
+  return new;
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_message_inbox()
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_employer uuid := public.crew_employer();
+  v_crew     uuid := public.crew_crew_id();
+  v_uid      uuid := auth.uid();
+begin
+  if v_employer is null or v_crew is null then
+    return null;
+  end if;
+
+  return coalesce((
+    select jsonb_agg(t.row order by t.unread desc, t.last_at desc)
+    from (
+      select jsonb_build_object(
+               'job_id', j.id,
+               'title', j.title,
+               'customer_name', c.name,
+               'scheduled_date', j.scheduled_date,
+               'status', j.status,
+               'unread', count(*) filter (
+                 where m.created_at > coalesce(r.last_read_at, '-infinity'::timestamptz)
+                   and m.created_by is distinct from v_uid
+                   and m.author_kind <> 'system'),
+               'last_at', max(m.created_at),
+               'last_author', (array_agg(m.author_name order by m.created_at desc))[1],
+               'last_body',   (array_agg(m.body        order by m.created_at desc))[1]
+             ) as row,
+             count(*) filter (
+               where m.created_at > coalesce(r.last_read_at, '-infinity'::timestamptz)
+                 and m.created_by is distinct from v_uid
+                 and m.author_kind <> 'system') as unread,
+             max(m.created_at) as last_at
+        from public.crew_messages m
+        join public.jobs j on j.id = m.job_id
+        left join public.customers c on c.id = j.customer_id
+        left join public.crew_message_reads r on r.job_id = j.id and r.reader_id = v_uid
+       where m.user_id = v_employer
+         and j.user_id = v_employer
+         and j.crew_id = v_crew
+         and m.created_at > now() - interval '30 days'
+       group by j.id, j.title, c.name, j.scheduled_date, j.status
+    ) t
+  ), '[]'::jsonb);
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_message_notify()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_job record;
+begin
+  if new.author_kind <> 'crew' then
+    return new;
+  end if;
+  if exists (
+    select 1 from public.notifications n
+     where n.user_id = new.user_id and n.type = 'crew_message'
+       and n.entity_id = new.job_id and n.read = false
+  ) then
+    return new;
+  end if;
+
+  select j.customer_id, j.title, c.name as customer_name
+    into v_job
+    from public.jobs j
+    left join public.customers c on c.id = j.customer_id
+   where j.id = new.job_id;
+
+  insert into public.notifications (user_id, type, title, body, customer_id, entity_type, entity_id, href)
+  values (
+    new.user_id,
+    'crew_message',
+    new.author_name || ' — ' || coalesce(nullif(btrim(v_job.customer_name), ''), v_job.title, 'a visit'),
+    left(new.body, 140),
+    v_job.customer_id,
+    'job',
+    new.job_id,
+    '/dashboard/schedule?job=' || new.job_id::text
+  );
+  return new;
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_message_schedule_event()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_body text;
+begin
+  if new.scheduled_date is not distinct from old.scheduled_date
+     and new.start_time is not distinct from old.start_time then
+    return new;
+  end if;
+  if not exists (select 1 from public.crew_messages m where m.job_id = new.id) then
+    return new;
+  end if;
+
+  if new.scheduled_date is distinct from old.scheduled_date then
+    v_body := 'Schedule changed — '
+           || to_char(old.scheduled_date, 'Dy Mon FMDD')
+           || ' → ' || to_char(new.scheduled_date, 'Dy Mon FMDD');
+  else
+    v_body := 'Start time changed — '
+           || coalesce(to_char(date '2000-01-01' + old.start_time, 'FMHH12:MI AM'), 'no set time')
+           || ' → ' || coalesce(to_char(date '2000-01-01' + new.start_time, 'FMHH12:MI AM'), 'no set time');
+  end if;
+
+  insert into public.crew_messages (user_id, job_id, body, author_kind, author_name, event_type)
+  values (new.user_id, new.id, v_body, 'system', 'Schedule', 'schedule_changed');
+  return new;
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_post_message(p_job_id uuid, p_body text, p_client_token text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_employer uuid := public.crew_employer();
+  v_crew     uuid := public.crew_crew_id();
+  v_uid      uuid := auth.uid();
+  v_job      uuid;
+  v_body     text := btrim(coalesce(p_body, ''));
+  v_row      public.crew_messages%rowtype;
+begin
+  if v_employer is null or v_crew is null then
+    return null;
+  end if;
+  if v_body = '' then
+    return jsonb_build_object('ok', false, 'reason', 'empty');
+  end if;
+  if char_length(v_body) > 2000 then
+    return jsonb_build_object('ok', false, 'reason', 'too_long');
+  end if;
+
+  select j.id into v_job
+    from public.jobs j
+   where j.id = p_job_id and j.user_id = v_employer and j.crew_id = v_crew;
+  if v_job is null then
+    return jsonb_build_object('ok', false, 'reason', 'not_found');
+  end if;
+
+  insert into public.crew_messages (user_id, job_id, body, author_kind, author_name, client_token)
+  values (v_employer, v_job, v_body, 'crew', 'Crew', nullif(btrim(coalesce(p_client_token, '')), ''))
+  on conflict (job_id, created_by, client_token) where client_token is not null do nothing
+  returning * into v_row;
+
+  if v_row.id is null then
+    select * into v_row from public.crew_messages
+     where job_id = v_job and created_by = v_uid
+       and client_token = nullif(btrim(coalesce(p_client_token, '')), '')
+     limit 1;
+  end if;
+  if v_row.id is null then
+    return jsonb_build_object('ok', false, 'reason', 'failed');
+  end if;
+
+  insert into public.crew_message_reads (user_id, job_id, reader_id, last_read_at)
+  values (v_employer, v_job, v_uid, v_row.created_at)
+  on conflict (job_id, reader_id) do update
+    set last_read_at = greatest(public.crew_message_reads.last_read_at, excluded.last_read_at);
+
+  return jsonb_build_object('ok', true, 'message', jsonb_build_object(
+    'id', v_row.id,
+    'body', v_row.body,
+    'author_kind', v_row.author_kind,
+    'author_name', v_row.author_name,
+    'author_technician_id', v_row.author_technician_id,
+    'event_type', v_row.event_type,
+    'mine', true,
+    'created_at', v_row.created_at
+  ));
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_redeem_invite(p_code text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_tech public.technicians%rowtype;
+begin
+  if auth.uid() is null then
+    raise exception 'not signed in' using errcode = '42501';
+  end if;
+  if exists (select 1 from public.business_settings b where b.user_id = auth.uid()) then
+    raise exception 'this account owns a business — it cannot also join one as crew' using errcode = '42501';
+  end if;
+  if exists (select 1 from public.technicians t where t.auth_user_id = auth.uid()) then
+    raise exception 'this account is already linked to an employee' using errcode = '42501';
+  end if;
+
+  select * into v_tech from public.technicians t
+  where t.invite_code = upper(btrim(p_code)) limit 1;
+
+  if v_tech.id is null then
+    raise exception 'that code is not valid' using errcode = '42501';
+  end if;
+  if v_tech.invite_expires_at is null or v_tech.invite_expires_at < now() then
+    raise exception 'that code has expired — ask for a new one' using errcode = '42501';
+  end if;
+  if v_tech.archived_at is not null or not v_tech.is_active then
+    raise exception 'that code is not valid' using errcode = '42501';
+  end if;
+  if v_tech.auth_user_id is not null then
+    raise exception 'that code has already been used' using errcode = '42501';
+  end if;
+
+  update public.technicians
+     set auth_user_id = auth.uid(), invite_code = null, invite_expires_at = null
+   where id = v_tech.id;
+
+  return jsonb_build_object('technician_id', v_tech.id, 'name', v_tech.name);
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_revoke_access(p_technician_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+begin
+  if auth.uid() is null then
+    raise exception 'not signed in' using errcode = '42501';
+  end if;
+  if not exists (
+    select 1 from public.technicians t where t.id = p_technician_id and t.user_id = auth.uid()
+  ) then
+    raise exception 'no such person on your roster' using errcode = '42501';
+  end if;
+  update public.technicians
+     set auth_user_id = null, invite_code = null, invite_expires_at = null, invite_sent_at = null
+   where id = p_technician_id;
+  return jsonb_build_object('revoked', true);
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_set_completion_record(p_job_id uuid, p_summary text DEFAULT NULL::text, p_issue text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_employer uuid := public.crew_employer();
+  v_crew     uuid := public.crew_crew_id();
+  v_summary  text := nullif(btrim(coalesce(p_summary, '')), '');
+  v_issue    text := nullif(btrim(coalesce(p_issue, '')), '');
+  v_prev     text;
+  v_job      record;
+begin
+  if v_employer is null or v_crew is null then
+    raise exception 'you are not on an active crew' using errcode = '42501';
+  end if;
+
+  v_summary := left(v_summary, 500);
+  v_issue   := left(v_issue, 500);
+
+  select j.completion_issue into v_prev
+    from public.jobs j
+   where j.id = p_job_id and j.user_id = v_employer and j.crew_id = v_crew
+     and j.status <> 'cancelled';
+
+  update public.jobs j
+     set completion_summary = v_summary,
+         completion_issue   = v_issue
+   where j.id = p_job_id
+     and j.user_id = v_employer
+     and j.crew_id = v_crew
+     and j.status <> 'cancelled'
+  returning j.id, j.title, j.customer_id into v_job;
+
+  if v_job.id is null then
+    return jsonb_build_object('ok', false, 'reason', 'not_yours');
+  end if;
+
+  if v_issue is not null and v_prev is distinct from v_issue then
+    insert into public.notifications (user_id, type, title, body, customer_id, entity_type, entity_id, href)
+    select v_employer, 'crew_visit_issue', 'Your crew flagged something',
+           coalesce(v_job.title, 'A visit') || ': ' || v_issue,
+           v_job.customer_id, 'job', v_job.id, '/dashboard/dispatch'
+     where not exists (
+       select 1 from public.notifications n
+        where n.user_id = v_employer and n.type = 'crew_visit_issue' and n.entity_id = v_job.id
+     );
+  end if;
+
+  return jsonb_build_object('ok', true);
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_set_visit_status(p_job_id uuid, p_status text, p_base_updated_at timestamp with time zone, p_started_at timestamp with time zone DEFAULT NULL::timestamp with time zone, p_completed_at timestamp with time zone DEFAULT NULL::timestamp with time zone, p_actual_minutes integer DEFAULT NULL::integer)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_employer uuid := public.crew_employer();
+  v_crew     uuid := public.crew_crew_id();
+  v_updated  timestamptz;
+begin
+  if v_employer is null or v_crew is null then
+    raise exception 'you are not on an active crew' using errcode = '42501';
+  end if;
+  -- The field lifecycle, and only it. 'cancelled' is a business decision: a
+  -- worker who cannot finish leaves the visit open for the office.
+  if p_status not in ('scheduled', 'in_progress', 'completed') then
+    raise exception 'crew may not set a visit to %', p_status using errcode = '42501';
+  end if;
+
+  -- Assignment is re-checked HERE because this function is DEFINER and so runs
+  -- past the RLS that would otherwise do it. Optimistic concurrency rides in the
+  -- same predicate: if the office moved the visit while the phone held an old
+  -- copy, nothing matches and the caller is told, rather than overwriting them.
+  update public.jobs j
+     set status         = p_status,
+         started_at     = p_started_at,
+         completed_at   = p_completed_at,
+         actual_minutes = p_actual_minutes
+   where j.id = p_job_id
+     and j.user_id = v_employer
+     and j.crew_id = v_crew
+     and j.updated_at = p_base_updated_at
+  returning j.updated_at into v_updated;
+
+  if v_updated is null then
+    return jsonb_build_object('ok', false, 'reason', 'stale');
+  end if;
+  return jsonb_build_object('ok', true, 'updated_at', v_updated);
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_technician_id()
+ RETURNS uuid
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  select t.id from public.technicians t
+  where t.auth_user_id = auth.uid() and t.is_active and t.archived_at is null limit 1
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_upcoming(p_from date, p_days integer DEFAULT 7)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_employer uuid := public.crew_employer();
+  v_crew     uuid := public.crew_crew_id();
+begin
+  if v_employer is null then
+    return null;
+  end if;
+  return coalesce((
+    select jsonb_agg(g.day_summary order by g.day)
+    from (
+      select jsonb_build_object(
+               'date', j.scheduled_date,
+               'stops', count(*),
+               'done', count(*) filter (where j.status = 'completed'),
+               'minutes', coalesce(sum(coalesce(j.duration_minutes, 45)), 0)
+             ) as day_summary,
+             j.scheduled_date as day
+      from public.jobs j
+      where j.user_id = v_employer
+        and j.crew_id = v_crew
+        and j.status <> 'cancelled'
+        and j.scheduled_date >= p_from
+        and j.scheduled_date < p_from + greatest(1, least(31, p_days))
+      group by j.scheduled_date
+    ) g
+  ), '[]'::jsonb);
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crm_stamp_review_requested()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  if new.template in ('review_request', 'review_chase')
+     and new.status = 'sent'
+     and new.customer_id is not null then
+    update public.customers
+      set review_requested_at = coalesce(review_requested_at, new.created_at)
+      where id = new.customer_id and reviewed_at is null and review_declined_at is null;
+  end if;
+  return new;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.crm_sync_referral()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  if new.referred_by_customer_id is not null
+     and new.referred_by_customer_id <> new.id
+     and (TG_OP = 'INSERT' or new.referred_by_customer_id is distinct from old.referred_by_customer_id) then
+    insert into public.referrals (user_id, referrer_customer_id, referred_customer_id, referred_name, status, joined_at)
+      values (new.user_id, new.referred_by_customer_id, new.id, new.name, 'joined', coalesce(new.created_at, now()))
+      on conflict (referrer_customer_id, referred_customer_id) where referred_customer_id is not null
+      do update set status    = case when referrals.status = 'invited' then 'joined' else referrals.status end,
+                    joined_at = coalesce(referrals.joined_at, excluded.joined_at);
+  end if;
+  return new;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.crm_touch_last_contacted()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  if new.direction = 'outbound' and new.customer_id is not null then
+    update public.customers
+      set last_contacted_at = greatest(coalesce(last_contacted_at, '-infinity'::timestamptz), new.created_at)
+      where id = new.customer_id;
+  end if;
+  return new;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.current_app_role()
+ RETURNS text
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  select case
+    when auth.uid() is null then 'none'
+    when exists (select 1 from public.business_settings b where b.user_id = auth.uid()) then 'owner'
+    when public.crew_employer() is not null then 'crew'
+    else 'none'
+  end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.ensure_pricing_config_version(p_user uuid)
+ RETURNS uuid
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_id uuid;
+  s    record;
+  w    record;
+begin
+  if p_user is null then return null; end if;
+
+  -- TENANT GUARD (2026-08-10): a signed-in caller may only record a version for
+  -- THEMSELVES. auth.uid() is null under service_role/trigger contexts, which
+  -- stay unaffected. Without this, EXECUTE alone let any authenticated account —
+  -- including a crew member with zero table access — write into another
+  -- business's pricing history (reproduced: owner versions 3 -> 4).
+  if auth.uid() is not null and p_user is distinct from auth.uid() then
+    return null;
+  end if;
+
+  select
+    case when coalesce(pricing_base_charge, 0) > 0      then pricing_base_charge      else 28  end as base_charge,
+    case when coalesce(pricing_mow_rate, 0) > 0         then pricing_mow_rate         else 15  end as mow_rate_per_1000,
+    0.8::numeric  as budget_mult,
+    0.92::numeric as market_mult,
+    case when coalesce(pricing_recommended_mult, 0) > 0 then pricing_recommended_mult else 1.0 end as recommended_mult,
+    case when coalesce(pricing_premium_mult, 0) > 0     then pricing_premium_mult     else 1.2 end as premium_mult,
+    case when coalesce(pricing_travel_rate, 0) > 0      then pricing_travel_rate      else 1.5 end as travel_rate_per_km,
+    coalesce(crew_cost_per_hour, 40)                        as crew_cost_per_hour,
+    coalesce(fee_recovery_percent, 3)                       as fee_recovery_percent,
+    coalesce(payment_fee_strategy, 'global_price_increase') as payment_fee_strategy
+  into w
+  from public.business_settings where user_id = p_user;
+
+  if not found then return null; end if;
+
+  select * into s from public.pricing_config_versions
+   where user_id = p_user order by valid_from desc limit 1;
+
+  if found
+     and s.engine_version = 'v1'
+     and s.base_charge          = w.base_charge
+     and s.mow_rate_per_1000    = w.mow_rate_per_1000
+     and s.budget_mult          = w.budget_mult
+     and s.market_mult          = w.market_mult
+     and s.recommended_mult     = w.recommended_mult
+     and s.premium_mult         = w.premium_mult
+     and s.travel_rate_per_km   = w.travel_rate_per_km
+     and s.crew_cost_per_hour   = w.crew_cost_per_hour
+     and s.fee_recovery_percent = w.fee_recovery_percent
+     and s.payment_fee_strategy = w.payment_fee_strategy
+  then
+    return s.id;
+  end if;
+
+  insert into public.pricing_config_versions (
+    user_id, valid_from, source, note, engine_version,
+    base_charge, mow_rate_per_1000, budget_mult, market_mult,
+    recommended_mult, premium_mult, travel_rate_per_km,
+    crew_cost_per_hour, fee_recovery_percent, payment_fee_strategy
+  ) values (
+    p_user, now(), 'recorded', 'Recorded by ensure_pricing_config_version on a detected settings change.', 'v1',
+    w.base_charge, w.mow_rate_per_1000, w.budget_mult, w.market_mult,
+    w.recommended_mult, w.premium_mult, w.travel_rate_per_km,
+    w.crew_cost_per_hour, w.fee_recovery_percent, w.payment_fee_strategy
+  ) returning id into v_id;
+
+  return v_id;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.fanout_integration_event()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  insert into public.webhook_deliveries (user_id, endpoint_id, event_id, event, payload)
+  select new.user_id, e.id, new.id, new.event, new.payload
+  from public.webhook_endpoints e
+  where e.user_id = new.user_id and e.active
+    and ('*' = any(e.events) or new.event = any(e.events));
+  return new;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.find_customer_by_phone(p_phone text)
+ RETURNS json
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare d text; result json;
+begin
+  d := right(regexp_replace(coalesce(p_phone, ''), '\D', '', 'g'), 10);
+  if length(d) < 10 then return null; end if;
+  select to_json(c) into result from (
+    select id, user_id, sms_opt_in, name from public.customers
+    where phone is not null and right(regexp_replace(phone, '\D', '', 'g'), 10) = d
+    order by created_at desc limit 1
+  ) c;
+  return result;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.find_inbound_sms_customer(p_phone text)
+ RETURNS json
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare d text; result json;
+begin
+  d := right(regexp_replace(coalesce(p_phone, ''), '\D', '', 'g'), 10);
+  if length(d) < 10 then return null; end if;
+  select to_json(c) into result from (
+    select cu.id, cu.user_id, cu.sms_opt_in, cu.name
+    from public.customers cu
+    join public.platform_capabilities pc
+      on pc.user_id = cu.user_id and pc.inbound_sms
+    where cu.phone is not null
+      and right(regexp_replace(cu.phone, '\D', '', 'g'), 10) = d
+    order by cu.created_at desc limit 1
+  ) c;
+  return result;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.find_portal_access_customers(p_email text)
+ RETURNS TABLE(customer_id uuid, customer_name text, owner_id uuid)
+ LANGUAGE sql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  select c.id, c.name, c.user_id
+  from public.customers c
+  where c.archived_at is null
+    and c.email is not null
+    and lower(trim(c.email)) = lower(trim(p_email))
+$function$;
+
+CREATE OR REPLACE FUNCTION public.get_booking_business(p_token text)
+ RETURNS json
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare result json;
+begin
+  select to_json(b) into result from (
+    select company_name, owner_name, logo_url, phone, email_primary, website,
+           pricing_base_charge, pricing_mow_rate, pricing_recommended_mult, pricing_premium_mult, pricing_travel_rate,
+           payment_fee_strategy, fee_recovery_percent, gst_percent
+    from public.business_settings
+    where booking_token = p_token and booking_enabled = true
+  ) b;
+  return result;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.get_portal_data(p_token text)
+ RETURNS json
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_customer uuid; v_user uuid; result json;
+begin
+  select customer_id, user_id into v_customer, v_user
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return null; end if;
+  select json_build_object(
+    -- review_declined_at: the customer's own "No thanks", so it survives the session.
+    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in, reviewed_at, review_declined_at, autopay_enabled from public.customers where id = v_customer) c),
+    -- service_seasons: buildServicePlans needs the owner's REAL season window.
+    -- gst_number: CRA requires the supplier's registration number on a $30+ invoice
+    -- for the customer to claim an ITC. Null when not registered; the PDFs print it
+    -- only when gst_percent > 0 AND it is set.
+    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, review_url, coalesce(gst_percent,0) as gst_percent, gst_number, etransfer_email, service_seasons from public.business_settings where user_id = v_user) b),
+    -- The owner's OWN catalogue — what this business actually sells. Drives the
+    -- portal's "Request a service" tab, so it lists pool visits for a pool company
+    -- and window cleaning for a window cleaner. Active only, in the owner's order.
+    'services', coalesce((select json_agg(s order by s.sort_order, s.name) from (
+      select name, category, default_rate, pricing_display_type, default_description, sort_order
+      from public.service_templates
+      where user_id = v_user and is_active
+    ) s), '[]'::json),
+    -- UNCHANGED — the primary property. Kept because Home/PropertyTab/PDF fallbacks
+    -- read it today; 'properties' below is the addition, not a replacement.
+    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
+    -- NEW — EVERY property this customer owns. `id` is the join key the quotes and
+    -- invoices projections below now carry; without it a card cannot name its own
+    -- address or area, and 'property' above can only ever answer for the primary.
+    -- Same ordering as the singular so properties[0] === property.
+    'properties', coalesce((select json_agg(p order by p.is_primary desc nulls last, p.created_at asc) from (
+      select id, address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, is_primary, created_at
+      from public.properties where customer_id = v_customer
+    ) p), '[]'::json),
+    -- property_id (NEW): which property this quote is actually for. NULL on legacy
+    -- rows (4 of 62 at time of writing) — the client falls back to qt.address text
+    -- and suppresses any area claim rather than borrowing the primary's.
+    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (
+      select qt.id, qt.quote_number, qt.service_type, qt.address, qt.property_id, qt.total, qt.initial_price, qt.subtotal,
+             qt.weekly_price, qt.biweekly_price, qt.monthly_price, qt.notes, qt.status, qt.created_at,
+             qt.issued_date, qt.crew_size, qt.hours, qt.travel_fee, qt.valid_until,
+             qt.selected_option_id,
+             -- accepted_price: what the customer CONSENTED to (selected option +
+             -- travel, snapshotted at approval) — the scheduling deposit derives
+             -- from this, never from a live total an edit could move.
+             -- deposit_type/deposit_value: the scheduling-deposit rule.
+             -- preferred_*: the customer's own scheduling REQUEST (a preference,
+             -- never a booking) — shown back so a reload keeps what they told us.
+             qt.accepted_price, qt.deposit_type, qt.deposit_value,
+             qt.preferred_date, qt.preferred_date_2, qt.preferred_timing, qt.preferred_note,
+             coalesce((select json_agg(o order by o.sort_order) from (
+               select qo.id, qo.name, qo.description, qo.price, qo.sort_order, qo.is_recommended
+               from public.quote_options qo where qo.quote_id = qt.id
+             ) o), '[]'::json) as options,
+             coalesce((select json_agg(s order by s.sort_order) from (
+               select qs.service_type, qs.quantity, qs.unit, qs.unit_price, qs.est_minutes,
+                      qs.discount_type, qs.discount_value, qs.notes, qs.sort_order
+               from public.quote_services qs where qs.quote_id = qt.id
+             ) s), '[]'::json) as services
+      from public.quotes qt where qt.customer_id = v_customer and qt.status <> 'draft') q), '[]'::json),
+    -- property_id (NEW): same reason. NULL is the honest answer for a combined
+    -- invoice spanning properties — do not infer one.
+    -- ⛔ `and status <> 'draft'` IS A PRIVACY PREDICATE, NOT A FILTER PREFERENCE.
+    -- A draft is the owner's unfinished, unsent bill. Without this clause it was
+    -- serialized into the customer's payload and read straight out of devtools —
+    -- the portal only declined to RENDER it. Same predicate the quotes select
+    -- above has always carried. Deleting it re-opens a confirmed data exposure.
+    -- deposit_amount / deposit_requested_at: the deposit surface reads these.
+    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, amount_paid, status, issued_date, due_date, notes, address, property_id, line_items, job_id, created_at, discount_type, discount_value, deposit_amount, deposit_requested_at from public.invoices where customer_id = v_customer and status <> 'draft') i), '[]'::json),
+    -- quote_id: which booking a pre-invoice deposit secures. The portal derives
+    -- "deposit received" from these rows (signed cash sum), never from a flag.
+    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, kind, invoice_id, quote_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
+    -- property_id, quote_id, price, is_initial_visit: buildServicePlans groups by
+    -- property and uses jobVisitValue to separate initial from recurring price.
+    --
+    -- ⛔⛔ THE INTERNAL ACCESS NOTE IS NOT IN THIS PROJECTION, AND MUST NEVER BE
+    -- PUT BACK. jobs.notes is written for whoever DOES the work — the job form
+    -- calls it "notes for whoever does the work", crew_day ships it to the
+    -- worker's phone as "the access note (gate code, where to park)". It was
+    -- selected here and rendered verbatim in the customer's visit history: 49 of
+    -- 78 completed production visits carried one, including "dog removal, keep
+    -- gate closed". Removing it here kills the leak AT THE SOURCE — a portal
+    -- component cannot render what was never serialized.
+    -- ⛔ jobs.completion_issue is internal for the same reason and likewise absent.
+    -- ⭐ jobs.completion_summary is the CUSTOMER-VISIBLE field, written for the
+    -- person who paid: it replaces the access note as the words on a finished
+    -- visit. `verify:completion` fails the build if either internal field
+    -- reappears in this line.
+    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, property_id, quote_id, price, is_initial_visit, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, completion_summary from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
+    -- start_date, end_count: the series' own window and count limit.
+    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, start_date, end_date, end_count from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
+    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json),
+    'change_orders', coalesce((select json_agg(co order by co.created_at desc) from (select id, co_number, job_id, quote_id, description, amount, status, decided_via, created_at, sent_at, approved_at, declined_at from public.change_orders where customer_id = v_customer and status <> 'draft') co), '[]'::json),
+    'payment_method', (select to_json(pm) from (select brand, last4, exp_month, exp_year from public.payment_methods where customer_id = v_customer and is_default order by created_at desc limit 1) pm)
+  ) into result;
+  return result;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.guard_business_settings_owner()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+begin
+  -- current_app_role() treats "has a business_settings row" as PROOF OF OWNERSHIP,
+  -- and RLS lets any authenticated user insert a row for their own uid. So this
+  -- INSERT was a one-statement promotion from crew to owner (reproduced: role
+  -- flipped 'crew' -> 'owner'), which then unlocked the owner-only invite route.
+  -- crew_redeem_invite already refuses the reverse direction ("this account owns
+  -- a business — it cannot also join one as crew"); this is the missing mirror.
+  if exists (select 1 from public.technicians t where t.auth_user_id = new.user_id) then
+    raise exception 'this account is linked to an employee record and cannot own a business'
+      using errcode = '42501';
+  end if;
+  return new;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.guard_lawn_sqft_writer()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+declare v_lawn numeric;
+begin
+  -- Only relevant when lawn_sqft actually changes (cheap: skips every other update).
+  if new.lawn_sqft is not distinct from old.lawn_sqft then return new; end if;
+  -- Once the typed ledger has a lawn row, its value is the ONLY legitimate
+  -- lawn_sqft — which is exactly what the mirror writes. Anything else is a
+  -- legacy direct write trying to diverge from the sensor of record.
+  select value into v_lawn from public.property_measurements
+    where property_id = new.id and kind = 'lawn';
+  if found and new.lawn_sqft is distinct from v_lawn then
+    raise exception 'lawn_sqft is derived from property_measurements (kind=lawn); save the measurement through lib/measure, never write lawn_sqft directly'
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.guard_technician_auth_link()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+begin
+  -- auth_user_id is the employee's IDENTITY LINK. It may only be written by the
+  -- flows that prove consent/ownership: crew_redeem_invite + crew_revoke_access
+  -- (SECURITY DEFINER, run as postgres) and the owner-authenticated invite route
+  -- (service_role). A client-side write would let an "owner" forge a link to a
+  -- stranger's auth account and then have the invite route mint a recovery token
+  -- for it.
+  if current_user in ('postgres', 'service_role', 'supabase_admin') then return new; end if;
+  if tg_op = 'INSERT' and new.auth_user_id is not null then
+    raise exception 'auth_user_id is set by the invite/join flow, not written directly'
+      using errcode = '42501';
+  end if;
+  if tg_op = 'UPDATE' and new.auth_user_id is distinct from old.auth_user_id then
+    raise exception 'auth_user_id is set by the invite/join flow, not written directly'
+      using errcode = '42501';
+  end if;
+  return new;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.handle_updated_at()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public'
+AS $function$ begin new.updated_at = now(); return new; end; $function$;
+
+CREATE OR REPLACE FUNCTION public.inbox_counts()
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE
+AS $function$
+  with c as (select archived_at, snoozed_until, lead_status, last_channel, last_direction, unread, muted
+             from public.conversations where user_id = auth.uid()),
+       awake as (select * from c where archived_at is null and (snoozed_until is null or snoozed_until <= now()))
+  select jsonb_build_object(
+    'all',          (select count(*) from awake),
+    'needs_reply',  (select count(*) from awake where last_direction = 'inbound'),
+    'sms',          (select count(*) from awake where lead_status is null and (last_channel = 'sms' or last_channel is null)),
+    'portal',       (select count(*) from awake where lead_status is null and last_channel = 'portal'),
+    'website_lead', (select count(*) from awake where lead_status = 'new'),
+    'snoozed',      (select count(*) from c where archived_at is null and snoozed_until > now()),
+    'archived',     (select count(*) from c where archived_at is not null),
+    'unread_sum',   (select coalesce(sum(unread), 0) from c where archived_at is null and muted = false)
+  );
+$function$;
+
+CREATE OR REPLACE FUNCTION public.is_verify_fixture_tenant()
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  select exists (
+    select 1 from public.verify_fixture_tenants t where t.user_id = auth.uid()
+  );
+$function$;
+
+CREATE OR REPLACE FUNCTION public.job_session_minutes(p_job_id uuid)
+ RETURNS integer
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  select sum(minutes)::integer from public.job_work_sessions where job_id = p_job_id;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.list_beta_invites()
+ RETURNS TABLE(id uuid, label text, email text, created_at timestamp with time zone, expires_at timestamp with time zone, state text, reserved_at timestamp with time zone, redeemed_at timestamp with time zone, send_count integer, last_sent_at timestamp with time zone)
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+begin
+  if auth.uid() is null
+     or not exists (select 1 from public.platform_operators o where o.user_id = auth.uid()) then
+    raise exception 'only a platform operator can list beta invites' using errcode = '42501';
+  end if;
+  return query
+  select i.id, i.label, i.email, i.created_at, i.expires_at,
+         case
+           when i.revoked_at  is not null then 'revoked'
+           when i.redeemed_at is not null then 'redeemed'
+           when i.reserved_by is not null then 'reserved'
+           when i.expires_at < now()      then 'expired'
+           else 'open'
+         end,
+         i.reserved_at, i.redeemed_at, i.send_count, i.last_sent_at
+    from public.beta_invites i
+   order by i.created_at desc;
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.log_measurement_event()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+begin
+  if tg_op = 'DELETE' then
+    insert into public.property_measurement_events
+      (user_id, property_id, measurement_id, kind, unit, value, shapes, source, confidence, confidence_reason, action, measured_at)
+    values (old.user_id, old.property_id, old.id, old.kind, old.unit, old.value, old.shapes,
+            old.source, old.confidence, old.confidence_reason, 'removed', old.measured_at);
+    return null;
+  end if;
+  -- Only log when something a reader would care about actually moved. An
+  -- unchanged re-save is not a measurement event.
+  if tg_op = 'UPDATE'
+     and new.value is not distinct from old.value
+     and new.source is not distinct from old.source
+     and new.shapes is not distinct from old.shapes then
+    return null;
+  end if;
+  insert into public.property_measurement_events
+    (user_id, property_id, measurement_id, kind, unit, value, shapes, source, confidence, confidence_reason, action, measured_at)
+  values (new.user_id, new.property_id, new.id, new.kind, new.unit, new.value, new.shapes,
+          new.source, new.confidence, new.confidence_reason, 'measured', new.measured_at);
+  return null;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.log_wage_change()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+begin
+  if tg_op = 'INSERT' then
+    if new.hourly_wage is not null then
+      insert into public.wage_history (user_id, technician_id, old_wage, new_wage, note)
+      values (new.user_id, new.id, null, new.hourly_wage, 'Starting wage');
+    end if;
+    return new;
+  end if;
+  if new.hourly_wage is distinct from old.hourly_wage then
+    insert into public.wage_history (user_id, technician_id, old_wage, new_wage)
+    values (new.user_id, new.id, old.hourly_wage, new.hourly_wage);
+  end if;
+  return new;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.mirror_measurement_to_property()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+declare target uuid; v numeric;
+begin
+  target := coalesce(new.property_id, old.property_id);
+  v := case when tg_op = 'DELETE' then null else new.value end;
+
+  case coalesce(new.kind, old.kind)
+    when 'lawn'    then update public.properties set lawn_sqft    = v where id = target;
+    when 'fencing' then update public.properties set fence_length = v where id = target;
+    when 'mulch'   then update public.properties set mulch_area   = v where id = target;
+    when 'rock'    then update public.properties set rock_area    = v where id = target;
+    else null;
+  end case;
+  return null;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.notify_change_order_decision()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_name text;
+begin
+  if new.status not in ('approved', 'declined') or old.status is not distinct from new.status then
+    return null;
+  end if;
+  if new.decided_via is distinct from 'portal' then return null; end if;
+  select name into v_name from public.customers where id = new.customer_id;
+  insert into public.notifications (user_id, type, title, body, customer_id, entity_type, entity_id, amount, href)
+  values (
+    new.user_id,
+    case when new.status = 'approved' then 'change_order_approved' else 'change_order_declined' end,
+    coalesce(nullif(v_name, ''), 'A customer') ||
+      case when new.status = 'approved' then ' approved a change' else ' declined a change' end,
+    new.co_number || ' - $' || trim(to_char(new.amount, 'FM999990D00')) || ' - ' || left(new.description, 80),
+    new.customer_id, 'job', new.job_id, new.amount, '/dashboard/schedule?focus=' || new.job_id
+  );
+  return null;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.notify_inbound_message()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_name text; v_muted boolean;
+begin
+  if new.direction <> 'inbound' then return new; end if;
+  select muted into v_muted from public.conversations where id = new.conversation_id;
+  if coalesce(v_muted, false) then return new; end if;
+  select name into v_name from public.customers where id = new.customer_id;
+  insert into public.notifications (user_id, type, title, body, customer_id, entity_type, entity_id, href)
+  values (
+    new.user_id,
+    case when new.channel = 'portal' and (new.meta ? 'service_request_id') then 'portal_request'
+         else 'new_message' end,
+    coalesce(nullif(v_name, ''), 'A customer')
+      || case when new.channel = 'portal' and (new.meta ? 'service_request_id') then ' sent a request from the portal'
+              when new.channel = 'portal' then ' sent you a message from the portal'
+              else ' replied by text' end,
+    left(new.body, 140),
+    new.customer_id, 'message', new.id, '/dashboard/messages?c=' || new.customer_id
+  );
+  return new;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.notify_invoice_paid()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  if new.status = 'paid' and old.status is distinct from 'paid' then
+    insert into public.notifications (user_id, type, title, body, customer_id, entity_type, entity_id, amount, href)
+    values (new.user_id, 'invoice_paid',
+      coalesce(nullif(new.customer_name,''), 'A customer') || ' paid an invoice',
+      'Invoice ' || coalesce(new.invoice_number, '') || ' · $' || trim(to_char(coalesce(new.amount,0), 'FM999990D00')) || ' received',
+      new.customer_id, 'invoice', new.id, new.amount, '/dashboard/invoices');
+  end if;
+  return new;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.notify_quote_accepted()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  if new.status = 'accepted' and old.status is distinct from 'accepted' then
+    insert into public.notifications (user_id, type, title, body, customer_id, entity_type, entity_id, amount, href)
+    values (new.user_id, 'quote_accepted',
+      coalesce(nullif(new.customer_name,''), 'A customer') || ' accepted a quote',
+      'Quote ' || coalesce(new.quote_number, '') || ' · $' || trim(to_char(coalesce(new.total,0), 'FM999990D00')),
+      new.customer_id, 'quote', new.id, new.total, '/dashboard/quotes/' || new.id);
+  end if;
+  return new;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.notify_review_received()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  if new.reviewed_at is not null and old.reviewed_at is distinct from new.reviewed_at then
+    insert into public.notifications (user_id, type, title, body, customer_id, entity_type, entity_id, href)
+    values (new.user_id, 'review_received',
+      coalesce(nullif(new.name, ''), 'A customer') || ' left a review',
+      'Thanks to your follow-up — tap to view their profile',
+      new.id, 'customer', new.id, '/dashboard/customers/' || new.id);
+  end if;
+  return new;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.nudge_webhook_deliveries()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_url text; v_secret text;
+begin
+  select deliver_url, secret into v_url, v_secret from public.integrations_config where id = 1;
+  if v_url is null or v_url = '' then return null; end if;
+  begin
+    perform net.http_post(
+      url     := v_url,
+      body    := '{}'::jsonb,
+      headers := jsonb_build_object('Content-Type', 'application/json',
+                                    'x-integrations-secret', coalesce(v_secret, ''))
+    );
+  exception when others then
+    null;
+  end;
+  return null;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.owner_select_quote_option(p_quote_id uuid, p_option_id uuid)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  -- Stated rather than implied: a guard whose safety depends on a NULL
+  -- comparison behaving is the shape that failed open in the measurement RPC.
+  if auth.uid() is null then return false; end if;
+  if not exists (
+    select 1 from public.quotes where id = p_quote_id and user_id = auth.uid()
+  ) then
+    return false;
+  end if;
+  return public.quote_apply_option_choice(p_quote_id, p_option_id);
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.portal_accept_quote(p_token text, p_quote_id uuid, p_option_id uuid DEFAULT NULL::uuid)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_customer uuid;
+  v_options int;
+begin
+  select customer_id into v_customer from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return false; end if;
+
+  select count(*) into v_options from public.quote_options where quote_id = p_quote_id;
+
+  -- Branch on what was ASKED FOR, not on what the quote happens to have.
+  if p_option_id is not null then
+    -- This door proves the quote is this token's customer's and still out for
+    -- approval. Whether the OPTION belongs to the quote is the core's question.
+    if not exists (
+      select 1 from public.quotes
+       where id = p_quote_id and customer_id = v_customer and status = 'sent'
+    ) then
+      return false;
+    end if;
+    return public.quote_apply_option_choice(p_quote_id, p_option_id);
+  end if;
+
+  -- A quote that offers alternatives cannot be approved without one.
+  if v_options > 0 then return false; end if;
+
+  update public.quotes
+     set status = 'accepted',
+         accepted_price = coalesce(accepted_price, total)
+   where id = p_quote_id and customer_id = v_customer and status = 'sent';
+  return found;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.portal_add_contact(p_token text, p_phone text DEFAULT NULL::text, p_email text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_customer uuid; v_user uuid;
+  v_cur_phone text; v_cur_email text;
+  v_phone text; v_email text; v_digits text;
+  v_added text[] := '{}'::text[];
+  v_skipped text[] := '{}'::text[];
+  v_has_phone boolean; v_has_email boolean;
+  v_note text;
+begin
+  select customer_id, user_id into v_customer, v_user
+    from public.customer_portal_tokens
+   where token = p_token and not revoked;
+  if v_customer is null then
+    return jsonb_build_object('ok', false, 'reason', 'invalid_token');
+  end if;
+
+  select nullif(btrim(phone), ''), nullif(btrim(email), '')
+    into v_cur_phone, v_cur_email
+    from public.customers where id = v_customer;
+
+  v_phone := nullif(btrim(coalesce(p_phone, '')), '');
+  v_email := lower(nullif(btrim(coalesce(p_email, '')), ''));
+
+  if v_phone is not null and v_cur_phone is not null then
+    v_skipped := array_append(v_skipped, 'phone'); v_phone := null;
+  end if;
+  if v_email is not null and v_cur_email is not null then
+    v_skipped := array_append(v_skipped, 'email'); v_email := null;
+  end if;
+
+  if v_phone is null and v_email is null then
+    return jsonb_build_object(
+      'ok', false,
+      'reason', case when array_length(v_skipped, 1) > 0 then 'already_on_file' else 'nothing_to_add' end,
+      'skipped', to_jsonb(v_skipped),
+      'has_phone', v_cur_phone is not null,
+      'has_email', v_cur_email is not null);
+  end if;
+
+  if v_phone is not null then
+    v_digits := regexp_replace(v_phone, '\D', '', 'g');
+    if length(v_digits) < 10 or length(v_digits) > 15 then
+      return jsonb_build_object('ok', false, 'reason', 'bad_phone');
+    end if;
+  end if;
+  if v_email is not null and v_email !~ '^[^[:space:]@]+@[^[:space:]@.]+\.[^[:space:]@]{2,}$' then
+    return jsonb_build_object('ok', false, 'reason', 'bad_email');
+  end if;
+
+  if v_phone is not null and exists (
+    select 1 from public.customers
+     where user_id = v_user and id <> v_customer and archived_at is null
+       and length(phone_digits) >= 10
+       and right(phone_digits, 10) = right(v_digits, 10)
+  ) then
+    return jsonb_build_object('ok', false, 'reason', 'phone_taken');
+  end if;
+  if v_email is not null and exists (
+    select 1 from public.customers
+     where user_id = v_user and id <> v_customer and archived_at is null
+       and lower(btrim(email)) = v_email
+  ) then
+    return jsonb_build_object('ok', false, 'reason', 'email_taken');
+  end if;
+
+  update public.customers
+     set phone = coalesce(v_phone, phone),
+         email = coalesce(v_email, email),
+         updated_at = now()
+   where id = v_customer;
+
+  if v_phone is not null then v_added := array_append(v_added, 'phone'); end if;
+  if v_email is not null then v_added := array_append(v_added, 'email'); end if;
+
+  select nullif(btrim(phone), '') is not null, nullif(btrim(email), '') is not null
+    into v_has_phone, v_has_email
+    from public.customers where id = v_customer;
+
+  v_note := 'Customer added their own contact details from the portal — '
+         || array_to_string(array_remove(array[
+              case when v_phone is not null then 'Phone: ' || v_phone end,
+              case when v_email is not null then 'Email: ' || v_email end
+            ], null), ' · ');
+  insert into public.service_requests (user_id, customer_id, message, status)
+  values (v_user, v_customer, left(v_note, 1000), 'handled');
+
+  return jsonb_build_object(
+    'ok', true, 'reason', null,
+    'added', to_jsonb(v_added),
+    'skipped', to_jsonb(v_skipped),
+    'has_phone', v_has_phone,
+    'has_email', v_has_email);
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.portal_begin_setup(p_token text)
+ RETURNS json
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_customer uuid; v_user uuid; result json;
+begin
+  select customer_id, user_id into v_customer, v_user
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return null; end if;
+  select to_json(c) into result from (
+    select id, user_id, name, email, stripe_customer_id from public.customers where id = v_customer
+  ) c;
+  return result;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.portal_decline_review(p_token text)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_customer uuid;
+begin
+  select customer_id into v_customer from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return false; end if;
+  update public.customers
+    set review_declined_at = coalesce(review_declined_at, now())
+    where id = v_customer;
+  return true;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.portal_get_messages(p_token text)
+ RETURNS json
+ LANGUAGE sql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  select coalesce(json_agg(json_build_object(
+           'id', m.id, 'direction', m.direction, 'channel', m.channel,
+           'body', m.body, 'created_at', m.created_at) order by m.created_at), '[]'::json)
+    from (
+      select msg.id, msg.direction, msg.channel, msg.body, msg.created_at
+        from public.messages msg
+        join public.conversations c on c.id = msg.conversation_id
+        join public.customer_portal_tokens t
+          on t.customer_id = c.customer_id and t.user_id = c.user_id
+       where t.token = p_token and not t.revoked
+       order by msg.created_at desc
+       limit 200
+    ) m;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.portal_get_prefs(p_token text)
+ RETURNS jsonb
+ LANGUAGE sql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  select coalesce(c.message_prefs, '{}'::jsonb)
+    from public.customer_portal_tokens t
+    join public.customers c on c.id = t.customer_id
+   where t.token = p_token and not t.revoked
+$function$;
+
+CREATE OR REPLACE FUNCTION public.portal_invoice_for_payment(p_token text, p_invoice_id uuid)
+ RETURNS json
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_customer uuid; result json;
+begin
+  select customer_id into v_customer from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return null; end if;
+  select to_json(i) into result from (
+    select id, invoice_number, service_type, amount, amount_paid, status, customer_id, user_id
+    from public.invoices where id = p_invoice_id and customer_id = v_customer and status in ('unpaid','sent','partial')
+  ) i;
+  return result;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.portal_mark_invoice_viewed(p_token text, p_invoice_id uuid)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_customer uuid; v_user uuid;
+begin
+  select customer_id, user_id into v_customer, v_user
+  from public.customer_portal_tokens
+  where token = p_token and not revoked;
+  if v_customer is null then return; end if;
+  update public.invoices
+     set viewed_at = coalesce(viewed_at, now())
+   where id = p_invoice_id and customer_id = v_customer and user_id = v_user
+     and status <> 'draft';
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.portal_mark_reviewed(p_token text)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_customer uuid;
+begin
+  select customer_id into v_customer from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return false; end if;
+  update public.customers
+    set reviewed_at   = coalesce(reviewed_at, now()),
+        review_source = coalesce(review_source, 'Google')
+    where id = v_customer;
+  return true;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.portal_remove_card(p_token text)
+ RETURNS json
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_customer uuid; v_pms json;
+begin
+  select customer_id into v_customer from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return null; end if;
+  select coalesce(json_agg(stripe_payment_method_id), '[]'::json) into v_pms
+    from public.payment_methods where customer_id = v_customer;
+  delete from public.payment_methods where customer_id = v_customer;
+  update public.customers set autopay_enabled = false where id = v_customer;
+  return v_pms;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.portal_request_photos_ok(p text[])
+ RETURNS boolean
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE
+AS $function$
+  select coalesce(array_length(p, 1), 0) <= 6
+     and coalesce(array_length(p, 1), 0) = (
+           select count(*) from unnest(p) as u
+            where u ~ ('^portal/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+                    || '/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+                    || '\.(jpg|jpeg|png|webp|heic|heif)$')
+         )
+$function$;
+
+CREATE OR REPLACE FUNCTION public.portal_request_service(p_token text, p_message text)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  return public.portal_submit_request(p_token, p_message, 'service');
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.portal_respond_change_order(p_token text, p_change_order_id uuid, p_decision text, p_reason text DEFAULT NULL::text)
+ RETURNS json
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_customer uuid; v_status text; v_number text; v_amount numeric;
+begin
+  if p_decision not in ('approve', 'decline') then
+    return json_build_object('ok', false, 'reason', 'bad_decision');
+  end if;
+  select customer_id into v_customer
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then
+    return json_build_object('ok', false, 'reason', 'no_access');
+  end if;
+
+  update public.change_orders
+     set status      = case when p_decision = 'approve' then 'approved' else 'declined' end,
+         decided_via = 'portal',
+         decline_reason = case when p_decision = 'decline' then nullif(btrim(coalesce(p_reason, '')), '') else null end
+   where id = p_change_order_id
+     and customer_id = v_customer
+     and status = 'pending'
+  returning status, co_number, amount into v_status, v_number, v_amount;
+
+  if v_status is null then
+    return json_build_object('ok', false, 'reason', 'not_pending');
+  end if;
+  return json_build_object('ok', true, 'status', v_status, 'number', v_number, 'amount', v_amount);
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.portal_send_message(p_token text, p_body text)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_customer uuid; v_user uuid; v_convo uuid;
+begin
+  select customer_id, user_id into v_customer, v_user
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return false; end if;
+  if coalesce(trim(p_body), '') = '' then return false; end if;
+  select id into v_convo from public.conversations
+    where user_id = v_user and customer_id = v_customer;
+  if v_convo is null then
+    insert into public.conversations (user_id, customer_id, last_message_at)
+      values (v_user, v_customer, now()) returning id into v_convo;
+  end if;
+  if (select count(*) from public.messages
+       where conversation_id = v_convo and direction = 'inbound' and channel = 'portal'
+         and created_at > now() - interval '1 hour') >= 30
+  then return false; end if;
+  insert into public.messages (user_id, conversation_id, customer_id, direction, channel, body, status, meta)
+    values (v_user, v_convo, v_customer, 'inbound', 'portal', left(trim(p_body), 2000), 'received',
+            jsonb_build_object('portal_message', true));
+  return true;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.portal_set_autopay(p_token text, p_enabled boolean)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_customer uuid; v_has_card boolean;
+begin
+  select customer_id into v_customer from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return false; end if;
+  if p_enabled then
+    select exists(select 1 from public.payment_methods where customer_id = v_customer) into v_has_card;
+    if not v_has_card then return false; end if;   -- can't enable AutoPay with no card
+  end if;
+  update public.customers set autopay_enabled = p_enabled where id = v_customer;
+  return true;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.portal_set_consent(p_token text, p_sms_opt_in boolean, p_email_opt_in boolean, p_prefs jsonb DEFAULT NULL::jsonb)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_customer uuid; v_user uuid; v_old_sms boolean; v_old_email boolean;
+begin
+  select customer_id, user_id into v_customer, v_user
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return false; end if;
+  select sms_opt_in, email_opt_in into v_old_sms, v_old_email from public.customers where id = v_customer;
+  update public.customers
+     set sms_opt_in = p_sms_opt_in,
+         email_opt_in = p_email_opt_in,
+         message_prefs = coalesce(p_prefs, message_prefs)
+   where id = v_customer;
+  if v_old_sms is distinct from p_sms_opt_in then
+    insert into public.consent_changes (user_id, customer_id, channel, old_value, new_value, source, changed_by)
+    values (v_user, v_customer, 'sms', v_old_sms, p_sms_opt_in, 'portal', 'customer (portal)');
+  end if;
+  if v_old_email is distinct from p_email_opt_in then
+    insert into public.consent_changes (user_id, customer_id, channel, old_value, new_value, source, changed_by)
+    values (v_user, v_customer, 'email', v_old_email, p_email_opt_in, 'portal', 'customer (portal)');
+  end if;
+  return true;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.portal_set_scheduling_preference(p_token text, p_quote_id uuid, p_date date DEFAULT NULL::date, p_date_2 date DEFAULT NULL::date, p_timing text DEFAULT NULL::text, p_note text DEFAULT NULL::text)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_customer uuid;
+begin
+  select customer_id into v_customer
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return false; end if;
+
+  if p_timing is not null and p_timing not in ('morning','afternoon') then return false; end if;
+  if p_date_2 is not null and p_date is null then return false; end if;
+  if p_date is not null and p_date < current_date - 1 then return false; end if;
+  if p_date_2 is not null and p_date_2 < current_date - 1 then return false; end if;
+  if p_note is not null and char_length(p_note) > 500 then return false; end if;
+
+  update public.quotes
+     set preferred_date   = p_date,
+         preferred_date_2 = p_date_2,
+         preferred_timing = p_timing,
+         preferred_note   = nullif(btrim(coalesce(p_note, '')), '')
+   where id = p_quote_id
+     and customer_id = v_customer
+     and status = 'accepted';
+  return found;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.portal_submit_request(p_token text, p_message text, p_kind text DEFAULT 'service'::text, p_preferred_date date DEFAULT NULL::date, p_job_id uuid DEFAULT NULL::uuid, p_recurrence_id uuid DEFAULT NULL::uuid, p_details jsonb DEFAULT NULL::jsonb, p_photos text[] DEFAULT NULL::text[])
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_customer uuid; v_user uuid; v_msg text; v_photos text[]; v_key text;
+begin
+  -- The token proves WHICH CUSTOMER. Everything below is re-resolved against it.
+  select customer_id, user_id into v_customer, v_user
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return false; end if;
+
+  v_msg := left(btrim(coalesce(p_message, '')), 2000);
+  if v_msg = '' then return false; end if;
+  if p_kind not in ('service','appointment','reschedule','plan_change','additional_work') then return false; end if;
+
+  -- A caller-supplied id proves nothing on its own: a job or plan named here must
+  -- belong to THIS token's customer AND this business, or the request is refused.
+  if p_job_id is not null and not exists (
+    select 1 from public.jobs where id = p_job_id and customer_id = v_customer and user_id = v_user
+  ) then return false; end if;
+  if p_recurrence_id is not null and not exists (
+    select 1 from public.job_recurrences where id = p_recurrence_id and customer_id = v_customer and user_id = v_user
+  ) then return false; end if;
+
+  -- Media is REFUSED, never silently dropped. A legitimate client can only ever
+  -- produce paths it just uploaded, so a malformed one means the call was
+  -- tampered with — and quietly discarding a photo the customer attached would
+  -- be the portal lying about what it sent.
+  v_photos := coalesce(p_photos, '{}'::text[]);
+  if not public.portal_request_photos_ok(v_photos) then return false; end if;
+
+  if (select count(*) from public.service_requests
+       where customer_id = v_customer and created_at > now() - interval '1 hour') >= 20
+  then return false; end if;
+
+  -- Same ask, same day preference, same visit ⇒ same key. Paired with the partial
+  -- unique index, a resubmission while the first is still open is a no-op that
+  -- still reports success: the request IS on file, which is what the customer
+  -- asked to be true.
+  v_key := md5(p_kind || '|' || lower(v_msg) || '|'
+            || coalesce(p_preferred_date::text, '') || '|' || coalesce(p_job_id::text, ''));
+
+  insert into public.service_requests
+    (user_id, customer_id, message, kind, preferred_date, job_id, recurrence_id, details, photos, from_portal, dedup_key)
+  values
+    (v_user, v_customer, v_msg, p_kind, p_preferred_date, p_job_id, p_recurrence_id, p_details, v_photos, true, v_key)
+  on conflict do nothing;
+
+  return true;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.pricing_config_versions_immutable()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+begin
+  raise exception
+    'pricing_config_versions is append-only (ADR-002): a configuration that priced a quote must never change. Insert a new version instead.'
+    using errcode = 'restrict_violation';
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.public_availability(p_token text, p_days integer DEFAULT 14)
+ RETURNS json
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_user uuid; v_days int; v_cap_min numeric; v_pref int[];
+begin
+  select user_id, coalesce(daily_capacity_hours,8)*60, coalesce(preferred_work_days,'{5,6,0}')
+    into v_user, v_cap_min, v_pref
+    from public.business_settings where booking_token = p_token and booking_enabled = true;
+  if v_user is null then return null; end if;
+  v_days := least(greatest(coalesce(p_days,14),1),60);
+  return (
+    select coalesce(json_agg(json_build_object(
+      'date', d::date, 'weekday', trim(to_char(d,'Dy')),
+      'available', booked_min < v_cap_min,
+      'remaining_minutes', greatest(v_cap_min - booked_min, 0)::int) order by d), '[]'::json)
+    from (
+      select g.d, coalesce((select sum(coalesce(j.duration_minutes, j.actual_minutes, 45))
+        from public.jobs j where j.user_id = v_user and j.scheduled_date = g.d::date and j.status in ('scheduled','in_progress')),0) as booked_min
+      from generate_series(current_date + 1, current_date + v_days, interval '1 day') g(d)
+      where (extract(dow from g.d))::int = any(v_pref)
+    ) days
+  );
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.public_services(p_token text)
+ RETURNS json
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_user uuid; result json;
+begin
+  select user_id into v_user from public.business_settings where booking_token = p_token and booking_enabled = true;
+  if v_user is null then return null; end if;
+  select json_build_object(
+    'business', (select to_json(b) from (
+      select company_name, owner_name, logo_url, phone, email_primary, website, base_address, coalesce(gst_percent,0) as gst_percent
+      from public.business_settings where user_id = v_user) b),
+    'services', (select coalesce(json_agg(json_build_object(
+        'id', id, 'name', name, 'category', category, 'description', default_description,
+        'default_rate', default_rate, 'pricing_display_type', pricing_display_type) order by sort_order, name), '[]'::json)
+      from public.service_templates where user_id = v_user and is_active = true)
+  ) into result;
+  return result;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.push_dispatch()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_url text; v_secret text;
+begin
+  select endpoint_url, secret into v_url, v_secret from public.push_config where id = 1;
+  if v_url is null or v_url = '' then return new; end if;
+  begin
+    perform net.http_post(
+      url     := v_url,
+      body    := jsonb_build_object('id', new.id::text),
+      headers := jsonb_build_object('Content-Type', 'application/json', 'x-push-secret', coalesce(v_secret, ''))
+    );
+  exception when others then
+    null;  -- push is best-effort; never block the notification insert
+  end;
+  return new;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.quote_apply_option_choice(p_quote_id uuid, p_option_id uuid)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_price numeric(10,2);
+  v_travel numeric(10,2);
+  v_follow int;
+begin
+  -- THE tenancy statement: o.quote_id = p_quote_id. Resolving the option THROUGH
+  -- the quote is what makes "you may not name another quote's option" true here
+  -- rather than wherever someone remembered to check it.
+  -- 'draft' or 'sent' = NOT YET DECIDED. Anything else means a choice already
+  -- stands, and re-deciding would silently rewrite the approved price.
+  select o.price, coalesce(q.travel_fee, 0), coalesce(q.follow_up_count, 0)
+    into v_price, v_travel, v_follow
+    from public.quote_options o
+    join public.quotes q on q.id = o.quote_id
+   where o.id = p_option_id
+     and o.quote_id = p_quote_id
+     and q.status in ('draft', 'sent');
+  if v_price is null then return false; end if;
+
+  update public.quotes
+     set status = 'accepted',
+         selected_option_id = p_option_id,
+         initial_price = v_price,
+         -- NOT coalesce(accepted_price, total): total is GENERATED over
+         -- initial_price and every SET expression reads the OLD row.
+         accepted_price = v_price + v_travel,
+         accepted_after_followup = v_follow > 0,
+         follow_up_count_at_acceptance = v_follow
+   where id = p_quote_id and status in ('draft', 'sent');
+  return found;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.quote_options_shape_guard()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public'
+AS $function$
+declare v_quote uuid; v_options int; v_lines int;
+begin
+  v_quote := coalesce(new.quote_id, old.quote_id);
+  if v_quote is null then return null; end if;
+  if not exists (select 1 from public.quotes where id = v_quote) then return null; end if;
+
+  select count(*) into v_options from public.quote_options where quote_id = v_quote;
+  select count(*) into v_lines   from public.quote_services where quote_id = v_quote;
+
+  if v_options > 4 then
+    raise exception 'A quote may offer at most 4 options (this one would have %)', v_options
+      using errcode = 'check_violation';
+  end if;
+
+  if v_options > 0 and v_lines > 0 then
+    raise exception 'A quote cannot have both alternative options and additive service lines'
+      using errcode = 'check_violation';
+  end if;
+  return null;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.recompute_equipment_service()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_eq uuid;
+begin
+  v_eq := coalesce(new.equipment_id, old.equipment_id);
+  update public.equipment e
+     set last_service_at = s.service_date, last_service_hours = s.hours, updated_at = now()
+    from (select service_date, hours from public.equipment_service
+           where equipment_id = v_eq order by service_date desc, created_at desc limit 1) s
+   where e.id = v_eq;
+  if not exists (select 1 from public.equipment_service where equipment_id = v_eq) then
+    update public.equipment set last_service_at = null, last_service_hours = null, updated_at = now() where id = v_eq;
+  end if;
+  return null;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.recompute_invoice_paid()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  perform public.recompute_invoice_paid_for(coalesce(new.invoice_id, old.invoice_id));
+  return coalesce(new, old);
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.recompute_invoice_paid_for(p_invoice_id uuid)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_inv record;
+  v_paid numeric;
+  v_total numeric;
+  v_gst numeric;
+begin
+  if p_invoice_id is null then return; end if;
+
+  select i.*, bs.gst_percent into v_inv
+  from public.invoices i
+  left join public.business_settings bs on bs.user_id = i.user_id
+  where i.id = p_invoice_id;
+  if not found then return; end if;
+
+  select coalesce(sum(p.amount), 0) into v_paid
+  from public.payments p
+  where p.invoice_id = p_invoice_id and p.kind = 'payment' and p.status = 'paid';
+
+  v_gst := coalesce(v_inv.gst_percent, 0);
+  v_total := round(v_inv.amount * (1 + v_gst / 100), 2);
+
+  update public.invoices set
+    amount_paid = v_paid,
+    paid_at = case when v_paid + 0.01 >= v_total and v_total > 0 then coalesce(paid_at, now()) else null end,
+    status = case
+      when status = 'cancelled' then status                    -- terminal: never auto-revived
+      when status = 'draft' then status
+      when v_paid <= 0 then (case when status in ('paid','partial','overpaid') then 'unpaid' else status end)
+      when v_paid + 0.01 < v_total then 'partial'
+      when v_paid <= v_total + 0.01 then 'paid'
+      else 'overpaid'
+    end
+  where id = p_invoice_id;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.recompute_invoice_paid_on_edit()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  perform public.recompute_invoice_paid_for(new.id);
+  return null;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.recompute_part_stock()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_part uuid;
+begin
+  v_part := coalesce(new.part_id, old.part_id);
+  update public.parts p
+     set qty_on_hand = coalesce((select sum(qty) from public.part_movements where part_id = v_part), 0),
+         updated_at  = now()
+   where p.id = v_part;
+  return null;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.record_booking_measurement(p_token text, p_quote_id uuid, p_lat double precision, p_lng double precision, p_neighborhood text, p_auto numeric, p_accepted numeric, p_building numeric, p_confidence text)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_user     uuid;
+  v_customer uuid;
+  v_property uuid;
+  v_hood     text;
+  v_found    boolean := false;
+begin
+  select user_id into v_user from public.business_settings
+   where booking_token = p_token and booking_enabled = true;
+  if v_user is null then return false; end if;
+
+  if p_quote_id is null then return false; end if;
+
+  select true, q.customer_id, q.property_id
+    into v_found, v_customer, v_property
+    from public.quotes q
+   where q.id = p_quote_id and q.user_id = v_user;
+  if not coalesce(v_found, false) then return false; end if;
+
+  if (select count(*) from public.measurements
+       where user_id = v_user and context = 'booking'
+         and created_at > now() - interval '1 hour') >= 30 then
+    return false;
+  end if;
+
+  select case
+           when nullif(btrim(pr.neighborhood), '') is not null then btrim(pr.neighborhood)
+           when length(btrim(coalesce(pr.postal_code, ''))) >= 3 then upper(left(btrim(pr.postal_code), 3))
+           when nullif(btrim(coalesce(pr.city, '')), '')  is not null then btrim(pr.city)
+           else 'Unknown'
+         end
+    into v_hood
+    from public.properties pr
+   where pr.id = v_property and pr.user_id = v_user;
+  v_hood := coalesce(v_hood, 'Unknown');
+
+  insert into public.measurements (user_id, quote_id, customer_id, property_id, lat, lng, neighborhood,
+      context, source, confidence, building_sqft, auto_sqft, accepted_sqft, adjusted, diff_pct)
+    values (v_user, p_quote_id, v_customer, v_property, p_lat, p_lng, v_hood,
+      'booking', 'calgary-buildings', nullif(p_confidence, ''),
+      nullif(p_building, 0), nullif(p_auto, 0), nullif(p_accepted, 0),
+      (p_auto is not null and p_auto > 0 and abs(coalesce(p_accepted, 0) - p_auto) > greatest(1, p_auto * 0.02)),
+      case when coalesce(p_auto, 0) > 0 then round(((p_accepted - p_auto) / p_auto * 100)::numeric, 1) else null end);
+  return true;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.resolve_intake_customer(p_user uuid, p_name text, p_email text, p_phone text, p_address text, p_city text, p_province text, p_postal text, p_source text, p_notes text DEFAULT NULL::text)
+ RETURNS uuid
+ LANGUAGE plpgsql
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_customer uuid;
+  v_digits text;
+  v_email text := lower(nullif(trim(p_email), ''));
+  v_phone text := nullif(trim(p_phone), '');
+  v_address text := nullif(trim(p_address), '');
+begin
+  v_digits := right(regexp_replace(coalesce(v_phone, ''), '\D', '', 'g'), 10);
+  if length(v_digits) = 10 then
+    select id into v_customer from public.customers
+      where user_id = p_user and phone is not null
+        and right(regexp_replace(phone, '\D', '', 'g'), 10) = v_digits
+      order by created_at desc limit 1;
+  end if;
+  if v_customer is null and v_email is not null then
+    select id into v_customer from public.customers
+      where user_id = p_user and lower(coalesce(email, '')) = v_email
+      order by created_at desc limit 1;
+  end if;
+  if v_customer is null and v_address is not null then
+    select id into v_customer from public.customers
+      where user_id = p_user and lower(coalesce(address, '')) = lower(v_address)
+      order by created_at desc limit 1;
+  end if;
+
+  if v_customer is null then
+    insert into public.customers (
+      user_id, name, email, phone, address, city, province, postal_code,
+      acquisition_source, notes
+    ) values (
+      p_user, p_name, v_email, v_phone, v_address,
+      nullif(trim(p_city), ''), coalesce(nullif(trim(p_province), ''), 'AB'), nullif(trim(p_postal), ''),
+      public.sanitize_source_input(p_source), nullif(trim(p_notes), '')
+    ) returning id into v_customer;
+  else
+    update public.customers set
+      phone = coalesce(phone, v_phone),
+      email = coalesce(email, v_email),
+      -- THE BACKFILL. Fills a blank; never overwrites a real answer.
+      acquisition_source = coalesce(nullif(btrim(acquisition_source), ''),
+                                    public.sanitize_source_input(p_source))
+    where id = v_customer;
+  end if;
+
+  return v_customer;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.resolve_intake_property(p_user uuid, p_customer uuid, p_address text, p_city text, p_province text, p_postal text, p_lat double precision DEFAULT NULL::double precision, p_lng double precision DEFAULT NULL::double precision, p_sqft numeric DEFAULT NULL::numeric, p_polygon jsonb DEFAULT NULL::jsonb, p_place_id text DEFAULT NULL::text, p_maps_url text DEFAULT NULL::text, p_travel_km numeric DEFAULT NULL::numeric, p_travel_fee numeric DEFAULT NULL::numeric)
+ RETURNS uuid
+ LANGUAGE plpgsql
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_prop uuid;
+  v_address text := nullif(trim(p_address), '');
+begin
+  if v_address is not null then
+    select id into v_prop from public.properties
+      where customer_id = p_customer and lower(coalesce(address, '')) = lower(v_address)
+      order by is_primary desc nulls last, created_at asc limit 1;
+  end if;
+
+  if v_prop is null then
+    insert into public.properties (
+      customer_id, user_id, address, city, province, postal_code, lat, lng,
+      lawn_sqft, lawn_polygon, google_place_id, maps_url,
+      property_travel_distance_km, property_travel_fee, is_primary
+    ) values (
+      p_customer, p_user, v_address,
+      nullif(trim(p_city), ''), coalesce(nullif(trim(p_province), ''), 'AB'), nullif(trim(p_postal), ''),
+      p_lat, p_lng, p_sqft, p_polygon,
+      nullif(trim(p_place_id), ''), nullif(trim(p_maps_url), ''),
+      p_travel_km, p_travel_fee,
+      not exists (select 1 from public.properties where customer_id = p_customer)
+    ) returning id into v_prop;
+  end if;
+
+  return v_prop;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.resync_quote_on_job_recurring()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  if new.recurrence_id is not null and old.recurrence_id is null and new.quote_id is not null then
+    update public.quotes set status = 'scheduled' where id = new.quote_id and status in ('completed','paid');
+  end if;
+  return new;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.revoke_beta_invite(p_id uuid)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare v_found boolean;
+begin
+  if auth.uid() is null
+     or not exists (select 1 from public.platform_operators o where o.user_id = auth.uid()) then
+    raise exception 'only a platform operator can revoke beta invites' using errcode = '42501';
+  end if;
+  update public.beta_invites
+     set revoked_at = coalesce(revoked_at, now())
+   where id = p_id
+  returning true into v_found;
+  return coalesce(v_found, false);
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.sanitize_source_input(p_raw text)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE
+ SET search_path TO 'pg_catalog', 'pg_temp'
+AS $function$
+  select nullif(
+    btrim(left(
+      btrim(regexp_replace(regexp_replace(coalesce(p_raw, ''), '[[:cntrl:]]', ' ', 'g'), '\s+', ' ', 'g')),
+      60)),
+    '');
+$function$;
+
+CREATE OR REPLACE FUNCTION public.schema_contract()
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+AS $function$
+  select jsonb_build_object(
+    'misc', jsonb_build_object(
+      'captured_at', now()::text,
+      'pg_version', version(),
+      'latest_migration', (select max(version) from supabase_migrations.schema_migrations),
+      'seq_acls', (select jsonb_agg(jsonb_build_object('name', c.relname, 'acl', c.relacl::text) order by c.relname)
+                   from pg_class c join pg_namespace n on c.relnamespace=n.oid where n.nspname='public' and c.relkind='S'),
+      'default_acls', (select jsonb_agg(jsonb_build_object('role', r.rolname, 'schema', coalesce(n.nspname,'<global>'),
+                          'objtype', d.defaclobjtype::text, 'acl', d.defaclacl::text))
+                       from pg_default_acl d join pg_roles r on d.defaclrole=r.oid
+                       left join pg_namespace n on d.defaclnamespace=n.oid),
+      'buckets', (select jsonb_agg(to_jsonb(b) order by b.id) from
+                  (select id, name, public, file_size_limit, allowed_mime_types, avif_autodetection
+                   from storage.buckets) b),
+      'extensions', (select jsonb_agg(jsonb_build_object('name', extname, 'version', extversion,
+                        'schema', (select nspname from pg_namespace where oid=extnamespace)) order by extname)
+                     from pg_extension),
+      'publication_tables', (select jsonb_agg(schemaname || '.' || tablename order by tablename)
+                             from pg_publication_tables where pubname='supabase_realtime')
+    ),
+    'misc2', jsonb_build_object(
+      'column_acls', (select jsonb_agg(jsonb_build_object('tbl', c.relname, 'col', a.attname, 'acl', a.attacl::text)
+                         order by c.relname, a.attname)
+                      from pg_attribute a join pg_class c on a.attrelid=c.oid join pg_namespace n on c.relnamespace=n.oid
+                      where n.nspname='public' and c.relkind='r' and a.attacl is not null),
+      'replica_identity', (select jsonb_agg(jsonb_build_object('tbl', c.relname, 'ident', c.relreplident::text) order by c.relname)
+                           from pg_class c join pg_namespace n on c.relnamespace=n.oid
+                           where n.nspname='public' and c.relkind='r' and c.relreplident <> 'd'),
+      'default_acls', (select jsonb_agg(jsonb_build_object('role', r.rolname, 'schema', coalesce(n.nspname,'<global>'),
+                          'objtype', d.defaclobjtype::text, 'acl', d.defaclacl::text))
+                       from pg_default_acl d join pg_roles r on d.defaclrole=r.oid
+                       left join pg_namespace n on d.defaclnamespace=n.oid),
+      'sequences', (select jsonb_agg(jsonb_build_object('name', s.sequencename, 'data_type', s.data_type::text) order by s.sequencename)
+                    from pg_sequences s where s.schemaname='public'),
+      'role_settings', (select jsonb_agg(jsonb_build_object('role', r.rolname, 'config', s.setconfig))
+                        from pg_db_role_setting s join pg_roles r on s.setrole=r.oid)
+    ),
+    'tables', (select jsonb_agg(jsonb_build_object(
+        'relname', c.relname, 'rls', c.relrowsecurity, 'force_rls', c.relforcerowsecurity, 'acl', c.relacl::text,
+        'cols', (select jsonb_agg(jsonb_build_object('name', a.attname, 'type', format_type(a.atttypid, a.atttypmod),
+                    'notnull', a.attnotnull, 'default', pg_get_expr(ad.adbin, ad.adrelid),
+                    'generated', a.attgenerated, 'identity', a.attidentity) order by a.attnum)
+                 from pg_attribute a left join pg_attrdef ad on ad.adrelid=a.attrelid and ad.adnum=a.attnum
+                 where a.attrelid=c.oid and a.attnum>0 and not a.attisdropped)
+      ) order by c.relname)
+      from pg_class c join pg_namespace n on c.relnamespace=n.oid where n.nspname='public' and c.relkind='r'),
+    'constraints', (select jsonb_agg(jsonb_build_object('tbl', cl.relname, 'conname', con.conname,
+        'contype', con.contype::text, 'def', pg_get_constraintdef(con.oid), 'convalidated', con.convalidated)
+        order by cl.relname, con.conname)
+      from pg_constraint con join pg_class cl on con.conrelid=cl.oid join pg_namespace n on cl.relnamespace=n.oid
+      where n.nspname='public'),
+    'indexes', (select jsonb_agg(jsonb_build_object('tbl', i.tablename, 'indexname', i.indexname, 'indexdef', i.indexdef,
+        'backs_constraint', exists(select 1 from pg_constraint con join pg_class ic on con.conindid=ic.oid
+                                   where ic.relname=i.indexname))
+        order by i.tablename, i.indexname)
+      from pg_indexes i where i.schemaname='public'),
+    'policies', (select jsonb_agg(jsonb_build_object('schemaname', p.schemaname, 'tablename', p.tablename,
+        'policyname', p.policyname, 'permissive', p.permissive, 'roles', p.roles::text, 'cmd', p.cmd,
+        'qual', p.qual, 'with_check', p.with_check)
+        order by p.schemaname, p.tablename, p.policyname)
+      from pg_policies p where p.schemaname in ('public','storage')),
+    'triggers', (select jsonb_agg(jsonb_build_object('tbl', c.relname, 'tgname', t.tgname,
+        'def', pg_get_triggerdef(t.oid), 'tgenabled', t.tgenabled::text) order by c.relname, t.tgname)
+      from pg_trigger t join pg_class c on t.tgrelid=c.oid join pg_namespace n on c.relnamespace=n.oid
+      where n.nspname='public' and not t.tgisinternal),
+    'functions', (select jsonb_agg(jsonb_build_object('proname', p.proname,
+        'args', pg_get_function_identity_arguments(p.oid), 'def', pg_get_functiondef(p.oid),
+        'acl', p.proacl::text, 'owner', r.rolname)
+        order by p.proname, pg_get_function_identity_arguments(p.oid))
+      from pg_proc p join pg_namespace n on p.pronamespace=n.oid join pg_roles r on p.proowner=r.oid
+      where n.nspname='public' and p.prokind='f'),
+    'extension_objects', (select jsonb_agg(jsonb_build_object('ext', e.extname, 'kind', c.k, 'name', c.objname)
+        order by e.extname, c.objname)
+      from (
+        select d.refobjid as extoid, 'function' as k,
+               p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' as objname
+        from pg_depend d join pg_proc p on d.objid=p.oid and d.classid='pg_proc'::regclass where d.deptype='e'
+        union all
+        select d.refobjid, 'operator', o.oprname::text
+        from pg_depend d join pg_operator o on d.objid=o.oid and d.classid='pg_operator'::regclass where d.deptype='e'
+        union all
+        select d.refobjid, c2.relkind::text, c2.relname::text
+        from pg_depend d join pg_class c2 on d.objid=c2.oid and d.classid='pg_class'::regclass where d.deptype='e'
+      ) c join pg_extension e on e.oid=c.extoid),
+    'comments', jsonb_build_object(
+      'table_comments', (select jsonb_agg(jsonb_build_object('tbl', c.relname, 'comment', d.description) order by c.relname)
+        from pg_description d join pg_class c on d.objoid=c.oid join pg_namespace n on c.relnamespace=n.oid
+        where n.nspname='public' and d.classoid='pg_class'::regclass and d.objsubid=0 and c.relkind='r'),
+      'column_comments', (select jsonb_agg(jsonb_build_object('tbl', c.relname, 'col', a.attname, 'comment', d.description)
+          order by c.relname, a.attname)
+        from pg_description d join pg_class c on d.objoid=c.oid join pg_namespace n on c.relnamespace=n.oid
+        join pg_attribute a on a.attrelid=c.oid and a.attnum=d.objsubid
+        where n.nspname='public' and d.classoid='pg_class'::regclass and d.objsubid>0),
+      'fn_comments', (select jsonb_agg(jsonb_build_object('fn', p.proname,
+          'args', pg_get_function_identity_arguments(p.oid), 'comment', d.description) order by p.proname)
+        from pg_description d join pg_proc p on d.objoid=p.oid join pg_namespace n on p.pronamespace=n.oid
+        where n.nspname='public' and d.classoid='pg_proc'::regclass)
+    ),
+    'ledger', (select jsonb_agg(jsonb_build_object('version', m.version, 'name', m.name,
+        'stmt_count', coalesce(array_length(m.statements,1),0),
+        'sql_len', length(array_to_string(m.statements, E'\n')),
+        'sql_md5', md5(array_to_string(m.statements, E'\n'))) order by m.version)
+      from supabase_migrations.schema_migrations m)
+  );
+$function$;
+
+CREATE OR REPLACE FUNCTION public.schema_fingerprint()
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+AS $function$
+  with
+  -- extension-owned functions are pg_trgm/pgcrypto internals: they move when the
+  -- platform upgrades an extension, which is not OUR drift and must not alarm.
+  ext_fns as (
+    select d.objid from pg_depend d
+    where d.classid = 'pg_proc'::regclass and d.deptype = 'e'
+  ),
+  tables_s as (
+    select string_agg(c.relname || ':' || c.relrowsecurity::text || ':' || c.relforcerowsecurity::text, E'\n' order by c.relname) as s,
+           count(*) as n
+    from pg_class c join pg_namespace n on c.relnamespace = n.oid
+    where n.nspname = 'public' and c.relkind = 'r'
+  ),
+  columns_s as (
+    select string_agg(c.relname || '.' || a.attname || ':' || format_type(a.atttypid, a.atttypmod)
+             || ':' || a.attnotnull::text || ':' || coalesce(a.attgenerated::text, '')
+             || ':' || coalesce(pg_get_expr(ad.adbin, ad.adrelid), ''), E'\n'
+             order by c.relname, a.attname) as s,
+           count(*) as n
+    from pg_attribute a
+    join pg_class c on a.attrelid = c.oid
+    join pg_namespace n on c.relnamespace = n.oid
+    left join pg_attrdef ad on ad.adrelid = a.attrelid and ad.adnum = a.attnum
+    where n.nspname = 'public' and c.relkind = 'r' and a.attnum > 0 and not a.attisdropped
+  ),
+  constraints_s as (
+    select string_agg(cl.relname || '.' || con.conname || ':' || pg_get_constraintdef(con.oid), E'\n'
+             order by cl.relname, con.conname) as s,
+           count(*) as n
+    from pg_constraint con
+    join pg_class cl on con.conrelid = cl.oid
+    join pg_namespace n on cl.relnamespace = n.oid
+    where n.nspname = 'public'
+  ),
+  indexes_s as (
+    select string_agg(i.indexname || ':' || i.indexdef, E'\n' order by i.indexname) as s, count(*) as n
+    from pg_indexes i where i.schemaname = 'public'
+  ),
+  functions_s as (
+    select string_agg(p.proname || '(' || pg_get_function_identity_arguments(p.oid) || '):'
+             || md5(pg_get_functiondef(p.oid)), E'\n'
+             order by p.proname, pg_get_function_identity_arguments(p.oid)) as s,
+           count(*) as n
+    from pg_proc p join pg_namespace n on p.pronamespace = n.oid
+    where n.nspname = 'public' and p.prokind = 'f' and p.oid not in (select objid from ext_fns)
+  ),
+  fn_grants_s as (
+    select string_agg(p.proname || '(' || pg_get_function_identity_arguments(p.oid) || '):'
+             || coalesce(p.proacl::text, '<default>'), E'\n'
+             order by p.proname, pg_get_function_identity_arguments(p.oid)) as s,
+           count(*) as n
+    from pg_proc p join pg_namespace n on p.pronamespace = n.oid
+    where n.nspname = 'public' and p.prokind = 'f' and p.oid not in (select objid from ext_fns)
+  ),
+  table_grants_s as (
+    select string_agg(c.relname || ':' || coalesce(c.relacl::text, '<default>'), E'\n' order by c.relname) as s,
+           count(*) as n
+    from pg_class c join pg_namespace n on c.relnamespace = n.oid
+    where n.nspname = 'public' and c.relkind = 'r'
+  ),
+  policies_s as (
+    select string_agg(p.tablename || ':' || p.policyname || ':' || p.cmd || ':' || p.roles::text
+             || ':' || coalesce(p.qual, '') || ':' || coalesce(p.with_check, ''), E'\n'
+             order by p.tablename, p.policyname) as s,
+           count(*) as n
+    from pg_policies p where p.schemaname = 'public'
+  ),
+  triggers_s as (
+    select string_agg(c.relname || ':' || t.tgname || ':' || pg_get_triggerdef(t.oid), E'\n'
+             order by c.relname, t.tgname) as s,
+           count(*) as n
+    from pg_trigger t join pg_class c on t.tgrelid = c.oid join pg_namespace n on c.relnamespace = n.oid
+    where n.nspname = 'public' and not t.tgisinternal
+  ),
+  storage_s as (
+    select coalesce((select string_agg(b.id || ':' || b.public::text, E'\n' order by b.id) from storage.buckets b), '')
+           || E'\n--\n' ||
+           coalesce((select string_agg(p.tablename || ':' || p.policyname || ':' || p.cmd || ':' || coalesce(p.qual, '')
+                       || ':' || coalesce(p.with_check, ''), E'\n' order by p.tablename, p.policyname)
+                     from pg_policies p where p.schemaname = 'storage'), '') as s,
+           (select count(*) from storage.buckets) as n
+  ),
+  realtime_s as (
+    select coalesce(string_agg(pt.schemaname || '.' || pt.tablename, E'\n' order by pt.tablename), '') as s,
+           count(*) as n
+    from pg_publication_tables pt
+    where pt.pubname = 'supabase_realtime' and pt.schemaname = 'public'
+  ),
+  sections as (
+    select jsonb_build_object(
+      'tables',       jsonb_build_object('n', (select n from tables_s),        'md5', md5(coalesce((select s from tables_s), ''))),
+      'columns',      jsonb_build_object('n', (select n from columns_s),       'md5', md5(coalesce((select s from columns_s), ''))),
+      'constraints',  jsonb_build_object('n', (select n from constraints_s),   'md5', md5(coalesce((select s from constraints_s), ''))),
+      'indexes',      jsonb_build_object('n', (select n from indexes_s),       'md5', md5(coalesce((select s from indexes_s), ''))),
+      'functions',    jsonb_build_object('n', (select n from functions_s),     'md5', md5(coalesce((select s from functions_s), ''))),
+      'fn_grants',    jsonb_build_object('n', (select n from fn_grants_s),     'md5', md5(coalesce((select s from fn_grants_s), ''))),
+      'table_grants', jsonb_build_object('n', (select n from table_grants_s),  'md5', md5(coalesce((select s from table_grants_s), ''))),
+      'policies',     jsonb_build_object('n', (select n from policies_s),      'md5', md5(coalesce((select s from policies_s), ''))),
+      'triggers',     jsonb_build_object('n', (select n from triggers_s),      'md5', md5(coalesce((select s from triggers_s), ''))),
+      'storage',      jsonb_build_object('n', (select n from storage_s),       'md5', md5(coalesce((select s from storage_s), ''))),
+      'realtime',     jsonb_build_object('n', (select n from realtime_s),      'md5', md5(coalesce((select s from realtime_s), '')))
+    ) as j
+  )
+  select jsonb_build_object(
+    'sections', (select j from sections),
+    'overall', md5((select j::text from sections)),
+    'latest_migration', (select max(version) from supabase_migrations.schema_migrations)
+  );
+$function$;
+
+CREATE OR REPLACE FUNCTION public.search_conversations(p_query text)
+ RETURNS json
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_user uuid := auth.uid();
+  q text := '%' || trim(coalesce(p_query, '')) || '%';
+  v_digits text;
+  v_phone_pat text;
+  result json;
+begin
+  if v_user is null or length(trim(coalesce(p_query, ''))) < 2 then return '[]'::json; end if;
+
+  if trim(coalesce(p_query, '')) ~ '[A-Za-z@]' then
+    v_digits := '';
+  else
+    v_digits := regexp_replace(coalesce(p_query, ''), '\D', '', 'g');
+  end if;
+  if length(v_digits) < 3 then v_digits := ''; end if;
+  v_phone_pat := '%' || v_digits || '%';
+
+  select coalesce(json_agg(row_to_json(t) order by t.pinned_at desc nulls last, t.last_message_at desc), '[]'::json) into result
+  from (
+    select c.id, c.customer_id, c.last_message_at, c.last_preview, c.last_direction, c.unread,
+           c.archived_at, c.pinned_at, c.muted, c.lead_status, c.last_channel, cu.name as customer_name, cu.phone as customer_phone,
+           (select left(m.body, 140) from public.messages m where m.conversation_id = c.id and m.body ilike q order by m.created_at desc limit 1) as message_snippet,
+           case
+             when cu.name ilike q then 'name'
+             when v_digits <> '' and coalesce(cu.phone_digits, '') like v_phone_pat then 'phone'
+             when v_digits = '' and coalesce(cu.phone, '') ilike q then 'phone'
+             when coalesce(cu.address, '') ilike q then 'address'
+             when exists (select 1 from public.properties p where p.customer_id = c.customer_id and (coalesce(p.address, '') ilike q or coalesce(p.city, '') ilike q)) then 'property'
+             when exists (select 1 from public.quotes qq where qq.customer_id = c.customer_id and qq.quote_number ilike q) then 'quote'
+             when exists (select 1 from public.invoices iv where iv.customer_id = c.customer_id and iv.invoice_number ilike q) then 'invoice'
+             when exists (select 1 from public.jobs j where j.customer_id = c.customer_id and coalesce(j.service_type, '') ilike q)
+               or exists (select 1 from public.quotes qq where qq.customer_id = c.customer_id and coalesce(qq.service_type, '') ilike q) then 'service'
+             else 'message'
+           end as match_type
+    from public.conversations c
+    join public.customers cu on cu.id = c.customer_id
+    where c.user_id = v_user and (
+      cu.name ilike q
+      or (v_digits <> '' and coalesce(cu.phone_digits, '') like v_phone_pat)
+      or (v_digits = '' and coalesce(cu.phone, '') ilike q)
+      or coalesce(cu.address, '') ilike q
+      or exists (select 1 from public.properties p where p.customer_id = c.customer_id and (coalesce(p.address, '') ilike q or coalesce(p.city, '') ilike q))
+      or exists (select 1 from public.messages m where m.conversation_id = c.id and m.body ilike q)
+      or exists (select 1 from public.quotes qq where qq.customer_id = c.customer_id and (qq.quote_number ilike q or coalesce(qq.service_type, '') ilike q))
+      or exists (select 1 from public.invoices iv where iv.customer_id = c.customer_id and iv.invoice_number ilike q)
+      or exists (select 1 from public.jobs j where j.customer_id = c.customer_id and coalesce(j.service_type, '') ilike q)
+    )
+  ) t;
+  return result;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.search_records(p_query text, p_limit integer DEFAULT 8)
+ RETURNS json
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_user uuid := auth.uid();
+  v_raw  text := trim(coalesce(p_query, ''));
+  v_lim  int  := least(greatest(coalesce(p_limit, 8), 1), 25);
+  v_esc  text;
+  v_like text;
+  v_pre  text;
+  v_digits text;
+  v_phone_like text;
+  v_email text;
+  v_ident text;
+  v_bare  text;
+  result json;
+begin
+  if v_user is null then return '[]'::json; end if;
+  if length(v_raw) < 2 then return '[]'::json; end if;
+
+  v_esc  := replace(replace(replace(v_raw, '\', '\\'), '%', '\%'), '_', '\_');
+  v_like := '%' || v_esc || '%';
+  v_pre  := v_esc || '%';
+
+  if v_raw ~ '[A-Za-z@]' then v_digits := ''; else v_digits := regexp_replace(v_raw, '\D', '', 'g'); end if;
+  if length(v_digits) < 3 then v_digits := ''; end if;
+  v_phone_like := '%' || v_digits || '%';
+
+  v_email := case when v_raw ~ '@' then lower(v_raw) else null end;
+  v_ident := lower(regexp_replace(v_raw, '[^A-Za-z0-9]', '', 'g'));
+  v_bare  := coalesce(nullif(ltrim(regexp_replace(v_raw, '\D', '', 'g'), '0'), ''),
+                      case when v_raw ~ '\d' then '0' else null end);
+
+  with hits as (
+    select
+      'customer'::text as kind,
+      c.id             as id,
+      c.created_at     as created_at,
+      coalesce(nullif(c.name, ''), 'Unnamed customer') as label,
+      nullif(concat_ws(' · ', nullif(c.address, ''), nullif(c.city, ''), nullif(c.phone, '')), '') as sub,
+      case
+        when v_email is not null and lower(coalesce(c.email, '')) = v_email then 10
+        when v_digits <> '' and coalesce(c.phone_digits, '') = v_digits then 10
+        when v_digits <> '' and length(v_digits) >= 10
+             and right(coalesce(c.phone_digits, ''), 10) = right(v_digits, 10) then 10
+        when c.name    ilike v_pre  then 20
+        when c.address ilike v_pre  then 20
+        when c.name    ilike v_like then 30
+        when c.address ilike v_like then 30
+        else 40
+      end              as rank,
+      c.id             as customer_id,
+      '{}'::jsonb      as extra
+    from public.customers c
+    where c.user_id = v_user
+      and c.archived_at is null
+      and (
+        c.name    ilike v_like
+        or c.email   ilike v_like
+        or c.address ilike v_like
+        or c.city    ilike v_like
+        or (v_digits <> '' and coalesce(c.phone_digits, '') like v_phone_like)
+        or (v_digits =  '' and coalesce(c.phone, '') ilike v_like)
+      )
+
+    union all
+    select
+      'property', p.id, p.created_at,
+      coalesce(nullif(p.address, ''), 'Property'),
+      nullif(concat_ws(' · ', nullif(p.neighborhood, ''), nullif(p.city, '')), ''),
+      case
+        when p.address ilike v_pre  then 20
+        when p.address ilike v_like then 30
+        else 40
+      end,
+      p.customer_id,
+      '{}'::jsonb
+    from public.properties p
+    where p.user_id = v_user
+      and (p.address ilike v_like or p.city ilike v_like
+           or p.neighborhood ilike v_like or p.postal_code ilike v_like)
+
+    union all
+    select
+      'quote', q.id, q.created_at,
+      coalesce(nullif(q.quote_number, ''), 'Quote'),
+      nullif(concat_ws(' · ', nullif(q.customer_name, ''), nullif(q.service_type, '')), ''),
+      case
+        when v_ident <> '' and lower(regexp_replace(coalesce(q.quote_number, ''), '[^A-Za-z0-9]', '', 'g')) = v_ident then 0
+        when v_bare is not null
+             and nullif(ltrim(regexp_replace(coalesce(q.quote_number, ''), '\D', '', 'g'), '0'), '') = v_bare then 0
+        when q.customer_name ilike v_pre  then 20
+        when q.address       ilike v_pre  then 20
+        when q.customer_name ilike v_like then 30
+        when q.address       ilike v_like then 30
+        else 40
+      end,
+      q.customer_id,
+      jsonb_build_object('ref', q.quote_number, 'status', q.status, 'total', q.total)
+    from public.quotes q
+    where q.user_id = v_user
+      and (
+        q.quote_number  ilike v_like
+        or q.customer_name ilike v_like
+        or q.service_type  ilike v_like
+        or q.address       ilike v_like
+        or (v_bare is not null
+            and nullif(ltrim(regexp_replace(coalesce(q.quote_number, ''), '\D', '', 'g'), '0'), '') = v_bare)
+      )
+
+    union all
+    select
+      'invoice', i.id, i.created_at,
+      coalesce(nullif(i.invoice_number, ''), 'Invoice'),
+      nullif(concat_ws(' · ', nullif(i.customer_name, ''), nullif(i.service_type, '')), ''),
+      case
+        when v_ident <> '' and lower(regexp_replace(coalesce(i.invoice_number, ''), '[^A-Za-z0-9]', '', 'g')) = v_ident then 0
+        when v_bare is not null
+             and nullif(ltrim(regexp_replace(coalesce(i.invoice_number, ''), '\D', '', 'g'), '0'), '') = v_bare then 0
+        when i.customer_name ilike v_pre  then 20
+        when i.address       ilike v_pre  then 20
+        when i.customer_name ilike v_like then 30
+        when i.address       ilike v_like then 30
+        else 40
+      end,
+      i.customer_id,
+      jsonb_build_object(
+        'ref', i.invoice_number, 'status', i.status,
+        'amount', i.amount, 'amount_paid', i.amount_paid,
+        'discount_type', i.discount_type, 'discount_value', i.discount_value,
+        'due_date', i.due_date, 'viewed_at', i.viewed_at)
+    from public.invoices i
+    where i.user_id = v_user
+      and (
+        i.invoice_number ilike v_like
+        or i.customer_name ilike v_like
+        or i.service_type  ilike v_like
+        or i.address       ilike v_like
+        or (v_bare is not null
+            and nullif(ltrim(regexp_replace(coalesce(i.invoice_number, ''), '\D', '', 'g'), '0'), '') = v_bare)
+      )
+
+    union all
+    select
+      'job', j.id, j.created_at,
+      coalesce(nullif(j.title, ''), nullif(j.service_type, ''), 'Visit'),
+      nullif(concat_ws(' · ', to_char(j.scheduled_date, 'Mon FMDD'), nullif(j.service_type, '')), ''),
+      case
+        when j.title ilike v_pre  then 20
+        when j.title ilike v_like then 30
+        else 40
+      end,
+      j.customer_id,
+      jsonb_build_object('status', j.status, 'scheduled_date', j.scheduled_date)
+    from public.jobs j
+    where j.user_id = v_user
+      and (j.title ilike v_like or j.service_type ilike v_like)
+  ),
+  ranked as (
+    select h.*,
+           case h.kind when 'customer' then 0 when 'property' then 1
+                       when 'invoice'  then 2 when 'quote'    then 3 else 4 end as kind_order
+    from hits h
+    order by rank,
+             case h.kind when 'customer' then 0 when 'property' then 1
+                         when 'invoice'  then 2 when 'quote'    then 3 else 4 end,
+             h.created_at desc, h.id
+    limit v_lim
+  )
+  select coalesce(
+           json_agg(row_to_json(r) order by r.rank, r.kind_order, r.created_at desc, r.id),
+           '[]'::json)
+  into result
+  from ranked r;
+
+  return result;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.set_updated_at()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+    begin new.updated_at = now(); return new; end; $function$;
+
+CREATE OR REPLACE FUNCTION public.sr_to_conversation()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_convo uuid;
+begin
+  if new.customer_id is null then return new; end if;
+  select id into v_convo from public.conversations where user_id = new.user_id and customer_id = new.customer_id;
+  if v_convo is null then
+    insert into public.conversations (user_id, customer_id, last_message_at) values (new.user_id, new.customer_id, new.created_at) returning id into v_convo;
+  end if;
+  insert into public.messages (user_id, conversation_id, customer_id, direction, channel, body, status, meta, created_at)
+    values (new.user_id, v_convo, new.customer_id, 'inbound', 'portal', new.message, 'received', jsonb_build_object('service_request_id', new.id), new.created_at);
+  return new;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.submit_booking(p_token text, p_name text, p_email text, p_phone text, p_address text, p_city text, p_province text, p_postal text, p_lat double precision, p_lng double precision, p_sqft numeric, p_service_type text, p_initial numeric, p_weekly numeric, p_biweekly numeric, p_monthly numeric, p_cadence text, p_notes text DEFAULT NULL::text, p_hear_about text DEFAULT NULL::text, p_referral_code text DEFAULT NULL::text, p_utm jsonb DEFAULT NULL::jsonb, p_photos text[] DEFAULT NULL::text[])
+ RETURNS json
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_user uuid; v_customer uuid; v_property uuid; v_quote uuid; v_num int; v_qnum text;
+        v_source text; v_meta jsonb; v_photo_count int := coalesce(array_length(p_photos, 1), 0);
+        v_service text; v_cfg uuid;
+begin
+  select user_id into v_user from public.business_settings where booking_token = p_token and booking_enabled = true;
+  if v_user is null then return null; end if;
+  if coalesce(trim(p_name), '') = '' then return null; end if;
+
+  v_service := coalesce(
+    nullif(trim(p_service_type), ''),
+    (select s.name from public.service_templates s
+      where s.user_id = v_user and s.is_active
+      order by s.sort_order, s.name limit 1),
+    'Service');
+
+  v_cfg := public.ensure_pricing_config_version(v_user);
+
+  -- THE ONLY CHANGED LINE in this function.
+  v_source := coalesce(
+    public.sanitize_source_input(p_hear_about),
+    public.sanitize_source_input(p_utm->>'source'),
+    'Online Booking');
+  v_meta := jsonb_strip_nulls(jsonb_build_object(
+    'hear_about', p_hear_about, 'referral_code', p_referral_code, 'utm', p_utm,
+    'photos', to_jsonb(p_photos), 'additional_notes', p_notes));
+
+  v_customer := public.resolve_intake_customer(
+    v_user, left(p_name, 200), p_email, p_phone, p_address, p_city, p_province, p_postal, v_source, p_notes);
+
+  v_property := public.resolve_intake_property(
+    v_user, v_customer, p_address, p_city, p_province, p_postal, p_lat, p_lng, nullif(p_sqft, 0));
+
+  select coalesce(max((regexp_match(quote_number, '([0-9]+)$'))[1]::int), 0) + 1 into v_num
+    from public.quotes where user_id = v_user and quote_number like 'EPS-' || extract(year from now())::text || '-%';
+  v_qnum := 'EPS-' || extract(year from now())::text || '-' || lpad(v_num::text, 4, '0');
+
+  insert into public.quotes (user_id, quote_number, customer_id, customer_name, address, service_type,
+      initial_price, weekly_price, biweekly_price, monthly_price, status, measured_sqft, property_id, notes, lead_meta,
+      price_source, pricing_config_version_id)
+    values (v_user, v_qnum, v_customer, left(p_name, 200), p_address, v_service,
+      nullif(p_initial, 0), nullif(p_weekly, 0), nullif(p_biweekly, 0), nullif(p_monthly, 0), 'draft', nullif(p_sqft, 0), v_property, nullif(trim(p_notes), ''), v_meta,
+      case when v_cfg is not null then 'engine' else null end, v_cfg)
+    returning id into v_quote;
+
+  insert into public.service_requests (user_id, customer_id, message)
+    values (v_user, v_customer, 'New online booking (review) — ' || left(p_name, 80) || ' · ' || coalesce(p_address, '') || ' · ' || coalesce(p_cadence, 'one-time')
+      || ' · via ' || v_source || case when v_photo_count > 0 then ' · ' || v_photo_count || ' photo(s)' else '' end
+      || case when nullif(trim(p_referral_code), '') is not null then ' · ref:' || p_referral_code else '' end || ' · draft ' || v_qnum);
+
+  return json_build_object('quote_number', v_qnum, 'customer_id', v_customer, 'quote_id', v_quote);
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.submit_website_lead(p_token text, p_payload jsonb, p_source text DEFAULT 'Website'::text)
+ RETURNS json
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_user uuid; v_customer uuid; v_prop uuid; v_lead uuid; v_convo uuid;
+  v_phone text; v_email text; v_name text; v_first text; v_last text; v_address text;
+  v_summary text; v_services text;
+  v_budget text; v_schedule text; v_contact text;
+  v_sqft text; v_est text; v_maps text; v_freq text; v_yard text; v_notes text; v_polygon jsonb;
+  v_limit int; v_recent int;
+  v_city text; v_province text; v_postal text; v_place text;
+  v_source text := coalesce(nullif(trim(p_source), ''), 'Website');
+begin
+  select user_id into v_user from public.business_settings where booking_token = p_token and booking_enabled = true;
+  if v_user is null then return null; end if;
+
+  select coalesce(website_lead_hourly_limit, 30) into v_limit from public.business_settings where user_id = v_user;
+  if coalesce(v_limit, 0) > 0 then
+    select count(*) into v_recent from public.website_leads where user_id = v_user and created_at > now() - interval '1 hour';
+    if v_recent >= v_limit then
+      raise log 'submit_website_lead: rate limit reached for user % (% leads in last hour, limit %)', v_user, v_recent, v_limit;
+      return json_build_object('error', 'rate_limited');
+    end if;
+  end if;
+
+  v_first    := nullif(trim(coalesce(p_payload->>'firstName', p_payload->>'first_name', '')), '');
+  v_last     := nullif(trim(coalesce(p_payload->>'lastName',  p_payload->>'last_name',  '')), '');
+  v_name     := nullif(trim(coalesce(p_payload->>'fullName',  p_payload->>'name', concat_ws(' ', v_first, v_last))), '');
+  v_phone    := nullif(trim(coalesce(p_payload->>'phone', '')), '');
+  v_email    := lower(nullif(trim(coalesce(p_payload->>'email', '')), ''));
+  v_address  := nullif(trim(coalesce(p_payload->>'address', p_payload->>'serviceAddress', '')), '');
+  v_services := nullif(trim(coalesce(p_payload->>'requestedServices', p_payload->>'services', p_payload->>'serviceType', p_payload->>'services_needed', '')), '');
+  v_budget   := nullif(trim(coalesce(p_payload->>'budget', p_payload->>'budgetRange', '')), '');
+  v_schedule := nullif(trim(coalesce(p_payload->>'preferredSchedule', p_payload->>'preferred_schedule', p_payload->>'schedule', p_payload->>'timeline', p_payload->>'preferred_date', '')), '');
+  v_contact  := nullif(trim(coalesce(p_payload->>'preferredContact', p_payload->>'preferred_contact', p_payload->>'contactMethod', '')), '');
+  v_sqft     := nullif(coalesce(p_payload->>'lawnSqft', p_payload->>'lawn_sqft', p_payload->>'lawn_area_sqft'), '');
+  v_est      := nullif(coalesce(p_payload->>'estimatedPrice', p_payload->>'estimated_quote'), '');
+  v_maps     := nullif(coalesce(p_payload->>'mapsUrl', p_payload->>'maps_url', p_payload->>'map_link'), '');
+  v_freq     := nullif(coalesce(p_payload->>'frequency', p_payload->>'mowing_frequency'), '');
+  v_yard     := nullif(coalesce(p_payload->>'yardCondition', p_payload->>'yard_condition'), '');
+  v_notes    := nullif(coalesce(p_payload->>'notes', p_payload->>'message'), '');
+  v_polygon  := coalesce(p_payload->'polygon', p_payload->'lawn_polygon');
+  v_city     := nullif(p_payload->>'city', '');
+  v_province := coalesce(nullif(p_payload->>'province', ''), 'AB');
+  v_postal   := nullif(coalesce(p_payload->>'postalCode', p_payload->>'postal_code'), '');
+  v_place    := nullif(coalesce(p_payload->>'placeId', p_payload->>'place_id'), '');
+
+  v_customer := public.resolve_intake_customer(
+    v_user, coalesce(v_name, v_source || ' lead'), v_email, v_phone, v_address,
+    v_city, v_province, v_postal, v_source);
+
+  v_prop := public.resolve_intake_property(
+    v_user, v_customer, coalesce(v_address, v_source || ' lead'),
+    v_city, v_province, v_postal,
+    nullif(p_payload->>'lat', '')::double precision, nullif(p_payload->>'lng', '')::double precision,
+    v_sqft::numeric, v_polygon, v_place, v_maps,
+    nullif(coalesce(p_payload->>'travelDistanceKm', p_payload->>'travel_distance_km'), '')::numeric,
+    nullif(coalesce(p_payload->>'travelFee', p_payload->>'travel_fee'), '')::numeric);
+
+  insert into public.website_leads (
+    user_id, customer_id, status, raw_submission, submitted_at,
+    contact_first, contact_last, contact_name, phone, email, preferred_contact,
+    address, city, province, postal_code, place_id, maps_url, lat, lng,
+    lawn_sqft, lawn_polygon, sections, travel_distance_km, travel_fee,
+    requested_services, frequency, yard_condition, website_estimated_price,
+    budget, preferred_schedule, notes
+  ) values (
+    v_user, v_customer, 'new', p_payload, nullif(p_payload->>'submittedAt', '')::timestamptz,
+    v_first, v_last, v_name, v_phone, v_email, v_contact,
+    v_address, v_city, v_province, v_postal, v_place, v_maps,
+    nullif(p_payload->>'lat', '')::double precision, nullif(p_payload->>'lng', '')::double precision,
+    v_sqft::numeric,
+    v_polygon, p_payload->'sections',
+    nullif(coalesce(p_payload->>'travelDistanceKm', p_payload->>'travel_distance_km'), '')::numeric,
+    nullif(coalesce(p_payload->>'travelFee', p_payload->>'travel_fee'), '')::numeric,
+    v_services, v_freq, v_yard,
+    v_est::numeric,
+    v_budget, v_schedule, v_notes
+  ) returning id into v_lead;
+
+  v_summary := 'New ' || v_source || ' lead'
+    || case when v_services is not null then ' — ' || v_services else '' end
+    || case when v_address is not null then ' · ' || v_address else '' end
+    || case when v_budget is not null then ' · Budget: ' || v_budget else '' end
+    || case when v_schedule is not null then ' · Prefers ' || v_schedule else '' end
+    || case when v_contact is not null then ' · via ' || v_contact else '' end
+    || case when v_sqft is not null then ' · ' || v_sqft || ' ft² lawn' else '' end
+    || case when v_est is not null then ' · est. $' || v_est else '' end;
+  insert into public.service_requests (user_id, customer_id, message, status)
+    values (v_user, v_customer, v_summary, 'new');
+
+  update public.conversations set lead_status = 'new'
+    where user_id = v_user and customer_id = v_customer;
+  select id into v_convo from public.conversations where user_id = v_user and customer_id = v_customer limit 1;
+  update public.website_leads set conversation_id = v_convo where id = v_lead;
+
+  return json_build_object('lead_id', v_lead, 'customer_id', v_customer, 'source', v_source);
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.sync_job_actual_minutes()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_job uuid := coalesce(new.job_id, old.job_id);
+  v_sum integer;
+begin
+  if pg_trigger_depth() > 1 then
+    return null;
+  end if;
+  v_sum := public.job_session_minutes(v_job);
+  update public.jobs
+     set actual_minutes = v_sum
+   where id = v_job
+     and actual_minutes is distinct from v_sum;
+  return null;
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.sync_quote_on_invoice_paid()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  if new.status = 'paid' and old.status is distinct from 'paid' and new.quote_id is not null then
+    update public.quotes set status = 'paid' where id = new.quote_id and status = 'completed';
+  end if;
+  return new;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.sync_quote_on_job_complete()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  if new.status = 'completed' and old.status is distinct from 'completed'
+     and new.quote_id is not null and new.recurrence_id is null then
+    update public.quotes set status = 'completed' where id = new.quote_id and status in ('accepted','scheduled');
+  end if;
+  return new;
+end; $function$;
+
+CREATE OR REPLACE FUNCTION public.vision_supersede_prior_active()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+begin
+  if new.status = 'active' then
+    update public.property_intelligence
+       set status = 'superseded'
+     where user_id = new.user_id
+       and property_id = new.property_id
+       and status = 'active'
+       and id <> new.id;
+  end if;
+  return new;
+end $function$;
+
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 4 · CONSTRAINTS
+-- Primary keys, then unique, then check, then EVERY foreign key last.
+-- Composite (user_id, id) foreign keys are deliberate — they are what stops one
+-- tenant attaching a child row to another tenant's parent. Do not "simplify".
+-- ══════════════════════════════════════════════════════════════════════════
+
+-- primary keys (103)
+alter table public."api_keys" add constraint "api_keys_pkey" PRIMARY KEY (id);
+alter table public."automation_runs" add constraint "automation_runs_pkey" PRIMARY KEY (id);
+alter table public."automation_signals" add constraint "automation_signals_pkey" PRIMARY KEY (id);
+alter table public."automation_sweeps" add constraint "automation_sweeps_pkey" PRIMARY KEY (job, ran_on);
+alter table public."beta_invites" add constraint "beta_invites_pkey" PRIMARY KEY (id);
+alter table public."business_settings" add constraint "business_settings_pkey" PRIMARY KEY (id);
+alter table public."change_orders" add constraint "change_orders_pkey" PRIMARY KEY (id);
+alter table public."consent_changes" add constraint "consent_changes_pkey" PRIMARY KEY (id);
+alter table public."content_pieces" add constraint "content_pieces_pkey" PRIMARY KEY (id);
+alter table public."conversations" add constraint "conversations_pkey" PRIMARY KEY (id);
+alter table public."crew_media" add constraint "crew_media_pkey" PRIMARY KEY (id);
+alter table public."crew_message_reads" add constraint "crew_message_reads_pkey" PRIMARY KEY (job_id, reader_id);
+alter table public."crew_messages" add constraint "crew_messages_pkey" PRIMARY KEY (id);
+alter table public."crews" add constraint "crews_pkey" PRIMARY KEY (id);
+alter table public."crm_campaign_log" add constraint "crm_campaign_log_pkey" PRIMARY KEY (id);
+alter table public."crm_campaign_presets" add constraint "crm_campaign_presets_pkey" PRIMARY KEY (id);
+alter table public."crm_campaigns" add constraint "crm_campaigns_pkey" PRIMARY KEY (id);
+alter table public."customer_imports" add constraint "customer_imports_pkey" PRIMARY KEY (id);
+alter table public."customer_portal_tokens" add constraint "customer_portal_tokens_pkey" PRIMARY KEY (token);
+alter table public."customers" add constraint "customers_pkey" PRIMARY KEY (id);
+alter table public."data_exports" add constraint "data_exports_pkey" PRIMARY KEY (id);
+alter table public."day_statuses" add constraint "day_statuses_pkey" PRIMARY KEY (id);
+alter table public."dispatch_notes" add constraint "dispatch_notes_pkey" PRIMARY KEY (id);
+alter table public."equipment" add constraint "equipment_pkey" PRIMARY KEY (id);
+alter table public."equipment_docs" add constraint "equipment_docs_pkey" PRIMARY KEY (id);
+alter table public."equipment_service" add constraint "equipment_service_pkey" PRIMARY KEY (id);
+alter table public."expense_categories" add constraint "expense_categories_pkey" PRIMARY KEY (id);
+alter table public."expenses" add constraint "expenses_pkey" PRIMARY KEY (id);
+alter table public."fixed_assets" add constraint "fixed_assets_pkey" PRIMARY KEY (id);
+alter table public."follow_ups" add constraint "follow_ups_pkey" PRIMARY KEY (id);
+alter table public."holidays" add constraint "holidays_pkey" PRIMARY KEY (id);
+alter table public."inbound_events" add constraint "inbound_events_pkey" PRIMARY KEY (id);
+alter table public."inbound_webhooks" add constraint "inbound_webhooks_pkey" PRIMARY KEY (id);
+alter table public."integration_events" add constraint "integration_events_pkey" PRIMARY KEY (id);
+alter table public."integrations_config" add constraint "integrations_config_pkey" PRIMARY KEY (id);
+alter table public."invoices" add constraint "invoices_pkey" PRIMARY KEY (id);
+alter table public."job_line_items" add constraint "job_line_items_pkey" PRIMARY KEY (id);
+alter table public."job_photos" add constraint "job_photos_pkey" PRIMARY KEY (id);
+alter table public."job_price_changes" add constraint "job_price_changes_pkey" PRIMARY KEY (id);
+alter table public."job_recurrences" add constraint "job_recurrences_pkey" PRIMARY KEY (id);
+alter table public."job_work_sessions" add constraint "job_work_sessions_pkey" PRIMARY KEY (id);
+alter table public."jobs" add constraint "jobs_pkey" PRIMARY KEY (id);
+alter table public."labor_observations" add constraint "labor_observations_pkey" PRIMARY KEY (id);
+alter table public."liabilities" add constraint "liabilities_pkey" PRIMARY KEY (id);
+alter table public."marketing_assets" add constraint "marketing_assets_pkey" PRIMARY KEY (id);
+alter table public."marketing_campaigns" add constraint "marketing_campaigns_pkey" PRIMARY KEY (id);
+alter table public."measurements" add constraint "measurements_pkey" PRIMARY KEY (id);
+alter table public."message_sends" add constraint "message_sends_pkey" PRIMARY KEY (user_id, client_message_id);
+alter table public."messages" add constraint "messages_pkey" PRIMARY KEY (id);
+alter table public."neighbor_leads" add constraint "neighbor_leads_pkey" PRIMARY KEY (id);
+alter table public."notification_log" add constraint "notification_log_pkey" PRIMARY KEY (id);
+alter table public."notifications" add constraint "notifications_pkey" PRIMARY KEY (id);
+alter table public."part_movements" add constraint "part_movements_pkey" PRIMARY KEY (id);
+alter table public."parts" add constraint "parts_pkey" PRIMARY KEY (id);
+alter table public."password_reset_requests" add constraint "password_reset_requests_pkey" PRIMARY KEY (id);
+alter table public."pay_run_lines" add constraint "pay_run_lines_pkey" PRIMARY KEY (id);
+alter table public."pay_runs" add constraint "pay_runs_pkey" PRIMARY KEY (id);
+alter table public."payment_methods" add constraint "payment_methods_pkey" PRIMARY KEY (id);
+alter table public."payments" add constraint "payments_pkey" PRIMARY KEY (id);
+alter table public."platform_capabilities" add constraint "platform_capabilities_pkey" PRIMARY KEY (user_id);
+alter table public."platform_operators" add constraint "platform_operators_pkey" PRIMARY KEY (user_id);
+alter table public."portal_access_requests" add constraint "portal_access_requests_pkey" PRIMARY KEY (id);
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_pkey" PRIMARY KEY (id);
+alter table public."properties" add constraint "properties_pkey" PRIMARY KEY (id);
+alter table public."property_intelligence" add constraint "property_intelligence_pkey" PRIMARY KEY (id);
+alter table public."property_measurement_events" add constraint "property_measurement_events_pkey" PRIMARY KEY (id);
+alter table public."property_measurements" add constraint "property_measurements_pkey" PRIMARY KEY (id);
+alter table public."property_observations" add constraint "property_observations_pkey" PRIMARY KEY (id);
+alter table public."property_twin" add constraint "property_twin_pkey" PRIMARY KEY (id);
+alter table public."pto_entries" add constraint "pto_entries_pkey" PRIMARY KEY (id);
+alter table public."publish_jobs" add constraint "publish_jobs_pkey" PRIMARY KEY (id);
+alter table public."purchase_order_items" add constraint "purchase_order_items_pkey" PRIMARY KEY (id);
+alter table public."purchase_orders" add constraint "purchase_orders_pkey" PRIMARY KEY (id);
+alter table public."push_config" add constraint "push_config_pkey" PRIMARY KEY (id);
+alter table public."push_subscriptions" add constraint "push_subscriptions_pkey" PRIMARY KEY (id);
+alter table public."quote_options" add constraint "quote_options_pkey" PRIMARY KEY (id);
+alter table public."quote_outcomes" add constraint "quote_outcomes_pkey" PRIMARY KEY (id);
+alter table public."quote_services" add constraint "quote_services_pkey" PRIMARY KEY (id);
+alter table public."quotes" add constraint "quotes_pkey" PRIMARY KEY (id);
+alter table public."referrals" add constraint "referrals_pkey" PRIMARY KEY (id);
+alter table public."report_schedules" add constraint "report_schedules_pkey" PRIMARY KEY (id);
+alter table public."revenue_recommendations" add constraint "revenue_recommendations_pkey" PRIMARY KEY (id);
+alter table public."road_distance_cache" add constraint "road_distance_cache_pkey" PRIMARY KEY (id);
+alter table public."schedule_health_ignored" add constraint "schedule_health_ignored_pkey" PRIMARY KEY (id);
+alter table public."schedule_items" add constraint "schedule_items_pkey" PRIMARY KEY (id);
+alter table public."scheduled_messages" add constraint "scheduled_messages_pkey" PRIMARY KEY (id);
+alter table public."service_bundle_items" add constraint "service_bundle_items_pkey" PRIMARY KEY (id);
+alter table public."service_bundles" add constraint "service_bundles_pkey" PRIMARY KEY (id);
+alter table public."service_requests" add constraint "service_requests_pkey" PRIMARY KEY (id);
+alter table public."service_templates" add constraint "service_templates_pkey" PRIMARY KEY (id);
+alter table public."service_units" add constraint "service_units_pkey" PRIMARY KEY (id);
+alter table public."social_connections" add constraint "social_connections_pkey" PRIMARY KEY (id);
+alter table public."suggestion_dismissals" add constraint "suggestion_dismissals_pkey" PRIMARY KEY (id);
+alter table public."suppliers" add constraint "suppliers_pkey" PRIMARY KEY (id);
+alter table public."technicians" add constraint "technicians_pkey" PRIMARY KEY (id);
+alter table public."time_entries" add constraint "time_entries_pkey" PRIMARY KEY (id);
+alter table public."travel_fee_tiers" add constraint "travel_fee_tiers_pkey" PRIMARY KEY (id);
+alter table public."vendors" add constraint "vendors_pkey" PRIMARY KEY (id);
+alter table public."verify_fixture_tenants" add constraint "verify_fixture_tenants_pkey" PRIMARY KEY (user_id);
+alter table public."wage_history" add constraint "wage_history_pkey" PRIMARY KEY (id);
+alter table public."webhook_deliveries" add constraint "webhook_deliveries_pkey" PRIMARY KEY (id);
+alter table public."webhook_endpoints" add constraint "webhook_endpoints_pkey" PRIMARY KEY (id);
+alter table public."website_leads" add constraint "website_leads_pkey" PRIMARY KEY (id);
+
+-- unique (38)
+alter table public."api_keys" add constraint "api_keys_key_hash_key" UNIQUE (key_hash);
+alter table public."beta_invites" add constraint "beta_invites_token_hash_key" UNIQUE (token_hash);
+alter table public."business_settings" add constraint "business_settings_user_id_key" UNIQUE (user_id);
+alter table public."change_orders" add constraint "change_orders_id_user_key" UNIQUE (id, user_id);
+alter table public."conversations" add constraint "conversations_user_id_customer_id_key" UNIQUE (user_id, customer_id);
+alter table public."crew_media" add constraint "crew_media_storage_path_key" UNIQUE (storage_path);
+alter table public."crm_campaign_log" add constraint "crm_campaign_log_campaign_id_customer_id_period_key_key" UNIQUE (campaign_id, customer_id, period_key);
+alter table public."crm_campaign_presets" add constraint "crm_campaign_presets_user_id_name_key" UNIQUE (user_id, name);
+alter table public."customers" add constraint "customers_user_id_id_key" UNIQUE (user_id, id);
+alter table public."day_statuses" add constraint "day_statuses_user_id_date_key" UNIQUE (user_id, date);
+alter table public."dispatch_notes" add constraint "dispatch_notes_day_crew_unique" UNIQUE NULLS NOT DISTINCT (user_id, date, crew_id);
+alter table public."holidays" add constraint "holidays_one_per_day" UNIQUE (user_id, date);
+alter table public."inbound_webhooks" add constraint "inbound_webhooks_token_key" UNIQUE (token);
+alter table public."job_recurrences" add constraint "job_recurrences_user_id_id_key" UNIQUE (user_id, id);
+alter table public."jobs" add constraint "jobs_id_user_key" UNIQUE (id, user_id);
+alter table public."labor_observations" add constraint "labor_observations_user_id_job_id_key" UNIQUE (user_id, job_id);
+alter table public."marketing_assets" add constraint "marketing_assets_user_id_job_id_key" UNIQUE (user_id, job_id);
+alter table public."pay_run_lines" add constraint "pay_run_lines_one_per_tech" UNIQUE (pay_run_id, technician_id);
+alter table public."pay_runs" add constraint "pay_runs_one_per_period" UNIQUE (user_id, period_start, period_end);
+alter table public."payment_methods" add constraint "payment_methods_stripe_payment_method_id_key" UNIQUE (stripe_payment_method_id);
+alter table public."payments" add constraint "payments_stripe_session_id_key" UNIQUE (stripe_session_id);
+alter table public."properties" add constraint "properties_id_user_unique" UNIQUE (id, user_id);
+alter table public."property_measurements" add constraint "property_measurements_one_per_kind" UNIQUE (property_id, kind);
+alter table public."property_twin" add constraint "property_twin_user_id_property_id_key" UNIQUE (user_id, property_id);
+alter table public."pto_entries" add constraint "pto_entries_one_per_day_kind" UNIQUE (technician_id, date, kind);
+alter table public."publish_jobs" add constraint "publish_jobs_idempotency_key_key" UNIQUE (idempotency_key);
+alter table public."push_subscriptions" add constraint "push_subscriptions_user_id_endpoint_key" UNIQUE (user_id, endpoint);
+alter table public."quote_options" add constraint "quote_options_id_quote_unique" UNIQUE (id, quote_id);
+alter table public."quote_outcomes" add constraint "quote_outcomes_user_id_quote_id_key" UNIQUE (user_id, quote_id);
+alter table public."quotes" add constraint "quotes_user_id_id_key" UNIQUE (user_id, id);
+alter table public."report_schedules" add constraint "report_schedules_user_id_kind_key" UNIQUE (user_id, kind);
+alter table public."revenue_recommendations" add constraint "revenue_recommendations_user_id_opportunity_key_key" UNIQUE (user_id, opportunity_key);
+alter table public."road_distance_cache" add constraint "road_distance_cache_user_id_from_key_to_key_key" UNIQUE (user_id, from_key, to_key);
+alter table public."schedule_health_ignored" add constraint "schedule_health_ignored_user_id_issue_key_key" UNIQUE (user_id, issue_key);
+alter table public."service_bundles" add constraint "service_bundles_id_user_uk" UNIQUE (id, user_id);
+alter table public."service_templates" add constraint "service_templates_id_user_uk" UNIQUE (id, user_id);
+alter table public."suggestion_dismissals" add constraint "suggestion_dismissals_user_id_suggestion_key_key" UNIQUE (user_id, suggestion_key);
+alter table public."technicians" add constraint "technicians_id_user_key" UNIQUE (id, user_id);
+
+-- check (149)
+alter table public."automation_runs" add constraint "automation_runs_decision_check" CHECK ((decision = ANY (ARRAY['fired'::text, 'suppressed'::text])));
+alter table public."automation_runs" add constraint "automation_runs_suppressed_reason_check" CHECK ((suppressed_reason = ANY (ARRAY['mode_off'::text, 'mode_suggest'::text, 'quiet_hours'::text, 'frequency_cap'::text, 'no_consent'::text, 'deduped'::text, 'signal_absent'::text])));
+alter table public."beta_invites" add constraint "beta_invites_token_hash_is_sha256" CHECK ((token_hash ~ '^[0-9a-f]{64}$'::text));
+alter table public."business_settings" add constraint "business_settings_autopay_charge_mode_check" CHECK ((autopay_charge_mode = ANY (ARRAY['auto'::text, 'manual_review'::text])));
+alter table public."business_settings" add constraint "business_settings_business_type_format" CHECK ((business_type ~ '^[a-z][a-z0-9_]*$'::text));
+alter table public."business_settings" add constraint "business_settings_fee_strategy_chk" CHECK ((payment_fee_strategy = ANY (ARRAY['absorb'::text, 'global_price_increase'::text, 'etransfer_discount'::text])));
+alter table public."business_settings" add constraint "business_settings_ot_daily_range" CHECK (((ot_daily_hours IS NULL) OR ((ot_daily_hours > (0)::numeric) AND (ot_daily_hours <= (24)::numeric))));
+alter table public."business_settings" add constraint "business_settings_ot_multiplier_min" CHECK ((ot_multiplier >= (1)::numeric));
+alter table public."business_settings" add constraint "business_settings_ot_weekly_range" CHECK (((ot_weekly_hours IS NULL) OR ((ot_weekly_hours > (0)::numeric) AND (ot_weekly_hours <= (168)::numeric))));
+alter table public."business_settings" add constraint "business_settings_pay_period_kind" CHECK ((pay_period = ANY (ARRAY['weekly'::text, 'biweekly'::text, 'semimonthly'::text, 'monthly'::text])));
+alter table public."business_settings" add constraint "business_settings_pay_week_start_range" CHECK (((pay_week_starts_on >= 0) AND (pay_week_starts_on <= 6)));
+alter table public."change_orders" add constraint "change_orders_amount_check" CHECK ((amount > (0)::numeric));
+alter table public."change_orders" add constraint "change_orders_decided_via_check" CHECK (((decided_via IS NULL) OR (decided_via = ANY (ARRAY['portal'::text, 'owner'::text]))));
+alter table public."change_orders" add constraint "change_orders_decided_via_present" CHECK (((status = ANY (ARRAY['approved'::text, 'declined'::text])) = (decided_via IS NOT NULL)));
+alter table public."change_orders" add constraint "change_orders_description_check" CHECK ((length(btrim(description)) > 0));
+alter table public."change_orders" add constraint "change_orders_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'pending'::text, 'approved'::text, 'declined'::text, 'cancelled'::text])));
+alter table public."change_orders" add constraint "change_orders_status_stamps" CHECK ((((status = 'draft'::text) AND (sent_at IS NULL) AND (approved_at IS NULL) AND (declined_at IS NULL) AND (cancelled_at IS NULL)) OR ((status = 'pending'::text) AND (sent_at IS NOT NULL) AND (approved_at IS NULL) AND (declined_at IS NULL) AND (cancelled_at IS NULL)) OR ((status = 'approved'::text) AND (approved_at IS NOT NULL) AND (declined_at IS NULL) AND (cancelled_at IS NULL)) OR ((status = 'declined'::text) AND (declined_at IS NOT NULL) AND (approved_at IS NULL) AND (cancelled_at IS NULL)) OR ((status = 'cancelled'::text) AND (cancelled_at IS NOT NULL) AND (approved_at IS NULL) AND (declined_at IS NULL))));
+alter table public."content_pieces" add constraint "content_pieces_kind_check" CHECK ((kind = ANY (ARRAY['organic'::text, 'ad'::text, 'print'::text])));
+alter table public."content_pieces" add constraint "content_pieces_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'approved'::text, 'published'::text, 'scheduled'::text, 'failed'::text])));
+alter table public."crew_media" add constraint "crew_media_kind_check" CHECK ((kind = ANY (ARRAY['photo'::text, 'video'::text])));
+alter table public."crew_messages" add constraint "crew_messages_author_kind" CHECK ((author_kind = ANY (ARRAY['owner'::text, 'crew'::text, 'system'::text])));
+alter table public."crew_messages" add constraint "crew_messages_body_length" CHECK ((char_length(body) <= 2000));
+alter table public."crew_messages" add constraint "crew_messages_body_nonblank" CHECK ((btrim(body) <> ''::text));
+alter table public."crm_campaign_presets" add constraint "crm_campaign_presets_kind_check" CHECK ((kind = ANY (ARRAY['birthday'::text, 'anniversary'::text, 'win_back'::text, 'broadcast'::text, 'seasonal'::text, 'referral'::text, 'review'::text])));
+alter table public."crm_campaigns" add constraint "crm_campaigns_kind_check" CHECK ((kind = ANY (ARRAY['birthday'::text, 'anniversary'::text, 'win_back'::text, 'broadcast'::text, 'seasonal'::text, 'referral'::text, 'review'::text])));
+alter table public."customer_imports" add constraint "customer_imports_counts_sane" CHECK (((rows_detected >= 0) AND (customers_created >= 0) AND (rows_skipped_existing >= 0) AND (rows_failed >= 0) AND (properties_created >= 0)));
+alter table public."customer_imports" add constraint "customer_imports_initiated_by_len" CHECK (((initiated_by IS NULL) OR (char_length(initiated_by) <= 200)));
+alter table public."customer_imports" add constraint "customer_imports_source_name_len" CHECK (((source_name IS NULL) OR (char_length(source_name) <= 200)));
+alter table public."customers" add constraint "customers_autopay_charge_mode_check" CHECK ((autopay_charge_mode = ANY (ARRAY['auto'::text, 'manual_review'::text])));
+alter table public."expense_categories" add constraint "expense_categories_kind_check" CHECK ((kind = ANY (ARRAY['operating'::text, 'owner_draw'::text])));
+alter table public."expenses" add constraint "expenses_amount_check" CHECK ((amount >= (0)::numeric));
+alter table public."expenses" add constraint "expenses_tax_amount_check" CHECK ((tax_amount >= (0)::numeric));
+alter table public."expenses" add constraint "expenses_tax_within_amount" CHECK ((tax_amount <= amount));
+alter table public."fixed_assets" add constraint "fixed_assets_cost_check" CHECK ((cost >= (0)::numeric));
+alter table public."fixed_assets" add constraint "fixed_assets_db_needs_rate" CHECK (((method <> 'declining_balance'::text) OR (declining_rate IS NOT NULL)));
+alter table public."fixed_assets" add constraint "fixed_assets_declining_rate_check" CHECK (((declining_rate > (0)::numeric) AND (declining_rate <= (100)::numeric)));
+alter table public."fixed_assets" add constraint "fixed_assets_disposal_after_service" CHECK (((disposed_at IS NULL) OR (disposed_at >= in_service_date)));
+alter table public."fixed_assets" add constraint "fixed_assets_method_check" CHECK ((method = ANY (ARRAY['straight_line'::text, 'declining_balance'::text, 'none'::text])));
+alter table public."fixed_assets" add constraint "fixed_assets_salvage_value_check" CHECK ((salvage_value >= (0)::numeric));
+alter table public."fixed_assets" add constraint "fixed_assets_salvage_within_cost" CHECK ((salvage_value <= cost));
+alter table public."fixed_assets" add constraint "fixed_assets_sl_needs_life" CHECK (((method <> 'straight_line'::text) OR (useful_life_years IS NOT NULL)));
+alter table public."fixed_assets" add constraint "fixed_assets_tax_amount_check" CHECK ((tax_amount >= (0)::numeric));
+alter table public."fixed_assets" add constraint "fixed_assets_tax_within_cost" CHECK ((tax_amount <= cost));
+alter table public."fixed_assets" add constraint "fixed_assets_useful_life_years_check" CHECK ((useful_life_years > (0)::numeric));
+alter table public."follow_ups" add constraint "follow_ups_completion_consistent" CHECK ((((status = 'open'::text) AND (completed_at IS NULL)) OR ((status = 'done'::text) AND (completed_at IS NOT NULL))));
+alter table public."follow_ups" add constraint "follow_ups_reason_check" CHECK (((length(btrim(reason)) >= 1) AND (length(btrim(reason)) <= 500)));
+alter table public."follow_ups" add constraint "follow_ups_source_check" CHECK ((source = ANY (ARRAY['customer'::text, 'quote'::text, 'conversation'::text])));
+alter table public."follow_ups" add constraint "follow_ups_status_check" CHECK ((status = ANY (ARRAY['open'::text, 'done'::text])));
+alter table public."holidays" add constraint "holidays_hours_range" CHECK (((default_hours >= (0)::numeric) AND (default_hours <= (24)::numeric)));
+alter table public."inbound_webhooks" add constraint "inbound_webhooks_action_check" CHECK ((action = ANY (ARRAY['lead'::text, 'customer'::text])));
+alter table public."integrations_config" add constraint "integrations_config_singleton" CHECK ((id = 1));
+alter table public."invoices" add constraint "invoices_deposit_amount_positive" CHECK (((deposit_amount IS NULL) OR (deposit_amount > (0)::numeric)));
+alter table public."invoices" add constraint "invoices_discount_type_check" CHECK (((discount_type IS NULL) OR (discount_type = ANY (ARRAY['amount'::text, 'percent'::text]))));
+alter table public."invoices" add constraint "invoices_payment_method_chk" CHECK (((payment_method IS NULL) OR (payment_method = ANY (ARRAY['stripe'::text, 'etransfer'::text, 'cash'::text, 'cheque'::text]))));
+alter table public."invoices" add constraint "invoices_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'unpaid'::text, 'sent'::text, 'partial'::text, 'paid'::text, 'overpaid'::text, 'cancelled'::text])));
+alter table public."job_recurrences" add constraint "job_recurrences_freq_check" CHECK ((freq = ANY (ARRAY['weekly'::text, 'biweekly'::text, 'monthly'::text])));
+alter table public."job_recurrences" add constraint "job_recurrences_interval_unit_check" CHECK ((interval_unit = ANY (ARRAY['day'::text, 'week'::text, 'month'::text])));
+alter table public."job_work_sessions" add constraint "job_work_sessions_check" CHECK (((ended_at IS NULL) OR (started_at IS NULL) OR (ended_at >= started_at)));
+alter table public."job_work_sessions" add constraint "job_work_sessions_minutes_check" CHECK (((minutes > 0) AND (minutes <= 10080)));
+alter table public."job_work_sessions" add constraint "job_work_sessions_note_check" CHECK (((note IS NULL) OR (char_length(note) <= 280)));
+alter table public."job_work_sessions" add constraint "job_work_sessions_source_check" CHECK ((source = ANY (ARRAY['clock'::text, 'manual'::text, 'carried'::text])));
+alter table public."job_work_sessions" add constraint "job_work_sessions_workers_check" CHECK (((workers >= 1) AND (workers <= 50)));
+alter table public."jobs" add constraint "jobs_status_check" CHECK ((status = ANY (ARRAY['scheduled'::text, 'in_progress'::text, 'completed'::text, 'cancelled'::text])));
+alter table public."liabilities" add constraint "liabilities_current_balance_check" CHECK ((current_balance >= (0)::numeric));
+alter table public."liabilities" add constraint "liabilities_interest_rate_check" CHECK ((interest_rate >= (0)::numeric));
+alter table public."liabilities" add constraint "liabilities_kind_check" CHECK ((kind = ANY (ARRAY['loan'::text, 'credit_card'::text, 'line_of_credit'::text, 'other'::text])));
+alter table public."marketing_assets" add constraint "marketing_assets_status_check" CHECK ((status = ANY (ARRAY['candidate'::text, 'used'::text, 'dismissed'::text])));
+alter table public."marketing_campaigns" add constraint "marketing_campaigns_kind_check" CHECK ((kind = ANY (ARRAY['spring'::text, 'summer'::text, 'fall'::text, 'winter'::text, 'holiday'::text, 'rain_delay'::text, 'referral'::text, 'review'::text, 'winback'::text, 'custom'::text])));
+alter table public."marketing_campaigns" add constraint "marketing_campaigns_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'active'::text, 'completed'::text, 'archived'::text])));
+alter table public."neighbor_leads" add constraint "neighbor_leads_status_check" CHECK ((status = ANY (ARRAY['prospect'::text, 'contacted'::text, 'quoted'::text, 'won'::text, 'lost'::text])));
+alter table public."pay_run_lines" add constraint "pay_run_lines_minutes_nonneg" CHECK (((regular_minutes >= 0) AND (ot_minutes >= 0)));
+alter table public."pay_run_lines" add constraint "pay_run_lines_name_present" CHECK ((length(TRIM(BOTH FROM technician_name)) > 0));
+alter table public."pay_runs" add constraint "pay_runs_kind_known" CHECK ((period_kind = ANY (ARRAY['weekly'::text, 'biweekly'::text, 'semimonthly'::text, 'monthly'::text])));
+alter table public."pay_runs" add constraint "pay_runs_minutes_nonneg" CHECK (((regular_minutes >= 0) AND (ot_minutes >= 0)));
+alter table public."pay_runs" add constraint "pay_runs_multiplier_min" CHECK ((ot_multiplier >= (1)::numeric));
+alter table public."pay_runs" add constraint "pay_runs_period_order" CHECK ((period_end >= period_start));
+alter table public."pay_runs" add constraint "pay_runs_week_start_range" CHECK (((pay_week_starts_on >= 0) AND (pay_week_starts_on <= 6)));
+alter table public."payments" add constraint "payments_kind_check" CHECK ((kind = ANY (ARRAY['payment'::text, 'credit'::text, 'refund'::text])));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_base_charge_check" CHECK ((base_charge >= (0)::numeric));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_budget_mult_check" CHECK ((budget_mult > (0)::numeric));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_crew_cost_per_hour_check" CHECK ((crew_cost_per_hour >= (0)::numeric));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_fee_recovery_percent_check" CHECK ((fee_recovery_percent >= (0)::numeric));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_market_mult_check" CHECK ((market_mult > (0)::numeric));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_mow_rate_per_1000_check" CHECK ((mow_rate_per_1000 >= (0)::numeric));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_premium_mult_check" CHECK ((premium_mult > (0)::numeric));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_recommended_mult_check" CHECK ((recommended_mult > (0)::numeric));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_source_check" CHECK ((source = ANY (ARRAY['recorded'::text, 'reconstructed'::text])));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_travel_rate_per_km_check" CHECK ((travel_rate_per_km >= (0)::numeric));
+alter table public."property_intelligence" add constraint "property_intelligence_source_check" CHECK ((source = ANY (ARRAY['satellite'::text, 'photos'::text, 'combined'::text])));
+alter table public."property_intelligence" add constraint "property_intelligence_status_check" CHECK ((status = ANY (ARRAY['active'::text, 'superseded'::text, 'archived'::text])));
+alter table public."property_measurement_events" add constraint "property_measurement_events_action_known" CHECK ((action = ANY (ARRAY['measured'::text, 'removed'::text])));
+alter table public."property_measurement_events" add constraint "property_measurement_events_kind_known" CHECK ((kind = ANY (ARRAY['lawn'::text, 'mulch'::text, 'gravel'::text, 'rock'::text, 'concrete'::text, 'fencing'::text, 'hedges'::text, 'trees'::text, 'snow'::text])));
+alter table public."property_measurement_events" add constraint "property_measurement_events_value_nonneg" CHECK ((value >= (0)::numeric));
+alter table public."property_measurements" add constraint "property_measurements_confidence_known" CHECK ((confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text])));
+alter table public."property_measurements" add constraint "property_measurements_kind_known" CHECK ((kind = ANY (ARRAY['lawn'::text, 'mulch'::text, 'gravel'::text, 'rock'::text, 'concrete'::text, 'fencing'::text, 'hedges'::text, 'trees'::text, 'snow'::text])));
+alter table public."property_measurements" add constraint "property_measurements_reason_present" CHECK ((length(TRIM(BOTH FROM confidence_reason)) > 0));
+alter table public."property_measurements" add constraint "property_measurements_source_known" CHECK ((source = ANY (ARRAY['traced'::text, 'auto'::text, 'manual'::text])));
+alter table public."property_measurements" add constraint "property_measurements_unit_known" CHECK ((unit = ANY (ARRAY['sqft'::text, 'linear_ft'::text, 'count'::text])));
+alter table public."property_measurements" add constraint "property_measurements_unit_matches_kind" CHECK ((((kind = ANY (ARRAY['lawn'::text, 'mulch'::text, 'gravel'::text, 'rock'::text, 'concrete'::text, 'snow'::text])) AND (unit = 'sqft'::text)) OR ((kind = ANY (ARRAY['fencing'::text, 'hedges'::text])) AND (unit = 'linear_ft'::text)) OR ((kind = 'trees'::text) AND (unit = 'count'::text))));
+alter table public."property_measurements" add constraint "property_measurements_value_nonneg" CHECK ((value >= (0)::numeric));
+alter table public."property_observations" add constraint "property_observations_status_check" CHECK ((status = ANY (ARRAY['active'::text, 'archived'::text])));
+alter table public."pto_entries" add constraint "pto_entries_hours_range" CHECK (((hours > (0)::numeric) AND (hours <= (24)::numeric)));
+alter table public."pto_entries" add constraint "pto_entries_kind_known" CHECK ((kind = ANY (ARRAY['vacation'::text, 'sick'::text, 'holiday'::text, 'personal'::text, 'bereavement'::text])));
+alter table public."pto_entries" add constraint "pto_entries_rate_nonneg" CHECK (((hourly_rate IS NULL) OR (hourly_rate >= (0)::numeric)));
+alter table public."publish_jobs" add constraint "publish_jobs_mode_check" CHECK ((mode = ANY (ARRAY['manual'::text, 'api'::text])));
+alter table public."publish_jobs" add constraint "publish_jobs_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'scheduled'::text, 'queued'::text, 'publishing'::text, 'published'::text, 'failed'::text, 'canceled'::text])));
+alter table public."purchase_orders" add constraint "purchase_orders_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'ordered'::text, 'cancelled'::text])));
+alter table public."push_config" add constraint "push_config_singleton" CHECK ((id = 1));
+alter table public."quote_options" add constraint "quote_options_name_check" CHECK ((btrim(name) <> ''::text));
+alter table public."quote_options" add constraint "quote_options_price_check" CHECK ((price >= (0)::numeric));
+alter table public."quote_services" add constraint "quote_services_discount_type_check" CHECK ((discount_type = ANY (ARRAY['amount'::text, 'percent'::text])));
+alter table public."quote_services" add constraint "quote_services_kind_check" CHECK ((kind = ANY (ARRAY['service'::text, 'material'::text])));
+alter table public."quotes" add constraint "quotes_deposit_rule_check" CHECK ((((deposit_type IS NULL) = (deposit_value IS NULL)) AND ((deposit_type IS NULL) OR (deposit_type = ANY (ARRAY['percent'::text, 'fixed'::text]))) AND ((deposit_value IS NULL) OR (deposit_value > (0)::numeric)) AND ((deposit_type IS DISTINCT FROM 'percent'::text) OR (deposit_value <= (100)::numeric))));
+alter table public."quotes" add constraint "quotes_engine_price_needs_config" CHECK (((price_source IS DISTINCT FROM 'engine'::text) OR (pricing_config_version_id IS NOT NULL)));
+alter table public."quotes" add constraint "quotes_nearby_count_nonneg" CHECK (((nearby_count IS NULL) OR (nearby_count >= 0)));
+alter table public."quotes" add constraint "quotes_preferred_note_check" CHECK (((preferred_note IS NULL) OR (char_length(preferred_note) <= 500)));
+alter table public."quotes" add constraint "quotes_preferred_timing_check" CHECK (((preferred_timing IS NULL) OR (preferred_timing = ANY (ARRAY['morning'::text, 'afternoon'::text]))));
+alter table public."quotes" add constraint "quotes_price_source_valid" CHECK (((price_source IS NULL) OR (price_source = ANY (ARRAY['engine'::text, 'template_rate'::text]))));
+alter table public."quotes" add constraint "quotes_pricing_confidence_chk" CHECK (((pricing_confidence IS NULL) OR (pricing_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text]))));
+alter table public."quotes" add constraint "quotes_selected_cadence_check" CHECK (((selected_cadence IS NULL) OR (selected_cadence = ANY (ARRAY['one_time'::text, 'weekly'::text, 'biweekly'::text, 'monthly'::text]))));
+alter table public."quotes" add constraint "quotes_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'sent'::text, 'accepted'::text, 'scheduled'::text, 'completed'::text, 'paid'::text, 'declined'::text])));
+alter table public."quotes" add constraint "quotes_value_grade_valid" CHECK (((value_grade IS NULL) OR (value_grade = ANY (ARRAY['A+'::text, 'A'::text, 'B'::text, 'C'::text, 'D'::text, 'F'::text]))));
+alter table public."referrals" add constraint "referrals_status_check" CHECK ((status = ANY (ARRAY['invited'::text, 'joined'::text, 'rewarded'::text, 'declined'::text])));
+alter table public."report_schedules" add constraint "report_schedules_kind_check" CHECK ((kind = ANY (ARRAY['daily'::text, 'weekly'::text, 'monthly'::text, 'yearly'::text])));
+alter table public."service_bundle_items" add constraint "service_bundle_items_kind_check" CHECK ((kind = ANY (ARRAY['service'::text, 'material'::text])));
+alter table public."service_bundle_items" add constraint "service_bundle_items_minutes_not_negative" CHECK (((est_minutes IS NULL) OR (est_minutes >= 0)));
+alter table public."service_bundle_items" add constraint "service_bundle_items_name_not_blank" CHECK ((btrim(name) <> ''::text));
+alter table public."service_bundle_items" add constraint "service_bundle_items_price_not_negative" CHECK (((unit_price IS NULL) OR (unit_price >= (0)::numeric)));
+alter table public."service_bundle_items" add constraint "service_bundle_items_quantity_positive" CHECK ((quantity > (0)::numeric));
+alter table public."service_bundles" add constraint "service_bundles_name_not_blank" CHECK ((btrim(name) <> ''::text));
+alter table public."service_requests" add constraint "service_requests_kind_check" CHECK ((kind = ANY (ARRAY['service'::text, 'appointment'::text, 'reschedule'::text, 'plan_change'::text, 'additional_work'::text])));
+alter table public."service_requests" add constraint "service_requests_photos_check" CHECK (portal_request_photos_ok(photos));
+alter table public."service_requests" add constraint "service_requests_resolved_at_check" CHECK (((resolved_at IS NULL) OR (status <> 'new'::text)));
+alter table public."service_requests" add constraint "service_requests_status_check" CHECK ((status = ANY (ARRAY['new'::text, 'handled'::text, 'dismissed'::text])));
+alter table public."service_templates" add constraint "service_templates_pricing_display_type_check" CHECK ((pricing_display_type = ANY (ARRAY['starting_from'::text, 'hourly'::text, 'per_sqft'::text, 'per_linear_ft'::text, 'starting_from_materials'::text, 'hourly_materials'::text])));
+alter table public."service_templates" add constraint "service_templates_recurrence_check" CHECK (((recurrence IS NULL) OR (recurrence = ANY (ARRAY['one_time'::text, 'recurring_ok'::text, 'usually_recurring'::text]))));
+alter table public."social_connections" add constraint "social_connections_mode_check" CHECK ((mode = ANY (ARRAY['manual'::text, 'api'::text])));
+alter table public."social_connections" add constraint "social_connections_status_check" CHECK ((status = ANY (ARRAY['connected'::text, 'expired'::text, 'revoked'::text])));
+alter table public."technicians" add constraint "technicians_employment_dates_ordered" CHECK (((ended_on IS NULL) OR (hired_on IS NULL) OR (ended_on >= hired_on)));
+alter table public."technicians" add constraint "technicians_hourly_wage_nonneg" CHECK (((hourly_wage IS NULL) OR (hourly_wage >= (0)::numeric)));
+alter table public."technicians" add constraint "technicians_pto_allowance_nonneg" CHECK (((pto_annual_hours IS NULL) OR (pto_annual_hours >= (0)::numeric)));
+alter table public."technicians" add constraint "technicians_status_check" CHECK ((status = ANY (ARRAY['available'::text, 'en_route'::text, 'on_job'::text, 'break'::text, 'off'::text])));
+alter table public."time_entries" add constraint "time_entries_break_nonneg" CHECK ((break_minutes >= 0));
+alter table public."time_entries" add constraint "time_entries_clock_order" CHECK (((clock_out IS NULL) OR (clock_out > clock_in)));
+alter table public."time_entries" add constraint "time_entries_rate_nonneg" CHECK (((hourly_rate IS NULL) OR (hourly_rate >= (0)::numeric)));
+alter table public."wage_history" add constraint "wage_history_actually_changed" CHECK ((old_wage IS DISTINCT FROM new_wage));
+alter table public."wage_history" add constraint "wage_history_wages_nonneg" CHECK ((((old_wage IS NULL) OR (old_wage >= (0)::numeric)) AND ((new_wage IS NULL) OR (new_wage >= (0)::numeric))));
+alter table public."webhook_deliveries" add constraint "webhook_deliveries_status_check" CHECK ((status = ANY (ARRAY['pending'::text, 'processing'::text, 'success'::text, 'dead'::text])));
+alter table public."webhook_endpoints" add constraint "webhook_endpoints_source_check" CHECK ((source = ANY (ARRAY['manual'::text, 'api'::text, 'zapier'::text, 'make'::text])));
+
+-- foreign keys (232)
+alter table public."api_keys" add constraint "api_keys_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."automation_runs" add constraint "automation_runs_signal_id_fkey" FOREIGN KEY (signal_id) REFERENCES automation_signals(id) ON DELETE SET NULL;
+alter table public."automation_runs" add constraint "automation_runs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."automation_signals" add constraint "automation_signals_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."beta_invites" add constraint "beta_invites_created_by_fkey" FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+alter table public."beta_invites" add constraint "beta_invites_redeemed_by_fkey" FOREIGN KEY (redeemed_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+alter table public."beta_invites" add constraint "beta_invites_reserved_by_fkey" FOREIGN KEY (reserved_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+alter table public."business_settings" add constraint "business_settings_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."change_orders" add constraint "change_orders_customer_same_owner" FOREIGN KEY (user_id, customer_id) REFERENCES customers(user_id, id) ON DELETE CASCADE;
+alter table public."change_orders" add constraint "change_orders_job_same_owner" FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE CASCADE;
+alter table public."change_orders" add constraint "change_orders_quote_same_owner" FOREIGN KEY (user_id, quote_id) REFERENCES quotes(user_id, id) ON DELETE SET NULL;
+alter table public."change_orders" add constraint "change_orders_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."consent_changes" add constraint "consent_changes_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."consent_changes" add constraint "consent_changes_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."content_pieces" add constraint "content_pieces_asset_id_fkey" FOREIGN KEY (asset_id) REFERENCES marketing_assets(id) ON DELETE CASCADE;
+alter table public."content_pieces" add constraint "content_pieces_campaign_id_fkey" FOREIGN KEY (campaign_id) REFERENCES marketing_campaigns(id) ON DELETE SET NULL;
+alter table public."content_pieces" add constraint "content_pieces_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."content_pieces" add constraint "content_pieces_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
+alter table public."content_pieces" add constraint "content_pieces_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."conversations" add constraint "conversations_assigned_to_fkey" FOREIGN KEY (assigned_to) REFERENCES technicians(id) ON DELETE SET NULL;
+alter table public."conversations" add constraint "conversations_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
+alter table public."conversations" add constraint "conversations_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."crew_media" add constraint "crew_media_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE;
+alter table public."crew_media" add constraint "crew_media_message_id_fkey" FOREIGN KEY (message_id) REFERENCES crew_messages(id) ON DELETE CASCADE;
+alter table public."crew_media" add constraint "crew_media_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."crew_message_reads" add constraint "crew_message_reads_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE;
+alter table public."crew_message_reads" add constraint "crew_message_reads_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."crew_messages" add constraint "crew_messages_author_technician_id_fkey" FOREIGN KEY (author_technician_id) REFERENCES technicians(id) ON DELETE SET NULL;
+alter table public."crew_messages" add constraint "crew_messages_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE;
+alter table public."crew_messages" add constraint "crew_messages_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."crews" add constraint "crews_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."crm_campaign_log" add constraint "crm_campaign_log_campaign_id_fkey" FOREIGN KEY (campaign_id) REFERENCES crm_campaigns(id) ON DELETE CASCADE;
+alter table public."crm_campaign_log" add constraint "crm_campaign_log_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
+alter table public."crm_campaign_log" add constraint "crm_campaign_log_message_id_fkey" FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL;
+alter table public."crm_campaign_log" add constraint "crm_campaign_log_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."crm_campaign_presets" add constraint "crm_campaign_presets_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."crm_campaigns" add constraint "crm_campaigns_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."customer_imports" add constraint "customer_imports_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."customer_portal_tokens" add constraint "customer_portal_tokens_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
+alter table public."customer_portal_tokens" add constraint "customer_portal_tokens_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."customers" add constraint "customers_referred_by_customer_id_fkey" FOREIGN KEY (referred_by_customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."customers" add constraint "customers_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."data_exports" add constraint "data_exports_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."day_statuses" add constraint "day_statuses_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."dispatch_notes" add constraint "dispatch_notes_crew_id_fkey" FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE CASCADE;
+alter table public."dispatch_notes" add constraint "dispatch_notes_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."equipment" add constraint "equipment_crew_id_fkey" FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL;
+alter table public."equipment" add constraint "equipment_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."equipment_docs" add constraint "equipment_docs_equipment_id_fkey" FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE CASCADE;
+alter table public."equipment_docs" add constraint "equipment_docs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."equipment_service" add constraint "equipment_service_equipment_id_fkey" FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE CASCADE;
+alter table public."equipment_service" add constraint "equipment_service_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."expense_categories" add constraint "expense_categories_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."expenses" add constraint "expenses_category_id_fkey" FOREIGN KEY (category_id) REFERENCES expense_categories(id) ON DELETE SET NULL;
+alter table public."expenses" add constraint "expenses_job_same_owner" FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE SET NULL (job_id);
+alter table public."expenses" add constraint "expenses_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."expenses" add constraint "expenses_vendor_id_fkey" FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE SET NULL;
+alter table public."fixed_assets" add constraint "fixed_assets_equipment_id_fkey" FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE SET NULL;
+alter table public."fixed_assets" add constraint "fixed_assets_expense_id_fkey" FOREIGN KEY (expense_id) REFERENCES expenses(id) ON DELETE SET NULL;
+alter table public."fixed_assets" add constraint "fixed_assets_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."fixed_assets" add constraint "fixed_assets_vendor_id_fkey" FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE SET NULL;
+alter table public."follow_ups" add constraint "follow_ups_customer_same_tenant" FOREIGN KEY (user_id, customer_id) REFERENCES customers(user_id, id) ON DELETE CASCADE;
+alter table public."follow_ups" add constraint "follow_ups_quote_same_tenant" FOREIGN KEY (user_id, quote_id) REFERENCES quotes(user_id, id) ON DELETE SET NULL (quote_id);
+alter table public."follow_ups" add constraint "follow_ups_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."holidays" add constraint "holidays_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."inbound_events" add constraint "inbound_events_hook_id_fkey" FOREIGN KEY (hook_id) REFERENCES inbound_webhooks(id) ON DELETE CASCADE;
+alter table public."inbound_events" add constraint "inbound_events_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."inbound_webhooks" add constraint "inbound_webhooks_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."integration_events" add constraint "integration_events_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."invoices" add constraint "invoices_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."invoices" add constraint "invoices_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
+alter table public."invoices" add constraint "invoices_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
+alter table public."invoices" add constraint "invoices_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
+alter table public."invoices" add constraint "invoices_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."job_line_items" add constraint "job_line_items_change_order_same_owner" FOREIGN KEY (change_order_id, user_id) REFERENCES change_orders(id, user_id) ON DELETE CASCADE;
+alter table public."job_line_items" add constraint "job_line_items_job_same_owner" FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE CASCADE;
+alter table public."job_line_items" add constraint "job_line_items_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."job_photos" add constraint "job_photos_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."job_photos" add constraint "job_photos_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
+alter table public."job_photos" add constraint "job_photos_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE;
+alter table public."job_photos" add constraint "job_photos_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."job_price_changes" add constraint "job_price_changes_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
+alter table public."job_price_changes" add constraint "job_price_changes_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
+alter table public."job_price_changes" add constraint "job_price_changes_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."job_recurrences" add constraint "job_recurrences_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."job_recurrences" add constraint "job_recurrences_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."job_work_sessions" add constraint "job_work_sessions_job_same_owner" FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE CASCADE;
+alter table public."job_work_sessions" add constraint "job_work_sessions_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."jobs" add constraint "jobs_crew_id_fkey" FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL;
+alter table public."jobs" add constraint "jobs_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."jobs" add constraint "jobs_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
+alter table public."jobs" add constraint "jobs_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
+alter table public."jobs" add constraint "jobs_recurrence_id_fkey" FOREIGN KEY (recurrence_id) REFERENCES job_recurrences(id) ON DELETE SET NULL;
+alter table public."jobs" add constraint "jobs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."labor_observations" add constraint "labor_observations_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
+alter table public."labor_observations" add constraint "labor_observations_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
+alter table public."labor_observations" add constraint "labor_observations_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."liabilities" add constraint "liabilities_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."marketing_assets" add constraint "marketing_assets_best_after_photo_id_fkey" FOREIGN KEY (best_after_photo_id) REFERENCES job_photos(id) ON DELETE SET NULL;
+alter table public."marketing_assets" add constraint "marketing_assets_best_before_photo_id_fkey" FOREIGN KEY (best_before_photo_id) REFERENCES job_photos(id) ON DELETE SET NULL;
+alter table public."marketing_assets" add constraint "marketing_assets_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."marketing_assets" add constraint "marketing_assets_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE;
+alter table public."marketing_assets" add constraint "marketing_assets_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
+alter table public."marketing_assets" add constraint "marketing_assets_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."marketing_campaigns" add constraint "marketing_campaigns_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."measurements" add constraint "measurements_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."measurements" add constraint "measurements_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
+alter table public."measurements" add constraint "measurements_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
+alter table public."measurements" add constraint "measurements_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."message_sends" add constraint "message_sends_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."messages" add constraint "messages_conversation_id_fkey" FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
+alter table public."messages" add constraint "messages_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."messages" add constraint "messages_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."neighbor_leads" add constraint "neighbor_leads_converted_customer_id_fkey" FOREIGN KEY (converted_customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."neighbor_leads" add constraint "neighbor_leads_source_customer_id_fkey" FOREIGN KEY (source_customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."neighbor_leads" add constraint "neighbor_leads_source_property_id_fkey" FOREIGN KEY (source_property_id) REFERENCES properties(id) ON DELETE SET NULL;
+alter table public."neighbor_leads" add constraint "neighbor_leads_source_quote_id_fkey" FOREIGN KEY (source_quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
+alter table public."neighbor_leads" add constraint "neighbor_leads_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."notification_log" add constraint "notification_log_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."notification_log" add constraint "notification_log_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
+alter table public."notification_log" add constraint "notification_log_message_id_fkey" FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL;
+alter table public."notification_log" add constraint "notification_log_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."notifications" add constraint "notifications_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."notifications" add constraint "notifications_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."part_movements" add constraint "part_movements_equipment_service_id_fkey" FOREIGN KEY (equipment_service_id) REFERENCES equipment_service(id) ON DELETE CASCADE;
+alter table public."part_movements" add constraint "part_movements_part_id_fkey" FOREIGN KEY (part_id) REFERENCES parts(id) ON DELETE CASCADE;
+alter table public."part_movements" add constraint "part_movements_purchase_order_item_id_fkey" FOREIGN KEY (purchase_order_item_id) REFERENCES purchase_order_items(id) ON DELETE CASCADE;
+alter table public."part_movements" add constraint "part_movements_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."parts" add constraint "parts_supplier_id_fkey" FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL;
+alter table public."parts" add constraint "parts_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."pay_run_lines" add constraint "pay_run_lines_pay_run_id_fkey" FOREIGN KEY (pay_run_id) REFERENCES pay_runs(id) ON DELETE CASCADE;
+alter table public."pay_run_lines" add constraint "pay_run_lines_technician_same_owner" FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (technician_id);
+alter table public."pay_run_lines" add constraint "pay_run_lines_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."pay_runs" add constraint "pay_runs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."payment_methods" add constraint "payment_methods_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
+alter table public."payment_methods" add constraint "payment_methods_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."payments" add constraint "payments_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."payments" add constraint "payments_invoice_id_fkey" FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE SET NULL;
+alter table public."payments" add constraint "payments_quote_tenant_fkey" FOREIGN KEY (user_id, quote_id) REFERENCES quotes(user_id, id) ON DELETE SET NULL (quote_id);
+alter table public."payments" add constraint "payments_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."platform_capabilities" add constraint "platform_capabilities_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."platform_operators" add constraint "platform_operators_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."properties" add constraint "properties_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
+alter table public."properties" add constraint "properties_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."property_intelligence" add constraint "property_intelligence_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."property_intelligence" add constraint "property_intelligence_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
+alter table public."property_intelligence" add constraint "property_intelligence_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE;
+alter table public."property_intelligence" add constraint "property_intelligence_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."property_measurement_events" add constraint "property_measurement_events_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."property_measurements" add constraint "property_measurements_property_same_owner" FOREIGN KEY (property_id, user_id) REFERENCES properties(id, user_id) ON DELETE CASCADE;
+alter table public."property_measurements" add constraint "property_measurements_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."property_observations" add constraint "property_observations_analysis_id_fkey" FOREIGN KEY (analysis_id) REFERENCES property_intelligence(id) ON DELETE SET NULL;
+alter table public."property_observations" add constraint "property_observations_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE;
+alter table public."property_observations" add constraint "property_observations_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."property_twin" add constraint "property_twin_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."property_twin" add constraint "property_twin_latest_analysis_id_fkey" FOREIGN KEY (latest_analysis_id) REFERENCES property_intelligence(id) ON DELETE SET NULL;
+alter table public."property_twin" add constraint "property_twin_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE;
+alter table public."property_twin" add constraint "property_twin_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."pto_entries" add constraint "pto_entries_holiday_id_fkey" FOREIGN KEY (holiday_id) REFERENCES holidays(id) ON DELETE SET NULL;
+alter table public."pto_entries" add constraint "pto_entries_technician_same_owner" FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (technician_id);
+alter table public."pto_entries" add constraint "pto_entries_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."publish_jobs" add constraint "publish_jobs_connection_id_fkey" FOREIGN KEY (connection_id) REFERENCES social_connections(id) ON DELETE SET NULL;
+alter table public."publish_jobs" add constraint "publish_jobs_content_piece_id_fkey" FOREIGN KEY (content_piece_id) REFERENCES content_pieces(id) ON DELETE CASCADE;
+alter table public."publish_jobs" add constraint "publish_jobs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."purchase_order_items" add constraint "purchase_order_items_part_id_fkey" FOREIGN KEY (part_id) REFERENCES parts(id) ON DELETE RESTRICT;
+alter table public."purchase_order_items" add constraint "purchase_order_items_purchase_order_id_fkey" FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id) ON DELETE CASCADE;
+alter table public."purchase_order_items" add constraint "purchase_order_items_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."purchase_orders" add constraint "purchase_orders_supplier_id_fkey" FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE RESTRICT;
+alter table public."purchase_orders" add constraint "purchase_orders_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."push_subscriptions" add constraint "push_subscriptions_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."quote_options" add constraint "quote_options_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE;
+alter table public."quote_options" add constraint "quote_options_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."quote_outcomes" add constraint "quote_outcomes_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE;
+alter table public."quote_outcomes" add constraint "quote_outcomes_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."quote_services" add constraint "quote_services_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE;
+alter table public."quote_services" add constraint "quote_services_service_template_id_fkey" FOREIGN KEY (service_template_id) REFERENCES service_templates(id) ON DELETE SET NULL;
+alter table public."quote_services" add constraint "quote_services_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."quotes" add constraint "quotes_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."quotes" add constraint "quotes_pricing_config_version_id_fkey" FOREIGN KEY (pricing_config_version_id) REFERENCES pricing_config_versions(id);
+alter table public."quotes" add constraint "quotes_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
+alter table public."quotes" add constraint "quotes_renewal_of_recurrence_fkey" FOREIGN KEY (user_id, renewal_of_recurrence_id) REFERENCES job_recurrences(user_id, id) ON UPDATE CASCADE ON DELETE SET NULL (renewal_of_recurrence_id);
+alter table public."quotes" add constraint "quotes_selected_option_fkey" FOREIGN KEY (selected_option_id, id) REFERENCES quote_options(id, quote_id) ON DELETE RESTRICT;
+alter table public."quotes" add constraint "quotes_service_template_id_fkey" FOREIGN KEY (service_template_id) REFERENCES service_templates(id) ON DELETE SET NULL;
+alter table public."quotes" add constraint "quotes_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."referrals" add constraint "referrals_referred_customer_id_fkey" FOREIGN KEY (referred_customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."referrals" add constraint "referrals_referrer_customer_id_fkey" FOREIGN KEY (referrer_customer_id) REFERENCES customers(id) ON DELETE CASCADE;
+alter table public."referrals" add constraint "referrals_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."report_schedules" add constraint "report_schedules_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."revenue_recommendations" add constraint "revenue_recommendations_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
+alter table public."revenue_recommendations" add constraint "revenue_recommendations_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."road_distance_cache" add constraint "road_distance_cache_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."schedule_health_ignored" add constraint "schedule_health_ignored_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."schedule_items" add constraint "schedule_items_converted_quote_id_fkey" FOREIGN KEY (converted_quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
+alter table public."schedule_items" add constraint "schedule_items_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."schedule_items" add constraint "schedule_items_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
+alter table public."schedule_items" add constraint "schedule_items_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."scheduled_messages" add constraint "scheduled_messages_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
+alter table public."scheduled_messages" add constraint "scheduled_messages_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
+alter table public."scheduled_messages" add constraint "scheduled_messages_message_id_fkey" FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL;
+alter table public."scheduled_messages" add constraint "scheduled_messages_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."service_bundle_items" add constraint "service_bundle_items_bundle_same_owner" FOREIGN KEY (bundle_id, user_id) REFERENCES service_bundles(id, user_id) ON DELETE CASCADE;
+alter table public."service_bundle_items" add constraint "service_bundle_items_template_same_owner" FOREIGN KEY (service_template_id, user_id) REFERENCES service_templates(id, user_id) ON DELETE SET NULL (service_template_id);
+alter table public."service_bundle_items" add constraint "service_bundle_items_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."service_bundles" add constraint "service_bundles_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."service_requests" add constraint "service_requests_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."service_requests" add constraint "service_requests_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
+alter table public."service_requests" add constraint "service_requests_recurrence_id_fkey" FOREIGN KEY (recurrence_id) REFERENCES job_recurrences(id) ON DELETE SET NULL;
+alter table public."service_requests" add constraint "service_requests_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."service_templates" add constraint "service_templates_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."service_units" add constraint "service_units_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."social_connections" add constraint "social_connections_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."suppliers" add constraint "suppliers_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."technicians" add constraint "technicians_auth_user_id_fkey" FOREIGN KEY (auth_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+alter table public."technicians" add constraint "technicians_crew_id_fkey" FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL;
+alter table public."technicians" add constraint "technicians_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."time_entries" add constraint "time_entries_job_same_owner" FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE SET NULL (job_id);
+alter table public."time_entries" add constraint "time_entries_technician_same_owner" FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (technician_id);
+alter table public."time_entries" add constraint "time_entries_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."travel_fee_tiers" add constraint "travel_fee_tiers_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."vendors" add constraint "vendors_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."verify_fixture_tenants" add constraint "verify_fixture_tenants_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."wage_history" add constraint "wage_history_technician_same_owner" FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (technician_id);
+alter table public."wage_history" add constraint "wage_history_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."webhook_deliveries" add constraint "webhook_deliveries_endpoint_id_fkey" FOREIGN KEY (endpoint_id) REFERENCES webhook_endpoints(id) ON DELETE CASCADE;
+alter table public."webhook_deliveries" add constraint "webhook_deliveries_event_id_fkey" FOREIGN KEY (event_id) REFERENCES integration_events(id) ON DELETE SET NULL;
+alter table public."webhook_deliveries" add constraint "webhook_deliveries_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."webhook_endpoints" add constraint "webhook_endpoints_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."website_leads" add constraint "website_leads_conversation_id_fkey" FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE SET NULL;
+alter table public."website_leads" add constraint "website_leads_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."website_leads" add constraint "website_leads_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
+alter table public."website_leads" add constraint "website_leads_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 5 · TRIGGERS
+-- 82 triggers, including the two DEFERRABLE constraint triggers that
+-- enforce quote-option/quote-service shape at commit time.
+-- ══════════════════════════════════════════════════════════════════════════
+
+drop trigger if exists "business_settings_no_crew_owner" on public."business_settings";
+CREATE TRIGGER business_settings_no_crew_owner BEFORE INSERT ON public.business_settings FOR EACH ROW EXECUTE FUNCTION guard_business_settings_owner();
+drop trigger if exists "business_settings_updated_at" on public."business_settings";
+CREATE TRIGGER business_settings_updated_at BEFORE UPDATE ON public.business_settings FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "trg_change_order_apply_approval" on public."change_orders";
+CREATE TRIGGER trg_change_order_apply_approval AFTER UPDATE ON public.change_orders FOR EACH ROW EXECUTE FUNCTION change_order_apply_approval();
+drop trigger if exists "trg_change_order_assign_number" on public."change_orders";
+CREATE TRIGGER trg_change_order_assign_number BEFORE INSERT ON public.change_orders FOR EACH ROW EXECUTE FUNCTION change_order_assign_number();
+drop trigger if exists "trg_change_order_guard_transition" on public."change_orders";
+CREATE TRIGGER trg_change_order_guard_transition BEFORE UPDATE ON public.change_orders FOR EACH ROW EXECUTE FUNCTION change_order_guard_transition();
+drop trigger if exists "trg_notify_change_order_decision" on public."change_orders";
+CREATE TRIGGER trg_notify_change_order_decision AFTER UPDATE ON public.change_orders FOR EACH ROW EXECUTE FUNCTION notify_change_order_decision();
+drop trigger if exists "trg_content_pieces_updated" on public."content_pieces";
+CREATE TRIGGER trg_content_pieces_updated BEFORE UPDATE ON public.content_pieces FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "crew_message_identity" on public."crew_messages";
+CREATE TRIGGER crew_message_identity BEFORE INSERT ON public.crew_messages FOR EACH ROW EXECUTE FUNCTION crew_message_identity();
+drop trigger if exists "crew_message_notify" on public."crew_messages";
+CREATE TRIGGER crew_message_notify AFTER INSERT ON public.crew_messages FOR EACH ROW EXECUTE FUNCTION crew_message_notify();
+drop trigger if exists "crews_updated_at" on public."crews";
+CREATE TRIGGER crews_updated_at BEFORE UPDATE ON public.crews FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "trg_crm_campaign_presets_updated" on public."crm_campaign_presets";
+CREATE TRIGGER trg_crm_campaign_presets_updated BEFORE UPDATE ON public.crm_campaign_presets FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "trg_crm_campaigns_updated" on public."crm_campaigns";
+CREATE TRIGGER trg_crm_campaigns_updated BEFORE UPDATE ON public.crm_campaigns FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "customers_updated_at" on public."customers";
+CREATE TRIGGER customers_updated_at BEFORE UPDATE ON public.customers FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "trg_crm_sync_referral" on public."customers";
+CREATE TRIGGER trg_crm_sync_referral AFTER INSERT OR UPDATE OF referred_by_customer_id ON public.customers FOR EACH ROW EXECUTE FUNCTION crm_sync_referral();
+drop trigger if exists "trg_integration_capture" on public."customers";
+CREATE TRIGGER trg_integration_capture AFTER INSERT ON public.customers FOR EACH ROW EXECUTE FUNCTION capture_integration_event();
+drop trigger if exists "trg_notify_review_received" on public."customers";
+CREATE TRIGGER trg_notify_review_received AFTER UPDATE OF reviewed_at ON public.customers FOR EACH ROW EXECUTE FUNCTION notify_review_received();
+drop trigger if exists "dispatch_notes_updated_at" on public."dispatch_notes";
+CREATE TRIGGER dispatch_notes_updated_at BEFORE UPDATE ON public.dispatch_notes FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "equipment_service_recompute" on public."equipment_service";
+CREATE TRIGGER equipment_service_recompute AFTER INSERT OR DELETE OR UPDATE ON public.equipment_service FOR EACH ROW EXECUTE FUNCTION recompute_equipment_service();
+drop trigger if exists "trg_expense_categories_updated" on public."expense_categories";
+CREATE TRIGGER trg_expense_categories_updated BEFORE UPDATE ON public.expense_categories FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "trg_expenses_updated" on public."expenses";
+CREATE TRIGGER trg_expenses_updated BEFORE UPDATE ON public.expenses FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "trg_fixed_assets_updated" on public."fixed_assets";
+CREATE TRIGGER trg_fixed_assets_updated BEFORE UPDATE ON public.fixed_assets FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "follow_ups_set_updated_at" on public."follow_ups";
+CREATE TRIGGER follow_ups_set_updated_at BEFORE UPDATE ON public.follow_ups FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "holidays_updated_at" on public."holidays";
+CREATE TRIGGER holidays_updated_at BEFORE UPDATE ON public.holidays FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "trg_integration_fanout" on public."integration_events";
+CREATE TRIGGER trg_integration_fanout AFTER INSERT ON public.integration_events FOR EACH ROW EXECUTE FUNCTION fanout_integration_event();
+drop trigger if exists "invoices_updated_at" on public."invoices";
+CREATE TRIGGER invoices_updated_at BEFORE UPDATE ON public.invoices FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "trg_integration_capture" on public."invoices";
+CREATE TRIGGER trg_integration_capture AFTER INSERT OR UPDATE OF status ON public.invoices FOR EACH ROW EXECUTE FUNCTION capture_integration_event();
+drop trigger if exists "trg_notify_invoice_paid" on public."invoices";
+CREATE TRIGGER trg_notify_invoice_paid AFTER UPDATE OF status ON public.invoices FOR EACH ROW EXECUTE FUNCTION notify_invoice_paid();
+drop trigger if exists "trg_recompute_invoice_on_edit" on public."invoices";
+CREATE TRIGGER trg_recompute_invoice_on_edit AFTER UPDATE OF amount, discount_type, discount_value ON public.invoices FOR EACH ROW WHEN (((old.amount IS DISTINCT FROM new.amount) OR (old.discount_type IS DISTINCT FROM new.discount_type) OR (old.discount_value IS DISTINCT FROM new.discount_value))) EXECUTE FUNCTION recompute_invoice_paid_on_edit();
+drop trigger if exists "trg_sync_quote_on_invoice_paid" on public."invoices";
+CREATE TRIGGER trg_sync_quote_on_invoice_paid AFTER UPDATE OF status ON public.invoices FOR EACH ROW EXECUTE FUNCTION sync_quote_on_invoice_paid();
+drop trigger if exists "aa_carry_forward_job_actual_minutes" on public."job_work_sessions";
+CREATE TRIGGER aa_carry_forward_job_actual_minutes BEFORE INSERT ON public.job_work_sessions FOR EACH ROW EXECUTE FUNCTION carry_forward_job_actual_minutes();
+drop trigger if exists "job_work_sessions_updated_at" on public."job_work_sessions";
+CREATE TRIGGER job_work_sessions_updated_at BEFORE UPDATE ON public.job_work_sessions FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "trg_sync_job_actual_minutes" on public."job_work_sessions";
+CREATE TRIGGER trg_sync_job_actual_minutes AFTER INSERT OR DELETE OR UPDATE ON public.job_work_sessions FOR EACH ROW EXECUTE FUNCTION sync_job_actual_minutes();
+drop trigger if exists "aa_bank_job_clock_session" on public."jobs";
+CREATE TRIGGER aa_bank_job_clock_session BEFORE UPDATE ON public.jobs FOR EACH ROW EXECUTE FUNCTION bank_job_clock_session();
+drop trigger if exists "crew_job_field_guard" on public."jobs";
+CREATE TRIGGER crew_job_field_guard BEFORE UPDATE ON public.jobs FOR EACH ROW EXECUTE FUNCTION crew_job_field_guard();
+drop trigger if exists "crew_message_schedule_event" on public."jobs";
+CREATE TRIGGER crew_message_schedule_event AFTER UPDATE ON public.jobs FOR EACH ROW EXECUTE FUNCTION crew_message_schedule_event();
+drop trigger if exists "jobs_updated_at" on public."jobs";
+CREATE TRIGGER jobs_updated_at BEFORE UPDATE ON public.jobs FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "trg_capture_labor" on public."jobs";
+CREATE TRIGGER trg_capture_labor AFTER UPDATE OF actual_minutes ON public.jobs FOR EACH ROW EXECUTE FUNCTION capture_labor_observation();
+drop trigger if exists "trg_integration_capture" on public."jobs";
+CREATE TRIGGER trg_integration_capture AFTER INSERT OR UPDATE OF status ON public.jobs FOR EACH ROW EXECUTE FUNCTION capture_integration_event();
+drop trigger if exists "trg_jobs_clear_route_order" on public."jobs";
+CREATE TRIGGER trg_jobs_clear_route_order BEFORE UPDATE OF scheduled_date ON public.jobs FOR EACH ROW EXECUTE FUNCTION clear_route_order_on_move();
+drop trigger if exists "trg_resync_quote_on_job_recurring" on public."jobs";
+CREATE TRIGGER trg_resync_quote_on_job_recurring AFTER UPDATE OF recurrence_id ON public.jobs FOR EACH ROW EXECUTE FUNCTION resync_quote_on_job_recurring();
+drop trigger if exists "trg_sync_quote_on_job_complete" on public."jobs";
+CREATE TRIGGER trg_sync_quote_on_job_complete AFTER UPDATE OF status ON public.jobs FOR EACH ROW EXECUTE FUNCTION sync_quote_on_job_complete();
+drop trigger if exists "trg_liabilities_updated" on public."liabilities";
+CREATE TRIGGER trg_liabilities_updated BEFORE UPDATE ON public.liabilities FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "trg_marketing_assets_updated" on public."marketing_assets";
+CREATE TRIGGER trg_marketing_assets_updated BEFORE UPDATE ON public.marketing_assets FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "trg_marketing_campaigns_updated" on public."marketing_campaigns";
+CREATE TRIGGER trg_marketing_campaigns_updated BEFORE UPDATE ON public.marketing_campaigns FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "trg_bump_conversation" on public."messages";
+CREATE TRIGGER trg_bump_conversation AFTER INSERT ON public.messages FOR EACH ROW EXECUTE FUNCTION bump_conversation();
+drop trigger if exists "trg_crm_touch_last_contacted" on public."messages";
+CREATE TRIGGER trg_crm_touch_last_contacted AFTER INSERT ON public.messages FOR EACH ROW EXECUTE FUNCTION crm_touch_last_contacted();
+drop trigger if exists "trg_notify_inbound_message" on public."messages";
+CREATE TRIGGER trg_notify_inbound_message AFTER INSERT ON public.messages FOR EACH ROW EXECUTE FUNCTION notify_inbound_message();
+drop trigger if exists "trg_crm_stamp_review_requested" on public."notification_log";
+CREATE TRIGGER trg_crm_stamp_review_requested AFTER INSERT ON public.notification_log FOR EACH ROW EXECUTE FUNCTION crm_stamp_review_requested();
+drop trigger if exists "trg_push_dispatch" on public."notifications";
+CREATE TRIGGER trg_push_dispatch AFTER INSERT ON public.notifications FOR EACH ROW EXECUTE FUNCTION push_dispatch();
+drop trigger if exists "part_movements_recompute" on public."part_movements";
+CREATE TRIGGER part_movements_recompute AFTER INSERT OR DELETE OR UPDATE ON public.part_movements FOR EACH ROW EXECUTE FUNCTION recompute_part_stock();
+drop trigger if exists "trg_integration_capture" on public."payments";
+CREATE TRIGGER trg_integration_capture AFTER INSERT ON public.payments FOR EACH ROW EXECUTE FUNCTION capture_integration_event();
+drop trigger if exists "trg_recompute_invoice_paid" on public."payments";
+CREATE TRIGGER trg_recompute_invoice_paid AFTER INSERT OR DELETE OR UPDATE ON public.payments FOR EACH ROW EXECUTE FUNCTION recompute_invoice_paid();
+drop trigger if exists "pricing_config_versions_no_mutate" on public."pricing_config_versions";
+CREATE TRIGGER pricing_config_versions_no_mutate BEFORE DELETE OR UPDATE ON public.pricing_config_versions FOR EACH ROW EXECUTE FUNCTION pricing_config_versions_immutable();
+drop trigger if exists "properties_guard_lawn_sqft" on public."properties";
+CREATE TRIGGER properties_guard_lawn_sqft BEFORE UPDATE OF lawn_sqft ON public.properties FOR EACH ROW EXECUTE FUNCTION guard_lawn_sqft_writer();
+drop trigger if exists "properties_updated_at" on public."properties";
+CREATE TRIGGER properties_updated_at BEFORE UPDATE ON public.properties FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "trg_property_intelligence_one_active" on public."property_intelligence";
+CREATE TRIGGER trg_property_intelligence_one_active BEFORE INSERT ON public.property_intelligence FOR EACH ROW EXECUTE FUNCTION vision_supersede_prior_active();
+drop trigger if exists "trg_property_intelligence_updated" on public."property_intelligence";
+CREATE TRIGGER trg_property_intelligence_updated BEFORE UPDATE ON public.property_intelligence FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "property_measurements_history" on public."property_measurements";
+CREATE TRIGGER property_measurements_history AFTER INSERT OR DELETE OR UPDATE ON public.property_measurements FOR EACH ROW EXECUTE FUNCTION log_measurement_event();
+drop trigger if exists "property_measurements_mirror" on public."property_measurements";
+CREATE TRIGGER property_measurements_mirror AFTER INSERT OR DELETE OR UPDATE OF value, kind ON public.property_measurements FOR EACH ROW EXECUTE FUNCTION mirror_measurement_to_property();
+drop trigger if exists "property_measurements_updated_at" on public."property_measurements";
+CREATE TRIGGER property_measurements_updated_at BEFORE UPDATE ON public.property_measurements FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "trg_property_twin_updated" on public."property_twin";
+CREATE TRIGGER trg_property_twin_updated BEFORE UPDATE ON public.property_twin FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "pto_entries_updated_at" on public."pto_entries";
+CREATE TRIGGER pto_entries_updated_at BEFORE UPDATE ON public.pto_entries FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "trg_publish_jobs_updated" on public."publish_jobs";
+CREATE TRIGGER trg_publish_jobs_updated BEFORE UPDATE ON public.publish_jobs FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "quote_options_shape_trg" on public."quote_options";
+CREATE CONSTRAINT TRIGGER quote_options_shape_trg AFTER INSERT OR DELETE OR UPDATE ON public.quote_options DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION quote_options_shape_guard();
+drop trigger if exists "quote_services_shape_trg" on public."quote_services";
+CREATE CONSTRAINT TRIGGER quote_services_shape_trg AFTER INSERT OR UPDATE ON public.quote_services DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION quote_options_shape_guard();
+drop trigger if exists "quotes_updated_at" on public."quotes";
+CREATE TRIGGER quotes_updated_at BEFORE UPDATE ON public.quotes FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "trg_integration_capture" on public."quotes";
+CREATE TRIGGER trg_integration_capture AFTER INSERT OR UPDATE OF status ON public.quotes FOR EACH ROW EXECUTE FUNCTION capture_integration_event();
+drop trigger if exists "trg_notify_quote_accepted" on public."quotes";
+CREATE TRIGGER trg_notify_quote_accepted AFTER UPDATE OF status ON public.quotes FOR EACH ROW EXECUTE FUNCTION notify_quote_accepted();
+drop trigger if exists "trg_referrals_updated" on public."referrals";
+CREATE TRIGGER trg_referrals_updated BEFORE UPDATE ON public.referrals FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "trg_report_schedules_updated_at" on public."report_schedules";
+CREATE TRIGGER trg_report_schedules_updated_at BEFORE UPDATE ON public.report_schedules FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "service_bundles_updated_at" on public."service_bundles";
+CREATE TRIGGER service_bundles_updated_at BEFORE UPDATE ON public.service_bundles FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "trg_integration_capture" on public."service_requests";
+CREATE TRIGGER trg_integration_capture AFTER INSERT ON public.service_requests FOR EACH ROW EXECUTE FUNCTION capture_integration_event();
+drop trigger if exists "trg_sr_to_conversation" on public."service_requests";
+CREATE TRIGGER trg_sr_to_conversation AFTER INSERT ON public.service_requests FOR EACH ROW EXECUTE FUNCTION sr_to_conversation();
+drop trigger if exists "service_templates_updated_at" on public."service_templates";
+CREATE TRIGGER service_templates_updated_at BEFORE UPDATE ON public.service_templates FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "trg_social_connections_updated" on public."social_connections";
+CREATE TRIGGER trg_social_connections_updated BEFORE UPDATE ON public.social_connections FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "technicians_auth_link_guard" on public."technicians";
+CREATE TRIGGER technicians_auth_link_guard BEFORE INSERT OR UPDATE ON public.technicians FOR EACH ROW EXECUTE FUNCTION guard_technician_auth_link();
+drop trigger if exists "technicians_log_wage_change" on public."technicians";
+CREATE TRIGGER technicians_log_wage_change AFTER INSERT OR UPDATE OF hourly_wage ON public.technicians FOR EACH ROW EXECUTE FUNCTION log_wage_change();
+drop trigger if exists "technicians_updated_at" on public."technicians";
+CREATE TRIGGER technicians_updated_at BEFORE UPDATE ON public.technicians FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "time_entries_updated_at" on public."time_entries";
+CREATE TRIGGER time_entries_updated_at BEFORE UPDATE ON public.time_entries FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "trg_vendors_updated" on public."vendors";
+CREATE TRIGGER trg_vendors_updated BEFORE UPDATE ON public.vendors FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "trg_webhook_deliveries_nudge" on public."webhook_deliveries";
+CREATE TRIGGER trg_webhook_deliveries_nudge AFTER INSERT ON public.webhook_deliveries FOR EACH STATEMENT EXECUTE FUNCTION nudge_webhook_deliveries();
+drop trigger if exists "webhook_endpoints_updated_at" on public."webhook_endpoints";
+CREATE TRIGGER webhook_endpoints_updated_at BEFORE UPDATE ON public.webhook_endpoints FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 6 · INDEXES
+-- 265 standalone indexes. Constraint-backing indexes are omitted on purpose —
+-- section 4 already created them; declaring both would fail or duplicate.
+-- The partial UNIQUE indexes are correctness, not speed: they are what stops a
+-- second open shift per technician and a duplicate invoice number.
+-- ══════════════════════════════════════════════════════════════════════════
+
+create index if not exists api_keys_user_idx ON public.api_keys USING btree (user_id);
+create index if not exists automation_runs_lookup ON public.automation_runs USING btree (user_id, evaluated_on DESC, rule_key);
+create index if not exists automation_runs_subject ON public.automation_runs USING btree (user_id, subject_id, evaluated_on DESC);
+create unique index if not exists automation_runs_unique ON public.automation_runs USING btree (user_id, rule_key, subject_id, evaluated_on);
+create index if not exists automation_signals_lookup ON public.automation_signals USING btree (user_id, signal, detected_on DESC);
+create index if not exists automation_signals_subject ON public.automation_signals USING btree (user_id, subject_id, detected_on DESC);
+create unique index if not exists automation_signals_unique ON public.automation_signals USING btree (user_id, signal, subject_id, detected_on);
+create unique index if not exists beta_invites_redeemed_by_key ON public.beta_invites USING btree (redeemed_by) WHERE (redeemed_by IS NOT NULL);
+create unique index if not exists beta_invites_reserved_by_key ON public.beta_invites USING btree (reserved_by) WHERE (reserved_by IS NOT NULL);
+create unique index if not exists business_settings_booking_token_idx ON public.business_settings USING btree (booking_token) WHERE (booking_token IS NOT NULL);
+create index if not exists change_orders_customer_idx ON public.change_orders USING btree (customer_id, status);
+create index if not exists change_orders_job_idx ON public.change_orders USING btree (job_id);
+create unique index if not exists change_orders_number_uniq ON public.change_orders USING btree (user_id, co_number);
+create index if not exists consent_changes_cust_idx ON public.consent_changes USING btree (user_id, customer_id, created_at DESC);
+create index if not exists consent_changes_customer_id_idx ON public.consent_changes USING btree (customer_id);
+create index if not exists content_pieces_active_idx ON public.content_pieces USING btree (user_id, created_at DESC) WHERE (archived_at IS NULL);
+create index if not exists content_pieces_asset_idx ON public.content_pieces USING btree (asset_id);
+create index if not exists content_pieces_campaign_idx ON public.content_pieces USING btree (campaign_id);
+create index if not exists content_pieces_favorite_idx ON public.content_pieces USING btree (user_id, favorite) WHERE favorite;
+create index if not exists content_pieces_schedule_idx ON public.content_pieces USING btree (user_id, scheduled_for);
+create index if not exists content_pieces_status_idx ON public.content_pieces USING btree (user_id, status);
+create index if not exists content_pieces_user_idx ON public.content_pieces USING btree (user_id, created_at DESC);
+create index if not exists conversations_customer_id_idx ON public.conversations USING btree (customer_id);
+create index if not exists conversations_inbox_idx ON public.conversations USING btree (user_id, archived_at, last_message_at DESC);
+create index if not exists conversations_labels_idx ON public.conversations USING gin (labels);
+create index if not exists conversations_lead_idx ON public.conversations USING btree (user_id, lead_status) WHERE (lead_status IS NOT NULL);
+create index if not exists conversations_snoozed_idx ON public.conversations USING btree (user_id, snoozed_until) WHERE (snoozed_until IS NOT NULL);
+create index if not exists conversations_user_idx ON public.conversations USING btree (user_id, last_message_at DESC);
+create index if not exists crew_media_job_idx ON public.crew_media USING btree (job_id, created_at);
+create index if not exists crew_media_message_idx ON public.crew_media USING btree (message_id) WHERE (message_id IS NOT NULL);
+create index if not exists crew_media_user_idx ON public.crew_media USING btree (user_id);
+create index if not exists crew_message_reads_reader_idx ON public.crew_message_reads USING btree (reader_id);
+create unique index if not exists crew_messages_client_token_key ON public.crew_messages USING btree (job_id, created_by, client_token) WHERE (client_token IS NOT NULL);
+create index if not exists crew_messages_job_idx ON public.crew_messages USING btree (job_id, created_at);
+create index if not exists crew_messages_user_idx ON public.crew_messages USING btree (user_id, created_at DESC);
+create index if not exists crews_user_idx ON public.crews USING btree (user_id, is_active);
+create index if not exists crm_campaign_log_campaign_idx ON public.crm_campaign_log USING btree (campaign_id, created_at DESC);
+create index if not exists crm_campaign_log_customer_idx ON public.crm_campaign_log USING btree (customer_id);
+create index if not exists crm_campaign_log_status_idx ON public.crm_campaign_log USING btree (campaign_id, status);
+create index if not exists crm_campaign_presets_user_idx ON public.crm_campaign_presets USING btree (user_id, created_at DESC);
+create index if not exists crm_campaigns_active_idx ON public.crm_campaigns USING btree (user_id, enabled) WHERE (archived_at IS NULL);
+create index if not exists crm_campaigns_user_idx ON public.crm_campaigns USING btree (user_id, enabled);
+create index if not exists customer_imports_user_created_idx ON public.customer_imports USING btree (user_id, created_at DESC);
+create index if not exists customer_portal_tokens_customer_id_idx ON public.customer_portal_tokens USING btree (customer_id);
+create index if not exists portal_tokens_customer_idx ON public.customer_portal_tokens USING btree (user_id, customer_id);
+create index if not exists customers_name_idx ON public.customers USING btree (name);
+create index if not exists customers_name_trgm ON public.customers USING gin (name gin_trgm_ops);
+create index if not exists customers_phone_digits_trgm_idx ON public.customers USING gin (phone_digits gin_trgm_ops);
+create index if not exists customers_referred_by_idx ON public.customers USING btree (referred_by_customer_id);
+create index if not exists customers_tags_idx ON public.customers USING gin (tags);
+create index if not exists customers_user_active_idx ON public.customers USING btree (user_id) WHERE (archived_at IS NULL);
+create index if not exists customers_user_id_idx ON public.customers USING btree (user_id);
+create index if not exists data_exports_user_created_idx ON public.data_exports USING btree (user_id, created_at DESC);
+create index if not exists day_statuses_user_date_idx ON public.day_statuses USING btree (user_id, date);
+create index if not exists dispatch_notes_user_date_idx ON public.dispatch_notes USING btree (user_id, date);
+create index if not exists equipment_crew_idx ON public.equipment USING btree (crew_id);
+create index if not exists equipment_user_idx ON public.equipment USING btree (user_id, status);
+create index if not exists equipment_docs_eq_idx ON public.equipment_docs USING btree (user_id, equipment_id, created_at DESC);
+create index if not exists equipment_service_eq_idx ON public.equipment_service USING btree (user_id, equipment_id, service_date DESC);
+create index if not exists expense_categories_user_idx ON public.expense_categories USING btree (user_id, sort_order) WHERE (archived_at IS NULL);
+create index if not exists expense_categories_user_kind_idx ON public.expense_categories USING btree (user_id, kind) WHERE (archived_at IS NULL);
+create unique index if not exists expense_categories_user_name_uniq ON public.expense_categories USING btree (user_id, lower(TRIM(BOTH FROM name))) WHERE (archived_at IS NULL);
+create index if not exists expenses_category_idx ON public.expenses USING btree (category_id) WHERE (archived_at IS NULL);
+create index if not exists expenses_job_idx ON public.expenses USING btree (job_id) WHERE (archived_at IS NULL);
+create index if not exists expenses_user_bill_date_idx ON public.expenses USING btree (user_id, bill_date DESC) WHERE (archived_at IS NULL);
+create index if not exists expenses_user_capital_idx ON public.expenses USING btree (user_id) WHERE (is_capital AND (archived_at IS NULL));
+create index if not exists expenses_user_date_idx ON public.expenses USING btree (user_id, spent_at DESC) WHERE (archived_at IS NULL);
+create index if not exists expenses_user_unpaid_idx ON public.expenses USING btree (user_id, bill_date) WHERE ((spent_at IS NULL) AND (archived_at IS NULL));
+create index if not exists expenses_vendor_idx ON public.expenses USING btree (vendor_id) WHERE (archived_at IS NULL);
+create index if not exists fixed_assets_equipment_idx ON public.fixed_assets USING btree (equipment_id) WHERE (equipment_id IS NOT NULL);
+create index if not exists fixed_assets_expense_idx ON public.fixed_assets USING btree (expense_id) WHERE (expense_id IS NOT NULL);
+create index if not exists fixed_assets_user_active_idx ON public.fixed_assets USING btree (user_id) WHERE ((archived_at IS NULL) AND (disposed_at IS NULL));
+create index if not exists fixed_assets_user_idx ON public.fixed_assets USING btree (user_id, in_service_date DESC) WHERE (archived_at IS NULL);
+create index if not exists follow_ups_customer_idx ON public.follow_ups USING btree (user_id, customer_id, due_on DESC);
+create index if not exists follow_ups_open_due_idx ON public.follow_ups USING btree (user_id, due_on) WHERE (status = 'open'::text);
+create index if not exists holidays_user_date_idx ON public.holidays USING btree (user_id, date);
+create index if not exists inbound_events_hook_idx ON public.inbound_events USING btree (hook_id, created_at DESC);
+create index if not exists inbound_webhooks_user_idx ON public.inbound_webhooks USING btree (user_id);
+create index if not exists integration_events_kind_idx ON public.integration_events USING btree (user_id, event, created_at DESC);
+create index if not exists integration_events_user_idx ON public.integration_events USING btree (user_id, created_at DESC);
+create index if not exists idx_invoices_deposit_outstanding ON public.invoices USING btree (user_id, deposit_requested_at) WHERE (deposit_amount IS NOT NULL);
+create index if not exists invoices_customer_id_idx ON public.invoices USING btree (customer_id);
+create index if not exists invoices_inum_trgm ON public.invoices USING gin (invoice_number gin_trgm_ops);
+create index if not exists invoices_job_id_idx ON public.invoices USING btree (job_id);
+create unique index if not exists invoices_job_id_key ON public.invoices USING btree (job_id) WHERE (job_id IS NOT NULL);
+create index if not exists invoices_property_id_idx ON public.invoices USING btree (property_id);
+create index if not exists invoices_quote_id_idx ON public.invoices USING btree (quote_id);
+create index if not exists invoices_reminder_scan_idx ON public.invoices USING btree (user_id, status, due_date) WHERE (status = ANY (ARRAY['unpaid'::text, 'sent'::text, 'partial'::text]));
+create index if not exists invoices_user_id_idx ON public.invoices USING btree (user_id);
+create unique index if not exists job_line_items_change_order_uniq ON public.job_line_items USING btree (change_order_id) WHERE (change_order_id IS NOT NULL);
+create index if not exists job_line_items_group_idx ON public.job_line_items USING btree (group_id);
+create index if not exists job_line_items_job_id_idx ON public.job_line_items USING btree (job_id);
+create index if not exists job_line_items_job_idx ON public.job_line_items USING btree (user_id, job_id);
+create index if not exists job_photos_customer_id_idx ON public.job_photos USING btree (customer_id);
+create index if not exists job_photos_hash_idx ON public.job_photos USING btree (user_id, property_id, content_hash) WHERE (content_hash IS NOT NULL);
+create index if not exists job_photos_job_id_idx ON public.job_photos USING btree (job_id);
+create index if not exists job_photos_job_idx ON public.job_photos USING btree (user_id, job_id);
+create index if not exists job_photos_property_id_idx ON public.job_photos USING btree (property_id);
+create index if not exists job_photos_property_idx ON public.job_photos USING btree (user_id, property_id);
+create index if not exists job_price_changes_job_id_idx ON public.job_price_changes USING btree (job_id);
+create index if not exists job_price_changes_job_idx ON public.job_price_changes USING btree (user_id, job_id);
+create index if not exists job_price_changes_quote_id_idx ON public.job_price_changes USING btree (quote_id);
+create index if not exists job_recurrences_customer_id_idx ON public.job_recurrences USING btree (customer_id);
+create index if not exists job_recurrences_user_id_idx ON public.job_recurrences USING btree (user_id);
+create index if not exists job_work_sessions_day_idx ON public.job_work_sessions USING btree (user_id, worked_on DESC);
+create index if not exists job_work_sessions_job_idx ON public.job_work_sessions USING btree (user_id, job_id, worked_on DESC);
+create unique index if not exists job_work_sessions_one_per_clock ON public.job_work_sessions USING btree (job_id, started_at) WHERE (started_at IS NOT NULL);
+create index if not exists jobs_crew_id_idx ON public.jobs USING btree (crew_id);
+create index if not exists jobs_customer_id_idx ON public.jobs USING btree (customer_id);
+create index if not exists jobs_property_id_idx ON public.jobs USING btree (property_id);
+create index if not exists jobs_quote_id_idx ON public.jobs USING btree (quote_id);
+create index if not exists jobs_recurrence_idx ON public.jobs USING btree (recurrence_id);
+create index if not exists jobs_scheduled_date_idx ON public.jobs USING btree (scheduled_date);
+create index if not exists jobs_user_id_idx ON public.jobs USING btree (user_id);
+create index if not exists labor_observations_job_id_idx ON public.labor_observations USING btree (job_id);
+create index if not exists labor_observations_prop_idx ON public.labor_observations USING btree (user_id, property_id);
+create index if not exists labor_observations_property_id_idx ON public.labor_observations USING btree (property_id);
+create index if not exists labor_observations_user_idx ON public.labor_observations USING btree (user_id);
+create index if not exists liabilities_user_idx ON public.liabilities USING btree (user_id, as_of_date DESC) WHERE (archived_at IS NULL);
+create index if not exists marketing_assets_customer_idx ON public.marketing_assets USING btree (customer_id);
+create index if not exists marketing_assets_job_idx ON public.marketing_assets USING btree (job_id);
+create index if not exists marketing_assets_user_idx ON public.marketing_assets USING btree (user_id, created_at DESC);
+create index if not exists marketing_campaigns_status_idx ON public.marketing_campaigns USING btree (user_id, status);
+create index if not exists marketing_campaigns_user_idx ON public.marketing_campaigns USING btree (user_id, created_at DESC);
+create index if not exists measurements_hood_idx ON public.measurements USING btree (user_id, neighborhood);
+create index if not exists measurements_user_idx ON public.measurements USING btree (user_id, created_at DESC);
+create index if not exists message_sends_age_idx ON public.message_sends USING btree (created_at);
+create index if not exists messages_convo_idx ON public.messages USING btree (conversation_id, created_at);
+create index if not exists messages_customer_id_idx ON public.messages USING btree (customer_id);
+create index if not exists messages_provider_msg_idx ON public.messages USING btree (provider, provider_message_id) WHERE (provider_message_id IS NOT NULL);
+create unique index if not exists messages_twilio_sid_key ON public.messages USING btree (twilio_sid) WHERE (twilio_sid IS NOT NULL);
+create index if not exists messages_user_id_idx ON public.messages USING btree (user_id);
+create index if not exists neighbor_leads_converted_customer_idx ON public.neighbor_leads USING btree (converted_customer_id);
+create index if not exists neighbor_leads_source_customer_idx ON public.neighbor_leads USING btree (source_customer_id);
+create index if not exists neighbor_leads_source_property_idx ON public.neighbor_leads USING btree (source_property_id);
+create index if not exists neighbor_leads_source_quote_idx ON public.neighbor_leads USING btree (source_quote_id);
+create index if not exists neighbor_leads_status_idx ON public.neighbor_leads USING btree (status);
+create index if not exists neighbor_leads_user_idx ON public.neighbor_leads USING btree (user_id);
+create index if not exists notification_log_customer_id_idx ON public.notification_log USING btree (customer_id);
+create index if not exists notification_log_dedupe_idx ON public.notification_log USING btree (user_id, job_id, template);
+create index if not exists notification_log_job_id_idx ON public.notification_log USING btree (job_id);
+create index if not exists notification_log_message_idx ON public.notification_log USING btree (message_id);
+create index if not exists notification_log_provider_msg_idx ON public.notification_log USING btree (provider, provider_message_id) WHERE (provider_message_id IS NOT NULL);
+create index if not exists notification_log_user_created_idx ON public.notification_log USING btree (user_id, created_at);
+create index if not exists notifications_customer_id_idx ON public.notifications USING btree (customer_id);
+create index if not exists notifications_user_active_idx ON public.notifications USING btree (user_id, created_at DESC) WHERE (archived_at IS NULL);
+create index if not exists notifications_user_unread_idx ON public.notifications USING btree (user_id, read, created_at DESC);
+create index if not exists part_movements_part_idx ON public.part_movements USING btree (user_id, part_id, created_at DESC);
+create index if not exists part_movements_po_item_idx ON public.part_movements USING btree (purchase_order_item_id) WHERE (purchase_order_item_id IS NOT NULL);
+create index if not exists part_movements_service_idx ON public.part_movements USING btree (equipment_service_id);
+create index if not exists parts_supplier_idx ON public.parts USING btree (supplier_id) WHERE (supplier_id IS NOT NULL);
+create index if not exists parts_user_idx ON public.parts USING btree (user_id, category);
+create index if not exists password_reset_requests_key_time_idx ON public.password_reset_requests USING btree (email_key, created_at DESC);
+create index if not exists password_reset_requests_time_idx ON public.password_reset_requests USING btree (created_at DESC);
+create index if not exists pay_run_lines_run_idx ON public.pay_run_lines USING btree (pay_run_id);
+create index if not exists pay_run_lines_tech_idx ON public.pay_run_lines USING btree (technician_id);
+create index if not exists pay_runs_user_period_idx ON public.pay_runs USING btree (user_id, period_start DESC);
+create index if not exists payment_methods_customer_idx ON public.payment_methods USING btree (customer_id, is_default DESC, created_at DESC);
+create index if not exists payments_customer_id_idx ON public.payments USING btree (customer_id);
+create index if not exists payments_customer_kind_idx ON public.payments USING btree (customer_id, kind);
+create index if not exists payments_invoice_idx ON public.payments USING btree (invoice_id);
+create index if not exists payments_quote_id_idx ON public.payments USING btree (quote_id) WHERE (quote_id IS NOT NULL);
+create index if not exists payments_user_idx ON public.payments USING btree (user_id, created_at DESC);
+create index if not exists portal_access_requests_key_time_idx ON public.portal_access_requests USING btree (email_key, created_at DESC);
+create index if not exists portal_access_requests_time_idx ON public.portal_access_requests USING btree (created_at DESC);
+create index if not exists pricing_config_versions_user_valid_idx ON public.pricing_config_versions USING btree (user_id, valid_from DESC);
+create index if not exists properties_customer_id_idx ON public.properties USING btree (customer_id);
+create unique index if not exists properties_one_primary ON public.properties USING btree (customer_id) WHERE is_primary;
+create index if not exists properties_user_id_idx ON public.properties USING btree (user_id);
+create index if not exists property_intelligence_customer_idx ON public.property_intelligence USING btree (customer_id);
+create unique index if not exists property_intelligence_one_active ON public.property_intelligence USING btree (user_id, property_id) WHERE (status = 'active'::text);
+create index if not exists property_intelligence_property_idx ON public.property_intelligence USING btree (property_id, status);
+create index if not exists property_intelligence_user_idx ON public.property_intelligence USING btree (user_id, created_at DESC);
+create index if not exists pme_property_idx ON public.property_measurement_events USING btree (property_id, seq DESC);
+create index if not exists pme_property_kind_idx ON public.property_measurement_events USING btree (property_id, kind, seq DESC);
+create index if not exists pme_user_idx ON public.property_measurement_events USING btree (user_id, seq DESC);
+create index if not exists property_measurements_kind_idx ON public.property_measurements USING btree (user_id, kind);
+create index if not exists property_measurements_property_idx ON public.property_measurements USING btree (property_id);
+create index if not exists property_measurements_user_idx ON public.property_measurements USING btree (user_id);
+create index if not exists property_observations_attr_idx ON public.property_observations USING btree (property_id, attribute_key, observed_at DESC);
+create index if not exists property_observations_prop_idx ON public.property_observations USING btree (user_id, property_id, observed_at DESC);
+create index if not exists property_observations_run_idx ON public.property_observations USING btree (analysis_id);
+create index if not exists property_twin_customer_idx ON public.property_twin USING btree (customer_id);
+create index if not exists property_twin_property_idx ON public.property_twin USING btree (property_id);
+create index if not exists property_twin_user_idx ON public.property_twin USING btree (user_id, last_analyzed_at DESC);
+create index if not exists pto_entries_tech_date_idx ON public.pto_entries USING btree (technician_id, date);
+create index if not exists pto_entries_user_date_idx ON public.pto_entries USING btree (user_id, date);
+create index if not exists publish_jobs_due_idx ON public.publish_jobs USING btree (status, scheduled_for);
+create index if not exists publish_jobs_piece_idx ON public.publish_jobs USING btree (content_piece_id);
+create index if not exists publish_jobs_status_idx ON public.publish_jobs USING btree (user_id, status);
+create index if not exists publish_jobs_user_idx ON public.publish_jobs USING btree (user_id, created_at DESC);
+create index if not exists purchase_order_items_part_idx ON public.purchase_order_items USING btree (part_id);
+create index if not exists purchase_order_items_po_idx ON public.purchase_order_items USING btree (purchase_order_id);
+create index if not exists purchase_orders_supplier_idx ON public.purchase_orders USING btree (supplier_id) WHERE (supplier_id IS NOT NULL);
+create index if not exists purchase_orders_user_idx ON public.purchase_orders USING btree (user_id, created_at DESC);
+create index if not exists push_subscriptions_user_idx ON public.push_subscriptions USING btree (user_id);
+create unique index if not exists quote_options_one_recommended ON public.quote_options USING btree (quote_id) WHERE is_recommended;
+create index if not exists quote_options_quote_idx ON public.quote_options USING btree (quote_id, sort_order);
+create index if not exists quote_options_user_idx ON public.quote_options USING btree (user_id);
+create index if not exists quote_outcomes_quote_id_idx ON public.quote_outcomes USING btree (quote_id);
+create index if not exists quote_outcomes_user_idx ON public.quote_outcomes USING btree (user_id);
+create index if not exists quote_services_quote_sort_idx ON public.quote_services USING btree (quote_id, sort_order);
+create index if not exists quote_services_user_quote_idx ON public.quote_services USING btree (user_id, quote_id);
+create index if not exists quotes_accepted_snapshot_idx ON public.quotes USING btree (user_id, selected_cadence) WHERE (accepted_price IS NOT NULL);
+create index if not exists quotes_created_idx ON public.quotes USING btree (created_at DESC);
+create index if not exists quotes_customer_id_idx ON public.quotes USING btree (customer_id);
+create index if not exists quotes_pricing_config_version_idx ON public.quotes USING btree (pricing_config_version_id) WHERE (pricing_config_version_id IS NOT NULL);
+create index if not exists quotes_property_id_idx ON public.quotes USING btree (property_id);
+create index if not exists quotes_qnum_trgm ON public.quotes USING gin (quote_number gin_trgm_ops);
+create index if not exists quotes_renewal_of_recurrence_idx ON public.quotes USING btree (renewal_of_recurrence_id) WHERE (renewal_of_recurrence_id IS NOT NULL);
+create index if not exists quotes_selected_option_idx ON public.quotes USING btree (selected_option_id);
+create index if not exists quotes_service_template_id_idx ON public.quotes USING btree (service_template_id);
+create index if not exists quotes_status_idx ON public.quotes USING btree (status);
+create index if not exists quotes_user_id_idx ON public.quotes USING btree (user_id);
+create unique index if not exists referrals_link_uniq ON public.referrals USING btree (referrer_customer_id, referred_customer_id) WHERE (referred_customer_id IS NOT NULL);
+create index if not exists referrals_referred_idx ON public.referrals USING btree (referred_customer_id);
+create index if not exists referrals_referrer_idx ON public.referrals USING btree (referrer_customer_id);
+create index if not exists referrals_user_idx ON public.referrals USING btree (user_id, created_at DESC);
+create index if not exists report_schedules_due_idx ON public.report_schedules USING btree (enabled, kind) WHERE enabled;
+create index if not exists revenue_recommendations_customer_idx ON public.revenue_recommendations USING btree (customer_id);
+create index if not exists revenue_recommendations_user_idx ON public.revenue_recommendations USING btree (user_id);
+create index if not exists road_distance_cache_lookup_idx ON public.road_distance_cache USING btree (user_id, from_key, to_key);
+create index if not exists schedule_health_ignored_user_idx ON public.schedule_health_ignored USING btree (user_id);
+create index if not exists schedule_items_due_idx ON public.schedule_items USING btree (user_id, status, due_at);
+create index if not exists schedule_items_user_date_idx ON public.schedule_items USING btree (user_id, scheduled_date);
+create index if not exists scheduled_messages_due_idx ON public.scheduled_messages USING btree (status, send_at);
+create index if not exists scheduled_messages_user_idx ON public.scheduled_messages USING btree (user_id, send_at DESC);
+create index if not exists service_bundle_items_bundle_idx ON public.service_bundle_items USING btree (bundle_id, sort_order, created_at);
+create unique index if not exists service_bundles_user_name_uk ON public.service_bundles USING btree (user_id, lower(btrim(name)));
+create index if not exists service_bundles_user_sort_idx ON public.service_bundles USING btree (user_id, sort_order, created_at);
+create index if not exists service_requests_customer_id_idx ON public.service_requests USING btree (customer_id);
+create unique index if not exists service_requests_open_dedup_idx ON public.service_requests USING btree (customer_id, dedup_key) WHERE ((dedup_key IS NOT NULL) AND (status = 'new'::text));
+create index if not exists service_requests_open_portal_idx ON public.service_requests USING btree (user_id, created_at DESC) WHERE (from_portal AND (status = 'new'::text));
+create index if not exists service_requests_user_idx ON public.service_requests USING btree (user_id, status);
+create index if not exists service_templates_active_idx ON public.service_templates USING btree (is_active);
+create index if not exists service_templates_favorite_idx ON public.service_templates USING btree (user_id, is_favorite) WHERE is_favorite;
+create index if not exists service_templates_user_idx ON public.service_templates USING btree (user_id);
+create unique index if not exists service_units_system_code_key ON public.service_units USING btree (code) WHERE (user_id IS NULL);
+create unique index if not exists service_units_user_code_key ON public.service_units USING btree (user_id, code) WHERE (user_id IS NOT NULL);
+create index if not exists service_units_user_idx ON public.service_units USING btree (user_id);
+create unique index if not exists social_connections_unique_idx ON public.social_connections USING btree (user_id, platform, COALESCE(account_id, account_name));
+create index if not exists social_connections_user_idx ON public.social_connections USING btree (user_id, platform);
+create index if not exists idx_suggestion_dismissals_user ON public.suggestion_dismissals USING btree (user_id);
+create index if not exists suppliers_user_idx ON public.suppliers USING btree (user_id, name);
+create index if not exists technicians_active_idx ON public.technicians USING btree (user_id) WHERE (archived_at IS NULL);
+create unique index if not exists technicians_auth_user_id_key ON public.technicians USING btree (auth_user_id) WHERE (auth_user_id IS NOT NULL);
+create index if not exists technicians_crew_idx ON public.technicians USING btree (crew_id);
+create unique index if not exists technicians_invite_code_key ON public.technicians USING btree (invite_code) WHERE (invite_code IS NOT NULL);
+create index if not exists technicians_user_idx ON public.technicians USING btree (user_id, is_active);
+create index if not exists time_entries_job_idx ON public.time_entries USING btree (job_id);
+create unique index if not exists time_entries_one_open_per_tech ON public.time_entries USING btree (technician_id) WHERE (clock_out IS NULL);
+create index if not exists time_entries_tech_idx ON public.time_entries USING btree (technician_id, clock_in DESC);
+create index if not exists time_entries_user_idx ON public.time_entries USING btree (user_id, clock_in DESC);
+create index if not exists travel_fee_tiers_user_idx ON public.travel_fee_tiers USING btree (user_id);
+create index if not exists vendors_user_idx ON public.vendors USING btree (user_id) WHERE (archived_at IS NULL);
+create unique index if not exists vendors_user_name_uniq ON public.vendors USING btree (user_id, lower(TRIM(BOTH FROM name))) WHERE (archived_at IS NULL);
+create index if not exists wage_history_tech_idx ON public.wage_history USING btree (technician_id, created_at DESC);
+create index if not exists wage_history_tech_seq_idx ON public.wage_history USING btree (technician_id, seq DESC);
+create index if not exists wage_history_user_idx ON public.wage_history USING btree (user_id, created_at DESC);
+create index if not exists webhook_deliveries_due_idx ON public.webhook_deliveries USING btree (status, next_attempt_at) WHERE (status = 'pending'::text);
+create index if not exists webhook_deliveries_endpoint_idx ON public.webhook_deliveries USING btree (endpoint_id, created_at DESC);
+create index if not exists webhook_deliveries_user_idx ON public.webhook_deliveries USING btree (user_id, created_at DESC);
+create index if not exists webhook_endpoints_user_idx ON public.webhook_endpoints USING btree (user_id);
+create index if not exists website_leads_customer_idx ON public.website_leads USING btree (customer_id);
+create index if not exists website_leads_user_idx ON public.website_leads USING btree (user_id, created_at DESC);
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 7 · ROW LEVEL SECURITY
+-- RLS enabled on all 103 tables, then 332 policies.
+-- Every table carries RLS. The tenant boundary audit found the holes were always
+-- RLS being OFF, never a policy being wrong — so enabling is emitted for every
+-- table unconditionally, before any policy.
+-- ══════════════════════════════════════════════════════════════════════════
+
+alter table public."api_keys" enable row level security;
+alter table public."automation_runs" enable row level security;
+alter table public."automation_signals" enable row level security;
+alter table public."automation_sweeps" enable row level security;
+alter table public."beta_invites" enable row level security;
+alter table public."business_settings" enable row level security;
+alter table public."change_orders" enable row level security;
+alter table public."consent_changes" enable row level security;
+alter table public."content_pieces" enable row level security;
+alter table public."conversations" enable row level security;
+alter table public."crew_media" enable row level security;
+alter table public."crew_message_reads" enable row level security;
+alter table public."crew_messages" enable row level security;
+alter table public."crews" enable row level security;
+alter table public."crm_campaign_log" enable row level security;
+alter table public."crm_campaign_presets" enable row level security;
+alter table public."crm_campaigns" enable row level security;
+alter table public."customer_imports" enable row level security;
+alter table public."customer_portal_tokens" enable row level security;
+alter table public."customers" enable row level security;
+alter table public."data_exports" enable row level security;
+alter table public."day_statuses" enable row level security;
+alter table public."dispatch_notes" enable row level security;
+alter table public."equipment" enable row level security;
+alter table public."equipment_docs" enable row level security;
+alter table public."equipment_service" enable row level security;
+alter table public."expense_categories" enable row level security;
+alter table public."expenses" enable row level security;
+alter table public."fixed_assets" enable row level security;
+alter table public."follow_ups" enable row level security;
+alter table public."holidays" enable row level security;
+alter table public."inbound_events" enable row level security;
+alter table public."inbound_webhooks" enable row level security;
+alter table public."integration_events" enable row level security;
+alter table public."integrations_config" enable row level security;
+alter table public."invoices" enable row level security;
+alter table public."job_line_items" enable row level security;
+alter table public."job_photos" enable row level security;
+alter table public."job_price_changes" enable row level security;
+alter table public."job_recurrences" enable row level security;
+alter table public."job_work_sessions" enable row level security;
+alter table public."jobs" enable row level security;
+alter table public."labor_observations" enable row level security;
+alter table public."liabilities" enable row level security;
+alter table public."marketing_assets" enable row level security;
+alter table public."marketing_campaigns" enable row level security;
+alter table public."measurements" enable row level security;
+alter table public."message_sends" enable row level security;
+alter table public."messages" enable row level security;
+alter table public."neighbor_leads" enable row level security;
+alter table public."notification_log" enable row level security;
+alter table public."notifications" enable row level security;
+alter table public."part_movements" enable row level security;
+alter table public."parts" enable row level security;
+alter table public."password_reset_requests" enable row level security;
+alter table public."pay_run_lines" enable row level security;
+alter table public."pay_runs" enable row level security;
+alter table public."payment_methods" enable row level security;
+alter table public."payments" enable row level security;
+alter table public."platform_capabilities" enable row level security;
+alter table public."platform_operators" enable row level security;
+alter table public."portal_access_requests" enable row level security;
+alter table public."pricing_config_versions" enable row level security;
+alter table public."properties" enable row level security;
+alter table public."property_intelligence" enable row level security;
+alter table public."property_measurement_events" enable row level security;
+alter table public."property_measurements" enable row level security;
+alter table public."property_observations" enable row level security;
+alter table public."property_twin" enable row level security;
+alter table public."pto_entries" enable row level security;
+alter table public."publish_jobs" enable row level security;
+alter table public."purchase_order_items" enable row level security;
+alter table public."purchase_orders" enable row level security;
+alter table public."push_config" enable row level security;
+alter table public."push_subscriptions" enable row level security;
+alter table public."quote_options" enable row level security;
+alter table public."quote_outcomes" enable row level security;
+alter table public."quote_services" enable row level security;
+alter table public."quotes" enable row level security;
+alter table public."referrals" enable row level security;
+alter table public."report_schedules" enable row level security;
+alter table public."revenue_recommendations" enable row level security;
+alter table public."road_distance_cache" enable row level security;
+alter table public."schedule_health_ignored" enable row level security;
+alter table public."schedule_items" enable row level security;
+alter table public."scheduled_messages" enable row level security;
+alter table public."service_bundle_items" enable row level security;
+alter table public."service_bundles" enable row level security;
+alter table public."service_requests" enable row level security;
+alter table public."service_templates" enable row level security;
+alter table public."service_units" enable row level security;
+alter table public."social_connections" enable row level security;
+alter table public."suggestion_dismissals" enable row level security;
+alter table public."suppliers" enable row level security;
+alter table public."technicians" enable row level security;
+alter table public."time_entries" enable row level security;
+alter table public."travel_fee_tiers" enable row level security;
+alter table public."vendors" enable row level security;
+alter table public."verify_fixture_tenants" enable row level security;
+alter table public."wage_history" enable row level security;
+alter table public."webhook_deliveries" enable row level security;
+alter table public."webhook_endpoints" enable row level security;
+alter table public."website_leads" enable row level security;
+
+drop policy if exists "api_keys: delete own" on public."api_keys";
+create policy "api_keys: delete own" on public."api_keys" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "api_keys: insert own" on public."api_keys";
+create policy "api_keys: insert own" on public."api_keys" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "api_keys: select own" on public."api_keys";
+create policy "api_keys: select own" on public."api_keys" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "api_keys: update own" on public."api_keys";
+create policy "api_keys: update own" on public."api_keys" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "own runs read" on public."automation_runs";
+create policy "own runs read" on public."automation_runs" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "own signals read" on public."automation_signals";
+create policy "own signals read" on public."automation_signals" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "own sweeps read" on public."automation_sweeps";
+create policy "own sweeps read" on public."automation_sweeps" as permissive for select to authenticated
+  using (true);
+drop policy if exists "settings: delete own" on public."business_settings";
+create policy "settings: delete own" on public."business_settings" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "settings: insert own" on public."business_settings";
+create policy "settings: insert own" on public."business_settings" as permissive for insert to public
+  with check (((auth.uid() = user_id) AND can_provision_business()));
+drop policy if exists "settings: select own" on public."business_settings";
+create policy "settings: select own" on public."business_settings" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "settings: update own" on public."business_settings";
+create policy "settings: update own" on public."business_settings" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "change_orders: insert own" on public."change_orders";
+create policy "change_orders: insert own" on public."change_orders" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "change_orders: select own" on public."change_orders";
+create policy "change_orders: select own" on public."change_orders" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "change_orders: update own" on public."change_orders";
+create policy "change_orders: update own" on public."change_orders" as permissive for update to public
+  using ((auth.uid() = user_id))
+  with check ((auth.uid() = user_id));
+drop policy if exists "consent_changes: insert own" on public."consent_changes";
+create policy "consent_changes: insert own" on public."consent_changes" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "consent_changes: select own" on public."consent_changes";
+create policy "consent_changes: select own" on public."consent_changes" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "content_pieces: delete own" on public."content_pieces";
+create policy "content_pieces: delete own" on public."content_pieces" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "content_pieces: insert own" on public."content_pieces";
+create policy "content_pieces: insert own" on public."content_pieces" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "content_pieces: select own" on public."content_pieces";
+create policy "content_pieces: select own" on public."content_pieces" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "content_pieces: update own" on public."content_pieces";
+create policy "content_pieces: update own" on public."content_pieces" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "conversations: insert own" on public."conversations";
+create policy "conversations: insert own" on public."conversations" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "conversations: select own" on public."conversations";
+create policy "conversations: select own" on public."conversations" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "conversations: update own" on public."conversations";
+create policy "conversations: update own" on public."conversations" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "crew_media: owner all" on public."crew_media";
+create policy "crew_media: owner all" on public."crew_media" as permissive for all to public
+  using ((auth.uid() = user_id))
+  with check ((auth.uid() = user_id));
+drop policy if exists "crew_message_reads: owner own" on public."crew_message_reads";
+create policy "crew_message_reads: owner own" on public."crew_message_reads" as permissive for all to public
+  using (((auth.uid() = user_id) AND (auth.uid() = reader_id)))
+  with check (((auth.uid() = user_id) AND (auth.uid() = reader_id) AND (EXISTS ( SELECT 1
+   FROM jobs j
+  WHERE ((j.id = crew_message_reads.job_id) AND (j.user_id = auth.uid()))))));
+drop policy if exists "crew_messages: owner all" on public."crew_messages";
+create policy "crew_messages: owner all" on public."crew_messages" as permissive for all to public
+  using ((auth.uid() = user_id))
+  with check (((auth.uid() = user_id) AND (EXISTS ( SELECT 1
+   FROM jobs j
+  WHERE ((j.id = crew_messages.job_id) AND (j.user_id = auth.uid()))))));
+drop policy if exists "crews: delete own" on public."crews";
+create policy "crews: delete own" on public."crews" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "crews: insert own" on public."crews";
+create policy "crews: insert own" on public."crews" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "crews: select own" on public."crews";
+create policy "crews: select own" on public."crews" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "crews: update own" on public."crews";
+create policy "crews: update own" on public."crews" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "crm_campaign_log: insert own" on public."crm_campaign_log";
+create policy "crm_campaign_log: insert own" on public."crm_campaign_log" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "crm_campaign_log: select own" on public."crm_campaign_log";
+create policy "crm_campaign_log: select own" on public."crm_campaign_log" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "crm_campaign_presets: delete own" on public."crm_campaign_presets";
+create policy "crm_campaign_presets: delete own" on public."crm_campaign_presets" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "crm_campaign_presets: insert own" on public."crm_campaign_presets";
+create policy "crm_campaign_presets: insert own" on public."crm_campaign_presets" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "crm_campaign_presets: select own" on public."crm_campaign_presets";
+create policy "crm_campaign_presets: select own" on public."crm_campaign_presets" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "crm_campaign_presets: update own" on public."crm_campaign_presets";
+create policy "crm_campaign_presets: update own" on public."crm_campaign_presets" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "crm_campaigns: delete own" on public."crm_campaigns";
+create policy "crm_campaigns: delete own" on public."crm_campaigns" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "crm_campaigns: insert own" on public."crm_campaigns";
+create policy "crm_campaigns: insert own" on public."crm_campaigns" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "crm_campaigns: select own" on public."crm_campaigns";
+create policy "crm_campaigns: select own" on public."crm_campaigns" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "crm_campaigns: update own" on public."crm_campaigns";
+create policy "crm_campaigns: update own" on public."crm_campaigns" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "customer_imports: insert own" on public."customer_imports";
+create policy "customer_imports: insert own" on public."customer_imports" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "customer_imports: select own" on public."customer_imports";
+create policy "customer_imports: select own" on public."customer_imports" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "portal_tokens: delete own" on public."customer_portal_tokens";
+create policy "portal_tokens: delete own" on public."customer_portal_tokens" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "portal_tokens: insert own" on public."customer_portal_tokens";
+create policy "portal_tokens: insert own" on public."customer_portal_tokens" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "portal_tokens: select own" on public."customer_portal_tokens";
+create policy "portal_tokens: select own" on public."customer_portal_tokens" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "portal_tokens: update own" on public."customer_portal_tokens";
+create policy "portal_tokens: update own" on public."customer_portal_tokens" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "customers: delete own" on public."customers";
+create policy "customers: delete own" on public."customers" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "customers: insert own" on public."customers";
+create policy "customers: insert own" on public."customers" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "customers: select own" on public."customers";
+create policy "customers: select own" on public."customers" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "customers: update own" on public."customers";
+create policy "customers: update own" on public."customers" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "data_exports: insert own" on public."data_exports";
+create policy "data_exports: insert own" on public."data_exports" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "data_exports: select own" on public."data_exports";
+create policy "data_exports: select own" on public."data_exports" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "day_statuses: delete own" on public."day_statuses";
+create policy "day_statuses: delete own" on public."day_statuses" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "day_statuses: insert own" on public."day_statuses";
+create policy "day_statuses: insert own" on public."day_statuses" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "day_statuses: select own" on public."day_statuses";
+create policy "day_statuses: select own" on public."day_statuses" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "day_statuses: update own" on public."day_statuses";
+create policy "day_statuses: update own" on public."day_statuses" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "dispatch_notes: delete own" on public."dispatch_notes";
+create policy "dispatch_notes: delete own" on public."dispatch_notes" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "dispatch_notes: insert own" on public."dispatch_notes";
+create policy "dispatch_notes: insert own" on public."dispatch_notes" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "dispatch_notes: select own" on public."dispatch_notes";
+create policy "dispatch_notes: select own" on public."dispatch_notes" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "dispatch_notes: update own" on public."dispatch_notes";
+create policy "dispatch_notes: update own" on public."dispatch_notes" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "equipment: delete own" on public."equipment";
+create policy "equipment: delete own" on public."equipment" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "equipment: insert own" on public."equipment";
+create policy "equipment: insert own" on public."equipment" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "equipment: select own" on public."equipment";
+create policy "equipment: select own" on public."equipment" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "equipment: update own" on public."equipment";
+create policy "equipment: update own" on public."equipment" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "equipment_docs: delete own" on public."equipment_docs";
+create policy "equipment_docs: delete own" on public."equipment_docs" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "equipment_docs: insert own" on public."equipment_docs";
+create policy "equipment_docs: insert own" on public."equipment_docs" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "equipment_docs: select own" on public."equipment_docs";
+create policy "equipment_docs: select own" on public."equipment_docs" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "equipment_docs: update own" on public."equipment_docs";
+create policy "equipment_docs: update own" on public."equipment_docs" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "equipment_service: delete own" on public."equipment_service";
+create policy "equipment_service: delete own" on public."equipment_service" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "equipment_service: insert own" on public."equipment_service";
+create policy "equipment_service: insert own" on public."equipment_service" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "equipment_service: select own" on public."equipment_service";
+create policy "equipment_service: select own" on public."equipment_service" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "equipment_service: update own" on public."equipment_service";
+create policy "equipment_service: update own" on public."equipment_service" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "expense_categories: delete own" on public."expense_categories";
+create policy "expense_categories: delete own" on public."expense_categories" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "expense_categories: insert own" on public."expense_categories";
+create policy "expense_categories: insert own" on public."expense_categories" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "expense_categories: select own" on public."expense_categories";
+create policy "expense_categories: select own" on public."expense_categories" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "expense_categories: update own" on public."expense_categories";
+create policy "expense_categories: update own" on public."expense_categories" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "expenses: delete own" on public."expenses";
+create policy "expenses: delete own" on public."expenses" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "expenses: insert own" on public."expenses";
+create policy "expenses: insert own" on public."expenses" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "expenses: select own" on public."expenses";
+create policy "expenses: select own" on public."expenses" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "expenses: update own" on public."expenses";
+create policy "expenses: update own" on public."expenses" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "fixed_assets: delete own" on public."fixed_assets";
+create policy "fixed_assets: delete own" on public."fixed_assets" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "fixed_assets: insert own" on public."fixed_assets";
+create policy "fixed_assets: insert own" on public."fixed_assets" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "fixed_assets: select own" on public."fixed_assets";
+create policy "fixed_assets: select own" on public."fixed_assets" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "fixed_assets: update own" on public."fixed_assets";
+create policy "fixed_assets: update own" on public."fixed_assets" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "follow_ups: delete own" on public."follow_ups";
+create policy "follow_ups: delete own" on public."follow_ups" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "follow_ups: insert own" on public."follow_ups";
+create policy "follow_ups: insert own" on public."follow_ups" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "follow_ups: select own" on public."follow_ups";
+create policy "follow_ups: select own" on public."follow_ups" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "follow_ups: update own" on public."follow_ups";
+create policy "follow_ups: update own" on public."follow_ups" as permissive for update to public
+  using ((auth.uid() = user_id))
+  with check ((auth.uid() = user_id));
+drop policy if exists "holidays_delete" on public."holidays";
+create policy "holidays_delete" on public."holidays" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "holidays_insert" on public."holidays";
+create policy "holidays_insert" on public."holidays" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "holidays_select" on public."holidays";
+create policy "holidays_select" on public."holidays" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "holidays_update" on public."holidays";
+create policy "holidays_update" on public."holidays" as permissive for update to public
+  using ((auth.uid() = user_id))
+  with check ((auth.uid() = user_id));
+drop policy if exists "inbound_events: delete own" on public."inbound_events";
+create policy "inbound_events: delete own" on public."inbound_events" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "inbound_events: select own" on public."inbound_events";
+create policy "inbound_events: select own" on public."inbound_events" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "inbound_webhooks: delete own" on public."inbound_webhooks";
+create policy "inbound_webhooks: delete own" on public."inbound_webhooks" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "inbound_webhooks: insert own" on public."inbound_webhooks";
+create policy "inbound_webhooks: insert own" on public."inbound_webhooks" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "inbound_webhooks: select own" on public."inbound_webhooks";
+create policy "inbound_webhooks: select own" on public."inbound_webhooks" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "inbound_webhooks: update own" on public."inbound_webhooks";
+create policy "inbound_webhooks: update own" on public."inbound_webhooks" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "integration_events: delete own" on public."integration_events";
+create policy "integration_events: delete own" on public."integration_events" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "integration_events: select own" on public."integration_events";
+create policy "integration_events: select own" on public."integration_events" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "invoices: delete own" on public."invoices";
+create policy "invoices: delete own" on public."invoices" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "invoices: insert own" on public."invoices";
+create policy "invoices: insert own" on public."invoices" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "invoices: select own" on public."invoices";
+create policy "invoices: select own" on public."invoices" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "invoices: update own" on public."invoices";
+create policy "invoices: update own" on public."invoices" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "job_line_items: delete own" on public."job_line_items";
+create policy "job_line_items: delete own" on public."job_line_items" as permissive for delete to public
+  using (((auth.uid() = user_id) AND (change_order_id IS NULL)));
+drop policy if exists "job_line_items: insert own" on public."job_line_items";
+create policy "job_line_items: insert own" on public."job_line_items" as permissive for insert to public
+  with check (((auth.uid() = user_id) AND (change_order_id IS NULL)));
+drop policy if exists "job_line_items: select own" on public."job_line_items";
+create policy "job_line_items: select own" on public."job_line_items" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "job_line_items: update own" on public."job_line_items";
+create policy "job_line_items: update own" on public."job_line_items" as permissive for update to public
+  using (((auth.uid() = user_id) AND (change_order_id IS NULL)))
+  with check (((auth.uid() = user_id) AND (change_order_id IS NULL)));
+drop policy if exists "job_photos: delete own" on public."job_photos";
+create policy "job_photos: delete own" on public."job_photos" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "job_photos: insert own" on public."job_photos";
+create policy "job_photos: insert own" on public."job_photos" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "job_photos: select own" on public."job_photos";
+create policy "job_photos: select own" on public."job_photos" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "job_photos: update own" on public."job_photos";
+create policy "job_photos: update own" on public."job_photos" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "job_price_changes: delete own" on public."job_price_changes";
+create policy "job_price_changes: delete own" on public."job_price_changes" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "job_price_changes: insert own" on public."job_price_changes";
+create policy "job_price_changes: insert own" on public."job_price_changes" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "job_price_changes: select own" on public."job_price_changes";
+create policy "job_price_changes: select own" on public."job_price_changes" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "job_recurrences: all own" on public."job_recurrences";
+create policy "job_recurrences: all own" on public."job_recurrences" as permissive for all to public
+  using ((auth.uid() = user_id))
+  with check ((auth.uid() = user_id));
+drop policy if exists "own work sessions delete" on public."job_work_sessions";
+create policy "own work sessions delete" on public."job_work_sessions" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "own work sessions insert" on public."job_work_sessions";
+create policy "own work sessions insert" on public."job_work_sessions" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "own work sessions select" on public."job_work_sessions";
+create policy "own work sessions select" on public."job_work_sessions" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "own work sessions update" on public."job_work_sessions";
+create policy "own work sessions update" on public."job_work_sessions" as permissive for update to public
+  using ((auth.uid() = user_id))
+  with check ((auth.uid() = user_id));
+drop policy if exists "jobs: delete own" on public."jobs";
+create policy "jobs: delete own" on public."jobs" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "jobs: insert own" on public."jobs";
+create policy "jobs: insert own" on public."jobs" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "jobs: select own" on public."jobs";
+create policy "jobs: select own" on public."jobs" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "jobs: update own" on public."jobs";
+create policy "jobs: update own" on public."jobs" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "labor_observations: delete own" on public."labor_observations";
+create policy "labor_observations: delete own" on public."labor_observations" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "labor_observations: insert own" on public."labor_observations";
+create policy "labor_observations: insert own" on public."labor_observations" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "labor_observations: select own" on public."labor_observations";
+create policy "labor_observations: select own" on public."labor_observations" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "labor_observations: update own" on public."labor_observations";
+create policy "labor_observations: update own" on public."labor_observations" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "liabilities: delete own" on public."liabilities";
+create policy "liabilities: delete own" on public."liabilities" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "liabilities: insert own" on public."liabilities";
+create policy "liabilities: insert own" on public."liabilities" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "liabilities: select own" on public."liabilities";
+create policy "liabilities: select own" on public."liabilities" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "liabilities: update own" on public."liabilities";
+create policy "liabilities: update own" on public."liabilities" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "marketing_assets: delete own" on public."marketing_assets";
+create policy "marketing_assets: delete own" on public."marketing_assets" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "marketing_assets: insert own" on public."marketing_assets";
+create policy "marketing_assets: insert own" on public."marketing_assets" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "marketing_assets: select own" on public."marketing_assets";
+create policy "marketing_assets: select own" on public."marketing_assets" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "marketing_assets: update own" on public."marketing_assets";
+create policy "marketing_assets: update own" on public."marketing_assets" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "marketing_campaigns: delete own" on public."marketing_campaigns";
+create policy "marketing_campaigns: delete own" on public."marketing_campaigns" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "marketing_campaigns: insert own" on public."marketing_campaigns";
+create policy "marketing_campaigns: insert own" on public."marketing_campaigns" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "marketing_campaigns: select own" on public."marketing_campaigns";
+create policy "marketing_campaigns: select own" on public."marketing_campaigns" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "marketing_campaigns: update own" on public."marketing_campaigns";
+create policy "marketing_campaigns: update own" on public."marketing_campaigns" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "measurements: insert own" on public."measurements";
+create policy "measurements: insert own" on public."measurements" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "measurements: select own" on public."measurements";
+create policy "measurements: select own" on public."measurements" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "message_sends: insert own" on public."message_sends";
+create policy "message_sends: insert own" on public."message_sends" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "message_sends: select own" on public."message_sends";
+create policy "message_sends: select own" on public."message_sends" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "message_sends: update own" on public."message_sends";
+create policy "message_sends: update own" on public."message_sends" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "messages: insert own" on public."messages";
+create policy "messages: insert own" on public."messages" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "messages: select own" on public."messages";
+create policy "messages: select own" on public."messages" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "neighbor_leads: delete own" on public."neighbor_leads";
+create policy "neighbor_leads: delete own" on public."neighbor_leads" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "neighbor_leads: insert own" on public."neighbor_leads";
+create policy "neighbor_leads: insert own" on public."neighbor_leads" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "neighbor_leads: select own" on public."neighbor_leads";
+create policy "neighbor_leads: select own" on public."neighbor_leads" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "neighbor_leads: update own" on public."neighbor_leads";
+create policy "neighbor_leads: update own" on public."neighbor_leads" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "notification_log: insert own" on public."notification_log";
+create policy "notification_log: insert own" on public."notification_log" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "notification_log: select own" on public."notification_log";
+create policy "notification_log: select own" on public."notification_log" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "notifications: delete own" on public."notifications";
+create policy "notifications: delete own" on public."notifications" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "notifications: insert own" on public."notifications";
+create policy "notifications: insert own" on public."notifications" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "notifications: select own" on public."notifications";
+create policy "notifications: select own" on public."notifications" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "notifications: update own" on public."notifications";
+create policy "notifications: update own" on public."notifications" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "part_movements: delete own" on public."part_movements";
+create policy "part_movements: delete own" on public."part_movements" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "part_movements: insert own" on public."part_movements";
+create policy "part_movements: insert own" on public."part_movements" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "part_movements: select own" on public."part_movements";
+create policy "part_movements: select own" on public."part_movements" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "part_movements: update own" on public."part_movements";
+create policy "part_movements: update own" on public."part_movements" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "parts: delete own" on public."parts";
+create policy "parts: delete own" on public."parts" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "parts: insert own" on public."parts";
+create policy "parts: insert own" on public."parts" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "parts: select own" on public."parts";
+create policy "parts: select own" on public."parts" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "parts: update own" on public."parts";
+create policy "parts: update own" on public."parts" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "pay_run_lines_delete" on public."pay_run_lines";
+create policy "pay_run_lines_delete" on public."pay_run_lines" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "pay_run_lines_insert" on public."pay_run_lines";
+create policy "pay_run_lines_insert" on public."pay_run_lines" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "pay_run_lines_select" on public."pay_run_lines";
+create policy "pay_run_lines_select" on public."pay_run_lines" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "pay_run_lines_update" on public."pay_run_lines";
+create policy "pay_run_lines_update" on public."pay_run_lines" as permissive for update to public
+  using ((auth.uid() = user_id))
+  with check ((auth.uid() = user_id));
+drop policy if exists "pay_runs_delete" on public."pay_runs";
+create policy "pay_runs_delete" on public."pay_runs" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "pay_runs_insert" on public."pay_runs";
+create policy "pay_runs_insert" on public."pay_runs" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "pay_runs_select" on public."pay_runs";
+create policy "pay_runs_select" on public."pay_runs" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "pay_runs_update" on public."pay_runs";
+create policy "pay_runs_update" on public."pay_runs" as permissive for update to public
+  using ((auth.uid() = user_id))
+  with check ((auth.uid() = user_id));
+drop policy if exists "payment_methods: select own" on public."payment_methods";
+create policy "payment_methods: select own" on public."payment_methods" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "payments: delete own" on public."payments";
+create policy "payments: delete own" on public."payments" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "payments: insert own" on public."payments";
+create policy "payments: insert own" on public."payments" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "payments: select own" on public."payments";
+create policy "payments: select own" on public."payments" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "payments: update own" on public."payments";
+create policy "payments: update own" on public."payments" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "capabilities: read own" on public."platform_capabilities";
+create policy "capabilities: read own" on public."platform_capabilities" as permissive for select to authenticated
+  using ((user_id = auth.uid()));
+drop policy if exists "pricing_config_versions: insert own" on public."pricing_config_versions";
+create policy "pricing_config_versions: insert own" on public."pricing_config_versions" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "pricing_config_versions: select own" on public."pricing_config_versions";
+create policy "pricing_config_versions: select own" on public."pricing_config_versions" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "properties: delete own" on public."properties";
+create policy "properties: delete own" on public."properties" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "properties: insert own" on public."properties";
+create policy "properties: insert own" on public."properties" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "properties: select own" on public."properties";
+create policy "properties: select own" on public."properties" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "properties: update own" on public."properties";
+create policy "properties: update own" on public."properties" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "property_intelligence: delete own" on public."property_intelligence";
+create policy "property_intelligence: delete own" on public."property_intelligence" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "property_intelligence: insert own" on public."property_intelligence";
+create policy "property_intelligence: insert own" on public."property_intelligence" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "property_intelligence: select own" on public."property_intelligence";
+create policy "property_intelligence: select own" on public."property_intelligence" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "property_intelligence: update own" on public."property_intelligence";
+create policy "property_intelligence: update own" on public."property_intelligence" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "pme_insert" on public."property_measurement_events";
+create policy "pme_insert" on public."property_measurement_events" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "pme_select" on public."property_measurement_events";
+create policy "pme_select" on public."property_measurement_events" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "property_measurements_delete" on public."property_measurements";
+create policy "property_measurements_delete" on public."property_measurements" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "property_measurements_insert" on public."property_measurements";
+create policy "property_measurements_insert" on public."property_measurements" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "property_measurements_select" on public."property_measurements";
+create policy "property_measurements_select" on public."property_measurements" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "property_measurements_update" on public."property_measurements";
+create policy "property_measurements_update" on public."property_measurements" as permissive for update to public
+  using ((auth.uid() = user_id))
+  with check ((auth.uid() = user_id));
+drop policy if exists "property_observations: delete own" on public."property_observations";
+create policy "property_observations: delete own" on public."property_observations" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "property_observations: insert own" on public."property_observations";
+create policy "property_observations: insert own" on public."property_observations" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "property_observations: select own" on public."property_observations";
+create policy "property_observations: select own" on public."property_observations" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "property_observations: update own" on public."property_observations";
+create policy "property_observations: update own" on public."property_observations" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "property_twin: delete own" on public."property_twin";
+create policy "property_twin: delete own" on public."property_twin" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "property_twin: insert own" on public."property_twin";
+create policy "property_twin: insert own" on public."property_twin" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "property_twin: select own" on public."property_twin";
+create policy "property_twin: select own" on public."property_twin" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "property_twin: update own" on public."property_twin";
+create policy "property_twin: update own" on public."property_twin" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "pto_entries_delete" on public."pto_entries";
+create policy "pto_entries_delete" on public."pto_entries" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "pto_entries_insert" on public."pto_entries";
+create policy "pto_entries_insert" on public."pto_entries" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "pto_entries_select" on public."pto_entries";
+create policy "pto_entries_select" on public."pto_entries" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "pto_entries_update" on public."pto_entries";
+create policy "pto_entries_update" on public."pto_entries" as permissive for update to public
+  using ((auth.uid() = user_id))
+  with check ((auth.uid() = user_id));
+drop policy if exists "pj del" on public."publish_jobs";
+create policy "pj del" on public."publish_jobs" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "pj ins" on public."publish_jobs";
+create policy "pj ins" on public."publish_jobs" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "pj sel" on public."publish_jobs";
+create policy "pj sel" on public."publish_jobs" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "pj upd" on public."publish_jobs";
+create policy "pj upd" on public."publish_jobs" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "publish_jobs: delete own" on public."publish_jobs";
+create policy "publish_jobs: delete own" on public."publish_jobs" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "publish_jobs: insert own" on public."publish_jobs";
+create policy "publish_jobs: insert own" on public."publish_jobs" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "publish_jobs: select own" on public."publish_jobs";
+create policy "publish_jobs: select own" on public."publish_jobs" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "publish_jobs: update own" on public."publish_jobs";
+create policy "publish_jobs: update own" on public."publish_jobs" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "purchase_order_items: delete own" on public."purchase_order_items";
+create policy "purchase_order_items: delete own" on public."purchase_order_items" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "purchase_order_items: insert own" on public."purchase_order_items";
+create policy "purchase_order_items: insert own" on public."purchase_order_items" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "purchase_order_items: select own" on public."purchase_order_items";
+create policy "purchase_order_items: select own" on public."purchase_order_items" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "purchase_order_items: update own" on public."purchase_order_items";
+create policy "purchase_order_items: update own" on public."purchase_order_items" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "purchase_orders: delete own" on public."purchase_orders";
+create policy "purchase_orders: delete own" on public."purchase_orders" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "purchase_orders: insert own" on public."purchase_orders";
+create policy "purchase_orders: insert own" on public."purchase_orders" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "purchase_orders: select own" on public."purchase_orders";
+create policy "purchase_orders: select own" on public."purchase_orders" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "purchase_orders: update own" on public."purchase_orders";
+create policy "purchase_orders: update own" on public."purchase_orders" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "push_subs: delete own" on public."push_subscriptions";
+create policy "push_subs: delete own" on public."push_subscriptions" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "push_subs: insert own" on public."push_subscriptions";
+create policy "push_subs: insert own" on public."push_subscriptions" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "push_subs: select own" on public."push_subscriptions";
+create policy "push_subs: select own" on public."push_subscriptions" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "push_subs: update own" on public."push_subscriptions";
+create policy "push_subs: update own" on public."push_subscriptions" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "quote_options: delete own" on public."quote_options";
+create policy "quote_options: delete own" on public."quote_options" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "quote_options: insert own" on public."quote_options";
+create policy "quote_options: insert own" on public."quote_options" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "quote_options: select own" on public."quote_options";
+create policy "quote_options: select own" on public."quote_options" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "quote_options: update own" on public."quote_options";
+create policy "quote_options: update own" on public."quote_options" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "quote_outcomes: delete own" on public."quote_outcomes";
+create policy "quote_outcomes: delete own" on public."quote_outcomes" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "quote_outcomes: insert own" on public."quote_outcomes";
+create policy "quote_outcomes: insert own" on public."quote_outcomes" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "quote_outcomes: select own" on public."quote_outcomes";
+create policy "quote_outcomes: select own" on public."quote_outcomes" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "quote_outcomes: update own" on public."quote_outcomes";
+create policy "quote_outcomes: update own" on public."quote_outcomes" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "quote_services: delete own" on public."quote_services";
+create policy "quote_services: delete own" on public."quote_services" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "quote_services: insert own" on public."quote_services";
+create policy "quote_services: insert own" on public."quote_services" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "quote_services: select own" on public."quote_services";
+create policy "quote_services: select own" on public."quote_services" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "quote_services: update own" on public."quote_services";
+create policy "quote_services: update own" on public."quote_services" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "quotes: delete own" on public."quotes";
+create policy "quotes: delete own" on public."quotes" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "quotes: insert own" on public."quotes";
+create policy "quotes: insert own" on public."quotes" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "quotes: select own" on public."quotes";
+create policy "quotes: select own" on public."quotes" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "quotes: update own" on public."quotes";
+create policy "quotes: update own" on public."quotes" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "referrals: delete own" on public."referrals";
+create policy "referrals: delete own" on public."referrals" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "referrals: insert own" on public."referrals";
+create policy "referrals: insert own" on public."referrals" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "referrals: select own" on public."referrals";
+create policy "referrals: select own" on public."referrals" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "referrals: update own" on public."referrals";
+create policy "referrals: update own" on public."referrals" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "report_schedules_delete_own" on public."report_schedules";
+create policy "report_schedules_delete_own" on public."report_schedules" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "report_schedules_insert_own" on public."report_schedules";
+create policy "report_schedules_insert_own" on public."report_schedules" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "report_schedules_select_own" on public."report_schedules";
+create policy "report_schedules_select_own" on public."report_schedules" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "report_schedules_update_own" on public."report_schedules";
+create policy "report_schedules_update_own" on public."report_schedules" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "revenue_recommendations: delete own" on public."revenue_recommendations";
+create policy "revenue_recommendations: delete own" on public."revenue_recommendations" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "revenue_recommendations: insert own" on public."revenue_recommendations";
+create policy "revenue_recommendations: insert own" on public."revenue_recommendations" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "revenue_recommendations: select own" on public."revenue_recommendations";
+create policy "revenue_recommendations: select own" on public."revenue_recommendations" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "revenue_recommendations: update own" on public."revenue_recommendations";
+create policy "revenue_recommendations: update own" on public."revenue_recommendations" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "road_distance_cache: delete own" on public."road_distance_cache";
+create policy "road_distance_cache: delete own" on public."road_distance_cache" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "road_distance_cache: insert own" on public."road_distance_cache";
+create policy "road_distance_cache: insert own" on public."road_distance_cache" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "road_distance_cache: select own" on public."road_distance_cache";
+create policy "road_distance_cache: select own" on public."road_distance_cache" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "road_distance_cache: update own" on public."road_distance_cache";
+create policy "road_distance_cache: update own" on public."road_distance_cache" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "schedule_health_ignored: delete own" on public."schedule_health_ignored";
+create policy "schedule_health_ignored: delete own" on public."schedule_health_ignored" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "schedule_health_ignored: insert own" on public."schedule_health_ignored";
+create policy "schedule_health_ignored: insert own" on public."schedule_health_ignored" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "schedule_health_ignored: select own" on public."schedule_health_ignored";
+create policy "schedule_health_ignored: select own" on public."schedule_health_ignored" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "schedule_items: delete own" on public."schedule_items";
+create policy "schedule_items: delete own" on public."schedule_items" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "schedule_items: insert own" on public."schedule_items";
+create policy "schedule_items: insert own" on public."schedule_items" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "schedule_items: select own" on public."schedule_items";
+create policy "schedule_items: select own" on public."schedule_items" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "schedule_items: update own" on public."schedule_items";
+create policy "schedule_items: update own" on public."schedule_items" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "scheduled_messages_delete_own" on public."scheduled_messages";
+create policy "scheduled_messages_delete_own" on public."scheduled_messages" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "scheduled_messages_insert_own" on public."scheduled_messages";
+create policy "scheduled_messages_insert_own" on public."scheduled_messages" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "scheduled_messages_select_own" on public."scheduled_messages";
+create policy "scheduled_messages_select_own" on public."scheduled_messages" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "scheduled_messages_update_own" on public."scheduled_messages";
+create policy "scheduled_messages_update_own" on public."scheduled_messages" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "bundle items: delete own" on public."service_bundle_items";
+create policy "bundle items: delete own" on public."service_bundle_items" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "bundle items: insert own" on public."service_bundle_items";
+create policy "bundle items: insert own" on public."service_bundle_items" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "bundle items: select own" on public."service_bundle_items";
+create policy "bundle items: select own" on public."service_bundle_items" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "bundle items: update own" on public."service_bundle_items";
+create policy "bundle items: update own" on public."service_bundle_items" as permissive for update to public
+  using ((auth.uid() = user_id))
+  with check ((auth.uid() = user_id));
+drop policy if exists "bundles: delete own" on public."service_bundles";
+create policy "bundles: delete own" on public."service_bundles" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "bundles: insert own" on public."service_bundles";
+create policy "bundles: insert own" on public."service_bundles" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "bundles: select own" on public."service_bundles";
+create policy "bundles: select own" on public."service_bundles" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "bundles: update own" on public."service_bundles";
+create policy "bundles: update own" on public."service_bundles" as permissive for update to public
+  using ((auth.uid() = user_id))
+  with check ((auth.uid() = user_id));
+drop policy if exists "service_requests: delete own" on public."service_requests";
+create policy "service_requests: delete own" on public."service_requests" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "service_requests: select own" on public."service_requests";
+create policy "service_requests: select own" on public."service_requests" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "service_requests: update own" on public."service_requests";
+create policy "service_requests: update own" on public."service_requests" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "templates: delete own" on public."service_templates";
+create policy "templates: delete own" on public."service_templates" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "templates: insert own" on public."service_templates";
+create policy "templates: insert own" on public."service_templates" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "templates: select own" on public."service_templates";
+create policy "templates: select own" on public."service_templates" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "templates: update own" on public."service_templates";
+create policy "templates: update own" on public."service_templates" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "service_units_delete" on public."service_units";
+create policy "service_units_delete" on public."service_units" as permissive for delete to public
+  using ((user_id = ( SELECT auth.uid() AS uid)));
+drop policy if exists "service_units_insert" on public."service_units";
+create policy "service_units_insert" on public."service_units" as permissive for insert to public
+  with check ((user_id = ( SELECT auth.uid() AS uid)));
+drop policy if exists "service_units_read" on public."service_units";
+create policy "service_units_read" on public."service_units" as permissive for select to public
+  using (((user_id IS NULL) OR (user_id = ( SELECT auth.uid() AS uid))));
+drop policy if exists "service_units_update" on public."service_units";
+create policy "service_units_update" on public."service_units" as permissive for update to public
+  using ((user_id = ( SELECT auth.uid() AS uid)))
+  with check ((user_id = ( SELECT auth.uid() AS uid)));
+drop policy if exists "sc del" on public."social_connections";
+create policy "sc del" on public."social_connections" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "sc ins" on public."social_connections";
+create policy "sc ins" on public."social_connections" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "sc sel" on public."social_connections";
+create policy "sc sel" on public."social_connections" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "sc upd" on public."social_connections";
+create policy "sc upd" on public."social_connections" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "social_connections: delete own" on public."social_connections";
+create policy "social_connections: delete own" on public."social_connections" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "social_connections: insert own" on public."social_connections";
+create policy "social_connections: insert own" on public."social_connections" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "social_connections: select own" on public."social_connections";
+create policy "social_connections: select own" on public."social_connections" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "social_connections: update own" on public."social_connections";
+create policy "social_connections: update own" on public."social_connections" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "Users manage own suggestion dismissals" on public."suggestion_dismissals";
+create policy "Users manage own suggestion dismissals" on public."suggestion_dismissals" as permissive for all to public
+  using ((auth.uid() = user_id))
+  with check ((auth.uid() = user_id));
+drop policy if exists "suppliers: delete own" on public."suppliers";
+create policy "suppliers: delete own" on public."suppliers" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "suppliers: insert own" on public."suppliers";
+create policy "suppliers: insert own" on public."suppliers" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "suppliers: select own" on public."suppliers";
+create policy "suppliers: select own" on public."suppliers" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "suppliers: update own" on public."suppliers";
+create policy "suppliers: update own" on public."suppliers" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "technicians: delete own" on public."technicians";
+create policy "technicians: delete own" on public."technicians" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "technicians: insert own" on public."technicians";
+create policy "technicians: insert own" on public."technicians" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "technicians: select own" on public."technicians";
+create policy "technicians: select own" on public."technicians" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "technicians: update own" on public."technicians";
+create policy "technicians: update own" on public."technicians" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "time_entries: delete own" on public."time_entries";
+create policy "time_entries: delete own" on public."time_entries" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "time_entries: insert own" on public."time_entries";
+create policy "time_entries: insert own" on public."time_entries" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "time_entries: select own" on public."time_entries";
+create policy "time_entries: select own" on public."time_entries" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "time_entries: update own" on public."time_entries";
+create policy "time_entries: update own" on public."time_entries" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "tiers: delete own" on public."travel_fee_tiers";
+create policy "tiers: delete own" on public."travel_fee_tiers" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "tiers: insert own" on public."travel_fee_tiers";
+create policy "tiers: insert own" on public."travel_fee_tiers" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "tiers: select own" on public."travel_fee_tiers";
+create policy "tiers: select own" on public."travel_fee_tiers" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "tiers: update own" on public."travel_fee_tiers";
+create policy "tiers: update own" on public."travel_fee_tiers" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "vendors: delete own" on public."vendors";
+create policy "vendors: delete own" on public."vendors" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "vendors: insert own" on public."vendors";
+create policy "vendors: insert own" on public."vendors" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "vendors: select own" on public."vendors";
+create policy "vendors: select own" on public."vendors" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "vendors: update own" on public."vendors";
+create policy "vendors: update own" on public."vendors" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "wage_history_delete" on public."wage_history";
+create policy "wage_history_delete" on public."wage_history" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "wage_history_insert" on public."wage_history";
+create policy "wage_history_insert" on public."wage_history" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "wage_history_select" on public."wage_history";
+create policy "wage_history_select" on public."wage_history" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "wage_history_update" on public."wage_history";
+create policy "wage_history_update" on public."wage_history" as permissive for update to public
+  using ((auth.uid() = user_id))
+  with check ((auth.uid() = user_id));
+drop policy if exists "webhook_deliveries: delete own" on public."webhook_deliveries";
+create policy "webhook_deliveries: delete own" on public."webhook_deliveries" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "webhook_deliveries: insert own" on public."webhook_deliveries";
+create policy "webhook_deliveries: insert own" on public."webhook_deliveries" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "webhook_deliveries: select own" on public."webhook_deliveries";
+create policy "webhook_deliveries: select own" on public."webhook_deliveries" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "webhook_deliveries: update own" on public."webhook_deliveries";
+create policy "webhook_deliveries: update own" on public."webhook_deliveries" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "webhook_endpoints: delete own" on public."webhook_endpoints";
+create policy "webhook_endpoints: delete own" on public."webhook_endpoints" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "webhook_endpoints: insert own" on public."webhook_endpoints";
+create policy "webhook_endpoints: insert own" on public."webhook_endpoints" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "webhook_endpoints: select own" on public."webhook_endpoints";
+create policy "webhook_endpoints: select own" on public."webhook_endpoints" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "webhook_endpoints: update own" on public."webhook_endpoints";
+create policy "webhook_endpoints: update own" on public."webhook_endpoints" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "website_leads: select own" on public."website_leads";
+create policy "website_leads: select own" on public."website_leads" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "website_leads: update own" on public."website_leads";
+create policy "website_leads: update own" on public."website_leads" as permissive for update to public
+  using ((auth.uid() = user_id));
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 8 · GRANTS
+-- REVOKE-then-GRANT, per object, always. A fresh Supabase project grants
+-- anon/authenticated/service_role everything on new objects through ALTER DEFAULT
+-- PRIVILEGES, so a grant-only baseline would quietly reproduce none of the
+-- lockdowns: crew tables that must be RPC-only, and the ~33 functions whose EXECUTE
+-- is revoked from every client role.
+-- ══════════════════════════════════════════════════════════════════════════
+
+-- platform default privileges (already true on a fresh Supabase project; a no-op there,
+-- and required on any other Postgres target so future objects inherit the same shape)
+alter default privileges for role postgres in schema public grant ALL on tables to anon;
+alter default privileges for role postgres in schema public grant ALL on tables to authenticated;
+alter default privileges for role postgres in schema public grant ALL on tables to service_role;
+alter default privileges for role postgres in schema public grant EXECUTE on functions to anon;
+alter default privileges for role postgres in schema public grant EXECUTE on functions to authenticated;
+alter default privileges for role postgres in schema public grant EXECUTE on functions to service_role;
+alter default privileges for role postgres in schema public grant SELECT, UPDATE, USAGE on sequences to anon;
+alter default privileges for role postgres in schema public grant SELECT, UPDATE, USAGE on sequences to authenticated;
+alter default privileges for role postgres in schema public grant SELECT, UPDATE, USAGE on sequences to service_role;
+
+-- tables
+revoke all on table public."api_keys" from public, anon, authenticated, service_role;
+grant ALL on table public."api_keys" to anon;
+grant ALL on table public."api_keys" to authenticated;
+grant ALL on table public."api_keys" to service_role;
+revoke all on table public."automation_runs" from public, anon, authenticated, service_role;
+grant SELECT, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN on table public."automation_runs" to anon;
+grant SELECT, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN on table public."automation_runs" to authenticated;
+grant ALL on table public."automation_runs" to service_role;
+revoke all on table public."automation_signals" from public, anon, authenticated, service_role;
+grant SELECT, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN on table public."automation_signals" to anon;
+grant SELECT, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN on table public."automation_signals" to authenticated;
+grant ALL on table public."automation_signals" to service_role;
+revoke all on table public."automation_sweeps" from public, anon, authenticated, service_role;
+grant TRUNCATE, REFERENCES, TRIGGER, MAINTAIN on table public."automation_sweeps" to anon;
+grant TRUNCATE, REFERENCES, TRIGGER, MAINTAIN on table public."automation_sweeps" to authenticated;
+grant ALL on table public."automation_sweeps" to service_role;
+revoke all on table public."beta_invites" from public, anon, authenticated, service_role;
+grant ALL on table public."beta_invites" to service_role;
+revoke all on table public."business_settings" from public, anon, authenticated, service_role;
+grant ALL on table public."business_settings" to anon;
+grant ALL on table public."business_settings" to authenticated;
+grant ALL on table public."business_settings" to service_role;
+revoke all on table public."change_orders" from public, anon, authenticated, service_role;
+grant ALL on table public."change_orders" to anon;
+grant ALL on table public."change_orders" to authenticated;
+grant ALL on table public."change_orders" to service_role;
+revoke all on table public."consent_changes" from public, anon, authenticated, service_role;
+grant ALL on table public."consent_changes" to anon;
+grant ALL on table public."consent_changes" to authenticated;
+grant ALL on table public."consent_changes" to service_role;
+revoke all on table public."content_pieces" from public, anon, authenticated, service_role;
+grant ALL on table public."content_pieces" to anon;
+grant ALL on table public."content_pieces" to authenticated;
+grant ALL on table public."content_pieces" to service_role;
+revoke all on table public."conversations" from public, anon, authenticated, service_role;
+grant ALL on table public."conversations" to anon;
+grant ALL on table public."conversations" to authenticated;
+grant ALL on table public."conversations" to service_role;
+revoke all on table public."crew_media" from public, anon, authenticated, service_role;
+grant ALL on table public."crew_media" to anon;
+grant ALL on table public."crew_media" to authenticated;
+grant ALL on table public."crew_media" to service_role;
+revoke all on table public."crew_message_reads" from public, anon, authenticated, service_role;
+grant ALL on table public."crew_message_reads" to authenticated;
+grant ALL on table public."crew_message_reads" to service_role;
+revoke all on table public."crew_messages" from public, anon, authenticated, service_role;
+grant ALL on table public."crew_messages" to authenticated;
+grant ALL on table public."crew_messages" to service_role;
+revoke all on table public."crews" from public, anon, authenticated, service_role;
+grant ALL on table public."crews" to anon;
+grant ALL on table public."crews" to authenticated;
+grant ALL on table public."crews" to service_role;
+revoke all on table public."crm_campaign_log" from public, anon, authenticated, service_role;
+grant ALL on table public."crm_campaign_log" to anon;
+grant ALL on table public."crm_campaign_log" to authenticated;
+grant ALL on table public."crm_campaign_log" to service_role;
+revoke all on table public."crm_campaign_presets" from public, anon, authenticated, service_role;
+grant ALL on table public."crm_campaign_presets" to anon;
+grant ALL on table public."crm_campaign_presets" to authenticated;
+grant ALL on table public."crm_campaign_presets" to service_role;
+revoke all on table public."crm_campaigns" from public, anon, authenticated, service_role;
+grant ALL on table public."crm_campaigns" to anon;
+grant ALL on table public."crm_campaigns" to authenticated;
+grant ALL on table public."crm_campaigns" to service_role;
+revoke all on table public."customer_imports" from public, anon, authenticated, service_role;
+grant ALL on table public."customer_imports" to authenticated;
+grant ALL on table public."customer_imports" to service_role;
+revoke all on table public."customer_portal_tokens" from public, anon, authenticated, service_role;
+grant ALL on table public."customer_portal_tokens" to anon;
+grant ALL on table public."customer_portal_tokens" to authenticated;
+grant ALL on table public."customer_portal_tokens" to service_role;
+revoke all on table public."customers" from public, anon, authenticated, service_role;
+grant ALL on table public."customers" to anon;
+grant ALL on table public."customers" to authenticated;
+grant ALL on table public."customers" to service_role;
+revoke all on table public."data_exports" from public, anon, authenticated, service_role;
+grant ALL on table public."data_exports" to authenticated;
+grant ALL on table public."data_exports" to service_role;
+revoke all on table public."day_statuses" from public, anon, authenticated, service_role;
+grant ALL on table public."day_statuses" to anon;
+grant ALL on table public."day_statuses" to authenticated;
+grant ALL on table public."day_statuses" to service_role;
+revoke all on table public."dispatch_notes" from public, anon, authenticated, service_role;
+grant ALL on table public."dispatch_notes" to anon;
+grant ALL on table public."dispatch_notes" to authenticated;
+grant ALL on table public."dispatch_notes" to service_role;
+revoke all on table public."equipment" from public, anon, authenticated, service_role;
+grant ALL on table public."equipment" to anon;
+grant ALL on table public."equipment" to authenticated;
+grant ALL on table public."equipment" to service_role;
+revoke all on table public."equipment_docs" from public, anon, authenticated, service_role;
+grant ALL on table public."equipment_docs" to anon;
+grant ALL on table public."equipment_docs" to authenticated;
+grant ALL on table public."equipment_docs" to service_role;
+revoke all on table public."equipment_service" from public, anon, authenticated, service_role;
+grant ALL on table public."equipment_service" to anon;
+grant ALL on table public."equipment_service" to authenticated;
+grant ALL on table public."equipment_service" to service_role;
+revoke all on table public."expense_categories" from public, anon, authenticated, service_role;
+grant ALL on table public."expense_categories" to anon;
+grant ALL on table public."expense_categories" to authenticated;
+grant ALL on table public."expense_categories" to service_role;
+revoke all on table public."expenses" from public, anon, authenticated, service_role;
+grant ALL on table public."expenses" to anon;
+grant ALL on table public."expenses" to authenticated;
+grant ALL on table public."expenses" to service_role;
+revoke all on table public."fixed_assets" from public, anon, authenticated, service_role;
+grant ALL on table public."fixed_assets" to anon;
+grant ALL on table public."fixed_assets" to authenticated;
+grant ALL on table public."fixed_assets" to service_role;
+revoke all on table public."follow_ups" from public, anon, authenticated, service_role;
+grant ALL on table public."follow_ups" to anon;
+grant ALL on table public."follow_ups" to authenticated;
+grant ALL on table public."follow_ups" to service_role;
+revoke all on table public."holidays" from public, anon, authenticated, service_role;
+grant ALL on table public."holidays" to anon;
+grant ALL on table public."holidays" to authenticated;
+grant ALL on table public."holidays" to service_role;
+revoke all on table public."inbound_events" from public, anon, authenticated, service_role;
+grant ALL on table public."inbound_events" to anon;
+grant ALL on table public."inbound_events" to authenticated;
+grant ALL on table public."inbound_events" to service_role;
+revoke all on table public."inbound_webhooks" from public, anon, authenticated, service_role;
+grant ALL on table public."inbound_webhooks" to anon;
+grant ALL on table public."inbound_webhooks" to authenticated;
+grant ALL on table public."inbound_webhooks" to service_role;
+revoke all on table public."integration_events" from public, anon, authenticated, service_role;
+grant ALL on table public."integration_events" to anon;
+grant ALL on table public."integration_events" to authenticated;
+grant ALL on table public."integration_events" to service_role;
+revoke all on table public."integrations_config" from public, anon, authenticated, service_role;
+grant ALL on table public."integrations_config" to service_role;
+revoke all on table public."invoices" from public, anon, authenticated, service_role;
+grant ALL on table public."invoices" to anon;
+grant ALL on table public."invoices" to authenticated;
+grant ALL on table public."invoices" to service_role;
+revoke all on table public."job_line_items" from public, anon, authenticated, service_role;
+grant ALL on table public."job_line_items" to anon;
+grant ALL on table public."job_line_items" to authenticated;
+grant ALL on table public."job_line_items" to service_role;
+revoke all on table public."job_photos" from public, anon, authenticated, service_role;
+grant ALL on table public."job_photos" to anon;
+grant ALL on table public."job_photos" to authenticated;
+grant ALL on table public."job_photos" to service_role;
+revoke all on table public."job_price_changes" from public, anon, authenticated, service_role;
+grant ALL on table public."job_price_changes" to anon;
+grant ALL on table public."job_price_changes" to authenticated;
+grant ALL on table public."job_price_changes" to service_role;
+revoke all on table public."job_recurrences" from public, anon, authenticated, service_role;
+grant ALL on table public."job_recurrences" to anon;
+grant ALL on table public."job_recurrences" to authenticated;
+grant ALL on table public."job_recurrences" to service_role;
+revoke all on table public."job_work_sessions" from public, anon, authenticated, service_role;
+grant ALL on table public."job_work_sessions" to anon;
+grant ALL on table public."job_work_sessions" to authenticated;
+grant ALL on table public."job_work_sessions" to service_role;
+revoke all on table public."jobs" from public, anon, authenticated, service_role;
+grant ALL on table public."jobs" to anon;
+grant ALL on table public."jobs" to authenticated;
+grant ALL on table public."jobs" to service_role;
+revoke all on table public."labor_observations" from public, anon, authenticated, service_role;
+grant ALL on table public."labor_observations" to anon;
+grant ALL on table public."labor_observations" to authenticated;
+grant ALL on table public."labor_observations" to service_role;
+revoke all on table public."liabilities" from public, anon, authenticated, service_role;
+grant ALL on table public."liabilities" to anon;
+grant ALL on table public."liabilities" to authenticated;
+grant ALL on table public."liabilities" to service_role;
+revoke all on table public."marketing_assets" from public, anon, authenticated, service_role;
+grant ALL on table public."marketing_assets" to anon;
+grant ALL on table public."marketing_assets" to authenticated;
+grant ALL on table public."marketing_assets" to service_role;
+revoke all on table public."marketing_campaigns" from public, anon, authenticated, service_role;
+grant ALL on table public."marketing_campaigns" to anon;
+grant ALL on table public."marketing_campaigns" to authenticated;
+grant ALL on table public."marketing_campaigns" to service_role;
+revoke all on table public."measurements" from public, anon, authenticated, service_role;
+grant ALL on table public."measurements" to anon;
+grant ALL on table public."measurements" to authenticated;
+grant ALL on table public."measurements" to service_role;
+revoke all on table public."message_sends" from public, anon, authenticated, service_role;
+grant ALL on table public."message_sends" to anon;
+grant ALL on table public."message_sends" to authenticated;
+grant ALL on table public."message_sends" to service_role;
+revoke all on table public."messages" from public, anon, authenticated, service_role;
+grant ALL on table public."messages" to anon;
+grant ALL on table public."messages" to authenticated;
+grant ALL on table public."messages" to service_role;
+revoke all on table public."neighbor_leads" from public, anon, authenticated, service_role;
+grant ALL on table public."neighbor_leads" to anon;
+grant ALL on table public."neighbor_leads" to authenticated;
+grant ALL on table public."neighbor_leads" to service_role;
+revoke all on table public."notification_log" from public, anon, authenticated, service_role;
+grant ALL on table public."notification_log" to anon;
+grant ALL on table public."notification_log" to authenticated;
+grant ALL on table public."notification_log" to service_role;
+revoke all on table public."notifications" from public, anon, authenticated, service_role;
+grant ALL on table public."notifications" to anon;
+grant ALL on table public."notifications" to authenticated;
+grant ALL on table public."notifications" to service_role;
+revoke all on table public."part_movements" from public, anon, authenticated, service_role;
+grant ALL on table public."part_movements" to anon;
+grant ALL on table public."part_movements" to authenticated;
+grant ALL on table public."part_movements" to service_role;
+revoke all on table public."parts" from public, anon, authenticated, service_role;
+grant ALL on table public."parts" to anon;
+grant ALL on table public."parts" to authenticated;
+grant ALL on table public."parts" to service_role;
+revoke all on table public."password_reset_requests" from public, anon, authenticated, service_role;
+grant ALL on table public."password_reset_requests" to service_role;
+revoke all on table public."pay_run_lines" from public, anon, authenticated, service_role;
+grant ALL on table public."pay_run_lines" to anon;
+grant ALL on table public."pay_run_lines" to authenticated;
+grant ALL on table public."pay_run_lines" to service_role;
+revoke all on table public."pay_runs" from public, anon, authenticated, service_role;
+grant ALL on table public."pay_runs" to anon;
+grant ALL on table public."pay_runs" to authenticated;
+grant ALL on table public."pay_runs" to service_role;
+revoke all on table public."payment_methods" from public, anon, authenticated, service_role;
+grant ALL on table public."payment_methods" to anon;
+grant ALL on table public."payment_methods" to authenticated;
+grant ALL on table public."payment_methods" to service_role;
+revoke all on table public."payments" from public, anon, authenticated, service_role;
+grant ALL on table public."payments" to anon;
+grant ALL on table public."payments" to authenticated;
+grant ALL on table public."payments" to service_role;
+revoke all on table public."platform_capabilities" from public, anon, authenticated, service_role;
+grant ALL on table public."platform_capabilities" to service_role;
+grant SELECT on table public."platform_capabilities" to authenticated;
+revoke all on table public."platform_operators" from public, anon, authenticated, service_role;
+grant ALL on table public."platform_operators" to service_role;
+revoke all on table public."portal_access_requests" from public, anon, authenticated, service_role;
+grant ALL on table public."portal_access_requests" to anon;
+grant ALL on table public."portal_access_requests" to authenticated;
+grant ALL on table public."portal_access_requests" to service_role;
+revoke all on table public."pricing_config_versions" from public, anon, authenticated, service_role;
+grant ALL on table public."pricing_config_versions" to anon;
+grant ALL on table public."pricing_config_versions" to authenticated;
+grant ALL on table public."pricing_config_versions" to service_role;
+revoke all on table public."properties" from public, anon, authenticated, service_role;
+grant ALL on table public."properties" to anon;
+grant ALL on table public."properties" to authenticated;
+grant ALL on table public."properties" to service_role;
+revoke all on table public."property_intelligence" from public, anon, authenticated, service_role;
+grant ALL on table public."property_intelligence" to anon;
+grant ALL on table public."property_intelligence" to authenticated;
+grant ALL on table public."property_intelligence" to service_role;
+revoke all on table public."property_measurement_events" from public, anon, authenticated, service_role;
+grant ALL on table public."property_measurement_events" to anon;
+grant ALL on table public."property_measurement_events" to authenticated;
+grant ALL on table public."property_measurement_events" to service_role;
+revoke all on table public."property_measurements" from public, anon, authenticated, service_role;
+grant ALL on table public."property_measurements" to anon;
+grant ALL on table public."property_measurements" to authenticated;
+grant ALL on table public."property_measurements" to service_role;
+revoke all on table public."property_observations" from public, anon, authenticated, service_role;
+grant ALL on table public."property_observations" to anon;
+grant ALL on table public."property_observations" to authenticated;
+grant ALL on table public."property_observations" to service_role;
+revoke all on table public."property_twin" from public, anon, authenticated, service_role;
+grant ALL on table public."property_twin" to anon;
+grant ALL on table public."property_twin" to authenticated;
+grant ALL on table public."property_twin" to service_role;
+revoke all on table public."pto_entries" from public, anon, authenticated, service_role;
+grant ALL on table public."pto_entries" to anon;
+grant ALL on table public."pto_entries" to authenticated;
+grant ALL on table public."pto_entries" to service_role;
+revoke all on table public."publish_jobs" from public, anon, authenticated, service_role;
+grant ALL on table public."publish_jobs" to anon;
+grant ALL on table public."publish_jobs" to authenticated;
+grant ALL on table public."publish_jobs" to service_role;
+revoke all on table public."purchase_order_items" from public, anon, authenticated, service_role;
+grant ALL on table public."purchase_order_items" to anon;
+grant ALL on table public."purchase_order_items" to authenticated;
+grant ALL on table public."purchase_order_items" to service_role;
+revoke all on table public."purchase_orders" from public, anon, authenticated, service_role;
+grant ALL on table public."purchase_orders" to anon;
+grant ALL on table public."purchase_orders" to authenticated;
+grant ALL on table public."purchase_orders" to service_role;
+revoke all on table public."push_config" from public, anon, authenticated, service_role;
+grant ALL on table public."push_config" to service_role;
+revoke all on table public."push_subscriptions" from public, anon, authenticated, service_role;
+grant ALL on table public."push_subscriptions" to anon;
+grant ALL on table public."push_subscriptions" to authenticated;
+grant ALL on table public."push_subscriptions" to service_role;
+revoke all on table public."quote_options" from public, anon, authenticated, service_role;
+grant ALL on table public."quote_options" to anon;
+grant ALL on table public."quote_options" to authenticated;
+grant ALL on table public."quote_options" to service_role;
+revoke all on table public."quote_outcomes" from public, anon, authenticated, service_role;
+grant ALL on table public."quote_outcomes" to anon;
+grant ALL on table public."quote_outcomes" to authenticated;
+grant ALL on table public."quote_outcomes" to service_role;
+revoke all on table public."quote_services" from public, anon, authenticated, service_role;
+grant ALL on table public."quote_services" to anon;
+grant ALL on table public."quote_services" to authenticated;
+grant ALL on table public."quote_services" to service_role;
+revoke all on table public."quotes" from public, anon, authenticated, service_role;
+grant ALL on table public."quotes" to anon;
+grant ALL on table public."quotes" to authenticated;
+grant ALL on table public."quotes" to service_role;
+revoke all on table public."referrals" from public, anon, authenticated, service_role;
+grant ALL on table public."referrals" to anon;
+grant ALL on table public."referrals" to authenticated;
+grant ALL on table public."referrals" to service_role;
+revoke all on table public."report_schedules" from public, anon, authenticated, service_role;
+grant ALL on table public."report_schedules" to anon;
+grant ALL on table public."report_schedules" to authenticated;
+grant ALL on table public."report_schedules" to service_role;
+revoke all on table public."revenue_recommendations" from public, anon, authenticated, service_role;
+grant ALL on table public."revenue_recommendations" to anon;
+grant ALL on table public."revenue_recommendations" to authenticated;
+grant ALL on table public."revenue_recommendations" to service_role;
+revoke all on table public."road_distance_cache" from public, anon, authenticated, service_role;
+grant ALL on table public."road_distance_cache" to anon;
+grant ALL on table public."road_distance_cache" to authenticated;
+grant ALL on table public."road_distance_cache" to service_role;
+revoke all on table public."schedule_health_ignored" from public, anon, authenticated, service_role;
+grant ALL on table public."schedule_health_ignored" to anon;
+grant ALL on table public."schedule_health_ignored" to authenticated;
+grant ALL on table public."schedule_health_ignored" to service_role;
+revoke all on table public."schedule_items" from public, anon, authenticated, service_role;
+grant ALL on table public."schedule_items" to anon;
+grant ALL on table public."schedule_items" to authenticated;
+grant ALL on table public."schedule_items" to service_role;
+revoke all on table public."scheduled_messages" from public, anon, authenticated, service_role;
+grant ALL on table public."scheduled_messages" to anon;
+grant ALL on table public."scheduled_messages" to authenticated;
+grant ALL on table public."scheduled_messages" to service_role;
+revoke all on table public."service_bundle_items" from public, anon, authenticated, service_role;
+grant ALL on table public."service_bundle_items" to anon;
+grant ALL on table public."service_bundle_items" to authenticated;
+grant ALL on table public."service_bundle_items" to service_role;
+revoke all on table public."service_bundles" from public, anon, authenticated, service_role;
+grant ALL on table public."service_bundles" to anon;
+grant ALL on table public."service_bundles" to authenticated;
+grant ALL on table public."service_bundles" to service_role;
+revoke all on table public."service_requests" from public, anon, authenticated, service_role;
+grant ALL on table public."service_requests" to anon;
+grant ALL on table public."service_requests" to authenticated;
+grant ALL on table public."service_requests" to service_role;
+revoke all on table public."service_templates" from public, anon, authenticated, service_role;
+grant ALL on table public."service_templates" to anon;
+grant ALL on table public."service_templates" to authenticated;
+grant ALL on table public."service_templates" to service_role;
+revoke all on table public."service_units" from public, anon, authenticated, service_role;
+grant ALL on table public."service_units" to anon;
+grant ALL on table public."service_units" to authenticated;
+grant ALL on table public."service_units" to service_role;
+revoke all on table public."social_connections" from public, anon, authenticated, service_role;
+grant ALL on table public."social_connections" to anon;
+grant ALL on table public."social_connections" to authenticated;
+grant ALL on table public."social_connections" to service_role;
+revoke all on table public."suggestion_dismissals" from public, anon, authenticated, service_role;
+grant ALL on table public."suggestion_dismissals" to anon;
+grant ALL on table public."suggestion_dismissals" to authenticated;
+grant ALL on table public."suggestion_dismissals" to service_role;
+revoke all on table public."suppliers" from public, anon, authenticated, service_role;
+grant ALL on table public."suppliers" to anon;
+grant ALL on table public."suppliers" to authenticated;
+grant ALL on table public."suppliers" to service_role;
+revoke all on table public."technicians" from public, anon, authenticated, service_role;
+grant ALL on table public."technicians" to anon;
+grant ALL on table public."technicians" to authenticated;
+grant ALL on table public."technicians" to service_role;
+revoke all on table public."time_entries" from public, anon, authenticated, service_role;
+grant ALL on table public."time_entries" to anon;
+grant ALL on table public."time_entries" to authenticated;
+grant ALL on table public."time_entries" to service_role;
+revoke all on table public."travel_fee_tiers" from public, anon, authenticated, service_role;
+grant ALL on table public."travel_fee_tiers" to anon;
+grant ALL on table public."travel_fee_tiers" to authenticated;
+grant ALL on table public."travel_fee_tiers" to service_role;
+revoke all on table public."vendors" from public, anon, authenticated, service_role;
+grant ALL on table public."vendors" to anon;
+grant ALL on table public."vendors" to authenticated;
+grant ALL on table public."vendors" to service_role;
+revoke all on table public."verify_fixture_tenants" from public, anon, authenticated, service_role;
+grant ALL on table public."verify_fixture_tenants" to service_role;
+revoke all on table public."wage_history" from public, anon, authenticated, service_role;
+grant ALL on table public."wage_history" to anon;
+grant ALL on table public."wage_history" to authenticated;
+grant ALL on table public."wage_history" to service_role;
+revoke all on table public."webhook_deliveries" from public, anon, authenticated, service_role;
+grant ALL on table public."webhook_deliveries" to anon;
+grant ALL on table public."webhook_deliveries" to authenticated;
+grant ALL on table public."webhook_deliveries" to service_role;
+revoke all on table public."webhook_endpoints" from public, anon, authenticated, service_role;
+grant ALL on table public."webhook_endpoints" to anon;
+grant ALL on table public."webhook_endpoints" to authenticated;
+grant ALL on table public."webhook_endpoints" to service_role;
+revoke all on table public."website_leads" from public, anon, authenticated, service_role;
+grant ALL on table public."website_leads" to anon;
+grant ALL on table public."website_leads" to authenticated;
+grant ALL on table public."website_leads" to service_role;
+
+-- column-level grants (narrower than the table grant on purpose)
+grant SELECT ("error") on table public."automation_sweeps" to authenticated;
+grant SELECT ("job") on table public."automation_sweeps" to authenticated;
+grant SELECT ("ok") on table public."automation_sweeps" to authenticated;
+grant SELECT ("ran_at") on table public."automation_sweeps" to authenticated;
+grant SELECT ("ran_on") on table public."automation_sweeps" to authenticated;
+
+-- sequences
+revoke all on sequence public."property_measurement_events_seq_seq" from public, anon, authenticated, service_role;
+grant SELECT, UPDATE, USAGE on sequence public."property_measurement_events_seq_seq" to anon;
+grant SELECT, UPDATE, USAGE on sequence public."property_measurement_events_seq_seq" to authenticated;
+grant SELECT, UPDATE, USAGE on sequence public."property_measurement_events_seq_seq" to service_role;
+revoke all on sequence public."wage_history_seq_seq" from public, anon, authenticated, service_role;
+grant SELECT, UPDATE, USAGE on sequence public."wage_history_seq_seq" to anon;
+grant SELECT, UPDATE, USAGE on sequence public."wage_history_seq_seq" to authenticated;
+grant SELECT, UPDATE, USAGE on sequence public."wage_history_seq_seq" to service_role;
+
+-- functions — the security-critical half of this section
+revoke all on function public."authenticate_api_key"(p_hash text) from public, anon, authenticated, service_role;
+grant execute on function public."authenticate_api_key"(p_hash text) to service_role;
+revoke all on function public."bank_job_clock_session"() from public, anon, authenticated, service_role;
+grant execute on function public."bank_job_clock_session"() to public;
+grant execute on function public."bank_job_clock_session"() to anon;
+grant execute on function public."bank_job_clock_session"() to authenticated;
+grant execute on function public."bank_job_clock_session"() to service_role;
+revoke all on function public."book_service"(p_token text, p_payload jsonb) from public, anon, authenticated, service_role;
+grant execute on function public."book_service"(p_token text, p_payload jsonb) to public;
+grant execute on function public."book_service"(p_token text, p_payload jsonb) to anon;
+grant execute on function public."book_service"(p_token text, p_payload jsonb) to authenticated;
+grant execute on function public."book_service"(p_token text, p_payload jsonb) to service_role;
+revoke all on function public."booking_set_consent"(p_token text, p_quote_id uuid, p_sms_opt_in boolean, p_email_opt_in boolean, p_prefs jsonb) from public, anon, authenticated, service_role;
+grant execute on function public."booking_set_consent"(p_token text, p_quote_id uuid, p_sms_opt_in boolean, p_email_opt_in boolean, p_prefs jsonb) to public;
+grant execute on function public."booking_set_consent"(p_token text, p_quote_id uuid, p_sms_opt_in boolean, p_email_opt_in boolean, p_prefs jsonb) to anon;
+grant execute on function public."booking_set_consent"(p_token text, p_quote_id uuid, p_sms_opt_in boolean, p_email_opt_in boolean, p_prefs jsonb) to authenticated;
+grant execute on function public."booking_set_consent"(p_token text, p_quote_id uuid, p_sms_opt_in boolean, p_email_opt_in boolean, p_prefs jsonb) to service_role;
+revoke all on function public."bump_conversation"() from public, anon, authenticated, service_role;
+grant execute on function public."bump_conversation"() to service_role;
+revoke all on function public."can_provision_business"() from public, anon, authenticated, service_role;
+grant execute on function public."can_provision_business"() to authenticated;
+grant execute on function public."can_provision_business"() to service_role;
+revoke all on function public."capture_integration_event"() from public, anon, authenticated, service_role;
+grant execute on function public."capture_integration_event"() to service_role;
+revoke all on function public."capture_labor_observation"() from public, anon, authenticated, service_role;
+grant execute on function public."capture_labor_observation"() to service_role;
+revoke all on function public."carry_forward_job_actual_minutes"() from public, anon, authenticated, service_role;
+grant execute on function public."carry_forward_job_actual_minutes"() to public;
+grant execute on function public."carry_forward_job_actual_minutes"() to anon;
+grant execute on function public."carry_forward_job_actual_minutes"() to authenticated;
+grant execute on function public."carry_forward_job_actual_minutes"() to service_role;
+revoke all on function public."change_order_apply_approval"() from public, anon, authenticated, service_role;
+revoke all on function public."change_order_assign_number"() from public, anon, authenticated, service_role;
+revoke all on function public."change_order_guard_transition"() from public, anon, authenticated, service_role;
+revoke all on function public."claim_beta_invite"() from public, anon, authenticated, service_role;
+grant execute on function public."claim_beta_invite"() to authenticated;
+grant execute on function public."claim_beta_invite"() to service_role;
+revoke all on function public."claim_webhook_deliveries"(p_limit integer, p_user uuid) from public, anon, authenticated, service_role;
+grant execute on function public."claim_webhook_deliveries"(p_limit integer, p_user uuid) to service_role;
+revoke all on function public."clear_route_order_on_move"() from public, anon, authenticated, service_role;
+grant execute on function public."clear_route_order_on_move"() to public;
+grant execute on function public."clear_route_order_on_move"() to anon;
+grant execute on function public."clear_route_order_on_move"() to authenticated;
+grant execute on function public."clear_route_order_on_move"() to service_role;
+revoke all on function public."comms_insights"(p_days integer) from public, anon, authenticated, service_role;
+grant execute on function public."comms_insights"(p_days integer) to public;
+grant execute on function public."comms_insights"(p_days integer) to anon;
+grant execute on function public."comms_insights"(p_days integer) to authenticated;
+grant execute on function public."comms_insights"(p_days integer) to service_role;
+revoke all on function public."create_beta_invite"(p_token_hash text, p_label text, p_email text, p_days integer) from public, anon, authenticated, service_role;
+grant execute on function public."create_beta_invite"(p_token_hash text, p_label text, p_email text, p_days integer) to authenticated;
+grant execute on function public."create_beta_invite"(p_token_hash text, p_label text, p_email text, p_days integer) to service_role;
+revoke all on function public."crew_access_states"() from public, anon, authenticated, service_role;
+grant execute on function public."crew_access_states"() to authenticated;
+grant execute on function public."crew_access_states"() to service_role;
+revoke all on function public."crew_crew_id"() from public, anon, authenticated, service_role;
+grant execute on function public."crew_crew_id"() to service_role;
+revoke all on function public."crew_day"(p_date date) from public, anon, authenticated, service_role;
+grant execute on function public."crew_day"(p_date date) to authenticated;
+grant execute on function public."crew_day"(p_date date) to service_role;
+revoke all on function public."crew_employer"() from public, anon, authenticated, service_role;
+grant execute on function public."crew_employer"() to service_role;
+revoke all on function public."crew_issue_invite"(p_technician_id uuid, p_hours integer) from public, anon, authenticated, service_role;
+grant execute on function public."crew_issue_invite"(p_technician_id uuid, p_hours integer) to authenticated;
+grant execute on function public."crew_issue_invite"(p_technician_id uuid, p_hours integer) to service_role;
+revoke all on function public."crew_job_field_guard"() from public, anon, authenticated, service_role;
+grant execute on function public."crew_job_field_guard"() to service_role;
+revoke all on function public."crew_job_messages"(p_job_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."crew_job_messages"(p_job_id uuid) to authenticated;
+grant execute on function public."crew_job_messages"(p_job_id uuid) to service_role;
+revoke all on function public."crew_message_identity"() from public, anon, authenticated, service_role;
+grant execute on function public."crew_message_identity"() to service_role;
+revoke all on function public."crew_message_inbox"() from public, anon, authenticated, service_role;
+grant execute on function public."crew_message_inbox"() to authenticated;
+grant execute on function public."crew_message_inbox"() to service_role;
+revoke all on function public."crew_message_notify"() from public, anon, authenticated, service_role;
+grant execute on function public."crew_message_notify"() to public;
+grant execute on function public."crew_message_notify"() to anon;
+grant execute on function public."crew_message_notify"() to authenticated;
+grant execute on function public."crew_message_notify"() to service_role;
+revoke all on function public."crew_message_schedule_event"() from public, anon, authenticated, service_role;
+grant execute on function public."crew_message_schedule_event"() to public;
+grant execute on function public."crew_message_schedule_event"() to anon;
+grant execute on function public."crew_message_schedule_event"() to authenticated;
+grant execute on function public."crew_message_schedule_event"() to service_role;
+revoke all on function public."crew_post_message"(p_job_id uuid, p_body text, p_client_token text) from public, anon, authenticated, service_role;
+grant execute on function public."crew_post_message"(p_job_id uuid, p_body text, p_client_token text) to authenticated;
+grant execute on function public."crew_post_message"(p_job_id uuid, p_body text, p_client_token text) to service_role;
+revoke all on function public."crew_redeem_invite"(p_code text) from public, anon, authenticated, service_role;
+grant execute on function public."crew_redeem_invite"(p_code text) to authenticated;
+grant execute on function public."crew_redeem_invite"(p_code text) to service_role;
+revoke all on function public."crew_revoke_access"(p_technician_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."crew_revoke_access"(p_technician_id uuid) to authenticated;
+grant execute on function public."crew_revoke_access"(p_technician_id uuid) to service_role;
+revoke all on function public."crew_set_completion_record"(p_job_id uuid, p_summary text, p_issue text) from public, anon, authenticated, service_role;
+grant execute on function public."crew_set_completion_record"(p_job_id uuid, p_summary text, p_issue text) to authenticated;
+grant execute on function public."crew_set_completion_record"(p_job_id uuid, p_summary text, p_issue text) to service_role;
+revoke all on function public."crew_set_visit_status"(p_job_id uuid, p_status text, p_base_updated_at timestamp with time zone, p_started_at timestamp with time zone, p_completed_at timestamp with time zone, p_actual_minutes integer) from public, anon, authenticated, service_role;
+grant execute on function public."crew_set_visit_status"(p_job_id uuid, p_status text, p_base_updated_at timestamp with time zone, p_started_at timestamp with time zone, p_completed_at timestamp with time zone, p_actual_minutes integer) to authenticated;
+grant execute on function public."crew_set_visit_status"(p_job_id uuid, p_status text, p_base_updated_at timestamp with time zone, p_started_at timestamp with time zone, p_completed_at timestamp with time zone, p_actual_minutes integer) to service_role;
+revoke all on function public."crew_technician_id"() from public, anon, authenticated, service_role;
+grant execute on function public."crew_technician_id"() to service_role;
+revoke all on function public."crew_upcoming"(p_from date, p_days integer) from public, anon, authenticated, service_role;
+grant execute on function public."crew_upcoming"(p_from date, p_days integer) to authenticated;
+grant execute on function public."crew_upcoming"(p_from date, p_days integer) to service_role;
+revoke all on function public."crm_stamp_review_requested"() from public, anon, authenticated, service_role;
+grant execute on function public."crm_stamp_review_requested"() to service_role;
+revoke all on function public."crm_sync_referral"() from public, anon, authenticated, service_role;
+grant execute on function public."crm_sync_referral"() to service_role;
+revoke all on function public."crm_touch_last_contacted"() from public, anon, authenticated, service_role;
+grant execute on function public."crm_touch_last_contacted"() to service_role;
+revoke all on function public."current_app_role"() from public, anon, authenticated, service_role;
+grant execute on function public."current_app_role"() to authenticated;
+grant execute on function public."current_app_role"() to service_role;
+revoke all on function public."ensure_pricing_config_version"(p_user uuid) from public, anon, authenticated, service_role;
+grant execute on function public."ensure_pricing_config_version"(p_user uuid) to authenticated;
+grant execute on function public."ensure_pricing_config_version"(p_user uuid) to service_role;
+revoke all on function public."fanout_integration_event"() from public, anon, authenticated, service_role;
+grant execute on function public."fanout_integration_event"() to service_role;
+revoke all on function public."find_customer_by_phone"(p_phone text) from public, anon, authenticated, service_role;
+grant execute on function public."find_customer_by_phone"(p_phone text) to service_role;
+revoke all on function public."find_inbound_sms_customer"(p_phone text) from public, anon, authenticated, service_role;
+grant execute on function public."find_inbound_sms_customer"(p_phone text) to service_role;
+revoke all on function public."find_portal_access_customers"(p_email text) from public, anon, authenticated, service_role;
+grant execute on function public."find_portal_access_customers"(p_email text) to service_role;
+revoke all on function public."get_booking_business"(p_token text) from public, anon, authenticated, service_role;
+grant execute on function public."get_booking_business"(p_token text) to public;
+grant execute on function public."get_booking_business"(p_token text) to anon;
+grant execute on function public."get_booking_business"(p_token text) to authenticated;
+grant execute on function public."get_booking_business"(p_token text) to service_role;
+revoke all on function public."get_portal_data"(p_token text) from public, anon, authenticated, service_role;
+grant execute on function public."get_portal_data"(p_token text) to public;
+grant execute on function public."get_portal_data"(p_token text) to anon;
+grant execute on function public."get_portal_data"(p_token text) to authenticated;
+grant execute on function public."get_portal_data"(p_token text) to service_role;
+revoke all on function public."guard_business_settings_owner"() from public, anon, authenticated, service_role;
+grant execute on function public."guard_business_settings_owner"() to public;
+grant execute on function public."guard_business_settings_owner"() to anon;
+grant execute on function public."guard_business_settings_owner"() to authenticated;
+grant execute on function public."guard_business_settings_owner"() to service_role;
+revoke all on function public."guard_lawn_sqft_writer"() from public, anon, authenticated, service_role;
+grant execute on function public."guard_lawn_sqft_writer"() to public;
+grant execute on function public."guard_lawn_sqft_writer"() to anon;
+grant execute on function public."guard_lawn_sqft_writer"() to authenticated;
+grant execute on function public."guard_lawn_sqft_writer"() to service_role;
+revoke all on function public."guard_technician_auth_link"() from public, anon, authenticated, service_role;
+grant execute on function public."guard_technician_auth_link"() to public;
+grant execute on function public."guard_technician_auth_link"() to anon;
+grant execute on function public."guard_technician_auth_link"() to authenticated;
+grant execute on function public."guard_technician_auth_link"() to service_role;
+revoke all on function public."handle_updated_at"() from public, anon, authenticated, service_role;
+grant execute on function public."handle_updated_at"() to public;
+grant execute on function public."handle_updated_at"() to anon;
+grant execute on function public."handle_updated_at"() to authenticated;
+grant execute on function public."handle_updated_at"() to service_role;
+revoke all on function public."inbox_counts"() from public, anon, authenticated, service_role;
+grant execute on function public."inbox_counts"() to public;
+grant execute on function public."inbox_counts"() to anon;
+grant execute on function public."inbox_counts"() to authenticated;
+grant execute on function public."inbox_counts"() to service_role;
+revoke all on function public."is_verify_fixture_tenant"() from public, anon, authenticated, service_role;
+grant execute on function public."is_verify_fixture_tenant"() to authenticated;
+grant execute on function public."is_verify_fixture_tenant"() to service_role;
+revoke all on function public."job_session_minutes"(p_job_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."job_session_minutes"(p_job_id uuid) to public;
+grant execute on function public."job_session_minutes"(p_job_id uuid) to anon;
+grant execute on function public."job_session_minutes"(p_job_id uuid) to authenticated;
+grant execute on function public."job_session_minutes"(p_job_id uuid) to service_role;
+revoke all on function public."list_beta_invites"() from public, anon, authenticated, service_role;
+grant execute on function public."list_beta_invites"() to authenticated;
+grant execute on function public."list_beta_invites"() to service_role;
+revoke all on function public."log_measurement_event"() from public, anon, authenticated, service_role;
+grant execute on function public."log_measurement_event"() to public;
+grant execute on function public."log_measurement_event"() to anon;
+grant execute on function public."log_measurement_event"() to authenticated;
+grant execute on function public."log_measurement_event"() to service_role;
+revoke all on function public."log_wage_change"() from public, anon, authenticated, service_role;
+grant execute on function public."log_wage_change"() to public;
+grant execute on function public."log_wage_change"() to anon;
+grant execute on function public."log_wage_change"() to authenticated;
+grant execute on function public."log_wage_change"() to service_role;
+revoke all on function public."mirror_measurement_to_property"() from public, anon, authenticated, service_role;
+grant execute on function public."mirror_measurement_to_property"() to public;
+grant execute on function public."mirror_measurement_to_property"() to anon;
+grant execute on function public."mirror_measurement_to_property"() to authenticated;
+grant execute on function public."mirror_measurement_to_property"() to service_role;
+revoke all on function public."notify_change_order_decision"() from public, anon, authenticated, service_role;
+revoke all on function public."notify_inbound_message"() from public, anon, authenticated, service_role;
+grant execute on function public."notify_inbound_message"() to service_role;
+revoke all on function public."notify_invoice_paid"() from public, anon, authenticated, service_role;
+grant execute on function public."notify_invoice_paid"() to service_role;
+revoke all on function public."notify_quote_accepted"() from public, anon, authenticated, service_role;
+grant execute on function public."notify_quote_accepted"() to service_role;
+revoke all on function public."notify_review_received"() from public, anon, authenticated, service_role;
+grant execute on function public."notify_review_received"() to service_role;
+revoke all on function public."nudge_webhook_deliveries"() from public, anon, authenticated, service_role;
+grant execute on function public."nudge_webhook_deliveries"() to service_role;
+revoke all on function public."owner_select_quote_option"(p_quote_id uuid, p_option_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."owner_select_quote_option"(p_quote_id uuid, p_option_id uuid) to authenticated;
+revoke all on function public."portal_accept_quote"(p_token text, p_quote_id uuid, p_option_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."portal_accept_quote"(p_token text, p_quote_id uuid, p_option_id uuid) to anon;
+grant execute on function public."portal_accept_quote"(p_token text, p_quote_id uuid, p_option_id uuid) to authenticated;
+grant execute on function public."portal_accept_quote"(p_token text, p_quote_id uuid, p_option_id uuid) to service_role;
+revoke all on function public."portal_add_contact"(p_token text, p_phone text, p_email text) from public, anon, authenticated, service_role;
+grant execute on function public."portal_add_contact"(p_token text, p_phone text, p_email text) to anon;
+grant execute on function public."portal_add_contact"(p_token text, p_phone text, p_email text) to authenticated;
+grant execute on function public."portal_add_contact"(p_token text, p_phone text, p_email text) to service_role;
+revoke all on function public."portal_begin_setup"(p_token text) from public, anon, authenticated, service_role;
+grant execute on function public."portal_begin_setup"(p_token text) to public;
+grant execute on function public."portal_begin_setup"(p_token text) to anon;
+grant execute on function public."portal_begin_setup"(p_token text) to authenticated;
+grant execute on function public."portal_begin_setup"(p_token text) to service_role;
+revoke all on function public."portal_decline_review"(p_token text) from public, anon, authenticated, service_role;
+grant execute on function public."portal_decline_review"(p_token text) to public;
+grant execute on function public."portal_decline_review"(p_token text) to anon;
+grant execute on function public."portal_decline_review"(p_token text) to authenticated;
+grant execute on function public."portal_decline_review"(p_token text) to service_role;
+revoke all on function public."portal_get_messages"(p_token text) from public, anon, authenticated, service_role;
+grant execute on function public."portal_get_messages"(p_token text) to public;
+grant execute on function public."portal_get_messages"(p_token text) to anon;
+grant execute on function public."portal_get_messages"(p_token text) to authenticated;
+grant execute on function public."portal_get_messages"(p_token text) to service_role;
+revoke all on function public."portal_get_prefs"(p_token text) from public, anon, authenticated, service_role;
+grant execute on function public."portal_get_prefs"(p_token text) to public;
+grant execute on function public."portal_get_prefs"(p_token text) to anon;
+grant execute on function public."portal_get_prefs"(p_token text) to authenticated;
+grant execute on function public."portal_get_prefs"(p_token text) to service_role;
+revoke all on function public."portal_invoice_for_payment"(p_token text, p_invoice_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."portal_invoice_for_payment"(p_token text, p_invoice_id uuid) to public;
+grant execute on function public."portal_invoice_for_payment"(p_token text, p_invoice_id uuid) to anon;
+grant execute on function public."portal_invoice_for_payment"(p_token text, p_invoice_id uuid) to authenticated;
+grant execute on function public."portal_invoice_for_payment"(p_token text, p_invoice_id uuid) to service_role;
+revoke all on function public."portal_mark_invoice_viewed"(p_token text, p_invoice_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."portal_mark_invoice_viewed"(p_token text, p_invoice_id uuid) to public;
+grant execute on function public."portal_mark_invoice_viewed"(p_token text, p_invoice_id uuid) to anon;
+grant execute on function public."portal_mark_invoice_viewed"(p_token text, p_invoice_id uuid) to authenticated;
+grant execute on function public."portal_mark_invoice_viewed"(p_token text, p_invoice_id uuid) to service_role;
+revoke all on function public."portal_mark_reviewed"(p_token text) from public, anon, authenticated, service_role;
+grant execute on function public."portal_mark_reviewed"(p_token text) to public;
+grant execute on function public."portal_mark_reviewed"(p_token text) to anon;
+grant execute on function public."portal_mark_reviewed"(p_token text) to authenticated;
+grant execute on function public."portal_mark_reviewed"(p_token text) to service_role;
+revoke all on function public."portal_remove_card"(p_token text) from public, anon, authenticated, service_role;
+grant execute on function public."portal_remove_card"(p_token text) to public;
+grant execute on function public."portal_remove_card"(p_token text) to anon;
+grant execute on function public."portal_remove_card"(p_token text) to authenticated;
+grant execute on function public."portal_remove_card"(p_token text) to service_role;
+revoke all on function public."portal_request_photos_ok"(p text[]) from public, anon, authenticated, service_role;
+grant execute on function public."portal_request_photos_ok"(p text[]) to authenticated;
+grant execute on function public."portal_request_photos_ok"(p text[]) to service_role;
+revoke all on function public."portal_request_service"(p_token text, p_message text) from public, anon, authenticated, service_role;
+grant execute on function public."portal_request_service"(p_token text, p_message text) to public;
+grant execute on function public."portal_request_service"(p_token text, p_message text) to anon;
+grant execute on function public."portal_request_service"(p_token text, p_message text) to authenticated;
+grant execute on function public."portal_request_service"(p_token text, p_message text) to service_role;
+revoke all on function public."portal_respond_change_order"(p_token text, p_change_order_id uuid, p_decision text, p_reason text) from public, anon, authenticated, service_role;
+grant execute on function public."portal_respond_change_order"(p_token text, p_change_order_id uuid, p_decision text, p_reason text) to anon;
+grant execute on function public."portal_respond_change_order"(p_token text, p_change_order_id uuid, p_decision text, p_reason text) to authenticated;
+revoke all on function public."portal_send_message"(p_token text, p_body text) from public, anon, authenticated, service_role;
+grant execute on function public."portal_send_message"(p_token text, p_body text) to public;
+grant execute on function public."portal_send_message"(p_token text, p_body text) to anon;
+grant execute on function public."portal_send_message"(p_token text, p_body text) to authenticated;
+grant execute on function public."portal_send_message"(p_token text, p_body text) to service_role;
+revoke all on function public."portal_set_autopay"(p_token text, p_enabled boolean) from public, anon, authenticated, service_role;
+grant execute on function public."portal_set_autopay"(p_token text, p_enabled boolean) to public;
+grant execute on function public."portal_set_autopay"(p_token text, p_enabled boolean) to anon;
+grant execute on function public."portal_set_autopay"(p_token text, p_enabled boolean) to authenticated;
+grant execute on function public."portal_set_autopay"(p_token text, p_enabled boolean) to service_role;
+revoke all on function public."portal_set_consent"(p_token text, p_sms_opt_in boolean, p_email_opt_in boolean, p_prefs jsonb) from public, anon, authenticated, service_role;
+grant execute on function public."portal_set_consent"(p_token text, p_sms_opt_in boolean, p_email_opt_in boolean, p_prefs jsonb) to public;
+grant execute on function public."portal_set_consent"(p_token text, p_sms_opt_in boolean, p_email_opt_in boolean, p_prefs jsonb) to anon;
+grant execute on function public."portal_set_consent"(p_token text, p_sms_opt_in boolean, p_email_opt_in boolean, p_prefs jsonb) to authenticated;
+grant execute on function public."portal_set_consent"(p_token text, p_sms_opt_in boolean, p_email_opt_in boolean, p_prefs jsonb) to service_role;
+revoke all on function public."portal_set_scheduling_preference"(p_token text, p_quote_id uuid, p_date date, p_date_2 date, p_timing text, p_note text) from public, anon, authenticated, service_role;
+grant execute on function public."portal_set_scheduling_preference"(p_token text, p_quote_id uuid, p_date date, p_date_2 date, p_timing text, p_note text) to anon;
+grant execute on function public."portal_set_scheduling_preference"(p_token text, p_quote_id uuid, p_date date, p_date_2 date, p_timing text, p_note text) to authenticated;
+revoke all on function public."portal_submit_request"(p_token text, p_message text, p_kind text, p_preferred_date date, p_job_id uuid, p_recurrence_id uuid, p_details jsonb, p_photos text[]) from public, anon, authenticated, service_role;
+grant execute on function public."portal_submit_request"(p_token text, p_message text, p_kind text, p_preferred_date date, p_job_id uuid, p_recurrence_id uuid, p_details jsonb, p_photos text[]) to anon;
+grant execute on function public."portal_submit_request"(p_token text, p_message text, p_kind text, p_preferred_date date, p_job_id uuid, p_recurrence_id uuid, p_details jsonb, p_photos text[]) to authenticated;
+grant execute on function public."portal_submit_request"(p_token text, p_message text, p_kind text, p_preferred_date date, p_job_id uuid, p_recurrence_id uuid, p_details jsonb, p_photos text[]) to service_role;
+revoke all on function public."pricing_config_versions_immutable"() from public, anon, authenticated, service_role;
+grant execute on function public."pricing_config_versions_immutable"() to public;
+grant execute on function public."pricing_config_versions_immutable"() to anon;
+grant execute on function public."pricing_config_versions_immutable"() to authenticated;
+grant execute on function public."pricing_config_versions_immutable"() to service_role;
+revoke all on function public."public_availability"(p_token text, p_days integer) from public, anon, authenticated, service_role;
+grant execute on function public."public_availability"(p_token text, p_days integer) to public;
+grant execute on function public."public_availability"(p_token text, p_days integer) to anon;
+grant execute on function public."public_availability"(p_token text, p_days integer) to authenticated;
+grant execute on function public."public_availability"(p_token text, p_days integer) to service_role;
+revoke all on function public."public_services"(p_token text) from public, anon, authenticated, service_role;
+grant execute on function public."public_services"(p_token text) to public;
+grant execute on function public."public_services"(p_token text) to anon;
+grant execute on function public."public_services"(p_token text) to authenticated;
+grant execute on function public."public_services"(p_token text) to service_role;
+revoke all on function public."push_dispatch"() from public, anon, authenticated, service_role;
+grant execute on function public."push_dispatch"() to service_role;
+revoke all on function public."quote_apply_option_choice"(p_quote_id uuid, p_option_id uuid) from public, anon, authenticated, service_role;
+revoke all on function public."quote_options_shape_guard"() from public, anon, authenticated, service_role;
+grant execute on function public."quote_options_shape_guard"() to public;
+grant execute on function public."quote_options_shape_guard"() to anon;
+grant execute on function public."quote_options_shape_guard"() to authenticated;
+grant execute on function public."quote_options_shape_guard"() to service_role;
+revoke all on function public."recompute_equipment_service"() from public, anon, authenticated, service_role;
+grant execute on function public."recompute_equipment_service"() to service_role;
+revoke all on function public."recompute_invoice_paid"() from public, anon, authenticated, service_role;
+grant execute on function public."recompute_invoice_paid"() to service_role;
+revoke all on function public."recompute_invoice_paid_for"(p_invoice_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."recompute_invoice_paid_for"(p_invoice_id uuid) to service_role;
+revoke all on function public."recompute_invoice_paid_on_edit"() from public, anon, authenticated, service_role;
+grant execute on function public."recompute_invoice_paid_on_edit"() to service_role;
+revoke all on function public."recompute_part_stock"() from public, anon, authenticated, service_role;
+grant execute on function public."recompute_part_stock"() to service_role;
+revoke all on function public."record_booking_measurement"(p_token text, p_quote_id uuid, p_lat double precision, p_lng double precision, p_neighborhood text, p_auto numeric, p_accepted numeric, p_building numeric, p_confidence text) from public, anon, authenticated, service_role;
+grant execute on function public."record_booking_measurement"(p_token text, p_quote_id uuid, p_lat double precision, p_lng double precision, p_neighborhood text, p_auto numeric, p_accepted numeric, p_building numeric, p_confidence text) to service_role;
+grant execute on function public."record_booking_measurement"(p_token text, p_quote_id uuid, p_lat double precision, p_lng double precision, p_neighborhood text, p_auto numeric, p_accepted numeric, p_building numeric, p_confidence text) to anon;
+grant execute on function public."record_booking_measurement"(p_token text, p_quote_id uuid, p_lat double precision, p_lng double precision, p_neighborhood text, p_auto numeric, p_accepted numeric, p_building numeric, p_confidence text) to authenticated;
+revoke all on function public."resolve_intake_customer"(p_user uuid, p_name text, p_email text, p_phone text, p_address text, p_city text, p_province text, p_postal text, p_source text, p_notes text) from public, anon, authenticated, service_role;
+grant execute on function public."resolve_intake_customer"(p_user uuid, p_name text, p_email text, p_phone text, p_address text, p_city text, p_province text, p_postal text, p_source text, p_notes text) to service_role;
+revoke all on function public."resolve_intake_property"(p_user uuid, p_customer uuid, p_address text, p_city text, p_province text, p_postal text, p_lat double precision, p_lng double precision, p_sqft numeric, p_polygon jsonb, p_place_id text, p_maps_url text, p_travel_km numeric, p_travel_fee numeric) from public, anon, authenticated, service_role;
+grant execute on function public."resolve_intake_property"(p_user uuid, p_customer uuid, p_address text, p_city text, p_province text, p_postal text, p_lat double precision, p_lng double precision, p_sqft numeric, p_polygon jsonb, p_place_id text, p_maps_url text, p_travel_km numeric, p_travel_fee numeric) to service_role;
+revoke all on function public."resync_quote_on_job_recurring"() from public, anon, authenticated, service_role;
+grant execute on function public."resync_quote_on_job_recurring"() to service_role;
+revoke all on function public."revoke_beta_invite"(p_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."revoke_beta_invite"(p_id uuid) to authenticated;
+grant execute on function public."revoke_beta_invite"(p_id uuid) to service_role;
+revoke all on function public."sanitize_source_input"(p_raw text) from public, anon, authenticated, service_role;
+grant execute on function public."sanitize_source_input"(p_raw text) to service_role;
+revoke all on function public."schema_contract"() from public, anon, authenticated, service_role;
+grant execute on function public."schema_contract"() to service_role;
+revoke all on function public."schema_fingerprint"() from public, anon, authenticated, service_role;
+grant execute on function public."schema_fingerprint"() to authenticated;
+grant execute on function public."schema_fingerprint"() to service_role;
+revoke all on function public."search_conversations"(p_query text) from public, anon, authenticated, service_role;
+grant execute on function public."search_conversations"(p_query text) to public;
+grant execute on function public."search_conversations"(p_query text) to anon;
+grant execute on function public."search_conversations"(p_query text) to authenticated;
+grant execute on function public."search_conversations"(p_query text) to service_role;
+revoke all on function public."search_records"(p_query text, p_limit integer) from public, anon, authenticated, service_role;
+grant execute on function public."search_records"(p_query text, p_limit integer) to authenticated;
+grant execute on function public."search_records"(p_query text, p_limit integer) to service_role;
+revoke all on function public."set_updated_at"() from public, anon, authenticated, service_role;
+grant execute on function public."set_updated_at"() to public;
+grant execute on function public."set_updated_at"() to anon;
+grant execute on function public."set_updated_at"() to authenticated;
+grant execute on function public."set_updated_at"() to service_role;
+revoke all on function public."sr_to_conversation"() from public, anon, authenticated, service_role;
+grant execute on function public."sr_to_conversation"() to service_role;
+revoke all on function public."submit_booking"(p_token text, p_name text, p_email text, p_phone text, p_address text, p_city text, p_province text, p_postal text, p_lat double precision, p_lng double precision, p_sqft numeric, p_service_type text, p_initial numeric, p_weekly numeric, p_biweekly numeric, p_monthly numeric, p_cadence text, p_notes text, p_hear_about text, p_referral_code text, p_utm jsonb, p_photos text[]) from public, anon, authenticated, service_role;
+grant execute on function public."submit_booking"(p_token text, p_name text, p_email text, p_phone text, p_address text, p_city text, p_province text, p_postal text, p_lat double precision, p_lng double precision, p_sqft numeric, p_service_type text, p_initial numeric, p_weekly numeric, p_biweekly numeric, p_monthly numeric, p_cadence text, p_notes text, p_hear_about text, p_referral_code text, p_utm jsonb, p_photos text[]) to public;
+grant execute on function public."submit_booking"(p_token text, p_name text, p_email text, p_phone text, p_address text, p_city text, p_province text, p_postal text, p_lat double precision, p_lng double precision, p_sqft numeric, p_service_type text, p_initial numeric, p_weekly numeric, p_biweekly numeric, p_monthly numeric, p_cadence text, p_notes text, p_hear_about text, p_referral_code text, p_utm jsonb, p_photos text[]) to anon;
+grant execute on function public."submit_booking"(p_token text, p_name text, p_email text, p_phone text, p_address text, p_city text, p_province text, p_postal text, p_lat double precision, p_lng double precision, p_sqft numeric, p_service_type text, p_initial numeric, p_weekly numeric, p_biweekly numeric, p_monthly numeric, p_cadence text, p_notes text, p_hear_about text, p_referral_code text, p_utm jsonb, p_photos text[]) to authenticated;
+grant execute on function public."submit_booking"(p_token text, p_name text, p_email text, p_phone text, p_address text, p_city text, p_province text, p_postal text, p_lat double precision, p_lng double precision, p_sqft numeric, p_service_type text, p_initial numeric, p_weekly numeric, p_biweekly numeric, p_monthly numeric, p_cadence text, p_notes text, p_hear_about text, p_referral_code text, p_utm jsonb, p_photos text[]) to service_role;
+revoke all on function public."submit_website_lead"(p_token text, p_payload jsonb, p_source text) from public, anon, authenticated, service_role;
+grant execute on function public."submit_website_lead"(p_token text, p_payload jsonb, p_source text) to public;
+grant execute on function public."submit_website_lead"(p_token text, p_payload jsonb, p_source text) to anon;
+grant execute on function public."submit_website_lead"(p_token text, p_payload jsonb, p_source text) to authenticated;
+grant execute on function public."submit_website_lead"(p_token text, p_payload jsonb, p_source text) to service_role;
+revoke all on function public."sync_job_actual_minutes"() from public, anon, authenticated, service_role;
+grant execute on function public."sync_job_actual_minutes"() to public;
+grant execute on function public."sync_job_actual_minutes"() to anon;
+grant execute on function public."sync_job_actual_minutes"() to authenticated;
+grant execute on function public."sync_job_actual_minutes"() to service_role;
+revoke all on function public."sync_quote_on_invoice_paid"() from public, anon, authenticated, service_role;
+grant execute on function public."sync_quote_on_invoice_paid"() to service_role;
+revoke all on function public."sync_quote_on_job_complete"() from public, anon, authenticated, service_role;
+grant execute on function public."sync_quote_on_job_complete"() to service_role;
+revoke all on function public."vision_supersede_prior_active"() from public, anon, authenticated, service_role;
+grant execute on function public."vision_supersede_prior_active"() to public;
+grant execute on function public."vision_supersede_prior_active"() to anon;
+grant execute on function public."vision_supersede_prior_active"() to authenticated;
+grant execute on function public."vision_supersede_prior_active"() to service_role;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 9 · COMMENTS
+-- These are not documentation garnish. Several encode rules that cost real money
+-- to relearn — which columns are customer-visible, which must never be, and why a
+-- figure is derived rather than stored. They ship with the schema deliberately.
+-- ══════════════════════════════════════════════════════════════════════════
+
+comment on table public."beta_invites" is 'One-time beta signup invites. Raw tokens are never stored — sha256 hex only. Service-role and DEFINER access only: RLS is on with zero policies.';
+comment on table public."change_orders" is 'Scope + price agreed AFTER the original approval. Owns the AUTHORIZATION only - approval mints a job_line_items row (change_order_id), which is the money. The originating quote is never rewritten.';
+comment on table public."crew_media" is 'CREW AUDIENCE. Reference photos/video the office sends TO the field — what a worker needs BEFORE and DURING the work. Never customer-facing: no portal projection selects it. Not proof of work — that is job_photos + jobs.completion_summary.';
+comment on table public."crew_message_reads" is 'High-water mark per (visit, reader). Unread is derived from it — deliberately NOT one row per message per user.';
+comment on table public."crew_messages" is 'CREW AUDIENCE (the business + the crew assigned to this visit). The conversation attached to one visit. Never customer-facing: no portal projection, no PDF, no public API selects it. Not a note — jobs.notes is the standing instruction; this is what was said and when.';
+comment on table public."dispatch_notes" is 'One note per (date, crew); crew NULL = the day-level note. Upsert on the unique constraint.';
+comment on table public."follow_ups" is 'Owner follow-up commitments: WHO (customer_id, mandatory) / WHEN (due_on, a local date) / WHY (reason) / open|done. NOT public.schedule_items (empty, unread, calendar-shaped) and NOT lib/followup.ts (the derived quote chaser). Never messages the customer — this is an owner reminder only.';
+comment on table public."job_work_sessions" is 'One stretch of work on one job on one day. jobs.actual_minutes is the sum of these (enforced by trigger). minutes = elapsed on site; labour_minutes = minutes x workers.';
+comment on table public."password_reset_requests" is 'Abuse ledger for the public password-reset endpoint. email_key = sha256(lower(trim(email))) — never the address. No user_id/email/token/IP by design.';
+comment on table public."platform_capabilities" is 'Platform-managed grants for SHARED deployment infrastructure (Stripe account, Twilio number, Resend identity). Missing row = no grants. App code reads only; rows are written by the platform operator in SQL.';
+comment on table public."platform_operators" is 'Who may issue beta invites. NOT a role system: one row today (the founding account). No client access of any kind.';
+comment on table public."portal_access_requests" is 'Abuse ledger for the public portal-link endpoint. email_key = sha256(lower(trim(email))) — never the address. No customer_id/user_id/token by design.';
+comment on table public."property_measurement_events" is 'Append-only history for property_measurements, written by trigger. No UPDATE/DELETE policy — history cannot be rewritten. Distinct from `measurements` (the lawn auto-vs-accepted accuracy log that trains neighbourhood ratios).';
+comment on table public."property_measurements" is 'THE typed measurement ledger (Measurement Engine V2). One row per (property, kind). Unit follows kind by CHECK. Legacy properties.lawn_sqft/fence_length/mulch_area/rock_area are DERIVED from here by trigger for existing pricing/portal readers — drop them once Quote V2 reads this table.';
+comment on table public."purchase_order_items" is 'PO lines. qty_received is intentionally absent — it is derived from part_movements linked by purchase_order_item_id, so stock and receipts cannot drift apart.';
+comment on table public."quote_options" is 'Mutually exclusive alternatives for one quote (Budget/Recommended/Premium). NOT additive: quotes.initial_price always equals ONE option price - the recommended one before the customer chooses, the selected one after. Cannot coexist with quote_services rows.';
+comment on table public."report_schedules" is 'Scheduled report cadences per owner. last_period_to is the idempotency key: the cron sends a closed period exactly once, however often it runs.';
+comment on table public."time_entries" is 'THE paid-time ledger. One row per shift. minutes_worked is DB-derived; hourly_rate is snapshotted at clock-in so wage changes never rewrite history. Open shift = clock_out IS NULL (at most one per technician, enforced by index).';
+comment on table public."verify_fixture_tenants" is 'Tenants whose data is created by scripts/verify-*.ts. Marker only — grants nothing, relaxes nothing. Guards read it through is_verify_fixture_tenant() and refuse to write when it answers false. Writable only by migration/service_role.';
+
+comment on column public."beta_invites"."redeemed_by" is 'Set by claim_beta_invite once the email is verified. This is what can_provision_business() reads.';
+comment on column public."beta_invites"."reserved_by" is 'The auth account created against this invite. SET NULL on user delete frees the invite for a fresh signup.';
+comment on column public."business_settings"."analytics_layout" is 'Analytics workspace layout: { "order": [widgetId], "hidden": [widgetId] }. Unknown ids ignored; missing ids append in default order.';
+comment on column public."business_settings"."business_type" is 'Trade/vertical key (registry: src/lib/trades). Selects seed data and default copy ONLY — engines never branch on it. Unknown key = neutral pack.';
+comment on column public."business_settings"."enabled_modules" is 'Feature-module keys visible in navigation (registry: src/lib/modules.ts). NULL = all modules. Core modules (dashboard) are always shown regardless.';
+comment on column public."business_settings"."gst_number" is 'GST/HST registration number (e.g. 123456789RT0001). Printed on invoices/receipts when gst_percent > 0 — CRA requires it for the customer to claim an ITC on $30+. Null = not registered.';
+comment on column public."business_settings"."module_meta" is 'Per-module install state { key: { v: installedVersion, at: ISO } } — drives the Modules update badges (registry: src/lib/modules.ts). NULL = treat everything as current.';
+comment on column public."business_settings"."opening_balance_date" is 'The date opening_bank_balance was true. Cash movements before it are ignored.';
+comment on column public."business_settings"."opening_bank_balance" is 'Bank balance as at opening_balance_date. Cash = this + every movement since.';
+comment on column public."business_settings"."opening_equity" is 'Owner capital already in the business at the opening date. NULL = unknown (never plugged).';
+comment on column public."business_settings"."ot_daily_hours" is 'Hours in a DAY after which OT applies. NULL = no daily rule (e.g. Ontario). Alberta 8, BC 8.';
+comment on column public."business_settings"."ot_multiplier" is 'Pay multiplier for overtime minutes (1.5 = time-and-a-half). Never below 1.';
+comment on column public."business_settings"."ot_weekly_hours" is 'Hours in a WORK WEEK after which OT applies. NULL = no weekly rule. Alberta 44, BC/ON 40/44.';
+comment on column public."business_settings"."pay_period" is 'weekly | biweekly | semimonthly | monthly. Drives the payroll summary window.';
+comment on column public."business_settings"."pay_period_anchor" is 'Any start date of a known period. Biweekly needs it to know WHICH two weeks; NULL falls back to the first pay_week_starts_on of 1970 (deterministic).';
+comment on column public."business_settings"."pay_week_starts_on" is '0=Sun..6=Sat. The OT WORK WEEK boundary — legally load-bearing, so it is explicit rather than assumed. Defaults to 1 (Mon) to match the existing timesheet week.';
+comment on column public."change_orders"."decided_via" is 'portal = the customer decided it themselves; owner = the owner recorded a decision taken elsewhere. Never inferred - no surface may imply a customer tapped approve when they did not.';
+comment on column public."crew_media"."message_id" is 'NULL = office reference material for the visit (the original meaning). Set = an attachment on that crew_messages row. Deleting the message takes its attachments with it.';
+comment on column public."crew_messages"."event_type" is 'NULL = a person spoke. Non-null = a system event (schedule_changed). Do not dump every mutation here: a system event may only join a conversation that already exists.';
+comment on column public."crew_messages"."user_id" is 'The BUSINESS that owns the visit — the tenant boundary. Never the crew author''s own uid.';
+comment on column public."crews"."capacity_minutes" is 'Explicit daily capacity override; NULL = derive from day window / business default.';
+comment on column public."crews"."color" is 'Palette key (lib/crews CREW_PALETTE) — board chips + map pin hues, not a hex.';
+comment on column public."crews"."day_start" is 'Crew-specific day start; NULL = business work_start_time.';
+comment on column public."crm_campaigns"."archived_at" is 'Soft delete. A hard DELETE cascades crm_campaign_log (the audit trail AND the dedupe ledger), so an undo would re-send to everyone. The cron and the manager both filter archived_at is null.';
+comment on column public."crm_campaigns"."subject" is 'Owner-written email subject. Blank → the message template''s built-in subject.';
+comment on column public."customers"."notes" is 'INTERNAL ONLY. What the office knows about this customer. Absent from get_portal_data''s customer projection, which names its columns.';
+comment on column public."customers"."phone_digits" is 'Digits-only form of phone, for search only. Generated — never write to it. Display and dial from `phone`, which keeps the owner''s own formatting.';
+comment on column public."equipment"."crew_id" is 'Crew this vehicle/equipment is assigned to for dispatch. NULL = unassigned pool.';
+comment on column public."expense_categories"."kind" is 'operating = a real business cost (P&L). owner_draw = a distribution of profit, NOT a cost: excluded from the P&L, still cash out in cash flow, and a reduction of equity on the balance sheet.';
+comment on column public."expenses"."bill_date" is 'When the cost was INCURRED (accrual date). Always set.';
+comment on column public."expenses"."is_capital" is 'This cash bought an ASSET, not an operating cost. Excluded from P&L cost; still real cash out in cash flow; the asset itself lives in fixed_assets.';
+comment on column public."expenses"."spent_at" is 'When the CASH LEFT. NULL = unpaid = accounts payable. Cash-basis reports filter on this.';
+comment on column public."fixed_assets"."expense_id" is 'The expense row this asset was bought with, when there is one. Traceability only — the P&L uses expenses.is_capital, not this link.';
+comment on column public."follow_ups"."completed_at" is 'Set iff status = ''done'', enforced by follow_ups_completion_consistent. Completing retains the row; history is never deleted.';
+comment on column public."follow_ups"."due_on" is 'A DATE, compared as a string against the owner''s LOCAL today. Never a timestamp — "Friday" must not become Thursday for a traveller.';
+comment on column public."invoices"."deposit_amount" is 'GST-inclusive amount requested up front. A deposit is a PARTIAL PAYMENT of this invoice, not a separate invoice. Percentage is derived, never stored — see lib/payments/deposit.ts.';
+comment on column public."invoices"."deposit_requested_at" is 'When the deposit request was successfully SENT to the customer. NULL = requested but not sent.';
+comment on column public."invoices"."internal_notes" is 'Private to the owner: never rendered on any PDF or shown in the portal. Home for system provenance (auto-draft origin) and the AutoPay hold flag, so customer-facing `notes` stays the customer''s and editing it cannot break hold detection.';
+comment on column public."invoices"."last_reminded_at" is 'When the automatic payment reminder last went out. Null = never reminded; the due date is the anchor instead.';
+comment on column public."invoices"."line_items_edited" is 'True once the owner hand-edits this draft''s line items in the invoice editor. syncDraftInvoiceAmounts then skips the draft so a later job-price change never silently overwrites owner-authored line_items/amount (the change-order-loss bug). Defaults false: job-derived drafts keep auto-re-pricing.';
+comment on column public."invoices"."reminder_count" is 'How many automatic payment reminders have been sent. Compare-and-swapped by /api/cron/invoice-reminders to guarantee at-most-once, and capped by the owner''s maximum.';
+comment on column public."job_line_items"."change_order_id" is 'Set only by change_order_apply_approval(). Its presence means this money exists BECAUSE a customer approved a change order - never hand-write it.';
+comment on column public."jobs"."completion_issue" is 'INTERNAL ONLY. What the field found that needs attention (leaking sprinkler head, wants a hedge quote). MUST NOT be selected by get_portal_data or reach any customer surface.';
+comment on column public."jobs"."completion_summary" is 'CUSTOMER-VISIBLE. What was done, written for the person who paid for it. Selected by get_portal_data and rendered verbatim in the portal visit history. Never put internal remarks here.';
+comment on column public."jobs"."crew_id" is 'Which crew runs this visit. NULL = unassigned (single-crew default). Orthogonal to crew_size (headcount).';
+comment on column public."jobs"."notes" is 'INTERNAL ONLY. The access/instruction note for whoever does the work (gate code, where to park). Shipped to the crew by crew_day. Removed from get_portal_data 2026-08-11 — it was being rendered to customers. Customer-facing words go in completion_summary.';
+comment on column public."part_movements"."purchase_order_item_id" is 'Receipt link. A kind=restock movement carrying this IS the receipt of that PO line; received qty is sum(qty) over these rows (lib/purchasing.receivedQty), never a stored column. CASCADE: deleting the line reverses the stock.';
+comment on column public."parts"."supplier_id" is 'Vendor entity. Nullable. The legacy parts.supplier text is kept as a fallback and is NOT backfilled — resolve display via lib/suppliers.supplierLabel.';
+comment on column public."payments"."quote_id" is 'The quote/booking a PRE-INVOICE deposit secures (both legs of the recordDeposit pair carry it). Null on ordinary invoice payments. The scheduling gate sums signed cash rows (isCashRow) by this — a Stripe refund writes a negative row with the same quote_id, so readiness derives honestly.';
+comment on column public."properties"."internal_notes" is 'Private to the owner and crew: never returned by get_portal_data and never rendered in the customer portal. Home for access and site facts about the PLACE (gate side, dog, shut-off/controller location, parking). Customer-facing property notes stay in `notes`; private notes about the PERSON stay in customers.notes.';
+comment on column public."property_measurement_events"."seq" is 'Monotonic tiebreaker. ORDER BY seq — created_at can tie at microsecond resolution.';
+comment on column public."quote_services"."kind" is 'What this line IS: service (labour you perform) or material (goods you supply). A material line is an ESTIMATE ON THE QUOTE — quantity x unit_price, same arithmetic, same discount engine. It never reserves, allocates or deducts stock, and carries no cost: see RUN-2026-07-16-quote-materials.sql.';
+comment on column public."quote_services"."service_type" is 'The line''s display name. For kind=service, the service performed; for kind=material, the material supplied ("Mulch"). Historical name — not a claim that the line is a service.';
+comment on column public."quotes"."accepted_price" is 'SNAPSHOT of what the customer agreed to pay, captured at acceptance. Deliberately a copy, not a reference to total: editing a quote afterwards must never rewrite what was agreed. NULL = accepted before this column existed, or accepted by a path that does not know. Never guess it.';
+comment on column public."quotes"."deposit_override_at" is 'Owner explicitly scheduled without the required deposit collected (the confirm dialog''s stamp). The deposit remains owed — this records the decision, it does not waive the money.';
+comment on column public."quotes"."deposit_type" is 'Scheduling-deposit rule: ''percent'' (deposit_value = % of the accepted price) or ''fixed'' (deposit_value = dollars). NULL = no deposit required — the quote behaves exactly as before this feature existed. The dollar figure for percent is DERIVED at read time (lib/payments/depositGate), never stored.';
+comment on column public."quotes"."internal_notes" is 'INTERNAL ONLY. The owner''s private margin on this quote — price floor, who to call before changing scope, why it was priced this way. MUST NOT be selected by get_portal_data or rendered by any PDF. Its customer-facing counterpart is quotes.notes.';
+comment on column public."quotes"."notes" is 'CUSTOMER-VISIBLE. The scope note the customer reads — printed in QuotePDF''s Notes box and selected by get_portal_data. Never put a gate code or a price floor here; that is quotes.internal_notes.';
+comment on column public."quotes"."preferred_date" is 'The customer''s preferred work date — a REQUEST, never a booking. A real visit exists only when the owner schedules one. Written only by portal_set_scheduling_preference while the quote is accepted.';
+comment on column public."quotes"."renewal_of_recurrence_id" is 'The service plan this quote renews. Set once, points backwards; the renewed plan is a NEW job_recurrences row and the old one is never modified. lib/renewals requires this link plus status=accepted before any visits are created.';
+comment on column public."quotes"."selected_cadence" is 'Which cadence was actually bought (one_time|weekly|biweekly|monthly). NULL = nobody said — do NOT infer it from whichever price column is populated; that is the bug this column exists to kill.';
+comment on column public."quotes"."selected_option_id" is 'The option the customer approved. Composite FK guarantees it belongs to THIS quote; ON DELETE RESTRICT keeps the approved alternative on the record permanently.';
+comment on column public."quotes"."total" is 'GENERATED = initial_price + travel_fee. NULL when the quote has no price — deliberately NOT 0, because an unpriced quote is not a free one. It must never fall back to hours*crew_size*rate again: that fabricated a price the pricing engine never produced, and two customers were billed on it (see RUN-2026-07-16e).';
+comment on column public."quotes"."valid_until" is 'Calendar date this quote stops being valid. Null = never expires (incl. every quote sent before expiry existed). ''expired'' is derived for display by lib/quoteStatus — it is never stored in quotes.status.';
+comment on column public."report_schedules"."last_period_to" is 'The `to` date of the last period SENT. Keyed on the period, not the clock, so retries and missed runs cannot double-send or drift.';
+comment on column public."report_schedules"."recipient" is 'NULL = defer to business_settings.email_primary (a pointer cannot go stale).';
+comment on column public."service_requests"."dedup_key" is 'Set by portal_submit_request. With service_requests_open_dedup_idx it makes a repeated submission of the same ask a no-op while the first is still open.';
+comment on column public."service_requests"."from_portal" is 'True only for rows created by portal_submit_request (incl. its portal_request_service wrapper) — a customer acting in their own portal. Website leads, online bookings and system notes stay false.';
+comment on column public."service_requests"."photos" is 'booking-uploads STORAGE PATHS (never URLs) the customer attached. The bucket is named in application code at render time; see portal_request_photos_ok for the enforced shape.';
+comment on column public."service_templates"."is_favorite" is 'Owner shortlist — surfaced first in the quote builder picker.';
+comment on column public."service_templates"."material_cost" is 'Material cost per unit. NULL = not set; never treat as 0.';
+comment on column public."service_templates"."recurrence" is 'Recurrence eligibility: one_time = never suggest recurring; recurring_ok = recurrence suggestions allowed; usually_recurring = this service is normally a recurring plan. NULL = owner has not said (suggestions then require behavioural cadence evidence).';
+comment on column public."service_templates"."unit_cost" is 'What delivering one unit costs (labour/subcontract). NULL = not set; never treat as 0.';
+comment on column public."technicians"."archived_at" is 'Soft-archive: set when the technician leaves the roster (hidden everywhere, record preserved). NULL = active. Removing a technician must archive, never delete — their time_entries/wage_history/pto_entries are statutory records.';
+comment on column public."technicians"."auth_user_id" is 'The Supabase auth user this employee signs in as. NULL = records-only (no app access). Unique across the whole project: one login is one employee of one business.';
+comment on column public."technicians"."hourly_wage" is 'Default pay rate for the NEXT clock-in. Historical cost lives on time_entries.hourly_rate (snapshot) — changing this never rewrites past shifts.';
+comment on column public."technicians"."invite_code" is 'One-time join code the owner hands out. Cleared the moment it is redeemed.';
+comment on column public."technicians"."invite_sent_at" is 'When the owner last generated a setup link for this employee. Cleared on revoke. Paired with auth.users.last_sign_in_at (via crew_access_states) to tell "invited" from "active".';
+comment on column public."technicians"."pto_annual_hours" is 'Annual PTO allowance in hours. NULL = no allowance configured -> usage is tracked but no balance is claimed (never guess someone''s entitlement).';
+comment on column public."technicians"."status" is 'Live dispatch status, owner-flipped from the board (no field login yet).';
+comment on column public."wage_history"."created_at" is 'clock_timestamp() (real wall clock), NOT now() — now() is transaction start and ties every row written in one transaction.';
+comment on column public."wage_history"."seq" is 'Monotonic tiebreaker. ORDER BY seq for a provably total audit order; created_at can tie at microsecond resolution.';
+
+comment on function public."crew_employer"() is 'The owner user_id this signed-in employee works for, or NULL. NULL for anon, for owners, and for anyone deactivated/archived — every crew RLS predicate fails closed on it.';
+comment on function public."crew_set_completion_record"(p_job_id uuid, p_summary text, p_issue text) is 'Crew Mode: record what was done (customer-visible) and what needs attention (internal) on an assigned, non-cancelled visit. Typed parameters only — writes exactly two columns and no lifecycle field. Re-checks employer + crew because DEFINER runs past RLS.';
+comment on function public."find_portal_access_customers"(p_email text) is 'Portal-link recovery lookup. Normalises both sides (lower+trim). NOT executable by anon/authenticated — service-role only, or the public anon key becomes a customer-existence oracle.';
+comment on function public."is_verify_fixture_tenant"() is 'True when the CALLER is a verification fixture tenant. Answers only about auth.uid(); takes no arguments so it cannot be used to enumerate or probe. Consulted by scripts/ only — no trigger, policy or application path reads it.';
+comment on function public."job_session_minutes"(p_job_id uuid) is 'Sum of a job''s work-session minutes. NULL when it has none (unknown, not zero).';
+comment on function public."owner_select_quote_option"(p_quote_id uuid, p_option_id uuid) is 'Owner records the option a customer chose by phone/in person. Same core, same money rule as portal_accept_quote - only auth.uid() proves access instead of a token.';
+comment on function public."portal_add_contact"(p_token text, p_phone text, p_email text) is 'Portal self-service: fill a MISSING customer phone/email from a valid portal token. Fills only - never overwrites a populated field (an email change is an identity change). Never touches sms_opt_in/email_opt_in/message_prefs. Refuses a value another customer of the same owner already holds. Returns the row state read back after the write.';
+comment on function public."portal_request_photos_ok"(p text[]) is 'Validator for service_requests.photos: at most 6 elements, each a booking-uploads path of the shape portal/<uuid>/<uuid>.<ext>. Used by a CHECK constraint, so it holds no matter which door writes.';
+comment on function public."portal_set_scheduling_preference"(p_token text, p_quote_id uuid, p_date date, p_date_2 date, p_timing text, p_note text) is 'THE writer of a customer''s scheduling preference. Token proves the customer; quote must be theirs and ''accepted''. A preference is a request — it never creates, moves, or implies a visit. All-null clears it.';
+comment on function public."quote_apply_option_choice"(p_quote_id uuid, p_option_id uuid) is 'THE single writer of quotes.selected_option_id and the option-derived price. Carries no authorisation - callers must prove access first. Deliberately granted to no role.';
+comment on function public."schema_contract"() is 'Full catalogue snapshot for npm run schema:contract. SERVICE_ROLE ONLY — it returns every RLS predicate and SECURITY DEFINER body, i.e. the product''s authorization logic. Use schema_fingerprint() (hashes only) for anything that merely needs to detect change.';
+comment on function public."schema_fingerprint"() is 'Counts + md5 per schema section, for npm run verify:schema. Returns NO names and NO data — only shape hashes, so it is safe to expose to any signed-in caller. The instrument that makes repo-vs-production drift visible; before it existed, 30 migrations reached production with no repo file and nothing reported it.';
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 10 · REALTIME
+-- 30 tables published to supabase_realtime, and the 27 tables set to
+-- REPLICA IDENTITY FULL so an UPDATE payload carries the old row.
+-- ══════════════════════════════════════════════════════════════════════════
+
+do $$ begin
+  if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    create publication supabase_realtime;
+  end if;
+end $$;
+
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='content_pieces') then
+    alter publication supabase_realtime add table public."content_pieces";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='conversations') then
+    alter publication supabase_realtime add table public."conversations";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='crews') then
+    alter publication supabase_realtime add table public."crews";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='crm_campaign_log') then
+    alter publication supabase_realtime add table public."crm_campaign_log";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='crm_campaigns') then
+    alter publication supabase_realtime add table public."crm_campaigns";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='customers') then
+    alter publication supabase_realtime add table public."customers";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='day_statuses') then
+    alter publication supabase_realtime add table public."day_statuses";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='dispatch_notes') then
+    alter publication supabase_realtime add table public."dispatch_notes";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='inbound_events') then
+    alter publication supabase_realtime add table public."inbound_events";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='invoices') then
+    alter publication supabase_realtime add table public."invoices";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='jobs') then
+    alter publication supabase_realtime add table public."jobs";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='marketing_assets') then
+    alter publication supabase_realtime add table public."marketing_assets";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='marketing_campaigns') then
+    alter publication supabase_realtime add table public."marketing_campaigns";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='messages') then
+    alter publication supabase_realtime add table public."messages";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='notifications') then
+    alter publication supabase_realtime add table public."notifications";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='payment_methods') then
+    alter publication supabase_realtime add table public."payment_methods";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='payments') then
+    alter publication supabase_realtime add table public."payments";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='properties') then
+    alter publication supabase_realtime add table public."properties";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='property_intelligence') then
+    alter publication supabase_realtime add table public."property_intelligence";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='property_twin') then
+    alter publication supabase_realtime add table public."property_twin";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='publish_jobs') then
+    alter publication supabase_realtime add table public."publish_jobs";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='quotes') then
+    alter publication supabase_realtime add table public."quotes";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='referrals') then
+    alter publication supabase_realtime add table public."referrals";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='schedule_items') then
+    alter publication supabase_realtime add table public."schedule_items";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='service_requests') then
+    alter publication supabase_realtime add table public."service_requests";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='social_connections') then
+    alter publication supabase_realtime add table public."social_connections";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='technicians') then
+    alter publication supabase_realtime add table public."technicians";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='time_entries') then
+    alter publication supabase_realtime add table public."time_entries";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='webhook_deliveries') then
+    alter publication supabase_realtime add table public."webhook_deliveries";
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='website_leads') then
+    alter publication supabase_realtime add table public."website_leads";
+  end if;
+end $$;
+
+alter table public."content_pieces" replica identity full;
+alter table public."conversations" replica identity full;
+alter table public."crews" replica identity full;
+alter table public."crm_campaign_log" replica identity full;
+alter table public."crm_campaigns" replica identity full;
+alter table public."customers" replica identity full;
+alter table public."day_statuses" replica identity full;
+alter table public."dispatch_notes" replica identity full;
+alter table public."inbound_events" replica identity full;
+alter table public."invoices" replica identity full;
+alter table public."jobs" replica identity full;
+alter table public."marketing_assets" replica identity full;
+alter table public."marketing_campaigns" replica identity full;
+alter table public."messages" replica identity full;
+alter table public."notifications" replica identity full;
+alter table public."payment_methods" replica identity full;
+alter table public."payments" replica identity full;
+alter table public."property_intelligence" replica identity full;
+alter table public."property_twin" replica identity full;
+alter table public."publish_jobs" replica identity full;
+alter table public."quotes" replica identity full;
+alter table public."referrals" replica identity full;
+alter table public."schedule_items" replica identity full;
+alter table public."service_requests" replica identity full;
+alter table public."social_connections" replica identity full;
+alter table public."technicians" replica identity full;
+alter table public."webhook_deliveries" replica identity full;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 11 · STORAGE
+-- 7 buckets and 21 storage policies.
+-- public=false is a security decision, not a default: crew-media is private because
+-- job-photos being public is what made a private bucket necessary in the first place.
+-- Buckets are created empty — the FILES in them are a separate restore.
+-- ══════════════════════════════════════════════════════════════════════════
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types, avif_autodetection)
+values ('booking-uploads', 'booking-uploads', true, null, null, false)
+on conflict (id) do update set public = excluded.public, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types, avif_autodetection)
+values ('branding', 'branding', true, null, null, false)
+on conflict (id) do update set public = excluded.public, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types, avif_autodetection)
+values ('crew-media', 'crew-media', false, 52428800, array['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'video/mp4', 'video/quicktime', 'video/webm']::text[], false)
+on conflict (id) do update set public = excluded.public, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types, avif_autodetection)
+values ('equipment-docs', 'equipment-docs', false, null, null, false)
+on conflict (id) do update set public = excluded.public, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types, avif_autodetection)
+values ('expense-receipts', 'expense-receipts', false, null, null, false)
+on conflict (id) do update set public = excluded.public, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types, avif_autodetection)
+values ('job-photos', 'job-photos', true, null, null, false)
+on conflict (id) do update set public = excluded.public, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types, avif_autodetection)
+values ('lead-uploads', 'lead-uploads', true, null, null, false)
+on conflict (id) do update set public = excluded.public, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists "booking-uploads: read own" on storage."objects";
+create policy "booking-uploads: read own" on storage."objects" as permissive for select to authenticated
+  using ((bucket_id = 'booking-uploads'::text));
+drop policy if exists "booking_uploads_public_insert" on storage."objects";
+create policy "booking_uploads_public_insert" on storage."objects" as permissive for insert to anon, authenticated
+  with check ((bucket_id = 'booking-uploads'::text));
+drop policy if exists "branding: insert own" on storage."objects";
+create policy "branding: insert own" on storage."objects" as permissive for insert to authenticated
+  with check (((bucket_id = 'branding'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)));
+drop policy if exists "branding: read own" on storage."objects";
+create policy "branding: read own" on storage."objects" as permissive for select to authenticated
+  using (((bucket_id = 'branding'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)));
+drop policy if exists "branding: update own" on storage."objects";
+create policy "branding: update own" on storage."objects" as permissive for update to authenticated
+  using (((bucket_id = 'branding'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)))
+  with check (((bucket_id = 'branding'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)));
+drop policy if exists "crew-media: owner deletes own" on storage."objects";
+create policy "crew-media: owner deletes own" on storage."objects" as permissive for delete to public
+  using (((bucket_id = 'crew-media'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)));
+drop policy if exists "crew-media: owner inserts own" on storage."objects";
+create policy "crew-media: owner inserts own" on storage."objects" as permissive for insert to public
+  with check (((bucket_id = 'crew-media'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)));
+drop policy if exists "crew-media: owner reads own" on storage."objects";
+create policy "crew-media: owner reads own" on storage."objects" as permissive for select to public
+  using (((bucket_id = 'crew-media'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)));
+drop policy if exists "crew-media: owner updates own" on storage."objects";
+create policy "crew-media: owner updates own" on storage."objects" as permissive for update to public
+  using (((bucket_id = 'crew-media'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)));
+drop policy if exists "equipment-docs: delete own" on storage."objects";
+create policy "equipment-docs: delete own" on storage."objects" as permissive for delete to public
+  using (((bucket_id = 'equipment-docs'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)));
+drop policy if exists "equipment-docs: insert own" on storage."objects";
+create policy "equipment-docs: insert own" on storage."objects" as permissive for insert to public
+  with check (((bucket_id = 'equipment-docs'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)));
+drop policy if exists "equipment-docs: read own" on storage."objects";
+create policy "equipment-docs: read own" on storage."objects" as permissive for select to public
+  using (((bucket_id = 'equipment-docs'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)));
+drop policy if exists "equipment-docs: update own" on storage."objects";
+create policy "equipment-docs: update own" on storage."objects" as permissive for update to public
+  using (((bucket_id = 'equipment-docs'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)));
+drop policy if exists "expense-receipts: delete own" on storage."objects";
+create policy "expense-receipts: delete own" on storage."objects" as permissive for delete to public
+  using (((bucket_id = 'expense-receipts'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)));
+drop policy if exists "expense-receipts: insert own" on storage."objects";
+create policy "expense-receipts: insert own" on storage."objects" as permissive for insert to public
+  with check (((bucket_id = 'expense-receipts'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)));
+drop policy if exists "expense-receipts: read own" on storage."objects";
+create policy "expense-receipts: read own" on storage."objects" as permissive for select to public
+  using (((bucket_id = 'expense-receipts'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)));
+drop policy if exists "expense-receipts: update own" on storage."objects";
+create policy "expense-receipts: update own" on storage."objects" as permissive for update to public
+  using (((bucket_id = 'expense-receipts'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)));
+drop policy if exists "job-photos: delete own" on storage."objects";
+create policy "job-photos: delete own" on storage."objects" as permissive for delete to public
+  using (((bucket_id = 'job-photos'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)));
+drop policy if exists "job-photos: insert own" on storage."objects";
+create policy "job-photos: insert own" on storage."objects" as permissive for insert to public
+  with check (((bucket_id = 'job-photos'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)));
+drop policy if exists "job-photos: read own" on storage."objects";
+create policy "job-photos: read own" on storage."objects" as permissive for select to authenticated
+  using (((bucket_id = 'job-photos'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)));
+drop policy if exists "job-photos: update own" on storage."objects";
+create policy "job-photos: update own" on storage."objects" as permissive for update to public
+  using (((bucket_id = 'job-photos'::text) AND ((storage.foldername(name))[1] = (auth.uid())::text)));
+
+-- ── end of baseline ─────────────────────────────────────────────────────────

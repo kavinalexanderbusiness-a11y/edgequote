@@ -685,13 +685,19 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
 
           Only on a SAVED visit — a work session needs a job id to point at, and
           there is none until the visit exists. */}
+      {/* id: the landing target for the + sheet's "Work time" door
+          (?job=<id>&panel=time — lib/quickAdd owns the vocabulary). It lives on
+          the wrapper rather than inside the panel so the anchor belongs to the
+          form that decides whether the panel exists at all. */}
       {isEdit && excludeJobId && ownerId && (status === 'in_progress' || status === 'completed') && (
+        <div id="job-work-sessions" className="scroll-mt-4">
         <WorkSessionsPanel
           job={{ id: excludeJobId, user_id: ownerId, crew_size: Number(watch('crew_size')) || 1 }}
           // The total the DATABASE computed, not one this form worked out. Kept
           // in the form so the estimate-vs-actual comparison below re-reads
           // against the same number every other surface shows.
           onTotalChange={m => setValue('actual_minutes', m ?? 0, { shouldValidate: false })} />
+        </div>
       )}
 
       {status === 'completed' && (
@@ -732,7 +738,13 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
               Only on a SAVED visit: an expense needs a job id to point at, and
               there is none until the visit exists. Creating one is not the
               moment to think about receipts anyway. */}
+          {/* id: the landing target for the + sheet's "Cost" door
+              (?job=<id>&panel=cost). Offered only on a completed visit, which is
+              exactly the condition this block already carries — lib/quickAdd
+              refuses to list the door on any other status rather than sending a
+              tap to a panel that isn't mounted. */}
           {isEdit && excludeJobId && (
+            <div id="job-cost" className="scroll-mt-4">
             <JobCostPanel
               job={{
                 id: excludeJobId,
@@ -741,6 +753,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
                 actual_minutes: Number(watch('actual_minutes')) || null,
                 crew_size: Number(watch('crew_size')) || null,
               }} />
+            </div>
           )}
         </div>
       )}

@@ -36,7 +36,7 @@ const check = (n: string, cond: boolean, d = '') => cond ? ok(n) : fail(n, d)
 
 const ROOT = process.cwd()
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8')
-const MIG = 'supabase/RUN-2026-08-10-tenant-rpc-grants.sql'
+const MIG = 'supabase/archive/run/RUN-2026-08-10-tenant-rpc-grants.sql'
 
 // ── 1. The two public-reachable DEFINER functions stay revoked ───────────────
 console.log('\n═══ A SECURITY DEFINER function is not public API ═══')

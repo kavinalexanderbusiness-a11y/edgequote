@@ -69,11 +69,27 @@ console.log('\n═══ A second line is not a second form ═══')
 check('the per-line extras sit behind a disclosure',
   (CODE.match(/<details className="group\/line">/g) || []).length === 2,
   'both the service line and the material line need one')
+// ⚠️ These two used to be character-window regexes anchored on the literal copy
+// "Duration (min)". Both broke when Session 54 swapped that box for the shared
+// Minutes/Hours/Workdays control — a correct change, reported as a defect,
+// because the assertion was about the WORDING and the window LENGTH rather than
+// about containment. Same trap as the SMS prose locks. The blocks are extracted
+// properly now, so what is asserted is what was always meant: these controls are
+// INSIDE the disclosure, however long it grows and whatever the field is called.
+const detailBlocks = (() => {
+  const out: string[] = []
+  const open = '<details className="group/line">'
+  for (let i = CODE.indexOf(open); i !== -1; i = CODE.indexOf(open, i + 1)) {
+    const end = CODE.indexOf('</details>', i)
+    if (end !== -1) out.push(CODE.slice(i, end))
+  }
+  return out
+})()
 check('Duration is one of the things hidden',
-  /<details className="group\/line">[\s\S]{0,900}?Duration \(min\)/.test(CODE),
+  detailBlocks.some(b => /<DurationField|Duration \(min\)/.test(b)),
   'it affects scheduling, not the price — it should not sit in the money row')
 check('the discount + notes row is hidden too',
-  (CODE.match(/<details className="group\/line">[\s\S]{0,1200}?lineDiscountRow\(i\)/g) || []).length === 2)
+  detailBlocks.filter(b => b.includes('lineDiscountRow(i)')).length === 2)
 check('quantity, unit and unit price stay visible',
   /grid grid-cols-3 gap-3">[\s\S]{0,700}?qtyLabelFor[\s\S]{0,700}?unit_price/.test(CODE),
   'these three decide the money and must never move behind a disclosure')

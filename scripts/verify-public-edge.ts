@@ -181,7 +181,7 @@ if (has(NOTIFY)) {
 
 // ── 2. The migration that closed the DB half is committed ────────────────────
 console.log('\n═══ A live database change is explained by a committed migration ═══')
-const MIG = 'supabase/RUN-2026-08-10-public-edge-hardening.sql'
+const MIG = 'supabase/archive/run/RUN-2026-08-10-public-edge-hardening.sql'
 check('the public-edge migration is committed', has(MIG),
   'the live database was changed; the repo must carry the migration that explains it')
 if (has(MIG)) {

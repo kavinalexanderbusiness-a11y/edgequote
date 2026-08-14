@@ -35,6 +35,7 @@ import { resolvePrefs, prefSummary, hasAnyPref, monthShort } from '@/lib/prefere
 import { SchedulePrefsFields, PrefsDraft, EMPTY_DRAFT, toDraft, draftToRow } from '@/components/customers/SchedulePrefsFields'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { DetailHeader } from '@/components/layout/DetailHeader'
+import { usePublishQuickAddContext } from '@/components/layout/QuickAddProvider'
 import { Avatar } from '@/components/ui/Avatar'
 import { Modal } from '@/components/ui/Modal'
 import { CustomerForm } from '@/components/customers/CustomerForm'
@@ -652,6 +653,19 @@ export default function CustomerDetailPage() {
     [tlSources, quotes, jobs, invoices, gstPercent],
   )
 
+  // Tell the mobile + who is on screen, so "Quote" and "Visit" arrive already
+  // knowing. Published as null until the row is actually here — an unpublished
+  // context gives the plain sheet, which is the honest answer while loading.
+  // `properties` is ordered is_primary first, so [0] is the address of record.
+  // ⚠️ Above the early returns: a hook that runs conditionally is a hook that
+  // changes order between renders.
+  usePublishQuickAddContext(useMemo(() => (customer ? {
+    kind: 'customer' as const,
+    customerId: customer.id,
+    customerName: customer.name,
+    propertyId: properties[0]?.id ?? null,
+  } : null), [customer, properties]))
+
   if (loading) return <PageContainer><SkeletonTiles count={4} /><SkeletonRows count={5} /></PageContainer>
   // Cached customer (if any) keeps showing on a revalidation blip; only when there's
   // genuinely nothing to show do we branch error-vs-not-found.
@@ -793,10 +807,22 @@ export default function CustomerDetailPage() {
         <Banner key={i} tone={w.tone === 'red' ? 'danger' : 'warn'} icon={AlertTriangle}>{w.text}</Banner>
       ))}
 
-      {/* Identity + quick actions */}
+      {/* Identity + quick actions.
+          ⭐ ON A PHONE THE ACTIONS COME BEFORE THE DOSSIER. Measured at 375×844:
+          Call sat at y=380 under a header, a badge row, a contact line and a
+          wrapping strip of up to eight metadata chips (source · referred by ·
+          owes · next visit · open quotes · last serviced · birthday ·
+          anniversary). Those chips are things to READ; Call, Message, Quote and
+          Schedule are the things you opened this page to DO — and the page is
+          most often opened with the customer already on the phone.
+          Flex `order` rather than a second copy of either block: one DOM, no
+          hydration seam, and `sm:` puts the desktop layout back exactly as it
+          was (where nothing is below the fold anyway).
+          gap-4 rather than space-y-4 on purpose — space-y hangs its margin on
+          DOM order, which `order` then moves out from under it. */}
       <Card>
-        <CardBody className="space-y-4">
-          <div className="flex items-start gap-4">
+        <CardBody className="flex flex-col gap-4">
+          <div className="order-1 flex items-start gap-4">
             <Avatar name={customer.name} seed={customer.id} size="lg" />
             <div className="min-w-0 flex-1">
               {/* Name lives in the DetailHeader above — here we lead with status +
@@ -837,7 +863,15 @@ export default function CustomerDetailPage() {
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-x-3 gap-y-1 mt-1.5 flex-wrap">
+            </div>
+          </div>
+
+          {/* The dossier strip — everything above is WHO, this is WHAT WE KNOW.
+              Lifted out of the avatar column so `order` can move it below the
+              actions on a phone; `sm:ml-16` restores the desktop indent it had
+              inside that column (avatar w-12 + gap-4). */}
+          <div className="order-3 sm:order-2 sm:ml-16 -mt-2 sm:-mt-3">
+              <div className="flex items-center gap-x-3 gap-y-1 flex-wrap">
                 {/* THE source vocabulary lives in lib/attribution — this used to run
                     its own inline regex ('formspree|webhook|api|zapier' → 'Website'),
                     which was a second mapping of the same question in a file with no
@@ -886,11 +920,12 @@ export default function CustomerDetailPage() {
                   <span className="text-xs text-ink-faint flex items-center gap-1"><PartyPopper className="w-3 h-3" /> {mdLabel(customer.anniversary)}</span>
                 )}
               </div>
-            </div>
           </div>
 
-          {/* Quick actions — one tap, large targets */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {/* Quick actions — one tap, large targets. order-2 on a phone puts
+              them directly under the name and contact line; sm: restores the
+              desktop order (dossier, then actions). */}
+          <div className="order-2 sm:order-3 grid grid-cols-2 sm:grid-cols-4 gap-2">
             <Link href={`/dashboard/quotes/new?customer=${customer.id}`} className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium bg-accent text-black hover:opacity-90 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
               <FilePlus className="w-4 h-4" /> New quote
             </Link>

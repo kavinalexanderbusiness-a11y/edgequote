@@ -9,6 +9,7 @@
 // fail, because "what happens when row 214 fails" is the question the owner
 // most needs answered honestly and the one no manual test reaches.
 
+import { baselineSql } from './lib/schema-source'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import {
@@ -375,10 +376,20 @@ H('14. TENANCY — the file can never choose the business')
   ok('the id is minted, never taken from the row', src.includes('crypto.randomUUID()'))
   // The real guarantee is in the database, not here — pinned so a future
   // migration cannot quietly drop it.
-  const schema = readFileSync(join(__dirname, '..', 'supabase', 'schema.sql'), 'utf8').replace(/\r\n?/g, '\n')
-  ok('customer_imports carries RLS', schema.includes('alter table public.customer_imports enable row level security'))
-  ok('its insert policy is own-row only', schema.includes('"customer_imports: insert own" on public.customer_imports\n  for insert with check (auth.uid() = user_id)'))
-  ok('anon holds no grant on the import audit', schema.includes('revoke all on public.customer_imports from anon'))
+  // 2026-08-14: reads the generated baseline instead of the retired schema.sql
+  // snapshot, so these now pin what the DATABASE enforces rather than what a
+  // seven-week-old file claimed. The claims are unchanged; only the source's
+  // rendering is, so the matches are quoting-agnostic (the generator emits
+  // public."customer_imports", pg_get_* style, not public.customer_imports).
+  const schema = baselineSql()
+  const T = '(?:public\\.)?"?customer_imports"?'
+  ok('customer_imports carries RLS',
+    new RegExp(`alter table ${T} enable row level security`, 'i').test(schema))
+  ok('its insert policy is own-row only',
+    new RegExp(`create policy "customer_imports: insert own" on ${T}[\\s\\S]{0,160}?for insert[\\s\\S]{0,120}?with check \\(+auth\\.uid\\(\\) = user_id\\)+`, 'i').test(schema))
+  ok('anon holds no grant on the import audit',
+    new RegExp(`revoke all on (?:table )?${T} from [^;]*\\banon\\b`, 'i').test(schema)
+    && !new RegExp(`grant [^;]+ on (?:table )?${T} to [^;]*\\banon\\b`, 'i').test(schema))
   ok('the audit has NO update policy (append-only)', !schema.includes('"customer_imports: update'))
   ok('the audit has NO delete policy (append-only)', !schema.includes('"customer_imports: delete'))
 }

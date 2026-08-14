@@ -27,7 +27,7 @@
 //
 // Underneath both, since 2026-08-11, all three job pointers carry a COMPOSITE
 // foreign key `(job_id, user_id) → jobs(id, user_id)`
-// (supabase/RUN-2026-08-11c-job-cost-tenancy.sql). Before it, RLS proved who
+// (supabase/archive/run/RUN-2026-08-11c-job-cost-tenancy.sql). Before it, RLS proved who
 // owned the EXPENSE and the foreign key proved the job EXISTED, and nothing
 // proved they were the same business — so a cost could be attached to another
 // tenant's visit. That is now a row that cannot exist, enforced by the storage

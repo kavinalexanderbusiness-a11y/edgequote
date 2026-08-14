@@ -9,6 +9,7 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { ConversationThread } from '@/components/messages/ConversationThread'
 import { ConversationInfo } from '@/components/messages/ConversationInfo'
 import { LeadCard } from '@/components/messages/LeadCard'
+import { RequestCard } from '@/components/messages/RequestCard'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { Modal } from '@/components/ui/Modal'
 import { CustomerPicker } from '@/components/ui/CustomerPicker'
@@ -25,7 +26,7 @@ import { cn } from '@/lib/utils'
 import {
   Loader2, Inbox, User, ArrowLeft, MessageSquare, FileText, X, Plus,
   Archive, ArchiveRestore, Pin, PinOff, BellOff, Bell, MailOpen, Trash2, MoreVertical, Reply,
-  MapPin, Wrench, Receipt, Globe, Sparkles, Mail, AlarmClock, Tag, CalendarClock, UserCheck, Keyboard, AlertTriangle,
+  MapPin, Wrench, Receipt, Globe, Sparkles, Mail, AlarmClock, Tag, CalendarClock, UserCheck, Keyboard, AlertTriangle, MessageSquarePlus,
 } from 'lucide-react'
 
 // Apple-Messages-style inbox that stays a CRM. Archive is a FLAG — nothing is
@@ -68,7 +69,7 @@ function snoozeDate(k: 'tomorrow' | 'threedays' | 'nextweek'): Date {
 // Type axis (one hub): All / Needs reply / SMS / Portal / Website Leads /
 // Archived. Needs-reply is the triage view — every conversation whose last word
 // was the customer's — so "who's waiting on me?" is one tap, not a scan.
-type Filter = 'all' | 'needs_reply' | 'sms' | 'portal' | 'website_lead' | 'snoozed' | 'archived'
+type Filter = 'all' | 'needs_reply' | 'sms' | 'portal' | 'website_lead' | 'requests' | 'snoozed' | 'archived'
 // The pills are the STATE axis — where a conversation is in your day. The two
 // CHANNEL pills that used to sit here (SMS, Portal) were strict subsets of All:
 // for a small business "SMS" is All minus a handful of leads, so the owner had
@@ -79,6 +80,11 @@ type Filter = 'all' | 'needs_reply' | 'sms' | 'portal' | 'website_lead' | 'snooz
 const FILTERS: { key: Filter; label: string; icon: typeof Inbox }[] = [
   { key: 'all', label: 'All', icon: Inbox },
   { key: 'needs_reply', label: 'Needs reply', icon: Reply },
+  // Requests earns its pill only while one is OPEN (see the pill row), on the
+  // same rule as Snoozed. It answers the one question the other pills cannot:
+  // reading a request clears its unread, so "needs reply" empties while the
+  // customer is still waiting for the work they asked for.
+  { key: 'requests', label: 'Requests', icon: MessageSquarePlus },
   { key: 'website_lead', label: 'Website leads', icon: Sparkles },
   // Snoozed renders only while something IS snoozed (see the pill row) — an
   // empty state pill would be noise the other 95% of the time.
@@ -105,11 +111,18 @@ const nameOf = (c: Convo) => c.customers?.name || c.customer_name || 'Unknown'
 const phoneOf = (c: Convo) => c.customers?.phone ?? c.customer_phone ?? null
 
 // Does a conversation still belong in this filter after a change? (optimistic removal)
-function inFilter(c: Convo, f: Filter): boolean {
+// `openReq` is the set of customers with an open portal request — passed in
+// rather than read from a module global so this stays a pure predicate.
+function inFilter(c: Convo, f: Filter, openReq?: Set<string>): boolean {
   if (f === 'archived') return !!c.archived_at
   if (c.archived_at) return false
   if (f === 'snoozed') return isSnoozed(c)
   if (isSnoozed(c)) return false   // snoozed rows leave every active view until they wake
+  // A request stays in this view until it is CLOSED, not until it is read —
+  // that is the whole point of the pill, so unread/last_direction are irrelevant
+  // here. An unknown set means "we don't know yet", and claiming membership we
+  // can't support would silently drop the row the owner is looking at.
+  if (f === 'requests') return !!openReq && !!c.customer_id && openReq.has(c.customer_id)
   if (f === 'all') return true
   if (f === 'needs_reply') return c.last_direction === 'inbound'   // matches the row's amber pill exactly
   if (f === 'website_lead') return c.lead_status === 'new'
@@ -146,7 +159,14 @@ export default function MessagesPage() {
   const [loadingMore, setLoadingMore] = useState(false)
   // A failed inbox read must never wear the "nobody has messaged you" empty state.
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [counts, setCounts] = useState<Record<Filter, number>>({ all: 0, needs_reply: 0, sms: 0, portal: 0, website_lead: 0, snoozed: 0, archived: 0 })
+  const [counts, setCounts] = useState<Record<Filter, number>>({ all: 0, needs_reply: 0, sms: 0, portal: 0, website_lead: 0, requests: 0, snoozed: 0, archived: 0 })
+  // Customers with an OPEN portal request. Held as a set because it does three
+  // jobs — the pill's count, the Requests view's query, and the per-row badge —
+  // and one read serving all three is what keeps them from disagreeing.
+  // Deliberately NOT folded into the inbox_counts RPC: that function answers
+  // questions about conversations, and this one is about service_requests.
+  const [openReq, setOpenReq] = useState<Set<string>>(new Set())
+  const openReqRef = useRef<Set<string>>(new Set()); openReqRef.current = openReq
   const [filter, setFilter] = useState<Filter>('all')
   const [sel, setSel] = useState<Convo | null>(null)
   const [query, setQuery] = useState('')
@@ -169,14 +189,34 @@ export default function MessagesPage() {
 
   // ONE round trip (inbox_counts RPC) for every pill — this used to be six COUNT
   // queries fired on every realtime event and every optimistic mutation.
-  async function loadCounts(_u: string) {
-    const { data } = await supabase.rpc('inbox_counts')
+  async function loadCounts(u: string) {
+    // Two reads, one state update, so the pill row can never paint a Requests
+    // count from one moment beside conversation counts from another.
+    const [{ data }, reqRes] = await Promise.all([
+      supabase.rpc('inbox_counts'),
+      supabase.from('service_requests').select('customer_id')
+        .eq('user_id', u).eq('from_portal', true).eq('status', 'new'),
+    ])
     const j = (data as Record<string, number> | null) || {}
+    // A failed request read leaves the previous set alone rather than emptying
+    // it: a null payload with an error is how Supabase reports a dropped
+    // connection, and treating that as "no requests" would make the pill
+    // disappear — and take the owner's only view of them with it — every time
+    // the wifi blinked.
+    const nextReq = reqRes.error ? openReqRef.current
+      : new Set(((reqRes.data as { customer_id: string | null }[] | null) ?? [])
+          .map(r => r.customer_id).filter((c): c is string => !!c))
+    setOpenReq(nextReq)
+    openReqRef.current = nextReq // available to the caller's very next loadPage
     setCounts({
       all: j.all || 0, needs_reply: j.needs_reply || 0, sms: j.sms || 0,
       portal: j.portal || 0, website_lead: j.website_lead || 0,
+      // The pill counts CUSTOMERS waiting, matching the rows the view shows —
+      // two requests from one person are one row to open, not two.
+      requests: nextReq.size,
       snoozed: j.snoozed || 0, archived: j.archived || 0,
     })
+    return nextReq
   }
 
   async function loadPage(u: string, f: Filter, reset: boolean) {
@@ -197,6 +237,17 @@ export default function MessagesPage() {
     else if (f === 'sms') qb = qb.is('archived_at', null).or(awake).is('lead_status', null).or('last_channel.eq.sms,last_channel.is.null')
     else if (f === 'portal') qb = qb.is('archived_at', null).or(awake).is('lead_status', null).eq('last_channel', 'portal')
     else if (f === 'website_lead') qb = qb.is('archived_at', null).or(awake).eq('lead_status', 'new')
+    else if (f === 'requests') {
+      const ids = [...openReqRef.current]
+      // An empty .in() list matches nothing in PostgREST, but relying on that
+      // reads as an accident. Say it: nobody is waiting, so there is no query.
+      if (!ids.length) {
+        loadingRef.current = false
+        if (mySeq === loadSeq.current) { setLoadError(null); setRows([]); setHasMore(false); setLoading(false); setLoadingMore(false) }
+        return
+      }
+      qb = qb.is('archived_at', null).in('customer_id', ids)
+    }
     else if (f === 'snoozed') qb = qb.is('archived_at', null).gt('snoozed_until', nowIso)
     else qb = qb.not('archived_at', 'is', null)
     const { data, error } = await qb
@@ -232,7 +283,11 @@ export default function MessagesPage() {
       setUid(u); uidRef.current = u
       if (scrollRef.current) scrollRef.current.scrollTop = 0
       setScrollTop(0)
-      await Promise.all([loadPage(u, filter, true), loadCounts(u)])
+      // The Requests view is the one filter whose query DEPENDS on the count
+      // read, so it waits for it. Every other filter keeps both round trips in
+      // parallel.
+      if (filter === 'requests') { await loadCounts(u); await loadPage(u, filter, true) }
+      else await Promise.all([loadPage(u, filter, true), loadCounts(u)])
     })()
     return () => { active = false }
   }, [filter]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -258,7 +313,7 @@ export default function MessagesPage() {
             const r = payload.new as Pick<Convo, 'id' | 'unread' | 'last_preview' | 'last_direction' | 'last_message_at' | 'archived_at' | 'pinned_at' | 'muted' | 'lead_status' | 'last_channel' | 'labels' | 'snoozed_until' | 'assigned_to'>
             const fields = { unread: r.unread, last_preview: r.last_preview, last_direction: r.last_direction, last_message_at: r.last_message_at, archived_at: r.archived_at, pinned_at: r.pinned_at, muted: r.muted, lead_status: r.lead_status, last_channel: r.last_channel, labels: r.labels, snoozed_until: r.snoozed_until, assigned_to: r.assigned_to }
             setRows(cs => cs.some(x => x.id === r.id)
-              ? sortConvos(cs.map(x => x.id === r.id ? { ...x, ...fields } : x).filter(x => x.id !== r.id || inFilter({ ...x, ...fields }, f)))
+              ? sortConvos(cs.map(x => x.id === r.id ? { ...x, ...fields } : x).filter(x => x.id !== r.id || inFilter({ ...x, ...fields }, f, openReqRef.current)))
               : cs)
             setSel(s => s && s.id === r.id ? { ...s, ...fields } : s)
           } else if (payload.eventType === 'DELETE') {
@@ -308,7 +363,7 @@ export default function MessagesPage() {
   function mutate(c: Convo, p: Partial<Convo>) {
     const next = { ...c, ...p }
     setRows(cs => cs.some(x => x.id === c.id)
-      ? sortConvos(inFilter(next, filter) ? cs.map(x => x.id === c.id ? next : x) : cs.filter(x => x.id !== c.id))
+      ? sortConvos(inFilter(next, filter, openReqRef.current) ? cs.map(x => x.id === c.id ? next : x) : cs.filter(x => x.id !== c.id))
       : cs)
     setSearchResults(rs => rs ? rs.map(x => x.id === c.id ? next : x) : rs)
     setSel(s => s && s.id === c.id ? next : s)
@@ -517,7 +572,7 @@ export default function MessagesPage() {
         : op === 'read' ? { unread: 0 } : op === 'unread' ? { unread: 1 } : op === 'mute' ? { muted: true } : op === 'unmute' ? { muted: false } : { pinned_at: now }
       const prevRows = rows
       const prevSearch = searchResults
-      setRows(cs => sortConvos(cs.map(c => selectedIds.has(c.id) ? { ...c, ...p } : c).filter(c => inFilter(c, filter))))
+      setRows(cs => sortConvos(cs.map(c => selectedIds.has(c.id) ? { ...c, ...p } : c).filter(c => inFilter(c, filter, openReqRef.current))))
       setSearchResults(rs => rs ? rs.map(c => selectedIds.has(c.id) ? { ...c, ...p } : c) : rs)
       const { error } = await supabase.from('conversations').update(p).in('id', ids)
       // Roll BOTH back: the search overlay was patched too, so restoring only
@@ -665,6 +720,10 @@ export default function MessagesPage() {
               // Snoozed earns its pill only while something IS snoozed — an empty
               // "Snoozed 0" would be permanent noise for the common case.
               if (f.key === 'snoozed' && counts.snoozed === 0 && filter !== 'snoozed') return null
+              // Same rule for Requests: it appears when someone is waiting, and
+              // stays while you're standing in it so the view you're looking at
+              // never loses its own pill as you clear the last one.
+              if (f.key === 'requests' && counts.requests === 0 && filter !== 'requests') return null
               return (
                 <FilterPill key={f.key} active={filter === f.key} onClick={() => { setFilter(f.key); setSel(null) }}>
                   <f.icon className="w-3.5 h-3.5" /> {f.label}
@@ -741,11 +800,16 @@ export default function MessagesPage() {
                 : filter === 'snoozed' ? 'Nothing snoozed'
                 : filter === 'archived' ? 'No archived chats'
                 : filter === 'website_lead' ? 'No new website leads'
+                // An empty filter must say what its emptiness MEANS. "No
+                // conversations yet" here would be false and alarming — the
+                // owner has plenty; what they have none of is customers waiting.
+                : filter === 'requests' ? 'Nobody is waiting on you'
                 : 'No conversations yet'}
               description={searchResults ? 'Try a name, address, service, or quote/invoice #.'
                 : filter === 'needs_reply' ? 'Nobody is waiting on a reply from you.'
                 : filter === 'snoozed' ? 'Snoozed conversations wait here until their time comes — or the customer replies.'
                 : filter === 'website_lead' ? 'Leads land here the moment your website form is submitted.'
+                : filter === 'requests' ? 'Every request your customers have sent from their portal has been handled or dismissed.'
                 : 'Inbound texts, portal requests and website leads all land here — replies go out from your business number.'} />
           ) : (
             <div ref={scrollRef} onScroll={onScroll} className="overflow-y-auto" style={{ maxHeight: '72vh' }}>
@@ -753,7 +817,8 @@ export default function MessagesPage() {
                 <div style={{ transform: `translateY(${start * ROW_H}px)` }}>
                   {visible.map(c => (
                     <ConversationRow key={c.id} c={c} selected={sel?.id === c.id} actions={actions} query={searchResults ? query.trim() : ''}
-                      selectMode={selectMode} checked={selectedIds.has(c.id)} onToggleSelect={() => toggleSelect(c.id)} techs={techs} />
+                      selectMode={selectMode} checked={selectedIds.has(c.id)} onToggleSelect={() => toggleSelect(c.id)} techs={techs}
+                      hasRequest={!!c.customer_id && openReq.has(c.customer_id)} />
                   ))}
                 </div>
               </div>
@@ -806,6 +871,13 @@ export default function MessagesPage() {
               </div>
               {/* Website-lead context + Build Quote, shown only while the lead is open. */}
               {sel.lead_status === 'new' && <LeadCard customerId={sel.customer_id} />}
+              {/* What this customer has ASKED FOR and is still waiting on, with
+                  the one move that answers it. Same slot as LeadCard — the two
+                  are the same shape of job and never both apply to one
+                  conversation in practice (a lead has no portal yet).
+                  onResolved refreshes the pill + set, so closing the last request
+                  here empties the Requests view without a manual reload. */}
+              <RequestCard customerId={sel.customer_id} onResolved={() => { if (uidRef.current) loadCounts(uidRef.current) }} />
               <ConversationInfo customerId={sel.customer_id} />
               <div className="flex-1 min-h-0">
                 <ConversationThread customerId={sel.customer_id} onRead={() => uid && loadCounts(uid)} autoFocus />
@@ -858,7 +930,7 @@ interface RowActions {
 
 }
 
-function ConversationRow({ c, selected, actions, query, selectMode, checked, onToggleSelect, techs }: { c: Convo; selected: boolean; actions: RowActions; query: string; selectMode: boolean; checked: boolean; onToggleSelect: () => void; techs: { id: string; name: string }[] }) {
+function ConversationRow({ c, selected, actions, query, selectMode, checked, onToggleSelect, techs, hasRequest }: { c: Convo; selected: boolean; actions: RowActions; query: string; selectMode: boolean; checked: boolean; onToggleSelect: () => void; techs: { id: string; name: string }[]; hasRequest: boolean }) {
   const router = useRouter()
   // Long-press / right-click open the SAME shared menu as the ⋮ trigger; the render
   // prop below keeps this ref pointed at the current open function.
@@ -979,6 +1051,11 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
             <p className="text-[10px] text-ink-faint">{timeAgo(c.last_message_at)}</p>
             {isSearch && match
               ? <span className="text-[10px] font-semibold text-accent-text flex items-center gap-0.5 ml-1"><match.icon className="w-3 h-3" /> {match.label}</span>
+              /* "Waiting" OUTRANKS "Needs reply" — they are usually both true of
+                 a fresh request, and only one of them survives being read. The
+                 stronger fact is the one that stays true until the owner acts. */
+              : hasRequest
+              ? <span className="text-[10px] font-semibold text-accent-text flex items-center gap-0.5 ml-1"><MessageSquarePlus className="w-3 h-3" /> Waiting on you</span>
               : needsReply && <span className="text-[10px] font-semibold text-amber-400 flex items-center gap-0.5 ml-1"><Reply className="w-3 h-3" /> Needs reply</span>}
           </div>
         </div>

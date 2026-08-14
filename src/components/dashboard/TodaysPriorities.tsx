@@ -4,7 +4,7 @@ import { cn, formatCurrency } from '@/lib/utils'
 import type { Priority, PriorityKind } from '@/lib/dashboard/priorities'
 import {
   ListChecks, CheckCircle2, ArrowRight, Plus,
-  DollarSign, FileText, Bell, CalendarPlus, AlertTriangle, MessageSquare, Repeat, UserPlus, HeartPulse, PhoneOff,
+  DollarSign, FileText, Bell, CalendarPlus, AlertTriangle, MessageSquare, MessageSquarePlus, Repeat, UserPlus, HeartPulse, PhoneOff,
 } from 'lucide-react'
 
 // ONE ranked queue of the highest-value things to do right now. The ranking and
@@ -26,6 +26,9 @@ const META: Record<PriorityKind, { icon: typeof DollarSign; tone: string }> = {
   reactivation: { icon: Repeat,        tone: 'text-accent-text bg-accent/10 border-accent/20' },
   lapsed:       { icon: HeartPulse,    tone: 'text-violet-400 bg-violet-500/10 border-violet-500/20' },
   messages:     { icon: MessageSquare, tone: 'text-sky-400 bg-sky-500/10 border-sky-500/20' },
+  // Accent rather than sky: a customer asking for work is a revenue row wearing
+  // an inbox icon, and it must not read as "more unread messages".
+  requests:     { icon: MessageSquarePlus, tone: 'text-accent-text bg-accent/10 border-accent/20' },
 }
 
 // `started` defaults TRUE so the only behaviour that can change is the one an

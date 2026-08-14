@@ -42,7 +42,7 @@ function read(p: string): string { return readFileSync(join(ROOT, p), 'utf8').re
 // ═══════════════════════════════════════════════════════════════════════════
 H('1. THE CONTRACT FILE — the applied DDL says what the table and resolver are')
 
-const sql = read('supabase/RUN-2026-08-13-platform-capabilities.sql')
+const sql = read('supabase/archive/run/RUN-2026-08-13-platform-capabilities.sql')
 check('grants table exists with all four capability columns',
   sql.includes('create table if not exists public.platform_capabilities')
   && ['online_payments', 'inbound_sms', 'outbound_sms', 'outbound_email']
@@ -133,6 +133,12 @@ H('4. OUTBOUND — the shared senders are only reachable through audited call-si
 // its own user (no borrowed identity, and a beta tenant still hears about its
 // bookings and leads). portal-access is the platform answering a customer's own
 // "send me my links" request — its email may span tenants by design.
+//
+// THE TEST for adding a line here: on whose behalf does this message go out? If
+// it is a tenant speaking to its customers, it belongs behind a grant, in
+// dispatch. If it is the PLATFORM speaking as itself — about an account, an
+// invite, a login — no tenant is on the hook for it and no grant can sensibly
+// gate it. Every entry below is one or the other, never "it was easier here".
 const SEND_ALLOWLIST: Record<string, string> = {
   'src/lib/comms/dispatch.ts': 'THE chokepoint — capability-gated inside, alongside consent and the governor',
   'src/app/api/comms/send/route.ts': 'manual send — gated in-route (mirrors dispatch)',
@@ -145,6 +151,16 @@ const SEND_ALLOWLIST: Record<string, string> = {
   // (beta_invites.send_count / last_sent_at), pinned by verify:beta-signup.
   'src/app/api/beta/signup/route.ts': 'platform-transactional: signup email verification (recipient predates the tenant)',
   'src/app/api/beta/resend/route.ts': 'platform-transactional: signup verification resend (row-throttled on the invite)',
+  // Password recovery is the same class again, and the clearest case of it: the
+  // platform emailing an EdgeQuote ACCOUNT HOLDER about their EdgeQuote login.
+  // There is no tenant on whose behalf it is sent — the route deliberately does
+  // not know who the address belongs to (finding out is the enumeration oracle
+  // it exists to avoid), and the recipient may hold no tenant at all. Gating it
+  // on a tenant grant would be incoherent: it would make "can this business text
+  // its customers" decide whether its owner can get back into their own account.
+  // Throttled per-address AND globally in password_reset_requests, pinned by
+  // verify:account-recovery.
+  'src/app/api/public/password-reset/route.ts': 'platform-transactional: owner password recovery (no tenant is on the hook for it)',
   'src/app/api/booking/notify/route.ts': 'owner alert TO the business itself (customer half goes through dispatch)',
   'src/lib/intake.ts': 'lead alert TO the business itself',
   'src/app/api/cron/reports/route.ts': 'scheduled report TO the business itself',

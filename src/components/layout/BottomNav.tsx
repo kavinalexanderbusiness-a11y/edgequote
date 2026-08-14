@@ -6,16 +6,16 @@ import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { useModules } from '@/hooks/useModules'
 import { useUnread } from '@/hooks/useUnread'
-import { useFocusTrap } from '@/hooks/useFocusTrap'
+import { QuickAdd } from '@/components/layout/QuickAdd'
+import { quickAddActions } from '@/lib/quickAdd'
 import {
-  LayoutDashboard, CalendarDays, FileText, MessageSquare, Plus, X,
-  Receipt, CreditCard, UserPlus, type LucideIcon,
+  CalendarDays, FileText, MessageSquare, Plus, Users, type LucideIcon,
 } from 'lucide-react'
 
 // ── The thumb-zone shell ─────────────────────────────────────────────────────
 // Mobile navigation used to be a hamburger at the TOP of the screen — the one
 // place a thumb can't reach one-handed. This bar puts the four daily-driver
-// destinations and a quick-action button where the thumb already rests. The
+// destinations and THE create button where the thumb already rests. The
 // drawer stays for the long tail; this is the fast path, not a replacement.
 //
 // Tabs ride THE module registry (useModules) — the same loader the sidebar,
@@ -39,24 +39,24 @@ interface TabDef {
   icon: LucideIcon
 }
 
-// Left pair / right pair around the center action button.
+// ── THE four field destinations ──────────────────────────────────────────────
+// Measured, not copied from a pattern library. On the shipped bar (Home ·
+// Schedule · + · Quotes · Messages) a customer lookup — the thing a ringing
+// phone demands — had ZERO one-tap doors: the only paths were the hamburger at
+// the TOP-RIGHT corner (the furthest point from a one-handed thumb) or a "+"
+// entry called "Customers", i.e. navigation dressed as a create action.
+//
+// Customers takes the slot Home gave up. Nothing was lost doing it: the logo in
+// the mobile top bar is now the Home link (the oldest convention on the web),
+// and Home is still in the drawer. Quotes stays — it is a real daily
+// destination, and its CREATE door is the first row of the + sheet.
 const LEFT_TABS: TabDef[] = [
-  { moduleKey: 'dashboard', href: '/dashboard', label: 'Home', icon: LayoutDashboard },
   { moduleKey: 'schedule', href: '/dashboard/schedule', label: 'Schedule', icon: CalendarDays },
+  { moduleKey: 'customers', href: '/dashboard/customers', label: 'Customers', icon: Users },
 ]
 const RIGHT_TABS: TabDef[] = [
   { moduleKey: 'quotes', href: '/dashboard/quotes', label: 'Quotes', icon: FileText },
   { moduleKey: 'messages', href: '/dashboard/messages', label: 'Messages', icon: MessageSquare },
-]
-
-// Quick actions: the workflows the owner starts 30× a day, one tap from
-// anywhere. Routes only — no invented deep-link params; ?customer/?quote on
-// invoices are the params that page actually reads.
-const QUICK_ACTIONS: { moduleKey: string; href: string; label: string; sub: string; icon: LucideIcon }[] = [
-  { moduleKey: 'quotes', href: '/dashboard/quotes/new', label: 'New quote', sub: 'Price a job', icon: FileText },
-  { moduleKey: 'invoices', href: '/dashboard/invoices', label: 'Invoice', sub: 'Bill finished work', icon: Receipt },
-  { moduleKey: 'payments', href: '/dashboard/payments', label: 'Collect payment', sub: 'Record or charge', icon: CreditCard },
-  { moduleKey: 'customers', href: '/dashboard/customers', label: 'Customers', sub: 'Look up or add', icon: UserPlus },
 ]
 
 export function BottomNav() {
@@ -64,17 +64,18 @@ export function BottomNav() {
   const { visible } = useModules()
   const unread = useUnread()
   const [sheetOpen, setSheetOpen] = useState(false)
-  const sheetRef = useFocusTrap<HTMLDivElement>(sheetOpen, () => setSheetOpen(false))
 
-  // Close the sheet on navigation — tapping an action must feel like GOING,
-  // not like closing a dialog and then going.
+  // Belt and braces with QuickAdd's own pathname effect: this bar owns the open
+  // state, so it must also let go of it when the route changes.
   useEffect(() => { setSheetOpen(false) }, [pathname])
 
   const enabled = new Set(visible.map(m => m.key))
   const show = (t: { moduleKey: string }) => enabled.has(t.moduleKey)
   const leftTabs = LEFT_TABS.filter(show)
   const rightTabs = RIGHT_TABS.filter(show)
-  const actions = QUICK_ACTIONS.filter(show)
+  // Whether the + is worth showing at all is lib/quickAdd's call, not this
+  // file's — it is the one place that knows what a surface can create.
+  const canCreate = quickAddActions({ kind: 'none' }, enabled).length > 0
 
   // Active = exact for /dashboard (else it matches everything), prefix elsewhere.
   const isActive = (href: string) =>
@@ -102,39 +103,10 @@ export function BottomNav() {
 
   return (
     <>
-      {/* Quick-action sheet — opens UPWARD from the bar so every action is in
-          thumb reach. Modal: focus-trapped, Escape/backdrop close. */}
-      {sheetOpen && (
-        <div className="lg:hidden fixed inset-0 z-overlay" role="dialog" aria-modal="true" aria-label="Quick actions">
-          <button aria-label="Close quick actions" onClick={() => setSheetOpen(false)}
-            className="absolute inset-0 bg-black/50 backdrop-blur-[2px]" />
-          <div ref={sheetRef}
-            className="absolute bottom-0 inset-x-0 rounded-t-2xl bg-bg-secondary border-t border-border p-4 pb-safe rise">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-ink-faint">Quick actions</p>
-              <button onClick={() => setSheetOpen(false)} aria-label="Close"
-                className="w-11 h-11 -mr-2 flex items-center justify-center text-ink-muted hover:text-ink">
-                <X className="w-5 h-5" aria-hidden />
-              </button>
-            </div>
-            <div className="grid grid-cols-2 gap-2 pb-2">
-              {actions.map(a => (
-                <Link key={a.label} href={a.href}
-                  className="flex items-center gap-3 rounded-xl border border-border bg-bg p-3.5 min-h-[64px] active:scale-[0.98] transition-transform">
-                  <a.icon className="w-5 h-5 text-accent shrink-0" aria-hidden />
-                  <span className="min-w-0">
-                    <span className="block text-sm font-semibold text-ink leading-tight">{a.label}</span>
-                    <span className="block text-[11px] text-ink-faint leading-tight mt-0.5">{a.sub}</span>
-                  </span>
-                </Link>
-              ))}
-              {actions.length === 0 && (
-                <p className="col-span-2 text-xs text-ink-faint p-2">No quick actions — the modules they start are turned off.</p>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* THE quick-add sheet. It is a component, not markup here, because the
+          rule "what can I create from this surface" belongs in one file that a
+          guard can read (lib/quickAdd) rather than in the navigation. */}
+      <QuickAdd open={sheetOpen} onClose={() => setSheetOpen(false)} enabled={enabled} />
 
       {/* data-eq-bottom-chrome: a field's dropdown must stop above this too, not
           only above a save bar (lib/dropdownPlacement). When a fixed save bar is
@@ -145,10 +117,10 @@ export function BottomNav() {
           {leftTabs.map(tab)}
           {/* Center action — visually raised so it reads as THE button. Hidden
               only if literally nothing is quick-actionable. */}
-          {actions.length > 0 && (
+          {canCreate && (
             <div className="flex-1 flex items-center justify-center">
               <button onClick={() => setSheetOpen(o => !o)}
-                aria-label="Quick actions" aria-expanded={sheetOpen}
+                aria-label="Create" aria-expanded={sheetOpen}
                 className="w-12 h-12 -mt-4 rounded-full bg-accent text-white shadow-lg shadow-accent/30 flex items-center justify-center active:scale-95 transition-transform">
                 <Plus className={cn('w-6 h-6 transition-transform', sheetOpen && 'rotate-45')} aria-hidden />
               </button>

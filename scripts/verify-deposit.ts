@@ -270,7 +270,7 @@ console.log('\nThe charge paths all ask the engine, and the webhook cannot doubl
     /invoiceBalance/.test(engine),
     'lib/payments/deposit.ts must read lib/payments/ledger.invoiceBalance, not restate totals')
   check('the deposit engine never stores a percentage',
-    !/deposit_percent/.test(engine) && !/deposit_percent/.test(read('supabase/RUN-2026-08-09-invoice-deposit-request.sql')),
+    !/deposit_percent/.test(engine) && !/deposit_percent/.test(read('supabase/archive/run/RUN-2026-08-09-invoice-deposit-request.sql')),
     'the percent is derived from amount ÷ live total; storing it would drift from the canonical total')
 
   // AutoPay charges the BALANCE and — deliberately — not the deposit: its dedupe
@@ -315,7 +315,7 @@ console.log('\nThe charge paths all ask the engine, and the webhook cannot doubl
 // ── 9. The migration is additive and guarded ─────────────────────────────────
 console.log('\nThe schema change cannot corrupt existing invoices:')
 {
-  const mig = read('supabase/RUN-2026-08-09-invoice-deposit-request.sql')
+  const mig = read('supabase/archive/run/RUN-2026-08-09-invoice-deposit-request.sql')
   // `not null` appears legitimately in the partial index's WHERE — the ban is on
   // a NOT NULL column constraint or a DEFAULT, either of which would rewrite what
   // every existing invoice means.

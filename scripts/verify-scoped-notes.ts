@@ -26,6 +26,7 @@
 // not match `\r`, so a `.*$` pattern strips NOTHING on a CRLF checkout and every
 // absence check silently inverts.
 
+import { portalDataSql, baselineFile } from './lib/schema-source'
 import {
   SCOPED_NOTE_FIELDS, AUDIENCE_READERS, AUDIENCE_COPY,
   fieldsHiddenFromCustomers, fieldsVisibleToCrew,
@@ -114,10 +115,12 @@ check('crew media caption is crew-audience, never customer',
 // what makes the audience boundary enforceable at all.
 console.log('\n═══ get_portal_data (the customer door) ═══')
 
-const PORTAL_SQL = 'supabase/CANONICAL-get_portal_data.sql'
-check(`${PORTAL_SQL} exists`, has(PORTAL_SQL))
-if (has(PORTAL_SQL)) {
-  const portal = stripSql(read(PORTAL_SQL))
+// 2026-08-14: the canonical file is retired; the one definition now lives in the
+// generated baseline, so this asserts against the body production actually runs.
+const PORTAL_SQL = baselineFile()
+check('the portal RPC has a definition in the apply path', PORTAL_SQL !== '')
+if (PORTAL_SQL) {
+  const portal = stripSql(portalDataSql())
 
   // ⚠️ THE CHECK HAS TO BE PROJECTION-AWARE, NOT A BARE GREP. `notes` is the
   // column name on customers, quotes, invoices, properties and jobs — three of
@@ -278,7 +281,7 @@ if (has(MEDIA_ROUTE)) {
 // private in the migration that creates it.
 console.log('\n═══ Storage privacy ═══')
 
-const MIGRATION = 'supabase/RUN-2026-08-11-scoped-notes-crew-media.sql'
+const MIGRATION = 'supabase/archive/run/RUN-2026-08-11-scoped-notes-crew-media.sql'
 check(`${MIGRATION} exists`, has(MIGRATION))
 if (has(MIGRATION)) {
   const sql = stripSql(read(MIGRATION))

@@ -49,7 +49,7 @@ const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8')
 // not exist cannot be abused, and a column that is not in the UPDATE cannot be
 // written. Both are checked live below as well where that is possible.
 console.log('\n═══ The shape of the function forbids the attack ═══')
-const SQL = read('supabase/RUN-2026-08-10-portal-add-contact.sql')
+const SQL = read('supabase/archive/run/RUN-2026-08-10-portal-add-contact.sql')
 // Comments in this file describe the attacks by name, so scan the CODE only —
 // a guard that greps its own prose reports the cure as the disease.
 const SQL_CODE = SQL.split('\n').filter(l => !l.trim().startsWith('--')).join('\n')

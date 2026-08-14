@@ -22,6 +22,7 @@ import { localTodayISO } from '@/lib/utils'
 import { computePriorities, type Priority } from '@/lib/dashboard/priorities'
 import { computeDayPlan, type DayPlan, type PlanJob } from '@/lib/dashboard/dayPlan'
 import { pageAll } from '@/lib/supabase/pageAll'
+import { openRequests } from '@/lib/portalRequests'
 import type { RJob, RRecurrence } from '@/lib/reactivation'
 import type { MoneyBandValues } from '@/components/dashboard/MoneyBand'
 
@@ -35,6 +36,8 @@ type InvoiceRow = Pick<Invoice,
 // One conversations read serves two consumers: the lead union (all non-archived)
 // and the messages priority row (the unread subset).
 type ConvRow = LeadConvRow & { unread: number }
+// Just enough of a service_requests row for the queue row and its own predicate.
+type PortalRequestRow = { id: string; customer_id: string | null; from_portal: boolean; status: string }
 
 // The union every downstream consumer actually reads — money/KPIs (status, total,
 // amount fields), priorities (status/total), needsFollowUp (sent_at,
@@ -130,7 +133,7 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
 
   // ── Phase 1: read every table ONCE, all in parallel ──
   const [
-    invRes, jobRes, planJobRes, quoteRes, recRes, convRes, custRes, setRes,
+    invRes, jobRes, planJobRes, quoteRes, recRes, convRes, custRes, reqRes, setRes,
     depositRowsRes,
     todayCash, weekCash, prevWeekCash, monthCash, lastMonthCash,
   ] = await Promise.all([
@@ -170,6 +173,13 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     // chases are real. Rides along in the batch that was already going out; the
     // reactivation engine only reads `id` and ignores the rest.
     sb.from('customers').select('id, phone, email, sms_opt_in, email_opt_in, message_prefs').eq('user_id', userId).is('archived_at', null),
+    // Open portal requests. Filtered in SQL on the two columns that define
+    // "open" (from_portal + status) rather than pulling the table and deciding
+    // here — service_requests also holds website leads and online bookings, and
+    // this row must never count those. The partial index
+    // service_requests_open_portal_idx serves exactly this predicate.
+    sb.from('service_requests').select('id, customer_id, from_portal, status')
+      .eq('user_id', userId).eq('from_portal', true).eq('status', 'new'),
     // Widened with base_* so the weather engine doesn't re-read this same row.
     sb.from('business_settings').select('gst_percent, service_seasons, preferred_work_days, work_start_time, daily_capacity_hours, base_lat, base_lng, base_address').eq('user_id', userId).maybeSingle(),
     // Quote-linked deposit ledger rows (pre-invoice booking deposits) — the
@@ -200,6 +210,10 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     : recRes.error ? `recurrences: ${recRes.error.message}`
     : convRes.error ? `conversations: ${convRes.error.message}`
     : custRes.error ? `customers: ${custRes.error.message}`
+    // A failed request read is not "no requests waiting". Swallowing it would
+    // paint the most reassuring version of the queue — the whole reason this
+    // all-or-throw block exists.
+    : reqRes.error ? `customer requests: ${reqRes.error.message}`
     : setRes.error ? `settings: ${setRes.error.message}`
     // Deposit ledger joins the all-or-throw rule: an unread ledger rendered as
     // "no deposit received" would tell the owner to chase money already paid —
@@ -269,6 +283,10 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     // Only the unread ones are a "reply to messages" job. customer_id must
     // survive — the messages row uses it to exclude people leads already counted.
     conversations: conversations.filter(c => Number(c.unread || 0) > 0),
+    // Through THE request engine's own predicate, so "open" means one thing in
+    // the queue row and in the card the owner opens from it — even though the
+    // query above already asked the database the same question.
+    requests: openRequests((reqRes.data as PortalRequestRow[] | null) ?? []),
     leads,
     seasons: settingsToSeasons(settings?.service_seasons),
     feeSettings: settings,

@@ -74,6 +74,7 @@
     "verify:portal-canonical": "tsx scripts/verify-portal-canonical.ts",
     "verify:portal-nav": "tsx scripts/verify-portal-nav.ts",
     "verify:portal-access": "tsx scripts/verify-portal-access.ts",
+    "verify:portal-requests": "tsx scripts/verify-portal-requests.ts",
     "verify:lead-intake": "tsx scripts/verify-lead-intake.ts",
     "verify:quote-status": "tsx scripts/verify-quote-status.ts",
     "verify:quote-builder": "tsx scripts/verify-quote-builder.ts",
@@ -88,6 +89,7 @@
     "verify:property-remove": "tsx scripts/verify-property-remove.ts",
     "verify:mobile-shell": "tsx scripts/verify-mobile-shell.ts",
     "verify:field-stops": "tsx scripts/verify-field-stops.ts",
+    "verify:field-mode": "tsx scripts/verify-field-mode.ts",
     "verify:workforce": "tsx scripts/verify-workforce.ts",
     "verify:team": "tsx scripts/verify-team.ts",
     "verify:job-completion": "tsx scripts/verify-job-completion.ts",
@@ -118,7 +120,13 @@
     "verify:fixture-isolation": "tsx scripts/verify-fixture-isolation.ts",
     "verify:deposit-scheduling": "tsx scripts/verify-deposit-scheduling.ts",
     "verify:day-fit": "tsx scripts/verify-day-fit.ts",
-    "verify:work-sessions": "tsx scripts/verify-work-sessions.ts"
+    "verify:work-sessions": "tsx scripts/verify-work-sessions.ts",
+    "verify:account-recovery": "tsx scripts/verify-account-recovery.ts",
+    "schema:contract": "tsx scripts/schema/capture-contract.mts",
+    "schema:baseline": "tsx scripts/schema/generate-baseline.ts",
+    "verify:rebuild": "tsx scripts/verify-rebuild.ts",
+    "verify:schema": "tsx scripts/verify-schema.ts",
+    "verify:migrations": "tsx scripts/verify-migrations.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

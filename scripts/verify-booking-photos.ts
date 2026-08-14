@@ -18,6 +18,7 @@
 // Style follows the other verify scripts: deterministic, no network, no DB. These pin
 // CURRENT behavior — this is coverage, not a behavior change.
 
+import { baselineSql } from './lib/schema-source'
 import { readFileSync } from 'node:fs'
 import { extractBookingPhotos, bookingPhotoViews, bookingPhotosFromQuotes } from '../src/lib/bookingPhotos'
 
@@ -96,7 +97,7 @@ H('5. schema.sql — booking-photo UPLOADS accept BOTH anon and authenticated')
 // the booking arrived WITHOUT the photo (0 objects across 26 bookings). INSERT must
 // mirror SELECT: both roles. This guards schema.sql from silently reverting.
 // (RLS can't be unit-tested; pinning the canonical schema text is the closest guard.)
-const schema = readFileSync('supabase/schema.sql', 'utf8')
+const schema = baselineSql()
 const insertPolicy = schema.split('\n').find(l =>
   /create\s+policy/i.test(l) && /booking_uploads/i.test(l) && /\binsert\b/i.test(l)) || ''
 check('a booking-uploads INSERT policy exists in schema.sql', insertPolicy !== '', true)

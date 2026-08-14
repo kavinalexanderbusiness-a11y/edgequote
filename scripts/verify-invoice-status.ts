@@ -15,6 +15,7 @@
 // column list covering every money column the editor writes, the unchanged
 // status thresholds, and the editor reading the derived row back. The app-side
 // balance maths uses the REAL functions — nothing is reimplemented here.
+import { baselineSql } from './lib/schema-source'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { invoiceBalance, displayInvoiceStatus } from '@/lib/payments/ledger'
@@ -29,21 +30,26 @@ function check(group: string, name: string, actual: unknown, expected: unknown) 
 }
 const H = (s: string) => console.log(`\n═══ ${s} ═══`)
 
-const SCHEMA = readFileSync(resolve(process.cwd(), 'supabase/schema.sql'), 'utf8')
-const RUN = readFileSync(resolve(process.cwd(), 'supabase/RUN-2026-07-26-invoice-status-on-total-edit.sql'), 'utf8')
+const SCHEMA = baselineSql()
+const RUN = readFileSync(resolve(process.cwd(), 'supabase/archive/run/RUN-2026-07-26-invoice-status-on-total-edit.sql'), 'utf8')
 const PAGE = readFileSync(resolve(process.cwd(), 'src/app/dashboard/invoices/page.tsx'), 'utf8')
 
-// schema.sql is an append log — old definitions of a function remain above the
-// current one. Every structural check below therefore runs on the LAST
-// definition, exactly what the DB holds after replaying the file.
+// 2026-08-14: the source is the generated baseline, not the retired schema.sql
+// snapshot. Strictly stronger — the baseline holds exactly ONE definition per
+// function and it is the body production is running, so these checks stopped
+// depending on "the last copy in an append log happens to be the live one".
+//
+// The rendering differs: pg_get_functiondef emits uppercase keywords and $function$
+// delimiters, so match case-insensitively and close on the dollar-quote.
 function lastDef(src: string, header: string): string {
-  const i = src.lastIndexOf(header)
-  if (i < 0) return ''
-  const end = src.indexOf('end; $$;', i)
-  return end < 0 ? src.slice(i) : src.slice(i, end + 'end; $$;'.length)
+  const sig = header.replace(/^create or replace function\s+/i, '')
+  const escaped = sig.replace(/[.*+?^${}()|[\]\\]/g, m => '\\' + m)
+  const re = new RegExp(`CREATE OR REPLACE FUNCTION\\s+${escaped}[\\s\\S]*?\\$function\\$[\\s\\S]*?\\$function\\$`, 'gi')
+  const hits = src.match(re)
+  return hits ? hits[hits.length - 1] : ''
 }
 
-H('one engine, two ignitions (schema.sql = what the DB holds)')
+H('one engine, two ignitions (the baseline = what the DB holds)')
 {
   const core = lastDef(SCHEMA, 'create or replace function public.recompute_invoice_paid_for(p_invoice_id uuid)')
   const payFn = lastDef(SCHEMA, 'create or replace function public.recompute_invoice_paid()')
@@ -68,12 +74,16 @@ H('one engine, two ignitions (schema.sql = what the DB holds)')
 
 H('the edit ignition (the trigger the bug was missing)')
 {
-  const trgAt = SCHEMA.lastIndexOf('create trigger trg_recompute_invoice_on_edit')
-  const trg = trgAt < 0 ? '' : SCHEMA.slice(trgAt, SCHEMA.indexOf(';', trgAt) + 1)
+  // The baseline renders pg_get_triggerdef output — uppercase, and the EXECUTE
+  // FUNCTION target unqualified. Lowercase the slice so the assertions below are
+  // unchanged in substance; only the casing of the source they read has moved.
+  const trgAt = SCHEMA.toLowerCase().lastIndexOf('create trigger trg_recompute_invoice_on_edit')
+  const trg = trgAt < 0 ? '' : SCHEMA.slice(trgAt, SCHEMA.indexOf(';', trgAt) + 1).toLowerCase()
   check('trigger', 'trg_recompute_invoice_on_edit exists on invoices', /after update of [^;]* on public\.invoices/.test(trg), true)
   check('trigger', 'AFTER (so the nested UPDATE fires the status triggers, like a payment does)', trg.includes('after update of'), true)
   check('trigger', 'guarded to real changes (is distinct from)', (trg.match(/is distinct from/g) || []).length, 3)
-  check('trigger', 'executes the delegate fn', trg.includes('execute function public.recompute_invoice_paid_on_edit()'), true)
+  check('trigger', 'executes the delegate fn',
+    /execute function (public\.)?recompute_invoice_paid_on_edit\(\)/.test(trg), true)
 
   // THE regression invariant: every money column the invoice editor writes must
   // be in the trigger's column list. Add a money column to the editor without

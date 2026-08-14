@@ -412,7 +412,7 @@ console.log('\nUnknown cannot be formatted into a number:')
 console.log('\nThe migration that makes a cross-tenant cost impossible is present:')
 {
   const sql = readFileSync(
-    join(__dirname, '..', 'supabase', 'RUN-2026-08-11c-job-cost-tenancy.sql'), 'utf8')
+    join(__dirname, '..', 'supabase', 'archive', 'run', 'RUN-2026-08-11c-job-cost-tenancy.sql'), 'utf8')
   const code = sql.replace(/^\s*--.*$/gm, '')
   check('jobs carries the referenceable (id, user_id) key',
     /add constraint jobs_id_user_key unique \(id, user_id\)/i.test(code))

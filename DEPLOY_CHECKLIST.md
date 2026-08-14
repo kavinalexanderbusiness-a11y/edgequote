@@ -16,95 +16,69 @@ fresh database completely; `tsc` + `next build` pass.
 
 ## SQL migrations
 
-**Each migration is listed once.** Pick the path that matches your target database.
+**One file. `supabase/migrations/`, in filename order. Nothing else.**
 
-### Fresh database / disaster recovery — schema.sql **then every later RUN file**
-
-> ⚠️ **This section used to say "run ONE file — nothing else is required."** That was
-> true when it was written (2026-06-25) and has been wrong since 2026-06-27. As of
-> **2026-07-21 there are 89 `RUN-*.sql` files** (was 27 at the 2026-07-15 revision
-> of this note — the count rots fast; trust `ls supabase/RUN-*.sql`, not this
-> sentence). Running `schema.sql` alone rebuilds a database weeks behind
-> production. It does not error — it just quietly produces a schema the app fails
-> against. Two further cautions from the migration audit: production's schema is
-> NOT a subset of main (unmerged branches have been applied by hand — the live
-> catalog is the only authority), and several functions (`get_portal_data`,
-> `submit_website_lead`) are `create or replace`d by MULTIPLE files — only the
-> newest in each chain may ever run, or the portal silently rolls backward.
-
-```
-# 1. the snapshot (complete as of 2026-06-25)
-supabase/schema.sql
-
-# 2. THEN every RUN file dated after it, in filename (date) order — they are idempotent
-ls supabase/RUN-*.sql | sort        # apply each in this order
-
-# 3. THEN the canonical objects — LAST, and not optional
-ls supabase/CANONICAL-*.sql | sort  # currently: get_portal_data
+```bash
+psql "$DATABASE_URL" -f supabase/migrations/20260814060714_baseline.sql
+# then any later file in supabase/migrations/, in filename order
 ```
 
-**Why step 3 exists.** Some objects were `create or replace`d by many migrations at
-once. `get_portal_data` was the worst: nine `RUN-*.sql` files plus eleven copies
-inside `schema.sql`, each one a complete runnable body — so applying an older file
-silently replaced the live function with an earlier version and the customer portal
-started returning less (no `services`, no `properties`). It never errored. Those are
-now all tombstones, and the single body lives in `supabase/CANONICAL-get_portal_data.sql`.
+That is the whole procedure, for a fresh database and for an existing one.
 
-Running it **last** is what makes the order safe: whatever the dated files did on the
-way past, the canonical body wins. **Skip step 3 and `get_portal_data` will not exist
-at all** — the portal RPC 404s and every customer portal page comes back empty.
-
-> ### ⛔ Run `npm run verify:portal-canonical` BEFORE step 3
+> ### What this replaces, and the deploy it nearly cost
 >
-> "The canonical body wins" is a loaded gun pointed at production when that body is
-> **stale**. The file is a snapshot of an object that keeps moving, so it rots by
-> default — and because it wins, a stale snapshot does not fail, it silently rolls
-> the function backward. No error, no stack trace: just fields missing from a
-> customer's screen, or a security predicate gone.
+> This section used to say: run `schema.sql`, then all 120 `RUN-*.sql` in date order,
+> then `CANONICAL-get_portal_data.sql` **last so it wins**.
 >
-> This is not hypothetical. On 2026-08-09 the file had already drifted by one line,
-> and that line carried both the draft-invoice privacy predicate (a confirmed data
-> exposure, fixed in `06a50db`) and the deposit fields. Applying it as written here
-> would have re-opened the exposure.
+> On **2026-08-14** that instruction was live and loaded. Production had been serving
+> a `change_orders` projection from `get_portal_data` since 05:33 that morning. The
+> canonical file in this repository did not have it. Following step 3 as written would
+> have replaced the live function with the older body and **deleted a customer-facing
+> feature from the portal** — no error, no failed migration, just a key that stopped
+> being returned.
 >
-> `npm run verify:portal-canonical` is the check that makes step 3 safe. It fails the
-> build if the file has lost a required predicate or field, if a tombstoned migration
-> has regained a runnable body, or — with database credentials present — if the live
-> function returns anything this file no longer builds. **If it fails, resync the file
-> from production before deploying; do not apply it.**
+> That is the same mechanism that already removed portal fields twice before. "Run it
+> last so the newest definition wins" and "a stale file silently rolls production
+> backward" are not two behaviours; they are one behaviour described optimistically.
+>
+> The rest of the old path was no better: `schema.sql` was a 2026-06-25 snapshot seven
+> weeks behind, and the `RUN-*.sql` set — while close — was not a complete history.
+> Eight applied migrations had no repo file creating any of their objects.
+>
+> The baseline removes the dilemma. It is **generated from the live catalogue**
+> (`npm run schema:baseline`), so it cannot describe a database that does not exist,
+> and there is no second copy of anything that could be older than the first.
+>
+> All of that history is preserved under `supabase/archive/` — the 120 RUN files, the
+> old snapshot, the retired canonical file, and the SQL of all 133 migrations
+> production actually ran, recovered from its ledger. **Never apply anything from
+> `archive/`.**
 
-`schema.sql` creates the 7 base tables (`business_settings, service_templates,
-travel_fee_tiers, properties, job_recurrences, jobs, invoices`) + RLS policies +
-indexes, then every dated migration **through 2026-06-25 only**, including the
-`invoices(job_id)` unique index.
+### Before you deploy a schema change
 
-**Keep this current.** Supabase's migration history only records what was applied via
-MCP `apply_migration` — everything built by pasting into the dashboard (i.e. most of
-this schema's history) left no row. So these files are the only record a rebuild can
-be driven from. When you add a `RUN-*.sql` it joins this path automatically by date;
-but create an object in the dashboard and never write a file, and it exists *only* in
-production — disaster recovery silently loses it.
+```bash
+npm run verify:migrations   # every applied migration is represented; one baseline; history unedited
+npm run verify:rebuild      # builds an empty Postgres from the repo, diffs it against production
+npm run verify:schema       # asks production whether it still matches the repo
+```
 
-That has already happened three times, all found and transcribed back on 2026-07-15:
+`verify:rebuild` needs PGlite (`npm i -D @electric-sql/pglite`) and **skips clean
+without it** — so run it deliberately before a release. It is the only check that
+proves this procedure works rather than assuming it, and it has already earned its
+keep: it caught a baseline that applied fine to an existing database and failed from
+zero, because a CHECK constraint called a function declared later in the file.
 
-| Object | Was only in prod | Now recorded in |
-|---|---|---|
-| `social_connections`, `publish_jobs` | Marketing Studio publishing | `RUN-2026-07-15-record-marketing-publishing-tables.sql` |
-| `branding` storage bucket | business logo (settings upload + every branded email) | `RUN-2026-07-15-record-branding-bucket.sql` |
+If `verify:schema` reports drift, production changed and the repo does not know.
+**Do not edit `fingerprint.json` to silence it.** Resync:
 
-**Verified 2026-07-15 — production vs. source control:**
-all 54 tables, 43 functions, 36 triggers and 4 storage buckets are now creatable from
-this repo. (The previous known exception is closed: `automation_signals` is
-covered by `supabase/RUN-2026-07-14-automation-signals.sql`, on `main` — a
-rebuild from `main` creates it.)
+```bash
+npm run schema:contract && npm run schema:baseline && npm run verify:rebuild
+```
 
-### Existing database — incremental files (already applied this session; listed for the audit trail / a DB that's behind). Apply in this order; each is idempotent:
-1. `supabase/RUN-2026-06-25-autopay-website.sql` — AutoPay (2026-06-25c) + Website Import (2026-06-25d)
-2. `supabase/RUN-db-catchup-2026-06-25.sql` — booking columns + funnel, `measurements`, `schedule_items`, `search_conversations` (lead badge), `pg_trgm` indexes, **REVOKE EXECUTE … FROM public** on the 11 trigger functions
-3. `supabase/RUN-2026-06-25e-website-lead-rate-limit.sql` — `business_settings.website_lead_hourly_limit` + rate-limited `submit_website_lead`
-4. `supabase/RUN-2026-06-25f-invoice-job-unique.sql` — **the duplicate-invoice / double-charge guard** (partial unique index on `invoices(job_id)`)
-
-> If you've followed this session, only **#4** may be outstanding — run it before relying on AutoPay.
+Then recover the SQL of any migration lacking a file and archive it. Full process:
+**[docs/MIGRATIONS.md](docs/MIGRATIONS.md)**. Full rebuild-from-nothing procedure,
+including what the repo *cannot* restore (all data, auth users, storage files):
+**[docs/DISASTER_RECOVERY.md](docs/DISASTER_RECOVERY.md)**.
 
 ## Environment variables (Vercel project settings)
 

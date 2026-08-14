@@ -27,6 +27,7 @@
 // ⚠️ THIS GUARD WRITES NOTHING, EVER — not even a fixture. It is the one place
 // that must be trustworthy when everything else is suspect.
 
+import { baselineFile } from './lib/schema-source'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createClient } from '@supabase/supabase-js'
@@ -152,8 +153,14 @@ const walk = (dir: string) => {
     if (e.isDirectory()) { walk(rel); continue }
     if (!/\.(ts|tsx|sql)$/.test(e.name)) continue
     const text = readFileSync(join(process.cwd(), rel), 'utf8')
-    // The migration that DEFINES the marker is the one legitimate mention.
+    // DEFINING the marker is legitimate; CONSULTING it is not. Three files define it:
+    // the original migration, its archived copy, and the generated baseline (which is
+    // the schema, so of course it declares the table and the function). Exempting them
+    // does not soften the claim — the claim is re-made below, and made STRONGER, by
+    // asserting that no policy or trigger in the baseline branches on the marker.
     if (rel.endsWith('RUN-2026-08-11-verify-fixture-tenant.sql')) continue
+    if (rel.startsWith('supabase/archive/')) continue          // history, never applied
+    if (/supabase\/migrations\/.*_baseline\.sql$/.test(rel)) continue
     if (/verify_fixture_tenants|is_verify_fixture_tenant/.test(text)) appHits.push(rel)
   }
 }
@@ -162,6 +169,22 @@ check('no application code reads the fixture marker',
   appHits.length === 0,
   `${appHits.join(', ')} consults it — a marker that changes behaviour is a test bypass, `
   + 'and a test bypass is worth forging')
+
+// The baseline IS the schema now, so "no policy or trigger consults the marker" has
+// to be asserted against it directly rather than inferred from its absence. A RLS
+// predicate that reads is_verify_fixture_tenant() would let anyone who can write the
+// marker table read past a tenant boundary — which is exactly why it grants nothing.
+{
+  const baseline = baselineFile()
+  const sql = baseline ? readFileSync(join(process.cwd(), baseline), 'utf8') : ''
+  const behaviour = sql
+    .split(';')
+    .filter(s => /verify_fixture_tenants|is_verify_fixture_tenant/.test(s))
+    .filter(s => /create\s+policy|create\s+(constraint\s+)?trigger/i.test(s))
+  check('no policy or trigger in the baseline branches on the fixture marker',
+    behaviour.length === 0,
+    `${behaviour.length} statement(s) consult it — the marker would stop being inert`)
+}
 
 console.log('\n═══ 4. Live: the real book carries no fixture artefact ═══')
 

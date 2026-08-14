@@ -21,6 +21,7 @@
 // session and never hardcoded, never printed. Read-only throughout — no writes, no
 // payment calls.
 
+import { portalDataSql, baselineFile } from './lib/schema-source'
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync, existsSync } from 'node:fs'
 import { normalizePortal, buildPortalView, type DocBlobRenderers, type PortalData } from '../src/app/portal/[token]/model'
@@ -184,10 +185,10 @@ function checkVisibleStatusesSurviveTheModel() {
  * that `status <> 'draft'` is PRESENT; this pins that nothing narrower replaces it.
  */
 function checkServerFilterIsAnExclusionNotAnAllowlist() {
-  // The SAME file verify:portal-canonical treats as the one true definition.
-  const path = 'supabase/CANONICAL-get_portal_data.sql'
-  if (!existsSync(path)) { check(`canonical portal SQL exists at ${path}`, false); return }
-  const sql = readFileSync(path, 'utf8').replace(/\r\n?/g, '\n')
+  // The SAME definition verify:portal-canonical treats as the one true one — now
+  // the generated baseline rather than the retired hand-maintained canonical file.
+  const sql = portalDataSql().replace(/\r\n?/g, '\n')
+  if (!sql) { check('canonical portal SQL found in the baseline', false); return }
   const sel = sql.slice(sql.indexOf('from public.invoices'), sql.indexOf('from public.invoices') + 200)
   check('the invoice filter EXCLUDES draft rather than allow-listing statuses',
     /status\s*<>\s*'draft'/.test(sel) && !/status\s+in\s*\(/i.test(sel) && !/status\s*=\s*'/.test(sel),
