@@ -195,7 +195,10 @@ function RenewalRow({ o, index, onChanged }: { o: RenewalOpportunity; index: num
 }
 
 // ONE button per row. `sm:` widens the label; the phone gets the short verb.
-function RowAction({
+// Exported so verify:renewals can RENDER it — the mobile contract is a property
+// of the markup, and a grep for class names would pass on markup that never
+// reaches the screen.
+export function RowAction({
   stage, busy, quoteId, onReview, onCreate,
 }: {
   stage: RenewalStage; busy: boolean; quoteId: string | null

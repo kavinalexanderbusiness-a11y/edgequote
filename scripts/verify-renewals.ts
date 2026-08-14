@@ -27,6 +27,17 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import type { RenewalStage } from '../src/lib/renewals'
+
+// createElement rather than JSX, and React on the global BEFORE the component is
+// required: this file runs under the app's tsconfig (`jsx: preserve`), so tsx
+// leaves the component's JSX as bare `React.createElement(...)` with no import.
+// Next supplies that scope; a plain tsx process does not. Same preamble
+// verify:team and verify:mobile-shell use.
+const React = require('react') as typeof import('react')
+;(globalThis as Record<string, unknown>).React = React
+const { renderToStaticMarkup } = require('react-dom/server') as typeof import('react-dom/server')
+const { RowAction } = require('../src/components/grow/RenewalQueue') as typeof import('../src/components/grow/RenewalQueue')
 import { computeRenewals, loadRenewals, renewalStageFor, type RnJob, type RnQuote, type RnRecurrence } from '../src/lib/renewals'
 import { computeReactivation, loadReactivation, type RJob, type RQuote, type RRecurrence } from '../src/lib/reactivation'
 import { planRenewal, ranOut, renewalDue, renewalLeadDays } from '../src/lib/signals'
@@ -610,6 +621,50 @@ H('10. NO TRADE IS NAMED IN THE ENGINES')
     const hit = code.match(WORDS)
     ok(`${f} names no trade`, !hit, hit ? `found "${hit[0]}"` : '')
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+H('12. MOBILE — four things per row, and one button')
+// The owner reads this queue one-handed in a truck. The brief is literal about
+// the shape: customer, what they used to buy, why it is here, and the button.
+// The BUTTON is rendered for real (renderToStaticMarkup, the technique
+// verify:team and verify:mobile-shell use) because a phone label that exists
+// only in a class name is not a phone label. The row's text discipline is
+// asserted against its source, which is stated plainly rather than dressed up as
+// a render.
+{
+  const stages: RenewalStage[] = ['due', 'drafted', 'sent', 'expired', 'accepted']
+  for (const stage of stages) {
+    const html = renderToStaticMarkup(
+      React.createElement(RowAction, {
+        stage, busy: false, quoteId: 'q1', onReview: () => {}, onCreate: () => {},
+      }),
+    )
+    // Exactly one interactive element: a queue where a row offers three things
+    // is a queue that gets read as a menu instead of a track.
+    const controls = (html.match(/<(button|a)\b/g) || []).length
+    check(`${stage}: exactly one action in the row`, controls, 1)
+    ok(`${stage}: a short label for the phone`, /class="[^"]*sm:hidden[^"]*"/.test(html), html.slice(0, 160))
+    ok(`${stage}: and a full one from sm up`, /class="[^"]*hidden sm:inline[^"]*"/.test(html), html.slice(0, 160))
+    ok(`${stage}: the label never wraps the row`, /whitespace-nowrap/.test(html))
+    ok(`${stage}: a 36px-plus touch target`, /\bh-9\b|\bh-10\b|\bh-11\b/.test(html))
+  }
+  const accepted = renderToStaticMarkup(
+    React.createElement(RowAction, { stage: 'accepted' as RenewalStage, busy: true, quoteId: 'q1', onReview: () => {}, onCreate: () => {} }),
+  )
+  ok('a plan being created cannot be created twice', /disabled/.test(accepted))
+}
+{
+  const q = stripComments(src('src/components/grow/RenewalQueue.tsx'))
+  // Long customer names and long service names are the normal case, not the edge
+  // case, and a row that grows to fit them pushes the button off a 390px screen.
+  ok('the text column can shrink', /min-w-0 flex-1/.test(q))
+  ok('the action column cannot', /shrink-0 text-right/.test(q))
+  const truncs = (q.match(/truncate/g) || []).length
+  ok('all three text lines truncate', truncs >= 3, `${truncs} found`)
+  ok('the customer name is capped on a phone', /max-w-\[60vw\]/.test(q))
+  // The evidence is a tap away, not a paragraph in the row.
+  ok('the reasoning is behind disclosure', /aria-expanded=\{open\}/.test(q))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
