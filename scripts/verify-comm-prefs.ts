@@ -10,7 +10,7 @@
 // the real source files, because a pure harness can pin every rule and still
 // miss the only failure that matters: nobody calling them.
 
-import { readFileSync } from 'fs'
+import { readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
 import {
   resolveReach, reachSummary, orderByPreference, capabilityBlocks, reachCheck,
@@ -261,8 +261,20 @@ check('inbound STOP still writes sms_opt_in false',
 check('inbound STOP still audits to consent_changes', /consent_changes/.test(inboundSrc), true)
 check('inbound STOP does NOT consult the preference', /preferred_channel/.test(inboundSrc), false)
 
-// The DB, not just TypeScript, owns the allowed set.
-const mig = readFileSync(join(ROOT, 'supabase', 'migrations', '20260814120000_customer_preferred_channel.sql'), 'utf8')
+// The DB, not just TypeScript, owns the allowed set. Located by pattern rather
+// than by a hard-coded filename: the file is named for the version production
+// RECORDED for it (supabase_migrations.schema_migrations), so pinning the name
+// here would break the guard the moment that alignment is corrected — which is
+// exactly what happened once already.
+const migName = readdirSync(join(ROOT, 'supabase', 'migrations'))
+  .find(f => /_customer_preferred_channel\.sql$/.test(f))
+check('the migration is present in the apply path', !!migName, true)
+const mig = readFileSync(join(ROOT, 'supabase', 'migrations', migName!), 'utf8')
+// It must sort AFTER the baseline: verify:rebuild applies the baseline and every
+// migration after it in FILENAME order, so a name that sorted earlier would add
+// a column to a table that does not exist yet.
+check('…and sorts after the generated baseline',
+  migName! > readdirSync(join(ROOT, 'supabase', 'migrations')).find(f => /_baseline\.sql$/.test(f))!, true)
 check('the migration constrains the value set in the database',
   /check\s*\(preferred_channel is null or preferred_channel in \('sms', 'email', 'phone'\)\)/.test(mig), true)
 check('the column is nullable (no preference is a real state)', /not null/i.test(mig), false)
