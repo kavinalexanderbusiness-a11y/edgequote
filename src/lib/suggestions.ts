@@ -15,12 +15,12 @@ import { ProfitJob, ProfitContext, neighborhoodProfitability, neighborhoodKey } 
 import { OptJob, OptOptions, OptimizeScope, OptimizeMode, analyzeSchedule, optimizeSchedule } from '@/lib/optimizer'
 import { dayProfitability } from '@/lib/profitability'
 import {
-  CHURN_RATIO_HIGH, cadenceDays, churnRisk, isSeasonallyDormant, isVip,
+  CHURN_RATIO_HIGH, RENEWAL_LEAD_MAX_DAYS, cadenceDays, churnRisk, isSeasonallyDormant, isVip,
   lifetimeValue, ranOut,
 } from '@/lib/signals'
 import { FOLLOW_UP_DAYS, quoteIsQuiet, startOfDayMs } from '@/lib/followup'
-import { generateOccurrences, dayDelta } from '@/lib/recurrence'
-import { ServiceSeasons, serviceCategory, seasonForService, seasonEndDateFor, isWithinSeason } from '@/lib/seasons'
+import { dayDelta, type RecurringPlanPayload } from '@/lib/recurrence'
+import { ServiceSeasons, serviceCategory, seasonForService, seasonEndDateFor, isWithinSeason, nextSeasonStartISO } from '@/lib/seasons'
 import { addDays, parseISO, format, getDay } from 'date-fns'
 
 // ── Suggestions Center — EdgeQuote's business advisor ────────────────────────
@@ -67,19 +67,14 @@ export interface PriceApplyPayload {
 // One-click creation of a recurring plan from a customer's repeated one-offs.
 // All dates/price are computed in the engine (which has ctx) so the apply fn is
 // a pure DB write that mirrors the schedule page's convertToRecurring.
-export interface RecurringPlanPayload {
-  customerId: string | null
-  propertyId: string | null
-  serviceType: string | null
-  title: string
-  perVisitPrice: number
-  intervalUnit: 'week'
-  intervalCount: 1 | 2          // 1 = weekly, 2 = biweekly
-  startDate: string             // yyyy-MM-dd
-  endDate: string | null        // season end (lawn) or null
-  crewSize: number
-  durationMinutes: number | null
-}
+//
+// The payload and the write itself now live in lib/recurrence — the plan-creation
+// engine — because the renewal queue needs the identical write and a second copy
+// of "insert a recurrence, then its visits" is how this codebase grows two
+// answers to one question. Re-exported so every existing `from '@/lib/suggestions'`
+// import (SuggestionsCenter) is unchanged.
+export type { RecurringPlanPayload } from '@/lib/recurrence'
+export { createRecurringPlan } from '@/lib/recurrence'
 
 export interface SuggestionAction {
   kind: 'apply-price' | 'navigate' | 'create-recurring'
@@ -362,13 +357,11 @@ function getDurationModel(ctx: SuggestionContext): DurationModel {
 }
 
 // ── season-date helpers (cross-sell + renewal timing) ──────────────────────────
+// `nextSeasonStartISO` used to be a private copy here. It is now lib/seasons'
+// (imported above) — the seasons engine owns "when does the next season start",
+// and the copy had already drifted: it padded the day in without clamping, so a
+// season anchored on a day its month doesn't have produced an invalid date.
 function pad2(n: number): string { return String(n).padStart(2, '0') }
-// The NEXT start date (yyyy-MM-dd, strictly after today) of a recurring season.
-function nextSeasonStartISO(season: { startMonth: number; startDay: number }, today: string): string {
-  const y = Number(today.slice(0, 4))
-  const thisYear = `${y}-${pad2(season.startMonth)}-${pad2(season.startDay)}`
-  return thisYear > today ? thisYear : `${y + 1}-${pad2(season.startMonth)}-${pad2(season.startDay)}`
-}
 // The next end date (yyyy-MM-dd, on/after today) of a season — for "season ending soon".
 function nextSeasonEndISO(season: { endMonth: number; endDay: number }, today: string): string {
   const y = Number(today.slice(0, 4))
@@ -1504,53 +1497,57 @@ function crossSeasonOffers(ctx: SuggestionContext): Suggestion[] {
   return candidates.sort((a, b) => b.impact - a.impact).slice(0, 4)
 }
 
-// ── ❤️ RETENTION: seasonal renewal — re-book next season before the gap ──────────
-// A seasonal recurring series ending at season-end with nothing booked for next
-// season is a route you re-quote from scratch every spring. One tap re-creates the
-// plan (reusing createRecurringPlan / the recurrence engine). Fires only in the
-// ~8-week pre-season window so it lands when re-booking is the right move.
+// ── ❤️ RETENTION: seasonal renewal — offer next season before the gap ───────────
+// A seasonal series that ended with its season and has nothing booked for the
+// next one. Fires in the same pre-season window the renewal engine uses
+// (RENEWAL_LEAD_MAX_DAYS), so the feed and the renewal queue can never disagree
+// about when to ask.
+//
+// ⛔ THIS USED TO CREATE THE SEASON IN ONE TAP. It shipped a `create-recurring`
+// action that inserted a fresh recurrence and up to 26 visits at next year's
+// dates — at LAST year's price, and without the customer ever having agreed to
+// any of it. That is a schedule (and an invoice run) built on an assumption, and
+// it is the exact thing renewals are not allowed to do. It now points at the
+// renewal queue, where the owner reviews the price and scope, sends a quote, and
+// the plan is created only after the customer accepts.
+//
+// It also required a WEEKLY or BIWEEKLY cadence to fire, which quietly meant
+// "only the trades that mow". The queue it now points at has no such rule.
 function seasonalRenewals(ctx: SuggestionContext): Suggestion[] {
   const out: Suggestion[] = []
   for (const s of getSeries(ctx)) {
     const season = seasonForService(s.rep.service_type, ctx.seasons)
     if (!season) continue                                   // only seasonal services renew
     if (!s.jobs.some(j => j.status === 'completed')) continue // established series only
-    const count: 1 | 2 | null = s.cadence === 'weekly' ? 1 : s.cadence === 'biweekly' ? 2 : null
-    if (!count) continue                                    // one-click rebook = weekly/biweekly
     if (s.perVisit <= 0 || !s.customerId) continue
     const start = nextSeasonStartISO(season, ctx.today)
     const daysUntil = daysUntilISO(start, ctx.today)
-    if (daysUntil < 0 || daysUntil > 60) continue           // only within the renewal window
+    if (daysUntil < 0 || daysUntil > RENEWAL_LEAD_MAX_DAYS) continue  // the one renewal window
     if (s.jobs.some(j => j.scheduled_date >= start && j.status !== 'cancelled')) continue // already re-booked
-    const startDate = firstWorkdayOnOrAfter(ctx, start)
-    const endDate = seasonEndDateFor(startDate, season)
+    const endDate = seasonEndDateFor(firstWorkdayOnOrAfter(ctx, start), season)
     const vpy = seriesVisitsPerYear(s)
     const annual = Math.round(s.perVisit * vpy)
     if (annual < 200) continue
-    const svc = serviceCategory(s.rep.service_type) === 'lawn' ? 'mowing' : (s.rep.service_type || 'service')
-    const startLabel = format(parseISO(startDate + 'T00:00:00'), 'MMM d')
-    const plan: RecurringPlanPayload = {
-      customerId: s.customerId, propertyId: s.rep.property_id, serviceType: s.rep.service_type, title: s.rep.title,
-      perVisitPrice: Math.round(s.perVisit), intervalUnit: 'week', intervalCount: count,
-      startDate, endDate, crewSize: s.rep.crew_size || 1, durationMinutes: s.rep.duration_minutes,
-    }
+    const svc = s.rep.service_type || 'their service'
+    const startLabel = format(parseISO(start + 'T00:00:00'), 'MMM d')
     out.push({
       id: `renew-${s.recurrenceId}`,
       category: 'retention',
-      title: `Re-book ${s.customerName} for next season`,
-      subtitle: `${s.cadence} ${svc} from ${startLabel} · ${vpy} visits`,
+      title: `Offer ${s.customerName} next season`,
+      subtitle: `${s.cadence} ${svc} · season starts ${startLabel}`,
       impact: annual, oneTime: false, revenueImpact: annual,
       confidence: 'high', confidenceScore: CONF_SCORE.high,
       why: [
-        `${s.customerName}'s ${svc} plan has nothing booked for next season`,
-        'Lock in the full season now in one tap — before they drift to a competitor',
-        `${vpy} visits × $${Math.round(s.perVisit)} = +$${annual}/yr`,
+        `${s.customerName}'s ${svc} plan ended with the season and has nothing booked for the next one`,
+        'Review the price and scope, then send it — their season is booked once they accept',
+        `${vpy} visits × $${Math.round(s.perVisit)} = $${annual}/season at last season's price`,
       ],
       calc: [
-        `Re-creates the ${s.cadence} plan ${startLabel} → ${format(parseISO(endDate + 'T00:00:00'), 'MMM d')} (${vpy} visits)`,
-        `At the current $${Math.round(s.perVisit)}/visit`,
+        `Last season ran ${vpy} visits at $${Math.round(s.perVisit)}/visit`,
+        `Next season's window would be ${startLabel} → ${format(parseISO(endDate + 'T00:00:00'), 'MMM d')}`,
+        'Nothing is scheduled until they accept the renewal quote',
       ],
-      action: { kind: 'create-recurring', label: `Re-book ${vpy} visits`, plan },
+      action: { kind: 'navigate', label: 'Review renewal', href: '/dashboard/reactivation#renewals' },
     })
   }
   return out.sort((a, b) => b.impact - a.impact).slice(0, 5)
@@ -1857,48 +1854,6 @@ export async function applyPriceRaise(
     return { ok: true }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : 'Apply failed' }
-  }
-}
-
-// ── one-click apply (create recurring plan) ───────────────────────────────────
-// Mirrors the schedule page's convertToRecurring: GENERATE + VALIDATE before any
-// write (refuse a plan with no visits), insert the recurrence, then its visits;
-// roll the orphan recurrence back if the visit insert fails. Non-quote series →
-// the per-visit price lives on every job (no initial/cadence split).
-export async function createRecurringPlan(
-  supabase: SupabaseClient,
-  plan: RecurringPlanPayload,
-): Promise<{ ok: boolean; error?: string; count?: number }> {
-  // getSession (local read), not getUser (network hop): the id only scopes RLS-filtered reads.
-  const { data: { session } } = await supabase.auth.getSession()
-  const user = session?.user
-  if (!user) return { ok: false, error: 'Not signed in' }
-  try {
-    const dates = generateOccurrences(plan.startDate, plan.intervalUnit, plan.intervalCount, plan.endDate, null)
-    const future = dates.filter(d => d >= plan.startDate)
-    if (future.length === 0) return { ok: false, error: 'No visits would be generated — check the season window.' }
-    const { data: rec, error: recErr } = await supabase.from('job_recurrences').insert({
-      user_id: user.id,
-      freq: plan.intervalCount === 1 ? 'weekly' : plan.intervalCount === 2 ? 'biweekly' : null,
-      interval_unit: plan.intervalUnit, interval_count: plan.intervalCount,
-      start_date: plan.startDate, end_date: plan.endDate, end_count: null,
-      customer_id: plan.customerId,
-    }).select().single()
-    if (recErr || !rec) return { ok: false, error: recErr?.message || 'Could not create the plan' }
-    const rows = future.map(d => ({
-      user_id: user.id, customer_id: plan.customerId, property_id: plan.propertyId, quote_id: null,
-      recurrence_id: (rec as { id: string }).id, title: plan.title, service_type: plan.serviceType,
-      scheduled_date: d, crew_size: plan.crewSize, status: 'scheduled', price: plan.perVisitPrice,
-      is_initial_visit: false, duration_minutes: plan.durationMinutes,
-    }))
-    const { error: jErr } = await supabase.from('jobs').insert(rows)
-    if (jErr) {
-      await supabase.from('job_recurrences').delete().eq('id', (rec as { id: string }).id) // rollback orphan
-      return { ok: false, error: jErr.message }
-    }
-    return { ok: true, count: future.length }
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : 'Create failed' }
   }
 }
 

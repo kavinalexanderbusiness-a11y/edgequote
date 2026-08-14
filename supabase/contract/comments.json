@@ -36,6 +36,11 @@
    "comment": "Portal self-service: fill a MISSING customer phone/email from a valid portal token. Fills only - never overwrites a populated field (an email change is an identity change). Never touches sms_opt_in/email_opt_in/message_prefs. Refuses a value another customer of the same owner already holds. Returns the row state read back after the write."
   },
   {
+   "fn": "portal_request_photos_ok",
+   "args": "p text[]",
+   "comment": "Validator for service_requests.photos: at most 6 elements, each a booking-uploads path of the shape portal/<uuid>/<uuid>.<ext>. Used by a CHECK constraint, so it holds no matter which door writes."
+  },
+  {
    "fn": "portal_set_scheduling_preference",
    "args": "p_token text, p_quote_id uuid, p_date date, p_date_2 date, p_timing text, p_note text",
    "comment": "THE writer of a customer's scheduling preference. Token proves the customer; quote must be theirs and 'accepted'. A preference is a request — it never creates, moves, or implies a visit. All-null clears it."
@@ -62,6 +67,10 @@
    "comment": "One-time beta signup invites. Raw tokens are never stored — sha256 hex only. Service-role and DEFINER access only: RLS is on with zero policies."
   },
   {
+   "tbl": "change_orders",
+   "comment": "Scope + price agreed AFTER the original approval. Owns the AUTHORIZATION only - approval mints a job_line_items row (change_order_id), which is the money. The originating quote is never rewritten."
+  },
+  {
    "tbl": "crew_media",
    "comment": "CREW AUDIENCE. Reference photos/video the office sends TO the field — what a worker needs BEFORE and DURING the work. Never customer-facing: no portal projection selects it. Not proof of work — that is job_photos + jobs.completion_summary."
   },
@@ -84,6 +93,10 @@
   {
    "tbl": "job_work_sessions",
    "comment": "One stretch of work on one job on one day. jobs.actual_minutes is the sum of these (enforced by trigger). minutes = elapsed on site; labour_minutes = minutes x workers."
+  },
+  {
+   "tbl": "password_reset_requests",
+   "comment": "Abuse ledger for the public password-reset endpoint. email_key = sha256(lower(trim(email))) — never the address. No user_id/email/token/IP by design."
   },
   {
    "tbl": "platform_capabilities",
@@ -208,6 +221,11 @@
    "comment": "0=Sun..6=Sat. The OT WORK WEEK boundary — legally load-bearing, so it is explicit rather than assumed. Defaults to 1 (Mon) to match the existing timesheet week."
   },
   {
+   "col": "decided_via",
+   "tbl": "change_orders",
+   "comment": "portal = the customer decided it themselves; owner = the owner recorded a decision taken elsewhere. Never inferred - no surface may imply a customer tapped approve when they did not."
+  },
+  {
    "col": "message_id",
    "tbl": "crew_media",
    "comment": "NULL = office reference material for the visit (the original meaning). Set = an attachment on that crew_messages row. Deleting the message takes its attachments with it."
@@ -328,6 +346,11 @@
    "comment": "How many automatic payment reminders have been sent. Compare-and-swapped by /api/cron/invoice-reminders to guarantee at-most-once, and capped by the owner's maximum."
   },
   {
+   "col": "change_order_id",
+   "tbl": "job_line_items",
+   "comment": "Set only by change_order_apply_approval(). Its presence means this money exists BECAUSE a customer approved a change order - never hand-write it."
+  },
+  {
    "col": "completion_issue",
    "tbl": "jobs",
    "comment": "INTERNAL ONLY. What the field found that needs attention (leaking sprinkler head, wants a hedge quote). MUST NOT be selected by get_portal_data or reach any customer surface."
@@ -413,6 +436,11 @@
    "comment": "The customer's preferred work date — a REQUEST, never a booking. A real visit exists only when the owner schedules one. Written only by portal_set_scheduling_preference while the quote is accepted."
   },
   {
+   "col": "renewal_of_recurrence_id",
+   "tbl": "quotes",
+   "comment": "The service plan this quote renews. Set once, points backwards; the renewed plan is a NEW job_recurrences row and the old one is never modified. lib/renewals requires this link plus status=accepted before any visits are created."
+  },
+  {
    "col": "selected_cadence",
    "tbl": "quotes",
    "comment": "Which cadence was actually bought (one_time|weekly|biweekly|monthly). NULL = nobody said — do NOT infer it from whichever price column is populated; that is the bug this column exists to kill."
@@ -441,6 +469,21 @@
    "col": "recipient",
    "tbl": "report_schedules",
    "comment": "NULL = defer to business_settings.email_primary (a pointer cannot go stale)."
+  },
+  {
+   "col": "dedup_key",
+   "tbl": "service_requests",
+   "comment": "Set by portal_submit_request. With service_requests_open_dedup_idx it makes a repeated submission of the same ask a no-op while the first is still open."
+  },
+  {
+   "col": "from_portal",
+   "tbl": "service_requests",
+   "comment": "True only for rows created by portal_submit_request (incl. its portal_request_service wrapper) — a customer acting in their own portal. Website leads, online bookings and system notes stay false."
+  },
+  {
+   "col": "photos",
+   "tbl": "service_requests",
+   "comment": "booking-uploads STORAGE PATHS (never URLs) the customer attached. The bucket is named in application code at render time; see portal_request_photos_ok for the enforced shape."
   },
   {
    "col": "is_favorite",

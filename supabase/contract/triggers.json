@@ -12,6 +12,30 @@
   "tgenabled": "O"
  },
  {
+  "def": "CREATE TRIGGER trg_change_order_apply_approval AFTER UPDATE ON public.change_orders FOR EACH ROW EXECUTE FUNCTION change_order_apply_approval()",
+  "tbl": "change_orders",
+  "tgname": "trg_change_order_apply_approval",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_change_order_assign_number BEFORE INSERT ON public.change_orders FOR EACH ROW EXECUTE FUNCTION change_order_assign_number()",
+  "tbl": "change_orders",
+  "tgname": "trg_change_order_assign_number",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_change_order_guard_transition BEFORE UPDATE ON public.change_orders FOR EACH ROW EXECUTE FUNCTION change_order_guard_transition()",
+  "tbl": "change_orders",
+  "tgname": "trg_change_order_guard_transition",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_notify_change_order_decision AFTER UPDATE ON public.change_orders FOR EACH ROW EXECUTE FUNCTION notify_change_order_decision()",
+  "tbl": "change_orders",
+  "tgname": "trg_notify_change_order_decision",
+  "tgenabled": "O"
+ },
+ {
   "def": "CREATE TRIGGER trg_content_pieces_updated BEFORE UPDATE ON public.content_pieces FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
   "tbl": "content_pieces",
   "tgname": "trg_content_pieces_updated",

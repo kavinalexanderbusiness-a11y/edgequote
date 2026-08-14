@@ -113,6 +113,36 @@
   "cmd": "INSERT",
   "qual": null,
   "roles": "{public}",
+  "tablename": "change_orders",
+  "permissive": "PERMISSIVE",
+  "policyname": "change_orders: insert own",
+  "schemaname": "public",
+  "with_check": "(auth.uid() = user_id)"
+ },
+ {
+  "cmd": "SELECT",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "change_orders",
+  "permissive": "PERMISSIVE",
+  "policyname": "change_orders: select own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "UPDATE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "change_orders",
+  "permissive": "PERMISSIVE",
+  "policyname": "change_orders: update own",
+  "schemaname": "public",
+  "with_check": "(auth.uid() = user_id)"
+ },
+ {
+  "cmd": "INSERT",
+  "qual": null,
+  "roles": "{public}",
   "tablename": "consent_changes",
   "permissive": "PERMISSIVE",
   "policyname": "consent_changes: insert own",
@@ -1011,7 +1041,7 @@
  },
  {
   "cmd": "DELETE",
-  "qual": "(auth.uid() = user_id)",
+  "qual": "((auth.uid() = user_id) AND (change_order_id IS NULL))",
   "roles": "{public}",
   "tablename": "job_line_items",
   "permissive": "PERMISSIVE",
@@ -1027,7 +1057,7 @@
   "permissive": "PERMISSIVE",
   "policyname": "job_line_items: insert own",
   "schemaname": "public",
-  "with_check": "(auth.uid() = user_id)"
+  "with_check": "((auth.uid() = user_id) AND (change_order_id IS NULL))"
  },
  {
   "cmd": "SELECT",
@@ -1041,13 +1071,13 @@
  },
  {
   "cmd": "UPDATE",
-  "qual": "(auth.uid() = user_id)",
+  "qual": "((auth.uid() = user_id) AND (change_order_id IS NULL))",
   "roles": "{public}",
   "tablename": "job_line_items",
   "permissive": "PERMISSIVE",
   "policyname": "job_line_items: update own",
   "schemaname": "public",
-  "with_check": null
+  "with_check": "((auth.uid() = user_id) AND (change_order_id IS NULL))"
  },
  {
   "cmd": "DELETE",

@@ -8,8 +8,8 @@ import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Banner } from '@/components/ui/Banner'
-import { applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix, formatCurrency } from '@/lib/utils'
-import { Globe } from 'lucide-react'
+import { applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix, formatCurrency, formatDate } from '@/lib/utils'
+import { Globe, RefreshCw } from 'lucide-react'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes } from '@/lib/pricing'
 import { servicePricingKind } from '@/lib/servicePricing'
 import { saveManual } from '@/lib/measure/data'
@@ -17,6 +17,7 @@ import { ensureCustomerAndProperty } from '@/lib/customers'
 import { applyFeeRecovery } from '@/lib/invoiceTotals'
 import { sumServiceLines } from '@/lib/quoteServices'
 import { LeadPrefillPayload, LEAD_PREFILL_KEY, closeOpenLeads } from '@/lib/leads'
+import { clearRenewalPrefill, readRenewalPrefill, type RenewalPrefillPayload } from '@/lib/renewals'
 import { toast } from '@/lib/toast'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
 
@@ -53,12 +54,25 @@ export default function NewQuotePage() {
   const searchParams = useSearchParams()
   const defaultCustomerId = searchParams.get('customer') || undefined
   const defaultPropertyId = searchParams.get('property') || undefined
+  // ── Renewing a service plan ────────────────────────────────────────────────
+  // This IS the renewal review screen. There is no separate renewal form: the
+  // owner lands in the builder they already know, with last cycle's service,
+  // cadence and price in the fields, and changes whatever they want to change
+  // before sending. "The owner reviews price and scope" means an editable quote.
+  //
+  // The plan id lives in the URL and the pre-filled numbers live in
+  // sessionStorage, split by what it costs to lose each. Losing the id would
+  // turn this into an ordinary quote that never closes its own renewal row and
+  // can never authorise a plan — so it rides where a refresh, a back-nav and a
+  // re-open all keep it. Losing the numbers costs some typing.
+  const renewalOfRecurrenceId = searchParams.get('renew') || null
   const [customers, setCustomers] = useState<Customer[]>([])
   const [templates, setTemplates] = useState<ServiceTemplate[]>([])
   const [tiers, setTiers] = useState<TravelFeeTier[]>([])
   const [settings, setSettings] = useState<BusinessSettings | null>(null)
   const [measurement, setMeasurement] = useState<MeasurementPayload | null>(null)
   const [lead, setLead] = useState<LeadPrefillPayload | null>(null)
+  const [renewal, setRenewal] = useState<RenewalPrefillPayload | null>(null)
   const [loading, setLoading] = useState(true)
 
   const supabase = createClient()
@@ -90,6 +104,17 @@ export default function NewQuotePage() {
           setLead(parsed)
         }
       } catch { window.sessionStorage.removeItem(LEAD_PREFILL_KEY) }
+    }
+    // Adopt a renewal handoff, but ONLY the one this URL is for. A stashed
+    // payload from a renewal the owner opened and abandoned must not seed the
+    // next plan's quote with the previous plan's price — the same
+    // wrong-customer trap the lead handoff above is guarded against, and worse
+    // here because the leaked value is money.
+    const r = readRenewalPrefill()
+    if (r) {
+      const forPlan = new URLSearchParams(window.location.search).get('renew')
+      if (forPlan && r.recurrenceId === forPlan) setRenewal(r)
+      else clearRenewalPrefill()
     }
   }, [])
 
@@ -262,6 +287,13 @@ export default function NewQuotePage() {
       // transitions through QuoteStatusControl (markSentPatch/markWonPatch) on the
       // detail page — never a raw status set that skips sent_at/valid_until.
       status: 'draft',
+      // Which service plan this quote renews, from the URL. Written once and
+      // never updated. It is what lets the renewal queue tell "already offered"
+      // from "not looked at", and it is the consent trail lib/renewals demands
+      // before it will create a single visit. The composite FK (user_id, id)
+      // means a plan id from another tenant is rejected by the database, not by
+      // this form.
+      renewal_of_recurrence_id: renewalOfRecurrenceId,
       user_id: user!.id,
     }).select().single()
 
@@ -400,7 +432,15 @@ export default function NewQuotePage() {
       if (typeof window !== 'undefined' && (createdCustomer || matchedBy)) {
         window.sessionStorage.setItem('eq_quote_save_customer', JSON.stringify({ created: createdCustomer, name: customerName, matchedBy }))
       }
-      toast.success(lead ? 'Quote created from the website lead.' : 'Quote created.')
+      // The renewal handoff is spent only now, when the save it existed for has
+      // landed — same rule as the lead handoff above, for the same reason: a
+      // refresh mid-build must not sever it.
+      if (renewalOfRecurrenceId) clearRenewalPrefill()
+      toast.success(
+        renewalOfRecurrenceId ? 'Renewal quote created — send it, and their plan is booked once they accept.'
+        : lead ? 'Quote created from the website lead.'
+        : 'Quote created.',
+      )
       router.push(`/dashboard/quotes/${data.id}`)
       return true
     }
@@ -457,11 +497,49 @@ export default function NewQuotePage() {
     }
   }, [measurement, templates])
 
+  // Last cycle's decisions, put back in front of the owner to be changed. The
+  // per-visit figure goes in the cadence field the plan actually ran at, so the
+  // number they see is the number that plan charged — not a fresh engine guess.
+  // QuoteBuilder seeds priceOrigin='manual' from a non-zero initial_price, which
+  // is exactly right here: this price IS a past decision of theirs.
+  const renewalDefaults = useMemo(() => {
+    if (!renewal) return undefined
+    const per = renewal.perVisit > 0 ? renewal.perVisit : 0
+    return {
+      customer_id: renewal.customerId,
+      customer_name: renewal.customerName,
+      service_type: renewal.serviceName,
+      // A cadence with a standard price column fills that column. One with no
+      // column (every 3 weeks, every 10 days) fills the one-time price instead
+      // and leaves the cadence to the owner — inventing a weekly price for a
+      // three-weekly plan would be a number nobody chose.
+      ...(renewal.cadence === 'weekly' ? { weekly_price: per }
+        : renewal.cadence === 'biweekly' ? { biweekly_price: per }
+        : renewal.cadence === 'monthly' ? { monthly_price: per }
+        : { initial_price: per }),
+    }
+  }, [renewal])
+
   if (loading) return <div className="max-w-5xl mx-auto space-y-6"><SkeletonRows count={6} /></div>
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      {lead ? (
+      {renewalOfRecurrenceId ? (
+        <>
+          <PageHeader title="Renew a service plan" description="Review the price and scope, then send it. Nothing is scheduled until they accept." />
+          <Banner tone="accent" icon={RefreshCw}>
+            <span className="font-semibold text-ink">Renewing {renewal ? `${renewal.customerName}’s ${renewal.cadenceLabel.toLowerCase()} ${renewal.serviceName}` : 'a service plan'}</span>
+            {renewal?.previousWindow ? <> · last ran {renewal.previousWindow}</> : null}
+            {renewal && renewal.previousVisits > 0 ? <> · {renewal.previousVisits} visit{renewal.previousVisits !== 1 ? 's' : ''} delivered</> : null}
+            {renewal && renewal.perVisit > 0 ? <> at <span className="font-semibold text-ink">{formatCurrency(renewal.perVisit)}</span>/visit</> : null}.
+            <span className="block mt-1 text-xs text-ink-muted">
+              Last cycle’s figures are pre-filled — change anything before you send. Their previous
+              plan and its history stay exactly as they are; accepting this creates a new one.
+              {renewal?.nextCycleStart ? ` The next cycle would start ${formatDate(renewal.nextCycleStart)}.` : ''}
+            </span>
+          </Banner>
+        </>
+      ) : lead ? (
         <>
           <PageHeader title="New quote from website lead" description="Review the pre-filled details and price, then create." />
           <Banner tone="accent" icon={Globe}>
@@ -491,9 +569,9 @@ export default function NewQuotePage() {
         templates={templates}
         tiers={tiers}
         settings={settings}
-        defaultCustomerId={lead?.customerId || measurement?.customerId || defaultCustomerId}
-        defaultPropertyId={measurement?.propertyId || defaultPropertyId}
-        defaultValues={lead ? {
+        defaultCustomerId={renewal?.customerId || lead?.customerId || measurement?.customerId || defaultCustomerId}
+        defaultPropertyId={renewal?.propertyId || measurement?.propertyId || defaultPropertyId}
+        defaultValues={renewalDefaults ? renewalDefaults : lead ? {
           // Pre-filled from a website quote request — review, adjust price, create.
           customer_id: lead.customerId || '',
           customer_name: lead.customerName || '',

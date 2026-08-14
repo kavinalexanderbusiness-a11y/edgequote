@@ -38,6 +38,7 @@
     "verify:settings-save": "tsx scripts/verify-settings-save.ts",
     "verify:crew-sync": "tsx scripts/verify-crew-sync.ts",
     "verify:recurrence": "tsx scripts/verify-recurrence.ts",
+    "verify:renewals": "tsx scripts/verify-renewals.ts",
     "verify:dedup": "tsx scripts/verify-dedup.ts",
     "verify:dedup-contract": "tsx scripts/verify-dedup-contract.ts",
     "verify:route": "tsx scripts/verify-route.ts",

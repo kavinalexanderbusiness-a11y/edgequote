@@ -21,9 +21,16 @@
 //   · storage BUCKETS and their policies are here; the OBJECTS in them are not.
 //
 // Ordering is chosen so the file runs top-to-bottom on an empty database with no
-// forward references: extensions → tables (columns only) → constraints (PK/UNIQUE/
-// CHECK first, then every FK once all tables exist) → functions → triggers →
-// indexes → RLS + policies → grants → comments → realtime → storage.
+// forward references: extensions → tables (columns only) → keys (PK/UNIQUE) →
+// functions → CHECK + FOREIGN KEY constraints → triggers → indexes →
+// RLS + policies → grants → comments → realtime → storage.
+//
+// CHECK constraints sit AFTER the functions on purpose: a CHECK is allowed to call
+// one (`check (portal_request_photos_ok(photos))`), Postgres resolves it at ALTER
+// TABLE time, and emitting it earlier aborts the entire rebuild with "function does
+// not exist". That happened for real the first time such a constraint reached
+// production — the generator wrote a baseline that described production perfectly
+// and could not reproduce it, which is the one job it has.
 //
 // Regenerating: safe and idempotent. `npm run schema:contract` re-reads production
 // into supabase/contract/, then this rewrites the baseline. Both are read-only
@@ -38,7 +45,7 @@ const CONTRACT = join('supabase', 'contract')
 // or a rebuild would apply the baseline and then re-apply history on top of it.
 // This is not theoretical: while this file was being written, a concurrent session
 // landed three migrations into production, and the contract capture picked them up.
-const BASELINE_VERSION = '20260814040000'
+const BASELINE_VERSION = '20260814061500'
 const OUT = join('supabase', 'migrations', `${BASELINE_VERSION}_baseline.sql`)
 
 const read = <T>(f: string): T => JSON.parse(readFileSync(join(CONTRACT, f), 'utf8'))
@@ -190,20 +197,24 @@ for (const t of [...tables].sort((a, b) => a.relname.localeCompare(b.relname))) 
 // ── constraints ──────────────────────────────────────────────────────────────
 // contype 't' is a CONSTRAINT TRIGGER: it is emitted in section 5 from
 // pg_get_triggerdef, never here (pg_get_constraintdef renders it as "TRIGGER").
-const CONSTRAINT_ORDER = ['p', 'u', 'c', 'f']
-section('3 · CONSTRAINTS',
-  'Primary keys, then unique, then check, then EVERY foreign key last.\n' +
+const emitConstraints = (types: string[]) => {
+  for (const type of types) {
+    const group = constraints.filter(c => c.contype === type).sort((a, b) => a.tbl.localeCompare(b.tbl) || a.conname.localeCompare(b.conname))
+    if (!group.length) continue
+    S(`-- ${{ p: 'primary keys', u: 'unique', c: 'check', f: 'foreign keys' }[type]} (${group.length})`)
+    for (const c of group) {
+      S(`alter table public.${q(c.tbl)} add constraint ${q(c.conname)} ${c.def}${c.convalidated ? '' : ' not valid'};`)
+    }
+    S()
+  }
+}
+
+section('3 · CONSTRAINTS (keys)',
+  'Primary keys, then unique. CHECK and FOREIGN KEY constraints are emitted after\n' +
+  'the functions, in section 5 — see the note there.\n' +
   'Composite (user_id, id) foreign keys are deliberate — they are what stops one\n' +
   'tenant attaching a child row to another tenant\'s parent. Do not "simplify".')
-for (const type of CONSTRAINT_ORDER) {
-  const group = constraints.filter(c => c.contype === type).sort((a, b) => a.tbl.localeCompare(b.tbl) || a.conname.localeCompare(b.conname))
-  if (!group.length) continue
-  S(`-- ${{ p: 'primary keys', u: 'unique', c: 'check', f: 'foreign keys' }[type]} (${group.length})`)
-  for (const c of group) {
-    S(`alter table public.${q(c.tbl)} add constraint ${q(c.conname)} ${c.def}${c.convalidated ? '' : ' not valid'};`)
-  }
-  S()
-}
+emitConstraints(['p', 'u'])
 
 // ── functions ────────────────────────────────────────────────────────────────
 section('4 · FUNCTIONS',
@@ -216,8 +227,25 @@ for (const f of [...appFunctions].sort((a, b) => a.proname.localeCompare(b.prona
   S()
 }
 
+// ── constraints that depend on functions ─────────────────────────────────────
+// CHECK and FOREIGN KEY come AFTER the functions, and the reason is a real
+// rebuild failure, not tidiness: a CHECK may CALL a function
+// (`check (portal_request_photos_ok(photos))`), and Postgres resolves that
+// function at ALTER TABLE time. Emitted in section 3 with the keys, such a
+// constraint aborts the whole rebuild with "function ... does not exist" — the
+// repo could still describe production but could no longer reproduce it, which
+// is the one thing the baseline exists to do.
+//
+// Nothing is lost by the move: a CHECK needs only its table, and every FK needs
+// only every table, which section 2 already created.
+section('5 · CONSTRAINTS (checks and foreign keys)',
+  'Deferred to here because a CHECK constraint is allowed to call a function, and\n' +
+  'the function has to exist first. Foreign keys ride along: they need every table\n' +
+  'to exist, and by this point every table does.')
+emitConstraints(['c', 'f'])
+
 // ── triggers ─────────────────────────────────────────────────────────────────
-section('5 · TRIGGERS', `${triggers.length} triggers, including the two DEFERRABLE constraint triggers that\nenforce quote-option/quote-service shape at commit time.`)
+section('6 · TRIGGERS', `${triggers.length} triggers, including the two DEFERRABLE constraint triggers that\nenforce quote-option/quote-service shape at commit time.`)
 for (const t of triggers) {
   S(`drop trigger if exists ${q(t.tgname)} on public.${q(t.tbl)};`)
   S(`${t.def};`)
@@ -226,7 +254,7 @@ for (const t of triggers) {
 
 // ── indexes ──────────────────────────────────────────────────────────────────
 const standalone = indexes.filter(i => !i.backs_constraint).sort((a, b) => a.tbl.localeCompare(b.tbl) || a.indexname.localeCompare(b.indexname))
-section('6 · INDEXES',
+section('7 · INDEXES',
   `${standalone.length} standalone indexes. Constraint-backing indexes are omitted on purpose —\n` +
   'section 3 already created them; declaring both would fail or duplicate.\n' +
   'The partial UNIQUE indexes are correctness, not speed: they are what stops a\n' +
@@ -235,7 +263,7 @@ for (const i of standalone) S(`${i.indexdef.replace(/^CREATE (UNIQUE )?INDEX /, 
 
 // ── RLS + policies ───────────────────────────────────────────────────────────
 const publicPolicies = policies.filter(p => p.schemaname === 'public')
-section('7 · ROW LEVEL SECURITY',
+section('8 · ROW LEVEL SECURITY',
   `RLS enabled on all ${tables.filter(t => t.rls).length} tables, then ${publicPolicies.length} policies.\n` +
   'Every table carries RLS. The tenant boundary audit found the holes were always\n' +
   'RLS being OFF, never a policy being wrong — so enabling is emitted for every\n' +
@@ -258,7 +286,7 @@ for (const p of publicPolicies) {
 }
 
 // ── grants ───────────────────────────────────────────────────────────────────
-section('8 · GRANTS',
+section('9 · GRANTS',
   'REVOKE-then-GRANT, per object, always. A fresh Supabase project grants\n' +
   'anon/authenticated/service_role everything on new objects through ALTER DEFAULT\n' +
   'PRIVILEGES, so a grant-only baseline would quietly reproduce none of the\n' +
@@ -325,7 +353,7 @@ for (const f of [...appFunctions].sort((a, b) => a.proname.localeCompare(b.prona
 }
 
 // ── comments ─────────────────────────────────────────────────────────────────
-section('9 · COMMENTS',
+section('10 · COMMENTS',
   'These are not documentation garnish. Several encode rules that cost real money\n' +
   'to relearn — which columns are customer-visible, which must never be, and why a\n' +
   'figure is derived rather than stored. They ship with the schema deliberately.')
@@ -337,7 +365,7 @@ for (const c of comments.fn_comments ?? []) S(`comment on function public.${q(c.
 
 // ── realtime ─────────────────────────────────────────────────────────────────
 const pubTables = (misc.publication_tables ?? []).filter((t: string) => t.startsWith('public.'))
-section('10 · REALTIME',
+section('11 · REALTIME',
   `${pubTables.length} tables published to supabase_realtime, and the ${(misc2.replica_identity ?? []).length} tables set to\n` +
   'REPLICA IDENTITY FULL so an UPDATE payload carries the old row.')
 S(`do $$ begin
@@ -361,7 +389,7 @@ for (const r of misc2.replica_identity ?? []) {
 
 // ── storage ──────────────────────────────────────────────────────────────────
 const storagePolicies = policies.filter(p => p.schemaname === 'storage')
-section('11 · STORAGE',
+section('12 · STORAGE',
   `${misc.buckets.length} buckets and ${storagePolicies.length} storage policies.\n` +
   'public=false is a security decision, not a default: crew-media is private because\n' +
   'job-photos being public is what made a private bucket necessary in the first place.\n' +

@@ -8,8 +8,8 @@
 --
 -- This file is the ONE starting point for a database. Applying it to an empty
 -- Postgres 17 database produces the production schema contract:
---   101 tables · 105 functions · 78 triggers · 329 policies
---   503 constraints · 256 standalone indexes · 7 storage buckets
+--   103 tables · 111 functions · 82 triggers · 332 policies
+--   522 constraints · 265 standalone indexes · 7 storage buckets
 --
 -- IT DOES NOT RESTORE DATA. Not one row. Rebuilding a working production system
 -- is: this file, THEN a backup restore, THEN storage objects, THEN env config.
@@ -175,6 +175,27 @@ create table if not exists public."business_settings" (
   "opening_balance_date" date,
   "opening_equity" numeric(12,2),
   "timezone" text default 'America/Edmonton'::text not null
+);
+create table if not exists public."change_orders" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "job_id" uuid not null,
+  "customer_id" uuid not null,
+  "quote_id" uuid,
+  "co_number" text not null,
+  "description" text not null,
+  "amount" numeric(12,2) not null,
+  "service_key" text,
+  "service_category" text,
+  "status" text default 'draft'::text not null,
+  "decided_via" text,
+  "decline_reason" text,
+  "sent_at" timestamp with time zone,
+  "approved_at" timestamp with time zone,
+  "declined_at" timestamp with time zone,
+  "cancelled_at" timestamp with time zone
 );
 create table if not exists public."consent_changes" (
   "id" uuid default extensions.uuid_generate_v4() not null,
@@ -610,7 +631,8 @@ create table if not exists public."job_line_items" (
   "service_key" text,
   "service_category" text,
   "group_id" uuid,
-  "recurring" boolean default false not null
+  "recurring" boolean default false not null,
+  "change_order_id" uuid
 );
 create table if not exists public."job_photos" (
   "id" uuid default extensions.uuid_generate_v4() not null,
@@ -877,6 +899,13 @@ create table if not exists public."parts" (
   "supplier" text,
   "notes" text,
   "supplier_id" uuid
+);
+create table if not exists public."password_reset_requests" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "email_key" text not null,
+  "created_at" timestamp with time zone default now() not null,
+  "matched" boolean default false not null,
+  "sent" boolean default false not null
 );
 create table if not exists public."pay_run_lines" (
   "id" uuid default gen_random_uuid() not null,
@@ -1293,7 +1322,8 @@ create table if not exists public."quotes" (
   "preferred_date_2" date,
   "preferred_timing" text,
   "preferred_note" text,
-  "deposit_override_at" timestamp with time zone
+  "deposit_override_at" timestamp with time zone,
+  "renewal_of_recurrence_id" uuid
 );
 create table if not exists public."referrals" (
   "id" uuid default extensions.uuid_generate_v4() not null,
@@ -1420,7 +1450,11 @@ create table if not exists public."service_requests" (
   "preferred_date" date,
   "job_id" uuid,
   "recurrence_id" uuid,
-  "details" jsonb
+  "details" jsonb,
+  "from_portal" boolean default false not null,
+  "photos" text[] default '{}'::text[] not null,
+  "dedup_key" text,
+  "resolved_at" timestamp with time zone
 );
 create table if not exists public."service_templates" (
   "id" uuid default extensions.uuid_generate_v4() not null,
@@ -1647,19 +1681,21 @@ create table if not exists public."website_leads" (
 );
 
 -- ══════════════════════════════════════════════════════════════════════════
--- 3 · CONSTRAINTS
--- Primary keys, then unique, then check, then EVERY foreign key last.
+-- 3 · CONSTRAINTS (keys)
+-- Primary keys, then unique. CHECK and FOREIGN KEY constraints are emitted after
+-- the functions, in section 5 — see the note there.
 -- Composite (user_id, id) foreign keys are deliberate — they are what stops one
 -- tenant attaching a child row to another tenant's parent. Do not "simplify".
 -- ══════════════════════════════════════════════════════════════════════════
 
--- primary keys (101)
+-- primary keys (103)
 alter table public."api_keys" add constraint "api_keys_pkey" PRIMARY KEY (id);
 alter table public."automation_runs" add constraint "automation_runs_pkey" PRIMARY KEY (id);
 alter table public."automation_signals" add constraint "automation_signals_pkey" PRIMARY KEY (id);
 alter table public."automation_sweeps" add constraint "automation_sweeps_pkey" PRIMARY KEY (job, ran_on);
 alter table public."beta_invites" add constraint "beta_invites_pkey" PRIMARY KEY (id);
 alter table public."business_settings" add constraint "business_settings_pkey" PRIMARY KEY (id);
+alter table public."change_orders" add constraint "change_orders_pkey" PRIMARY KEY (id);
 alter table public."consent_changes" add constraint "consent_changes_pkey" PRIMARY KEY (id);
 alter table public."content_pieces" add constraint "content_pieces_pkey" PRIMARY KEY (id);
 alter table public."conversations" add constraint "conversations_pkey" PRIMARY KEY (id);
@@ -1707,6 +1743,7 @@ alter table public."notification_log" add constraint "notification_log_pkey" PRI
 alter table public."notifications" add constraint "notifications_pkey" PRIMARY KEY (id);
 alter table public."part_movements" add constraint "part_movements_pkey" PRIMARY KEY (id);
 alter table public."parts" add constraint "parts_pkey" PRIMARY KEY (id);
+alter table public."password_reset_requests" add constraint "password_reset_requests_pkey" PRIMARY KEY (id);
 alter table public."pay_run_lines" add constraint "pay_run_lines_pkey" PRIMARY KEY (id);
 alter table public."pay_runs" add constraint "pay_runs_pkey" PRIMARY KEY (id);
 alter table public."payment_methods" add constraint "payment_methods_pkey" PRIMARY KEY (id);
@@ -1756,10 +1793,11 @@ alter table public."webhook_deliveries" add constraint "webhook_deliveries_pkey"
 alter table public."webhook_endpoints" add constraint "webhook_endpoints_pkey" PRIMARY KEY (id);
 alter table public."website_leads" add constraint "website_leads_pkey" PRIMARY KEY (id);
 
--- unique (36)
+-- unique (38)
 alter table public."api_keys" add constraint "api_keys_key_hash_key" UNIQUE (key_hash);
 alter table public."beta_invites" add constraint "beta_invites_token_hash_key" UNIQUE (token_hash);
 alter table public."business_settings" add constraint "business_settings_user_id_key" UNIQUE (user_id);
+alter table public."change_orders" add constraint "change_orders_id_user_key" UNIQUE (id, user_id);
 alter table public."conversations" add constraint "conversations_user_id_customer_id_key" UNIQUE (user_id, customer_id);
 alter table public."crew_media" add constraint "crew_media_storage_path_key" UNIQUE (storage_path);
 alter table public."crm_campaign_log" add constraint "crm_campaign_log_campaign_id_customer_id_period_key_key" UNIQUE (campaign_id, customer_id, period_key);
@@ -1769,6 +1807,7 @@ alter table public."day_statuses" add constraint "day_statuses_user_id_date_key"
 alter table public."dispatch_notes" add constraint "dispatch_notes_day_crew_unique" UNIQUE NULLS NOT DISTINCT (user_id, date, crew_id);
 alter table public."holidays" add constraint "holidays_one_per_day" UNIQUE (user_id, date);
 alter table public."inbound_webhooks" add constraint "inbound_webhooks_token_key" UNIQUE (token);
+alter table public."job_recurrences" add constraint "job_recurrences_user_id_id_key" UNIQUE (user_id, id);
 alter table public."jobs" add constraint "jobs_id_user_key" UNIQUE (id, user_id);
 alter table public."labor_observations" add constraint "labor_observations_user_id_job_id_key" UNIQUE (user_id, job_id);
 alter table public."marketing_assets" add constraint "marketing_assets_user_id_job_id_key" UNIQUE (user_id, job_id);
@@ -1794,380 +1833,10 @@ alter table public."service_templates" add constraint "service_templates_id_user
 alter table public."suggestion_dismissals" add constraint "suggestion_dismissals_user_id_suggestion_key_key" UNIQUE (user_id, suggestion_key);
 alter table public."technicians" add constraint "technicians_id_user_key" UNIQUE (id, user_id);
 
--- check (140)
-alter table public."automation_runs" add constraint "automation_runs_decision_check" CHECK ((decision = ANY (ARRAY['fired'::text, 'suppressed'::text])));
-alter table public."automation_runs" add constraint "automation_runs_suppressed_reason_check" CHECK ((suppressed_reason = ANY (ARRAY['mode_off'::text, 'mode_suggest'::text, 'quiet_hours'::text, 'frequency_cap'::text, 'no_consent'::text, 'deduped'::text, 'signal_absent'::text])));
-alter table public."beta_invites" add constraint "beta_invites_token_hash_is_sha256" CHECK ((token_hash ~ '^[0-9a-f]{64}$'::text));
-alter table public."business_settings" add constraint "business_settings_autopay_charge_mode_check" CHECK ((autopay_charge_mode = ANY (ARRAY['auto'::text, 'manual_review'::text])));
-alter table public."business_settings" add constraint "business_settings_business_type_format" CHECK ((business_type ~ '^[a-z][a-z0-9_]*$'::text));
-alter table public."business_settings" add constraint "business_settings_fee_strategy_chk" CHECK ((payment_fee_strategy = ANY (ARRAY['absorb'::text, 'global_price_increase'::text, 'etransfer_discount'::text])));
-alter table public."business_settings" add constraint "business_settings_ot_daily_range" CHECK (((ot_daily_hours IS NULL) OR ((ot_daily_hours > (0)::numeric) AND (ot_daily_hours <= (24)::numeric))));
-alter table public."business_settings" add constraint "business_settings_ot_multiplier_min" CHECK ((ot_multiplier >= (1)::numeric));
-alter table public."business_settings" add constraint "business_settings_ot_weekly_range" CHECK (((ot_weekly_hours IS NULL) OR ((ot_weekly_hours > (0)::numeric) AND (ot_weekly_hours <= (168)::numeric))));
-alter table public."business_settings" add constraint "business_settings_pay_period_kind" CHECK ((pay_period = ANY (ARRAY['weekly'::text, 'biweekly'::text, 'semimonthly'::text, 'monthly'::text])));
-alter table public."business_settings" add constraint "business_settings_pay_week_start_range" CHECK (((pay_week_starts_on >= 0) AND (pay_week_starts_on <= 6)));
-alter table public."content_pieces" add constraint "content_pieces_kind_check" CHECK ((kind = ANY (ARRAY['organic'::text, 'ad'::text, 'print'::text])));
-alter table public."content_pieces" add constraint "content_pieces_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'approved'::text, 'published'::text, 'scheduled'::text, 'failed'::text])));
-alter table public."crew_media" add constraint "crew_media_kind_check" CHECK ((kind = ANY (ARRAY['photo'::text, 'video'::text])));
-alter table public."crew_messages" add constraint "crew_messages_author_kind" CHECK ((author_kind = ANY (ARRAY['owner'::text, 'crew'::text, 'system'::text])));
-alter table public."crew_messages" add constraint "crew_messages_body_length" CHECK ((char_length(body) <= 2000));
-alter table public."crew_messages" add constraint "crew_messages_body_nonblank" CHECK ((btrim(body) <> ''::text));
-alter table public."crm_campaign_presets" add constraint "crm_campaign_presets_kind_check" CHECK ((kind = ANY (ARRAY['birthday'::text, 'anniversary'::text, 'win_back'::text, 'broadcast'::text, 'seasonal'::text, 'referral'::text, 'review'::text])));
-alter table public."crm_campaigns" add constraint "crm_campaigns_kind_check" CHECK ((kind = ANY (ARRAY['birthday'::text, 'anniversary'::text, 'win_back'::text, 'broadcast'::text, 'seasonal'::text, 'referral'::text, 'review'::text])));
-alter table public."customer_imports" add constraint "customer_imports_counts_sane" CHECK (((rows_detected >= 0) AND (customers_created >= 0) AND (rows_skipped_existing >= 0) AND (rows_failed >= 0) AND (properties_created >= 0)));
-alter table public."customer_imports" add constraint "customer_imports_initiated_by_len" CHECK (((initiated_by IS NULL) OR (char_length(initiated_by) <= 200)));
-alter table public."customer_imports" add constraint "customer_imports_source_name_len" CHECK (((source_name IS NULL) OR (char_length(source_name) <= 200)));
-alter table public."customers" add constraint "customers_autopay_charge_mode_check" CHECK ((autopay_charge_mode = ANY (ARRAY['auto'::text, 'manual_review'::text])));
-alter table public."expense_categories" add constraint "expense_categories_kind_check" CHECK ((kind = ANY (ARRAY['operating'::text, 'owner_draw'::text])));
-alter table public."expenses" add constraint "expenses_amount_check" CHECK ((amount >= (0)::numeric));
-alter table public."expenses" add constraint "expenses_tax_amount_check" CHECK ((tax_amount >= (0)::numeric));
-alter table public."expenses" add constraint "expenses_tax_within_amount" CHECK ((tax_amount <= amount));
-alter table public."fixed_assets" add constraint "fixed_assets_cost_check" CHECK ((cost >= (0)::numeric));
-alter table public."fixed_assets" add constraint "fixed_assets_db_needs_rate" CHECK (((method <> 'declining_balance'::text) OR (declining_rate IS NOT NULL)));
-alter table public."fixed_assets" add constraint "fixed_assets_declining_rate_check" CHECK (((declining_rate > (0)::numeric) AND (declining_rate <= (100)::numeric)));
-alter table public."fixed_assets" add constraint "fixed_assets_disposal_after_service" CHECK (((disposed_at IS NULL) OR (disposed_at >= in_service_date)));
-alter table public."fixed_assets" add constraint "fixed_assets_method_check" CHECK ((method = ANY (ARRAY['straight_line'::text, 'declining_balance'::text, 'none'::text])));
-alter table public."fixed_assets" add constraint "fixed_assets_salvage_value_check" CHECK ((salvage_value >= (0)::numeric));
-alter table public."fixed_assets" add constraint "fixed_assets_salvage_within_cost" CHECK ((salvage_value <= cost));
-alter table public."fixed_assets" add constraint "fixed_assets_sl_needs_life" CHECK (((method <> 'straight_line'::text) OR (useful_life_years IS NOT NULL)));
-alter table public."fixed_assets" add constraint "fixed_assets_tax_amount_check" CHECK ((tax_amount >= (0)::numeric));
-alter table public."fixed_assets" add constraint "fixed_assets_tax_within_cost" CHECK ((tax_amount <= cost));
-alter table public."fixed_assets" add constraint "fixed_assets_useful_life_years_check" CHECK ((useful_life_years > (0)::numeric));
-alter table public."follow_ups" add constraint "follow_ups_completion_consistent" CHECK ((((status = 'open'::text) AND (completed_at IS NULL)) OR ((status = 'done'::text) AND (completed_at IS NOT NULL))));
-alter table public."follow_ups" add constraint "follow_ups_reason_check" CHECK (((length(btrim(reason)) >= 1) AND (length(btrim(reason)) <= 500)));
-alter table public."follow_ups" add constraint "follow_ups_source_check" CHECK ((source = ANY (ARRAY['customer'::text, 'quote'::text, 'conversation'::text])));
-alter table public."follow_ups" add constraint "follow_ups_status_check" CHECK ((status = ANY (ARRAY['open'::text, 'done'::text])));
-alter table public."holidays" add constraint "holidays_hours_range" CHECK (((default_hours >= (0)::numeric) AND (default_hours <= (24)::numeric)));
-alter table public."inbound_webhooks" add constraint "inbound_webhooks_action_check" CHECK ((action = ANY (ARRAY['lead'::text, 'customer'::text])));
-alter table public."integrations_config" add constraint "integrations_config_singleton" CHECK ((id = 1));
-alter table public."invoices" add constraint "invoices_deposit_amount_positive" CHECK (((deposit_amount IS NULL) OR (deposit_amount > (0)::numeric)));
-alter table public."invoices" add constraint "invoices_discount_type_check" CHECK (((discount_type IS NULL) OR (discount_type = ANY (ARRAY['amount'::text, 'percent'::text]))));
-alter table public."invoices" add constraint "invoices_payment_method_chk" CHECK (((payment_method IS NULL) OR (payment_method = ANY (ARRAY['stripe'::text, 'etransfer'::text, 'cash'::text, 'cheque'::text]))));
-alter table public."invoices" add constraint "invoices_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'unpaid'::text, 'sent'::text, 'partial'::text, 'paid'::text, 'overpaid'::text, 'cancelled'::text])));
-alter table public."job_recurrences" add constraint "job_recurrences_freq_check" CHECK ((freq = ANY (ARRAY['weekly'::text, 'biweekly'::text, 'monthly'::text])));
-alter table public."job_recurrences" add constraint "job_recurrences_interval_unit_check" CHECK ((interval_unit = ANY (ARRAY['day'::text, 'week'::text, 'month'::text])));
-alter table public."job_work_sessions" add constraint "job_work_sessions_check" CHECK (((ended_at IS NULL) OR (started_at IS NULL) OR (ended_at >= started_at)));
-alter table public."job_work_sessions" add constraint "job_work_sessions_minutes_check" CHECK (((minutes > 0) AND (minutes <= 10080)));
-alter table public."job_work_sessions" add constraint "job_work_sessions_note_check" CHECK (((note IS NULL) OR (char_length(note) <= 280)));
-alter table public."job_work_sessions" add constraint "job_work_sessions_source_check" CHECK ((source = ANY (ARRAY['clock'::text, 'manual'::text, 'carried'::text])));
-alter table public."job_work_sessions" add constraint "job_work_sessions_workers_check" CHECK (((workers >= 1) AND (workers <= 50)));
-alter table public."jobs" add constraint "jobs_status_check" CHECK ((status = ANY (ARRAY['scheduled'::text, 'in_progress'::text, 'completed'::text, 'cancelled'::text])));
-alter table public."liabilities" add constraint "liabilities_current_balance_check" CHECK ((current_balance >= (0)::numeric));
-alter table public."liabilities" add constraint "liabilities_interest_rate_check" CHECK ((interest_rate >= (0)::numeric));
-alter table public."liabilities" add constraint "liabilities_kind_check" CHECK ((kind = ANY (ARRAY['loan'::text, 'credit_card'::text, 'line_of_credit'::text, 'other'::text])));
-alter table public."marketing_assets" add constraint "marketing_assets_status_check" CHECK ((status = ANY (ARRAY['candidate'::text, 'used'::text, 'dismissed'::text])));
-alter table public."marketing_campaigns" add constraint "marketing_campaigns_kind_check" CHECK ((kind = ANY (ARRAY['spring'::text, 'summer'::text, 'fall'::text, 'winter'::text, 'holiday'::text, 'rain_delay'::text, 'referral'::text, 'review'::text, 'winback'::text, 'custom'::text])));
-alter table public."marketing_campaigns" add constraint "marketing_campaigns_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'active'::text, 'completed'::text, 'archived'::text])));
-alter table public."neighbor_leads" add constraint "neighbor_leads_status_check" CHECK ((status = ANY (ARRAY['prospect'::text, 'contacted'::text, 'quoted'::text, 'won'::text, 'lost'::text])));
-alter table public."pay_run_lines" add constraint "pay_run_lines_minutes_nonneg" CHECK (((regular_minutes >= 0) AND (ot_minutes >= 0)));
-alter table public."pay_run_lines" add constraint "pay_run_lines_name_present" CHECK ((length(TRIM(BOTH FROM technician_name)) > 0));
-alter table public."pay_runs" add constraint "pay_runs_kind_known" CHECK ((period_kind = ANY (ARRAY['weekly'::text, 'biweekly'::text, 'semimonthly'::text, 'monthly'::text])));
-alter table public."pay_runs" add constraint "pay_runs_minutes_nonneg" CHECK (((regular_minutes >= 0) AND (ot_minutes >= 0)));
-alter table public."pay_runs" add constraint "pay_runs_multiplier_min" CHECK ((ot_multiplier >= (1)::numeric));
-alter table public."pay_runs" add constraint "pay_runs_period_order" CHECK ((period_end >= period_start));
-alter table public."pay_runs" add constraint "pay_runs_week_start_range" CHECK (((pay_week_starts_on >= 0) AND (pay_week_starts_on <= 6)));
-alter table public."payments" add constraint "payments_kind_check" CHECK ((kind = ANY (ARRAY['payment'::text, 'credit'::text, 'refund'::text])));
-alter table public."pricing_config_versions" add constraint "pricing_config_versions_base_charge_check" CHECK ((base_charge >= (0)::numeric));
-alter table public."pricing_config_versions" add constraint "pricing_config_versions_budget_mult_check" CHECK ((budget_mult > (0)::numeric));
-alter table public."pricing_config_versions" add constraint "pricing_config_versions_crew_cost_per_hour_check" CHECK ((crew_cost_per_hour >= (0)::numeric));
-alter table public."pricing_config_versions" add constraint "pricing_config_versions_fee_recovery_percent_check" CHECK ((fee_recovery_percent >= (0)::numeric));
-alter table public."pricing_config_versions" add constraint "pricing_config_versions_market_mult_check" CHECK ((market_mult > (0)::numeric));
-alter table public."pricing_config_versions" add constraint "pricing_config_versions_mow_rate_per_1000_check" CHECK ((mow_rate_per_1000 >= (0)::numeric));
-alter table public."pricing_config_versions" add constraint "pricing_config_versions_premium_mult_check" CHECK ((premium_mult > (0)::numeric));
-alter table public."pricing_config_versions" add constraint "pricing_config_versions_recommended_mult_check" CHECK ((recommended_mult > (0)::numeric));
-alter table public."pricing_config_versions" add constraint "pricing_config_versions_source_check" CHECK ((source = ANY (ARRAY['recorded'::text, 'reconstructed'::text])));
-alter table public."pricing_config_versions" add constraint "pricing_config_versions_travel_rate_per_km_check" CHECK ((travel_rate_per_km >= (0)::numeric));
-alter table public."property_intelligence" add constraint "property_intelligence_source_check" CHECK ((source = ANY (ARRAY['satellite'::text, 'photos'::text, 'combined'::text])));
-alter table public."property_intelligence" add constraint "property_intelligence_status_check" CHECK ((status = ANY (ARRAY['active'::text, 'superseded'::text, 'archived'::text])));
-alter table public."property_measurement_events" add constraint "property_measurement_events_action_known" CHECK ((action = ANY (ARRAY['measured'::text, 'removed'::text])));
-alter table public."property_measurement_events" add constraint "property_measurement_events_kind_known" CHECK ((kind = ANY (ARRAY['lawn'::text, 'mulch'::text, 'gravel'::text, 'rock'::text, 'concrete'::text, 'fencing'::text, 'hedges'::text, 'trees'::text, 'snow'::text])));
-alter table public."property_measurement_events" add constraint "property_measurement_events_value_nonneg" CHECK ((value >= (0)::numeric));
-alter table public."property_measurements" add constraint "property_measurements_confidence_known" CHECK ((confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text])));
-alter table public."property_measurements" add constraint "property_measurements_kind_known" CHECK ((kind = ANY (ARRAY['lawn'::text, 'mulch'::text, 'gravel'::text, 'rock'::text, 'concrete'::text, 'fencing'::text, 'hedges'::text, 'trees'::text, 'snow'::text])));
-alter table public."property_measurements" add constraint "property_measurements_reason_present" CHECK ((length(TRIM(BOTH FROM confidence_reason)) > 0));
-alter table public."property_measurements" add constraint "property_measurements_source_known" CHECK ((source = ANY (ARRAY['traced'::text, 'auto'::text, 'manual'::text])));
-alter table public."property_measurements" add constraint "property_measurements_unit_known" CHECK ((unit = ANY (ARRAY['sqft'::text, 'linear_ft'::text, 'count'::text])));
-alter table public."property_measurements" add constraint "property_measurements_unit_matches_kind" CHECK ((((kind = ANY (ARRAY['lawn'::text, 'mulch'::text, 'gravel'::text, 'rock'::text, 'concrete'::text, 'snow'::text])) AND (unit = 'sqft'::text)) OR ((kind = ANY (ARRAY['fencing'::text, 'hedges'::text])) AND (unit = 'linear_ft'::text)) OR ((kind = 'trees'::text) AND (unit = 'count'::text))));
-alter table public."property_measurements" add constraint "property_measurements_value_nonneg" CHECK ((value >= (0)::numeric));
-alter table public."property_observations" add constraint "property_observations_status_check" CHECK ((status = ANY (ARRAY['active'::text, 'archived'::text])));
-alter table public."pto_entries" add constraint "pto_entries_hours_range" CHECK (((hours > (0)::numeric) AND (hours <= (24)::numeric)));
-alter table public."pto_entries" add constraint "pto_entries_kind_known" CHECK ((kind = ANY (ARRAY['vacation'::text, 'sick'::text, 'holiday'::text, 'personal'::text, 'bereavement'::text])));
-alter table public."pto_entries" add constraint "pto_entries_rate_nonneg" CHECK (((hourly_rate IS NULL) OR (hourly_rate >= (0)::numeric)));
-alter table public."publish_jobs" add constraint "publish_jobs_mode_check" CHECK ((mode = ANY (ARRAY['manual'::text, 'api'::text])));
-alter table public."publish_jobs" add constraint "publish_jobs_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'scheduled'::text, 'queued'::text, 'publishing'::text, 'published'::text, 'failed'::text, 'canceled'::text])));
-alter table public."purchase_orders" add constraint "purchase_orders_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'ordered'::text, 'cancelled'::text])));
-alter table public."push_config" add constraint "push_config_singleton" CHECK ((id = 1));
-alter table public."quote_options" add constraint "quote_options_name_check" CHECK ((btrim(name) <> ''::text));
-alter table public."quote_options" add constraint "quote_options_price_check" CHECK ((price >= (0)::numeric));
-alter table public."quote_services" add constraint "quote_services_discount_type_check" CHECK ((discount_type = ANY (ARRAY['amount'::text, 'percent'::text])));
-alter table public."quote_services" add constraint "quote_services_kind_check" CHECK ((kind = ANY (ARRAY['service'::text, 'material'::text])));
-alter table public."quotes" add constraint "quotes_deposit_rule_check" CHECK ((((deposit_type IS NULL) = (deposit_value IS NULL)) AND ((deposit_type IS NULL) OR (deposit_type = ANY (ARRAY['percent'::text, 'fixed'::text]))) AND ((deposit_value IS NULL) OR (deposit_value > (0)::numeric)) AND ((deposit_type IS DISTINCT FROM 'percent'::text) OR (deposit_value <= (100)::numeric))));
-alter table public."quotes" add constraint "quotes_engine_price_needs_config" CHECK (((price_source IS DISTINCT FROM 'engine'::text) OR (pricing_config_version_id IS NOT NULL)));
-alter table public."quotes" add constraint "quotes_nearby_count_nonneg" CHECK (((nearby_count IS NULL) OR (nearby_count >= 0)));
-alter table public."quotes" add constraint "quotes_preferred_note_check" CHECK (((preferred_note IS NULL) OR (char_length(preferred_note) <= 500)));
-alter table public."quotes" add constraint "quotes_preferred_timing_check" CHECK (((preferred_timing IS NULL) OR (preferred_timing = ANY (ARRAY['morning'::text, 'afternoon'::text]))));
-alter table public."quotes" add constraint "quotes_price_source_valid" CHECK (((price_source IS NULL) OR (price_source = ANY (ARRAY['engine'::text, 'template_rate'::text]))));
-alter table public."quotes" add constraint "quotes_pricing_confidence_chk" CHECK (((pricing_confidence IS NULL) OR (pricing_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text]))));
-alter table public."quotes" add constraint "quotes_selected_cadence_check" CHECK (((selected_cadence IS NULL) OR (selected_cadence = ANY (ARRAY['one_time'::text, 'weekly'::text, 'biweekly'::text, 'monthly'::text]))));
-alter table public."quotes" add constraint "quotes_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'sent'::text, 'accepted'::text, 'scheduled'::text, 'completed'::text, 'paid'::text, 'declined'::text])));
-alter table public."quotes" add constraint "quotes_value_grade_valid" CHECK (((value_grade IS NULL) OR (value_grade = ANY (ARRAY['A+'::text, 'A'::text, 'B'::text, 'C'::text, 'D'::text, 'F'::text]))));
-alter table public."referrals" add constraint "referrals_status_check" CHECK ((status = ANY (ARRAY['invited'::text, 'joined'::text, 'rewarded'::text, 'declined'::text])));
-alter table public."report_schedules" add constraint "report_schedules_kind_check" CHECK ((kind = ANY (ARRAY['daily'::text, 'weekly'::text, 'monthly'::text, 'yearly'::text])));
-alter table public."service_bundle_items" add constraint "service_bundle_items_kind_check" CHECK ((kind = ANY (ARRAY['service'::text, 'material'::text])));
-alter table public."service_bundle_items" add constraint "service_bundle_items_minutes_not_negative" CHECK (((est_minutes IS NULL) OR (est_minutes >= 0)));
-alter table public."service_bundle_items" add constraint "service_bundle_items_name_not_blank" CHECK ((btrim(name) <> ''::text));
-alter table public."service_bundle_items" add constraint "service_bundle_items_price_not_negative" CHECK (((unit_price IS NULL) OR (unit_price >= (0)::numeric)));
-alter table public."service_bundle_items" add constraint "service_bundle_items_quantity_positive" CHECK ((quantity > (0)::numeric));
-alter table public."service_bundles" add constraint "service_bundles_name_not_blank" CHECK ((btrim(name) <> ''::text));
-alter table public."service_requests" add constraint "service_requests_kind_check" CHECK ((kind = ANY (ARRAY['service'::text, 'appointment'::text, 'reschedule'::text, 'plan_change'::text])));
-alter table public."service_templates" add constraint "service_templates_pricing_display_type_check" CHECK ((pricing_display_type = ANY (ARRAY['starting_from'::text, 'hourly'::text, 'per_sqft'::text, 'per_linear_ft'::text, 'starting_from_materials'::text, 'hourly_materials'::text])));
-alter table public."service_templates" add constraint "service_templates_recurrence_check" CHECK (((recurrence IS NULL) OR (recurrence = ANY (ARRAY['one_time'::text, 'recurring_ok'::text, 'usually_recurring'::text]))));
-alter table public."social_connections" add constraint "social_connections_mode_check" CHECK ((mode = ANY (ARRAY['manual'::text, 'api'::text])));
-alter table public."social_connections" add constraint "social_connections_status_check" CHECK ((status = ANY (ARRAY['connected'::text, 'expired'::text, 'revoked'::text])));
-alter table public."technicians" add constraint "technicians_employment_dates_ordered" CHECK (((ended_on IS NULL) OR (hired_on IS NULL) OR (ended_on >= hired_on)));
-alter table public."technicians" add constraint "technicians_hourly_wage_nonneg" CHECK (((hourly_wage IS NULL) OR (hourly_wage >= (0)::numeric)));
-alter table public."technicians" add constraint "technicians_pto_allowance_nonneg" CHECK (((pto_annual_hours IS NULL) OR (pto_annual_hours >= (0)::numeric)));
-alter table public."technicians" add constraint "technicians_status_check" CHECK ((status = ANY (ARRAY['available'::text, 'en_route'::text, 'on_job'::text, 'break'::text, 'off'::text])));
-alter table public."time_entries" add constraint "time_entries_break_nonneg" CHECK ((break_minutes >= 0));
-alter table public."time_entries" add constraint "time_entries_clock_order" CHECK (((clock_out IS NULL) OR (clock_out > clock_in)));
-alter table public."time_entries" add constraint "time_entries_rate_nonneg" CHECK (((hourly_rate IS NULL) OR (hourly_rate >= (0)::numeric)));
-alter table public."wage_history" add constraint "wage_history_actually_changed" CHECK ((old_wage IS DISTINCT FROM new_wage));
-alter table public."wage_history" add constraint "wage_history_wages_nonneg" CHECK ((((old_wage IS NULL) OR (old_wage >= (0)::numeric)) AND ((new_wage IS NULL) OR (new_wage >= (0)::numeric))));
-alter table public."webhook_deliveries" add constraint "webhook_deliveries_status_check" CHECK ((status = ANY (ARRAY['pending'::text, 'processing'::text, 'success'::text, 'dead'::text])));
-alter table public."webhook_endpoints" add constraint "webhook_endpoints_source_check" CHECK ((source = ANY (ARRAY['manual'::text, 'api'::text, 'zapier'::text, 'make'::text])));
-
--- foreign keys (226)
-alter table public."api_keys" add constraint "api_keys_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."automation_runs" add constraint "automation_runs_signal_id_fkey" FOREIGN KEY (signal_id) REFERENCES automation_signals(id) ON DELETE SET NULL;
-alter table public."automation_runs" add constraint "automation_runs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."automation_signals" add constraint "automation_signals_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."beta_invites" add constraint "beta_invites_created_by_fkey" FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
-alter table public."beta_invites" add constraint "beta_invites_redeemed_by_fkey" FOREIGN KEY (redeemed_by) REFERENCES auth.users(id) ON DELETE SET NULL;
-alter table public."beta_invites" add constraint "beta_invites_reserved_by_fkey" FOREIGN KEY (reserved_by) REFERENCES auth.users(id) ON DELETE SET NULL;
-alter table public."business_settings" add constraint "business_settings_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."consent_changes" add constraint "consent_changes_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."consent_changes" add constraint "consent_changes_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."content_pieces" add constraint "content_pieces_asset_id_fkey" FOREIGN KEY (asset_id) REFERENCES marketing_assets(id) ON DELETE CASCADE;
-alter table public."content_pieces" add constraint "content_pieces_campaign_id_fkey" FOREIGN KEY (campaign_id) REFERENCES marketing_campaigns(id) ON DELETE SET NULL;
-alter table public."content_pieces" add constraint "content_pieces_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."content_pieces" add constraint "content_pieces_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
-alter table public."content_pieces" add constraint "content_pieces_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."conversations" add constraint "conversations_assigned_to_fkey" FOREIGN KEY (assigned_to) REFERENCES technicians(id) ON DELETE SET NULL;
-alter table public."conversations" add constraint "conversations_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
-alter table public."conversations" add constraint "conversations_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."crew_media" add constraint "crew_media_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE;
-alter table public."crew_media" add constraint "crew_media_message_id_fkey" FOREIGN KEY (message_id) REFERENCES crew_messages(id) ON DELETE CASCADE;
-alter table public."crew_media" add constraint "crew_media_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."crew_message_reads" add constraint "crew_message_reads_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE;
-alter table public."crew_message_reads" add constraint "crew_message_reads_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."crew_messages" add constraint "crew_messages_author_technician_id_fkey" FOREIGN KEY (author_technician_id) REFERENCES technicians(id) ON DELETE SET NULL;
-alter table public."crew_messages" add constraint "crew_messages_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE;
-alter table public."crew_messages" add constraint "crew_messages_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."crews" add constraint "crews_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."crm_campaign_log" add constraint "crm_campaign_log_campaign_id_fkey" FOREIGN KEY (campaign_id) REFERENCES crm_campaigns(id) ON DELETE CASCADE;
-alter table public."crm_campaign_log" add constraint "crm_campaign_log_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
-alter table public."crm_campaign_log" add constraint "crm_campaign_log_message_id_fkey" FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL;
-alter table public."crm_campaign_log" add constraint "crm_campaign_log_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."crm_campaign_presets" add constraint "crm_campaign_presets_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."crm_campaigns" add constraint "crm_campaigns_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."customer_imports" add constraint "customer_imports_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."customer_portal_tokens" add constraint "customer_portal_tokens_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
-alter table public."customer_portal_tokens" add constraint "customer_portal_tokens_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."customers" add constraint "customers_referred_by_customer_id_fkey" FOREIGN KEY (referred_by_customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."customers" add constraint "customers_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."data_exports" add constraint "data_exports_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."day_statuses" add constraint "day_statuses_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."dispatch_notes" add constraint "dispatch_notes_crew_id_fkey" FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE CASCADE;
-alter table public."dispatch_notes" add constraint "dispatch_notes_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."equipment" add constraint "equipment_crew_id_fkey" FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL;
-alter table public."equipment" add constraint "equipment_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."equipment_docs" add constraint "equipment_docs_equipment_id_fkey" FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE CASCADE;
-alter table public."equipment_docs" add constraint "equipment_docs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."equipment_service" add constraint "equipment_service_equipment_id_fkey" FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE CASCADE;
-alter table public."equipment_service" add constraint "equipment_service_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."expense_categories" add constraint "expense_categories_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."expenses" add constraint "expenses_category_id_fkey" FOREIGN KEY (category_id) REFERENCES expense_categories(id) ON DELETE SET NULL;
-alter table public."expenses" add constraint "expenses_job_same_owner" FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE SET NULL (job_id);
-alter table public."expenses" add constraint "expenses_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."expenses" add constraint "expenses_vendor_id_fkey" FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE SET NULL;
-alter table public."fixed_assets" add constraint "fixed_assets_equipment_id_fkey" FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE SET NULL;
-alter table public."fixed_assets" add constraint "fixed_assets_expense_id_fkey" FOREIGN KEY (expense_id) REFERENCES expenses(id) ON DELETE SET NULL;
-alter table public."fixed_assets" add constraint "fixed_assets_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."fixed_assets" add constraint "fixed_assets_vendor_id_fkey" FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE SET NULL;
-alter table public."follow_ups" add constraint "follow_ups_customer_same_tenant" FOREIGN KEY (user_id, customer_id) REFERENCES customers(user_id, id) ON DELETE CASCADE;
-alter table public."follow_ups" add constraint "follow_ups_quote_same_tenant" FOREIGN KEY (user_id, quote_id) REFERENCES quotes(user_id, id) ON DELETE SET NULL (quote_id);
-alter table public."follow_ups" add constraint "follow_ups_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."holidays" add constraint "holidays_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."inbound_events" add constraint "inbound_events_hook_id_fkey" FOREIGN KEY (hook_id) REFERENCES inbound_webhooks(id) ON DELETE CASCADE;
-alter table public."inbound_events" add constraint "inbound_events_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."inbound_webhooks" add constraint "inbound_webhooks_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."integration_events" add constraint "integration_events_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."invoices" add constraint "invoices_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."invoices" add constraint "invoices_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
-alter table public."invoices" add constraint "invoices_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
-alter table public."invoices" add constraint "invoices_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
-alter table public."invoices" add constraint "invoices_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."job_line_items" add constraint "job_line_items_job_same_owner" FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE CASCADE;
-alter table public."job_line_items" add constraint "job_line_items_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."job_photos" add constraint "job_photos_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."job_photos" add constraint "job_photos_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
-alter table public."job_photos" add constraint "job_photos_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE;
-alter table public."job_photos" add constraint "job_photos_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."job_price_changes" add constraint "job_price_changes_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
-alter table public."job_price_changes" add constraint "job_price_changes_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
-alter table public."job_price_changes" add constraint "job_price_changes_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."job_recurrences" add constraint "job_recurrences_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."job_recurrences" add constraint "job_recurrences_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."job_work_sessions" add constraint "job_work_sessions_job_same_owner" FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE CASCADE;
-alter table public."job_work_sessions" add constraint "job_work_sessions_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."jobs" add constraint "jobs_crew_id_fkey" FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL;
-alter table public."jobs" add constraint "jobs_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."jobs" add constraint "jobs_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
-alter table public."jobs" add constraint "jobs_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
-alter table public."jobs" add constraint "jobs_recurrence_id_fkey" FOREIGN KEY (recurrence_id) REFERENCES job_recurrences(id) ON DELETE SET NULL;
-alter table public."jobs" add constraint "jobs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."labor_observations" add constraint "labor_observations_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
-alter table public."labor_observations" add constraint "labor_observations_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
-alter table public."labor_observations" add constraint "labor_observations_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."liabilities" add constraint "liabilities_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."marketing_assets" add constraint "marketing_assets_best_after_photo_id_fkey" FOREIGN KEY (best_after_photo_id) REFERENCES job_photos(id) ON DELETE SET NULL;
-alter table public."marketing_assets" add constraint "marketing_assets_best_before_photo_id_fkey" FOREIGN KEY (best_before_photo_id) REFERENCES job_photos(id) ON DELETE SET NULL;
-alter table public."marketing_assets" add constraint "marketing_assets_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."marketing_assets" add constraint "marketing_assets_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE;
-alter table public."marketing_assets" add constraint "marketing_assets_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
-alter table public."marketing_assets" add constraint "marketing_assets_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."marketing_campaigns" add constraint "marketing_campaigns_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."measurements" add constraint "measurements_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."measurements" add constraint "measurements_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
-alter table public."measurements" add constraint "measurements_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
-alter table public."measurements" add constraint "measurements_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."message_sends" add constraint "message_sends_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."messages" add constraint "messages_conversation_id_fkey" FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
-alter table public."messages" add constraint "messages_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."messages" add constraint "messages_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."neighbor_leads" add constraint "neighbor_leads_converted_customer_id_fkey" FOREIGN KEY (converted_customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."neighbor_leads" add constraint "neighbor_leads_source_customer_id_fkey" FOREIGN KEY (source_customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."neighbor_leads" add constraint "neighbor_leads_source_property_id_fkey" FOREIGN KEY (source_property_id) REFERENCES properties(id) ON DELETE SET NULL;
-alter table public."neighbor_leads" add constraint "neighbor_leads_source_quote_id_fkey" FOREIGN KEY (source_quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
-alter table public."neighbor_leads" add constraint "neighbor_leads_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."notification_log" add constraint "notification_log_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."notification_log" add constraint "notification_log_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
-alter table public."notification_log" add constraint "notification_log_message_id_fkey" FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL;
-alter table public."notification_log" add constraint "notification_log_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."notifications" add constraint "notifications_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."notifications" add constraint "notifications_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."part_movements" add constraint "part_movements_equipment_service_id_fkey" FOREIGN KEY (equipment_service_id) REFERENCES equipment_service(id) ON DELETE CASCADE;
-alter table public."part_movements" add constraint "part_movements_part_id_fkey" FOREIGN KEY (part_id) REFERENCES parts(id) ON DELETE CASCADE;
-alter table public."part_movements" add constraint "part_movements_purchase_order_item_id_fkey" FOREIGN KEY (purchase_order_item_id) REFERENCES purchase_order_items(id) ON DELETE CASCADE;
-alter table public."part_movements" add constraint "part_movements_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."parts" add constraint "parts_supplier_id_fkey" FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL;
-alter table public."parts" add constraint "parts_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."pay_run_lines" add constraint "pay_run_lines_pay_run_id_fkey" FOREIGN KEY (pay_run_id) REFERENCES pay_runs(id) ON DELETE CASCADE;
-alter table public."pay_run_lines" add constraint "pay_run_lines_technician_same_owner" FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (technician_id);
-alter table public."pay_run_lines" add constraint "pay_run_lines_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."pay_runs" add constraint "pay_runs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."payment_methods" add constraint "payment_methods_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
-alter table public."payment_methods" add constraint "payment_methods_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."payments" add constraint "payments_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."payments" add constraint "payments_invoice_id_fkey" FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE SET NULL;
-alter table public."payments" add constraint "payments_quote_tenant_fkey" FOREIGN KEY (user_id, quote_id) REFERENCES quotes(user_id, id) ON DELETE SET NULL (quote_id);
-alter table public."payments" add constraint "payments_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."platform_capabilities" add constraint "platform_capabilities_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."platform_operators" add constraint "platform_operators_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."pricing_config_versions" add constraint "pricing_config_versions_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."properties" add constraint "properties_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
-alter table public."properties" add constraint "properties_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."property_intelligence" add constraint "property_intelligence_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."property_intelligence" add constraint "property_intelligence_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
-alter table public."property_intelligence" add constraint "property_intelligence_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE;
-alter table public."property_intelligence" add constraint "property_intelligence_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."property_measurement_events" add constraint "property_measurement_events_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."property_measurements" add constraint "property_measurements_property_same_owner" FOREIGN KEY (property_id, user_id) REFERENCES properties(id, user_id) ON DELETE CASCADE;
-alter table public."property_measurements" add constraint "property_measurements_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."property_observations" add constraint "property_observations_analysis_id_fkey" FOREIGN KEY (analysis_id) REFERENCES property_intelligence(id) ON DELETE SET NULL;
-alter table public."property_observations" add constraint "property_observations_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE;
-alter table public."property_observations" add constraint "property_observations_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."property_twin" add constraint "property_twin_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."property_twin" add constraint "property_twin_latest_analysis_id_fkey" FOREIGN KEY (latest_analysis_id) REFERENCES property_intelligence(id) ON DELETE SET NULL;
-alter table public."property_twin" add constraint "property_twin_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE;
-alter table public."property_twin" add constraint "property_twin_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."pto_entries" add constraint "pto_entries_holiday_id_fkey" FOREIGN KEY (holiday_id) REFERENCES holidays(id) ON DELETE SET NULL;
-alter table public."pto_entries" add constraint "pto_entries_technician_same_owner" FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (technician_id);
-alter table public."pto_entries" add constraint "pto_entries_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."publish_jobs" add constraint "publish_jobs_connection_id_fkey" FOREIGN KEY (connection_id) REFERENCES social_connections(id) ON DELETE SET NULL;
-alter table public."publish_jobs" add constraint "publish_jobs_content_piece_id_fkey" FOREIGN KEY (content_piece_id) REFERENCES content_pieces(id) ON DELETE CASCADE;
-alter table public."publish_jobs" add constraint "publish_jobs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."purchase_order_items" add constraint "purchase_order_items_part_id_fkey" FOREIGN KEY (part_id) REFERENCES parts(id) ON DELETE RESTRICT;
-alter table public."purchase_order_items" add constraint "purchase_order_items_purchase_order_id_fkey" FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id) ON DELETE CASCADE;
-alter table public."purchase_order_items" add constraint "purchase_order_items_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."purchase_orders" add constraint "purchase_orders_supplier_id_fkey" FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE RESTRICT;
-alter table public."purchase_orders" add constraint "purchase_orders_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."push_subscriptions" add constraint "push_subscriptions_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."quote_options" add constraint "quote_options_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE;
-alter table public."quote_options" add constraint "quote_options_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."quote_outcomes" add constraint "quote_outcomes_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE;
-alter table public."quote_outcomes" add constraint "quote_outcomes_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."quote_services" add constraint "quote_services_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE;
-alter table public."quote_services" add constraint "quote_services_service_template_id_fkey" FOREIGN KEY (service_template_id) REFERENCES service_templates(id) ON DELETE SET NULL;
-alter table public."quote_services" add constraint "quote_services_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."quotes" add constraint "quotes_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."quotes" add constraint "quotes_pricing_config_version_id_fkey" FOREIGN KEY (pricing_config_version_id) REFERENCES pricing_config_versions(id);
-alter table public."quotes" add constraint "quotes_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
-alter table public."quotes" add constraint "quotes_selected_option_fkey" FOREIGN KEY (selected_option_id, id) REFERENCES quote_options(id, quote_id) ON DELETE RESTRICT;
-alter table public."quotes" add constraint "quotes_service_template_id_fkey" FOREIGN KEY (service_template_id) REFERENCES service_templates(id) ON DELETE SET NULL;
-alter table public."quotes" add constraint "quotes_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."referrals" add constraint "referrals_referred_customer_id_fkey" FOREIGN KEY (referred_customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."referrals" add constraint "referrals_referrer_customer_id_fkey" FOREIGN KEY (referrer_customer_id) REFERENCES customers(id) ON DELETE CASCADE;
-alter table public."referrals" add constraint "referrals_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."report_schedules" add constraint "report_schedules_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."revenue_recommendations" add constraint "revenue_recommendations_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
-alter table public."revenue_recommendations" add constraint "revenue_recommendations_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."road_distance_cache" add constraint "road_distance_cache_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."schedule_health_ignored" add constraint "schedule_health_ignored_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."schedule_items" add constraint "schedule_items_converted_quote_id_fkey" FOREIGN KEY (converted_quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
-alter table public."schedule_items" add constraint "schedule_items_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."schedule_items" add constraint "schedule_items_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
-alter table public."schedule_items" add constraint "schedule_items_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."scheduled_messages" add constraint "scheduled_messages_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
-alter table public."scheduled_messages" add constraint "scheduled_messages_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
-alter table public."scheduled_messages" add constraint "scheduled_messages_message_id_fkey" FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL;
-alter table public."scheduled_messages" add constraint "scheduled_messages_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."service_bundle_items" add constraint "service_bundle_items_bundle_same_owner" FOREIGN KEY (bundle_id, user_id) REFERENCES service_bundles(id, user_id) ON DELETE CASCADE;
-alter table public."service_bundle_items" add constraint "service_bundle_items_template_same_owner" FOREIGN KEY (service_template_id, user_id) REFERENCES service_templates(id, user_id) ON DELETE SET NULL (service_template_id);
-alter table public."service_bundle_items" add constraint "service_bundle_items_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."service_bundles" add constraint "service_bundles_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."service_requests" add constraint "service_requests_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."service_requests" add constraint "service_requests_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
-alter table public."service_requests" add constraint "service_requests_recurrence_id_fkey" FOREIGN KEY (recurrence_id) REFERENCES job_recurrences(id) ON DELETE SET NULL;
-alter table public."service_requests" add constraint "service_requests_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."service_templates" add constraint "service_templates_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."service_units" add constraint "service_units_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."social_connections" add constraint "social_connections_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."suppliers" add constraint "suppliers_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."technicians" add constraint "technicians_auth_user_id_fkey" FOREIGN KEY (auth_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-alter table public."technicians" add constraint "technicians_crew_id_fkey" FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL;
-alter table public."technicians" add constraint "technicians_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."time_entries" add constraint "time_entries_job_same_owner" FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE SET NULL (job_id);
-alter table public."time_entries" add constraint "time_entries_technician_same_owner" FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (technician_id);
-alter table public."time_entries" add constraint "time_entries_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."travel_fee_tiers" add constraint "travel_fee_tiers_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."vendors" add constraint "vendors_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."verify_fixture_tenants" add constraint "verify_fixture_tenants_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."wage_history" add constraint "wage_history_technician_same_owner" FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (technician_id);
-alter table public."wage_history" add constraint "wage_history_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."webhook_deliveries" add constraint "webhook_deliveries_endpoint_id_fkey" FOREIGN KEY (endpoint_id) REFERENCES webhook_endpoints(id) ON DELETE CASCADE;
-alter table public."webhook_deliveries" add constraint "webhook_deliveries_event_id_fkey" FOREIGN KEY (event_id) REFERENCES integration_events(id) ON DELETE SET NULL;
-alter table public."webhook_deliveries" add constraint "webhook_deliveries_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."webhook_endpoints" add constraint "webhook_endpoints_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."website_leads" add constraint "website_leads_conversation_id_fkey" FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE SET NULL;
-alter table public."website_leads" add constraint "website_leads_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."website_leads" add constraint "website_leads_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
-alter table public."website_leads" add constraint "website_leads_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 4 · FUNCTIONS
--- 105 application functions, verbatim from pg_get_functiondef.
+-- 111 application functions, verbatim from pg_get_functiondef.
 -- SECURITY DEFINER + `set search_path` is not decoration here: these functions are
 -- the ONLY door a crew session or a portal token has to the data. Section 8 revokes
 -- and re-grants EXECUTE explicitly — a function is not safe merely by being defined.
@@ -2524,6 +2193,93 @@ begin
   return new;
 end
 $function$;
+
+CREATE OR REPLACE FUNCTION public.change_order_apply_approval()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  if new.status = 'approved' and old.status is distinct from 'approved' then
+    insert into public.job_line_items
+      (user_id, job_id, description, amount, service_key, service_category, recurring, change_order_id)
+    values
+      (new.user_id, new.job_id, new.description, new.amount,
+       coalesce(new.service_key, 'change_order'), new.service_category, false, new.id)
+    on conflict (change_order_id) where change_order_id is not null do nothing;
+  end if;
+  return null;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.change_order_assign_number()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_next int;
+begin
+  if new.co_number is not null and btrim(new.co_number) <> '' then return new; end if;
+  select coalesce(max((regexp_replace(co_number, '\D', '', 'g'))::int), 0) + 1
+    into v_next
+    from public.change_orders
+   where user_id = new.user_id and co_number ~ '\d';
+  new.co_number := 'CO-' || lpad(v_next::text, 4, '0');
+  return new;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.change_order_guard_transition()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  -- A DECIDED change order is a record of what was asked and what was answered.
+  -- Nothing about it may move again -- including decided_via, which is the
+  -- difference between "the customer tapped approve" and "the business says they
+  -- agreed". Without this an owner-recorded approval could be silently rewritten
+  -- as the customer's own, which is the one claim this whole feature exists to
+  -- keep honest. An exact no-op update is allowed; anything else is refused.
+  if old.status in ('approved', 'declined', 'cancelled') then
+    if new is distinct from old then
+      raise exception 'a % change order is a record of what was answered and cannot be edited', old.status
+        using errcode = '42501';
+    end if;
+    return new;
+  end if;
+
+  if new.job_id is distinct from old.job_id
+     or new.user_id is distinct from old.user_id
+     or new.customer_id is distinct from old.customer_id then
+    raise exception 'a change order cannot be moved to another job, customer or business'
+      using errcode = 'check_violation';
+  end if;
+
+  if new.status is distinct from old.status then
+    if not (
+         (old.status = 'draft'   and new.status in ('pending', 'cancelled'))
+      or (old.status = 'pending' and new.status in ('approved', 'declined', 'cancelled'))
+    ) then
+      raise exception 'a % change order cannot become %', old.status, new.status
+        using errcode = 'check_violation';
+    end if;
+    if new.status = 'pending'   then new.sent_at      := coalesce(old.sent_at, now()); end if;
+    if new.status = 'approved'  then new.approved_at  := now(); end if;
+    if new.status = 'declined'  then new.declined_at  := now(); end if;
+    if new.status = 'cancelled' then new.cancelled_at := now(); end if;
+  end if;
+
+  if old.status <> 'draft'
+     and (new.amount is distinct from old.amount or new.description is distinct from old.description) then
+    raise exception 'the scope and price of a change order are fixed once it is sent for approval'
+      using errcode = 'check_violation';
+  end if;
+
+  new.updated_at := now();
+  return new;
+end $function$;
 
 CREATE OR REPLACE FUNCTION public.claim_beta_invite()
  RETURNS text
@@ -3711,6 +3467,7 @@ begin
     -- start_date, end_count: the series' own window and count limit.
     'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, start_date, end_date, end_count from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
     'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json),
+    'change_orders', coalesce((select json_agg(co order by co.created_at desc) from (select id, co_number, job_id, quote_id, description, amount, status, decided_via, created_at, sent_at, approved_at, declined_at from public.change_orders where customer_id = v_customer and status <> 'draft') co), '[]'::json),
     'payment_method', (select to_json(pm) from (select brand, last4, exp_month, exp_year from public.payment_methods where customer_id = v_customer and is_default order by created_at desc limit 1) pm)
   ) into result;
   return result;
@@ -3915,6 +3672,31 @@ begin
     when 'rock'    then update public.properties set rock_area    = v where id = target;
     else null;
   end case;
+  return null;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.notify_change_order_decision()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_name text;
+begin
+  if new.status not in ('approved', 'declined') or old.status is not distinct from new.status then
+    return null;
+  end if;
+  if new.decided_via is distinct from 'portal' then return null; end if;
+  select name into v_name from public.customers where id = new.customer_id;
+  insert into public.notifications (user_id, type, title, body, customer_id, entity_type, entity_id, amount, href)
+  values (
+    new.user_id,
+    case when new.status = 'approved' then 'change_order_approved' else 'change_order_declined' end,
+    coalesce(nullif(v_name, ''), 'A customer') ||
+      case when new.status = 'approved' then ' approved a change' else ' declined a change' end,
+    new.co_number || ' - $' || trim(to_char(new.amount, 'FM999990D00')) || ' - ' || left(new.description, 80),
+    new.customer_id, 'job', new.job_id, new.amount, '/dashboard/schedule?focus=' || new.job_id
+  );
   return null;
 end $function$;
 
@@ -4310,20 +4092,61 @@ begin
   return v_pms;
 end; $function$;
 
+CREATE OR REPLACE FUNCTION public.portal_request_photos_ok(p text[])
+ RETURNS boolean
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE
+AS $function$
+  select coalesce(array_length(p, 1), 0) <= 6
+     and coalesce(array_length(p, 1), 0) = (
+           select count(*) from unnest(p) as u
+            where u ~ ('^portal/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+                    || '/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+                    || '\.(jpg|jpeg|png|webp|heic|heif)$')
+         )
+$function$;
+
 CREATE OR REPLACE FUNCTION public.portal_request_service(p_token text, p_message text)
  RETURNS boolean
  LANGUAGE plpgsql
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-declare v_customer uuid; v_user uuid;
 begin
-  select customer_id, user_id into v_customer, v_user from public.customer_portal_tokens where token = p_token and not revoked;
-  if v_customer is null then return false; end if;
-  if coalesce(trim(p_message), '') = '' then return false; end if;
-  insert into public.service_requests (user_id, customer_id, message) values (v_user, v_customer, left(p_message, 1000));
-  return true;
+  return public.portal_submit_request(p_token, p_message, 'service');
 end; $function$;
+
+CREATE OR REPLACE FUNCTION public.portal_respond_change_order(p_token text, p_change_order_id uuid, p_decision text, p_reason text DEFAULT NULL::text)
+ RETURNS json
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_customer uuid; v_status text; v_number text; v_amount numeric;
+begin
+  if p_decision not in ('approve', 'decline') then
+    return json_build_object('ok', false, 'reason', 'bad_decision');
+  end if;
+  select customer_id into v_customer
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then
+    return json_build_object('ok', false, 'reason', 'no_access');
+  end if;
+
+  update public.change_orders
+     set status      = case when p_decision = 'approve' then 'approved' else 'declined' end,
+         decided_via = 'portal',
+         decline_reason = case when p_decision = 'decline' then nullif(btrim(coalesce(p_reason, '')), '') else null end
+   where id = p_change_order_id
+     and customer_id = v_customer
+     and status = 'pending'
+  returning status, co_number, amount into v_status, v_number, v_amount;
+
+  if v_status is null then
+    return json_build_object('ok', false, 'reason', 'not_pending');
+  end if;
+  return json_build_object('ok', true, 'status', v_status, 'number', v_number, 'amount', v_amount);
+end $function$;
 
 CREATE OR REPLACE FUNCTION public.portal_send_message(p_token text, p_body text)
  RETURNS boolean
@@ -4428,30 +4251,56 @@ begin
   return found;
 end $function$;
 
-CREATE OR REPLACE FUNCTION public.portal_submit_request(p_token text, p_message text, p_kind text DEFAULT 'service'::text, p_preferred_date date DEFAULT NULL::date, p_job_id uuid DEFAULT NULL::uuid, p_recurrence_id uuid DEFAULT NULL::uuid, p_details jsonb DEFAULT NULL::jsonb)
+CREATE OR REPLACE FUNCTION public.portal_submit_request(p_token text, p_message text, p_kind text DEFAULT 'service'::text, p_preferred_date date DEFAULT NULL::date, p_job_id uuid DEFAULT NULL::uuid, p_recurrence_id uuid DEFAULT NULL::uuid, p_details jsonb DEFAULT NULL::jsonb, p_photos text[] DEFAULT NULL::text[])
  RETURNS boolean
  LANGUAGE plpgsql
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-declare v_customer uuid; v_user uuid;
+declare v_customer uuid; v_user uuid; v_msg text; v_photos text[]; v_key text;
 begin
+  -- The token proves WHICH CUSTOMER. Everything below is re-resolved against it.
   select customer_id, user_id into v_customer, v_user
     from public.customer_portal_tokens where token = p_token and not revoked;
   if v_customer is null then return false; end if;
-  if coalesce(trim(p_message), '') = '' then return false; end if;
-  if p_kind not in ('service','appointment','reschedule','plan_change') then return false; end if;
+
+  v_msg := left(btrim(coalesce(p_message, '')), 2000);
+  if v_msg = '' then return false; end if;
+  if p_kind not in ('service','appointment','reschedule','plan_change','additional_work') then return false; end if;
+
+  -- A caller-supplied id proves nothing on its own: a job or plan named here must
+  -- belong to THIS token's customer AND this business, or the request is refused.
   if p_job_id is not null and not exists (
     select 1 from public.jobs where id = p_job_id and customer_id = v_customer and user_id = v_user
   ) then return false; end if;
   if p_recurrence_id is not null and not exists (
     select 1 from public.job_recurrences where id = p_recurrence_id and customer_id = v_customer and user_id = v_user
   ) then return false; end if;
+
+  -- Media is REFUSED, never silently dropped. A legitimate client can only ever
+  -- produce paths it just uploaded, so a malformed one means the call was
+  -- tampered with — and quietly discarding a photo the customer attached would
+  -- be the portal lying about what it sent.
+  v_photos := coalesce(p_photos, '{}'::text[]);
+  if not public.portal_request_photos_ok(v_photos) then return false; end if;
+
   if (select count(*) from public.service_requests
        where customer_id = v_customer and created_at > now() - interval '1 hour') >= 20
   then return false; end if;
-  insert into public.service_requests (user_id, customer_id, message, kind, preferred_date, job_id, recurrence_id, details)
-    values (v_user, v_customer, left(trim(p_message), 2000), p_kind, p_preferred_date, p_job_id, p_recurrence_id, p_details);
+
+  -- Same ask, same day preference, same visit ⇒ same key. Paired with the partial
+  -- unique index, a resubmission while the first is still open is a no-op that
+  -- still reports success: the request IS on file, which is what the customer
+  -- asked to be true.
+  v_key := md5(p_kind || '|' || lower(v_msg) || '|'
+            || coalesce(p_preferred_date::text, '') || '|' || coalesce(p_job_id::text, ''));
+
+  insert into public.service_requests
+    (user_id, customer_id, message, kind, preferred_date, job_id, recurrence_id, details, photos, from_portal, dedup_key)
+  values
+    (v_user, v_customer, v_msg, p_kind, p_preferred_date, p_job_id, p_recurrence_id, p_details, v_photos, true, v_key)
+  on conflict do nothing;
+
   return true;
 end; $function$;
 
@@ -5603,8 +5452,401 @@ end $function$;
 
 
 -- ══════════════════════════════════════════════════════════════════════════
--- 5 · TRIGGERS
--- 78 triggers, including the two DEFERRABLE constraint triggers that
+-- 5 · CONSTRAINTS (checks and foreign keys)
+-- Deferred to here because a CHECK constraint is allowed to call a function, and
+-- the function has to exist first. Foreign keys ride along: they need every table
+-- to exist, and by this point every table does.
+-- ══════════════════════════════════════════════════════════════════════════
+
+-- check (149)
+alter table public."automation_runs" add constraint "automation_runs_decision_check" CHECK ((decision = ANY (ARRAY['fired'::text, 'suppressed'::text])));
+alter table public."automation_runs" add constraint "automation_runs_suppressed_reason_check" CHECK ((suppressed_reason = ANY (ARRAY['mode_off'::text, 'mode_suggest'::text, 'quiet_hours'::text, 'frequency_cap'::text, 'no_consent'::text, 'deduped'::text, 'signal_absent'::text])));
+alter table public."beta_invites" add constraint "beta_invites_token_hash_is_sha256" CHECK ((token_hash ~ '^[0-9a-f]{64}$'::text));
+alter table public."business_settings" add constraint "business_settings_autopay_charge_mode_check" CHECK ((autopay_charge_mode = ANY (ARRAY['auto'::text, 'manual_review'::text])));
+alter table public."business_settings" add constraint "business_settings_business_type_format" CHECK ((business_type ~ '^[a-z][a-z0-9_]*$'::text));
+alter table public."business_settings" add constraint "business_settings_fee_strategy_chk" CHECK ((payment_fee_strategy = ANY (ARRAY['absorb'::text, 'global_price_increase'::text, 'etransfer_discount'::text])));
+alter table public."business_settings" add constraint "business_settings_ot_daily_range" CHECK (((ot_daily_hours IS NULL) OR ((ot_daily_hours > (0)::numeric) AND (ot_daily_hours <= (24)::numeric))));
+alter table public."business_settings" add constraint "business_settings_ot_multiplier_min" CHECK ((ot_multiplier >= (1)::numeric));
+alter table public."business_settings" add constraint "business_settings_ot_weekly_range" CHECK (((ot_weekly_hours IS NULL) OR ((ot_weekly_hours > (0)::numeric) AND (ot_weekly_hours <= (168)::numeric))));
+alter table public."business_settings" add constraint "business_settings_pay_period_kind" CHECK ((pay_period = ANY (ARRAY['weekly'::text, 'biweekly'::text, 'semimonthly'::text, 'monthly'::text])));
+alter table public."business_settings" add constraint "business_settings_pay_week_start_range" CHECK (((pay_week_starts_on >= 0) AND (pay_week_starts_on <= 6)));
+alter table public."change_orders" add constraint "change_orders_amount_check" CHECK ((amount > (0)::numeric));
+alter table public."change_orders" add constraint "change_orders_decided_via_check" CHECK (((decided_via IS NULL) OR (decided_via = ANY (ARRAY['portal'::text, 'owner'::text]))));
+alter table public."change_orders" add constraint "change_orders_decided_via_present" CHECK (((status = ANY (ARRAY['approved'::text, 'declined'::text])) = (decided_via IS NOT NULL)));
+alter table public."change_orders" add constraint "change_orders_description_check" CHECK ((length(btrim(description)) > 0));
+alter table public."change_orders" add constraint "change_orders_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'pending'::text, 'approved'::text, 'declined'::text, 'cancelled'::text])));
+alter table public."change_orders" add constraint "change_orders_status_stamps" CHECK ((((status = 'draft'::text) AND (sent_at IS NULL) AND (approved_at IS NULL) AND (declined_at IS NULL) AND (cancelled_at IS NULL)) OR ((status = 'pending'::text) AND (sent_at IS NOT NULL) AND (approved_at IS NULL) AND (declined_at IS NULL) AND (cancelled_at IS NULL)) OR ((status = 'approved'::text) AND (approved_at IS NOT NULL) AND (declined_at IS NULL) AND (cancelled_at IS NULL)) OR ((status = 'declined'::text) AND (declined_at IS NOT NULL) AND (approved_at IS NULL) AND (cancelled_at IS NULL)) OR ((status = 'cancelled'::text) AND (cancelled_at IS NOT NULL) AND (approved_at IS NULL) AND (declined_at IS NULL))));
+alter table public."content_pieces" add constraint "content_pieces_kind_check" CHECK ((kind = ANY (ARRAY['organic'::text, 'ad'::text, 'print'::text])));
+alter table public."content_pieces" add constraint "content_pieces_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'approved'::text, 'published'::text, 'scheduled'::text, 'failed'::text])));
+alter table public."crew_media" add constraint "crew_media_kind_check" CHECK ((kind = ANY (ARRAY['photo'::text, 'video'::text])));
+alter table public."crew_messages" add constraint "crew_messages_author_kind" CHECK ((author_kind = ANY (ARRAY['owner'::text, 'crew'::text, 'system'::text])));
+alter table public."crew_messages" add constraint "crew_messages_body_length" CHECK ((char_length(body) <= 2000));
+alter table public."crew_messages" add constraint "crew_messages_body_nonblank" CHECK ((btrim(body) <> ''::text));
+alter table public."crm_campaign_presets" add constraint "crm_campaign_presets_kind_check" CHECK ((kind = ANY (ARRAY['birthday'::text, 'anniversary'::text, 'win_back'::text, 'broadcast'::text, 'seasonal'::text, 'referral'::text, 'review'::text])));
+alter table public."crm_campaigns" add constraint "crm_campaigns_kind_check" CHECK ((kind = ANY (ARRAY['birthday'::text, 'anniversary'::text, 'win_back'::text, 'broadcast'::text, 'seasonal'::text, 'referral'::text, 'review'::text])));
+alter table public."customer_imports" add constraint "customer_imports_counts_sane" CHECK (((rows_detected >= 0) AND (customers_created >= 0) AND (rows_skipped_existing >= 0) AND (rows_failed >= 0) AND (properties_created >= 0)));
+alter table public."customer_imports" add constraint "customer_imports_initiated_by_len" CHECK (((initiated_by IS NULL) OR (char_length(initiated_by) <= 200)));
+alter table public."customer_imports" add constraint "customer_imports_source_name_len" CHECK (((source_name IS NULL) OR (char_length(source_name) <= 200)));
+alter table public."customers" add constraint "customers_autopay_charge_mode_check" CHECK ((autopay_charge_mode = ANY (ARRAY['auto'::text, 'manual_review'::text])));
+alter table public."expense_categories" add constraint "expense_categories_kind_check" CHECK ((kind = ANY (ARRAY['operating'::text, 'owner_draw'::text])));
+alter table public."expenses" add constraint "expenses_amount_check" CHECK ((amount >= (0)::numeric));
+alter table public."expenses" add constraint "expenses_tax_amount_check" CHECK ((tax_amount >= (0)::numeric));
+alter table public."expenses" add constraint "expenses_tax_within_amount" CHECK ((tax_amount <= amount));
+alter table public."fixed_assets" add constraint "fixed_assets_cost_check" CHECK ((cost >= (0)::numeric));
+alter table public."fixed_assets" add constraint "fixed_assets_db_needs_rate" CHECK (((method <> 'declining_balance'::text) OR (declining_rate IS NOT NULL)));
+alter table public."fixed_assets" add constraint "fixed_assets_declining_rate_check" CHECK (((declining_rate > (0)::numeric) AND (declining_rate <= (100)::numeric)));
+alter table public."fixed_assets" add constraint "fixed_assets_disposal_after_service" CHECK (((disposed_at IS NULL) OR (disposed_at >= in_service_date)));
+alter table public."fixed_assets" add constraint "fixed_assets_method_check" CHECK ((method = ANY (ARRAY['straight_line'::text, 'declining_balance'::text, 'none'::text])));
+alter table public."fixed_assets" add constraint "fixed_assets_salvage_value_check" CHECK ((salvage_value >= (0)::numeric));
+alter table public."fixed_assets" add constraint "fixed_assets_salvage_within_cost" CHECK ((salvage_value <= cost));
+alter table public."fixed_assets" add constraint "fixed_assets_sl_needs_life" CHECK (((method <> 'straight_line'::text) OR (useful_life_years IS NOT NULL)));
+alter table public."fixed_assets" add constraint "fixed_assets_tax_amount_check" CHECK ((tax_amount >= (0)::numeric));
+alter table public."fixed_assets" add constraint "fixed_assets_tax_within_cost" CHECK ((tax_amount <= cost));
+alter table public."fixed_assets" add constraint "fixed_assets_useful_life_years_check" CHECK ((useful_life_years > (0)::numeric));
+alter table public."follow_ups" add constraint "follow_ups_completion_consistent" CHECK ((((status = 'open'::text) AND (completed_at IS NULL)) OR ((status = 'done'::text) AND (completed_at IS NOT NULL))));
+alter table public."follow_ups" add constraint "follow_ups_reason_check" CHECK (((length(btrim(reason)) >= 1) AND (length(btrim(reason)) <= 500)));
+alter table public."follow_ups" add constraint "follow_ups_source_check" CHECK ((source = ANY (ARRAY['customer'::text, 'quote'::text, 'conversation'::text])));
+alter table public."follow_ups" add constraint "follow_ups_status_check" CHECK ((status = ANY (ARRAY['open'::text, 'done'::text])));
+alter table public."holidays" add constraint "holidays_hours_range" CHECK (((default_hours >= (0)::numeric) AND (default_hours <= (24)::numeric)));
+alter table public."inbound_webhooks" add constraint "inbound_webhooks_action_check" CHECK ((action = ANY (ARRAY['lead'::text, 'customer'::text])));
+alter table public."integrations_config" add constraint "integrations_config_singleton" CHECK ((id = 1));
+alter table public."invoices" add constraint "invoices_deposit_amount_positive" CHECK (((deposit_amount IS NULL) OR (deposit_amount > (0)::numeric)));
+alter table public."invoices" add constraint "invoices_discount_type_check" CHECK (((discount_type IS NULL) OR (discount_type = ANY (ARRAY['amount'::text, 'percent'::text]))));
+alter table public."invoices" add constraint "invoices_payment_method_chk" CHECK (((payment_method IS NULL) OR (payment_method = ANY (ARRAY['stripe'::text, 'etransfer'::text, 'cash'::text, 'cheque'::text]))));
+alter table public."invoices" add constraint "invoices_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'unpaid'::text, 'sent'::text, 'partial'::text, 'paid'::text, 'overpaid'::text, 'cancelled'::text])));
+alter table public."job_recurrences" add constraint "job_recurrences_freq_check" CHECK ((freq = ANY (ARRAY['weekly'::text, 'biweekly'::text, 'monthly'::text])));
+alter table public."job_recurrences" add constraint "job_recurrences_interval_unit_check" CHECK ((interval_unit = ANY (ARRAY['day'::text, 'week'::text, 'month'::text])));
+alter table public."job_work_sessions" add constraint "job_work_sessions_check" CHECK (((ended_at IS NULL) OR (started_at IS NULL) OR (ended_at >= started_at)));
+alter table public."job_work_sessions" add constraint "job_work_sessions_minutes_check" CHECK (((minutes > 0) AND (minutes <= 10080)));
+alter table public."job_work_sessions" add constraint "job_work_sessions_note_check" CHECK (((note IS NULL) OR (char_length(note) <= 280)));
+alter table public."job_work_sessions" add constraint "job_work_sessions_source_check" CHECK ((source = ANY (ARRAY['clock'::text, 'manual'::text, 'carried'::text])));
+alter table public."job_work_sessions" add constraint "job_work_sessions_workers_check" CHECK (((workers >= 1) AND (workers <= 50)));
+alter table public."jobs" add constraint "jobs_status_check" CHECK ((status = ANY (ARRAY['scheduled'::text, 'in_progress'::text, 'completed'::text, 'cancelled'::text])));
+alter table public."liabilities" add constraint "liabilities_current_balance_check" CHECK ((current_balance >= (0)::numeric));
+alter table public."liabilities" add constraint "liabilities_interest_rate_check" CHECK ((interest_rate >= (0)::numeric));
+alter table public."liabilities" add constraint "liabilities_kind_check" CHECK ((kind = ANY (ARRAY['loan'::text, 'credit_card'::text, 'line_of_credit'::text, 'other'::text])));
+alter table public."marketing_assets" add constraint "marketing_assets_status_check" CHECK ((status = ANY (ARRAY['candidate'::text, 'used'::text, 'dismissed'::text])));
+alter table public."marketing_campaigns" add constraint "marketing_campaigns_kind_check" CHECK ((kind = ANY (ARRAY['spring'::text, 'summer'::text, 'fall'::text, 'winter'::text, 'holiday'::text, 'rain_delay'::text, 'referral'::text, 'review'::text, 'winback'::text, 'custom'::text])));
+alter table public."marketing_campaigns" add constraint "marketing_campaigns_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'active'::text, 'completed'::text, 'archived'::text])));
+alter table public."neighbor_leads" add constraint "neighbor_leads_status_check" CHECK ((status = ANY (ARRAY['prospect'::text, 'contacted'::text, 'quoted'::text, 'won'::text, 'lost'::text])));
+alter table public."pay_run_lines" add constraint "pay_run_lines_minutes_nonneg" CHECK (((regular_minutes >= 0) AND (ot_minutes >= 0)));
+alter table public."pay_run_lines" add constraint "pay_run_lines_name_present" CHECK ((length(TRIM(BOTH FROM technician_name)) > 0));
+alter table public."pay_runs" add constraint "pay_runs_kind_known" CHECK ((period_kind = ANY (ARRAY['weekly'::text, 'biweekly'::text, 'semimonthly'::text, 'monthly'::text])));
+alter table public."pay_runs" add constraint "pay_runs_minutes_nonneg" CHECK (((regular_minutes >= 0) AND (ot_minutes >= 0)));
+alter table public."pay_runs" add constraint "pay_runs_multiplier_min" CHECK ((ot_multiplier >= (1)::numeric));
+alter table public."pay_runs" add constraint "pay_runs_period_order" CHECK ((period_end >= period_start));
+alter table public."pay_runs" add constraint "pay_runs_week_start_range" CHECK (((pay_week_starts_on >= 0) AND (pay_week_starts_on <= 6)));
+alter table public."payments" add constraint "payments_kind_check" CHECK ((kind = ANY (ARRAY['payment'::text, 'credit'::text, 'refund'::text])));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_base_charge_check" CHECK ((base_charge >= (0)::numeric));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_budget_mult_check" CHECK ((budget_mult > (0)::numeric));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_crew_cost_per_hour_check" CHECK ((crew_cost_per_hour >= (0)::numeric));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_fee_recovery_percent_check" CHECK ((fee_recovery_percent >= (0)::numeric));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_market_mult_check" CHECK ((market_mult > (0)::numeric));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_mow_rate_per_1000_check" CHECK ((mow_rate_per_1000 >= (0)::numeric));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_premium_mult_check" CHECK ((premium_mult > (0)::numeric));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_recommended_mult_check" CHECK ((recommended_mult > (0)::numeric));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_source_check" CHECK ((source = ANY (ARRAY['recorded'::text, 'reconstructed'::text])));
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_travel_rate_per_km_check" CHECK ((travel_rate_per_km >= (0)::numeric));
+alter table public."property_intelligence" add constraint "property_intelligence_source_check" CHECK ((source = ANY (ARRAY['satellite'::text, 'photos'::text, 'combined'::text])));
+alter table public."property_intelligence" add constraint "property_intelligence_status_check" CHECK ((status = ANY (ARRAY['active'::text, 'superseded'::text, 'archived'::text])));
+alter table public."property_measurement_events" add constraint "property_measurement_events_action_known" CHECK ((action = ANY (ARRAY['measured'::text, 'removed'::text])));
+alter table public."property_measurement_events" add constraint "property_measurement_events_kind_known" CHECK ((kind = ANY (ARRAY['lawn'::text, 'mulch'::text, 'gravel'::text, 'rock'::text, 'concrete'::text, 'fencing'::text, 'hedges'::text, 'trees'::text, 'snow'::text])));
+alter table public."property_measurement_events" add constraint "property_measurement_events_value_nonneg" CHECK ((value >= (0)::numeric));
+alter table public."property_measurements" add constraint "property_measurements_confidence_known" CHECK ((confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text])));
+alter table public."property_measurements" add constraint "property_measurements_kind_known" CHECK ((kind = ANY (ARRAY['lawn'::text, 'mulch'::text, 'gravel'::text, 'rock'::text, 'concrete'::text, 'fencing'::text, 'hedges'::text, 'trees'::text, 'snow'::text])));
+alter table public."property_measurements" add constraint "property_measurements_reason_present" CHECK ((length(TRIM(BOTH FROM confidence_reason)) > 0));
+alter table public."property_measurements" add constraint "property_measurements_source_known" CHECK ((source = ANY (ARRAY['traced'::text, 'auto'::text, 'manual'::text])));
+alter table public."property_measurements" add constraint "property_measurements_unit_known" CHECK ((unit = ANY (ARRAY['sqft'::text, 'linear_ft'::text, 'count'::text])));
+alter table public."property_measurements" add constraint "property_measurements_unit_matches_kind" CHECK ((((kind = ANY (ARRAY['lawn'::text, 'mulch'::text, 'gravel'::text, 'rock'::text, 'concrete'::text, 'snow'::text])) AND (unit = 'sqft'::text)) OR ((kind = ANY (ARRAY['fencing'::text, 'hedges'::text])) AND (unit = 'linear_ft'::text)) OR ((kind = 'trees'::text) AND (unit = 'count'::text))));
+alter table public."property_measurements" add constraint "property_measurements_value_nonneg" CHECK ((value >= (0)::numeric));
+alter table public."property_observations" add constraint "property_observations_status_check" CHECK ((status = ANY (ARRAY['active'::text, 'archived'::text])));
+alter table public."pto_entries" add constraint "pto_entries_hours_range" CHECK (((hours > (0)::numeric) AND (hours <= (24)::numeric)));
+alter table public."pto_entries" add constraint "pto_entries_kind_known" CHECK ((kind = ANY (ARRAY['vacation'::text, 'sick'::text, 'holiday'::text, 'personal'::text, 'bereavement'::text])));
+alter table public."pto_entries" add constraint "pto_entries_rate_nonneg" CHECK (((hourly_rate IS NULL) OR (hourly_rate >= (0)::numeric)));
+alter table public."publish_jobs" add constraint "publish_jobs_mode_check" CHECK ((mode = ANY (ARRAY['manual'::text, 'api'::text])));
+alter table public."publish_jobs" add constraint "publish_jobs_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'scheduled'::text, 'queued'::text, 'publishing'::text, 'published'::text, 'failed'::text, 'canceled'::text])));
+alter table public."purchase_orders" add constraint "purchase_orders_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'ordered'::text, 'cancelled'::text])));
+alter table public."push_config" add constraint "push_config_singleton" CHECK ((id = 1));
+alter table public."quote_options" add constraint "quote_options_name_check" CHECK ((btrim(name) <> ''::text));
+alter table public."quote_options" add constraint "quote_options_price_check" CHECK ((price >= (0)::numeric));
+alter table public."quote_services" add constraint "quote_services_discount_type_check" CHECK ((discount_type = ANY (ARRAY['amount'::text, 'percent'::text])));
+alter table public."quote_services" add constraint "quote_services_kind_check" CHECK ((kind = ANY (ARRAY['service'::text, 'material'::text])));
+alter table public."quotes" add constraint "quotes_deposit_rule_check" CHECK ((((deposit_type IS NULL) = (deposit_value IS NULL)) AND ((deposit_type IS NULL) OR (deposit_type = ANY (ARRAY['percent'::text, 'fixed'::text]))) AND ((deposit_value IS NULL) OR (deposit_value > (0)::numeric)) AND ((deposit_type IS DISTINCT FROM 'percent'::text) OR (deposit_value <= (100)::numeric))));
+alter table public."quotes" add constraint "quotes_engine_price_needs_config" CHECK (((price_source IS DISTINCT FROM 'engine'::text) OR (pricing_config_version_id IS NOT NULL)));
+alter table public."quotes" add constraint "quotes_nearby_count_nonneg" CHECK (((nearby_count IS NULL) OR (nearby_count >= 0)));
+alter table public."quotes" add constraint "quotes_preferred_note_check" CHECK (((preferred_note IS NULL) OR (char_length(preferred_note) <= 500)));
+alter table public."quotes" add constraint "quotes_preferred_timing_check" CHECK (((preferred_timing IS NULL) OR (preferred_timing = ANY (ARRAY['morning'::text, 'afternoon'::text]))));
+alter table public."quotes" add constraint "quotes_price_source_valid" CHECK (((price_source IS NULL) OR (price_source = ANY (ARRAY['engine'::text, 'template_rate'::text]))));
+alter table public."quotes" add constraint "quotes_pricing_confidence_chk" CHECK (((pricing_confidence IS NULL) OR (pricing_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text]))));
+alter table public."quotes" add constraint "quotes_selected_cadence_check" CHECK (((selected_cadence IS NULL) OR (selected_cadence = ANY (ARRAY['one_time'::text, 'weekly'::text, 'biweekly'::text, 'monthly'::text]))));
+alter table public."quotes" add constraint "quotes_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'sent'::text, 'accepted'::text, 'scheduled'::text, 'completed'::text, 'paid'::text, 'declined'::text])));
+alter table public."quotes" add constraint "quotes_value_grade_valid" CHECK (((value_grade IS NULL) OR (value_grade = ANY (ARRAY['A+'::text, 'A'::text, 'B'::text, 'C'::text, 'D'::text, 'F'::text]))));
+alter table public."referrals" add constraint "referrals_status_check" CHECK ((status = ANY (ARRAY['invited'::text, 'joined'::text, 'rewarded'::text, 'declined'::text])));
+alter table public."report_schedules" add constraint "report_schedules_kind_check" CHECK ((kind = ANY (ARRAY['daily'::text, 'weekly'::text, 'monthly'::text, 'yearly'::text])));
+alter table public."service_bundle_items" add constraint "service_bundle_items_kind_check" CHECK ((kind = ANY (ARRAY['service'::text, 'material'::text])));
+alter table public."service_bundle_items" add constraint "service_bundle_items_minutes_not_negative" CHECK (((est_minutes IS NULL) OR (est_minutes >= 0)));
+alter table public."service_bundle_items" add constraint "service_bundle_items_name_not_blank" CHECK ((btrim(name) <> ''::text));
+alter table public."service_bundle_items" add constraint "service_bundle_items_price_not_negative" CHECK (((unit_price IS NULL) OR (unit_price >= (0)::numeric)));
+alter table public."service_bundle_items" add constraint "service_bundle_items_quantity_positive" CHECK ((quantity > (0)::numeric));
+alter table public."service_bundles" add constraint "service_bundles_name_not_blank" CHECK ((btrim(name) <> ''::text));
+alter table public."service_requests" add constraint "service_requests_kind_check" CHECK ((kind = ANY (ARRAY['service'::text, 'appointment'::text, 'reschedule'::text, 'plan_change'::text, 'additional_work'::text])));
+alter table public."service_requests" add constraint "service_requests_photos_check" CHECK (portal_request_photos_ok(photos));
+alter table public."service_requests" add constraint "service_requests_resolved_at_check" CHECK (((resolved_at IS NULL) OR (status <> 'new'::text)));
+alter table public."service_requests" add constraint "service_requests_status_check" CHECK ((status = ANY (ARRAY['new'::text, 'handled'::text, 'dismissed'::text])));
+alter table public."service_templates" add constraint "service_templates_pricing_display_type_check" CHECK ((pricing_display_type = ANY (ARRAY['starting_from'::text, 'hourly'::text, 'per_sqft'::text, 'per_linear_ft'::text, 'starting_from_materials'::text, 'hourly_materials'::text])));
+alter table public."service_templates" add constraint "service_templates_recurrence_check" CHECK (((recurrence IS NULL) OR (recurrence = ANY (ARRAY['one_time'::text, 'recurring_ok'::text, 'usually_recurring'::text]))));
+alter table public."social_connections" add constraint "social_connections_mode_check" CHECK ((mode = ANY (ARRAY['manual'::text, 'api'::text])));
+alter table public."social_connections" add constraint "social_connections_status_check" CHECK ((status = ANY (ARRAY['connected'::text, 'expired'::text, 'revoked'::text])));
+alter table public."technicians" add constraint "technicians_employment_dates_ordered" CHECK (((ended_on IS NULL) OR (hired_on IS NULL) OR (ended_on >= hired_on)));
+alter table public."technicians" add constraint "technicians_hourly_wage_nonneg" CHECK (((hourly_wage IS NULL) OR (hourly_wage >= (0)::numeric)));
+alter table public."technicians" add constraint "technicians_pto_allowance_nonneg" CHECK (((pto_annual_hours IS NULL) OR (pto_annual_hours >= (0)::numeric)));
+alter table public."technicians" add constraint "technicians_status_check" CHECK ((status = ANY (ARRAY['available'::text, 'en_route'::text, 'on_job'::text, 'break'::text, 'off'::text])));
+alter table public."time_entries" add constraint "time_entries_break_nonneg" CHECK ((break_minutes >= 0));
+alter table public."time_entries" add constraint "time_entries_clock_order" CHECK (((clock_out IS NULL) OR (clock_out > clock_in)));
+alter table public."time_entries" add constraint "time_entries_rate_nonneg" CHECK (((hourly_rate IS NULL) OR (hourly_rate >= (0)::numeric)));
+alter table public."wage_history" add constraint "wage_history_actually_changed" CHECK ((old_wage IS DISTINCT FROM new_wage));
+alter table public."wage_history" add constraint "wage_history_wages_nonneg" CHECK ((((old_wage IS NULL) OR (old_wage >= (0)::numeric)) AND ((new_wage IS NULL) OR (new_wage >= (0)::numeric))));
+alter table public."webhook_deliveries" add constraint "webhook_deliveries_status_check" CHECK ((status = ANY (ARRAY['pending'::text, 'processing'::text, 'success'::text, 'dead'::text])));
+alter table public."webhook_endpoints" add constraint "webhook_endpoints_source_check" CHECK ((source = ANY (ARRAY['manual'::text, 'api'::text, 'zapier'::text, 'make'::text])));
+
+-- foreign keys (232)
+alter table public."api_keys" add constraint "api_keys_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."automation_runs" add constraint "automation_runs_signal_id_fkey" FOREIGN KEY (signal_id) REFERENCES automation_signals(id) ON DELETE SET NULL;
+alter table public."automation_runs" add constraint "automation_runs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."automation_signals" add constraint "automation_signals_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."beta_invites" add constraint "beta_invites_created_by_fkey" FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+alter table public."beta_invites" add constraint "beta_invites_redeemed_by_fkey" FOREIGN KEY (redeemed_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+alter table public."beta_invites" add constraint "beta_invites_reserved_by_fkey" FOREIGN KEY (reserved_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+alter table public."business_settings" add constraint "business_settings_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."change_orders" add constraint "change_orders_customer_same_owner" FOREIGN KEY (user_id, customer_id) REFERENCES customers(user_id, id) ON DELETE CASCADE;
+alter table public."change_orders" add constraint "change_orders_job_same_owner" FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE CASCADE;
+alter table public."change_orders" add constraint "change_orders_quote_same_owner" FOREIGN KEY (user_id, quote_id) REFERENCES quotes(user_id, id) ON DELETE SET NULL;
+alter table public."change_orders" add constraint "change_orders_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."consent_changes" add constraint "consent_changes_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."consent_changes" add constraint "consent_changes_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."content_pieces" add constraint "content_pieces_asset_id_fkey" FOREIGN KEY (asset_id) REFERENCES marketing_assets(id) ON DELETE CASCADE;
+alter table public."content_pieces" add constraint "content_pieces_campaign_id_fkey" FOREIGN KEY (campaign_id) REFERENCES marketing_campaigns(id) ON DELETE SET NULL;
+alter table public."content_pieces" add constraint "content_pieces_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."content_pieces" add constraint "content_pieces_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
+alter table public."content_pieces" add constraint "content_pieces_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."conversations" add constraint "conversations_assigned_to_fkey" FOREIGN KEY (assigned_to) REFERENCES technicians(id) ON DELETE SET NULL;
+alter table public."conversations" add constraint "conversations_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
+alter table public."conversations" add constraint "conversations_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."crew_media" add constraint "crew_media_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE;
+alter table public."crew_media" add constraint "crew_media_message_id_fkey" FOREIGN KEY (message_id) REFERENCES crew_messages(id) ON DELETE CASCADE;
+alter table public."crew_media" add constraint "crew_media_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."crew_message_reads" add constraint "crew_message_reads_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE;
+alter table public."crew_message_reads" add constraint "crew_message_reads_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."crew_messages" add constraint "crew_messages_author_technician_id_fkey" FOREIGN KEY (author_technician_id) REFERENCES technicians(id) ON DELETE SET NULL;
+alter table public."crew_messages" add constraint "crew_messages_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE;
+alter table public."crew_messages" add constraint "crew_messages_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."crews" add constraint "crews_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."crm_campaign_log" add constraint "crm_campaign_log_campaign_id_fkey" FOREIGN KEY (campaign_id) REFERENCES crm_campaigns(id) ON DELETE CASCADE;
+alter table public."crm_campaign_log" add constraint "crm_campaign_log_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
+alter table public."crm_campaign_log" add constraint "crm_campaign_log_message_id_fkey" FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL;
+alter table public."crm_campaign_log" add constraint "crm_campaign_log_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."crm_campaign_presets" add constraint "crm_campaign_presets_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."crm_campaigns" add constraint "crm_campaigns_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."customer_imports" add constraint "customer_imports_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."customer_portal_tokens" add constraint "customer_portal_tokens_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
+alter table public."customer_portal_tokens" add constraint "customer_portal_tokens_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."customers" add constraint "customers_referred_by_customer_id_fkey" FOREIGN KEY (referred_by_customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."customers" add constraint "customers_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."data_exports" add constraint "data_exports_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."day_statuses" add constraint "day_statuses_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."dispatch_notes" add constraint "dispatch_notes_crew_id_fkey" FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE CASCADE;
+alter table public."dispatch_notes" add constraint "dispatch_notes_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."equipment" add constraint "equipment_crew_id_fkey" FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL;
+alter table public."equipment" add constraint "equipment_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."equipment_docs" add constraint "equipment_docs_equipment_id_fkey" FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE CASCADE;
+alter table public."equipment_docs" add constraint "equipment_docs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."equipment_service" add constraint "equipment_service_equipment_id_fkey" FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE CASCADE;
+alter table public."equipment_service" add constraint "equipment_service_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."expense_categories" add constraint "expense_categories_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."expenses" add constraint "expenses_category_id_fkey" FOREIGN KEY (category_id) REFERENCES expense_categories(id) ON DELETE SET NULL;
+alter table public."expenses" add constraint "expenses_job_same_owner" FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE SET NULL (job_id);
+alter table public."expenses" add constraint "expenses_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."expenses" add constraint "expenses_vendor_id_fkey" FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE SET NULL;
+alter table public."fixed_assets" add constraint "fixed_assets_equipment_id_fkey" FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE SET NULL;
+alter table public."fixed_assets" add constraint "fixed_assets_expense_id_fkey" FOREIGN KEY (expense_id) REFERENCES expenses(id) ON DELETE SET NULL;
+alter table public."fixed_assets" add constraint "fixed_assets_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."fixed_assets" add constraint "fixed_assets_vendor_id_fkey" FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE SET NULL;
+alter table public."follow_ups" add constraint "follow_ups_customer_same_tenant" FOREIGN KEY (user_id, customer_id) REFERENCES customers(user_id, id) ON DELETE CASCADE;
+alter table public."follow_ups" add constraint "follow_ups_quote_same_tenant" FOREIGN KEY (user_id, quote_id) REFERENCES quotes(user_id, id) ON DELETE SET NULL (quote_id);
+alter table public."follow_ups" add constraint "follow_ups_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."holidays" add constraint "holidays_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."inbound_events" add constraint "inbound_events_hook_id_fkey" FOREIGN KEY (hook_id) REFERENCES inbound_webhooks(id) ON DELETE CASCADE;
+alter table public."inbound_events" add constraint "inbound_events_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."inbound_webhooks" add constraint "inbound_webhooks_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."integration_events" add constraint "integration_events_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."invoices" add constraint "invoices_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."invoices" add constraint "invoices_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
+alter table public."invoices" add constraint "invoices_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
+alter table public."invoices" add constraint "invoices_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
+alter table public."invoices" add constraint "invoices_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."job_line_items" add constraint "job_line_items_change_order_same_owner" FOREIGN KEY (change_order_id, user_id) REFERENCES change_orders(id, user_id) ON DELETE CASCADE;
+alter table public."job_line_items" add constraint "job_line_items_job_same_owner" FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE CASCADE;
+alter table public."job_line_items" add constraint "job_line_items_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."job_photos" add constraint "job_photos_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."job_photos" add constraint "job_photos_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
+alter table public."job_photos" add constraint "job_photos_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE;
+alter table public."job_photos" add constraint "job_photos_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."job_price_changes" add constraint "job_price_changes_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
+alter table public."job_price_changes" add constraint "job_price_changes_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
+alter table public."job_price_changes" add constraint "job_price_changes_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."job_recurrences" add constraint "job_recurrences_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."job_recurrences" add constraint "job_recurrences_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."job_work_sessions" add constraint "job_work_sessions_job_same_owner" FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE CASCADE;
+alter table public."job_work_sessions" add constraint "job_work_sessions_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."jobs" add constraint "jobs_crew_id_fkey" FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL;
+alter table public."jobs" add constraint "jobs_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."jobs" add constraint "jobs_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
+alter table public."jobs" add constraint "jobs_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
+alter table public."jobs" add constraint "jobs_recurrence_id_fkey" FOREIGN KEY (recurrence_id) REFERENCES job_recurrences(id) ON DELETE SET NULL;
+alter table public."jobs" add constraint "jobs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."labor_observations" add constraint "labor_observations_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
+alter table public."labor_observations" add constraint "labor_observations_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
+alter table public."labor_observations" add constraint "labor_observations_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."liabilities" add constraint "liabilities_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."marketing_assets" add constraint "marketing_assets_best_after_photo_id_fkey" FOREIGN KEY (best_after_photo_id) REFERENCES job_photos(id) ON DELETE SET NULL;
+alter table public."marketing_assets" add constraint "marketing_assets_best_before_photo_id_fkey" FOREIGN KEY (best_before_photo_id) REFERENCES job_photos(id) ON DELETE SET NULL;
+alter table public."marketing_assets" add constraint "marketing_assets_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."marketing_assets" add constraint "marketing_assets_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE;
+alter table public."marketing_assets" add constraint "marketing_assets_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
+alter table public."marketing_assets" add constraint "marketing_assets_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."marketing_campaigns" add constraint "marketing_campaigns_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."measurements" add constraint "measurements_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."measurements" add constraint "measurements_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
+alter table public."measurements" add constraint "measurements_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
+alter table public."measurements" add constraint "measurements_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."message_sends" add constraint "message_sends_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."messages" add constraint "messages_conversation_id_fkey" FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
+alter table public."messages" add constraint "messages_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."messages" add constraint "messages_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."neighbor_leads" add constraint "neighbor_leads_converted_customer_id_fkey" FOREIGN KEY (converted_customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."neighbor_leads" add constraint "neighbor_leads_source_customer_id_fkey" FOREIGN KEY (source_customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."neighbor_leads" add constraint "neighbor_leads_source_property_id_fkey" FOREIGN KEY (source_property_id) REFERENCES properties(id) ON DELETE SET NULL;
+alter table public."neighbor_leads" add constraint "neighbor_leads_source_quote_id_fkey" FOREIGN KEY (source_quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
+alter table public."neighbor_leads" add constraint "neighbor_leads_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."notification_log" add constraint "notification_log_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."notification_log" add constraint "notification_log_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
+alter table public."notification_log" add constraint "notification_log_message_id_fkey" FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL;
+alter table public."notification_log" add constraint "notification_log_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."notifications" add constraint "notifications_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."notifications" add constraint "notifications_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."part_movements" add constraint "part_movements_equipment_service_id_fkey" FOREIGN KEY (equipment_service_id) REFERENCES equipment_service(id) ON DELETE CASCADE;
+alter table public."part_movements" add constraint "part_movements_part_id_fkey" FOREIGN KEY (part_id) REFERENCES parts(id) ON DELETE CASCADE;
+alter table public."part_movements" add constraint "part_movements_purchase_order_item_id_fkey" FOREIGN KEY (purchase_order_item_id) REFERENCES purchase_order_items(id) ON DELETE CASCADE;
+alter table public."part_movements" add constraint "part_movements_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."parts" add constraint "parts_supplier_id_fkey" FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL;
+alter table public."parts" add constraint "parts_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."pay_run_lines" add constraint "pay_run_lines_pay_run_id_fkey" FOREIGN KEY (pay_run_id) REFERENCES pay_runs(id) ON DELETE CASCADE;
+alter table public."pay_run_lines" add constraint "pay_run_lines_technician_same_owner" FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (technician_id);
+alter table public."pay_run_lines" add constraint "pay_run_lines_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."pay_runs" add constraint "pay_runs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."payment_methods" add constraint "payment_methods_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
+alter table public."payment_methods" add constraint "payment_methods_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."payments" add constraint "payments_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."payments" add constraint "payments_invoice_id_fkey" FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE SET NULL;
+alter table public."payments" add constraint "payments_quote_tenant_fkey" FOREIGN KEY (user_id, quote_id) REFERENCES quotes(user_id, id) ON DELETE SET NULL (quote_id);
+alter table public."payments" add constraint "payments_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."platform_capabilities" add constraint "platform_capabilities_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."platform_operators" add constraint "platform_operators_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."pricing_config_versions" add constraint "pricing_config_versions_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."properties" add constraint "properties_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
+alter table public."properties" add constraint "properties_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."property_intelligence" add constraint "property_intelligence_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."property_intelligence" add constraint "property_intelligence_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
+alter table public."property_intelligence" add constraint "property_intelligence_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE;
+alter table public."property_intelligence" add constraint "property_intelligence_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."property_measurement_events" add constraint "property_measurement_events_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."property_measurements" add constraint "property_measurements_property_same_owner" FOREIGN KEY (property_id, user_id) REFERENCES properties(id, user_id) ON DELETE CASCADE;
+alter table public."property_measurements" add constraint "property_measurements_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."property_observations" add constraint "property_observations_analysis_id_fkey" FOREIGN KEY (analysis_id) REFERENCES property_intelligence(id) ON DELETE SET NULL;
+alter table public."property_observations" add constraint "property_observations_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE;
+alter table public."property_observations" add constraint "property_observations_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."property_twin" add constraint "property_twin_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."property_twin" add constraint "property_twin_latest_analysis_id_fkey" FOREIGN KEY (latest_analysis_id) REFERENCES property_intelligence(id) ON DELETE SET NULL;
+alter table public."property_twin" add constraint "property_twin_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE;
+alter table public."property_twin" add constraint "property_twin_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."pto_entries" add constraint "pto_entries_holiday_id_fkey" FOREIGN KEY (holiday_id) REFERENCES holidays(id) ON DELETE SET NULL;
+alter table public."pto_entries" add constraint "pto_entries_technician_same_owner" FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (technician_id);
+alter table public."pto_entries" add constraint "pto_entries_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."publish_jobs" add constraint "publish_jobs_connection_id_fkey" FOREIGN KEY (connection_id) REFERENCES social_connections(id) ON DELETE SET NULL;
+alter table public."publish_jobs" add constraint "publish_jobs_content_piece_id_fkey" FOREIGN KEY (content_piece_id) REFERENCES content_pieces(id) ON DELETE CASCADE;
+alter table public."publish_jobs" add constraint "publish_jobs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."purchase_order_items" add constraint "purchase_order_items_part_id_fkey" FOREIGN KEY (part_id) REFERENCES parts(id) ON DELETE RESTRICT;
+alter table public."purchase_order_items" add constraint "purchase_order_items_purchase_order_id_fkey" FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id) ON DELETE CASCADE;
+alter table public."purchase_order_items" add constraint "purchase_order_items_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."purchase_orders" add constraint "purchase_orders_supplier_id_fkey" FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE RESTRICT;
+alter table public."purchase_orders" add constraint "purchase_orders_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."push_subscriptions" add constraint "push_subscriptions_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."quote_options" add constraint "quote_options_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE;
+alter table public."quote_options" add constraint "quote_options_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."quote_outcomes" add constraint "quote_outcomes_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE;
+alter table public."quote_outcomes" add constraint "quote_outcomes_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."quote_services" add constraint "quote_services_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE;
+alter table public."quote_services" add constraint "quote_services_service_template_id_fkey" FOREIGN KEY (service_template_id) REFERENCES service_templates(id) ON DELETE SET NULL;
+alter table public."quote_services" add constraint "quote_services_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."quotes" add constraint "quotes_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."quotes" add constraint "quotes_pricing_config_version_id_fkey" FOREIGN KEY (pricing_config_version_id) REFERENCES pricing_config_versions(id);
+alter table public."quotes" add constraint "quotes_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
+alter table public."quotes" add constraint "quotes_renewal_of_recurrence_fkey" FOREIGN KEY (user_id, renewal_of_recurrence_id) REFERENCES job_recurrences(user_id, id) ON UPDATE CASCADE ON DELETE SET NULL (renewal_of_recurrence_id);
+alter table public."quotes" add constraint "quotes_selected_option_fkey" FOREIGN KEY (selected_option_id, id) REFERENCES quote_options(id, quote_id) ON DELETE RESTRICT;
+alter table public."quotes" add constraint "quotes_service_template_id_fkey" FOREIGN KEY (service_template_id) REFERENCES service_templates(id) ON DELETE SET NULL;
+alter table public."quotes" add constraint "quotes_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."referrals" add constraint "referrals_referred_customer_id_fkey" FOREIGN KEY (referred_customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."referrals" add constraint "referrals_referrer_customer_id_fkey" FOREIGN KEY (referrer_customer_id) REFERENCES customers(id) ON DELETE CASCADE;
+alter table public."referrals" add constraint "referrals_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."report_schedules" add constraint "report_schedules_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."revenue_recommendations" add constraint "revenue_recommendations_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
+alter table public."revenue_recommendations" add constraint "revenue_recommendations_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."road_distance_cache" add constraint "road_distance_cache_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."schedule_health_ignored" add constraint "schedule_health_ignored_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."schedule_items" add constraint "schedule_items_converted_quote_id_fkey" FOREIGN KEY (converted_quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
+alter table public."schedule_items" add constraint "schedule_items_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."schedule_items" add constraint "schedule_items_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
+alter table public."schedule_items" add constraint "schedule_items_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."scheduled_messages" add constraint "scheduled_messages_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
+alter table public."scheduled_messages" add constraint "scheduled_messages_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
+alter table public."scheduled_messages" add constraint "scheduled_messages_message_id_fkey" FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL;
+alter table public."scheduled_messages" add constraint "scheduled_messages_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."service_bundle_items" add constraint "service_bundle_items_bundle_same_owner" FOREIGN KEY (bundle_id, user_id) REFERENCES service_bundles(id, user_id) ON DELETE CASCADE;
+alter table public."service_bundle_items" add constraint "service_bundle_items_template_same_owner" FOREIGN KEY (service_template_id, user_id) REFERENCES service_templates(id, user_id) ON DELETE SET NULL (service_template_id);
+alter table public."service_bundle_items" add constraint "service_bundle_items_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."service_bundles" add constraint "service_bundles_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."service_requests" add constraint "service_requests_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."service_requests" add constraint "service_requests_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
+alter table public."service_requests" add constraint "service_requests_recurrence_id_fkey" FOREIGN KEY (recurrence_id) REFERENCES job_recurrences(id) ON DELETE SET NULL;
+alter table public."service_requests" add constraint "service_requests_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."service_templates" add constraint "service_templates_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."service_units" add constraint "service_units_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."social_connections" add constraint "social_connections_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."suppliers" add constraint "suppliers_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."technicians" add constraint "technicians_auth_user_id_fkey" FOREIGN KEY (auth_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+alter table public."technicians" add constraint "technicians_crew_id_fkey" FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL;
+alter table public."technicians" add constraint "technicians_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."time_entries" add constraint "time_entries_job_same_owner" FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE SET NULL (job_id);
+alter table public."time_entries" add constraint "time_entries_technician_same_owner" FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (technician_id);
+alter table public."time_entries" add constraint "time_entries_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."travel_fee_tiers" add constraint "travel_fee_tiers_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."vendors" add constraint "vendors_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."verify_fixture_tenants" add constraint "verify_fixture_tenants_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."wage_history" add constraint "wage_history_technician_same_owner" FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (technician_id);
+alter table public."wage_history" add constraint "wage_history_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."webhook_deliveries" add constraint "webhook_deliveries_endpoint_id_fkey" FOREIGN KEY (endpoint_id) REFERENCES webhook_endpoints(id) ON DELETE CASCADE;
+alter table public."webhook_deliveries" add constraint "webhook_deliveries_event_id_fkey" FOREIGN KEY (event_id) REFERENCES integration_events(id) ON DELETE SET NULL;
+alter table public."webhook_deliveries" add constraint "webhook_deliveries_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."webhook_endpoints" add constraint "webhook_endpoints_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."website_leads" add constraint "website_leads_conversation_id_fkey" FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE SET NULL;
+alter table public."website_leads" add constraint "website_leads_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."website_leads" add constraint "website_leads_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
+alter table public."website_leads" add constraint "website_leads_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 6 · TRIGGERS
+-- 82 triggers, including the two DEFERRABLE constraint triggers that
 -- enforce quote-option/quote-service shape at commit time.
 -- ══════════════════════════════════════════════════════════════════════════
 
@@ -5612,6 +5854,14 @@ drop trigger if exists "business_settings_no_crew_owner" on public."business_set
 CREATE TRIGGER business_settings_no_crew_owner BEFORE INSERT ON public.business_settings FOR EACH ROW EXECUTE FUNCTION guard_business_settings_owner();
 drop trigger if exists "business_settings_updated_at" on public."business_settings";
 CREATE TRIGGER business_settings_updated_at BEFORE UPDATE ON public.business_settings FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "trg_change_order_apply_approval" on public."change_orders";
+CREATE TRIGGER trg_change_order_apply_approval AFTER UPDATE ON public.change_orders FOR EACH ROW EXECUTE FUNCTION change_order_apply_approval();
+drop trigger if exists "trg_change_order_assign_number" on public."change_orders";
+CREATE TRIGGER trg_change_order_assign_number BEFORE INSERT ON public.change_orders FOR EACH ROW EXECUTE FUNCTION change_order_assign_number();
+drop trigger if exists "trg_change_order_guard_transition" on public."change_orders";
+CREATE TRIGGER trg_change_order_guard_transition BEFORE UPDATE ON public.change_orders FOR EACH ROW EXECUTE FUNCTION change_order_guard_transition();
+drop trigger if exists "trg_notify_change_order_decision" on public."change_orders";
+CREATE TRIGGER trg_notify_change_order_decision AFTER UPDATE ON public.change_orders FOR EACH ROW EXECUTE FUNCTION notify_change_order_decision();
 drop trigger if exists "trg_content_pieces_updated" on public."content_pieces";
 CREATE TRIGGER trg_content_pieces_updated BEFORE UPDATE ON public.content_pieces FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 drop trigger if exists "crew_message_identity" on public."crew_messages";
@@ -5766,8 +6016,8 @@ drop trigger if exists "webhook_endpoints_updated_at" on public."webhook_endpoin
 CREATE TRIGGER webhook_endpoints_updated_at BEFORE UPDATE ON public.webhook_endpoints FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
 
 -- ══════════════════════════════════════════════════════════════════════════
--- 6 · INDEXES
--- 256 standalone indexes. Constraint-backing indexes are omitted on purpose —
+-- 7 · INDEXES
+-- 265 standalone indexes. Constraint-backing indexes are omitted on purpose —
 -- section 3 already created them; declaring both would fail or duplicate.
 -- The partial UNIQUE indexes are correctness, not speed: they are what stops a
 -- second open shift per technician and a duplicate invoice number.
@@ -5783,6 +6033,9 @@ create unique index if not exists automation_signals_unique ON public.automation
 create unique index if not exists beta_invites_redeemed_by_key ON public.beta_invites USING btree (redeemed_by) WHERE (redeemed_by IS NOT NULL);
 create unique index if not exists beta_invites_reserved_by_key ON public.beta_invites USING btree (reserved_by) WHERE (reserved_by IS NOT NULL);
 create unique index if not exists business_settings_booking_token_idx ON public.business_settings USING btree (booking_token) WHERE (booking_token IS NOT NULL);
+create index if not exists change_orders_customer_idx ON public.change_orders USING btree (customer_id, status);
+create index if not exists change_orders_job_idx ON public.change_orders USING btree (job_id);
+create unique index if not exists change_orders_number_uniq ON public.change_orders USING btree (user_id, co_number);
 create index if not exists consent_changes_cust_idx ON public.consent_changes USING btree (user_id, customer_id, created_at DESC);
 create index if not exists consent_changes_customer_id_idx ON public.consent_changes USING btree (customer_id);
 create index if not exists content_pieces_active_idx ON public.content_pieces USING btree (user_id, created_at DESC) WHERE (archived_at IS NULL);
@@ -5859,6 +6112,7 @@ create index if not exists invoices_property_id_idx ON public.invoices USING btr
 create index if not exists invoices_quote_id_idx ON public.invoices USING btree (quote_id);
 create index if not exists invoices_reminder_scan_idx ON public.invoices USING btree (user_id, status, due_date) WHERE (status = ANY (ARRAY['unpaid'::text, 'sent'::text, 'partial'::text]));
 create index if not exists invoices_user_id_idx ON public.invoices USING btree (user_id);
+create unique index if not exists job_line_items_change_order_uniq ON public.job_line_items USING btree (change_order_id) WHERE (change_order_id IS NOT NULL);
 create index if not exists job_line_items_group_idx ON public.job_line_items USING btree (group_id);
 create index if not exists job_line_items_job_id_idx ON public.job_line_items USING btree (job_id);
 create index if not exists job_line_items_job_idx ON public.job_line_items USING btree (user_id, job_id);
@@ -5921,6 +6175,8 @@ create index if not exists part_movements_po_item_idx ON public.part_movements U
 create index if not exists part_movements_service_idx ON public.part_movements USING btree (equipment_service_id);
 create index if not exists parts_supplier_idx ON public.parts USING btree (supplier_id) WHERE (supplier_id IS NOT NULL);
 create index if not exists parts_user_idx ON public.parts USING btree (user_id, category);
+create index if not exists password_reset_requests_key_time_idx ON public.password_reset_requests USING btree (email_key, created_at DESC);
+create index if not exists password_reset_requests_time_idx ON public.password_reset_requests USING btree (created_at DESC);
 create index if not exists pay_run_lines_run_idx ON public.pay_run_lines USING btree (pay_run_id);
 create index if not exists pay_run_lines_tech_idx ON public.pay_run_lines USING btree (technician_id);
 create index if not exists pay_runs_user_period_idx ON public.pay_runs USING btree (user_id, period_start DESC);
@@ -5976,6 +6232,7 @@ create index if not exists quotes_customer_id_idx ON public.quotes USING btree (
 create index if not exists quotes_pricing_config_version_idx ON public.quotes USING btree (pricing_config_version_id) WHERE (pricing_config_version_id IS NOT NULL);
 create index if not exists quotes_property_id_idx ON public.quotes USING btree (property_id);
 create index if not exists quotes_qnum_trgm ON public.quotes USING gin (quote_number gin_trgm_ops);
+create index if not exists quotes_renewal_of_recurrence_idx ON public.quotes USING btree (renewal_of_recurrence_id) WHERE (renewal_of_recurrence_id IS NOT NULL);
 create index if not exists quotes_selected_option_idx ON public.quotes USING btree (selected_option_id);
 create index if not exists quotes_service_template_id_idx ON public.quotes USING btree (service_template_id);
 create index if not exists quotes_status_idx ON public.quotes USING btree (status);
@@ -5997,6 +6254,8 @@ create index if not exists service_bundle_items_bundle_idx ON public.service_bun
 create unique index if not exists service_bundles_user_name_uk ON public.service_bundles USING btree (user_id, lower(btrim(name)));
 create index if not exists service_bundles_user_sort_idx ON public.service_bundles USING btree (user_id, sort_order, created_at);
 create index if not exists service_requests_customer_id_idx ON public.service_requests USING btree (customer_id);
+create unique index if not exists service_requests_open_dedup_idx ON public.service_requests USING btree (customer_id, dedup_key) WHERE ((dedup_key IS NOT NULL) AND (status = 'new'::text));
+create index if not exists service_requests_open_portal_idx ON public.service_requests USING btree (user_id, created_at DESC) WHERE (from_portal AND (status = 'new'::text));
 create index if not exists service_requests_user_idx ON public.service_requests USING btree (user_id, status);
 create index if not exists service_templates_active_idx ON public.service_templates USING btree (is_active);
 create index if not exists service_templates_favorite_idx ON public.service_templates USING btree (user_id, is_favorite) WHERE is_favorite;
@@ -6031,8 +6290,8 @@ create index if not exists website_leads_customer_idx ON public.website_leads US
 create index if not exists website_leads_user_idx ON public.website_leads USING btree (user_id, created_at DESC);
 
 -- ══════════════════════════════════════════════════════════════════════════
--- 7 · ROW LEVEL SECURITY
--- RLS enabled on all 101 tables, then 329 policies.
+-- 8 · ROW LEVEL SECURITY
+-- RLS enabled on all 103 tables, then 332 policies.
 -- Every table carries RLS. The tenant boundary audit found the holes were always
 -- RLS being OFF, never a policy being wrong — so enabling is emitted for every
 -- table unconditionally, before any policy.
@@ -6044,6 +6303,7 @@ alter table public."automation_signals" enable row level security;
 alter table public."automation_sweeps" enable row level security;
 alter table public."beta_invites" enable row level security;
 alter table public."business_settings" enable row level security;
+alter table public."change_orders" enable row level security;
 alter table public."consent_changes" enable row level security;
 alter table public."content_pieces" enable row level security;
 alter table public."conversations" enable row level security;
@@ -6091,6 +6351,7 @@ alter table public."notification_log" enable row level security;
 alter table public."notifications" enable row level security;
 alter table public."part_movements" enable row level security;
 alter table public."parts" enable row level security;
+alter table public."password_reset_requests" enable row level security;
 alter table public."pay_run_lines" enable row level security;
 alter table public."pay_runs" enable row level security;
 alter table public."payment_methods" enable row level security;
@@ -6173,6 +6434,16 @@ create policy "settings: select own" on public."business_settings" as permissive
 drop policy if exists "settings: update own" on public."business_settings";
 create policy "settings: update own" on public."business_settings" as permissive for update to public
   using ((auth.uid() = user_id));
+drop policy if exists "change_orders: insert own" on public."change_orders";
+create policy "change_orders: insert own" on public."change_orders" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "change_orders: select own" on public."change_orders";
+create policy "change_orders: select own" on public."change_orders" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "change_orders: update own" on public."change_orders";
+create policy "change_orders: update own" on public."change_orders" as permissive for update to public
+  using ((auth.uid() = user_id))
+  with check ((auth.uid() = user_id));
 drop policy if exists "consent_changes: insert own" on public."consent_changes";
 create policy "consent_changes: insert own" on public."consent_changes" as permissive for insert to public
   with check ((auth.uid() = user_id));
@@ -6454,16 +6725,17 @@ create policy "invoices: update own" on public."invoices" as permissive for upda
   using ((auth.uid() = user_id));
 drop policy if exists "job_line_items: delete own" on public."job_line_items";
 create policy "job_line_items: delete own" on public."job_line_items" as permissive for delete to public
-  using ((auth.uid() = user_id));
+  using (((auth.uid() = user_id) AND (change_order_id IS NULL)));
 drop policy if exists "job_line_items: insert own" on public."job_line_items";
 create policy "job_line_items: insert own" on public."job_line_items" as permissive for insert to public
-  with check ((auth.uid() = user_id));
+  with check (((auth.uid() = user_id) AND (change_order_id IS NULL)));
 drop policy if exists "job_line_items: select own" on public."job_line_items";
 create policy "job_line_items: select own" on public."job_line_items" as permissive for select to public
   using ((auth.uid() = user_id));
 drop policy if exists "job_line_items: update own" on public."job_line_items";
 create policy "job_line_items: update own" on public."job_line_items" as permissive for update to public
-  using ((auth.uid() = user_id));
+  using (((auth.uid() = user_id) AND (change_order_id IS NULL)))
+  with check (((auth.uid() = user_id) AND (change_order_id IS NULL)));
 drop policy if exists "job_photos: delete own" on public."job_photos";
 create policy "job_photos: delete own" on public."job_photos" as permissive for delete to public
   using ((auth.uid() = user_id));
@@ -7149,7 +7421,7 @@ create policy "website_leads: update own" on public."website_leads" as permissiv
   using ((auth.uid() = user_id));
 
 -- ══════════════════════════════════════════════════════════════════════════
--- 8 · GRANTS
+-- 9 · GRANTS
 -- REVOKE-then-GRANT, per object, always. A fresh Supabase project grants
 -- anon/authenticated/service_role everything on new objects through ALTER DEFAULT
 -- PRIVILEGES, so a grant-only baseline would quietly reproduce none of the
@@ -7192,6 +7464,10 @@ revoke all on table public."business_settings" from public, anon, authenticated,
 grant ALL on table public."business_settings" to anon;
 grant ALL on table public."business_settings" to authenticated;
 grant ALL on table public."business_settings" to service_role;
+revoke all on table public."change_orders" from public, anon, authenticated, service_role;
+grant ALL on table public."change_orders" to anon;
+grant ALL on table public."change_orders" to authenticated;
+grant ALL on table public."change_orders" to service_role;
 revoke all on table public."consent_changes" from public, anon, authenticated, service_role;
 grant ALL on table public."consent_changes" to anon;
 grant ALL on table public."consent_changes" to authenticated;
@@ -7374,6 +7650,8 @@ revoke all on table public."parts" from public, anon, authenticated, service_rol
 grant ALL on table public."parts" to anon;
 grant ALL on table public."parts" to authenticated;
 grant ALL on table public."parts" to service_role;
+revoke all on table public."password_reset_requests" from public, anon, authenticated, service_role;
+grant ALL on table public."password_reset_requests" to service_role;
 revoke all on table public."pay_run_lines" from public, anon, authenticated, service_role;
 grant ALL on table public."pay_run_lines" to anon;
 grant ALL on table public."pay_run_lines" to authenticated;
@@ -7609,6 +7887,9 @@ grant execute on function public."carry_forward_job_actual_minutes"() to public;
 grant execute on function public."carry_forward_job_actual_minutes"() to anon;
 grant execute on function public."carry_forward_job_actual_minutes"() to authenticated;
 grant execute on function public."carry_forward_job_actual_minutes"() to service_role;
+revoke all on function public."change_order_apply_approval"() from public, anon, authenticated, service_role;
+revoke all on function public."change_order_assign_number"() from public, anon, authenticated, service_role;
+revoke all on function public."change_order_guard_transition"() from public, anon, authenticated, service_role;
 revoke all on function public."claim_beta_invite"() from public, anon, authenticated, service_role;
 grant execute on function public."claim_beta_invite"() to authenticated;
 grant execute on function public."claim_beta_invite"() to service_role;
@@ -7761,6 +8042,7 @@ grant execute on function public."mirror_measurement_to_property"() to public;
 grant execute on function public."mirror_measurement_to_property"() to anon;
 grant execute on function public."mirror_measurement_to_property"() to authenticated;
 grant execute on function public."mirror_measurement_to_property"() to service_role;
+revoke all on function public."notify_change_order_decision"() from public, anon, authenticated, service_role;
 revoke all on function public."notify_inbound_message"() from public, anon, authenticated, service_role;
 grant execute on function public."notify_inbound_message"() to service_role;
 revoke all on function public."notify_invoice_paid"() from public, anon, authenticated, service_role;
@@ -7821,11 +8103,17 @@ grant execute on function public."portal_remove_card"(p_token text) to public;
 grant execute on function public."portal_remove_card"(p_token text) to anon;
 grant execute on function public."portal_remove_card"(p_token text) to authenticated;
 grant execute on function public."portal_remove_card"(p_token text) to service_role;
+revoke all on function public."portal_request_photos_ok"(p text[]) from public, anon, authenticated, service_role;
+grant execute on function public."portal_request_photos_ok"(p text[]) to authenticated;
+grant execute on function public."portal_request_photos_ok"(p text[]) to service_role;
 revoke all on function public."portal_request_service"(p_token text, p_message text) from public, anon, authenticated, service_role;
 grant execute on function public."portal_request_service"(p_token text, p_message text) to public;
 grant execute on function public."portal_request_service"(p_token text, p_message text) to anon;
 grant execute on function public."portal_request_service"(p_token text, p_message text) to authenticated;
 grant execute on function public."portal_request_service"(p_token text, p_message text) to service_role;
+revoke all on function public."portal_respond_change_order"(p_token text, p_change_order_id uuid, p_decision text, p_reason text) from public, anon, authenticated, service_role;
+grant execute on function public."portal_respond_change_order"(p_token text, p_change_order_id uuid, p_decision text, p_reason text) to anon;
+grant execute on function public."portal_respond_change_order"(p_token text, p_change_order_id uuid, p_decision text, p_reason text) to authenticated;
 revoke all on function public."portal_send_message"(p_token text, p_body text) from public, anon, authenticated, service_role;
 grant execute on function public."portal_send_message"(p_token text, p_body text) to public;
 grant execute on function public."portal_send_message"(p_token text, p_body text) to anon;
@@ -7844,11 +8132,10 @@ grant execute on function public."portal_set_consent"(p_token text, p_sms_opt_in
 revoke all on function public."portal_set_scheduling_preference"(p_token text, p_quote_id uuid, p_date date, p_date_2 date, p_timing text, p_note text) from public, anon, authenticated, service_role;
 grant execute on function public."portal_set_scheduling_preference"(p_token text, p_quote_id uuid, p_date date, p_date_2 date, p_timing text, p_note text) to anon;
 grant execute on function public."portal_set_scheduling_preference"(p_token text, p_quote_id uuid, p_date date, p_date_2 date, p_timing text, p_note text) to authenticated;
-revoke all on function public."portal_submit_request"(p_token text, p_message text, p_kind text, p_preferred_date date, p_job_id uuid, p_recurrence_id uuid, p_details jsonb) from public, anon, authenticated, service_role;
-grant execute on function public."portal_submit_request"(p_token text, p_message text, p_kind text, p_preferred_date date, p_job_id uuid, p_recurrence_id uuid, p_details jsonb) to public;
-grant execute on function public."portal_submit_request"(p_token text, p_message text, p_kind text, p_preferred_date date, p_job_id uuid, p_recurrence_id uuid, p_details jsonb) to anon;
-grant execute on function public."portal_submit_request"(p_token text, p_message text, p_kind text, p_preferred_date date, p_job_id uuid, p_recurrence_id uuid, p_details jsonb) to authenticated;
-grant execute on function public."portal_submit_request"(p_token text, p_message text, p_kind text, p_preferred_date date, p_job_id uuid, p_recurrence_id uuid, p_details jsonb) to service_role;
+revoke all on function public."portal_submit_request"(p_token text, p_message text, p_kind text, p_preferred_date date, p_job_id uuid, p_recurrence_id uuid, p_details jsonb, p_photos text[]) from public, anon, authenticated, service_role;
+grant execute on function public."portal_submit_request"(p_token text, p_message text, p_kind text, p_preferred_date date, p_job_id uuid, p_recurrence_id uuid, p_details jsonb, p_photos text[]) to anon;
+grant execute on function public."portal_submit_request"(p_token text, p_message text, p_kind text, p_preferred_date date, p_job_id uuid, p_recurrence_id uuid, p_details jsonb, p_photos text[]) to authenticated;
+grant execute on function public."portal_submit_request"(p_token text, p_message text, p_kind text, p_preferred_date date, p_job_id uuid, p_recurrence_id uuid, p_details jsonb, p_photos text[]) to service_role;
 revoke all on function public."pricing_config_versions_immutable"() from public, anon, authenticated, service_role;
 grant execute on function public."pricing_config_versions_immutable"() to public;
 grant execute on function public."pricing_config_versions_immutable"() to anon;
@@ -7943,19 +8230,21 @@ grant execute on function public."vision_supersede_prior_active"() to authentica
 grant execute on function public."vision_supersede_prior_active"() to service_role;
 
 -- ══════════════════════════════════════════════════════════════════════════
--- 9 · COMMENTS
+-- 10 · COMMENTS
 -- These are not documentation garnish. Several encode rules that cost real money
 -- to relearn — which columns are customer-visible, which must never be, and why a
 -- figure is derived rather than stored. They ship with the schema deliberately.
 -- ══════════════════════════════════════════════════════════════════════════
 
 comment on table public."beta_invites" is 'One-time beta signup invites. Raw tokens are never stored — sha256 hex only. Service-role and DEFINER access only: RLS is on with zero policies.';
+comment on table public."change_orders" is 'Scope + price agreed AFTER the original approval. Owns the AUTHORIZATION only - approval mints a job_line_items row (change_order_id), which is the money. The originating quote is never rewritten.';
 comment on table public."crew_media" is 'CREW AUDIENCE. Reference photos/video the office sends TO the field — what a worker needs BEFORE and DURING the work. Never customer-facing: no portal projection selects it. Not proof of work — that is job_photos + jobs.completion_summary.';
 comment on table public."crew_message_reads" is 'High-water mark per (visit, reader). Unread is derived from it — deliberately NOT one row per message per user.';
 comment on table public."crew_messages" is 'CREW AUDIENCE (the business + the crew assigned to this visit). The conversation attached to one visit. Never customer-facing: no portal projection, no PDF, no public API selects it. Not a note — jobs.notes is the standing instruction; this is what was said and when.';
 comment on table public."dispatch_notes" is 'One note per (date, crew); crew NULL = the day-level note. Upsert on the unique constraint.';
 comment on table public."follow_ups" is 'Owner follow-up commitments: WHO (customer_id, mandatory) / WHEN (due_on, a local date) / WHY (reason) / open|done. NOT public.schedule_items (empty, unread, calendar-shaped) and NOT lib/followup.ts (the derived quote chaser). Never messages the customer — this is an owner reminder only.';
 comment on table public."job_work_sessions" is 'One stretch of work on one job on one day. jobs.actual_minutes is the sum of these (enforced by trigger). minutes = elapsed on site; labour_minutes = minutes x workers.';
+comment on table public."password_reset_requests" is 'Abuse ledger for the public password-reset endpoint. email_key = sha256(lower(trim(email))) — never the address. No user_id/email/token/IP by design.';
 comment on table public."platform_capabilities" is 'Platform-managed grants for SHARED deployment infrastructure (Stripe account, Twilio number, Resend identity). Missing row = no grants. App code reads only; rows are written by the platform operator in SQL.';
 comment on table public."platform_operators" is 'Who may issue beta invites. NOT a role system: one row today (the founding account). No client access of any kind.';
 comment on table public."portal_access_requests" is 'Abuse ledger for the public portal-link endpoint. email_key = sha256(lower(trim(email))) — never the address. No customer_id/user_id/token by design.';
@@ -7983,6 +8272,7 @@ comment on column public."business_settings"."ot_weekly_hours" is 'Hours in a WO
 comment on column public."business_settings"."pay_period" is 'weekly | biweekly | semimonthly | monthly. Drives the payroll summary window.';
 comment on column public."business_settings"."pay_period_anchor" is 'Any start date of a known period. Biweekly needs it to know WHICH two weeks; NULL falls back to the first pay_week_starts_on of 1970 (deterministic).';
 comment on column public."business_settings"."pay_week_starts_on" is '0=Sun..6=Sat. The OT WORK WEEK boundary — legally load-bearing, so it is explicit rather than assumed. Defaults to 1 (Mon) to match the existing timesheet week.';
+comment on column public."change_orders"."decided_via" is 'portal = the customer decided it themselves; owner = the owner recorded a decision taken elsewhere. Never inferred - no surface may imply a customer tapped approve when they did not.';
 comment on column public."crew_media"."message_id" is 'NULL = office reference material for the visit (the original meaning). Set = an attachment on that crew_messages row. Deleting the message takes its attachments with it.';
 comment on column public."crew_messages"."event_type" is 'NULL = a person spoke. Non-null = a system event (schedule_changed). Do not dump every mutation here: a system event may only join a conversation that already exists.';
 comment on column public."crew_messages"."user_id" is 'The BUSINESS that owns the visit — the tenant boundary. Never the crew author''s own uid.';
@@ -8007,6 +8297,7 @@ comment on column public."invoices"."internal_notes" is 'Private to the owner: n
 comment on column public."invoices"."last_reminded_at" is 'When the automatic payment reminder last went out. Null = never reminded; the due date is the anchor instead.';
 comment on column public."invoices"."line_items_edited" is 'True once the owner hand-edits this draft''s line items in the invoice editor. syncDraftInvoiceAmounts then skips the draft so a later job-price change never silently overwrites owner-authored line_items/amount (the change-order-loss bug). Defaults false: job-derived drafts keep auto-re-pricing.';
 comment on column public."invoices"."reminder_count" is 'How many automatic payment reminders have been sent. Compare-and-swapped by /api/cron/invoice-reminders to guarantee at-most-once, and capped by the owner''s maximum.';
+comment on column public."job_line_items"."change_order_id" is 'Set only by change_order_apply_approval(). Its presence means this money exists BECAUSE a customer approved a change order - never hand-write it.';
 comment on column public."jobs"."completion_issue" is 'INTERNAL ONLY. What the field found that needs attention (leaking sprinkler head, wants a hedge quote). MUST NOT be selected by get_portal_data or reach any customer surface.';
 comment on column public."jobs"."completion_summary" is 'CUSTOMER-VISIBLE. What was done, written for the person who paid for it. Selected by get_portal_data and rendered verbatim in the portal visit history. Never put internal remarks here.';
 comment on column public."jobs"."crew_id" is 'Which crew runs this visit. NULL = unassigned (single-crew default). Orthogonal to crew_size (headcount).';
@@ -8024,12 +8315,16 @@ comment on column public."quotes"."deposit_type" is 'Scheduling-deposit rule: ''
 comment on column public."quotes"."internal_notes" is 'INTERNAL ONLY. The owner''s private margin on this quote — price floor, who to call before changing scope, why it was priced this way. MUST NOT be selected by get_portal_data or rendered by any PDF. Its customer-facing counterpart is quotes.notes.';
 comment on column public."quotes"."notes" is 'CUSTOMER-VISIBLE. The scope note the customer reads — printed in QuotePDF''s Notes box and selected by get_portal_data. Never put a gate code or a price floor here; that is quotes.internal_notes.';
 comment on column public."quotes"."preferred_date" is 'The customer''s preferred work date — a REQUEST, never a booking. A real visit exists only when the owner schedules one. Written only by portal_set_scheduling_preference while the quote is accepted.';
+comment on column public."quotes"."renewal_of_recurrence_id" is 'The service plan this quote renews. Set once, points backwards; the renewed plan is a NEW job_recurrences row and the old one is never modified. lib/renewals requires this link plus status=accepted before any visits are created.';
 comment on column public."quotes"."selected_cadence" is 'Which cadence was actually bought (one_time|weekly|biweekly|monthly). NULL = nobody said — do NOT infer it from whichever price column is populated; that is the bug this column exists to kill.';
 comment on column public."quotes"."selected_option_id" is 'The option the customer approved. Composite FK guarantees it belongs to THIS quote; ON DELETE RESTRICT keeps the approved alternative on the record permanently.';
 comment on column public."quotes"."total" is 'GENERATED = initial_price + travel_fee. NULL when the quote has no price — deliberately NOT 0, because an unpriced quote is not a free one. It must never fall back to hours*crew_size*rate again: that fabricated a price the pricing engine never produced, and two customers were billed on it (see RUN-2026-07-16e).';
 comment on column public."quotes"."valid_until" is 'Calendar date this quote stops being valid. Null = never expires (incl. every quote sent before expiry existed). ''expired'' is derived for display by lib/quoteStatus — it is never stored in quotes.status.';
 comment on column public."report_schedules"."last_period_to" is 'The `to` date of the last period SENT. Keyed on the period, not the clock, so retries and missed runs cannot double-send or drift.';
 comment on column public."report_schedules"."recipient" is 'NULL = defer to business_settings.email_primary (a pointer cannot go stale).';
+comment on column public."service_requests"."dedup_key" is 'Set by portal_submit_request. With service_requests_open_dedup_idx it makes a repeated submission of the same ask a no-op while the first is still open.';
+comment on column public."service_requests"."from_portal" is 'True only for rows created by portal_submit_request (incl. its portal_request_service wrapper) — a customer acting in their own portal. Website leads, online bookings and system notes stay false.';
+comment on column public."service_requests"."photos" is 'booking-uploads STORAGE PATHS (never URLs) the customer attached. The bucket is named in application code at render time; see portal_request_photos_ok for the enforced shape.';
 comment on column public."service_templates"."is_favorite" is 'Owner shortlist — surfaced first in the quote builder picker.';
 comment on column public."service_templates"."material_cost" is 'Material cost per unit. NULL = not set; never treat as 0.';
 comment on column public."service_templates"."recurrence" is 'Recurrence eligibility: one_time = never suggest recurring; recurring_ok = recurrence suggestions allowed; usually_recurring = this service is normally a recurring plan. NULL = owner has not said (suggestions then require behavioural cadence evidence).';
@@ -8051,13 +8346,14 @@ comment on function public."is_verify_fixture_tenant"() is 'True when the CALLER
 comment on function public."job_session_minutes"(p_job_id uuid) is 'Sum of a job''s work-session minutes. NULL when it has none (unknown, not zero).';
 comment on function public."owner_select_quote_option"(p_quote_id uuid, p_option_id uuid) is 'Owner records the option a customer chose by phone/in person. Same core, same money rule as portal_accept_quote - only auth.uid() proves access instead of a token.';
 comment on function public."portal_add_contact"(p_token text, p_phone text, p_email text) is 'Portal self-service: fill a MISSING customer phone/email from a valid portal token. Fills only - never overwrites a populated field (an email change is an identity change). Never touches sms_opt_in/email_opt_in/message_prefs. Refuses a value another customer of the same owner already holds. Returns the row state read back after the write.';
+comment on function public."portal_request_photos_ok"(p text[]) is 'Validator for service_requests.photos: at most 6 elements, each a booking-uploads path of the shape portal/<uuid>/<uuid>.<ext>. Used by a CHECK constraint, so it holds no matter which door writes.';
 comment on function public."portal_set_scheduling_preference"(p_token text, p_quote_id uuid, p_date date, p_date_2 date, p_timing text, p_note text) is 'THE writer of a customer''s scheduling preference. Token proves the customer; quote must be theirs and ''accepted''. A preference is a request — it never creates, moves, or implies a visit. All-null clears it.';
 comment on function public."quote_apply_option_choice"(p_quote_id uuid, p_option_id uuid) is 'THE single writer of quotes.selected_option_id and the option-derived price. Carries no authorisation - callers must prove access first. Deliberately granted to no role.';
 comment on function public."schema_contract"() is 'Full catalogue snapshot for npm run schema:contract. SERVICE_ROLE ONLY — it returns every RLS predicate and SECURITY DEFINER body, i.e. the product''s authorization logic. Use schema_fingerprint() (hashes only) for anything that merely needs to detect change.';
 comment on function public."schema_fingerprint"() is 'Counts + md5 per schema section, for npm run verify:schema. Returns NO names and NO data — only shape hashes, so it is safe to expose to any signed-in caller. The instrument that makes repo-vs-production drift visible; before it existed, 30 migrations reached production with no repo file and nothing reported it.';
 
 -- ══════════════════════════════════════════════════════════════════════════
--- 10 · REALTIME
+-- 11 · REALTIME
 -- 30 tables published to supabase_realtime, and the 27 tables set to
 -- REPLICA IDENTITY FULL so an UPDATE payload carries the old row.
 -- ══════════════════════════════════════════════════════════════════════════
@@ -8248,7 +8544,7 @@ alter table public."technicians" replica identity full;
 alter table public."webhook_deliveries" replica identity full;
 
 -- ══════════════════════════════════════════════════════════════════════════
--- 11 · STORAGE
+-- 12 · STORAGE
 -- 7 buckets and 21 storage policies.
 -- public=false is a security decision, not a default: crew-media is private because
 -- job-photos being public is what made a private bucket necessary in the first place.

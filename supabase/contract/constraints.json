@@ -196,6 +196,90 @@
   "convalidated": true
  },
  {
+  "def": "CHECK ((amount > (0)::numeric))",
+  "tbl": "change_orders",
+  "conname": "change_orders_amount_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id, customer_id) REFERENCES customers(user_id, id) ON DELETE CASCADE",
+  "tbl": "change_orders",
+  "conname": "change_orders_customer_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((decided_via IS NULL) OR (decided_via = ANY (ARRAY['portal'::text, 'owner'::text]))))",
+  "tbl": "change_orders",
+  "conname": "change_orders_decided_via_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((status = ANY (ARRAY['approved'::text, 'declined'::text])) = (decided_via IS NOT NULL)))",
+  "tbl": "change_orders",
+  "conname": "change_orders_decided_via_present",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((length(btrim(description)) > 0))",
+  "tbl": "change_orders",
+  "conname": "change_orders_description_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (id, user_id)",
+  "tbl": "change_orders",
+  "conname": "change_orders_id_user_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE CASCADE",
+  "tbl": "change_orders",
+  "conname": "change_orders_job_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "change_orders",
+  "conname": "change_orders_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id, quote_id) REFERENCES quotes(user_id, id) ON DELETE SET NULL",
+  "tbl": "change_orders",
+  "conname": "change_orders_quote_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['draft'::text, 'pending'::text, 'approved'::text, 'declined'::text, 'cancelled'::text])))",
+  "tbl": "change_orders",
+  "conname": "change_orders_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((((status = 'draft'::text) AND (sent_at IS NULL) AND (approved_at IS NULL) AND (declined_at IS NULL) AND (cancelled_at IS NULL)) OR ((status = 'pending'::text) AND (sent_at IS NOT NULL) AND (approved_at IS NULL) AND (declined_at IS NULL) AND (cancelled_at IS NULL)) OR ((status = 'approved'::text) AND (approved_at IS NOT NULL) AND (declined_at IS NULL) AND (cancelled_at IS NULL)) OR ((status = 'declined'::text) AND (declined_at IS NOT NULL) AND (approved_at IS NULL) AND (cancelled_at IS NULL)) OR ((status = 'cancelled'::text) AND (cancelled_at IS NOT NULL) AND (approved_at IS NULL) AND (declined_at IS NULL))))",
+  "tbl": "change_orders",
+  "conname": "change_orders_status_stamps",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "change_orders",
+  "conname": "change_orders_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
   "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
   "tbl": "consent_changes",
   "conname": "consent_changes_customer_id_fkey",
@@ -1162,6 +1246,13 @@
   "convalidated": true
  },
  {
+  "def": "FOREIGN KEY (change_order_id, user_id) REFERENCES change_orders(id, user_id) ON DELETE CASCADE",
+  "tbl": "job_line_items",
+  "conname": "job_line_items_change_order_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
   "def": "FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE CASCADE",
   "tbl": "job_line_items",
   "conname": "job_line_items_job_same_owner",
@@ -1278,6 +1369,13 @@
   "tbl": "job_recurrences",
   "conname": "job_recurrences_user_id_fkey",
   "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, id)",
+  "tbl": "job_recurrences",
+  "conname": "job_recurrences_user_id_id_key",
+  "contype": "u",
   "convalidated": true
  },
  {
@@ -1796,6 +1894,13 @@
   "tbl": "parts",
   "conname": "parts_user_id_fkey",
   "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "password_reset_requests",
+  "conname": "password_reset_requests_pkey",
+  "contype": "p",
   "convalidated": true
  },
  {
@@ -2765,6 +2870,13 @@
   "convalidated": true
  },
  {
+  "def": "FOREIGN KEY (user_id, renewal_of_recurrence_id) REFERENCES job_recurrences(user_id, id) ON UPDATE CASCADE ON DELETE SET NULL (renewal_of_recurrence_id)",
+  "tbl": "quotes",
+  "conname": "quotes_renewal_of_recurrence_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
   "def": "CHECK (((selected_cadence IS NULL) OR (selected_cadence = ANY (ARRAY['one_time'::text, 'weekly'::text, 'biweekly'::text, 'monthly'::text]))))",
   "tbl": "quotes",
   "conname": "quotes_selected_cadence_check",
@@ -3122,9 +3234,16 @@
   "convalidated": true
  },
  {
-  "def": "CHECK ((kind = ANY (ARRAY['service'::text, 'appointment'::text, 'reschedule'::text, 'plan_change'::text])))",
+  "def": "CHECK ((kind = ANY (ARRAY['service'::text, 'appointment'::text, 'reschedule'::text, 'plan_change'::text, 'additional_work'::text])))",
   "tbl": "service_requests",
   "conname": "service_requests_kind_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (portal_request_photos_ok(photos))",
+  "tbl": "service_requests",
+  "conname": "service_requests_photos_check",
   "contype": "c",
   "convalidated": true
  },
@@ -3140,6 +3259,20 @@
   "tbl": "service_requests",
   "conname": "service_requests_recurrence_id_fkey",
   "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((resolved_at IS NULL) OR (status <> 'new'::text)))",
+  "tbl": "service_requests",
+  "conname": "service_requests_resolved_at_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['new'::text, 'handled'::text, 'dismissed'::text])))",
+  "tbl": "service_requests",
+  "conname": "service_requests_status_check",
+  "contype": "c",
   "convalidated": true
  },
  {

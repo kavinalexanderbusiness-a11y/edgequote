@@ -1,4 +1,5 @@
 import { addDays, addMonths, format, parseISO, differenceInCalendarDays } from 'date-fns'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Job, JobRecurrence, RecurUnit, RecurrenceScope } from '@/types'
 import { ServiceSeasons, seasonForService, seasonEndDateFor, seasonLabel } from '@/lib/seasons'
 
@@ -182,4 +183,83 @@ export function buildServicePlans(
 function formatShort(iso: string): string {
   const d = parseISO(iso + (iso.length === 10 ? 'T00:00:00' : ''))
   return format(d, 'MMM d')
+}
+
+// ── Creating a service plan ──────────────────────────────────────────────────
+// Moved here from lib/suggestions, where it was the "one-click apply" of one
+// feature. It is not one feature's helper: it is THE way a plan comes into
+// existence outside the schedule screen's own editor, and the renewal queue
+// needs exactly the same write. Two copies of "insert a recurrence and its
+// visits" is the shape this codebase keeps getting hurt by, so there is one, and
+// it lives beside the engine that generates the dates. lib/suggestions re-exports
+// it, so its existing callers are untouched.
+//
+// Mirrors the schedule page's convertToRecurring: GENERATE + VALIDATE before any
+// write (refuse a plan with no visits), insert the recurrence, then its visits;
+// roll the orphan recurrence back if the visit insert fails.
+//
+// ⚠️ This function is a WRITE and it is deliberately dumb: it creates what it is
+// told to create. Every caller is responsible for having an owner's explicit
+// instruction behind it — see lib/renewals.createRenewedPlan, which will not
+// call it without an accepted quote.
+export interface RecurringPlanPayload {
+  customerId: string | null
+  propertyId: string | null
+  serviceType: string | null
+  title: string
+  /** Per-visit money written onto every visit. Pass null WITH a quoteId to let
+   *  the visits derive the quote's cadence price instead — one money path,
+   *  the same choice convertToRecurring makes for quote-linked series. */
+  perVisitPrice: number | null
+  intervalUnit: RecurUnit
+  intervalCount: number
+  startDate: string             // yyyy-MM-dd
+  endDate: string | null        // a season end, a term end, or null for open-ended
+  /** Ends after N visits instead of on a date. */
+  endCount?: number | null
+  crewSize: number
+  durationMinutes: number | null
+  /** Links every visit to the quote the customer accepted. */
+  quoteId?: string | null
+}
+
+export async function createRecurringPlan(
+  supabase: SupabaseClient,
+  plan: RecurringPlanPayload,
+): Promise<{ ok: boolean; error?: string; count?: number; recurrenceId?: string }> {
+  // getSession (local read), not getUser (network hop): the id only scopes RLS-filtered reads.
+  const { data: { session } } = await supabase.auth.getSession()
+  const user = session?.user
+  if (!user) return { ok: false, error: 'Not signed in' }
+  try {
+    const dates = generateOccurrences(plan.startDate, plan.intervalUnit, plan.intervalCount, plan.endDate, plan.endCount ?? null)
+    const future = dates.filter(d => d >= plan.startDate)
+    if (future.length === 0) return { ok: false, error: 'No visits would be generated — check the dates and cadence.' }
+    const { data: rec, error: recErr } = await supabase.from('job_recurrences').insert({
+      user_id: user.id,
+      freq: plan.intervalUnit === 'week' && plan.intervalCount === 1 ? 'weekly'
+        : plan.intervalUnit === 'week' && plan.intervalCount === 2 ? 'biweekly'
+        : plan.intervalUnit === 'month' && plan.intervalCount === 1 ? 'monthly'
+        : null,
+      interval_unit: plan.intervalUnit, interval_count: plan.intervalCount,
+      start_date: plan.startDate, end_date: plan.endDate, end_count: plan.endCount ?? null,
+      customer_id: plan.customerId,
+    }).select().single()
+    if (recErr || !rec) return { ok: false, error: recErr?.message || 'Could not create the plan' }
+    const rows = future.map(d => ({
+      user_id: user.id, customer_id: plan.customerId, property_id: plan.propertyId,
+      quote_id: plan.quoteId ?? null,
+      recurrence_id: (rec as { id: string }).id, title: plan.title, service_type: plan.serviceType,
+      scheduled_date: d, crew_size: plan.crewSize, status: 'scheduled', price: plan.perVisitPrice,
+      is_initial_visit: false, duration_minutes: plan.durationMinutes,
+    }))
+    const { error: jErr } = await supabase.from('jobs').insert(rows)
+    if (jErr) {
+      await supabase.from('job_recurrences').delete().eq('id', (rec as { id: string }).id) // rollback orphan
+      return { ok: false, error: jErr.message }
+    }
+    return { ok: true, count: future.length, recurrenceId: (rec as { id: string }).id }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Create failed' }
+  }
 }

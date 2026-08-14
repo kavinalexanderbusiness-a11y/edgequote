@@ -21,3 +21,21 @@ export const RANOUT_URGENT_CADENCES = 3
 
 /** Lapse buckets (days since last service) used by the reactivation queue. */
 export const LAPSE_BUCKET_DAYS = { '3+': 90, '6+': 180, '12+': 365 } as const
+
+/** How far ahead of the next cycle a renewal is offered, as a fraction of that
+ *  cycle, held between a floor and a ceiling. One sixth is "the last stretch of
+ *  the run" at any scale: ~2 months before a season or a yearly agreement, a
+ *  week before a short block. The clamps are the human bounds — nobody wants a
+ *  four-week plan nagging for a month, and nobody re-books a season on the day.
+ *  The 60-day ceiling is deliberately the same window the seasonal re-book
+ *  suggestion already used, so the product asks about renewal exactly once and
+ *  at exactly one time. */
+export const RENEWAL_LEAD_FRACTION = 1 / 6
+export const RENEWAL_LEAD_MIN_DAYS = 7
+export const RENEWAL_LEAD_MAX_DAYS = 60
+
+/** A season repeats once a year, whatever the trade and however the visits
+ *  inside it are spaced. The cycle being renewed is the SEASON, never the gap
+ *  between two visits — asking a weekly customer about next spring seven days
+ *  out is asking far too late. */
+export const RENEWAL_SEASON_CYCLE_DAYS = 365

@@ -838,5 +838,96 @@
   "sql_md5": "d3cca1983565a875b7b923cad876176b",
   "version": "20260814035646",
   "stmt_count": 1
+ },
+ {
+  "name": "baseline_consolidation_2026_08_14",
+  "sql_len": 823,
+  "sql_md5": "b28bcf53ee6e08102ed4335e7ba16c00",
+  "version": "20260814040000",
+  "stmt_count": 1
+ },
+ {
+  "name": "work_sessions_restore_after_mutation_test",
+  "sql_len": 1652,
+  "sql_md5": "da906d46ed09e6fef64a58c393f891b0",
+  "version": "20260814041525",
+  "stmt_count": 1
+ },
+ {
+  "name": "work_sessions_restore_carry_forward_trigger",
+  "sql_len": 328,
+  "sql_md5": "f7a98085c2ee8c7ae4a9802a82204517",
+  "version": "20260814041603",
+  "stmt_count": 1
+ },
+ {
+  "name": "probe_write_access_noop_s51",
+  "sql_len": 53,
+  "sql_md5": "e79bd20cfea24e14f9e5de892d0914fb",
+  "version": "20260814052229",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_requests_v1",
+  "sql_len": 15020,
+  "sql_md5": "a00f360d607f23bd780effd245d5156b",
+  "version": "20260814053248",
+  "stmt_count": 1
+ },
+ {
+  "name": "change_orders_v1_table",
+  "sql_len": 4045,
+  "sql_md5": "324462cc9961204e2aca179b403c9963",
+  "version": "20260814053250",
+  "stmt_count": 1
+ },
+ {
+  "name": "change_orders_v1_money_link",
+  "sql_len": 1506,
+  "sql_md5": "3f5e432769c5b234b28fd87fd8f79786",
+  "version": "20260814053258",
+  "stmt_count": 1
+ },
+ {
+  "name": "change_orders_v1_state_machine",
+  "sql_len": 5179,
+  "sql_md5": "3c47fb9355e3e788b3e08cbb34918e68",
+  "version": "20260814053317",
+  "stmt_count": 1
+ },
+ {
+  "name": "change_orders_v1_portal_door",
+  "sql_len": 1572,
+  "sql_md5": "71918c6fe6cf9a701fafd9f91f2b273d",
+  "version": "20260814053325",
+  "stmt_count": 1
+ },
+ {
+  "name": "change_orders_v1_portal_projection",
+  "sql_len": 1102,
+  "sql_md5": "89066bc4b276c079cf6794f34e6c3a97",
+  "version": "20260814053333",
+  "stmt_count": 1
+ },
+ {
+  "name": "quote_renewal_of_recurrence",
+  "sql_len": 2668,
+  "sql_md5": "c5e8cc972377f671ff6ac49413a5697c",
+  "version": "20260814053834",
+  "stmt_count": 1
+ },
+ {
+  "name": "change_orders_v1_freeze_decided",
+  "sql_len": 2257,
+  "sql_md5": "1863b391f386e7d65542943e2bd813aa",
+  "version": "20260814055703",
+  "stmt_count": 1
+ },
+ {
+  "name": "password_reset_requests",
+  "sql_len": 830,
+  "sql_md5": "a080916bb8660150fcf2259d76d15c68",
+  "version": "20260814060713",
+  "stmt_count": 1
  }
 ]

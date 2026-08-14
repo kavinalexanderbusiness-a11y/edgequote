@@ -988,6 +988,166 @@
     "generated": ""
    },
    {
+    "name": "updated_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "user_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "job_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "customer_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "quote_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "co_number",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "description",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "amount",
+    "type": "numeric(12,2)",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "service_key",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "service_category",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "status",
+    "type": "text",
+    "default": "'draft'::text",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "decided_via",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "decline_reason",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "sent_at",
+    "type": "timestamp with time zone",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "approved_at",
+    "type": "timestamp with time zone",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "declined_at",
+    "type": "timestamp with time zone",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "cancelled_at",
+    "type": "timestamp with time zone",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   }
+  ],
+  "relname": "change_orders",
+  "force_rls": false
+ },
+ {
+  "acl": "{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
+  "rls": true,
+  "cols": [
+   {
+    "name": "id",
+    "type": "uuid",
+    "default": "extensions.uuid_generate_v4()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
     "name": "user_id",
     "type": "uuid",
     "default": null,
@@ -4210,6 +4370,14 @@
     "notnull": true,
     "identity": "",
     "generated": ""
+   },
+   {
+    "name": "change_order_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
    }
   ],
   "relname": "job_line_items",
@@ -6205,6 +6373,54 @@
    }
   ],
   "relname": "parts",
+  "force_rls": false
+ },
+ {
+  "acl": "{postgres=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
+  "rls": true,
+  "cols": [
+   {
+    "name": "id",
+    "type": "uuid",
+    "default": "extensions.uuid_generate_v4()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "email_key",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "matched",
+    "type": "boolean",
+    "default": "false",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "sent",
+    "type": "boolean",
+    "default": "false",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   }
+  ],
+  "relname": "password_reset_requests",
   "force_rls": false
  },
  {
@@ -9346,6 +9562,14 @@
     "notnull": false,
     "identity": "",
     "generated": ""
+   },
+   {
+    "name": "renewal_of_recurrence_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
    }
   ],
   "relname": "quotes",
@@ -10278,6 +10502,38 @@
    {
     "name": "details",
     "type": "jsonb",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "from_portal",
+    "type": "boolean",
+    "default": "false",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "photos",
+    "type": "text[]",
+    "default": "'{}'::text[]",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "dedup_key",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "resolved_at",
+    "type": "timestamp with time zone",
     "default": null,
     "notnull": false,
     "identity": "",

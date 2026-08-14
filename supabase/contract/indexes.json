@@ -114,6 +114,36 @@
   "backs_constraint": true
  },
  {
+  "tbl": "change_orders",
+  "indexdef": "CREATE INDEX change_orders_customer_idx ON public.change_orders USING btree (customer_id, status)",
+  "indexname": "change_orders_customer_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "change_orders",
+  "indexdef": "CREATE UNIQUE INDEX change_orders_id_user_key ON public.change_orders USING btree (id, user_id)",
+  "indexname": "change_orders_id_user_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "change_orders",
+  "indexdef": "CREATE INDEX change_orders_job_idx ON public.change_orders USING btree (job_id)",
+  "indexname": "change_orders_job_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "change_orders",
+  "indexdef": "CREATE UNIQUE INDEX change_orders_number_uniq ON public.change_orders USING btree (user_id, co_number)",
+  "indexname": "change_orders_number_uniq",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "change_orders",
+  "indexdef": "CREATE UNIQUE INDEX change_orders_pkey ON public.change_orders USING btree (id)",
+  "indexname": "change_orders_pkey",
+  "backs_constraint": true
+ },
+ {
   "tbl": "consent_changes",
   "indexdef": "CREATE INDEX consent_changes_cust_idx ON public.consent_changes USING btree (user_id, customer_id, created_at DESC)",
   "indexname": "consent_changes_cust_idx",
@@ -799,6 +829,12 @@
  },
  {
   "tbl": "job_line_items",
+  "indexdef": "CREATE UNIQUE INDEX job_line_items_change_order_uniq ON public.job_line_items USING btree (change_order_id) WHERE (change_order_id IS NOT NULL)",
+  "indexname": "job_line_items_change_order_uniq",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_line_items",
   "indexdef": "CREATE INDEX job_line_items_group_idx ON public.job_line_items USING btree (group_id)",
   "indexname": "job_line_items_group_idx",
   "backs_constraint": false
@@ -897,6 +933,12 @@
   "tbl": "job_recurrences",
   "indexdef": "CREATE UNIQUE INDEX job_recurrences_pkey ON public.job_recurrences USING btree (id)",
   "indexname": "job_recurrences_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "job_recurrences",
+  "indexdef": "CREATE UNIQUE INDEX job_recurrences_user_id_id_key ON public.job_recurrences USING btree (user_id, id)",
+  "indexname": "job_recurrences_user_id_id_key",
   "backs_constraint": true
  },
  {
@@ -1293,6 +1335,24 @@
   "tbl": "parts",
   "indexdef": "CREATE INDEX parts_user_idx ON public.parts USING btree (user_id, category)",
   "indexname": "parts_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "password_reset_requests",
+  "indexdef": "CREATE INDEX password_reset_requests_key_time_idx ON public.password_reset_requests USING btree (email_key, created_at DESC)",
+  "indexname": "password_reset_requests_key_time_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "password_reset_requests",
+  "indexdef": "CREATE UNIQUE INDEX password_reset_requests_pkey ON public.password_reset_requests USING btree (id)",
+  "indexname": "password_reset_requests_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "password_reset_requests",
+  "indexdef": "CREATE INDEX password_reset_requests_time_idx ON public.password_reset_requests USING btree (created_at DESC)",
+  "indexname": "password_reset_requests_time_idx",
   "backs_constraint": false
  },
  {
@@ -1843,6 +1903,12 @@
  },
  {
   "tbl": "quotes",
+  "indexdef": "CREATE INDEX quotes_renewal_of_recurrence_idx ON public.quotes USING btree (renewal_of_recurrence_id) WHERE (renewal_of_recurrence_id IS NOT NULL)",
+  "indexname": "quotes_renewal_of_recurrence_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quotes",
   "indexdef": "CREATE INDEX quotes_selected_option_idx ON public.quotes USING btree (selected_option_id)",
   "indexname": "quotes_selected_option_idx",
   "backs_constraint": false
@@ -2055,6 +2121,18 @@
   "tbl": "service_requests",
   "indexdef": "CREATE INDEX service_requests_customer_id_idx ON public.service_requests USING btree (customer_id)",
   "indexname": "service_requests_customer_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "service_requests",
+  "indexdef": "CREATE UNIQUE INDEX service_requests_open_dedup_idx ON public.service_requests USING btree (customer_id, dedup_key) WHERE ((dedup_key IS NOT NULL) AND (status = 'new'::text))",
+  "indexname": "service_requests_open_dedup_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "service_requests",
+  "indexdef": "CREATE INDEX service_requests_open_portal_idx ON public.service_requests USING btree (user_id, created_at DESC) WHERE (from_portal AND (status = 'new'::text))",
+  "indexname": "service_requests_open_portal_idx",
   "backs_constraint": false
  },
  {
