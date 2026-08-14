@@ -47,8 +47,17 @@
 // owner typed and can never rewrite a historical estimate. jobs.duration_minutes
 // stays THE owner's figure at all times; the suggestion is derived at read time
 // from completed work and lives only as long as the screen does. That is why
-// there is no "learned estimate" column and no migration — the separation the
-// feedback loop needs is structural, not stored.
+// there is no "learned estimate" column and no migration.
+//
+// ⭐ AND THAT IS ALSO WHY THE LOOP CANNOT EAT ITSELF. Every figure offered here
+// descends from `actual_minutes` — the stopwatch — and from nothing else. The
+// suggestion is the median of what the work HAS TAKEN, never the median of what
+// anyone PLANNED, so an owner who accepts a suggestion does not feed it back in:
+// the next visit still contributes its own recorded time, measured against
+// whatever plan it carried. A learner that suggested from past ESTIMATES would
+// converge on its own opinion and call the agreement evidence. This one cannot
+// reach its own output, which is a structural property rather than a stored
+// flag — hence no "was this learned?" column that would have to be kept honest.
 
 import { resolveDuration, type DurationSource } from '@/lib/dayFit'
 import { DEFAULT_CAPACITY_HOURS } from '@/lib/route'

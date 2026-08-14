@@ -462,5 +462,41 @@ console.log('\n15. Only completed, plausible visits teach:')
   eq('…and readVisitLabor still refuses an unfinished one', readVisitLabor(noisy[0]).reason, 'not_completed')
 }
 
+console.log('\n16. The feedback loop cannot eat itself:')
+{
+  // The suggestion descends from RECORDED time and nothing else. A learner that
+  // suggested from past ESTIMATES would converge on its own opinion and then
+  // present the agreement as evidence — accuracy climbing while nothing about
+  // the work improved. Same outcomes, wildly different plans: the offered
+  // duration must not move.
+  const mk = (plan: number, tag: string) => learnFromCompletedVisits(
+    Array.from({ length: 6 }, (_, i) => ({
+      id: `${tag}${i}`, status: 'completed', service_type: 'Panel Install',
+      duration_minutes: plan, actual_minutes: 90, crew_size: 2,
+    })) as VisitLike[])
+  const wild = buildWorkEstimate(serviceHistory('Panel Install', mk(20, 'a').comparisons), { capacityHours: 8 })
+  const tame = buildWorkEstimate(serviceHistory('Panel Install', mk(300, 'b').comparisons), { capacityHours: 8 })
+  eq('a 20-minute plan and a 90-minute outcome suggests', wild.suggestedElapsedMinutes, 90)
+  eq('a 300-minute plan and the SAME outcome suggests the same', tame.suggestedElapsedMinutes, 90)
+  check('…so the plan cannot steer the suggestion',
+    wild.suggestedElapsedMinutes === tame.suggestedElapsedMinutes, 'the estimate leaked into the estimate')
+  eq('…and labour likewise comes from recorded time × crew', wild.suggestedLaborMinutes, 180)
+  // Structural: no planned figure is readable from the engine at all.
+  const src = stripComments(read('src/lib/workEstimate.ts'))
+  check('the engine never reads a planned figure',
+    !/medianEstimatedMinutes|duration_minutes|estimatedMinutes/.test(src),
+    'a planned figure is readable from the engine')
+  // Completing a visit must not re-read the history it is about to join — and
+  // the read must not be gated on completion either, which is how the card came
+  // to render nothing at all on every new job.
+  const form = stripComments(read('src/components/schedule/JobForm.tsx'))
+  const at = form.indexOf('loadCompletedVisitLearning(supabase')
+  const effect = form.slice(Math.max(0, at - 700), at + 400)
+  check('the learning read is not gated on completion',
+    !/status !== 'completed'/.test(effect), 'the estimate card would be starved on a new job')
+  check('…and runs once per form, not on every status change',
+    /\}, \[supabase\]\)/.test(effect), 'status is a dependency of the learning read')
+}
+
 console.log(failures ? `\n✗ ${failures} failure(s)` : '\n✓ smart-estimate: every rule holds')
 process.exit(failures ? 1 : 0)
