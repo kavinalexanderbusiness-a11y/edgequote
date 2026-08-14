@@ -72,29 +72,113 @@ export function jobsInScope(anchor: Job, allJobs: Job[], scope: RecurrenceScope)
   return series.filter(j => j.scheduled_date >= anchor.scheduled_date)
 }
 
+// ── What a recurrence edit is allowed to destroy ──────────────────────────────
+// ONE predicate, because every recurrence edit that removes rows — reconciling
+// against an end date, regenerating a changed cadence, removing the series
+// outright — is asking the same question, and a second definition is how one of
+// them ends up laxer than the others.
+//
+// A visit is CANONICALLY REPLACEABLE only when it is a bare future placeholder:
+// something the series itself put on the calendar and can put back. Anything
+// that records what happened is not:
+//
+//   • status other than `scheduled` — completed and in-progress visits are work,
+//     cancelled ones are a deliberate record that it was called off.
+//   • any `actual_minutes` — time was logged against it (the column is the
+//     database-enforced sum of its work sessions).
+//   • anything the caller marks protected — invoices, work sessions, crew media,
+//     photos, expenses, time entries, change orders, priced extras. Deleting the
+//     visit CASCADES those away or orphans them (see lib/seriesHistory).
+//   • anything before `todayISO` — a past visit is the book's record of what was
+//     planned, not a placeholder for work still to come.
+//   • the anchor — the visit the owner is looking at while saving. Removing the
+//     row under an open editor is how a save turns into a vanish.
+//
+// The three groups are reported separately so a caller can say the true thing:
+// `preserved` is what was spared INSIDE the window it was reconciling (worth
+// naming to the owner), `untouched` is everything outside that window (not news).
+export interface SeriesVisitLite {
+  id: string
+  scheduled_date: string
+  status: string
+  actual_minutes?: number | null
+}
+
+export interface ReplaceWindow {
+  anchorId?: string
+  protectedIds?: Set<string>
+  /** Only visits strictly AFTER this date are in the window (end reconciliation). */
+  afterDate?: string
+  /** Only visits on or after this date are in the window (never rewrite the past). */
+  todayISO?: string
+}
+
+export interface SeriesPartition {
+  replaceable: SeriesVisitLite[]
+  preserved: SeriesVisitLite[]
+  untouched: SeriesVisitLite[]
+}
+
+export function partitionSeriesVisits(series: SeriesVisitLite[], opts: ReplaceWindow = {}): SeriesPartition {
+  const out: SeriesPartition = { replaceable: [], preserved: [], untouched: [] }
+  for (const j of series) {
+    if (j.id === opts.anchorId) continue
+    const inWindow =
+      (opts.afterDate === undefined || j.scheduled_date > opts.afterDate) &&
+      (opts.todayISO === undefined || j.scheduled_date >= opts.todayISO)
+    if (!inWindow) { out.untouched.push(j); continue }
+    const bare =
+      j.status === 'scheduled' &&
+      !(Number(j.actual_minutes) > 0) &&
+      !opts.protectedIds?.has(j.id)
+    ;(bare ? out.replaceable : out.preserved).push(j)
+  }
+  return out
+}
+
 // ── Series-end reconciliation ─────────────────────────────────────────────────
-// The visits that CONTRADICT a series' end date: still merely scheduled, sitting
-// strictly AFTER the end. Everything with history weight is out of bounds here —
-// completed/in-progress/cancelled visits (work that happened, is happening, or
-// was explicitly called off) and anything the caller marks protected (invoiced
-// visits: deleting one un-links its invoice). The anchor — the visit the owner
-// is looking at while saving — is also excluded: removing the row under an open
-// editor is how a save turns into a vanish. Strict `>` so a visit ON the end
-// date is the season's last legitimate stop, never a ghost.
-export interface SeriesVisitLite { id: string; scheduled_date: string; status: string }
+// The visits that CONTRADICT a series' end date: bare placeholders sitting
+// strictly AFTER the end. Strict `>` so a visit ON the end date is the season's
+// last legitimate stop, never a ghost. No `todayISO` — a stray visit past an end
+// the owner just re-asserted is a ghost whether or not the calendar has reached
+// it yet; that is the shape the production incident left behind.
 export function visitsBeyondEnd(
   series: SeriesVisitLite[],
   endDate: string | null,
   opts: { anchorId?: string; protectedIds?: Set<string> } = {},
 ): string[] {
   if (!endDate) return []
-  return series
-    .filter(j =>
-      j.scheduled_date > endDate &&
-      j.status === 'scheduled' &&
-      j.id !== opts.anchorId &&
-      !opts.protectedIds?.has(j.id))
-    .map(j => j.id)
+  return partitionSeriesVisits(series, { ...opts, afterDate: endDate }).replaceable.map(j => j.id)
+}
+
+// ── May this save remove the series at all? ───────────────────────────────────
+// "Does not repeat" on a job that HAS a series deletes siblings and the series
+// row, so the save must prove the owner ASKED for that. Two independent things
+// have to be true, and neither is inferable from the other:
+//
+//   1. the series was actually loaded — a form that knows nothing about a series
+//      has not been told to delete it (mayRemoveRecurrence); and
+//   2. the owner touched the Repeat controls during THIS edit session.
+//
+// (2) is what makes the guard hold even when the form is wrong for a reason
+// nobody has thought of yet. A "Does not repeat" the owner never selected is the
+// control's DEFAULT, not their instruction — a series that failed to map onto
+// the presets, a snapshot that arrived after the initial render and re-seeded
+// nothing, a future refactor. Silence is not consent, so an untouched Repeat
+// control can change a price or a crew size, but it can never end a schedule.
+export type RemovalDecision =
+  | { kind: 'remove' }
+  | { kind: 'refuse'; reason: 'series-not-loaded' | 'repeat-untouched' }
+
+export function planRecurrenceRemoval(
+  recurrenceId: string | null | undefined,
+  loaded: Record<string, unknown>,
+  repeatAsserted: boolean | undefined,
+): RemovalDecision {
+  if (!recurrenceId) return { kind: 'remove' } // a one-time job has nothing to lose
+  if (!mayRemoveRecurrence(recurrenceId, loaded)) return { kind: 'refuse', reason: 'series-not-loaded' }
+  if (!repeatAsserted) return { kind: 'refuse', reason: 'repeat-untouched' }
+  return { kind: 'remove' }
 }
 
 // ── What a rule change MEANS for an existing series ──────────────────────────
@@ -182,6 +266,38 @@ export function recurrenceToUi(r?: RecurrenceLike): RecurrenceUi {
     endDate: r.endDate || '',
     endCount: r.endCount || 10,
   }
+}
+
+// ── Re-seeding the Repeat controls when the series finally arrives ────────────
+// The editor seeds its controls from the series in useState initializers, which
+// read the prop ONCE. The schedule page opens the editor from a ?focus= deep
+// link the moment `jobs` arrives — which can beat the `recurrences` read it
+// looks the series up in — so a genuinely weekly job rendered as "Does not
+// repeat" and STAYED that way after its series landed.
+//
+// This says what the controls should read when the series arrives late. Split in
+// two because the owner touches the halves independently: a chosen cadence and a
+// chosen end are each protected on their own, and a late prop never overwrites
+// either. Returning nothing for a half means "leave it exactly as it is" —
+// including the case that matters most, a deliberate "Does not repeat".
+export interface RepeatReseed {
+  repeat?: Pick<RecurrenceUi, 'preset' | 'customUnit' | 'customCount'>
+  end?: Pick<RecurrenceUi, 'endMode' | 'endDate' | 'endCount'>
+}
+
+export function reseedRepeatUi(
+  incoming: RecurrenceLike | undefined,
+  touched: { repeat: boolean; end: boolean },
+): RepeatReseed {
+  // Nothing to re-seed FROM: a series that has not arrived (or a job that never
+  // had one) must not push the controls anywhere. The save-side guard, not this,
+  // is what stops that silence from being read as an instruction.
+  if (!incoming?.unit) return {}
+  const ui = recurrenceToUi(incoming)
+  const out: RepeatReseed = {}
+  if (!touched.repeat) out.repeat = { preset: ui.preset, customUnit: ui.customUnit, customCount: ui.customCount }
+  if (!touched.repeat && !touched.end) out.end = { endMode: ui.endMode, endDate: ui.endDate, endCount: ui.endCount }
+  return out
 }
 
 /**

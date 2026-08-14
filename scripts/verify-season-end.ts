@@ -15,7 +15,8 @@
 // Writes ONLY into the marked fixture tenant (scripts/lib/verify-fixture) —
 // never the owner's book. Skips cleanly where no live credentials exist (CI).
 
-import { generateOccurrences, visitsBeyondEnd } from '../src/lib/recurrence'
+import { generateOccurrences, visitsBeyondEnd, partitionSeriesVisits } from '../src/lib/recurrence'
+import { loadVisitEncumbrances } from '../src/lib/seriesHistory'
 import { seasonEndDateFor, DEFAULT_SEASONS } from '../src/lib/seasons'
 import { openFixtureTenant, isSkipped } from './lib/verify-fixture'
 
@@ -159,12 +160,127 @@ async function main() {
         seasonEndDateFor(openVisit, DEFAULT_SEASONS.lawn) > fromSeries, true)
     }
 
+    // ── 9. Ending a series is HISTORY-SAFE — proven through Postgres ─────────
+    // §2 proves an end-date reconcile spares history. This proves the other,
+    // far more destructive gesture: "Does not repeat" on a job that has a
+    // series. That path used to delete every sibling outright, and it is what
+    // took 67 of one customer's visits — four of them completed or cancelled.
+    //
+    // It runs the removal exactly as the page does (partition → delete only the
+    // replaceable → detach the rest → drop the rule) against real rows, real
+    // cascades and real RLS, and reads back what survived.
+    H('9. "Does not repeat" removes placeholders and keeps every record')
+    const { data: rec2Row, error: rec2Err } = await db.from('job_recurrences').insert({
+      user_id: uid, customer_id: customerId, freq: 'weekly', interval_unit: 'week',
+      interval_count: 1, start_date: '2026-06-19', end_date: null, end_count: null,
+    }).select('id').single()
+    if (rec2Err || !rec2Row) throw new Error('could not create removal fixture: ' + rec2Err?.message)
+    const rec2 = (rec2Row as { id: string }).id
+    const v2 = (date: string, status: string) => ({
+      user_id: uid, customer_id: customerId, recurrence_id: rec2,
+      title: tag('RMV'), service_type: tag('SERVICE'), scheduled_date: date, status,
+    })
+    const { data: madeRows, error: mkErr } = await db.from('jobs').insert([
+      v2('2026-08-14', 'scheduled'),   // the anchor under the editor
+      v2('2026-07-02', 'completed'),   // finished work
+      v2('2026-07-09', 'scheduled'),   // a past placeholder — still the book's record
+      v2('2026-08-14', 'in_progress'), // being worked right now
+      v2('2026-08-21', 'cancelled'),   // deliberately called off
+      v2('2026-09-04', 'scheduled'),   // will carry a work session
+      v2('2026-11-06', 'scheduled'),   // bare future placeholders — the only fair game
+      v2('2026-11-14', 'scheduled'),
+    ]).select('id, scheduled_date, status')
+    if (mkErr || !madeRows) throw new Error('could not create removal visits: ' + mkErr?.message)
+    const made = madeRows as { id: string; scheduled_date: string; status: string }[]
+    const pick = (date: string, status: string) => made.find(j => j.scheduled_date === date && j.status === status)!
+    const anchor2 = pick('2026-08-14', 'scheduled').id
+    const worked = pick('2026-09-04', 'scheduled').id
+
+    // Logged time makes a merely-`scheduled` visit history. actual_minutes is the
+    // database-enforced sum of these rows, so this is the real signal.
+    const { error: wsErr } = await db.from('job_work_sessions')
+      .insert({ user_id: uid, job_id: worked, worked_on: '2026-09-04', minutes: 75 })
+    check('a work session can be logged against a scheduled visit', wsErr ?? null, null)
+
+    const readRemoval = async () => {
+      const { data, error } = await db.from('jobs')
+        .select('id, scheduled_date, status, actual_minutes, recurrence_id')
+        .in('id', made.map(j => j.id)).order('scheduled_date')
+      if (error) throw new Error('removal series read failed: ' + error.message)
+      return (data as { id: string; scheduled_date: string; status: string; actual_minutes: number | null; recurrence_id: string | null }[]) ?? []
+    }
+    const live = await readRemoval()
+    check('the logged time landed on the job row', live.find(j => j.id === worked)?.actual_minutes, 75)
+
+    // The database's own answer to "which visits carry history".
+    const enc = await loadVisitEncumbrances(
+      db as unknown as Parameters<typeof loadVisitEncumbrances>[0],
+      live.filter(j => j.id !== anchor2).map(j => j.id))
+    check('every history table was reachable — the answer is known, not assumed', enc.complete, true)
+    check('the work-session visit is named as encumbered', enc.ids.has(worked), true)
+
+    const TODAY = '2026-08-14' // fixed, never the clock — a guard must not drift at midnight
+    const plan9 = partitionSeriesVisits(live, { anchorId: anchor2, protectedIds: enc.ids, todayISO: TODAY })
+    check('only the two bare future placeholders are replaceable',
+      plan9.replaceable.map(j => j.scheduled_date).sort(), ['2026-11-06', '2026-11-14'])
+    check('in-progress, cancelled and logged-time visits are preserved',
+      plan9.preserved.map(j => j.status).sort(), ['cancelled', 'in_progress', 'scheduled'])
+    check('the past is untouched, worked or not',
+      plan9.untouched.map(j => j.scheduled_date).sort(), ['2026-07-02', '2026-07-09'])
+
+    // Execute it the way the page does, counting rows at every step.
+    const removeIds = plan9.replaceable.map(j => j.id)
+    const { data: gone, error: goneErr } = await db.from('jobs').delete().in('id', removeIds).select('id')
+    check('the delete removes exactly the placeholders it named', goneErr ? -1 : gone?.length, removeIds.length)
+    const detachIds = [anchor2, ...plan9.preserved.map(j => j.id), ...plan9.untouched.map(j => j.id)]
+    const { data: detached, error: detErr } = await db.from('jobs')
+      .update({ recurrence_id: null }).in('id', detachIds).select('id')
+    check('every surviving visit is detached, and the count proves it', detErr ? -1 : detached?.length, detachIds.length)
+    const { data: recGone } = await db.from('job_recurrences').delete().eq('id', rec2).select('id')
+    check('the rule itself is removed, one row', recGone?.length, 1)
+
+    const after9 = await readRemoval()
+    check('six visits survive — everything except the two placeholders', after9.length, 6)
+    check('the completed visit is intact', after9.some(j => j.status === 'completed'), true)
+    check('the in-progress visit is intact', after9.some(j => j.status === 'in_progress'), true)
+    check('the cancelled record is intact', after9.some(j => j.status === 'cancelled'), true)
+    check('the past placeholder is intact — a removal does not rewrite the book',
+      after9.some(j => j.scheduled_date === '2026-07-09'), true)
+    check('no survivor still belongs to the deleted series', after9.every(j => j.recurrence_id === null), true)
+    const { data: wsLeft } = await db.from('job_work_sessions').select('id, minutes').eq('job_id', worked)
+    check('the work session survived the removal', wsLeft?.length, 1)
+    check('…with its minutes, and the job still reports them',
+      after9.find(j => j.id === worked)?.actual_minutes, 75)
+
+    // ── 10. Why that protection is load-bearing, and why counting is ─────────
+    H('10. The cascade is real, and a no-op write is silent')
+    const { data: doomedRow } = await db.from('jobs').insert({
+      user_id: uid, customer_id: customerId, title: tag('CASCADE'),
+      scheduled_date: '2026-09-11', status: 'scheduled',
+    }).select('id').single()
+    const doomed = (doomedRow as { id: string }).id
+    await db.from('job_work_sessions').insert({ user_id: uid, job_id: doomed, worked_on: '2026-09-11', minutes: 30 })
+    const { count: before10 } = await db.from('job_work_sessions')
+      .select('id', { count: 'exact', head: true }).eq('job_id', doomed)
+    check('the doomed visit has a work session', before10, 1)
+    await db.from('jobs').delete().eq('id', doomed)
+    const { count: after10 } = await db.from('job_work_sessions')
+      .select('id', { count: 'exact', head: true }).eq('job_id', doomed)
+    check('deleting the VISIT destroys its work session — the delete is never soft', after10, 0)
+    // The same silent shape §6 proves for the rule, on the detach write.
+    const { data: noopDetach, error: noopErr } = await db.from('jobs')
+      .update({ recurrence_id: null }).eq('id', '00000000-0000-0000-0000-000000000000').select('id')
+    check('detaching a row that does not exist raises no error', noopErr ?? null, null)
+    check('…and returns zero rows — the page must count, not assume', noopDetach?.length, 0)
+
     // ── Cleanup — measured, not assumed ──────────────────────────────────────
     await db.from('jobs').delete().eq('recurrence_id', recId)
     await db.from('job_recurrences').delete().eq('id', recId)
+    // §9's survivors are detached by design, so they are cleaned up by id.
+    await db.from('jobs').delete().in('id', made.map(j => j.id))
     const { count: leftJobs } = await db.from('jobs').select('id', { count: 'exact', head: true }).eq('user_id', uid).like('title', `%${t.runId}%`)
     const { count: leftRecs } = await db.from('job_recurrences').select('id', { count: 'exact', head: true }).eq('id', recId)
-    H('9. Residue')
+    H('11. Residue')
     check('no fixture visits left behind', leftJobs ?? -1, 0)
     check('no fixture recurrence left behind', leftRecs ?? -1, 0)
   } finally {

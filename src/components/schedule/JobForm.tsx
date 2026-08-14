@@ -10,7 +10,7 @@ import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
 import { Customer, Property, JobFormValues, JobStatus, RecurUnit } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { recurrenceLabel, recurrenceToUi, type RepeatPreset, type EndMode } from '@/lib/recurrence'
+import { recurrenceLabel, recurrenceToUi, reseedRepeatUi, type RepeatPreset, type EndMode } from '@/lib/recurrence'
 import { latestSavedRecommendation, savedPriceFor, recommendationIsStale, CadenceKey } from '@/lib/pricing'
 import { servicePricingKind } from '@/lib/servicePricing'
 import {
@@ -49,6 +49,13 @@ export interface Recurrence {
   // (leave deliberately-moved visits alone). Absent on rows hydrated from the
   // database (recFromRow), so an untouched save never reconciles by surprise.
   endAsserted?: boolean
+  // True when the owner touched the Repeat controls this session. `unit: null`
+  // means "does not repeat", and on a job that HAS a series that instruction
+  // deletes sibling visits and the series row — so the save needs to know
+  // whether a human chose it or whether it is simply what the control says when
+  // nobody has spoken. Absent on rows hydrated from the database (recFromRow),
+  // so an untouched save can never end a schedule. See planRecurrenceRemoval.
+  repeatAsserted?: boolean
 }
 
 export interface SuggestionMeta {
@@ -295,17 +302,21 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   // sibling visit. Re-seed once the series actually arrives, and only while the
   // owner has not touched the controls, so a deliberate "Does not repeat" is
   // never overwritten by a late-arriving prop.
+  // What to re-seed is lib/recurrence.reseedRepeatUi's call, not this effect's —
+  // the rule ("only while untouched") is the load-bearing half and belongs where
+  // a guard can exercise it.
   const repeatTouched = useRef(false)
   useEffect(() => {
-    if (repeatTouched.current || !initialRecurrence?.unit) return
-    const ui = recurrenceToUi(initialRecurrence)
-    setPreset(ui.preset)
-    setCustomUnit(ui.customUnit)
-    setCustomCount(ui.customCount)
-    if (!endTouched.current) {
-      setEndMode(ui.endMode)
-      setEndDate(ui.endDate)
-      setEndCount(ui.endCount)
+    const next = reseedRepeatUi(initialRecurrence, { repeat: repeatTouched.current, end: endTouched.current })
+    if (next.repeat) {
+      setPreset(next.repeat.preset)
+      setCustomUnit(next.repeat.customUnit)
+      setCustomCount(next.repeat.customCount)
+    }
+    if (next.end) {
+      setEndMode(next.end.endMode)
+      setEndDate(next.end.endDate)
+      setEndCount(next.end.endCount)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialRecurrence?.unit, initialRecurrence?.count, initialRecurrence?.endDate, initialRecurrence?.endCount])
@@ -351,10 +362,13 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   const measuredPrice = savedRec && lawnService ? savedPriceFor(savedRec.rec, cadenceForInterval) : null
 
   function buildRecurrence(): Recurrence {
-    if (!interval) return { unit: null, count: 1, endDate: null, endCount: null }
+    // The `!interval` branch is the destructive one — it is what the page reads
+    // as "remove this series" — so it carries the intent flag too.
+    if (!interval) return { unit: null, count: 1, endDate: null, endCount: null, repeatAsserted: repeatTouched.current }
     return {
       unit: interval.unit,
       count: interval.count,
+      repeatAsserted: repeatTouched.current,
       // Season End resolves to the season's end DATE (stored as a normal end_date,
       // so the recurrence engine needs no season awareness).
       endDate: endMode === 'season' ? seasonEndDate : (endMode === 'on' && endDate ? endDate : null),
@@ -371,6 +385,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   // default is "Lawn Mowing" gets exactly the old behaviour; every other trade
   // gets theirs.
   function applyCadencePreset(kind: 'weekly' | 'biweekly' | 'monthly') {
+    repeatTouched.current = true
     setPreset(kind === 'weekly' ? 'w1' : kind === 'biweekly' ? 'w2' : 'm1')
     const svc = (watch('service_type') || '').trim() || learnedService || ''
     if (svc) {
@@ -864,7 +879,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
                     className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                     View existing schedule
                   </a>
-                  <button type="button" onClick={() => { setPreset('none'); setDupAck(true) }}
+                  <button type="button" onClick={() => { repeatTouched.current = true; setPreset('none'); setDupAck(true) }}
                     className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                     Add one-time visit instead
                   </button>
@@ -913,9 +928,9 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
             {preset === 'custom' && (
               <div className="grid grid-cols-2 gap-4">
                 <Input label="Every" type="number" min="1" value={customCount}
-                  onChange={(e) => setCustomCount(Math.max(1, Number(e.target.value) || 1))} />
+                  onChange={(e) => { repeatTouched.current = true; setCustomCount(Math.max(1, Number(e.target.value) || 1)) }} />
                 <Select label="Unit" value={customUnit}
-                  onChange={(e) => setCustomUnit(e.target.value as RecurUnit)}
+                  onChange={(e) => { repeatTouched.current = true; setCustomUnit(e.target.value as RecurUnit) }}
                   options={[{ value: 'day', label: 'Days' }, { value: 'week', label: 'Weeks' }, { value: 'month', label: 'Months' }]} />
               </div>
             )}

@@ -16,10 +16,13 @@
 // Pure + deterministic, no I/O — same discipline as verify-onboarding /
 // verify-sms-segments, runnable in CI beside them.
 
+import { readFileSync } from 'node:fs'
 import {
   generateOccurrences, recurrenceLabel, recurringCustomerLabel,
   jobsInScope, shiftDate, dayDelta, buildServicePlans, visitsBeyondEnd, planSeriesChange, recurrenceToUi, mayRemoveRecurrence,
+  partitionSeriesVisits, planRecurrenceRemoval, reseedRepeatUi,
 } from '../src/lib/recurrence'
+import { HISTORY_TABLES } from '../src/lib/seriesHistory'
 import { DEFAULT_SEASONS, DEFAULT_LAWN_SEASON, DEFAULT_SNOW_SEASON, seasonEndDateFor } from '../src/lib/seasons'
 import type { Job, JobRecurrence } from '../src/types'
 
@@ -331,6 +334,149 @@ check('a season-ended series round-trips its end date',
   recurrenceToUi({ unit: 'week', count: 1, endDate: '2026-10-31', endCount: null }).endDate, '2026-10-31')
 check('only a genuinely absent series reads as "does not repeat"',
   recurrenceToUi(undefined).preset, 'none')
+
+// ═══════════════════════════════════════════════════════════════════════════
+H('14. THE SLOW-LOAD SEQUENCE, REPLAYED STEP BY STEP (Session 56)')
+// The production failure was not a wrong value, it was an ORDER of events. So
+// this replays that order against the real functions the editor and the save
+// path use, and asserts what each of them answers at each step. Every step is
+// deterministic: no clock, no network, no DOM.
+//
+//   t0  the job arrives and the editor opens (?focus= deep link)
+//   t1  the owner changes something unrelated — a price, a crew size — and
+//       saves. They have not been near the Repeat control.
+//   t2  the series snapshot finally arrives
+//   t3  the editor re-seeds and now shows the truth
+//
+// The series being destroyed: a weekly mow, the shape of the one that lost 67
+// visits.
+const lateSeries = { unit: 'week' as const, count: 1, endDate: '2026-10-31', endCount: null }
+
+// t0 — the editor seeds from a prop that is not there yet.
+const t0 = recurrenceToUi(undefined)
+check('t0: with no series loaded the control reads "Does not repeat"', t0.preset, 'none')
+check('t0: nothing has been touched, so nothing is asserted',
+  reseedRepeatUi(undefined, { repeat: false, end: false }), {})
+
+// t1 — THE MOMENT THAT DESTROYED THE DATA. The form says "does not repeat" and
+// means nothing by it. Two independent refusals, either of which is enough.
+const t1 = planRecurrenceRemoval('rec-weekly', {}, /* repeatAsserted */ false)
+check('t1: an untouched save cannot remove a series that never loaded',
+  t1, { kind: 'refuse', reason: 'series-not-loaded' })
+check('t1: …and it still cannot once the snapshot IS there — untouched is not intent',
+  planRecurrenceRemoval('rec-weekly', { 'rec-weekly': lateSeries }, false),
+  { kind: 'refuse', reason: 'repeat-untouched' })
+check('t1: the reason is reported, so the page can say the right thing',
+  t1.kind === 'refuse' && t1.reason, 'series-not-loaded')
+
+// t2/t3 — the snapshot lands and the untouched controls follow it.
+const t3 = reseedRepeatUi(lateSeries, { repeat: false, end: false })
+check('t3: the control re-seeds to the TRUE cadence, not "Does not repeat"', t3.repeat?.preset, 'w1')
+check('t3: and to the series\' own end date', t3.end?.endDate, '2026-10-31')
+check('t3: which is a specific-date end mode, not "never"', t3.end?.endMode, 'on')
+// The whole point of the touched flags: a deliberate choice outranks a late prop.
+check('a deliberate "Does not repeat" is NEVER overwritten by a late series',
+  reseedRepeatUi(lateSeries, { repeat: true, end: false }).repeat, undefined)
+check('…and a hand-picked end date is not overwritten either',
+  reseedRepeatUi(lateSeries, { repeat: false, end: true }).end, undefined)
+check('an owner who DID choose "does not repeat" is obeyed',
+  planRecurrenceRemoval('rec-weekly', { 'rec-weekly': lateSeries }, true), { kind: 'remove' })
+check('a one-time job needs no permission slip',
+  planRecurrenceRemoval(null, {}, false), { kind: 'remove' })
+
+// ═══════════════════════════════════════════════════════════════════════════
+H('15. WHAT A RECURRENCE EDIT MAY DESTROY — one predicate, history-safe')
+// Deleting a visit is not a soft act: job_work_sessions, crew_media,
+// job_line_items and change_orders CASCADE away with it, and its invoice,
+// photos, expenses and time entries are orphaned. So only a bare future
+// placeholder is replaceable. The series below is the incident's own shape —
+// history, today's work, and ghosts, all in one series.
+const TODAY = '2026-08-14'
+const mixed = [
+  { id: 'anchor', scheduled_date: '2026-08-14', status: 'scheduled' },
+  { id: 'past-done', scheduled_date: '2026-07-02', status: 'completed' },
+  { id: 'past-open', scheduled_date: '2026-07-09', status: 'scheduled' },   // never worked, still the past
+  { id: 'live', scheduled_date: '2026-08-14', status: 'in_progress' },
+  { id: 'called-off', scheduled_date: '2026-08-21', status: 'cancelled' },
+  { id: 'billed', scheduled_date: '2026-08-28', status: 'scheduled' },      // invoice-linked
+  { id: 'worked', scheduled_date: '2026-09-04', status: 'scheduled', actual_minutes: 45 },
+  { id: 'ghost-1', scheduled_date: '2026-11-06', status: 'scheduled' },
+  { id: 'ghost-2', scheduled_date: '2026-11-14', status: 'scheduled' },
+]
+const part = partitionSeriesVisits(mixed, {
+  anchorId: 'anchor', protectedIds: new Set(['billed']), todayISO: TODAY,
+})
+check('only the bare future placeholders are replaceable',
+  part.replaceable.map(j => j.id), ['ghost-1', 'ghost-2'])
+check('completed, in-progress and cancelled visits are spared',
+  part.preserved.map(j => j.id).filter(id => ['live', 'called-off'].includes(id)), ['live', 'called-off'])
+check('an invoice-linked visit is spared', part.preserved.some(j => j.id === 'billed'), true)
+check('a visit carrying logged time is spared — status alone is not the test',
+  part.preserved.some(j => j.id === 'worked'), true)
+check('the past is out of the window entirely, worked or not',
+  part.untouched.map(j => j.id), ['past-done', 'past-open'])
+check('the anchor under the editor is in neither list',
+  [...part.replaceable, ...part.preserved, ...part.untouched].some(j => j.id === 'anchor'), false)
+check('nothing is lost between the three groups',
+  part.replaceable.length + part.preserved.length + part.untouched.length, mixed.length - 1)
+// Zero minutes is not "some time logged" — an untouched placeholder still is one.
+check('actual_minutes 0 / null does not protect a placeholder',
+  partitionSeriesVisits([
+    { id: 'z', scheduled_date: '2026-11-06', status: 'scheduled', actual_minutes: 0 },
+    { id: 'n', scheduled_date: '2026-11-07', status: 'scheduled', actual_minutes: null },
+  ], { todayISO: TODAY }).replaceable.map(j => j.id), ['z', 'n'])
+// The end-date predicate is the same engine, so it inherits every protection.
+check('visitsBeyondEnd names only the ghosts past the end',
+  visitsBeyondEnd(mixed, '2026-10-31', { anchorId: 'anchor', protectedIds: new Set(['billed']) }),
+  ['ghost-1', 'ghost-2'])
+check('…and it inherits the logged-time protection from the same engine',
+  visitsBeyondEnd([{ id: 'w', scheduled_date: '2026-11-06', status: 'scheduled', actual_minutes: 30 }], '2026-10-31'),
+  [])
+check('a series with no end has no ghosts, by construction', visitsBeyondEnd(mixed, null), [])
+
+// ═══════════════════════════════════════════════════════════════════════════
+H('16. THE PROTECTIONS ARE ACTUALLY WIRED IN (not just importable)')
+// §14 and §15 pin the rules; these pin that the surfaces still CALL them. A
+// mutation that deletes the re-seed effect, or the removal guard, or the
+// row-count checks leaves every pure test above green. Comments are stripped
+// first — a rule must not be satisfiable by a sentence about the rule.
+const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+const formSrc = strip(readFileSync(new URL('../src/components/schedule/JobForm.tsx', import.meta.url), 'utf8'))
+const pageSrc = strip(readFileSync(new URL('../src/app/dashboard/schedule/page.tsx', import.meta.url), 'utf8'))
+const histSrc = strip(readFileSync(new URL('../src/lib/seriesHistory.ts', import.meta.url), 'utf8'))
+
+check('the editor re-seeds through reseedRepeatUi', /reseedRepeatUi\(/.test(formSrc), true)
+check('…inside an effect, so a LATE series still reaches the controls',
+  /useEffect\(\(\)\s*=>\s*\{[\s\S]{0,400}?reseedRepeatUi\(/.test(formSrc), true)
+check('…and it reports whether Repeat was touched this session',
+  /repeatAsserted:\s*repeatTouched\.current/.test(formSrc), true)
+check('every Repeat control marks the flag (select, custom count, custom unit, chips, one-time)',
+  (formSrc.match(/repeatTouched\.current\s*=\s*true/g) || []).length >= 5, true)
+check('Season End anchors on the SERIES start, falling back to the visit',
+  /seriesStartDate\s*\|\|\s*scheduledDate/.test(formSrc), true)
+check('the save routes removal through planRecurrenceRemoval', /planRecurrenceRemoval\(/.test(pageSrc), true)
+check('…passing the owner-intent flag, not a constant',
+  /planRecurrenceRemoval\([^)]*recurrence\.repeatAsserted/.test(pageSrc), true)
+check('…and refuses on either answer', /decision\.kind === 'refuse'/.test(pageSrc), true)
+check('the destructive paths partition the series instead of taking all siblings',
+  (pageSrc.match(/partitionSeriesVisits\(/g) || []).length >= 2, true)
+check('…from a FRESH read, not the page\'s in-memory jobs',
+  /readSeriesForEdit\([^)]*\)/.test(pageSrc) && /from\('jobs'\)\s*\n?\s*\.select\('id, scheduled_date, status, actual_minutes'\)/.test(pageSrc), true)
+check('…with history read from the database first',
+  /loadVisitEncumbrances\(/.test(pageSrc), true)
+check('an incomplete history read blocks the edit', /if \(!enc\.complete\)/.test(pageSrc), true)
+check('every history table a delete would cascade or orphan is checked',
+  HISTORY_TABLES.length >= 8 && ['invoices', 'job_work_sessions', 'crew_media', 'job_photos', 'job_line_items', 'change_orders', 'expenses', 'time_entries']
+    .every(t => (HISTORY_TABLES as readonly string[]).includes(t)), true)
+check('…and the reader fails CLOSED on a failed table read',
+  /complete:\s*failed\.size === 0/.test(histSrc), true)
+// Write honesty: three writes end a series, and each proves it landed.
+check('the removal path counts rows on every write it claims',
+  (pageSrc.match(/\.select\('id'\)/g) || []).length >= 4, true)
+check('…and treats zero rows back as failure, not success',
+  /data\.length === 0/.test(pageSrc) && /!==\s*removeIds\.length/.test(pageSrc), true)
+check('…including the detach, which the FK would otherwise do silently',
+  /!==\s*detachIds\.length/.test(pageSrc), true)
 
 console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)
 if (fail > 0) process.exit(1)

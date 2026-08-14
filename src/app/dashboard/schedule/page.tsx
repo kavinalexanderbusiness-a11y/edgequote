@@ -13,7 +13,8 @@ import { DayOpsPanel, QuoteLite, QuickPatch } from '@/components/schedule/DayOps
 import { Coord, geocodeAddress } from '@/lib/geo'
 import { JobForm, Recurrence, SuggestionMeta } from '@/components/schedule/JobForm'
 import { ScopeDialog } from '@/components/schedule/ScopeDialog'
-import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel, visitsBeyondEnd, planSeriesChange, mayRemoveRecurrence } from '@/lib/recurrence'
+import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel, visitsBeyondEnd, planSeriesChange, planRecurrenceRemoval, partitionSeriesVisits, type SeriesVisitLite } from '@/lib/recurrence'
+import { loadVisitEncumbrances } from '@/lib/seriesHistory'
 import type { JobRecurrence } from '@/types'
 import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts, uncompleteJob } from '@/lib/invoicing'
 import { queueOrRun } from '@/lib/offline/outbox'
@@ -1280,26 +1281,106 @@ export default function SchedulePage() {
     setBanner(`Now recurring — ${recurrenceLabel(recurrence.unit, recurrence.count)}. ${future.length} future visit${future.length !== 1 ? 's' : ''} added.`)
   }
 
-  // Detach/delete recurrence per scope, turning the anchor into a one-time job.
+  // ── The pre-flight every destructive recurrence edit shares ─────────────────
+  // Two questions, always asked of the DATABASE and never of the page's
+  // in-memory `jobs`: what does this series actually look like right now, and
+  // which of its visits carry history a delete would take with them? An editor
+  // can sit open for an hour while a visit is completed on a phone, invoiced, or
+  // photographed — deciding from the snapshot the page loaded is how a save
+  // destroys work that already happened. A failed read returns an error string,
+  // never an empty series: unknown is not the same as nothing.
+  type SeriesRead = { series: SeriesVisitLite[]; protectedIds: Set<string> }
+  async function readSeriesForEdit(recurrenceId: string, anchorId: string): Promise<SeriesRead | { error: string }> {
+    const { data, error } = await supabase.from('jobs')
+      .select('id, scheduled_date, status, actual_minutes').eq('recurrence_id', recurrenceId)
+    if (error || !data) return { error: error?.message || 'the repeating schedule could not be read' }
+    const series = data as SeriesVisitLite[]
+    const enc = await loadVisitEncumbrances(supabase, series.filter(j => j.id !== anchorId).map(j => j.id))
+    if (!enc.complete) return { error: `the ${enc.failed.join(', ')} record${enc.failed.length !== 1 ? 's' : ''} of the other visits could not be checked` }
+    // The page already tracks invoiced future visits for the optimizer; union
+    // rather than replace, so the two can never disagree about what is locked.
+    const protectedIds = new Set(enc.ids)
+    for (const id of invoicedJobIds) protectedIds.add(id)
+    return { series, protectedIds }
+  }
+
+  // End a series per scope, turning the anchor into a one-time job.
+  //
+  // Ending a schedule removes the visits it would still have PRODUCED. It never
+  // removes the record of the ones it already did: completed, in-progress and
+  // cancelled visits, anything carrying logged time, an invoice, photos, crew
+  // media, expenses or a change order, and everything in the past all keep their
+  // rows and simply stop belonging to a series. This is the path that deleted 67
+  // of one customer's visits — four of them completed or cancelled — so it
+  // deletes only what partitionSeriesVisits calls replaceable, and proves every
+  // write landed before it claims anything.
   async function removeRecurrence(job: Job, scope: RecurrenceScope) {
     if (!job.recurrence_id) return
+    const recId = job.recurrence_id
+
+    // Detaching the one visit under the editor costs no sibling anything.
     if (scope === 'this') {
-      await supabase.from('jobs').update({ recurrence_id: null }).eq('id', job.id)
+      const { data, error } = await supabase.from('jobs').update({ recurrence_id: null }).eq('id', job.id).select('id')
+      if (error || !data || data.length === 0) {
+        setBanner('Could not take this visit out of its repeating schedule — nothing was changed. ' + (error?.message ?? ''))
+        return
+      }
       setBanner('This visit is now a one-time job.')
       return
     }
-    if (scope === 'future') {
-      const laterIds = jobs.filter(j => j.recurrence_id === job.recurrence_id && j.scheduled_date > job.scheduled_date).map(j => j.id)
-      if (laterIds.length) await supabase.from('jobs').delete().in('id', laterIds)
-      await supabase.from('jobs').update({ recurrence_id: null }).eq('id', job.id)
-      setBanner(`Recurrence ended — ${laterIds.length} future visit${laterIds.length !== 1 ? 's' : ''} removed.`)
+
+    const read = await readSeriesForEdit(recId, job.id)
+    if ('error' in read) {
+      setBanner(`Could not safely end this repeating schedule, so nothing was changed — ${read.error}. Reopen the visit and try again.`)
       return
     }
-    const siblingIds = jobs.filter(j => j.recurrence_id === job.recurrence_id && j.id !== job.id).map(j => j.id)
-    if (siblingIds.length) await supabase.from('jobs').delete().in('id', siblingIds)
-    await supabase.from('jobs').update({ recurrence_id: null }).eq('id', job.id)
-    await supabase.from('job_recurrences').delete().eq('id', job.recurrence_id)
-    setBanner('Recurrence removed — this is now a one-time job.')
+    const { replaceable, preserved, untouched } = partitionSeriesVisits(read.series, {
+      anchorId: job.id,
+      protectedIds: read.protectedIds,
+      todayISO: localToday(),
+      ...(scope === 'future' ? { afterDate: job.scheduled_date } : {}),
+    })
+    const removeIds = replaceable.map(j => j.id)
+    if (removeIds.length) {
+      const { data: gone, error: delErr } = await supabase.from('jobs').delete().in('id', removeIds).select('id')
+      if (delErr) {
+        setBanner('Could not remove the upcoming visits — the schedule is unchanged. ' + delErr.message)
+        return
+      }
+      if ((gone?.length ?? 0) !== removeIds.length) {
+        setBanner(`Only ${gone?.length ?? 0} of ${removeIds.length} upcoming visits could be removed — the schedule is part-way changed. Reopen it to see where it stands.`)
+        return
+      }
+    }
+    const removedNote = removeIds.length ? ` ${removeIds.length} upcoming visit${removeIds.length !== 1 ? 's' : ''} removed.` : ''
+
+    if (scope === 'future') {
+      const { data, error } = await supabase.from('jobs').update({ recurrence_id: null }).eq('id', job.id).select('id')
+      if (error || !data || data.length === 0) {
+        setBanner(`Removed the later visits, but this one is still attached to the repeating schedule. ${error?.message ?? 'Reopen it and try again.'}`)
+        return
+      }
+      setBanner(`Repeat schedule ended after this visit.${removedNote}${preserved.length ? ` ${preserved.length} later visit${preserved.length !== 1 ? 's' : ''} with work or an invoice kept.` : ''}`)
+      return
+    }
+
+    // Scope "all": everything that survives is detached explicitly. The foreign
+    // key would null these anyway (ON DELETE SET NULL), but doing it as its own
+    // write is what lets the row count prove it happened.
+    const detachIds = [job.id, ...preserved.map(j => j.id), ...untouched.map(j => j.id)]
+    const { data: detached, error: detErr } = await supabase.from('jobs')
+      .update({ recurrence_id: null }).in('id', detachIds).select('id')
+    if (detErr || (detached?.length ?? 0) !== detachIds.length) {
+      setBanner(`Could not fully unlink this schedule's visits, so the repeat rule was kept. ${detErr?.message ?? 'Reopen the visit and try again.'}`)
+      return
+    }
+    const { data: recGone, error: recErr } = await supabase.from('job_recurrences').delete().eq('id', recId).select('id')
+    if (recErr || !recGone || recGone.length === 0) {
+      setBanner(`The visits were unlinked, but the repeat rule itself could not be removed. ${recErr?.message ?? 'Reopen the visit and try again.'}`)
+      return
+    }
+    const kept = preserved.length + untouched.length
+    setBanner(`Repeat schedule removed — this is now a one-time job.${removedNote}${kept ? ` ${kept} past or already-worked visit${kept !== 1 ? 's' : ''} kept as history.` : ''}`)
   }
 
   // Remove the future visits that contradict a series' end date — the owner just
@@ -1309,18 +1390,23 @@ export default function SchedulePage() {
   // visits stay, and are named in the banner rather than silently kept.
   async function reconcileSeriesEnd(job: Job, endDate: string) {
     if (!job.recurrence_id) return
-    const series = jobs.filter(j => j.recurrence_id === job.recurrence_id)
-    const ghostIds = visitsBeyondEnd(series, endDate, { anchorId: job.id, protectedIds: invoicedJobIds })
-    const kept = series.filter(j => j.scheduled_date > endDate && j.id !== job.id && !ghostIds.includes(j.id) && j.status !== 'cancelled').length
+    const read = await readSeriesForEdit(job.recurrence_id, job.id)
+    if ('error' in read) {
+      setBanner(`Saved, but the visits after ${formatDate(endDate)} were left exactly as they are — ${read.error}.`)
+      return
+    }
+    const series = read.series
+    const ghostIds = visitsBeyondEnd(series, endDate, { anchorId: job.id, protectedIds: read.protectedIds })
+    const kept = series.filter(j => j.scheduled_date > endDate && j.id !== job.id && !ghostIds.includes(j.id)).length
     if (ghostIds.length) {
       const { error } = await supabase.from('jobs').delete().in('id', ghostIds)
       if (error) {
         setBanner(`Saved, but ${ghostIds.length} visit${ghostIds.length !== 1 ? 's' : ''} after ${formatDate(endDate)} could not be removed: ` + error.message)
         return
       }
-      setBanner(`Removed ${ghostIds.length} visit${ghostIds.length !== 1 ? 's' : ''} scheduled after the series end (${formatDate(endDate)}).${kept ? ` ${kept} completed/invoiced visit${kept !== 1 ? 's' : ''} after that date kept.` : ''}`)
+      setBanner(`Removed ${ghostIds.length} visit${ghostIds.length !== 1 ? 's' : ''} scheduled after the series end (${formatDate(endDate)}).${kept ? ` ${kept} visit${kept !== 1 ? 's' : ''} with work, an invoice or a record after that date kept.` : ''}`)
     } else if (kept) {
-      setBanner(`${kept} completed or invoiced visit${kept !== 1 ? 's' : ''} after ${formatDate(endDate)} kept — history is never removed by an end-date change.`)
+      setBanner(`${kept} visit${kept !== 1 ? 's' : ''} with work, an invoice or a record after ${formatDate(endDate)} kept — history is never removed by an end-date change.`)
     }
   }
 
@@ -1358,6 +1444,14 @@ export default function SchedulePage() {
       setBanner('This recurring schedule was changed elsewhere since you opened it — showing the current schedule. Review it and save again.')
       return
     }
+    // The visits, read fresh and with their history weighed, BEFORE the rule is
+    // written: a rule change that cannot be reconciled safely should change
+    // nothing at all, rather than leave a new rule over an old schedule.
+    const read = await readSeriesForEdit(job.recurrence_id, job.id)
+    if ('error' in read) {
+      setBanner(`Could not safely change this repeating schedule, so nothing was changed — ${read.error}. Reopen the visit and try again.`)
+      return
+    }
     // Persist the rule FIRST and prove it landed — zero rows updated is a
     // failure, not a success (RLS or a deleted row returns no error at all).
     // Rule-then-visits ordering means a failure here leaves the series intact,
@@ -1383,8 +1477,8 @@ export default function SchedulePage() {
     // a count-limited rule the last occurrence it allows.
     if (plan.kind === 'end') {
       const cutoff = plan.cutoff
-      const series = jobs.filter(j => j.recurrence_id === job.recurrence_id)
-      const ghostIds = visitsBeyondEnd(series, cutoff, { anchorId: job.id, protectedIds: invoicedJobIds })
+      const series = read.series
+      const ghostIds = visitsBeyondEnd(series, cutoff, { anchorId: job.id, protectedIds: read.protectedIds })
       const kept = series.filter(j => j.scheduled_date > cutoff && j.id !== job.id && !ghostIds.includes(j.id)).length
       if (ghostIds.length) {
         const { error: delErr } = await supabase.from('jobs').delete().in('id', ghostIds)
@@ -1396,13 +1490,18 @@ export default function SchedulePage() {
       setBanner(`This series now ends ${formatDate(cutoff)}.${ghostIds.length ? ` ${ghostIds.length} later visit${ghostIds.length !== 1 ? 's' : ''} removed.` : ''}${kept ? ` ${kept} completed or invoiced visit${kept !== 1 ? 's' : ''} after that date kept.` : ''}`)
       return
     }
-    // Regenerate forward. Only merely-scheduled, uninvoiced siblings are
-    // replaceable; completed/in-progress work and invoice-linked visits are
+    // Regenerate forward. Only bare future placeholders are replaceable; work
+    // that happened, anything carrying a record, and every past visit are
     // business history and survive a rule change (their dates are skipped on
     // re-insert so the grid never doubles them up).
-    const siblings = jobs.filter(j => j.recurrence_id === job.recurrence_id && j.id !== job.id && j.scheduled_date > job.scheduled_date)
-    const replaceable = siblings.filter(j => j.status === 'scheduled' && !invoicedJobIds.has(j.id)).map(j => j.id)
-    const preserved = siblings.filter(j => !replaceable.includes(j.id))
+    const forward = partitionSeriesVisits(read.series, {
+      anchorId: job.id,
+      protectedIds: read.protectedIds,
+      afterDate: job.scheduled_date,
+      todayISO: localToday(),
+    })
+    const replaceable = forward.replaceable.map(j => j.id)
+    const preserved = [...forward.preserved, ...forward.untouched.filter(j => j.scheduled_date > job.scheduled_date)]
     if (replaceable.length) {
       const { error: delErr } = await supabase.from('jobs').delete().in('id', replaceable)
       if (delErr) {
@@ -1420,7 +1519,7 @@ export default function SchedulePage() {
         return
       }
     }
-    setBanner(`Schedule updated to ${recurrenceLabel(recurrence.unit, recurrence.count)}. ${plan.future.length} future visit${plan.future.length !== 1 ? 's' : ''}.${preserved.length ? ` ${preserved.length} completed/invoiced visit${preserved.length !== 1 ? 's' : ''} kept.` : ''}`)
+    setBanner(`Schedule updated to ${recurrenceLabel(recurrence.unit, recurrence.count)}. ${plan.future.length} future visit${plan.future.length !== 1 ? 's' : ''}.${preserved.length ? ` ${preserved.length} visit${preserved.length !== 1 ? 's' : ''} with work or a record kept.` : ''}`)
   }
 
   // Orchestrator for an edit on a recurring job (or a one-time → one-time edit):
@@ -1450,15 +1549,31 @@ export default function SchedulePage() {
         await reconcileSeriesEnd(job, recurrence.endDate)
       }
     } else if (!will) {
-      // "Does not repeat" on a job that HAS a series deletes every sibling visit
-      // and the series row. That is only ever safe when the form was actually
-      // showing the series: if the rule never loaded (the ?focus= deep link
-      // opens this modal as soon as `jobs` arrives, which can beat the
-      // `recurrences` read), the form shows "Does not repeat" because it knows
-      // nothing — not because the owner asked for it. Acting on that silence
-      // destroyed a customer's whole schedule. Refuse and re-read instead.
-      if (!mayRemoveRecurrence(job.recurrence_id, recurrences)) {
-        setBanner('This job\'s repeat schedule had not finished loading — nothing was changed. Reopen the visit and try again.')
+      // "Does not repeat" on a job that HAS a series ends the schedule. Two
+      // things must be true before a save is allowed to mean that, and
+      // planRecurrenceRemoval refuses unless both are:
+      //
+      //   • the series had actually loaded. The ?focus= deep link opens this
+      //     modal as soon as `jobs` arrives, which can beat the `recurrences`
+      //     read; the form then shows "Does not repeat" because it knows
+      //     nothing. Acting on that silence destroyed a customer's schedule.
+      //   • the owner touched the Repeat controls this session. An untouched
+      //     control is showing its default, not an instruction — and unlike the
+      //     first check, this one holds no matter WHY the form is wrong.
+      //
+      // Refusing costs an owner who really did mean it one deliberate click.
+      const decision = planRecurrenceRemoval(job.recurrence_id, recurrences, recurrence.repeatAsserted)
+      if (decision.kind === 'refuse') {
+        if (decision.reason === 'series-not-loaded') {
+          setBanner('This job\'s repeat schedule had not finished loading — nothing was changed. Reopen the visit and try again.')
+          await fetchJobs()
+          setEditing(null)
+          return
+        }
+        // The rest of the save is a normal edit and still applies; only the
+        // schedule is left alone, and the owner is told exactly that.
+        await applyFieldEdits(job, values, scope)
+        setBanner('Saved — the repeat schedule was left as it is. To end it, set Repeats to “Does not repeat” yourself and save again.')
         await fetchJobs()
         setEditing(null)
         return
