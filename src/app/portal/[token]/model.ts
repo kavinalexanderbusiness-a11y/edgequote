@@ -31,6 +31,11 @@ import { serviceLineTotals } from '@/lib/quoteServices'
 import { sortedOptions } from '@/lib/quoteOptions'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
 import { formatCurrency, parseLocalDate } from '@/lib/utils'
+// THE request engine (lib/portalRequests) — the same module the owner's request
+// card reads. The kinds, the media contract and the "a request is an ask, not an
+// outcome" law live there once, so the two sides of the wire cannot disagree
+// about what a customer asked for.
+import type { RequestKind } from '@/lib/portalRequests'
 import type { Job, JobRecurrence, QuoteStatus } from '@/types'
 
 // ── Payload types (the get_portal_data JSON, verbatim from the old client) ──
@@ -133,9 +138,15 @@ export type DocKind = 'quote' | 'invoice'
 // jobs or plans directly. The message string is what the owner reads; the
 // structured fields exist so their side can grow one-tap actions later.
 export type SubmitRequestFn = (opts: {
-  message: string; kind: 'service' | 'appointment' | 'reschedule' | 'plan_change'
+  message: string; kind: RequestKind
   preferredDate?: string | null; jobId?: string | null; recurrenceId?: string | null
   details?: Record<string, unknown> | null
+  /**
+   * booking-uploads storage PATHS the customer attached (never URLs — see
+   * lib/portalRequests). The RPC refuses a malformed one rather than dropping
+   * it silently, so a photo either arrives or the customer is told it didn't.
+   */
+  photos?: string[] | null
 }) => Promise<boolean>
 
 // What a customer can request comes from the owner's OWN catalogue — never a

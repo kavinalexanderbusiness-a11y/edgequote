@@ -43,8 +43,14 @@ export interface PortalActions {
   paymentPending: boolean
   /** Legacy free-text/preset request (portal_request_service). */
   request: (message: string, source: string) => Promise<boolean>
-  /** Structured request (portal_submit_request) — reschedule/plan_change/appointment. */
+  /** Structured request (portal_submit_request) — reschedule/plan_change/appointment/extra work. */
   submitRequest: SubmitRequestFn
+  /**
+   * Upload photos for a request and report what actually landed. Returns storage
+   * PATHS to hand to submitRequest — never URLs, and never a path for a file that
+   * failed, so a photo that didn't upload can't be shown as attached.
+   */
+  uploadRequestPhotos: (files: File[]) => Promise<{ paths: string[]; failed: number }>
   photoUrl: (path: string) => string
   markInvoiceViewed: (invoiceId: string) => void
   /** Re-fetch get_portal_data (post card-change / autopay truth-refresh). */

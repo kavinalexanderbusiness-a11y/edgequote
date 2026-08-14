@@ -74,6 +74,7 @@
     "verify:portal-canonical": "tsx scripts/verify-portal-canonical.ts",
     "verify:portal-nav": "tsx scripts/verify-portal-nav.ts",
     "verify:portal-access": "tsx scripts/verify-portal-access.ts",
+    "verify:portal-requests": "tsx scripts/verify-portal-requests.ts",
     "verify:lead-intake": "tsx scripts/verify-lead-intake.ts",
     "verify:quote-status": "tsx scripts/verify-quote-status.ts",
     "verify:quote-builder": "tsx scripts/verify-quote-builder.ts",

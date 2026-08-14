@@ -64,7 +64,10 @@ const inv = (i: Partial<PriorityInvoice>): PriorityInvoice => ({
 function run(over: Partial<Parameters<typeof computePriorities>[0]>): Priority[] {
   return computePriorities({
     quotes: [], invoices: [], jobs: [], recById: {}, customers: [],
-    conversations: [], leads: NO_LEADS, seasons: settingsToSeasons(null),
+    // `requests` is REQUIRED on PrioritiesInput, not optional-with-a-default: a
+    // caller that forgets it would silently report no customer requests, and a
+    // queue that under-reports is the one failure nobody notices.
+    conversations: [], requests: [], leads: NO_LEADS, seasons: settingsToSeasons(null),
     feeSettings: null, today: TODAY, limit: 12,
     ...over,
   })

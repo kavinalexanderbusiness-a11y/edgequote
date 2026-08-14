@@ -12,6 +12,7 @@ import { displayQuoteStatus } from '@/lib/quoteStatus'
 import { requiredDeposit } from '@/lib/payments/depositGate'
 import type { QuoteStatus } from '@/types'
 import { renderPortalInvoiceBlob, renderPortalQuoteBlob } from '@/lib/portalPdf'
+import { REQUEST_PHOTO_BUCKET, requestPhotoExt, requestPhotoPath } from '@/lib/portalRequests'
 import {
   buildPortalView, contactGap, normalizePortal, parsePortalDeepLink, primaryPortalAction,
   recentPaymentLanded, tabNavTarget,
@@ -526,18 +527,49 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     if (res.ok) await load()
     return res
   }
-  // Structured requests (appointment / reschedule / plan change) — same pipeline,
-  // carrying structure alongside the human-readable message. The RPC re-verifies
-  // that any referenced job/plan belongs to this token's customer.
+  // Structured requests (appointment / reschedule / plan change / extra work) —
+  // same pipeline, carrying structure alongside the human-readable message. The
+  // RPC re-verifies that any referenced job/plan belongs to this token's
+  // customer, and refuses (rather than silently drops) a photo path it doesn't
+  // recognise.
   const submitRequest: SubmitRequestFn = async (opts) => {
     setActionError(null)
     const { data: ok, error } = await supabase.rpc('portal_submit_request', {
       p_token: token, p_message: opts.message, p_kind: opts.kind,
       p_preferred_date: opts.preferredDate ?? null, p_job_id: opts.jobId ?? null,
       p_recurrence_id: opts.recurrenceId ?? null, p_details: opts.details ?? null,
+      p_photos: opts.photos?.length ? opts.photos : null,
     })
     if (error || !ok) { setActionError('Your request didn’t go through — please try again, or call us directly.'); return false }
     return true
+  }
+
+  // Photos attached to a request. They go to the SAME public bucket the booking
+  // door and website intake already use — one anon-upload path for
+  // customer-supplied photos, not a second one — and what we keep is the storage
+  // PATH, never a URL: the bucket is named in code wherever these are rendered,
+  // so a stored value can't address another bucket or an outside host. The
+  // customer's own FILE NAME is discarded (the path is two UUIDs and an
+  // extension), and the portal token is deliberately absent from it, because a
+  // token in a public-bucket URL is a token anyone holding that URL now has.
+  //
+  // Returns the paths that actually landed plus how many failed, so the caller
+  // can say so. A photo that didn't upload must never be presented as attached.
+  async function uploadRequestPhotos(files: File[]): Promise<{ paths: string[]; failed: number }> {
+    const batch = crypto.randomUUID()
+    const paths: string[] = []
+    let failed = 0
+    for (const f of files) {
+      const ext = requestPhotoExt(f.name, f.type)
+      const path = ext ? requestPhotoPath(batch, crypto.randomUUID(), ext) : null
+      if (!path) { failed++; continue }
+      try {
+        const { error } = await supabase.storage.from(REQUEST_PHOTO_BUCKET).upload(path, f, { upsert: false, contentType: f.type || undefined })
+        if (error) failed++
+        else paths.push(path)
+      } catch { failed++ } // a thrown upload (offline, blocked) is one failed photo, never an aborted loop
+    }
+    return { paths, failed }
   }
   // The customer opened this invoice (PDF or pay) — stamp viewed_at once so the
   // owner's list shows 'Viewed'. Fire-and-forget; idempotent server-side.
@@ -652,7 +684,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     payQuoteDeposit, payingQuoteId, savePreference,
     paymentPending: justPaid === 'confirming',
     request: (message: string) => request(message),
-    submitRequest, photoUrl, markInvoiceViewed, refresh: load,
+    submitRequest, uploadRequestPhotos, photoUrl, markInvoiceViewed, refresh: load,
     navigate: (t, opts) => {
       goTab(t, opts?.docsCat)
       if (opts?.focusDocId) { setFocusDocId(opts.focusDocId); setTimeout(() => setFocusDocId(null), 4000) }
