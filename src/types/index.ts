@@ -304,7 +304,10 @@ export interface Job {
   // Which crew runs this visit (RUN-2026-07-15-dispatch-crews). null = unassigned —
   // the single-crew status quo. Orthogonal to crew_size, which stays headcount.
   crew_id?: string | null
-  customers?: Pick<Customer, 'id' | 'name' | 'phone' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'>
+  // `email` joined the pick for change orders: whether an approval ask can be
+  // DELIVERED at all is "phone or email", and a phone-only test would have hidden
+  // the Send button from every email-only customer.
+  customers?: Pick<Customer, 'id' | 'name' | 'phone' | 'email' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'>
   properties?: Pick<Property, 'id' | 'address' | 'lat' | 'lng' | 'neighborhood' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'>
 }
 
@@ -653,6 +656,11 @@ export interface JobLineItem {
   service_category: string | null // lawn | snow | year_round (lib/seasons)
   group_id: string | null
   recurring: boolean
+  // ⭐ Set ONLY by the approval trigger (trg_change_order_apply_approval). Its
+  // presence means this money exists because a customer approved a change order:
+  // the row is not editable or deletable by any client (RLS), and lib/changeOrders
+  // counts it from the change order instead, so it is never counted twice.
+  change_order_id?: string | null
 }
 
 // Audit trail for a price change. Reason is only required on an increase.

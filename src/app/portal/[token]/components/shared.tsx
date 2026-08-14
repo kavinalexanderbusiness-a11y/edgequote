@@ -53,6 +53,11 @@ export interface PortalActions {
   navigate: (tab: TabKey, opts?: { docsCat?: 'all' | 'quote' | 'invoice'; focusDocId?: string | null }) => void
   /** Open Messages with the composer pre-filled (a contextual "ask about this"). */
   askAbout: (prefill: string) => void
+  /** Answer a change order (portal_respond_change_order). Token-scoped and
+   *  PENDING-ONLY server-side, so a stale tab cannot re-answer a decided one.
+   *  Resolves false when the server refused the write. */
+  respondToChange: (changeOrderId: string, decision: 'approve' | 'decline') => Promise<boolean>
+  decidingChangeId: string | null
 }
 
 export interface TabProps { view: PortalView; actions: PortalActions }

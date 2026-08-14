@@ -29,6 +29,7 @@ import {
   type AddContactResult, type ContactGap, type Derived, type PortalJob, type PortalView, type SubmitRequestFn,
 } from '../model'
 import { AddToCalendar, PortalSection, StatusPill, StatusStepper, Thumb, type TabProps } from './shared'
+import { PendingChangeCard } from './ChangesCard'
 
 // ── Home ────────────────────────────────────────────────────────────────────
 // `suppressApproved` is the one prop beyond the tab contract: PortalClient
@@ -65,7 +66,7 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
   // put quotes first, so someone with a past-due invoice AND a new quote met two
   // identical amber cards in the wrong order. Same engine, so the two surfaces can't
   // disagree about what matters most.
-  const topAction = primaryPortalAction(view.docItems, view.money)
+  const topAction = primaryPortalAction(view.docItems, view.money, view.pendingChanges)
   const payFirst = topAction?.kind === 'pay'
   // The ranked engine put the SCHEDULING DEPOSIT first — an approved quote whose
   // booking isn't secured yet. One card, one figure (the gate's outstanding — the
@@ -213,6 +214,18 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
           )}
         </div>
       )}
+      {/* Extra work waiting on a decision. Rendered as the real card, with the
+          real buttons, on the surface a texted link opens — approving is two taps
+          from the message, which is the whole promise of the feature. Ranked
+          below the money asks and above the quote signpost by
+          primaryPortalAction; this list is that ranking made visible. */}
+      {view.pendingChanges.map(co => (
+        <PendingChangeCard key={co.id} co={co}
+          originalTotal={view.changesByJob.get(co.job_id)?.original ?? null}
+          actions={actions}
+          deciding={actions.decidingChangeId}
+          onDecide={(c, d) => { void actions.respondToChange(c.id, d) }} />
+      ))}
       {awaiting.length > 0 && (
         <div className="rounded-card border border-amber-500/30 bg-amber-500/10 card-lift animate-rise stagger-2">
           <button type="button" onClick={() => actions.navigate('billing', { docsCat: 'quote' })}

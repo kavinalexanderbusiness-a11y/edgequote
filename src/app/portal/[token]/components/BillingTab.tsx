@@ -19,6 +19,7 @@ import {
   QuoteStatusPill, StatCard, fmtMoney, type PortalActions, type TabProps,
 } from './shared'
 import { PaymentsSection } from './PaymentsSection'
+import { ChangeBreakdown, PendingChangeCard } from './ChangesCard'
 
 const KIND_META: Record<DocKind, { label: string; icon: typeof FileText; tone: string }> = {
   quote: { label: 'Quote', icon: FileText, tone: 'text-accent-text border-accent/25 bg-accent/10' },
@@ -74,6 +75,40 @@ export function BillingTab({ view, actions, initialCat, focusDocId }: TabProps &
           )}
         </PortalSection>
       </div>
+
+      {/* ── Changes to approved work ──
+          THE canonical record of the three figures: what was originally
+          approved, what has been approved since, and what is still only asked.
+          It lives here, in the money surface, and NOT on the visit rows — a
+          visit says work, the record says money (see VisitsTab's note). A
+          pending ask keeps its real buttons here too, so a customer who came
+          to Billing to check the numbers can answer without hunting for Home. */}
+      {view.changesByJob.size > 0 && (
+        <div className="animate-rise stagger-3">
+          <PortalSection title="Changes to your work"
+            sub="Extra work agreed after the original approval. Your original approval is unchanged.">
+            <div className="space-y-3">
+              {[...view.changesByJob.values()].map(v => {
+                const job = view.data.jobs.find(j => j.id === v.jobId)
+                return (
+                  <div key={v.jobId} className="space-y-2">
+                    <p className="text-xs font-semibold text-ink">
+                      {job?.service_type || job?.title || 'Your work'}
+                      {job ? <span className="text-ink-faint font-normal"> · {job.scheduled_date}</span> : null}
+                    </p>
+                    <ChangeBreakdown v={v} />
+                    {v.pending.map(co => (
+                      <PendingChangeCard key={co.id} co={co} originalTotal={v.original} actions={actions}
+                        deciding={actions.decidingChangeId}
+                        onDecide={(c, d) => { void actions.respondToChange(c.id, d) }} />
+                    ))}
+                  </div>
+                )
+              })}
+            </div>
+          </PortalSection>
+        </div>
+      )}
 
       {/* ── Payment history + saved card (built in ./PaymentsSection). ── */}
       <div className="animate-rise stagger-3">

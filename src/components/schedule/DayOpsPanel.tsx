@@ -21,6 +21,8 @@ import { JobPhotos } from '@/components/photos/JobPhotos'
 import { RouteTimeline, type TimelineStop } from '@/components/schedule/RouteTimeline'
 import { VisitAddress } from '@/components/schedule/VisitAddress'
 import { JobAddons } from '@/components/schedule/JobAddons'
+import { JobChangeOrders, type ChangeOrderCreateInput } from '@/components/schedule/JobChangeOrders'
+import { authorizedValue, type ChangeOrder } from '@/lib/changeOrders'
 import { JobMessages } from '@/components/schedule/JobMessages'
 import { VisitConversation } from '@/components/schedule/VisitConversation'
 import { loadOwnerUnread } from '@/lib/crewMessages'
@@ -29,6 +31,7 @@ import {
   DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
   Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send, Receipt,
   ChevronUp, ChevronDown, Wand2, MoreHorizontal, CalendarDays, StickyNote, MessagesSquare, PauseCircle,
+  FileSignature,
 } from 'lucide-react'
 import StopForTodaySheet from '@/components/jobs/StopForTodaySheet'
 import type { StopForTodayInput } from '@/lib/workSession'
@@ -80,6 +83,16 @@ interface Props {
   // Quick-add chips for the add-on editor, resolved from the business's trade
   // pack by the page — passed through untouched.
   addonTemplates: AddonTemplate[]
+  // ── Change orders: scope priced AFTER the original approval ────────────────
+  // The authorization only. Approving one mints its job_line_items row in the
+  // database, so it reaches the invoice through the add-on path that already
+  // exists — this panel never writes money itself.
+  changeOrdersByJobId: Record<string, ChangeOrder[]>
+  onCreateChangeOrder: (job: Job, input: ChangeOrderCreateInput) => Promise<void>
+  onSendChangeOrder: (co: ChangeOrder) => Promise<void>
+  onCancelChangeOrder: (co: ChangeOrder) => Promise<void>
+  onOwnerChangeDecision: (co: ChangeOrder, decision: 'approve' | 'decline') => Promise<void>
+  onRemindChangeOrder: (co: ChangeOrder) => Promise<void>
   // Reports the day's RESOLVED stop order (this list's order, by job id) so the
   // page's field bar can name the same next stop. Optional: the board renders
   // identically without it.
@@ -104,6 +117,7 @@ export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
   onOpenJob, onStartJob, onMarkDone, onMove, onStopForToday, onResume, onSetPrice, workStartTime, capacityHours, onRainDelay, onAddJob, onQuickSave,
   addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons, addonTemplates,
+  changeOrdersByJobId, onCreateChangeOrder, onSendChangeOrder, onCancelChangeOrder, onOwnerChangeDecision, onRemindChangeOrder,
   onStopOrder, onChatUnread,
 }: Props) {
   const supabase = createClient()
@@ -128,6 +142,8 @@ export function DayOpsPanel({
   const [photoId, setPhotoId] = useState<string | null>(null)
   // Which job's add-on services panel is open.
   const [addonsId, setAddonsId] = useState<string | null>(null)
+  // Which job's change-order panel is open.
+  const [changesId, setChangesId] = useState<string | null>(null)
   // Which job's one-tap messaging panel is open. ⚠️ This one texts the CUSTOMER.
   const [messageId, setMessageId] = useState<string | null>(null)
   // Which job's CREW conversation is open — the internal one, which no customer
@@ -202,11 +218,12 @@ export function DayOpsPanel({
   function closePanels() {
     setPriceId(null); setQuickId(null); setMoveId(null)
     setPhotoId(null); setAddonsId(null); setMessageId(null)
-    setChatId(null)
+    setChatId(null); setChangesId(null)
   }
   const toggleChat = (job: Job) => { const was = chatId === job.id; closePanels(); if (!was) setChatId(job.id) }
   const togglePhoto = (job: Job) => { const was = photoId === job.id; closePanels(); if (!was) setPhotoId(job.id) }
   const toggleAddons = (job: Job) => { const was = addonsId === job.id; closePanels(); if (!was) setAddonsId(job.id) }
+  const toggleChanges = (job: Job) => { const was = changesId === job.id; closePanels(); if (!was) setChangesId(job.id) }
   const toggleMessage = (job: Job) => { const was = messageId === job.id; closePanels(); if (!was) setMessageId(job.id) }
   const toggleMove = (job: Job) => { const was = moveId === job.id; closePanels(); if (!was) setMoveId(job.id) }
   const openStop = (job: Job) => { closePanels(); setStopping(job) }
@@ -287,6 +304,14 @@ export function DayOpsPanel({
   // Add-ons on a visit + the TOTAL job value (base + add-ons) — the number the
   // invoice will bill. Shown everywhere money is shown.
   function addonsFor(job: Job): JobLineItem[] { return addonsByJobId[job.id] || [] }
+  function changesFor(job: Job): ChangeOrder[] { return changeOrdersByJobId[job.id] || [] }
+  // The three-figure breakdown for this visit, from THE one engine. `jobTotal`
+  // below stays the billable number (base + every add-on, approved changes
+  // included, because approval already minted their line items) — this only
+  // separates that number into the parts a customer would recognise.
+  function avFor(job: Job) {
+    return authorizedValue({ originalValue: jobValue(job), changeOrders: changesFor(job), lineItems: addonsFor(job) })
+  }
   function jobTotal(job: Job): number { return jobValue(job) + addonsTotal(addonsFor(job)) }
 
   const active = jobs.filter(j => j.status !== 'cancelled')
@@ -814,6 +839,12 @@ export function DayOpsPanel({
               const value = jobValue(job)            // base
               const addons = addonsFor(job)
               const total = value + addonsTotal(addons)  // base + add-ons (billed amount)
+              // Change orders on this visit. `ownerExtras` is what the add-on
+              // editor may still touch: an approved change's line item is
+              // customer-approved money and is not the owner's to bin from there.
+              const changes = changesFor(job)
+              const av = avFor(job)
+              const ownerExtras = addons.filter(a => !a.change_order_id)
               const qVal = quoteValueFor(job)
               const idx = sortedJobs.findIndex(j => j.id === job.id)
               return (
@@ -1014,11 +1045,27 @@ export function DayOpsPanel({
                         {job.service_type && <span className="truncate">{job.service_type}</span>}
                         {job.start_time && <span>· {job.start_time.slice(0, 5)}</span>}
                         {/* At-a-glance add-on indicator — names when few, else count */}
-                        {addons.length > 0 && (
+                        {ownerExtras.length > 0 && (
                           <button onClick={e => { e.stopPropagation(); toggleAddons(job) }}
-                            title={addons.map(a => `${a.description} ${formatCurrency(Number(a.amount))}`).join(' · ')}
+                            title={ownerExtras.map(a => `${a.description} ${formatCurrency(Number(a.amount))}`).join(' · ')}
                             className="text-[10px] font-semibold text-accent-text border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5 shrink-0 hover:bg-accent/20">
-                            +{addons.length <= 2 ? addons.map(a => a.description).join(' + ') : `${addons.length} services`}
+                            +{ownerExtras.length <= 2 ? ownerExtras.map(a => a.description).join(' + ') : `${ownerExtras.length} services`}
+                          </button>
+                        )}
+                        {/* A change the customer hasn't answered is the one thing on
+                            this card that needs chasing — amber, on the face, always. */}
+                        {av.pendingCount > 0 && (
+                          <button onClick={e => { e.stopPropagation(); toggleChanges(job) }}
+                            title="Change orders awaiting the customer's approval — not counted in the authorized value"
+                            className="text-[10px] font-semibold text-amber-300 border border-amber-500/40 bg-amber-500/10 rounded px-1.5 py-0.5 shrink-0 hover:bg-amber-500/20">
+                            {formatCurrency(av.pending)} awaiting approval
+                          </button>
+                        )}
+                        {av.approvedChanges > 0 && (
+                          <button onClick={e => { e.stopPropagation(); toggleChanges(job) }}
+                            title={`Approved changes on top of the original ${formatCurrency(av.original)}`}
+                            className="text-[10px] font-semibold text-emerald-300 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5 shrink-0 hover:bg-emerald-500/20">
+                            +{formatCurrency(av.approvedChanges)} approved change{av.approvedCount > 1 ? 's' : ''}
                           </button>
                         )}
                         {/* No status chip — the order badge, card tone, ETA/timer and
@@ -1129,7 +1176,19 @@ export function DayOpsPanel({
                         <ActionBtn className={cn(!chatUnread[job.id] && 'hidden sm:inline-flex')}
                           onClick={() => toggleChat(job)} icon={MessagesSquare}
                           label={chatUnread[job.id] ? `Crew chat (${chatUnread[job.id]})` : 'Crew chat'} />
-                        <ActionBtn className="hidden sm:inline-flex" onClick={() => toggleAddons(job)} icon={PlusCircle} label={addons.length ? `Services (${addons.length})` : 'Services'} />
+                        <ActionBtn className="hidden sm:inline-flex" onClick={() => toggleAddons(job)} icon={PlusCircle} label={ownerExtras.length ? `Services (${ownerExtras.length})` : 'Services'} />
+                        {/* ⚠️ "Changes" ≠ "Services" beside it. Services are extras
+                            the owner adds and bills; a CHANGE is new scope the
+                            CUSTOMER has to approve before it counts or bills.
+                            Two meanings, two doors — never merged by label.
+                            It folds into the phone menu like its neighbours —
+                            EXCEPT while a change is unanswered. Same rule as an
+                            unread crew chat: somebody is waiting on an answer,
+                            and news does not go behind a menu. */}
+                        <ActionBtn className={cn(av.pendingCount === 0 && 'hidden sm:inline-flex')}
+                          onClick={() => toggleChanges(job)} icon={FileSignature}
+                          tone={av.pendingCount > 0 ? 'amber' : undefined}
+                          label={av.pendingCount > 0 ? `Changes (${av.pendingCount} waiting)` : changes.length ? `Changes (${changes.length})` : 'Add change'} />
                         <Menu align="end" width={300} items={[
                           // The phone twins of the three buttons above. They
                           // exist ONLY below sm, so no width ever shows the same
@@ -1137,7 +1196,8 @@ export function DayOpsPanel({
                           { key: 'p-message', className: 'sm:hidden', label: 'Message', description: 'Text this customer', icon: MessageSquare, onSelect: () => toggleMessage(job) },
                           { key: 'p-photos', className: 'sm:hidden', label: 'Photos', description: 'Before & after for this visit', icon: Camera, onSelect: () => togglePhoto(job) },
                           ...(chatUnread[job.id] ? [] : [{ key: 'p-chat', className: 'sm:hidden', label: 'Crew chat', description: 'The crew conversation for this visit', icon: MessagesSquare, onSelect: () => toggleChat(job) }]),
-                          { key: 'p-services', className: 'sm:hidden', label: addons.length ? `Services (${addons.length})` : 'Services', description: 'Extra work billed with this visit', icon: PlusCircle, onSelect: () => toggleAddons(job) },
+                          { key: 'p-services', className: 'sm:hidden', label: ownerExtras.length ? `Services (${ownerExtras.length})` : 'Services', description: 'Extra work billed with this visit', icon: PlusCircle, onSelect: () => toggleAddons(job) },
+                          ...(av.pendingCount ? [] : [{ key: 'p-changes', className: 'sm:hidden', label: changes.length ? `Changes (${changes.length})` : 'Add change', description: 'New scope the customer has to approve first', icon: FileSignature, onSelect: () => toggleChanges(job) }]),
                           { key: 'quick', label: 'Quick edit', description: 'Time, crew, status & notes — this visit', icon: SlidersHorizontal, onSelect: () => { quickId === job.id ? setQuickId(null) : openQuick(job) } },
                           { key: 'edit', label: 'Edit job', description: 'Property, title & the recurring schedule', icon: Pencil, onSelect: () => onOpenJob(job) },
                           // Stop for today is a first-class button on the card
@@ -1207,13 +1267,35 @@ export function DayOpsPanel({
                           <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1"><PlusCircle className="w-3 h-3" /> Extra services</p>
                           <JobAddons
                             baseValue={value}
-                            items={addons}
+                            items={ownerExtras}
                             isRecurring={!!job.recurrence_id}
                             onAdd={(input) => onAddLineItem(job, input)}
                             onDelete={onDeleteLineItem}
                             previousAddons={getPreviousAddons(job)}
                             onCopyPrevious={() => onCopyPreviousAddons(job)}
                             addonTemplates={addonTemplates}
+                            approvedChanges={av.approvedChanges}
+                          />
+                        </div>
+                      )}
+
+                      {/* Change orders — new scope, priced and sent for the
+                          customer's decision. The original approval is read here
+                          and never written; approval is what makes the money real. */}
+                      {changesId === job.id && (
+                        <div className="mt-2 rounded-lg border border-border bg-bg-secondary p-2.5" onClick={e => e.stopPropagation()}>
+                          <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1"><FileSignature className="w-3 h-3" /> Changes to this visit</p>
+                          <JobChangeOrders
+                            originalValue={value}
+                            changeOrders={changes}
+                            lineItems={addons}
+                            canAsk={!!job.customer_id}
+                            canMessage={!!(job.customers?.phone || job.customers?.email)}
+                            onCreate={(input) => onCreateChangeOrder(job, input)}
+                            onSend={onSendChangeOrder}
+                            onCancel={onCancelChangeOrder}
+                            onOwnerDecision={onOwnerChangeDecision}
+                            onRemind={onRemindChangeOrder}
                           />
                         </div>
                       )}
@@ -1296,7 +1378,9 @@ function Metric({ icon: Icon, label, value, tone }: { icon: typeof DollarSign; l
 // `tap-target` lifts that 40px to the 44px minimum on a coarse pointer — the last
 // 4px matter with a glove on — while `sm:h-8` keeps the mouse density identical.
 // 'primary' = THE next action for the stage; 'complete' = the finish action.
-function ActionBtn({ onClick, icon: Icon, label, tone, disabled, title, className }: { onClick: () => void; icon: typeof Pencil; label: string; tone?: 'emerald' | 'sky' | 'primary' | 'complete'; disabled?: boolean; title?: string; className?: string }) {
+// 'amber' = something is WAITING ON SOMEBODY ELSE (a change order the customer
+// hasn't answered) — not an error, not a next action of the owner's.
+function ActionBtn({ onClick, icon: Icon, label, tone, disabled, title, className }: { onClick: () => void; icon: typeof Pencil; label: string; tone?: 'emerald' | 'sky' | 'primary' | 'complete' | 'amber'; disabled?: boolean; title?: string; className?: string }) {
   return (
     <button
       onClick={onClick}
@@ -1315,7 +1399,9 @@ function ActionBtn({ onClick, icon: Icon, label, tone, disabled, title, classNam
               ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25'
               : tone === 'sky'
                 ? 'bg-sky-400/15 border-sky-400/30 text-sky-300 hover:bg-sky-400/25'
-                : 'border-current/30 hover:bg-black/10',
+                : tone === 'amber'
+                  ? 'bg-amber-500/15 border-amber-500/40 text-amber-300 hover:bg-amber-500/25'
+                  : 'border-current/30 hover:bg-black/10',
         className,
       )}
     >

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CheckCircle2, ChevronRight, Clock, FileText, History, Home, Leaf, Loader2, MapPin, MessageSquare, Receipt, Wallet, X } from 'lucide-react'
+import { CheckCircle2, ChevronRight, Clock, FileSignature, FileText, History, Home, Leaf, Loader2, MapPin, MessageSquare, Receipt, Wallet, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { ConfirmHost } from '@/components/ui/ConfirmHost'
@@ -74,6 +74,8 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   // one place a folded key gets mapped.
   const activeTab = resolveTab(tab, multiProperty)
   const [accepting, setAccepting] = useState<string | null>(null)
+  // Which change order is mid-decision (locks both buttons on that card).
+  const [decidingChangeId, setDecidingChangeId] = useState<string | null>(null)
   const [paymentsEnabled, setPaymentsEnabled] = useState(false)
   const [payingId, setPayingId] = useState<string | null>(null)
   // 'confirming' = the customer came back from Stripe but our ledger hasn't recorded
@@ -493,6 +495,38 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     setAccepting(null)
   }
 
+  // ── Answering a change order ────────────────────────────────────────────────
+  // ONE door (portal_respond_change_order): token-scoped, row-scoped, and it only
+  // matches a row still 'pending'. So a second tap, a second tab, or a decision
+  // the owner recorded a moment ago all land on the same honest answer instead of
+  // a second approval — and, as with quote approval, a falsy result is NOT proof
+  // of failure. Ask the server what is true before telling the customer anything.
+  async function respondToChange(changeOrderId: string, decision: 'approve' | 'decline'): Promise<boolean> {
+    if (decidingChangeId) return false
+    setDecidingChangeId(changeOrderId)
+    setActionError(null)
+    const { data: res, error } = await supabase.rpc('portal_respond_change_order', {
+      p_token: token, p_change_order_id: changeOrderId, p_decision: decision,
+    })
+    const ok = !!(res as { ok?: boolean } | null)?.ok
+    if (ok) {
+      await load()
+      setDecidingChangeId(null)
+      return true
+    }
+    // Not pending any more? Then it was already answered — here, in another tab,
+    // or by the business recording the answer we gave them on the phone. Saying
+    // "that didn't work" would be false and would invite another tap.
+    const after = await load()
+    const now = (after?.change_orders || []).find(c => c.id === changeOrderId)
+    setDecidingChangeId(null)
+    if (now && now.status !== 'pending') return true
+    setActionError(error
+      ? 'We couldn’t reach the server just now — please try again, or reply to any message from us.'
+      : 'We couldn’t record that just now — please try again, or reply to any message from us and we’ll sort it out.')
+    return false
+  }
+
   // Free-text / preset request. Returns success so the Requests tab can own its
   // sent/busy affordances locally.
   async function request(message: string): Promise<boolean> {
@@ -663,13 +697,21 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       goTab('messages')
       if (typeof window !== 'undefined') window.scrollTo({ top: 0 })
     },
+    respondToChange, decidingChangeId,
   }
 
   // Tab order = how often a customer reaches for each. Tabs whose surface would
   // be EMPTY are hidden (a fresh quote recipient sees Home/Billing/Requests, not
   // five dead ends) — each appears as soon as it has content. Messages and
   // Requests are always visible: their empty state IS the invitation.
+  // ⚠️ CHANGE ORDERS COUNT AS DOCUMENTS. Billing is hidden when it would be
+  // empty — but it is also where the record of changes lives, so a customer with
+  // no quote and no invoice yet (a job raised straight onto the calendar, which
+  // is a normal way for work to start here) had their approved and pending
+  // changes rendered onto a tab they had no pill for. Caught by driving the real
+  // portal at 375px: every figure was correct and none of it was reachable.
   const docCount = data.quotes.length + data.invoices.filter(i => i.status !== 'draft').length
+    + (data.change_orders?.length ?? 0)
   // `unit` names the count for a screen reader — "Billing, 3 documents", not a
   // bare "Billing 3" that reads as an unlabelled number.
   const TABS: { key: TabKey; label: string; icon: typeof Home; n?: number; unit?: string }[] = ([
@@ -812,7 +854,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
               exact document via the same scroll a deep link uses. */}
           {(() => {
             if (activeTab === 'home' || activeTab === 'billing') return null
-            const a = primaryPortalAction(view.docItems, view.money)
+            const a = primaryPortalAction(view.docItems, view.money, view.pendingChanges)
             if (!a || a.key === dismissedAction) return null
             return (
               <div className={cn('mb-3 rounded-card border flex items-center gap-1 pr-1',
@@ -820,7 +862,11 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
                 <button type="button"
                   onClick={() => actions.navigate('billing', { docsCat: a.docsCat, focusDocId: a.focusDocId })}
                   className="flex-1 flex items-center gap-2.5 px-4 py-3 text-left rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                  {a.kind !== 'approve' ? <Wallet className="w-4 h-4 shrink-0 text-amber-400" /> : <FileText className="w-4 h-4 shrink-0 text-accent-text" />}
+                  {/* A change awaiting a decision is not a bill — a wallet on that
+                      banner would tell the customer money is owed when nothing is. */}
+                  {a.kind === 'approve-change' ? <FileSignature className="w-4 h-4 shrink-0 text-amber-400" />
+                    : a.kind !== 'approve' ? <Wallet className="w-4 h-4 shrink-0 text-amber-400" />
+                      : <FileText className="w-4 h-4 shrink-0 text-accent-text" />}
                   <span className="text-sm font-medium text-ink">{a.headline}</span>
                   <ChevronRight className="w-4 h-4 text-ink-faint ml-auto shrink-0" />
                 </button>

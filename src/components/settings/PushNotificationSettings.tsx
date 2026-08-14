@@ -8,11 +8,11 @@ import { cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { enablePush, disablePush, getPushState, isIos, isStandalone, type PushState } from '@/lib/push'
 import {
-  Bell, BellRing, Check, MessageSquare, MessagesSquare, FileText, DollarSign, Globe, Star,
+  Bell, BellRing, Check, MessageSquare, MessagesSquare, FileText, FileSignature, DollarSign, Globe, Star,
   CloudRain, CalendarClock, Sun, Smartphone,
 } from 'lucide-react'
 
-// The nine owner-facing preference rows. `key` matches the notif_prefs jsonb keys
+// The owner-facing preference rows. `key` matches the notif_prefs jsonb keys
 // the send endpoint reads; absent/true = ON (opt-out model).
 const PREFS = [
   { key: 'sms', label: 'New text messages', hint: 'When a customer replies by SMS', Icon: MessageSquare },
@@ -27,6 +27,9 @@ const PREFS = [
   // on a visit — different people, different urgency, its own switch. The key
   // matches PREF_KEY.crew_message in /api/push/send.
   { key: 'crew_message', label: 'Crew messages', hint: 'Your crew writes about a visit', Icon: MessagesSquare },
+  // Both answers share this key (see PREF_KEY in /api/push/send) — approve and
+  // decline are the same interruption to someone deciding whether to be told.
+  { key: 'change_order', label: 'Changes answered', hint: 'A customer approves or declines extra work', Icon: FileSignature },
 ] as const
 
 export function PushNotificationSettings() {

@@ -13,6 +13,12 @@ export type MsgType =
   // NOT the 'invoice' template: that one says "your invoice for {{amount}} is
   // ready", which would name the deposit as the whole bill.
   | 'deposit_request'
+  // Extra scope priced AFTER the original approval, sent for the customer's
+  // decision. Its own template because none of the others can say the one thing
+  // that matters: this is an ADDITION, the original approval is untouched, and
+  // nothing is authorised until they answer. msgCategory files it under
+  // 'estimates' — it is a quote for extra work, not a bill for it.
+  | 'change_order'
   // Scheduler communication actions.
   | 'eta' | 'rain_delay' | 'rescheduled' | 'early_arrival' | 'confirm'
   // Follow-up / reminder templates.
@@ -46,6 +52,7 @@ export const MSG_LABELS: Record<MsgType, string> = {
   quote: 'Send quote',
   invoice: 'Send invoice',
   deposit_request: 'Request deposit',
+  change_order: 'Approve extra work',
   eta: 'ETA / arrival window',
   rain_delay: 'Weather delay',
   rescheduled: 'Rescheduled',
@@ -202,6 +209,20 @@ Pay it securely here:
 
 The balance is due once the work is done. Questions? Just reply.`,
 
+  // The ASK for extra work. Two things must survive any owner's edit of this
+  // template, which is why they are also written into changeOrderMessageBody()
+  // (the override every send actually uses): the original approval is UNCHANGED,
+  // and nothing is authorised until they answer. A message that only names a new
+  // number reads as a price rise on work they already agreed.
+  change_order: `Hi {{first_name}}, we've priced some extra work on your job with {{business_name}}: **{{amount}}**.
+
+This is in addition to what you already approved — that stays exactly as it was, and nothing goes ahead until you say so.
+
+Approve or decline here:
+{{portal_link}}
+
+Questions? Just reply.`,
+
   estimate_reminder: `Hi {{first_name}},
 
 This is a reminder from {{business_name}} about your upcoming estimate on **{{date}}**.
@@ -318,6 +339,7 @@ const SUBJECTS: Record<MsgType, string> = {
   job_complete: 'Your service is complete', thanks: 'Thank you!', review_request: 'How did we do?',
   reminder: 'Service reminder', quote: 'Your quote', invoice: 'Your invoice',
   deposit_request: 'Deposit to get you booked in',
+  change_order: 'Extra work — your approval needed',
   eta: 'Your upcoming service', rain_delay: 'Weather reschedule', rescheduled: 'Your service has been rescheduled',
   early_arrival: 'We can come earlier today', confirm: 'Confirming your service',
   estimate_reminder: 'Your upcoming estimate', payment_reminder: 'Invoice reminder', estimate_followup: 'Following up on your quote',
@@ -531,6 +553,38 @@ We appreciate your business!
 — {{business_name}}`
 }
 
+// The change-order ask, with the scope and the price in the words themselves.
+// Sent as `bodyOverride` on the 'change_order' template — the same shape the
+// receipt uses — so the customer reads WHAT the extra work is, not just a number,
+// while {{first_name}}/{{portal_link}}/{{business_name}} stay for the server (the
+// only side that knows the portal token) to fill in.
+//
+// ⭐ "in addition to" and "nothing … until you approve" are load-bearing, not
+// padding: this feature exists so that added scope is never mistaken for a
+// revision of what was already agreed.
+export function changeOrderMessageBody(p: {
+  number: string; description: string; amount: string; originalTotal: string | null
+}): string {
+  const original = p.originalTotal
+    ? `Your original approved total of **${p.originalTotal}** does not change.`
+    : 'What you already approved does not change.'
+  return `Hi {{first_name}},
+
+We've priced some extra work on your job:
+
+${p.description} — **${p.amount}** (${p.number})
+
+${original} This is in addition to it, and nothing goes ahead until you approve.
+
+Approve or decline here:
+
+{{portal_link}}
+
+Questions? Just reply.
+
+— {{business_name}}`
+}
+
 // ── Message categories (granular consent) ─────────────────────────────────────
 // The customer-facing grouping every template falls into. Customers opt in/out
 // per CATEGORY (customers.message_prefs jsonb) on the website funnel + portal;
@@ -558,7 +612,10 @@ export function msgCategory(t: MsgType): MsgCategory | null {
     // asked for — transactional, same category as the invoice itself. It must
     // never ride the marketing preference.
     case 'invoice': case 'deposit_request': case 'payment_reminder': case 'receipt': return 'invoices'
-    case 'quote': case 'estimate_reminder': case 'estimate_followup': return 'estimates'
+    // A change order is a QUOTE for extra work — priced, unapproved, and the
+    // customer's to accept or refuse. It belongs with the other estimates, not
+    // with the invoices: nothing is owed until they say yes.
+    case 'quote': case 'estimate_reminder': case 'estimate_followup': case 'change_order': return 'estimates'
     // review_chase is the BULK campaign sweep — a list-segmented solicitation
     // asking customers to publicly promote the business, sent with no visit
     // attached. That is a CEM, so it rides the marketing preference. Its twin
