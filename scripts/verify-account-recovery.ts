@@ -25,8 +25,8 @@
 
 import {
   classifyRecoverySend, classifyResetToken, passwordProblem, readResetToken,
-  buildResetUrl, acceptedMessage, UNAVAILABLE_MESSAGE, MIN_PASSWORD,
-  RESET_SIGNOUT_SCOPE, RESET_PATH, FORGOT_PATH, RESET_TOKEN_PARAMS,
+  readRecoveryFragment, buildResetUrl, acceptedMessage, UNAVAILABLE_MESSAGE,
+  MIN_PASSWORD, RESET_SIGNOUT_SCOPE, RESET_PATH, FORGOT_PATH, RESET_TOKEN_PARAMS,
 } from '../src/lib/passwordRecovery'
 import { routeFor } from '../src/lib/crewAccess'
 import { readFileSync, existsSync } from 'node:fs'
@@ -138,13 +138,45 @@ check('the reset page distinguishes all three outcomes on screen',
 check('the unavailable state does not claim the link expired',
   !/unavailable[\s\S]{0,600}(expired|invalid)/i.test(reset.split("outcome.kind === 'dead'")[0] ?? ''))
 check('a pre-existing session is not accepted as proof',
-  /PASSWORD_RECOVERY/.test(reset) && !/getSession\(\)/.test(reset),
+  /readRecoveryFragment/.test(reset) && !/getSession\(\)/.test(reset),
   'this is the recovery door — being signed in already proves nothing about reading the email')
 check('the token is spent once per mount',
   /spent\.current/.test(reset), 'React 18 runs effects twice in dev and would burn a live token')
 check('the effect is keyed on the token STRING, not the searchParams object',
   /\}, \[token\]\)/.test(reset),
   'a new object every render re-runs the effect forever — the global-search failure')
+
+// ── 3b. The other link shape ─────────────────────────────────────────────────
+// Supabase's stock template puts the session in the URL fragment, and
+// @supabase/ssr hard-codes flowType "pkce", which ignores it — measured: the
+// hash was still in location.hash and no session had been stored. On the free
+// tier the stock template is the ONLY one this project can send, so the
+// fragment is not a fallback, it is the live path.
+console.log('\n═══ The fragment link the stock email sends ═══')
+
+eq('a recovery fragment yields a session',
+  readRecoveryFragment('#access_token=AAA&refresh_token=RRR&expires_in=3600&token_type=bearer&type=recovery'),
+  { kind: 'session', accessToken: 'AAA', refreshToken: 'RRR' })
+eq('Supabase reporting a dead link in the fragment → error',
+  readRecoveryFragment('#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid'),
+  { kind: 'error' })
+eq('a magic-link fragment is NOT a password-change permit',
+  readRecoveryFragment('#access_token=AAA&refresh_token=RRR&type=magiclink'), { kind: 'none' })
+eq('a fragment with no type is refused',
+  readRecoveryFragment('#access_token=AAA&refresh_token=RRR'), { kind: 'none' })
+eq('a recovery fragment missing the refresh token is refused',
+  readRecoveryFragment('#access_token=AAA&type=recovery'), { kind: 'none' })
+eq('an empty hash is nothing', readRecoveryFragment(''), { kind: 'none' })
+eq('a bare hash is nothing', readRecoveryFragment('#'), { kind: 'none' })
+
+check('the reset page installs the fragment session explicitly',
+  /setSession\(\{\s*access_token:/.test(reset),
+  'supabase-js will not do it — flowType is pinned to pkce by @supabase/ssr')
+check('the credential is stripped from the address bar',
+  /history\.replaceState/.test(reset),
+  'an access token left in location.hash rides into history and referrers')
+check('stripping happens for the error fragment too',
+  /if \(frag\.kind !== 'none'\)[\s\S]{0,160}replaceState/.test(reset))
 
 // ── 4. The token belongs to Supabase ─────────────────────────────────────────
 console.log('\n═══ No second token system ═══')

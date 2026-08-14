@@ -9,8 +9,8 @@ import { Input } from '@/components/ui/Input'
 import { Banner } from '@/components/ui/Banner'
 import { Skeleton } from '@/components/ui/Skeleton'
 import {
-  readResetToken, classifyResetToken, passwordProblem, MIN_PASSWORD,
-  RESET_SIGNOUT_SCOPE, RESET_DESTINATION, FORGOT_PATH, UNAVAILABLE_MESSAGE,
+  readResetToken, readRecoveryFragment, classifyResetToken, passwordProblem,
+  MIN_PASSWORD, RESET_SIGNOUT_SCOPE, RESET_DESTINATION, FORGOT_PATH,
   type ResetTokenOutcome,
 } from '@/lib/passwordRecovery'
 import { KeyRound, ShieldCheck, LinkIcon, RefreshCw } from 'lucide-react'
@@ -48,8 +48,6 @@ function Form() {
     if (spent.current) return
     spent.current = true
     let alive = true
-    let timer: ReturnType<typeof setTimeout> | undefined
-    let unsubscribe: (() => void) | undefined
     const supabase = createClient()
 
     if (token) {
@@ -63,25 +61,36 @@ function Form() {
         // one thing a dead link is not.
         .catch(() => { if (alive) setOutcome({ kind: 'unavailable' }) })
     } else {
-      // No token in the query string. The default Supabase template lands with
-      // the session in the URL FRAGMENT instead; supabase-js consumes it on
-      // construction and announces it as PASSWORD_RECOVERY. Accepting that too
-      // means the flow still works if this project is ever switched to the stock
-      // template — but ONLY that event, never a session that merely happens to
-      // exist. Someone already signed in has not proved they can read the
-      // account's email, and this page is the recovery door, not a settings one.
-      const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
-        if (!alive || event !== 'PASSWORD_RECOVERY') return
-        setOutcome({ kind: 'ready', email: session?.user?.email ?? null })
-      })
-      unsubscribe = () => sub.subscription.unsubscribe()
-      // supabase-js has to be given a turn to parse the fragment before we can
-      // call it a dead link. If the event has not arrived by then, it is not
-      // coming — there is nothing to wait for and nothing to retry.
-      timer = setTimeout(() => { if (alive) setOutcome(o => o ?? { kind: 'dead' }) }, 1500)
+      // No token in the query string — so this is the stock template's link,
+      // which arrives with the session in the fragment. supabase-js will not
+      // touch it (see readRecoveryFragment for the measurement), so it is read
+      // and installed here. Only `type=recovery` counts: a session that merely
+      // happens to exist is not proof that this person can read the account's
+      // email, and this page is the recovery door, not a settings one.
+      const frag = readRecoveryFragment(window.location.hash)
+
+      // Take the credential out of the address bar before anything else can see
+      // it — history, a referrer header, a screenshot over somebody's shoulder.
+      if (frag.kind !== 'none') {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search)
+      }
+
+      if (frag.kind === 'error') {
+        setOutcome({ kind: 'dead' })
+      } else if (frag.kind === 'none') {
+        setOutcome({ kind: 'dead' })
+      } else {
+        supabase.auth.setSession({ access_token: frag.accessToken, refresh_token: frag.refreshToken })
+          .then(({ data, error }) => {
+            if (!alive) return
+            const result = classifyResetToken(error, !!data?.user)
+            setOutcome(result.kind === 'ready' ? { kind: 'ready', email: data.user?.email ?? null } : result)
+          })
+          .catch(() => { if (alive) setOutcome({ kind: 'unavailable' }) })
+      }
     }
 
-    return () => { alive = false; if (timer) clearTimeout(timer); unsubscribe?.() }
+    return () => { alive = false }
   }, [token])
 
   async function submit(e: React.FormEvent) {

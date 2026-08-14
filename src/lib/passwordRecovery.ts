@@ -55,6 +55,47 @@ export function readResetToken(get: (k: string) => string | null): string | null
   return null
 }
 
+// ── The OTHER link shape ─────────────────────────────────────────────────────
+// Supabase's stock recovery template sends {{ .ConfirmationURL }}, which points
+// at the auth server's /verify endpoint and 302s to the app with the session in
+// the URL FRAGMENT: #access_token=…&refresh_token=…&type=recovery
+//
+// ⚠️ supabase-js does NOT pick that up here, and this was measured, not assumed:
+// @supabase/ssr's createBrowserClient hard-codes flowType "pkce" (it sets the
+// field AFTER spreading the caller's options, so it cannot be overridden). PKCE
+// looks for `?code=`; handed an implicit fragment it does nothing at all — the
+// hash was still sitting in location.hash afterwards, with no session stored.
+//
+// So the fragment is parsed here and handed to setSession explicitly. That makes
+// the reset page work under BOTH link shapes no matter what flowType the client
+// is built with — which matters right now, because this project is on the free
+// tier and Supabase refuses template edits without custom SMTP ("Email template
+// modification is not available for free tier projects using the default email
+// provider"). Until SMTP is configured, the stock fragment link is the ONLY link
+// this project can send.
+//
+// `type=recovery` is required. A fragment is not a password-change permit just
+// because it carries a token: this is the recovery door, and the type is what
+// says the person proved they can read the account's email.
+export type RecoveryFragment =
+  | { kind: 'session'; accessToken: string; refreshToken: string }
+  | { kind: 'error' }
+  | { kind: 'none' }
+
+export function readRecoveryFragment(hash: string): RecoveryFragment {
+  const raw = (hash || '').replace(/^#/, '')
+  if (!raw) return { kind: 'none' }
+  const p = new URLSearchParams(raw)
+  // Supabase reports a spent or expired link the same way — as an error in the
+  // fragment — so this is the stock template's version of "this link is dead".
+  if (p.get('error') || p.get('error_code')) return { kind: 'error' }
+  if (p.get('type') !== 'recovery') return { kind: 'none' }
+  const accessToken = p.get('access_token')
+  const refreshToken = p.get('refresh_token')
+  if (!accessToken || !refreshToken) return { kind: 'none' }
+  return { kind: 'session', accessToken, refreshToken }
+}
+
 // ── Asking for a link ────────────────────────────────────────────────────────
 // TWO outcomes reach the screen, and the split is a security decision, not an
 // accident.
