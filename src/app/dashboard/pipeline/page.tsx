@@ -4,6 +4,7 @@ import { PipelineBoard } from '@/components/pipeline/PipelineBoard'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { PageContainer } from '@/components/layout/PageContainer'
 import { ButtonLink } from '@/components/ui/Button'
+import Link from 'next/link'
 import { formatCurrency } from '@/lib/utils'
 import { Plus } from 'lucide-react'
 
@@ -58,9 +59,9 @@ export default async function PipelinePage() {
         <p className="mt-4 text-[11px] text-ink-faint leading-relaxed">
           A deal leaves this list once there’s nothing left to do about it — booked, invoiced and
           paid, or lost with the reason recorded. Your full quote history lives in{' '}
-          <a href="/dashboard/quotes" className="text-ink-muted hover:text-accent-text underline">Quotes</a>,
+          <Link href="/dashboard/quotes" className="text-ink-muted hover:text-accent-text underline">Quotes</Link>,
           and win rates in{' '}
-          <a href="/dashboard/grow" className="text-ink-muted hover:text-accent-text underline">Grow</a>.
+          <Link href="/dashboard/grow" className="text-ink-muted hover:text-accent-text underline">Grow</Link>.
         </p>
       )}
     </PageContainer>
