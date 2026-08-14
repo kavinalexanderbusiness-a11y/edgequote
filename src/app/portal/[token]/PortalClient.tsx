@@ -212,7 +212,11 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   useEffect(() => {
     let cancelled = false
     let paidTimer: ReturnType<typeof setTimeout> | undefined
-    fetch('/api/payments/status').then(r => r.json()).then(d => setPaymentsEnabled(!!d.enabled)).catch(() => {})
+    // ?portal=<token> — no session exists here, so the status route resolves the
+    // OWNER (and their platform online_payments grant) from the token
+    // server-side. Without it the answer would be the deployment-wide one, which
+    // is wrong for a business the platform hasn't granted online payments.
+    fetch(`/api/payments/status?portal=${encodeURIComponent(token)}`).then(r => r.json()).then(d => setPaymentsEnabled(!!d.enabled)).catch(() => {})
     if (typeof window !== 'undefined') {
       const sp = new URLSearchParams(window.location.search)
       if (sp.get('paid') === '1') {

@@ -462,16 +462,20 @@ async function run() {
 
     // Minimal Supabase stand-in: notification_log inserts are fire-and-forget, and
     // the conversation lookup answers "none" so nothing is threaded — correct, since
-    // every send below is meant to fail.
-    const table = () => {
+    // every send below is meant to fail. platform_capabilities answers as a fully
+    // GRANTED tenant (session 43): dispatch consults the tenant's grant before
+    // sending, and these checks are about the PROVIDER failing — a null there
+    // would read as a restricted beta tenant and turn every outage into a skip.
+    const GRANTS = { online_payments: true, inbound_sms: true, outbound_sms: true, outbound_email: true }
+    const table = (name?: string) => {
       const b: Record<string, unknown> = {}
       for (const m of ['select', 'eq', 'in', 'order', 'limit', 'update', 'upsert']) b[m] = () => b
       b.insert = async () => ({ error: null })
-      b.maybeSingle = async () => ({ data: null, error: null })
+      b.maybeSingle = async () => ({ data: name === 'platform_capabilities' ? GRANTS : null, error: null })
       b.single = async () => ({ data: null, error: null })
       return b
     }
-    const sbFake = { from: () => table() } as never
+    const sbFake = { from: (name: string) => table(name) } as never
 
     // claim/refund TRANSCRIBE the route's SQL (src/app/api/cron/quote-followup):
     //   claim  → set follow_up_count = seen + 1 ... where follow_up_count = seen
@@ -573,7 +577,7 @@ async function run() {
       // insert that throws there escapes runChaseCron entirely, which is a real
       // pre-existing gap in the batch-isolation guarantee, but not this fix's.)
       let inserts = 0
-      const sbBoom = { from: () => ({ ...table(), insert: async () => { if (++inserts === 1) throw new Error('notification_log unreachable'); return { error: null } } }) } as never
+      const sbBoom = { from: (name: string) => ({ ...table(name), insert: async () => { if (++inserts === 1) throw new Error('notification_log unreachable'); return { error: null } } }) } as never
       reset()
       const tAfter = await withFetch(async () => new Response('{"sid":"SM1"}', { status: 200 }), () =>
         runChaseCron<OutageItem, { policy: typeof P }>(sbBoom, {

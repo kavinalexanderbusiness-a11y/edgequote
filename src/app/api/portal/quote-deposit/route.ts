@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { createQuoteDepositCheckoutSession, stripeEnabled } from '@/lib/stripe/config'
 import { schedulingGate, type GateLedgerRow } from '@/lib/payments/depositGate'
+import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
 
 export const dynamic = 'force-dynamic'
 
@@ -52,6 +53,14 @@ export async function POST(req: NextRequest) {
     user_id: string; customer_id: string | null
   } | null
   if (!quote) return NextResponse.json({ error: 'This quote is not available.' }, { status: 404 })
+
+  // Tenant capability, from the owner the quote resolved to. The deposit ASK
+  // stays real for every tenant (the gate still blocks scheduling); only the
+  // online way of paying it is withheld — the owner records e-transfer/cash and
+  // the same ledger satisfies the same gate.
+  if (!(await tenantCapabilities(admin, quote.user_id)).onlinePayments) {
+    return NextResponse.json({ error: CAPABILITY_MESSAGE.payments }, { status: 503 })
+  }
 
   // A deposit secures a booking the customer has CONSENTED to. Before acceptance
   // there is nothing to secure; 'scheduled' stays payable because an owner who

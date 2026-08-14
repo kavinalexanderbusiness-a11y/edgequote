@@ -6,6 +6,7 @@
     "dev": "next dev",
     "verify": "tsx scripts/verify-all.ts",
     "verify:automations": "tsx scripts/verify-automations.ts",
+    "verify:capabilities": "tsx scripts/verify-capabilities.ts",
     "verify:comms-governor": "tsx scripts/verify-comms-governor.ts",
     "verify:completion": "tsx scripts/verify-completion.ts",
     "verify:scoped-notes": "tsx scripts/verify-scoped-notes.ts",

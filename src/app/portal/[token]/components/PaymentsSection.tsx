@@ -115,14 +115,21 @@ export function PaymentsSection({ view, actions }: TabProps) {
       {hasSomethingToPay && (
       <div className="rounded-card border border-border bg-bg-secondary p-4 space-y-3 animate-rise">
         <p className="text-[10px] uppercase tracking-[0.14em] text-ink-faint font-semibold">Ways to pay</p>
+        {/* Card is listed as a way to pay ONLY while it is one. The old else-copy
+            ("Ask us for a secure card payment link") promised a link the pay
+            routes refuse to mint whenever payments are off — for THIS business's
+            missing platform grant or a missing deployment key alike. A restricted
+            business's portal lists e-transfer and cash, which genuinely work. */}
+        {paymentsEnabled && (
         <div className="flex items-start gap-3">
           <span aria-hidden><CreditCard className="w-4 h-4" /></span>
           <div className="min-w-0">
             <p className="text-sm font-semibold text-ink">Card</p>
-            <p className="text-xs text-ink-muted">{paymentsEnabled ? 'Pay any invoice securely online with the Pay button.' : 'Ask us for a secure card payment link.'}</p>
-            {paymentsEnabled && <p className="text-[11px] text-ink-faint mt-1 flex items-center gap-1"><ShieldCheck className="w-3 h-3 text-emerald-400 shrink-0" /> Secure checkout by Stripe — your card details never touch us.</p>}
+            <p className="text-xs text-ink-muted">Pay any invoice securely online with the Pay button.</p>
+            <p className="text-[11px] text-ink-faint mt-1 flex items-center gap-1"><ShieldCheck className="w-3 h-3 text-emerald-400 shrink-0" /> Secure checkout by Stripe — your card details never touch us.</p>
           </div>
         </div>
+        )}
         {/* Only advertise e-transfer once the business has set its address —
             never show a customer owner-facing setup instructions. */}
         {etransferEmail && (

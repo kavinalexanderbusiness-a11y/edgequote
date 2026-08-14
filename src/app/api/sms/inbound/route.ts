@@ -41,7 +41,17 @@ export async function POST(req: NextRequest) {
     if (!sbUrl || !svc) return twiml()
     const sb = createClient(sbUrl, svc)
 
-    const { data: custJson } = await sb.rpc('find_customer_by_phone', { p_phone: from })
+    // THE tenant-capable resolver — NOT the old global find_customer_by_phone.
+    // A Twilio webhook carries no tenant, and the shared number belongs to ONE
+    // business, so resolution is structurally restricted to tenants holding the
+    // platform's inbound_sms grant (today: exactly that business — see
+    // supabase/RUN-2026-08-13-platform-capabilities.sql). A phone known only to
+    // a non-granted tenant resolves to nothing and takes the unknown-number
+    // path below: nothing stored, no STOP flip — a beta tenant's thread can
+    // never be written to, and another tenant's STOP can never flip its opt-in.
+    // Deliberately NOT "guess the tenant from the phone": the resolution SET is
+    // what the platform granted, never a heuristic over duplicates.
+    const { data: custJson } = await sb.rpc('find_inbound_sms_customer', { p_phone: from })
     const c = custJson as { id: string; user_id: string; sms_opt_in: boolean; name: string } | null
     if (!c) return twiml() // unknown number — accept (200) but store nothing
 

@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createInvoiceCheckoutSession, stripeEnabled } from '@/lib/stripe/config'
 import { ensureStripeCustomerId, type CardCustomer } from '@/lib/payments/cards'
 import { depositChargeAmount } from '@/lib/payments/deposit'
+import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
 
 export const dynamic = 'force-dynamic'
 
@@ -15,6 +16,12 @@ export async function POST(req: NextRequest) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+  // Tenant capability, on top of the deployment key: the ONE Stripe account
+  // settles into the founding business's funds, so a tenant without the
+  // online_payments grant must never mint a checkout (see lib/capabilities).
+  if (!(await tenantCapabilities(supabase, user.id)).onlinePayments) {
+    return NextResponse.json({ error: CAPABILITY_MESSAGE.payments }, { status: 503 })
+  }
 
   const body = await req.json().catch(() => ({}))
   const invoiceId = String(body.invoiceId || '')

@@ -3,6 +3,8 @@ import { sendSms, sendEmail } from './send'
 import { getOrCreateConversation } from './conversation'
 import { reachCheck } from './reach'
 import { governCheck } from './governor'
+import { SKIP_REASON } from './skipReasons'
+import { tenantCapabilities, NO_CAPABILITIES } from '@/lib/capabilities'
 import { type MessagePrefs } from './templates'
 
 // ── Shared customer dispatch ─────────────────────────────────────────────────
@@ -91,15 +93,34 @@ export async function dispatchToCustomer(sb: SupabaseClient, inp: DispatchInput)
     return { attempts, messageId: null, sentChannels: [] }
   }
 
+  // Tenant capability — WHICH CHANNELS this business may use at all, after
+  // consent (WHETHER) and before the governor (WHEN). The shared Twilio number
+  // and Resend identity are platform grants (lib/capabilities): a tenant
+  // without one must not send from a sender that belongs to another business.
+  // Checked HERE so every automated sender (receipts, campaigns, chase, cron
+  // reminders, booking confirmations) inherits it structurally, exactly like
+  // the governor. Only read when something could still go out.
+  if (gate.some(g => !g.blocked)) {
+    const caps = inp.channels.some(ch => ch === 'sms' || ch === 'email')
+      ? await tenantCapabilities(sb, inp.userId) : NO_CAPABILITIES
+    for (const ch of inp.channels) {
+      if (blocked.get(ch)) continue
+      if ((ch === 'sms' && !caps.outboundSms) || (ch === 'email' && !caps.outboundEmail)) {
+        blocked.set(ch, SKIP_REASON.NOT_ENABLED)
+      }
+    }
+  }
+
   // The governor: WHEN and AGAIN, after consent decides WHETHER. Runs here so
   // every sender inherits it structurally — quiet hours, the cross-sender
   // frequency cap, and the owner's runaway daily cap (lib/comms/governor).
   // Only consulted when something could actually go out, so a fully-blocked
-  // customer still reports their consent reason, not a governor verdict.
-  if (gate.some(g => !g.blocked)) {
+  // customer still reports their consent reason (or capability), not a
+  // governor verdict.
+  if (gate.some(g => !blocked.get(g.channel))) {
     const gov = await governCheck(sb, { userId: inp.userId, customerId: c.id, template: inp.template })
     if (!gov.allowed) {
-      for (const g of gate) attempts.push(skip(g.channel, g.blocked ?? gov.reason!))
+      for (const g of gate) attempts.push(skip(g.channel, blocked.get(g.channel) ?? gov.reason!))
       return { attempts, messageId: null, sentChannels: [] }
     }
   }

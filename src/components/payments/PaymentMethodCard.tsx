@@ -27,7 +27,13 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
 }) {
   const supabase = useMemo(() => createClient(), [])
   const [card, setCard] = useState<PaymentMethod | null>(null)
-  const { enabled: paymentsEnabled, webhook: webhookReady } = usePaymentsStatus()
+  const { enabled: paymentsEnabled, webhook: webhookReady, reason: paymentsReason } = usePaymentsStatus()
+  // 'not-enabled' is a platform restriction on this business, not a setup gap —
+  // pointing the owner at Stripe env vars would send them chasing a switch that
+  // isn't theirs to flip. One honest sentence, everywhere this card disables.
+  const disabledHint = paymentsReason === 'not-enabled'
+    ? "Online payments aren't enabled for this business"
+    : 'Connect Stripe in Settings to enable card payments'
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [autopay, setAutopay] = useState(!!customer.autopay_enabled)
@@ -129,7 +135,9 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
       <CardBody className="space-y-4">
         {!paymentsEnabled && (
           <Banner tone="warn" icon={AlertCircle} className="text-xs">
-            Connect Stripe (STRIPE_SECRET_KEY) to enable saved cards &amp; AutoPay.
+            {paymentsReason === 'not-enabled'
+              ? <>Online payments aren&rsquo;t enabled for this business, so saved cards &amp; AutoPay are unavailable. Payments can still be recorded manually on any invoice.</>
+              : <>Connect Stripe (STRIPE_SECRET_KEY) to enable saved cards &amp; AutoPay.</>}
           </Banner>
         )}
 
@@ -181,7 +189,7 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <Button size="sm" variant="secondary" onClick={saveCard} loading={busy === 'save'} disabled={!paymentsEnabled} title={!paymentsEnabled ? "Connect Stripe in Settings to enable card payments" : undefined}>Replace</Button>
+              <Button size="sm" variant="secondary" onClick={saveCard} loading={busy === 'save'} disabled={!paymentsEnabled} title={!paymentsEnabled ? disabledHint : undefined}>Replace</Button>
               <Button size="sm" variant="ghost" onClick={removeCard} loading={busy === 'remove'} className="text-red-400/70 hover:text-red-400" aria-label="Remove card" title="Remove card">
                 <Trash2 className="w-3.5 h-3.5" />
               </Button>
@@ -190,7 +198,7 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
         ) : (
           <div className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-border p-3">
             <p className="text-sm text-ink-muted">No card on file.</p>
-            <Button size="sm" onClick={saveCard} loading={busy === 'save'} disabled={!paymentsEnabled} title={!paymentsEnabled ? "Connect Stripe in Settings to enable card payments" : undefined}>
+            <Button size="sm" onClick={saveCard} loading={busy === 'save'} disabled={!paymentsEnabled} title={!paymentsEnabled ? disabledHint : undefined}>
               <CreditCard className="w-3.5 h-3.5" /> Add card
             </Button>
           </div>

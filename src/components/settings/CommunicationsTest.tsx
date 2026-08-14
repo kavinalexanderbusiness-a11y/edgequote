@@ -10,6 +10,9 @@ import { MessageSquare, CheckCircle2, XCircle, RefreshCw, ShieldCheck, ShieldAle
 
 interface Diag {
   enabled: { sms: boolean; email: boolean }
+  /** The deployment could send, but THIS business holds no platform grant for
+   *  the channel (lib/capabilities) — a restriction, not a setup gap. */
+  restricted?: { sms: boolean; email: boolean }
   vars: Record<string, boolean>
   twilioFrom: string | null
   resendFrom: string | null
@@ -91,6 +94,20 @@ export function CommunicationsTest() {
               <StatusBadge label="SMS" on={diag.enabled.sms} />
               <StatusBadge label="Email" on={diag.enabled.email} />
             </div>
+
+            {/* Platform restriction — intentionally unavailable, not misconfigured.
+                Without this line, the env checklist below (a deployment fact) reads
+                as "all green, so why is my SMS off?". */}
+            {(diag.restricted?.sms || diag.restricted?.email) && (
+              <p className="text-xs text-amber-400">
+                {diag.restricted?.sms && diag.restricted?.email
+                  ? 'Text and email sending aren’t enabled for this business.'
+                  : diag.restricted?.sms
+                    ? 'Text messaging isn’t enabled for this business.'
+                    : 'Email sending isn’t enabled for this business.'}
+                {' '}The checks below describe the platform, not this business.
+              </p>
+            )}
 
             {/* Detected env vars */}
             <div>
