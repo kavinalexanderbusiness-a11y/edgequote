@@ -207,8 +207,27 @@ check('the minimum is stated to the person typing',
 check('the crew welcome form reads the same rule',
   /from '@\/lib\/passwordRecovery'/.test(read('src/components/crew/CrewWelcomeForm.tsx')),
   'two minimums in two files is how a policy becomes a suggestion')
-check('no file declares a second minimum',
-  !/const MIN_PASSWORD\s*=/.test(read('src/components/crew/CrewWelcomeForm.tsx')))
+
+// EVERY password door, not only the ones this session wrote. Beta signup landed
+// its own `const MIN_PASSWORD = 8` hours after this feature, described as the
+// Supabase default — which was 6, and is now 10. That screen would have accepted
+// 9 characters and then been refused by the server, having said 9 was fine. The
+// scan covers the whole set so the next door to appear cannot repeat it.
+{
+  const PASSWORD_DOORS = [
+    'src/components/crew/CrewWelcomeForm.tsx',
+    'src/components/auth/ResetPasswordForm.tsx',
+    'src/lib/betaInvite.ts',
+    'src/app/signup/page.tsx',
+    'src/app/api/beta/signup/route.ts',
+  ].filter(f => existsSync(join(ROOT, f)))
+  const declarers = PASSWORD_DOORS.filter(f => /(const|let)\s+MIN_PASSWORD\s*=\s*\d/.test(read(f)))
+  check(`no other file declares its own minimum (${PASSWORD_DOORS.length} door(s) checked)`,
+    declarers.length === 0,
+    `a second number lives in: ${declarers.join(', ')} — re-export from lib/passwordRecovery instead`)
+  check('lib/passwordRecovery holds the only declaration',
+    /export const MIN_PASSWORD\s*=\s*\d+/.test(lib))
+}
 
 // ── 6. Session 34 is not regressed ───────────────────────────────────────────
 // supabase-js defaults signOut() to scope 'global'. A bare call anywhere in this

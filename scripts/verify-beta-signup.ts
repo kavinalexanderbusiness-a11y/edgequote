@@ -30,6 +30,7 @@ import {
   buildBetaSignupUrl, buildBetaConfirmUrl,
 } from '../src/lib/betaInvite'
 import { generateBetaToken, hashBetaToken, betaVerifyEmail } from '../src/lib/betaInviteServer'
+import { MIN_PASSWORD as SHARED_MIN_PASSWORD } from '../src/lib/passwordRecovery'
 
 let failures = 0
 const ok = (name: string) => console.log(`  ✓ ${name}`)
@@ -66,7 +67,13 @@ H('1. token + hash + URLs (pure)')
     su === `https://x.example${SIGNUP_PATH}?invite=${encodeURIComponent(t)}`)
   const cu = buildBetaConfirmUrl('https://x.example', 'pkce_ab/cd+ef=', 'signup')
   check('confirm URL encodes the hashed token', cu.includes('token_hash=pkce_ab%2Fcd%2Bef%3D') && cu.includes(`${SIGNUP_CONFIRM_PATH}?`))
-  check(`MIN_PASSWORD stays ${8} (Supabase default; crew welcome states the same)`, MIN_PASSWORD === 8)
+  // Pinned to the ONE application-wide constant, not to a literal. This said
+  // `=== 8` and called it the Supabase default; the project floor was actually
+  // 6, and was raised to 10 on 2026-08-13. A literal here would have kept this
+  // screen promising a length the SERVER refuses. See verify:account-recovery.
+  check(`MIN_PASSWORD is the shared rule (${MIN_PASSWORD}), not a second local number`,
+    MIN_PASSWORD === SHARED_MIN_PASSWORD && MIN_PASSWORD >= 8,
+    'src/lib/betaInvite re-exports it from lib/passwordRecovery')
 }
 
 H('2. the verification email (pure)')

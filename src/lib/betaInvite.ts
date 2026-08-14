@@ -26,9 +26,19 @@
  *  distinct prefix so an invite can never be mistaken for an API key. */
 export const BETA_TOKEN_RE = /^eqb_[0-9a-f]{64}$/
 
-/** The shortest password Supabase accepts by default — same constant the crew
- *  welcome screen states up front. */
-export const MIN_PASSWORD = 8
+/**
+ * THE application-wide password minimum, re-exported so this module's callers
+ * keep their import and the number lives in exactly one file.
+ *
+ * ⚠️ This was a local `8`, described as "the shortest password Supabase accepts
+ * by default". That was never true — the project default was 6 — and it became
+ * actively wrong on 2026-08-13, when the project's enforced `password_min_length`
+ * was raised to 10. A signup screen promising 8 accepts a 9-character password
+ * and is then refused BY THE SERVER with "Password should be at least 10
+ * characters", after telling the person 9 was fine. See lib/passwordRecovery:
+ * the stated number and the enforced number have to be the same number.
+ */
+export { MIN_PASSWORD } from './passwordRecovery'
 
 export const SIGNUP_PATH = '/signup'
 export const SIGNUP_CONFIRM_PATH = '/signup/confirm'
