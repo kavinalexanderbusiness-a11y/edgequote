@@ -264,11 +264,12 @@ try {
 
   // What the [+] offers.
   const quick = await evaluate(`(async () => {
-    const b = [...document.querySelectorAll('button')].find(x => /quick action/i.test(x.getAttribute('aria-label') || ''))
+    const b = [...document.querySelectorAll('button')]
+      .find(x => /^(quick actions|create)$/i.test(x.getAttribute('aria-label') || ''))
     if (!b) return { found: false }
     b.click()
     await new Promise(r => setTimeout(r, 700))
-    const sheet = document.querySelector('[role=dialog][aria-label*="Quick"]')
+    const sheet = document.querySelector('[role=dialog][aria-label="Create"], [role=dialog][aria-label*="Quick"]')
     const items = sheet ? [...sheet.querySelectorAll('a, button')].map(e => ({
       label: (e.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 48),
       href: e.getAttribute('href') || null,
@@ -402,6 +403,80 @@ try {
     if ((over || []).length) log(`         ⚠ overflow: ${over.join(' · ')}`)
   }
   log('')
+
+  // ── 5b. The + on a customer: does it arrive knowing who? ──────────────────
+  if (customerId) {
+    log('═══ 5b. Quick Add, from a customer profile ═══')
+    await setWidth(390)
+    await goto(`${baseUrl}/dashboard/customers/${customerId}`, 6500)
+    const qa = await evaluate(`(async () => {
+      const b = [...document.querySelectorAll('button')].find(x => (x.getAttribute('aria-label') || '') === 'Create')
+      if (!b) return { found: false }
+      b.click()
+      await new Promise(r => setTimeout(r, 800))
+      const sheet = document.querySelector('[role=dialog][aria-label="Create"]')
+      if (!sheet) return { found: true, opened: false }
+      const rows = [...sheet.querySelectorAll('a')].map(a => {
+        const r = a.getBoundingClientRect()
+        return {
+          label: (a.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 40),
+          href: a.getAttribute('href'),
+          h: Math.round(r.height),
+          inThumbZone: r.top >= innerHeight * 0.45,
+        }
+      })
+      return { found: true, opened: true, rows }
+    })()`)
+    report.surfaces.quickAddCustomer = qa
+    log(`  sheet: ${qa.opened ? qa.rows.map(r => `${r.label} → ${r.href}`).join('  |  ') : 'DID NOT OPEN'}`)
+    log(`  every row ≥56px and in the thumb zone: ${qa.rows ? qa.rows.every(r => r.h >= 56 && r.inThumbZone) : 'n/a'}`)
+    log('')
+  }
+
+  // ── 5c. The keyboard ──────────────────────────────────────────────────────
+  // ⚠️ CDP's setDeviceMetricsOverride does NOT move window.visualViewport, so a
+  // software keyboard has to be simulated: shrink vv.height and fire its resize.
+  // Without that the page believes the whole screen is visible and every "is the
+  // save button reachable" answer is about a phone with no keyboard on it.
+  log('═══ 5c. With the software keyboard open (390px, 336px keyboard) ═══')
+  {
+    await setWidth(390)
+    await goto(`${baseUrl}/dashboard/quotes/new`, 4000)
+    await evaluate(`(() => {
+      const vv = window.visualViewport
+      if (!vv) return { noVisualViewport: true }
+      Object.defineProperty(vv, 'height', { value: innerHeight - 336, configurable: true })
+      Object.defineProperty(vv, 'offsetTop', { value: 0, configurable: true })
+      vv.dispatchEvent(new Event('resize'))
+      return { visible: Math.round(vv.height) }
+    })()`)
+    await sleep(900)
+    const save = await evaluate(`(() => {
+      // ⚠️ There are TWO "Save quote" buttons: the desktop card's (0×0 at this
+      // width — display:none, not removed) and the fixed mobile bar's. A bare
+      // .find() picks the hidden one and reports 0–0, which reads as "the save
+      // button has no position" — a scary non-fact. Size is the filter.
+      const b = [...document.querySelectorAll('button')]
+        .filter(x => x.getBoundingClientRect().height > 0)
+        .find(x => /save quote/i.test(x.textContent || ''))
+      if (!b) return { found: false }
+      const r = b.getBoundingClientRect()
+      const strip = innerHeight - 336
+      const hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2))
+      return {
+        found: true, top: Math.round(r.top), bottom: Math.round(r.bottom), strip,
+        // The whole point: is it inside the strip the keyboard leaves visible?
+        aboveKeyboard: r.bottom <= strip + 1,
+        // …and is the button itself what a tap at its centre would reach?
+        hitIsSave: !!hit && /save quote/i.test(((hit.closest && hit.closest('button')) || hit).textContent || ''),
+        transform: getComputedStyle(b.closest('[class*=fixed]') || b).transform,
+      }
+    })()`)
+    report.surfaces.keyboard = { quoteSave: save }
+    log(`  Save quote: ${save.top}–${save.bottom} inside the ${save.strip}px visible strip → ${save.aboveKeyboard ? 'REACHABLE' : 'BEHIND THE KEYBOARD'} · tap hits Save: ${save.hitIsSave}`)
+    log(`  bar transform: ${save.transform}`)
+    log('')
+  }
 
   // ── 6. PAGE WEIGHT on the core field routes ────────────────────────────────
   log('═══ 6. Script weight on the core field routes ═══')

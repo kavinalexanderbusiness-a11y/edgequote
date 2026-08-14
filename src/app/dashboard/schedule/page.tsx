@@ -16,7 +16,7 @@ import { ScopeDialog } from '@/components/schedule/ScopeDialog'
 import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel, visitsBeyondEnd, planSeriesChange, mayRemoveRecurrence } from '@/lib/recurrence'
 import type { JobRecurrence } from '@/types'
 import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts, uncompleteJob } from '@/lib/invoicing'
-import { queueOrRun } from '@/lib/offline/outbox'
+import { queueOrRun, isNetworkError } from '@/lib/offline/outbox'
 // THE completion stamp. Every door on this page that moves a visit to
 // "completed" writes the same three fields through it — see lib/jobStatus.
 import { completionPatch } from '@/lib/jobStatus'
@@ -2198,7 +2198,17 @@ export default function SchedulePage() {
     const res = await stopForToday(supabase, job, input)
     if (!res.ok) {
       setJobs(prevJobs => prevJobs.map(j => j.id === job.id ? { ...j, ...res.prev } : j))
-      setBanner('Could not stop for today: ' + (res.error ?? 'please try again.'))
+      // ⛔ Stopping is NOT queued. It banks a work session and patches the visit
+      // as one intent, and replaying that offline is a piece of engineering this
+      // session did not do — so the write is rolled back and the job stays
+      // exactly as it was, on the clock. What it must not do is blame the owner
+      // for their signal in the machine's words: "Load failed" told a contractor
+      // in a field nothing they could act on. Same question the outbox asks
+      // before queuing anything, so the two can never disagree about what
+      // "no signal" means.
+      setBanner(isNetworkError(res.error)
+        ? 'No signal — today’s time was not recorded, and the job is still on the clock. Try again once you’re back in range.'
+        : 'Could not stop for today: ' + (res.error ?? 'please try again.'))
       return
     }
     await fetchJobs()
@@ -2225,7 +2235,13 @@ export default function SchedulePage() {
     const res = await resumeWork(supabase, job)
     if (!res.ok) {
       setJobs(prevJobs => prevJobs.map(j => j.id === job.id ? { ...j, ...res.prev } : j))
-      setBanner('Could not resume the job: ' + (res.error ?? 'please try again.'))
+      // Same contract as stopping: rolled back, and named as signal when that is
+      // what it was. The clock genuinely did not start, so saying so is the
+      // whole job — a "resumed" that never reached the server would put a
+      // started_at on the record that no other device will ever see.
+      setBanner(isNetworkError(res.error)
+        ? 'No signal — the clock did not start. Try again once you’re back in range.'
+        : 'Could not resume the job: ' + (res.error ?? 'please try again.'))
       return
     }
     await fetchJobs()

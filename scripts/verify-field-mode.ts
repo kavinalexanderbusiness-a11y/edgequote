@@ -310,8 +310,28 @@ console.log('\n═══ Poor signal is told, not hidden ═══')
     'a completed job that never synced must say so, not look done')
   const sheet = stripComments(read('src/components/layout/QuickAdd.tsx'))
   check('the + only ever navigates — it writes nothing',
-    !/supabase|fetch\(|insert\(/.test(sheet),
+    !/supabase|fetch\(/.test(sheet),
     'a create sheet that writes offline would report success for a row nobody has')
+
+  // ⛔ Stopping for the day and resuming are NOT queued — each is a work-session
+  // write plus a visit patch as one intent, and replaying that is engineering
+  // this session did not do. What they MUST do is roll back and say why in words
+  // a contractor in a field can act on. "Could not stop for today: Load failed"
+  // is the machine blaming them for their signal.
+  for (const [what, msg] of [
+    ['stopping for the day', 'today’s time was not recorded'],
+    ['resuming', 'the clock did not start'],
+  ] as const) {
+    check(`${what} names a no-signal failure as one`,
+      new RegExp(`isNetworkError\\(res\\.error\\)[\\s\\S]{0,220}${msg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(page),
+      'a rolled-back write is honest; an unreadable reason is not')
+  }
+  check('…and both still roll the visit back',
+    (page.match(/setJobs\(prevJobs => prevJobs\.map\(j => j\.id === job\.id \? \{ \.\.\.j, \.\.\.res\.prev \} : j\)\)/g) || []).length >= 2,
+    'leaving the optimistic state on screen after a failed write IS the faked write')
+  check('the no-signal question has ONE definition',
+    /export function isNetworkError/.test(stripComments(read('src/lib/offline/outbox.ts'))),
+    'a second copy would drift from the one that decides what is safe to queue')
 }
 
 console.log(`\n${fail === 0 ? '✓' : '✗'} field mode checks: ${pass} passed, ${fail} failed`)

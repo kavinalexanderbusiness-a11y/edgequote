@@ -97,6 +97,16 @@ const MUTATIONS = [
     from: '<DurationField\n', to: '<Input label="Duration (min)" type="number"\n' },
   { file: 'src/components/quotes/QuoteBuilder.tsx', why: 'a workday becomes 24 hours',
     from: 'workdayMinutes(settings?.daily_capacity_hours)', to: '(24 * 60)' },
+
+  // ── Offline honesty ───────────────────────────────────────────────────────
+  { file: 'src/app/dashboard/schedule/page.tsx', why: 'a no-signal stop goes back to blaming the machine',
+    from: "setBanner(isNetworkError(res.error)\n        ? 'No signal — today’s time was not recorded, and the job is still on the clock. Try again once you’re back in range.'\n        : 'Could not stop for today: ' + (res.error ?? 'please try again.'))",
+    to: "setBanner('Could not stop for today: ' + (res.error ?? 'please try again.'))" },
+  { file: 'src/app/dashboard/schedule/page.tsx', why: 'a failed stop leaves the optimistic state on screen',
+    from: "      setJobs(prevJobs => prevJobs.map(j => j.id === job.id ? { ...j, ...res.prev } : j))\n      // ⛔ Stopping is NOT queued.",
+    to: '      // ⛔ Stopping is NOT queued.' },
+  { file: 'src/lib/offline/outbox.ts', why: 'the no-signal test stops being shared',
+    from: 'export function isNetworkError', to: 'function isNetworkError' },
 ]
 
 const run = () => spawnSync('node', ['node_modules/tsx/dist/cli.mjs', 'scripts/verify-field-mode.ts'],
