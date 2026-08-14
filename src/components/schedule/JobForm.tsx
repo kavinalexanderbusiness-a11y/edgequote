@@ -10,7 +10,7 @@ import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
 import { Customer, Property, JobFormValues, JobStatus, RecurUnit } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { recurrenceLabel } from '@/lib/recurrence'
+import { recurrenceLabel, recurrenceToUi, type RepeatPreset, type EndMode } from '@/lib/recurrence'
 import { latestSavedRecommendation, savedPriceFor, recommendationIsStale, CadenceKey } from '@/lib/pricing'
 import { servicePricingKind } from '@/lib/servicePricing'
 import {
@@ -95,7 +95,6 @@ const STATUS_OPTIONS: { value: JobStatus; label: string }[] = [
   { value: 'cancelled', label: 'Cancelled' },
 ]
 
-type RepeatPreset = 'none' | 'w1' | 'w2' | 'w3' | 'w4' | 'm1' | 'custom'
 
 const PRESET_OPTIONS: { value: RepeatPreset; label: string }[] = [
   { value: 'none', label: 'Does not repeat' },
@@ -127,32 +126,6 @@ function intervalToCadence(iv: { unit: RecurUnit; count: number } | null): Caden
   if (iv.unit === 'week') return iv.count <= 1 ? 'weekly' : iv.count === 2 ? 'biweekly' : 'monthly'
   if (iv.unit === 'day') return iv.count <= 10 ? 'weekly' : iv.count <= 18 ? 'biweekly' : 'monthly'
   return 'one_time'
-}
-
-type EndMode = 'season' | 'on' | 'after' | 'never'
-
-// Map an existing series back onto the Repeat UI controls so editing pre-fills.
-function recurrenceToUi(r?: Recurrence) {
-  if (!r || !r.unit) {
-    return { preset: 'none' as RepeatPreset, customUnit: 'week' as RecurUnit, customCount: 3, endMode: 'never' as EndMode, endDate: '', endCount: 10 }
-  }
-  let preset: RepeatPreset = 'custom'
-  if (r.unit === 'week' && r.count === 1) preset = 'w1'
-  else if (r.unit === 'week' && r.count === 2) preset = 'w2'
-  else if (r.unit === 'week' && r.count === 3) preset = 'w3'
-  else if (r.unit === 'week' && r.count === 4) preset = 'w4'
-  else if (r.unit === 'month' && r.count === 1) preset = 'm1'
-  // An existing end_date pre-fills as a specific date (we can't know post-hoc
-  // whether it was originally a season pick — treat as 'on' for safe editing).
-  const endMode: EndMode = r.endDate ? 'on' : r.endCount ? 'after' : 'never'
-  return {
-    preset,
-    customUnit: r.unit,
-    customCount: Math.max(1, r.count),
-    endMode,
-    endDate: r.endDate || '',
-    endCount: r.endCount || 10,
-  }
 }
 
 export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, seriesStartDate, allowAddAnother, suggestedPrice, warnFor, onSubmit, onCancel, onDirtyChange, isEdit }: JobFormProps) {
@@ -313,6 +286,31 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   // When the service is seasonal, default the end mode to Season End — but only
   // until the user touches the control, and never when editing an existing job.
   const endTouched = useRef(false)
+
+  // The Repeat controls are seeded from `initialRecurrence` in useState
+  // initializers, which read it ONCE. The schedule page opens this modal from a
+  // ?focus= deep link the moment `jobs` arrives — which can be BEFORE the
+  // `recurrences` map it looks the series up in. A recurring job then rendered
+  // as "Does not repeat" and STAYED that way, because nothing re-read the prop;
+  // saving took the form at its word and removed the series, deleting every
+  // sibling visit. Re-seed once the series actually arrives, and only while the
+  // owner has not touched the controls, so a deliberate "Does not repeat" is
+  // never overwritten by a late-arriving prop.
+  const repeatTouched = useRef(false)
+  useEffect(() => {
+    if (repeatTouched.current || !initialRecurrence?.unit) return
+    const ui = recurrenceToUi(initialRecurrence)
+    setPreset(ui.preset)
+    setCustomUnit(ui.customUnit)
+    setCustomCount(ui.customCount)
+    if (!endTouched.current) {
+      setEndMode(ui.endMode)
+      setEndDate(ui.endDate)
+      setEndCount(ui.endCount)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialRecurrence?.unit, initialRecurrence?.count, initialRecurrence?.endDate, initialRecurrence?.endCount])
+
   useEffect(() => {
     if (isEdit || endTouched.current) return
     setEndMode(serviceSeason ? 'season' : 'never')
@@ -860,7 +858,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
 
             {/* THE shared Select — same chevron/field tokens as every other dropdown. */}
             <Select label="Repeats" value={preset}
-              onChange={(e) => setPreset(e.target.value as RepeatPreset)}
+              onChange={(e) => { repeatTouched.current = true; setPreset(e.target.value as RepeatPreset) }}
               options={PRESET_OPTIONS.map(o => ({ value: o.value, label: o.label }))} />
 
             {preset === 'custom' && (
