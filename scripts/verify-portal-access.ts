@@ -41,7 +41,7 @@ const read = (p: string) => readFileSync(join(ROOT, p), 'utf8')
 const ROUTE = read('src/app/api/public/portal-access/route.ts')
 const FORM = read('src/app/portal-access/PortalAccessForm.tsx')
 const PAGE = read('src/app/portal-access/page.tsx')
-const SQL = read('supabase/RUN-2026-08-10-portal-access-requests.sql')
+const SQL = read('supabase/archive/run/RUN-2026-08-10-portal-access-requests.sql')
 
 // ═══════════════════════════════════════════════════════════════════════════
 H('1. NORMALISATION — the same person, however they type it')

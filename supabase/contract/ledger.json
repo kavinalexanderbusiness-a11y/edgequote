@@ -1,0 +1,842 @@
+[
+ {
+  "name": "probe_write_access_noop",
+  "sql_len": 53,
+  "sql_md5": "e79bd20cfea24e14f9e5de892d0914fb",
+  "version": "20260715075324",
+  "stmt_count": 1
+ },
+ {
+  "name": "write_access_probe_noop",
+  "sql_len": 145,
+  "sql_md5": "e7a453ca11903085acfd222bdcf5d399",
+  "version": "20260715075520",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_quote_expiry_get_portal_data",
+  "sql_len": 3997,
+  "sql_md5": "d94c2db7a08ac8c10805be9775b2f955",
+  "version": "20260715075546",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_get_portal_data_union_service_plans_and_expiry",
+  "sql_len": 4603,
+  "sql_md5": "35b2462f07c49d748177fc32e9701bc1",
+  "version": "20260715075726",
+  "stmt_count": 1
+ },
+ {
+  "name": "probe_write_access_noop",
+  "sql_len": 274,
+  "sql_md5": "db5e6099465f07c1f31cf94afb85d298",
+  "version": "20260715081826",
+  "stmt_count": 1
+ },
+ {
+  "name": "capability_check_noop",
+  "sql_len": 187,
+  "sql_md5": "9822c8df0e3da90bd06fdc2105f24790",
+  "version": "20260715082118",
+  "stmt_count": 1
+ },
+ {
+  "name": "probe_write_access_noop",
+  "sql_len": 303,
+  "sql_md5": "c8ac27e453e18b4ad6373885166020c2",
+  "version": "20260715082324",
+  "stmt_count": 1
+ },
+ {
+  "name": "record_marketing_publishing_tables",
+  "sql_len": 4980,
+  "sql_md5": "0bd4f21b41430fc26237e2ec8b07e851",
+  "version": "20260715082613",
+  "stmt_count": 1
+ },
+ {
+  "name": "revoke_trigger_fn_execute",
+  "sql_len": 928,
+  "sql_md5": "99d3051cb55c53f26d724488fe110a31",
+  "version": "20260715083100",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_decline_review",
+  "sql_len": 1401,
+  "sql_md5": "feac0dd2148e23c74b2120a4069e7601",
+  "version": "20260715083535",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_get_portal_data_review_declined_at",
+  "sql_len": 5047,
+  "sql_md5": "cd21813e4fb20309b2b7fe841009d9b2",
+  "version": "20260715083748",
+  "stmt_count": 1
+ },
+ {
+  "name": "record_branding_bucket",
+  "sql_len": 816,
+  "sql_md5": "fc48f7ce75e96060ce3f942c3acae23c",
+  "version": "20260715085430",
+  "stmt_count": 1
+ },
+ {
+  "name": "crm_correctness_archived_at_and_review_chase",
+  "sql_len": 1563,
+  "sql_md5": "cfb05649ab9cac4ca4ade6627d7d07b0",
+  "version": "20260715090240",
+  "stmt_count": 1
+ },
+ {
+  "name": "automation_runs",
+  "sql_len": 2375,
+  "sql_md5": "e21428ea0641a9b5c430a7d8c4c899f8",
+  "version": "20260715091047",
+  "stmt_count": 1
+ },
+ {
+  "name": "invoice_internal_notes",
+  "sql_len": 372,
+  "sql_md5": "d097257d833d1eb415e227f55aebd81d",
+  "version": "20260715091212",
+  "stmt_count": 1
+ },
+ {
+  "name": "analytics_layout",
+  "sql_len": 1098,
+  "sql_md5": "cd11f0a1e8b6828bb8a0ea1f594d6fc0",
+  "version": "20260715092117",
+  "stmt_count": 1
+ },
+ {
+  "name": "automation_subject_lookup",
+  "sql_len": 1002,
+  "sql_md5": "584e52bec964613653833ab4ab7f7a1a",
+  "version": "20260715093455",
+  "stmt_count": 1
+ },
+ {
+  "name": "automation_sweeps",
+  "sql_len": 2164,
+  "sql_md5": "a05bbdda1ab27f878d4c6004daa4ac35",
+  "version": "20260715095703",
+  "stmt_count": 1
+ },
+ {
+  "name": "automation_sweeps_column_grants",
+  "sql_len": 647,
+  "sql_md5": "73b87733914505b355f29054dcfaadd5",
+  "version": "20260715095733",
+  "stmt_count": 1
+ },
+ {
+  "name": "add_gst_registration_number",
+  "sql_len": 1370,
+  "sql_md5": "656813c816e02d532634d8cc2d0e39f0",
+  "version": "20260715102115",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_get_portal_data_gst_number",
+  "sql_len": 5219,
+  "sql_md5": "40d4be5d0a1bdf9d02250ba1b4de04d3",
+  "version": "20260715102946",
+  "stmt_count": 1
+ },
+ {
+  "name": "feature_modules_enabled_modules",
+  "sql_len": 525,
+  "sql_md5": "ea2f665751a8bf9da4d5ed0a42b0968b",
+  "version": "20260715231804",
+  "stmt_count": 1
+ },
+ {
+  "name": "neutral_company_name_default",
+  "sql_len": 293,
+  "sql_md5": "5a3b55e1cafcc67951468ca5220d50dc",
+  "version": "20260715232122",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_services_from_service_templates",
+  "sql_len": 6176,
+  "sql_md5": "69d715f66eb047f0f6329bbe39840f85",
+  "version": "20260715232259",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_services_fix_sort_order",
+  "sql_len": 5241,
+  "sql_md5": "a12a0df64bda38bc2ab83b7620f230fa",
+  "version": "20260715232348",
+  "stmt_count": 1
+ },
+ {
+  "name": "service_units_vocabulary",
+  "sql_len": 3982,
+  "sql_md5": "14a1abf1f91da379556ebe3b74909cf1",
+  "version": "20260715232802",
+  "stmt_count": 1
+ },
+ {
+  "name": "business_type_column",
+  "sql_len": 1444,
+  "sql_md5": "b73e0e75f128c2bf125984b1bf2f8020",
+  "version": "20260715233211",
+  "stmt_count": 1
+ },
+ {
+  "name": "accounting_foundation_expenses_vendors_categories",
+  "sql_len": 7841,
+  "sql_md5": "cee4037b3e684e0cb6f72c31c5b05db9",
+  "version": "20260715233509",
+  "stmt_count": 1
+ },
+ {
+  "name": "submit_booking_service_from_catalog",
+  "sql_len": 4896,
+  "sql_md5": "d193560f308f30a7722c3074aa82188e",
+  "version": "20260715233942",
+  "stmt_count": 1
+ },
+ {
+  "name": "dispatch_crews",
+  "sql_len": 8349,
+  "sql_md5": "cfd2ce87817796985ad3717921e4f57f",
+  "version": "20260716000130",
+  "stmt_count": 1
+ },
+ {
+  "name": "module_meta_update_system",
+  "sql_len": 566,
+  "sql_md5": "96007a84aad216029b90a1dc0f90e5f5",
+  "version": "20260716000641",
+  "stmt_count": 1
+ },
+ {
+  "name": "service_template_cost_and_favorites",
+  "sql_len": 2202,
+  "sql_md5": "8283f4a59fd345a5c577630068a04c74",
+  "version": "20260716001317",
+  "stmt_count": 1
+ },
+ {
+  "name": "employee_time_and_wages",
+  "sql_len": 4401,
+  "sql_md5": "7c756c2de7555af44649630e5b9eda91",
+  "version": "20260716002357",
+  "stmt_count": 1
+ },
+ {
+  "name": "suppliers",
+  "sql_len": 1755,
+  "sql_md5": "8aa4c5c39daf9d171612bada9e790223",
+  "version": "20260716053848",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_self_service_expansion",
+  "sql_len": 5818,
+  "sql_md5": "51a2d8ab2cb04d0e42de48ff773730f5",
+  "version": "20260716054700",
+  "stmt_count": 1
+ },
+ {
+  "name": "payroll_overtime_and_pay_period_settings",
+  "sql_len": 3122,
+  "sql_md5": "ede80d5f690b77e24fefb2909180cfae",
+  "version": "20260716055125",
+  "stmt_count": 1
+ },
+ {
+  "name": "integrations_platform",
+  "sql_len": 19864,
+  "sql_md5": "a19046e585aea689151d9803ca1059bb",
+  "version": "20260716055241",
+  "stmt_count": 1
+ },
+ {
+  "name": "scheduled_messages",
+  "sql_len": 2027,
+  "sql_md5": "97bb9d566bd91961ae9ffa4201db38cf",
+  "version": "20260716055952",
+  "stmt_count": 1
+ },
+ {
+  "name": "scheduled_messages_claimed_at",
+  "sql_len": 233,
+  "sql_md5": "dcb845aec3523a87b058499e7b1f6736",
+  "version": "20260716060320",
+  "stmt_count": 1
+ },
+ {
+  "name": "expense_receipts_private_bucket",
+  "sql_len": 1245,
+  "sql_md5": "40ee290330a851ab9bc404461dde8862",
+  "version": "20260716060646",
+  "stmt_count": 1
+ },
+ {
+  "name": "purchase_orders",
+  "sql_len": 4112,
+  "sql_md5": "828da58958a3316db5295b67718eaa59",
+  "version": "20260716061442",
+  "stmt_count": 1
+ },
+ {
+  "name": "workforce_pto_holidays_wage_history_pay_runs",
+  "sql_len": 11425,
+  "sql_md5": "36cbebe35905435f382b3251fd45b54d",
+  "version": "20260716232722",
+  "stmt_count": 1
+ },
+ {
+  "name": "wage_history_deterministic_ordering",
+  "sql_len": 1405,
+  "sql_md5": "3f1f78444991f70a24ee9525feea53e1",
+  "version": "20260716232854",
+  "stmt_count": 1
+ },
+ {
+  "name": "phone_search_digits_2026_07_16",
+  "sql_len": 522,
+  "sql_md5": "8a795870b23d03b3375eb990ae6d3e5b",
+  "version": "20260716233203",
+  "stmt_count": 1
+ },
+ {
+  "name": "search_conversations_phone_digits_2026_07_16",
+  "sql_len": 3323,
+  "sql_md5": "880cb2ada58eb7accc83e89ba7ad573e",
+  "version": "20260716233413",
+  "stmt_count": 1
+ },
+ {
+  "name": "comms_insights_and_deeplink",
+  "sql_len": 3519,
+  "sql_md5": "6eeefbe31792b8c7d67994f793e5aa36",
+  "version": "20260716233928",
+  "stmt_count": 1
+ },
+ {
+  "name": "balance_sheet_foundation",
+  "sql_len": 6143,
+  "sql_md5": "93c5b9652968d39f3806fdd2a9fe3cfa",
+  "version": "20260716234632",
+  "stmt_count": 1
+ },
+ {
+  "name": "capital_purchase_flag",
+  "sql_len": 1662,
+  "sql_md5": "e4895c767e0b17a36c54ed8f29ee2d5c",
+  "version": "20260716234850",
+  "stmt_count": 1
+ },
+ {
+  "name": "expense_category_kind",
+  "sql_len": 1488,
+  "sql_md5": "ef7f980925eb08fde629ed44aaad9c50",
+  "version": "20260716235052",
+  "stmt_count": 1
+ },
+ {
+  "name": "comms_triage_and_inbox_counts",
+  "sql_len": 2433,
+  "sql_md5": "6cbf3acc973411ed4254f73d229291dd",
+  "version": "20260716235841",
+  "stmt_count": 1
+ },
+ {
+  "name": "integrations_stabilization",
+  "sql_len": 4857,
+  "sql_md5": "d3e15d71c89794ceb282175f712a50e0",
+  "version": "20260717012601",
+  "stmt_count": 1
+ },
+ {
+  "name": "business_type_default_general",
+  "sql_len": 309,
+  "sql_md5": "f1b3c05e080f6bc0672e3b55cb8bf9d8",
+  "version": "20260717012955",
+  "stmt_count": 1
+ },
+ {
+  "name": "report_schedules",
+  "sql_len": 2122,
+  "sql_md5": "2910ecbbab786aff11c3cffcd1926fbb",
+  "version": "20260717013442",
+  "stmt_count": 1
+ },
+ {
+  "name": "pricing_v2_phase0_quote_accepted_snapshot",
+  "sql_len": 1185,
+  "sql_md5": "472b9a123c5090be671f64977ba2e224",
+  "version": "20260717020230",
+  "stmt_count": 1
+ },
+ {
+  "name": "pricing_v2_phase0_portal_accept_snapshot",
+  "sql_len": 1464,
+  "sql_md5": "396ecddf8cd1f615715e7a47763f165d",
+  "version": "20260717020333",
+  "stmt_count": 1
+ },
+ {
+  "name": "customer_v2_m1_primary_index_and_attribution",
+  "sql_len": 1120,
+  "sql_md5": "8ff6f81862ec80c2f6630b9ba7c0136a",
+  "version": "20260717054703",
+  "stmt_count": 1
+ },
+ {
+  "name": "quote_materials",
+  "sql_len": 1432,
+  "sql_md5": "d3849097214714fa1bfd3e2f804534a0",
+  "version": "20260717055508",
+  "stmt_count": 1
+ },
+ {
+  "name": "measurement_engine_v2_property_measurements",
+  "sql_len": 6915,
+  "sql_md5": "1e5d63096944868a3507db626c74f3cb",
+  "version": "20260717055949",
+  "stmt_count": 1
+ },
+ {
+  "name": "quote_v2_phase0_total_no_fabrication",
+  "sql_len": 801,
+  "sql_md5": "e808e3e2ab2068e300b9306f00640096",
+  "version": "20260717060007",
+  "stmt_count": 1
+ },
+ {
+  "name": "measurement_engine_v2_history",
+  "sql_len": 4960,
+  "sql_md5": "39fea98a490930fb48b2d86e184437f6",
+  "version": "20260717061245",
+  "stmt_count": 1
+ },
+ {
+  "name": "customer_v2_m1_tags_recorded",
+  "sql_len": 326,
+  "sql_md5": "d17839be77a14ef8110462ce692f75b1",
+  "version": "20260717062554",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_property_identity_2026_07_17",
+  "sql_len": 6026,
+  "sql_md5": "03540f88882356d0e3ef93610ccadadc",
+  "version": "20260717074252",
+  "stmt_count": 1
+ },
+ {
+  "name": "adr_002_pricing_config_provenance_schema",
+  "sql_len": 5390,
+  "sql_md5": "582c6b0a6c24d10b2c138a9c862b37c2",
+  "version": "20260717080410",
+  "stmt_count": 1
+ },
+ {
+  "name": "meas1_lawn_sqft_single_writer_guard",
+  "sql_len": 2098,
+  "sql_md5": "c9deb14957ca0955f9808ae463bea1a2",
+  "version": "20260717080617",
+  "stmt_count": 1
+ },
+ {
+  "name": "adr_002_ensure_pricing_config_version",
+  "sql_len": 2878,
+  "sql_md5": "c2360adc83f2d118771407bb88173ec5",
+  "version": "20260717082025",
+  "stmt_count": 1
+ },
+ {
+  "name": "adr_002_sql_writers_record_provenance",
+  "sql_len": 10567,
+  "sql_md5": "14d568fa17be2f01507d909d5326efd9",
+  "version": "20260718063157",
+  "stmt_count": 1
+ },
+ {
+  "name": "payroll_archive_technicians_pay1",
+  "sql_len": 1604,
+  "sql_md5": "67e290e8d3753b00af1901da3e7786f7",
+  "version": "20260718063637",
+  "stmt_count": 1
+ },
+ {
+  "name": "bk1_intake_dedup_2026_07_17",
+  "sql_len": 13692,
+  "sql_md5": "5679159bbe713b3d5511b341db44806f",
+  "version": "20260718063808",
+  "stmt_count": 1
+ },
+ {
+  "name": "comms_governor_timezone",
+  "sql_len": 685,
+  "sql_md5": "d5906eb39760a6ce51e3f8cfdaadc4b9",
+  "version": "20260718063809",
+  "stmt_count": 1
+ },
+ {
+  "name": "bk1_intake_helpers_revoke_public_exec",
+  "sql_len": 952,
+  "sql_md5": "29dd1801d00898f2c8c96ff64ca1e96b",
+  "version": "20260718063846",
+  "stmt_count": 1
+ },
+ {
+  "name": "invoice_status_on_total_edit",
+  "sql_len": 3216,
+  "sql_md5": "39c7b3a6710c8b99e24d514d1c748ee9",
+  "version": "20260727033122",
+  "stmt_count": 1
+ },
+ {
+  "name": "invoice_line_items_edited_flag",
+  "sql_len": 457,
+  "sql_md5": "e3988441e6d4ff4098e0f915dc44ef80",
+  "version": "20260728073742",
+  "stmt_count": 1
+ },
+ {
+  "name": "booking_uploads_insert_allow_authenticated",
+  "sql_len": 855,
+  "sql_md5": "33296d5e7e7cbe8c0c1ee513b95745b5",
+  "version": "20260730063035",
+  "stmt_count": 1
+ },
+ {
+  "name": "lead_uploads_bucket",
+  "sql_len": 1009,
+  "sql_md5": "42a478bef81b9a8bcb314231e590e9eb",
+  "version": "20260730212108",
+  "stmt_count": 1
+ },
+ {
+  "name": "crew_mode_foundation_2026_08_07",
+  "sql_len": 13259,
+  "sql_md5": "a997ac774e156aa89b4fc380243d7ce9",
+  "version": "20260809075846",
+  "stmt_count": 1
+ },
+ {
+  "name": "invoice_deposit_request",
+  "sql_len": 972,
+  "sql_md5": "a5bd1c48d5515539af3f7c1d0524f08c",
+  "version": "20260809081058",
+  "stmt_count": 1
+ },
+ {
+  "name": "crew_mode_no_direct_table_access_2026_08_07",
+  "sql_len": 3565,
+  "sql_md5": "b3f5b4a5ae0afb2feb2c2d20ba294d8b",
+  "version": "20260809082317",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_hide_draft_invoices",
+  "sql_len": 1547,
+  "sql_md5": "5929a9e4f8793c21fb80636fe8d0b00c",
+  "version": "20260809082642",
+  "stmt_count": 1
+ },
+ {
+  "name": "crew_mode_tighten_function_grants_2026_08_07",
+  "sql_len": 1636,
+  "sql_md5": "5e5b7393bbac37a1c656ec6a52e8b89b",
+  "version": "20260809082831",
+  "stmt_count": 1
+ },
+ {
+  "name": "crew_invite_provisioning_2026_08_09",
+  "sql_len": 3123,
+  "sql_md5": "11cd4fe1bf6d35307e15f8d2d940648e",
+  "version": "20260809085602",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_access_requests",
+  "sql_len": 823,
+  "sql_md5": "6a3d0d2f5e1bec1b0ec6c553278dfd41",
+  "version": "20260810030326",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_access_lookup_fn",
+  "sql_len": 872,
+  "sql_md5": "2ae84b00c1341ac51fdfef47c901aaea",
+  "version": "20260810030804",
+  "stmt_count": 1
+ },
+ {
+  "name": "public_edge_hardening_20260810",
+  "sql_len": 3163,
+  "sql_md5": "42ffd33c5028b2d59e62d90710d1cfa0",
+  "version": "20260810063320",
+  "stmt_count": 1
+ },
+ {
+  "name": "booking_measurement_authorization_20260810",
+  "sql_len": 4044,
+  "sql_md5": "18b87ee82b9802f40f66ec3971e67bbb",
+  "version": "20260810195044",
+  "stmt_count": 1
+ },
+ {
+  "name": "temp_mutation_test_vulnerable_measurement",
+  "sql_len": 1646,
+  "sql_md5": "0eb9cde1cada40feeddcbcb96ee50df3",
+  "version": "20260810195334",
+  "stmt_count": 1
+ },
+ {
+  "name": "booking_measurement_authorization_restore_20260810",
+  "sql_len": 4050,
+  "sql_md5": "ac6887a054c95c677cd85f88b975fa57",
+  "version": "20260810195406",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_add_contact",
+  "sql_len": 4301,
+  "sql_md5": "ae9bb9f5e7705b0a0eac9aab7f185ffe",
+  "version": "20260811051856",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_add_contact_array_append_fix",
+  "sql_len": 3746,
+  "sql_md5": "bb5fe409274cf02ebde7f0a9fa6f63eb",
+  "version": "20260811052023",
+  "stmt_count": 1
+ },
+ {
+  "name": "quote_options_v1",
+  "sql_len": 4223,
+  "sql_md5": "78969040b57225379c9ea0fc9982c3c5",
+  "version": "20260811060825",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_accept_quote_with_option",
+  "sql_len": 3264,
+  "sql_md5": "2ce82f413d3152246188c9cb34fb4b47",
+  "version": "20260811061005",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_accept_quote_option_strict",
+  "sql_len": 2993,
+  "sql_md5": "6c76d95875a0b12918cedd0121f8f24b",
+  "version": "20260811061100",
+  "stmt_count": 1
+ },
+ {
+  "name": "get_portal_data_quote_options",
+  "sql_len": 1772,
+  "sql_md5": "fde7732702783140e53e998bd77a74da",
+  "version": "20260811061219",
+  "stmt_count": 1
+ },
+ {
+  "name": "crm_follow_ups",
+  "sql_len": 3203,
+  "sql_md5": "ea77872da8de9234bfe30db2cf94cb20",
+  "version": "20260811061331",
+  "stmt_count": 1
+ },
+ {
+  "name": "source_attribution_v1_intake_hardening",
+  "sql_len": 7759,
+  "sql_md5": "0dfa5d474a75a2825fc83df2f254b3a7",
+  "version": "20260811062420",
+  "stmt_count": 1
+ },
+ {
+  "name": "crm_follow_ups_fk_disambiguation",
+  "sql_len": 1112,
+  "sql_md5": "f13c1eaadfe1f5bfde8307a194c8bb11",
+  "version": "20260811063043",
+  "stmt_count": 1
+ },
+ {
+  "name": "quote_options_selection_one_core_two_doors",
+  "sql_len": 4159,
+  "sql_md5": "c47998ee76c0c065e700aae17e6a880f",
+  "version": "20260811064715",
+  "stmt_count": 1
+ },
+ {
+  "name": "global_search_records",
+  "sql_len": 7648,
+  "sql_md5": "955f777b848e79772270b0ecf880cbbf",
+  "version": "20260811074600",
+  "stmt_count": 1
+ },
+ {
+  "name": "property_internal_notes",
+  "sql_len": 453,
+  "sql_md5": "79cbba23acbffa239ab592aab68aa3ca",
+  "version": "20260811074609",
+  "stmt_count": 1
+ },
+ {
+  "name": "proof_of_work_v1_completion_record",
+  "sql_len": 3394,
+  "sql_md5": "14318be81a946e61cf81afbc08ef554e",
+  "version": "20260811074619",
+  "stmt_count": 1
+ },
+ {
+  "name": "global_search_drop_unused_trgm_indexes",
+  "sql_len": 812,
+  "sql_md5": "f2fc11e8b0110b100d5d33f4acb75f56",
+  "version": "20260811074743",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_data_completion_summary_replaces_internal_notes",
+  "sql_len": 6657,
+  "sql_md5": "4a64a165e62e68654ee7d362dc62a9f0",
+  "version": "20260811074801",
+  "stmt_count": 1
+ },
+ {
+  "name": "crew_day_returns_completion_record",
+  "sql_len": 3273,
+  "sql_md5": "3f29dd5cde083e6d9231a8f4ac1e3413",
+  "version": "20260811074934",
+  "stmt_count": 1
+ },
+ {
+  "name": "service_bundles_v1",
+  "sql_len": 3496,
+  "sql_md5": "3a0231ea31e04588a3bf062f9798a076",
+  "version": "20260811075519",
+  "stmt_count": 1
+ },
+ {
+  "name": "customer_imports_provenance",
+  "sql_len": 1579,
+  "sql_md5": "c2d93cfbfe47cc443e366d4d70155d9f",
+  "version": "20260811075554",
+  "stmt_count": 1
+ },
+ {
+  "name": "data_exports_audit_record",
+  "sql_len": 3682,
+  "sql_md5": "296dda81fc72c173eac607183f2cddf0",
+  "version": "20260811075700",
+  "stmt_count": 1
+ },
+ {
+  "name": "job_cost_tenancy_composite_fks",
+  "sql_len": 1545,
+  "sql_md5": "7600d7becbd691ab61317f0c1dc534ab",
+  "version": "20260811083921",
+  "stmt_count": 1
+ },
+ {
+  "name": "verify_fixture_tenant_marker",
+  "sql_len": 1408,
+  "sql_md5": "8375b535fa4d604fa0fd7e60e1854d5f",
+  "version": "20260811090653",
+  "stmt_count": 1
+ },
+ {
+  "name": "scoped_notes_crew_media_v1",
+  "sql_len": 3431,
+  "sql_md5": "0f91f7b73a1edab748b6461b3c32a619",
+  "version": "20260811091259",
+  "stmt_count": 1
+ },
+ {
+  "name": "deposit_gated_scheduling_v1",
+  "sql_len": 5106,
+  "sql_md5": "174110c4dbd3c4fd553b6e5ae8d4ef4c",
+  "version": "20260812045109",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_data_deposit_scheduling_fields",
+  "sql_len": 8673,
+  "sql_md5": "a45d0dada2a260deebae8e2ea519de09",
+  "version": "20260812045311",
+  "stmt_count": 1
+ },
+ {
+  "name": "platform_capabilities_beta_tenant_safety",
+  "sql_len": 2489,
+  "sql_md5": "d18ea2777b27cf3add33620f1fbaccf7",
+  "version": "20260813200303",
+  "stmt_count": 1
+ },
+ {
+  "name": "beta_invites_v1",
+  "sql_len": 7943,
+  "sql_md5": "64cdfbb9f8f49029b22b27b2606b027a",
+  "version": "20260813200748",
+  "stmt_count": 1
+ },
+ {
+  "name": "service_template_recurrence_eligibility",
+  "sql_len": 794,
+  "sql_md5": "1c3421a3068fc7d1a447131bc127d18a",
+  "version": "20260813201019",
+  "stmt_count": 1
+ },
+ {
+  "name": "schema_fingerprint_drift_detection",
+  "sql_len": 7921,
+  "sql_md5": "9233c7c97cb131f95148e46317d6eb41",
+  "version": "20260814034022",
+  "stmt_count": 1
+ },
+ {
+  "name": "work_sessions_v1",
+  "sql_len": 5839,
+  "sql_md5": "f97ca863ba2f15b9efcb4a2ab2aa6f0f",
+  "version": "20260814034037",
+  "stmt_count": 1
+ },
+ {
+  "name": "work_sessions_carry_forward_on_first_session",
+  "sql_len": 3128,
+  "sql_md5": "5d1c7e1338fa953bf8dc0ca051171345",
+  "version": "20260814034318",
+  "stmt_count": 1
+ },
+ {
+  "name": "crew_communications_v1",
+  "sql_len": 15140,
+  "sql_md5": "decfd191c5eb6580206c6fc25b59742e",
+  "version": "20260814034445",
+  "stmt_count": 1
+ },
+ {
+  "name": "schema_contract_capture_service_role_only",
+  "sql_len": 10067,
+  "sql_md5": "f5a78177a02714d5fb18d3e93fa3490f",
+  "version": "20260814034550",
+  "stmt_count": 1
+ },
+ {
+  "name": "crew_message_inbox_unread_excludes_system",
+  "sql_len": 2308,
+  "sql_md5": "5a9fed7fc73cf8e4ea9c0ce09dd54b9b",
+  "version": "20260814034848",
+  "stmt_count": 1
+ },
+ {
+  "name": "work_sessions_reclose_extends_the_stretch",
+  "sql_len": 2032,
+  "sql_md5": "d3cca1983565a875b7b923cad876176b",
+  "version": "20260814035646",
+  "stmt_count": 1
+ }
+]

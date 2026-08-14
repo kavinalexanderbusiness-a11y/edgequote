@@ -1,0 +1,2360 @@
+[
+ {
+  "tbl": "api_keys",
+  "indexdef": "CREATE UNIQUE INDEX api_keys_key_hash_key ON public.api_keys USING btree (key_hash)",
+  "indexname": "api_keys_key_hash_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "api_keys",
+  "indexdef": "CREATE UNIQUE INDEX api_keys_pkey ON public.api_keys USING btree (id)",
+  "indexname": "api_keys_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "api_keys",
+  "indexdef": "CREATE INDEX api_keys_user_idx ON public.api_keys USING btree (user_id)",
+  "indexname": "api_keys_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "automation_runs",
+  "indexdef": "CREATE INDEX automation_runs_lookup ON public.automation_runs USING btree (user_id, evaluated_on DESC, rule_key)",
+  "indexname": "automation_runs_lookup",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "automation_runs",
+  "indexdef": "CREATE UNIQUE INDEX automation_runs_pkey ON public.automation_runs USING btree (id)",
+  "indexname": "automation_runs_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "automation_runs",
+  "indexdef": "CREATE INDEX automation_runs_subject ON public.automation_runs USING btree (user_id, subject_id, evaluated_on DESC)",
+  "indexname": "automation_runs_subject",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "automation_runs",
+  "indexdef": "CREATE UNIQUE INDEX automation_runs_unique ON public.automation_runs USING btree (user_id, rule_key, subject_id, evaluated_on)",
+  "indexname": "automation_runs_unique",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "automation_signals",
+  "indexdef": "CREATE INDEX automation_signals_lookup ON public.automation_signals USING btree (user_id, signal, detected_on DESC)",
+  "indexname": "automation_signals_lookup",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "automation_signals",
+  "indexdef": "CREATE UNIQUE INDEX automation_signals_pkey ON public.automation_signals USING btree (id)",
+  "indexname": "automation_signals_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "automation_signals",
+  "indexdef": "CREATE INDEX automation_signals_subject ON public.automation_signals USING btree (user_id, subject_id, detected_on DESC)",
+  "indexname": "automation_signals_subject",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "automation_signals",
+  "indexdef": "CREATE UNIQUE INDEX automation_signals_unique ON public.automation_signals USING btree (user_id, signal, subject_id, detected_on)",
+  "indexname": "automation_signals_unique",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "automation_sweeps",
+  "indexdef": "CREATE UNIQUE INDEX automation_sweeps_pkey ON public.automation_sweeps USING btree (job, ran_on)",
+  "indexname": "automation_sweeps_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "beta_invites",
+  "indexdef": "CREATE UNIQUE INDEX beta_invites_pkey ON public.beta_invites USING btree (id)",
+  "indexname": "beta_invites_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "beta_invites",
+  "indexdef": "CREATE UNIQUE INDEX beta_invites_redeemed_by_key ON public.beta_invites USING btree (redeemed_by) WHERE (redeemed_by IS NOT NULL)",
+  "indexname": "beta_invites_redeemed_by_key",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "beta_invites",
+  "indexdef": "CREATE UNIQUE INDEX beta_invites_reserved_by_key ON public.beta_invites USING btree (reserved_by) WHERE (reserved_by IS NOT NULL)",
+  "indexname": "beta_invites_reserved_by_key",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "beta_invites",
+  "indexdef": "CREATE UNIQUE INDEX beta_invites_token_hash_key ON public.beta_invites USING btree (token_hash)",
+  "indexname": "beta_invites_token_hash_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "business_settings",
+  "indexdef": "CREATE UNIQUE INDEX business_settings_booking_token_idx ON public.business_settings USING btree (booking_token) WHERE (booking_token IS NOT NULL)",
+  "indexname": "business_settings_booking_token_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "business_settings",
+  "indexdef": "CREATE UNIQUE INDEX business_settings_pkey ON public.business_settings USING btree (id)",
+  "indexname": "business_settings_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "business_settings",
+  "indexdef": "CREATE UNIQUE INDEX business_settings_user_id_key ON public.business_settings USING btree (user_id)",
+  "indexname": "business_settings_user_id_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "consent_changes",
+  "indexdef": "CREATE INDEX consent_changes_cust_idx ON public.consent_changes USING btree (user_id, customer_id, created_at DESC)",
+  "indexname": "consent_changes_cust_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "consent_changes",
+  "indexdef": "CREATE INDEX consent_changes_customer_id_idx ON public.consent_changes USING btree (customer_id)",
+  "indexname": "consent_changes_customer_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "consent_changes",
+  "indexdef": "CREATE UNIQUE INDEX consent_changes_pkey ON public.consent_changes USING btree (id)",
+  "indexname": "consent_changes_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "content_pieces",
+  "indexdef": "CREATE INDEX content_pieces_active_idx ON public.content_pieces USING btree (user_id, created_at DESC) WHERE (archived_at IS NULL)",
+  "indexname": "content_pieces_active_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "content_pieces",
+  "indexdef": "CREATE INDEX content_pieces_asset_idx ON public.content_pieces USING btree (asset_id)",
+  "indexname": "content_pieces_asset_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "content_pieces",
+  "indexdef": "CREATE INDEX content_pieces_campaign_idx ON public.content_pieces USING btree (campaign_id)",
+  "indexname": "content_pieces_campaign_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "content_pieces",
+  "indexdef": "CREATE INDEX content_pieces_favorite_idx ON public.content_pieces USING btree (user_id, favorite) WHERE favorite",
+  "indexname": "content_pieces_favorite_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "content_pieces",
+  "indexdef": "CREATE UNIQUE INDEX content_pieces_pkey ON public.content_pieces USING btree (id)",
+  "indexname": "content_pieces_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "content_pieces",
+  "indexdef": "CREATE INDEX content_pieces_schedule_idx ON public.content_pieces USING btree (user_id, scheduled_for)",
+  "indexname": "content_pieces_schedule_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "content_pieces",
+  "indexdef": "CREATE INDEX content_pieces_status_idx ON public.content_pieces USING btree (user_id, status)",
+  "indexname": "content_pieces_status_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "content_pieces",
+  "indexdef": "CREATE INDEX content_pieces_user_idx ON public.content_pieces USING btree (user_id, created_at DESC)",
+  "indexname": "content_pieces_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "conversations",
+  "indexdef": "CREATE INDEX conversations_customer_id_idx ON public.conversations USING btree (customer_id)",
+  "indexname": "conversations_customer_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "conversations",
+  "indexdef": "CREATE INDEX conversations_inbox_idx ON public.conversations USING btree (user_id, archived_at, last_message_at DESC)",
+  "indexname": "conversations_inbox_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "conversations",
+  "indexdef": "CREATE INDEX conversations_labels_idx ON public.conversations USING gin (labels)",
+  "indexname": "conversations_labels_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "conversations",
+  "indexdef": "CREATE INDEX conversations_lead_idx ON public.conversations USING btree (user_id, lead_status) WHERE (lead_status IS NOT NULL)",
+  "indexname": "conversations_lead_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "conversations",
+  "indexdef": "CREATE UNIQUE INDEX conversations_pkey ON public.conversations USING btree (id)",
+  "indexname": "conversations_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "conversations",
+  "indexdef": "CREATE INDEX conversations_snoozed_idx ON public.conversations USING btree (user_id, snoozed_until) WHERE (snoozed_until IS NOT NULL)",
+  "indexname": "conversations_snoozed_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "conversations",
+  "indexdef": "CREATE UNIQUE INDEX conversations_user_id_customer_id_key ON public.conversations USING btree (user_id, customer_id)",
+  "indexname": "conversations_user_id_customer_id_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "conversations",
+  "indexdef": "CREATE INDEX conversations_user_idx ON public.conversations USING btree (user_id, last_message_at DESC)",
+  "indexname": "conversations_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "crew_media",
+  "indexdef": "CREATE INDEX crew_media_job_idx ON public.crew_media USING btree (job_id, created_at)",
+  "indexname": "crew_media_job_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "crew_media",
+  "indexdef": "CREATE INDEX crew_media_message_idx ON public.crew_media USING btree (message_id) WHERE (message_id IS NOT NULL)",
+  "indexname": "crew_media_message_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "crew_media",
+  "indexdef": "CREATE UNIQUE INDEX crew_media_pkey ON public.crew_media USING btree (id)",
+  "indexname": "crew_media_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "crew_media",
+  "indexdef": "CREATE UNIQUE INDEX crew_media_storage_path_key ON public.crew_media USING btree (storage_path)",
+  "indexname": "crew_media_storage_path_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "crew_media",
+  "indexdef": "CREATE INDEX crew_media_user_idx ON public.crew_media USING btree (user_id)",
+  "indexname": "crew_media_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "crew_message_reads",
+  "indexdef": "CREATE UNIQUE INDEX crew_message_reads_pkey ON public.crew_message_reads USING btree (job_id, reader_id)",
+  "indexname": "crew_message_reads_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "crew_message_reads",
+  "indexdef": "CREATE INDEX crew_message_reads_reader_idx ON public.crew_message_reads USING btree (reader_id)",
+  "indexname": "crew_message_reads_reader_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "crew_messages",
+  "indexdef": "CREATE UNIQUE INDEX crew_messages_client_token_key ON public.crew_messages USING btree (job_id, created_by, client_token) WHERE (client_token IS NOT NULL)",
+  "indexname": "crew_messages_client_token_key",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "crew_messages",
+  "indexdef": "CREATE INDEX crew_messages_job_idx ON public.crew_messages USING btree (job_id, created_at)",
+  "indexname": "crew_messages_job_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "crew_messages",
+  "indexdef": "CREATE UNIQUE INDEX crew_messages_pkey ON public.crew_messages USING btree (id)",
+  "indexname": "crew_messages_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "crew_messages",
+  "indexdef": "CREATE INDEX crew_messages_user_idx ON public.crew_messages USING btree (user_id, created_at DESC)",
+  "indexname": "crew_messages_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "crews",
+  "indexdef": "CREATE UNIQUE INDEX crews_pkey ON public.crews USING btree (id)",
+  "indexname": "crews_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "crews",
+  "indexdef": "CREATE INDEX crews_user_idx ON public.crews USING btree (user_id, is_active)",
+  "indexname": "crews_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "crm_campaign_log",
+  "indexdef": "CREATE UNIQUE INDEX crm_campaign_log_campaign_id_customer_id_period_key_key ON public.crm_campaign_log USING btree (campaign_id, customer_id, period_key)",
+  "indexname": "crm_campaign_log_campaign_id_customer_id_period_key_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "crm_campaign_log",
+  "indexdef": "CREATE INDEX crm_campaign_log_campaign_idx ON public.crm_campaign_log USING btree (campaign_id, created_at DESC)",
+  "indexname": "crm_campaign_log_campaign_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "crm_campaign_log",
+  "indexdef": "CREATE INDEX crm_campaign_log_customer_idx ON public.crm_campaign_log USING btree (customer_id)",
+  "indexname": "crm_campaign_log_customer_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "crm_campaign_log",
+  "indexdef": "CREATE UNIQUE INDEX crm_campaign_log_pkey ON public.crm_campaign_log USING btree (id)",
+  "indexname": "crm_campaign_log_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "crm_campaign_log",
+  "indexdef": "CREATE INDEX crm_campaign_log_status_idx ON public.crm_campaign_log USING btree (campaign_id, status)",
+  "indexname": "crm_campaign_log_status_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "crm_campaign_presets",
+  "indexdef": "CREATE UNIQUE INDEX crm_campaign_presets_pkey ON public.crm_campaign_presets USING btree (id)",
+  "indexname": "crm_campaign_presets_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "crm_campaign_presets",
+  "indexdef": "CREATE UNIQUE INDEX crm_campaign_presets_user_id_name_key ON public.crm_campaign_presets USING btree (user_id, name)",
+  "indexname": "crm_campaign_presets_user_id_name_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "crm_campaign_presets",
+  "indexdef": "CREATE INDEX crm_campaign_presets_user_idx ON public.crm_campaign_presets USING btree (user_id, created_at DESC)",
+  "indexname": "crm_campaign_presets_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "crm_campaigns",
+  "indexdef": "CREATE INDEX crm_campaigns_active_idx ON public.crm_campaigns USING btree (user_id, enabled) WHERE (archived_at IS NULL)",
+  "indexname": "crm_campaigns_active_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "crm_campaigns",
+  "indexdef": "CREATE UNIQUE INDEX crm_campaigns_pkey ON public.crm_campaigns USING btree (id)",
+  "indexname": "crm_campaigns_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "crm_campaigns",
+  "indexdef": "CREATE INDEX crm_campaigns_user_idx ON public.crm_campaigns USING btree (user_id, enabled)",
+  "indexname": "crm_campaigns_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "customer_imports",
+  "indexdef": "CREATE UNIQUE INDEX customer_imports_pkey ON public.customer_imports USING btree (id)",
+  "indexname": "customer_imports_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "customer_imports",
+  "indexdef": "CREATE INDEX customer_imports_user_created_idx ON public.customer_imports USING btree (user_id, created_at DESC)",
+  "indexname": "customer_imports_user_created_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "customer_portal_tokens",
+  "indexdef": "CREATE INDEX customer_portal_tokens_customer_id_idx ON public.customer_portal_tokens USING btree (customer_id)",
+  "indexname": "customer_portal_tokens_customer_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "customer_portal_tokens",
+  "indexdef": "CREATE UNIQUE INDEX customer_portal_tokens_pkey ON public.customer_portal_tokens USING btree (token)",
+  "indexname": "customer_portal_tokens_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "customer_portal_tokens",
+  "indexdef": "CREATE INDEX portal_tokens_customer_idx ON public.customer_portal_tokens USING btree (user_id, customer_id)",
+  "indexname": "portal_tokens_customer_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "customers",
+  "indexdef": "CREATE INDEX customers_name_idx ON public.customers USING btree (name)",
+  "indexname": "customers_name_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "customers",
+  "indexdef": "CREATE INDEX customers_name_trgm ON public.customers USING gin (name gin_trgm_ops)",
+  "indexname": "customers_name_trgm",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "customers",
+  "indexdef": "CREATE INDEX customers_phone_digits_trgm_idx ON public.customers USING gin (phone_digits gin_trgm_ops)",
+  "indexname": "customers_phone_digits_trgm_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "customers",
+  "indexdef": "CREATE UNIQUE INDEX customers_pkey ON public.customers USING btree (id)",
+  "indexname": "customers_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "customers",
+  "indexdef": "CREATE INDEX customers_referred_by_idx ON public.customers USING btree (referred_by_customer_id)",
+  "indexname": "customers_referred_by_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "customers",
+  "indexdef": "CREATE INDEX customers_tags_idx ON public.customers USING gin (tags)",
+  "indexname": "customers_tags_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "customers",
+  "indexdef": "CREATE INDEX customers_user_active_idx ON public.customers USING btree (user_id) WHERE (archived_at IS NULL)",
+  "indexname": "customers_user_active_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "customers",
+  "indexdef": "CREATE UNIQUE INDEX customers_user_id_id_key ON public.customers USING btree (user_id, id)",
+  "indexname": "customers_user_id_id_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "customers",
+  "indexdef": "CREATE INDEX customers_user_id_idx ON public.customers USING btree (user_id)",
+  "indexname": "customers_user_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "data_exports",
+  "indexdef": "CREATE UNIQUE INDEX data_exports_pkey ON public.data_exports USING btree (id)",
+  "indexname": "data_exports_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "data_exports",
+  "indexdef": "CREATE INDEX data_exports_user_created_idx ON public.data_exports USING btree (user_id, created_at DESC)",
+  "indexname": "data_exports_user_created_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "day_statuses",
+  "indexdef": "CREATE UNIQUE INDEX day_statuses_pkey ON public.day_statuses USING btree (id)",
+  "indexname": "day_statuses_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "day_statuses",
+  "indexdef": "CREATE INDEX day_statuses_user_date_idx ON public.day_statuses USING btree (user_id, date)",
+  "indexname": "day_statuses_user_date_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "day_statuses",
+  "indexdef": "CREATE UNIQUE INDEX day_statuses_user_id_date_key ON public.day_statuses USING btree (user_id, date)",
+  "indexname": "day_statuses_user_id_date_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "dispatch_notes",
+  "indexdef": "CREATE UNIQUE INDEX dispatch_notes_day_crew_unique ON public.dispatch_notes USING btree (user_id, date, crew_id) NULLS NOT DISTINCT",
+  "indexname": "dispatch_notes_day_crew_unique",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "dispatch_notes",
+  "indexdef": "CREATE UNIQUE INDEX dispatch_notes_pkey ON public.dispatch_notes USING btree (id)",
+  "indexname": "dispatch_notes_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "dispatch_notes",
+  "indexdef": "CREATE INDEX dispatch_notes_user_date_idx ON public.dispatch_notes USING btree (user_id, date)",
+  "indexname": "dispatch_notes_user_date_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "equipment",
+  "indexdef": "CREATE INDEX equipment_crew_idx ON public.equipment USING btree (crew_id)",
+  "indexname": "equipment_crew_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "equipment",
+  "indexdef": "CREATE UNIQUE INDEX equipment_pkey ON public.equipment USING btree (id)",
+  "indexname": "equipment_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "equipment",
+  "indexdef": "CREATE INDEX equipment_user_idx ON public.equipment USING btree (user_id, status)",
+  "indexname": "equipment_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "equipment_docs",
+  "indexdef": "CREATE INDEX equipment_docs_eq_idx ON public.equipment_docs USING btree (user_id, equipment_id, created_at DESC)",
+  "indexname": "equipment_docs_eq_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "equipment_docs",
+  "indexdef": "CREATE UNIQUE INDEX equipment_docs_pkey ON public.equipment_docs USING btree (id)",
+  "indexname": "equipment_docs_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "equipment_service",
+  "indexdef": "CREATE INDEX equipment_service_eq_idx ON public.equipment_service USING btree (user_id, equipment_id, service_date DESC)",
+  "indexname": "equipment_service_eq_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "equipment_service",
+  "indexdef": "CREATE UNIQUE INDEX equipment_service_pkey ON public.equipment_service USING btree (id)",
+  "indexname": "equipment_service_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "expense_categories",
+  "indexdef": "CREATE UNIQUE INDEX expense_categories_pkey ON public.expense_categories USING btree (id)",
+  "indexname": "expense_categories_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "expense_categories",
+  "indexdef": "CREATE INDEX expense_categories_user_idx ON public.expense_categories USING btree (user_id, sort_order) WHERE (archived_at IS NULL)",
+  "indexname": "expense_categories_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "expense_categories",
+  "indexdef": "CREATE INDEX expense_categories_user_kind_idx ON public.expense_categories USING btree (user_id, kind) WHERE (archived_at IS NULL)",
+  "indexname": "expense_categories_user_kind_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "expense_categories",
+  "indexdef": "CREATE UNIQUE INDEX expense_categories_user_name_uniq ON public.expense_categories USING btree (user_id, lower(TRIM(BOTH FROM name))) WHERE (archived_at IS NULL)",
+  "indexname": "expense_categories_user_name_uniq",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "expenses",
+  "indexdef": "CREATE INDEX expenses_category_idx ON public.expenses USING btree (category_id) WHERE (archived_at IS NULL)",
+  "indexname": "expenses_category_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "expenses",
+  "indexdef": "CREATE INDEX expenses_job_idx ON public.expenses USING btree (job_id) WHERE (archived_at IS NULL)",
+  "indexname": "expenses_job_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "expenses",
+  "indexdef": "CREATE UNIQUE INDEX expenses_pkey ON public.expenses USING btree (id)",
+  "indexname": "expenses_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "expenses",
+  "indexdef": "CREATE INDEX expenses_user_bill_date_idx ON public.expenses USING btree (user_id, bill_date DESC) WHERE (archived_at IS NULL)",
+  "indexname": "expenses_user_bill_date_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "expenses",
+  "indexdef": "CREATE INDEX expenses_user_capital_idx ON public.expenses USING btree (user_id) WHERE (is_capital AND (archived_at IS NULL))",
+  "indexname": "expenses_user_capital_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "expenses",
+  "indexdef": "CREATE INDEX expenses_user_date_idx ON public.expenses USING btree (user_id, spent_at DESC) WHERE (archived_at IS NULL)",
+  "indexname": "expenses_user_date_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "expenses",
+  "indexdef": "CREATE INDEX expenses_user_unpaid_idx ON public.expenses USING btree (user_id, bill_date) WHERE ((spent_at IS NULL) AND (archived_at IS NULL))",
+  "indexname": "expenses_user_unpaid_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "expenses",
+  "indexdef": "CREATE INDEX expenses_vendor_idx ON public.expenses USING btree (vendor_id) WHERE (archived_at IS NULL)",
+  "indexname": "expenses_vendor_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "fixed_assets",
+  "indexdef": "CREATE INDEX fixed_assets_equipment_idx ON public.fixed_assets USING btree (equipment_id) WHERE (equipment_id IS NOT NULL)",
+  "indexname": "fixed_assets_equipment_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "fixed_assets",
+  "indexdef": "CREATE INDEX fixed_assets_expense_idx ON public.fixed_assets USING btree (expense_id) WHERE (expense_id IS NOT NULL)",
+  "indexname": "fixed_assets_expense_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "fixed_assets",
+  "indexdef": "CREATE UNIQUE INDEX fixed_assets_pkey ON public.fixed_assets USING btree (id)",
+  "indexname": "fixed_assets_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "fixed_assets",
+  "indexdef": "CREATE INDEX fixed_assets_user_active_idx ON public.fixed_assets USING btree (user_id) WHERE ((archived_at IS NULL) AND (disposed_at IS NULL))",
+  "indexname": "fixed_assets_user_active_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "fixed_assets",
+  "indexdef": "CREATE INDEX fixed_assets_user_idx ON public.fixed_assets USING btree (user_id, in_service_date DESC) WHERE (archived_at IS NULL)",
+  "indexname": "fixed_assets_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "follow_ups",
+  "indexdef": "CREATE INDEX follow_ups_customer_idx ON public.follow_ups USING btree (user_id, customer_id, due_on DESC)",
+  "indexname": "follow_ups_customer_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "follow_ups",
+  "indexdef": "CREATE INDEX follow_ups_open_due_idx ON public.follow_ups USING btree (user_id, due_on) WHERE (status = 'open'::text)",
+  "indexname": "follow_ups_open_due_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "follow_ups",
+  "indexdef": "CREATE UNIQUE INDEX follow_ups_pkey ON public.follow_ups USING btree (id)",
+  "indexname": "follow_ups_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "holidays",
+  "indexdef": "CREATE UNIQUE INDEX holidays_one_per_day ON public.holidays USING btree (user_id, date)",
+  "indexname": "holidays_one_per_day",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "holidays",
+  "indexdef": "CREATE UNIQUE INDEX holidays_pkey ON public.holidays USING btree (id)",
+  "indexname": "holidays_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "holidays",
+  "indexdef": "CREATE INDEX holidays_user_date_idx ON public.holidays USING btree (user_id, date)",
+  "indexname": "holidays_user_date_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "inbound_events",
+  "indexdef": "CREATE INDEX inbound_events_hook_idx ON public.inbound_events USING btree (hook_id, created_at DESC)",
+  "indexname": "inbound_events_hook_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "inbound_events",
+  "indexdef": "CREATE UNIQUE INDEX inbound_events_pkey ON public.inbound_events USING btree (id)",
+  "indexname": "inbound_events_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "inbound_webhooks",
+  "indexdef": "CREATE UNIQUE INDEX inbound_webhooks_pkey ON public.inbound_webhooks USING btree (id)",
+  "indexname": "inbound_webhooks_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "inbound_webhooks",
+  "indexdef": "CREATE UNIQUE INDEX inbound_webhooks_token_key ON public.inbound_webhooks USING btree (token)",
+  "indexname": "inbound_webhooks_token_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "inbound_webhooks",
+  "indexdef": "CREATE INDEX inbound_webhooks_user_idx ON public.inbound_webhooks USING btree (user_id)",
+  "indexname": "inbound_webhooks_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "integration_events",
+  "indexdef": "CREATE INDEX integration_events_kind_idx ON public.integration_events USING btree (user_id, event, created_at DESC)",
+  "indexname": "integration_events_kind_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "integration_events",
+  "indexdef": "CREATE UNIQUE INDEX integration_events_pkey ON public.integration_events USING btree (id)",
+  "indexname": "integration_events_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "integration_events",
+  "indexdef": "CREATE INDEX integration_events_user_idx ON public.integration_events USING btree (user_id, created_at DESC)",
+  "indexname": "integration_events_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "integrations_config",
+  "indexdef": "CREATE UNIQUE INDEX integrations_config_pkey ON public.integrations_config USING btree (id)",
+  "indexname": "integrations_config_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "invoices",
+  "indexdef": "CREATE INDEX idx_invoices_deposit_outstanding ON public.invoices USING btree (user_id, deposit_requested_at) WHERE (deposit_amount IS NOT NULL)",
+  "indexname": "idx_invoices_deposit_outstanding",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "invoices",
+  "indexdef": "CREATE INDEX invoices_customer_id_idx ON public.invoices USING btree (customer_id)",
+  "indexname": "invoices_customer_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "invoices",
+  "indexdef": "CREATE INDEX invoices_inum_trgm ON public.invoices USING gin (invoice_number gin_trgm_ops)",
+  "indexname": "invoices_inum_trgm",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "invoices",
+  "indexdef": "CREATE INDEX invoices_job_id_idx ON public.invoices USING btree (job_id)",
+  "indexname": "invoices_job_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "invoices",
+  "indexdef": "CREATE UNIQUE INDEX invoices_job_id_key ON public.invoices USING btree (job_id) WHERE (job_id IS NOT NULL)",
+  "indexname": "invoices_job_id_key",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "invoices",
+  "indexdef": "CREATE UNIQUE INDEX invoices_pkey ON public.invoices USING btree (id)",
+  "indexname": "invoices_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "invoices",
+  "indexdef": "CREATE INDEX invoices_property_id_idx ON public.invoices USING btree (property_id)",
+  "indexname": "invoices_property_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "invoices",
+  "indexdef": "CREATE INDEX invoices_quote_id_idx ON public.invoices USING btree (quote_id)",
+  "indexname": "invoices_quote_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "invoices",
+  "indexdef": "CREATE INDEX invoices_reminder_scan_idx ON public.invoices USING btree (user_id, status, due_date) WHERE (status = ANY (ARRAY['unpaid'::text, 'sent'::text, 'partial'::text]))",
+  "indexname": "invoices_reminder_scan_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "invoices",
+  "indexdef": "CREATE INDEX invoices_user_id_idx ON public.invoices USING btree (user_id)",
+  "indexname": "invoices_user_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_line_items",
+  "indexdef": "CREATE INDEX job_line_items_group_idx ON public.job_line_items USING btree (group_id)",
+  "indexname": "job_line_items_group_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_line_items",
+  "indexdef": "CREATE INDEX job_line_items_job_id_idx ON public.job_line_items USING btree (job_id)",
+  "indexname": "job_line_items_job_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_line_items",
+  "indexdef": "CREATE INDEX job_line_items_job_idx ON public.job_line_items USING btree (user_id, job_id)",
+  "indexname": "job_line_items_job_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_line_items",
+  "indexdef": "CREATE UNIQUE INDEX job_line_items_pkey ON public.job_line_items USING btree (id)",
+  "indexname": "job_line_items_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "job_photos",
+  "indexdef": "CREATE INDEX job_photos_customer_id_idx ON public.job_photos USING btree (customer_id)",
+  "indexname": "job_photos_customer_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_photos",
+  "indexdef": "CREATE INDEX job_photos_hash_idx ON public.job_photos USING btree (user_id, property_id, content_hash) WHERE (content_hash IS NOT NULL)",
+  "indexname": "job_photos_hash_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_photos",
+  "indexdef": "CREATE INDEX job_photos_job_id_idx ON public.job_photos USING btree (job_id)",
+  "indexname": "job_photos_job_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_photos",
+  "indexdef": "CREATE INDEX job_photos_job_idx ON public.job_photos USING btree (user_id, job_id)",
+  "indexname": "job_photos_job_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_photos",
+  "indexdef": "CREATE UNIQUE INDEX job_photos_pkey ON public.job_photos USING btree (id)",
+  "indexname": "job_photos_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "job_photos",
+  "indexdef": "CREATE INDEX job_photos_property_id_idx ON public.job_photos USING btree (property_id)",
+  "indexname": "job_photos_property_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_photos",
+  "indexdef": "CREATE INDEX job_photos_property_idx ON public.job_photos USING btree (user_id, property_id)",
+  "indexname": "job_photos_property_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_price_changes",
+  "indexdef": "CREATE INDEX job_price_changes_job_id_idx ON public.job_price_changes USING btree (job_id)",
+  "indexname": "job_price_changes_job_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_price_changes",
+  "indexdef": "CREATE INDEX job_price_changes_job_idx ON public.job_price_changes USING btree (user_id, job_id)",
+  "indexname": "job_price_changes_job_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_price_changes",
+  "indexdef": "CREATE UNIQUE INDEX job_price_changes_pkey ON public.job_price_changes USING btree (id)",
+  "indexname": "job_price_changes_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "job_price_changes",
+  "indexdef": "CREATE INDEX job_price_changes_quote_id_idx ON public.job_price_changes USING btree (quote_id)",
+  "indexname": "job_price_changes_quote_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_recurrences",
+  "indexdef": "CREATE INDEX job_recurrences_customer_id_idx ON public.job_recurrences USING btree (customer_id)",
+  "indexname": "job_recurrences_customer_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_recurrences",
+  "indexdef": "CREATE UNIQUE INDEX job_recurrences_pkey ON public.job_recurrences USING btree (id)",
+  "indexname": "job_recurrences_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "job_recurrences",
+  "indexdef": "CREATE INDEX job_recurrences_user_id_idx ON public.job_recurrences USING btree (user_id)",
+  "indexname": "job_recurrences_user_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_work_sessions",
+  "indexdef": "CREATE INDEX job_work_sessions_day_idx ON public.job_work_sessions USING btree (user_id, worked_on DESC)",
+  "indexname": "job_work_sessions_day_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_work_sessions",
+  "indexdef": "CREATE INDEX job_work_sessions_job_idx ON public.job_work_sessions USING btree (user_id, job_id, worked_on DESC)",
+  "indexname": "job_work_sessions_job_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_work_sessions",
+  "indexdef": "CREATE UNIQUE INDEX job_work_sessions_one_per_clock ON public.job_work_sessions USING btree (job_id, started_at) WHERE (started_at IS NOT NULL)",
+  "indexname": "job_work_sessions_one_per_clock",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_work_sessions",
+  "indexdef": "CREATE UNIQUE INDEX job_work_sessions_pkey ON public.job_work_sessions USING btree (id)",
+  "indexname": "job_work_sessions_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "jobs",
+  "indexdef": "CREATE INDEX jobs_crew_id_idx ON public.jobs USING btree (crew_id)",
+  "indexname": "jobs_crew_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "jobs",
+  "indexdef": "CREATE INDEX jobs_customer_id_idx ON public.jobs USING btree (customer_id)",
+  "indexname": "jobs_customer_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "jobs",
+  "indexdef": "CREATE UNIQUE INDEX jobs_id_user_key ON public.jobs USING btree (id, user_id)",
+  "indexname": "jobs_id_user_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "jobs",
+  "indexdef": "CREATE UNIQUE INDEX jobs_pkey ON public.jobs USING btree (id)",
+  "indexname": "jobs_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "jobs",
+  "indexdef": "CREATE INDEX jobs_property_id_idx ON public.jobs USING btree (property_id)",
+  "indexname": "jobs_property_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "jobs",
+  "indexdef": "CREATE INDEX jobs_quote_id_idx ON public.jobs USING btree (quote_id)",
+  "indexname": "jobs_quote_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "jobs",
+  "indexdef": "CREATE INDEX jobs_recurrence_idx ON public.jobs USING btree (recurrence_id)",
+  "indexname": "jobs_recurrence_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "jobs",
+  "indexdef": "CREATE INDEX jobs_scheduled_date_idx ON public.jobs USING btree (scheduled_date)",
+  "indexname": "jobs_scheduled_date_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "jobs",
+  "indexdef": "CREATE INDEX jobs_user_id_idx ON public.jobs USING btree (user_id)",
+  "indexname": "jobs_user_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "labor_observations",
+  "indexdef": "CREATE INDEX labor_observations_job_id_idx ON public.labor_observations USING btree (job_id)",
+  "indexname": "labor_observations_job_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "labor_observations",
+  "indexdef": "CREATE UNIQUE INDEX labor_observations_pkey ON public.labor_observations USING btree (id)",
+  "indexname": "labor_observations_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "labor_observations",
+  "indexdef": "CREATE INDEX labor_observations_prop_idx ON public.labor_observations USING btree (user_id, property_id)",
+  "indexname": "labor_observations_prop_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "labor_observations",
+  "indexdef": "CREATE INDEX labor_observations_property_id_idx ON public.labor_observations USING btree (property_id)",
+  "indexname": "labor_observations_property_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "labor_observations",
+  "indexdef": "CREATE UNIQUE INDEX labor_observations_user_id_job_id_key ON public.labor_observations USING btree (user_id, job_id)",
+  "indexname": "labor_observations_user_id_job_id_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "labor_observations",
+  "indexdef": "CREATE INDEX labor_observations_user_idx ON public.labor_observations USING btree (user_id)",
+  "indexname": "labor_observations_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "liabilities",
+  "indexdef": "CREATE UNIQUE INDEX liabilities_pkey ON public.liabilities USING btree (id)",
+  "indexname": "liabilities_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "liabilities",
+  "indexdef": "CREATE INDEX liabilities_user_idx ON public.liabilities USING btree (user_id, as_of_date DESC) WHERE (archived_at IS NULL)",
+  "indexname": "liabilities_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "marketing_assets",
+  "indexdef": "CREATE INDEX marketing_assets_customer_idx ON public.marketing_assets USING btree (customer_id)",
+  "indexname": "marketing_assets_customer_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "marketing_assets",
+  "indexdef": "CREATE INDEX marketing_assets_job_idx ON public.marketing_assets USING btree (job_id)",
+  "indexname": "marketing_assets_job_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "marketing_assets",
+  "indexdef": "CREATE UNIQUE INDEX marketing_assets_pkey ON public.marketing_assets USING btree (id)",
+  "indexname": "marketing_assets_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "marketing_assets",
+  "indexdef": "CREATE UNIQUE INDEX marketing_assets_user_id_job_id_key ON public.marketing_assets USING btree (user_id, job_id)",
+  "indexname": "marketing_assets_user_id_job_id_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "marketing_assets",
+  "indexdef": "CREATE INDEX marketing_assets_user_idx ON public.marketing_assets USING btree (user_id, created_at DESC)",
+  "indexname": "marketing_assets_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "marketing_campaigns",
+  "indexdef": "CREATE UNIQUE INDEX marketing_campaigns_pkey ON public.marketing_campaigns USING btree (id)",
+  "indexname": "marketing_campaigns_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "marketing_campaigns",
+  "indexdef": "CREATE INDEX marketing_campaigns_status_idx ON public.marketing_campaigns USING btree (user_id, status)",
+  "indexname": "marketing_campaigns_status_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "marketing_campaigns",
+  "indexdef": "CREATE INDEX marketing_campaigns_user_idx ON public.marketing_campaigns USING btree (user_id, created_at DESC)",
+  "indexname": "marketing_campaigns_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "measurements",
+  "indexdef": "CREATE INDEX measurements_hood_idx ON public.measurements USING btree (user_id, neighborhood)",
+  "indexname": "measurements_hood_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "measurements",
+  "indexdef": "CREATE UNIQUE INDEX measurements_pkey ON public.measurements USING btree (id)",
+  "indexname": "measurements_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "measurements",
+  "indexdef": "CREATE INDEX measurements_user_idx ON public.measurements USING btree (user_id, created_at DESC)",
+  "indexname": "measurements_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "message_sends",
+  "indexdef": "CREATE INDEX message_sends_age_idx ON public.message_sends USING btree (created_at)",
+  "indexname": "message_sends_age_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "message_sends",
+  "indexdef": "CREATE UNIQUE INDEX message_sends_pkey ON public.message_sends USING btree (user_id, client_message_id)",
+  "indexname": "message_sends_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "messages",
+  "indexdef": "CREATE INDEX messages_convo_idx ON public.messages USING btree (conversation_id, created_at)",
+  "indexname": "messages_convo_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "messages",
+  "indexdef": "CREATE INDEX messages_customer_id_idx ON public.messages USING btree (customer_id)",
+  "indexname": "messages_customer_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "messages",
+  "indexdef": "CREATE UNIQUE INDEX messages_pkey ON public.messages USING btree (id)",
+  "indexname": "messages_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "messages",
+  "indexdef": "CREATE INDEX messages_provider_msg_idx ON public.messages USING btree (provider, provider_message_id) WHERE (provider_message_id IS NOT NULL)",
+  "indexname": "messages_provider_msg_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "messages",
+  "indexdef": "CREATE UNIQUE INDEX messages_twilio_sid_key ON public.messages USING btree (twilio_sid) WHERE (twilio_sid IS NOT NULL)",
+  "indexname": "messages_twilio_sid_key",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "messages",
+  "indexdef": "CREATE INDEX messages_user_id_idx ON public.messages USING btree (user_id)",
+  "indexname": "messages_user_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "neighbor_leads",
+  "indexdef": "CREATE INDEX neighbor_leads_converted_customer_idx ON public.neighbor_leads USING btree (converted_customer_id)",
+  "indexname": "neighbor_leads_converted_customer_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "neighbor_leads",
+  "indexdef": "CREATE UNIQUE INDEX neighbor_leads_pkey ON public.neighbor_leads USING btree (id)",
+  "indexname": "neighbor_leads_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "neighbor_leads",
+  "indexdef": "CREATE INDEX neighbor_leads_source_customer_idx ON public.neighbor_leads USING btree (source_customer_id)",
+  "indexname": "neighbor_leads_source_customer_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "neighbor_leads",
+  "indexdef": "CREATE INDEX neighbor_leads_source_property_idx ON public.neighbor_leads USING btree (source_property_id)",
+  "indexname": "neighbor_leads_source_property_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "neighbor_leads",
+  "indexdef": "CREATE INDEX neighbor_leads_source_quote_idx ON public.neighbor_leads USING btree (source_quote_id)",
+  "indexname": "neighbor_leads_source_quote_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "neighbor_leads",
+  "indexdef": "CREATE INDEX neighbor_leads_status_idx ON public.neighbor_leads USING btree (status)",
+  "indexname": "neighbor_leads_status_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "neighbor_leads",
+  "indexdef": "CREATE INDEX neighbor_leads_user_idx ON public.neighbor_leads USING btree (user_id)",
+  "indexname": "neighbor_leads_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "notification_log",
+  "indexdef": "CREATE INDEX notification_log_customer_id_idx ON public.notification_log USING btree (customer_id)",
+  "indexname": "notification_log_customer_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "notification_log",
+  "indexdef": "CREATE INDEX notification_log_dedupe_idx ON public.notification_log USING btree (user_id, job_id, template)",
+  "indexname": "notification_log_dedupe_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "notification_log",
+  "indexdef": "CREATE INDEX notification_log_job_id_idx ON public.notification_log USING btree (job_id)",
+  "indexname": "notification_log_job_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "notification_log",
+  "indexdef": "CREATE INDEX notification_log_message_idx ON public.notification_log USING btree (message_id)",
+  "indexname": "notification_log_message_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "notification_log",
+  "indexdef": "CREATE UNIQUE INDEX notification_log_pkey ON public.notification_log USING btree (id)",
+  "indexname": "notification_log_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "notification_log",
+  "indexdef": "CREATE INDEX notification_log_provider_msg_idx ON public.notification_log USING btree (provider, provider_message_id) WHERE (provider_message_id IS NOT NULL)",
+  "indexname": "notification_log_provider_msg_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "notification_log",
+  "indexdef": "CREATE INDEX notification_log_user_created_idx ON public.notification_log USING btree (user_id, created_at)",
+  "indexname": "notification_log_user_created_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "notifications",
+  "indexdef": "CREATE INDEX notifications_customer_id_idx ON public.notifications USING btree (customer_id)",
+  "indexname": "notifications_customer_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "notifications",
+  "indexdef": "CREATE UNIQUE INDEX notifications_pkey ON public.notifications USING btree (id)",
+  "indexname": "notifications_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "notifications",
+  "indexdef": "CREATE INDEX notifications_user_active_idx ON public.notifications USING btree (user_id, created_at DESC) WHERE (archived_at IS NULL)",
+  "indexname": "notifications_user_active_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "notifications",
+  "indexdef": "CREATE INDEX notifications_user_unread_idx ON public.notifications USING btree (user_id, read, created_at DESC)",
+  "indexname": "notifications_user_unread_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "part_movements",
+  "indexdef": "CREATE INDEX part_movements_part_idx ON public.part_movements USING btree (user_id, part_id, created_at DESC)",
+  "indexname": "part_movements_part_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "part_movements",
+  "indexdef": "CREATE UNIQUE INDEX part_movements_pkey ON public.part_movements USING btree (id)",
+  "indexname": "part_movements_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "part_movements",
+  "indexdef": "CREATE INDEX part_movements_po_item_idx ON public.part_movements USING btree (purchase_order_item_id) WHERE (purchase_order_item_id IS NOT NULL)",
+  "indexname": "part_movements_po_item_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "part_movements",
+  "indexdef": "CREATE INDEX part_movements_service_idx ON public.part_movements USING btree (equipment_service_id)",
+  "indexname": "part_movements_service_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "parts",
+  "indexdef": "CREATE UNIQUE INDEX parts_pkey ON public.parts USING btree (id)",
+  "indexname": "parts_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "parts",
+  "indexdef": "CREATE INDEX parts_supplier_idx ON public.parts USING btree (supplier_id) WHERE (supplier_id IS NOT NULL)",
+  "indexname": "parts_supplier_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "parts",
+  "indexdef": "CREATE INDEX parts_user_idx ON public.parts USING btree (user_id, category)",
+  "indexname": "parts_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "pay_run_lines",
+  "indexdef": "CREATE UNIQUE INDEX pay_run_lines_one_per_tech ON public.pay_run_lines USING btree (pay_run_id, technician_id)",
+  "indexname": "pay_run_lines_one_per_tech",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "pay_run_lines",
+  "indexdef": "CREATE UNIQUE INDEX pay_run_lines_pkey ON public.pay_run_lines USING btree (id)",
+  "indexname": "pay_run_lines_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "pay_run_lines",
+  "indexdef": "CREATE INDEX pay_run_lines_run_idx ON public.pay_run_lines USING btree (pay_run_id)",
+  "indexname": "pay_run_lines_run_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "pay_run_lines",
+  "indexdef": "CREATE INDEX pay_run_lines_tech_idx ON public.pay_run_lines USING btree (technician_id)",
+  "indexname": "pay_run_lines_tech_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "pay_runs",
+  "indexdef": "CREATE UNIQUE INDEX pay_runs_one_per_period ON public.pay_runs USING btree (user_id, period_start, period_end)",
+  "indexname": "pay_runs_one_per_period",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "pay_runs",
+  "indexdef": "CREATE UNIQUE INDEX pay_runs_pkey ON public.pay_runs USING btree (id)",
+  "indexname": "pay_runs_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "pay_runs",
+  "indexdef": "CREATE INDEX pay_runs_user_period_idx ON public.pay_runs USING btree (user_id, period_start DESC)",
+  "indexname": "pay_runs_user_period_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "payment_methods",
+  "indexdef": "CREATE INDEX payment_methods_customer_idx ON public.payment_methods USING btree (customer_id, is_default DESC, created_at DESC)",
+  "indexname": "payment_methods_customer_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "payment_methods",
+  "indexdef": "CREATE UNIQUE INDEX payment_methods_pkey ON public.payment_methods USING btree (id)",
+  "indexname": "payment_methods_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "payment_methods",
+  "indexdef": "CREATE UNIQUE INDEX payment_methods_stripe_payment_method_id_key ON public.payment_methods USING btree (stripe_payment_method_id)",
+  "indexname": "payment_methods_stripe_payment_method_id_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "payments",
+  "indexdef": "CREATE INDEX payments_customer_id_idx ON public.payments USING btree (customer_id)",
+  "indexname": "payments_customer_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "payments",
+  "indexdef": "CREATE INDEX payments_customer_kind_idx ON public.payments USING btree (customer_id, kind)",
+  "indexname": "payments_customer_kind_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "payments",
+  "indexdef": "CREATE INDEX payments_invoice_idx ON public.payments USING btree (invoice_id)",
+  "indexname": "payments_invoice_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "payments",
+  "indexdef": "CREATE UNIQUE INDEX payments_pkey ON public.payments USING btree (id)",
+  "indexname": "payments_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "payments",
+  "indexdef": "CREATE INDEX payments_quote_id_idx ON public.payments USING btree (quote_id) WHERE (quote_id IS NOT NULL)",
+  "indexname": "payments_quote_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "payments",
+  "indexdef": "CREATE UNIQUE INDEX payments_stripe_session_id_key ON public.payments USING btree (stripe_session_id)",
+  "indexname": "payments_stripe_session_id_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "payments",
+  "indexdef": "CREATE INDEX payments_user_idx ON public.payments USING btree (user_id, created_at DESC)",
+  "indexname": "payments_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "platform_capabilities",
+  "indexdef": "CREATE UNIQUE INDEX platform_capabilities_pkey ON public.platform_capabilities USING btree (user_id)",
+  "indexname": "platform_capabilities_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "platform_operators",
+  "indexdef": "CREATE UNIQUE INDEX platform_operators_pkey ON public.platform_operators USING btree (user_id)",
+  "indexname": "platform_operators_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "portal_access_requests",
+  "indexdef": "CREATE INDEX portal_access_requests_key_time_idx ON public.portal_access_requests USING btree (email_key, created_at DESC)",
+  "indexname": "portal_access_requests_key_time_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "portal_access_requests",
+  "indexdef": "CREATE UNIQUE INDEX portal_access_requests_pkey ON public.portal_access_requests USING btree (id)",
+  "indexname": "portal_access_requests_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "portal_access_requests",
+  "indexdef": "CREATE INDEX portal_access_requests_time_idx ON public.portal_access_requests USING btree (created_at DESC)",
+  "indexname": "portal_access_requests_time_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "pricing_config_versions",
+  "indexdef": "CREATE UNIQUE INDEX pricing_config_versions_pkey ON public.pricing_config_versions USING btree (id)",
+  "indexname": "pricing_config_versions_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "pricing_config_versions",
+  "indexdef": "CREATE INDEX pricing_config_versions_user_valid_idx ON public.pricing_config_versions USING btree (user_id, valid_from DESC)",
+  "indexname": "pricing_config_versions_user_valid_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "properties",
+  "indexdef": "CREATE INDEX properties_customer_id_idx ON public.properties USING btree (customer_id)",
+  "indexname": "properties_customer_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "properties",
+  "indexdef": "CREATE UNIQUE INDEX properties_id_user_unique ON public.properties USING btree (id, user_id)",
+  "indexname": "properties_id_user_unique",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "properties",
+  "indexdef": "CREATE UNIQUE INDEX properties_one_primary ON public.properties USING btree (customer_id) WHERE is_primary",
+  "indexname": "properties_one_primary",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "properties",
+  "indexdef": "CREATE UNIQUE INDEX properties_pkey ON public.properties USING btree (id)",
+  "indexname": "properties_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "properties",
+  "indexdef": "CREATE INDEX properties_user_id_idx ON public.properties USING btree (user_id)",
+  "indexname": "properties_user_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "property_intelligence",
+  "indexdef": "CREATE INDEX property_intelligence_customer_idx ON public.property_intelligence USING btree (customer_id)",
+  "indexname": "property_intelligence_customer_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "property_intelligence",
+  "indexdef": "CREATE UNIQUE INDEX property_intelligence_one_active ON public.property_intelligence USING btree (user_id, property_id) WHERE (status = 'active'::text)",
+  "indexname": "property_intelligence_one_active",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "property_intelligence",
+  "indexdef": "CREATE UNIQUE INDEX property_intelligence_pkey ON public.property_intelligence USING btree (id)",
+  "indexname": "property_intelligence_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "property_intelligence",
+  "indexdef": "CREATE INDEX property_intelligence_property_idx ON public.property_intelligence USING btree (property_id, status)",
+  "indexname": "property_intelligence_property_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "property_intelligence",
+  "indexdef": "CREATE INDEX property_intelligence_user_idx ON public.property_intelligence USING btree (user_id, created_at DESC)",
+  "indexname": "property_intelligence_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "property_measurement_events",
+  "indexdef": "CREATE INDEX pme_property_idx ON public.property_measurement_events USING btree (property_id, seq DESC)",
+  "indexname": "pme_property_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "property_measurement_events",
+  "indexdef": "CREATE INDEX pme_property_kind_idx ON public.property_measurement_events USING btree (property_id, kind, seq DESC)",
+  "indexname": "pme_property_kind_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "property_measurement_events",
+  "indexdef": "CREATE INDEX pme_user_idx ON public.property_measurement_events USING btree (user_id, seq DESC)",
+  "indexname": "pme_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "property_measurement_events",
+  "indexdef": "CREATE UNIQUE INDEX property_measurement_events_pkey ON public.property_measurement_events USING btree (id)",
+  "indexname": "property_measurement_events_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "property_measurements",
+  "indexdef": "CREATE INDEX property_measurements_kind_idx ON public.property_measurements USING btree (user_id, kind)",
+  "indexname": "property_measurements_kind_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "property_measurements",
+  "indexdef": "CREATE UNIQUE INDEX property_measurements_one_per_kind ON public.property_measurements USING btree (property_id, kind)",
+  "indexname": "property_measurements_one_per_kind",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "property_measurements",
+  "indexdef": "CREATE UNIQUE INDEX property_measurements_pkey ON public.property_measurements USING btree (id)",
+  "indexname": "property_measurements_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "property_measurements",
+  "indexdef": "CREATE INDEX property_measurements_property_idx ON public.property_measurements USING btree (property_id)",
+  "indexname": "property_measurements_property_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "property_measurements",
+  "indexdef": "CREATE INDEX property_measurements_user_idx ON public.property_measurements USING btree (user_id)",
+  "indexname": "property_measurements_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "property_observations",
+  "indexdef": "CREATE INDEX property_observations_attr_idx ON public.property_observations USING btree (property_id, attribute_key, observed_at DESC)",
+  "indexname": "property_observations_attr_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "property_observations",
+  "indexdef": "CREATE UNIQUE INDEX property_observations_pkey ON public.property_observations USING btree (id)",
+  "indexname": "property_observations_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "property_observations",
+  "indexdef": "CREATE INDEX property_observations_prop_idx ON public.property_observations USING btree (user_id, property_id, observed_at DESC)",
+  "indexname": "property_observations_prop_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "property_observations",
+  "indexdef": "CREATE INDEX property_observations_run_idx ON public.property_observations USING btree (analysis_id)",
+  "indexname": "property_observations_run_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "property_twin",
+  "indexdef": "CREATE INDEX property_twin_customer_idx ON public.property_twin USING btree (customer_id)",
+  "indexname": "property_twin_customer_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "property_twin",
+  "indexdef": "CREATE UNIQUE INDEX property_twin_pkey ON public.property_twin USING btree (id)",
+  "indexname": "property_twin_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "property_twin",
+  "indexdef": "CREATE INDEX property_twin_property_idx ON public.property_twin USING btree (property_id)",
+  "indexname": "property_twin_property_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "property_twin",
+  "indexdef": "CREATE UNIQUE INDEX property_twin_user_id_property_id_key ON public.property_twin USING btree (user_id, property_id)",
+  "indexname": "property_twin_user_id_property_id_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "property_twin",
+  "indexdef": "CREATE INDEX property_twin_user_idx ON public.property_twin USING btree (user_id, last_analyzed_at DESC)",
+  "indexname": "property_twin_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "pto_entries",
+  "indexdef": "CREATE UNIQUE INDEX pto_entries_one_per_day_kind ON public.pto_entries USING btree (technician_id, date, kind)",
+  "indexname": "pto_entries_one_per_day_kind",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "pto_entries",
+  "indexdef": "CREATE UNIQUE INDEX pto_entries_pkey ON public.pto_entries USING btree (id)",
+  "indexname": "pto_entries_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "pto_entries",
+  "indexdef": "CREATE INDEX pto_entries_tech_date_idx ON public.pto_entries USING btree (technician_id, date)",
+  "indexname": "pto_entries_tech_date_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "pto_entries",
+  "indexdef": "CREATE INDEX pto_entries_user_date_idx ON public.pto_entries USING btree (user_id, date)",
+  "indexname": "pto_entries_user_date_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "publish_jobs",
+  "indexdef": "CREATE INDEX publish_jobs_due_idx ON public.publish_jobs USING btree (status, scheduled_for)",
+  "indexname": "publish_jobs_due_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "publish_jobs",
+  "indexdef": "CREATE UNIQUE INDEX publish_jobs_idempotency_key_key ON public.publish_jobs USING btree (idempotency_key)",
+  "indexname": "publish_jobs_idempotency_key_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "publish_jobs",
+  "indexdef": "CREATE INDEX publish_jobs_piece_idx ON public.publish_jobs USING btree (content_piece_id)",
+  "indexname": "publish_jobs_piece_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "publish_jobs",
+  "indexdef": "CREATE UNIQUE INDEX publish_jobs_pkey ON public.publish_jobs USING btree (id)",
+  "indexname": "publish_jobs_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "publish_jobs",
+  "indexdef": "CREATE INDEX publish_jobs_status_idx ON public.publish_jobs USING btree (user_id, status)",
+  "indexname": "publish_jobs_status_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "publish_jobs",
+  "indexdef": "CREATE INDEX publish_jobs_user_idx ON public.publish_jobs USING btree (user_id, created_at DESC)",
+  "indexname": "publish_jobs_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "purchase_order_items",
+  "indexdef": "CREATE INDEX purchase_order_items_part_idx ON public.purchase_order_items USING btree (part_id)",
+  "indexname": "purchase_order_items_part_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "purchase_order_items",
+  "indexdef": "CREATE UNIQUE INDEX purchase_order_items_pkey ON public.purchase_order_items USING btree (id)",
+  "indexname": "purchase_order_items_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "purchase_order_items",
+  "indexdef": "CREATE INDEX purchase_order_items_po_idx ON public.purchase_order_items USING btree (purchase_order_id)",
+  "indexname": "purchase_order_items_po_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "purchase_orders",
+  "indexdef": "CREATE UNIQUE INDEX purchase_orders_pkey ON public.purchase_orders USING btree (id)",
+  "indexname": "purchase_orders_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "purchase_orders",
+  "indexdef": "CREATE INDEX purchase_orders_supplier_idx ON public.purchase_orders USING btree (supplier_id) WHERE (supplier_id IS NOT NULL)",
+  "indexname": "purchase_orders_supplier_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "purchase_orders",
+  "indexdef": "CREATE INDEX purchase_orders_user_idx ON public.purchase_orders USING btree (user_id, created_at DESC)",
+  "indexname": "purchase_orders_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "push_config",
+  "indexdef": "CREATE UNIQUE INDEX push_config_pkey ON public.push_config USING btree (id)",
+  "indexname": "push_config_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "push_subscriptions",
+  "indexdef": "CREATE UNIQUE INDEX push_subscriptions_pkey ON public.push_subscriptions USING btree (id)",
+  "indexname": "push_subscriptions_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "push_subscriptions",
+  "indexdef": "CREATE UNIQUE INDEX push_subscriptions_user_id_endpoint_key ON public.push_subscriptions USING btree (user_id, endpoint)",
+  "indexname": "push_subscriptions_user_id_endpoint_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "push_subscriptions",
+  "indexdef": "CREATE INDEX push_subscriptions_user_idx ON public.push_subscriptions USING btree (user_id)",
+  "indexname": "push_subscriptions_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quote_options",
+  "indexdef": "CREATE UNIQUE INDEX quote_options_id_quote_unique ON public.quote_options USING btree (id, quote_id)",
+  "indexname": "quote_options_id_quote_unique",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "quote_options",
+  "indexdef": "CREATE UNIQUE INDEX quote_options_one_recommended ON public.quote_options USING btree (quote_id) WHERE is_recommended",
+  "indexname": "quote_options_one_recommended",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quote_options",
+  "indexdef": "CREATE UNIQUE INDEX quote_options_pkey ON public.quote_options USING btree (id)",
+  "indexname": "quote_options_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "quote_options",
+  "indexdef": "CREATE INDEX quote_options_quote_idx ON public.quote_options USING btree (quote_id, sort_order)",
+  "indexname": "quote_options_quote_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quote_options",
+  "indexdef": "CREATE INDEX quote_options_user_idx ON public.quote_options USING btree (user_id)",
+  "indexname": "quote_options_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quote_outcomes",
+  "indexdef": "CREATE UNIQUE INDEX quote_outcomes_pkey ON public.quote_outcomes USING btree (id)",
+  "indexname": "quote_outcomes_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "quote_outcomes",
+  "indexdef": "CREATE INDEX quote_outcomes_quote_id_idx ON public.quote_outcomes USING btree (quote_id)",
+  "indexname": "quote_outcomes_quote_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quote_outcomes",
+  "indexdef": "CREATE UNIQUE INDEX quote_outcomes_user_id_quote_id_key ON public.quote_outcomes USING btree (user_id, quote_id)",
+  "indexname": "quote_outcomes_user_id_quote_id_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "quote_outcomes",
+  "indexdef": "CREATE INDEX quote_outcomes_user_idx ON public.quote_outcomes USING btree (user_id)",
+  "indexname": "quote_outcomes_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quote_services",
+  "indexdef": "CREATE UNIQUE INDEX quote_services_pkey ON public.quote_services USING btree (id)",
+  "indexname": "quote_services_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "quote_services",
+  "indexdef": "CREATE INDEX quote_services_quote_sort_idx ON public.quote_services USING btree (quote_id, sort_order)",
+  "indexname": "quote_services_quote_sort_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quote_services",
+  "indexdef": "CREATE INDEX quote_services_user_quote_idx ON public.quote_services USING btree (user_id, quote_id)",
+  "indexname": "quote_services_user_quote_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quotes",
+  "indexdef": "CREATE INDEX quotes_accepted_snapshot_idx ON public.quotes USING btree (user_id, selected_cadence) WHERE (accepted_price IS NOT NULL)",
+  "indexname": "quotes_accepted_snapshot_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quotes",
+  "indexdef": "CREATE INDEX quotes_created_idx ON public.quotes USING btree (created_at DESC)",
+  "indexname": "quotes_created_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quotes",
+  "indexdef": "CREATE INDEX quotes_customer_id_idx ON public.quotes USING btree (customer_id)",
+  "indexname": "quotes_customer_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quotes",
+  "indexdef": "CREATE UNIQUE INDEX quotes_pkey ON public.quotes USING btree (id)",
+  "indexname": "quotes_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "quotes",
+  "indexdef": "CREATE INDEX quotes_pricing_config_version_idx ON public.quotes USING btree (pricing_config_version_id) WHERE (pricing_config_version_id IS NOT NULL)",
+  "indexname": "quotes_pricing_config_version_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quotes",
+  "indexdef": "CREATE INDEX quotes_property_id_idx ON public.quotes USING btree (property_id)",
+  "indexname": "quotes_property_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quotes",
+  "indexdef": "CREATE INDEX quotes_qnum_trgm ON public.quotes USING gin (quote_number gin_trgm_ops)",
+  "indexname": "quotes_qnum_trgm",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quotes",
+  "indexdef": "CREATE INDEX quotes_selected_option_idx ON public.quotes USING btree (selected_option_id)",
+  "indexname": "quotes_selected_option_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quotes",
+  "indexdef": "CREATE INDEX quotes_service_template_id_idx ON public.quotes USING btree (service_template_id)",
+  "indexname": "quotes_service_template_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quotes",
+  "indexdef": "CREATE INDEX quotes_status_idx ON public.quotes USING btree (status)",
+  "indexname": "quotes_status_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quotes",
+  "indexdef": "CREATE UNIQUE INDEX quotes_user_id_id_key ON public.quotes USING btree (user_id, id)",
+  "indexname": "quotes_user_id_id_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "quotes",
+  "indexdef": "CREATE INDEX quotes_user_id_idx ON public.quotes USING btree (user_id)",
+  "indexname": "quotes_user_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "referrals",
+  "indexdef": "CREATE UNIQUE INDEX referrals_link_uniq ON public.referrals USING btree (referrer_customer_id, referred_customer_id) WHERE (referred_customer_id IS NOT NULL)",
+  "indexname": "referrals_link_uniq",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "referrals",
+  "indexdef": "CREATE UNIQUE INDEX referrals_pkey ON public.referrals USING btree (id)",
+  "indexname": "referrals_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "referrals",
+  "indexdef": "CREATE INDEX referrals_referred_idx ON public.referrals USING btree (referred_customer_id)",
+  "indexname": "referrals_referred_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "referrals",
+  "indexdef": "CREATE INDEX referrals_referrer_idx ON public.referrals USING btree (referrer_customer_id)",
+  "indexname": "referrals_referrer_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "referrals",
+  "indexdef": "CREATE INDEX referrals_user_idx ON public.referrals USING btree (user_id, created_at DESC)",
+  "indexname": "referrals_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "report_schedules",
+  "indexdef": "CREATE INDEX report_schedules_due_idx ON public.report_schedules USING btree (enabled, kind) WHERE enabled",
+  "indexname": "report_schedules_due_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "report_schedules",
+  "indexdef": "CREATE UNIQUE INDEX report_schedules_pkey ON public.report_schedules USING btree (id)",
+  "indexname": "report_schedules_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "report_schedules",
+  "indexdef": "CREATE UNIQUE INDEX report_schedules_user_id_kind_key ON public.report_schedules USING btree (user_id, kind)",
+  "indexname": "report_schedules_user_id_kind_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "revenue_recommendations",
+  "indexdef": "CREATE INDEX revenue_recommendations_customer_idx ON public.revenue_recommendations USING btree (customer_id)",
+  "indexname": "revenue_recommendations_customer_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "revenue_recommendations",
+  "indexdef": "CREATE UNIQUE INDEX revenue_recommendations_pkey ON public.revenue_recommendations USING btree (id)",
+  "indexname": "revenue_recommendations_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "revenue_recommendations",
+  "indexdef": "CREATE UNIQUE INDEX revenue_recommendations_user_id_opportunity_key_key ON public.revenue_recommendations USING btree (user_id, opportunity_key)",
+  "indexname": "revenue_recommendations_user_id_opportunity_key_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "revenue_recommendations",
+  "indexdef": "CREATE INDEX revenue_recommendations_user_idx ON public.revenue_recommendations USING btree (user_id)",
+  "indexname": "revenue_recommendations_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "road_distance_cache",
+  "indexdef": "CREATE INDEX road_distance_cache_lookup_idx ON public.road_distance_cache USING btree (user_id, from_key, to_key)",
+  "indexname": "road_distance_cache_lookup_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "road_distance_cache",
+  "indexdef": "CREATE UNIQUE INDEX road_distance_cache_pkey ON public.road_distance_cache USING btree (id)",
+  "indexname": "road_distance_cache_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "road_distance_cache",
+  "indexdef": "CREATE UNIQUE INDEX road_distance_cache_user_id_from_key_to_key_key ON public.road_distance_cache USING btree (user_id, from_key, to_key)",
+  "indexname": "road_distance_cache_user_id_from_key_to_key_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "schedule_health_ignored",
+  "indexdef": "CREATE UNIQUE INDEX schedule_health_ignored_pkey ON public.schedule_health_ignored USING btree (id)",
+  "indexname": "schedule_health_ignored_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "schedule_health_ignored",
+  "indexdef": "CREATE UNIQUE INDEX schedule_health_ignored_user_id_issue_key_key ON public.schedule_health_ignored USING btree (user_id, issue_key)",
+  "indexname": "schedule_health_ignored_user_id_issue_key_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "schedule_health_ignored",
+  "indexdef": "CREATE INDEX schedule_health_ignored_user_idx ON public.schedule_health_ignored USING btree (user_id)",
+  "indexname": "schedule_health_ignored_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "schedule_items",
+  "indexdef": "CREATE INDEX schedule_items_due_idx ON public.schedule_items USING btree (user_id, status, due_at)",
+  "indexname": "schedule_items_due_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "schedule_items",
+  "indexdef": "CREATE UNIQUE INDEX schedule_items_pkey ON public.schedule_items USING btree (id)",
+  "indexname": "schedule_items_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "schedule_items",
+  "indexdef": "CREATE INDEX schedule_items_user_date_idx ON public.schedule_items USING btree (user_id, scheduled_date)",
+  "indexname": "schedule_items_user_date_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "scheduled_messages",
+  "indexdef": "CREATE INDEX scheduled_messages_due_idx ON public.scheduled_messages USING btree (status, send_at)",
+  "indexname": "scheduled_messages_due_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "scheduled_messages",
+  "indexdef": "CREATE UNIQUE INDEX scheduled_messages_pkey ON public.scheduled_messages USING btree (id)",
+  "indexname": "scheduled_messages_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "scheduled_messages",
+  "indexdef": "CREATE INDEX scheduled_messages_user_idx ON public.scheduled_messages USING btree (user_id, send_at DESC)",
+  "indexname": "scheduled_messages_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "service_bundle_items",
+  "indexdef": "CREATE INDEX service_bundle_items_bundle_idx ON public.service_bundle_items USING btree (bundle_id, sort_order, created_at)",
+  "indexname": "service_bundle_items_bundle_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "service_bundle_items",
+  "indexdef": "CREATE UNIQUE INDEX service_bundle_items_pkey ON public.service_bundle_items USING btree (id)",
+  "indexname": "service_bundle_items_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "service_bundles",
+  "indexdef": "CREATE UNIQUE INDEX service_bundles_id_user_uk ON public.service_bundles USING btree (id, user_id)",
+  "indexname": "service_bundles_id_user_uk",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "service_bundles",
+  "indexdef": "CREATE UNIQUE INDEX service_bundles_pkey ON public.service_bundles USING btree (id)",
+  "indexname": "service_bundles_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "service_bundles",
+  "indexdef": "CREATE UNIQUE INDEX service_bundles_user_name_uk ON public.service_bundles USING btree (user_id, lower(btrim(name)))",
+  "indexname": "service_bundles_user_name_uk",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "service_bundles",
+  "indexdef": "CREATE INDEX service_bundles_user_sort_idx ON public.service_bundles USING btree (user_id, sort_order, created_at)",
+  "indexname": "service_bundles_user_sort_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "service_requests",
+  "indexdef": "CREATE INDEX service_requests_customer_id_idx ON public.service_requests USING btree (customer_id)",
+  "indexname": "service_requests_customer_id_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "service_requests",
+  "indexdef": "CREATE UNIQUE INDEX service_requests_pkey ON public.service_requests USING btree (id)",
+  "indexname": "service_requests_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "service_requests",
+  "indexdef": "CREATE INDEX service_requests_user_idx ON public.service_requests USING btree (user_id, status)",
+  "indexname": "service_requests_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "service_templates",
+  "indexdef": "CREATE INDEX service_templates_active_idx ON public.service_templates USING btree (is_active)",
+  "indexname": "service_templates_active_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "service_templates",
+  "indexdef": "CREATE INDEX service_templates_favorite_idx ON public.service_templates USING btree (user_id, is_favorite) WHERE is_favorite",
+  "indexname": "service_templates_favorite_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "service_templates",
+  "indexdef": "CREATE UNIQUE INDEX service_templates_id_user_uk ON public.service_templates USING btree (id, user_id)",
+  "indexname": "service_templates_id_user_uk",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "service_templates",
+  "indexdef": "CREATE UNIQUE INDEX service_templates_pkey ON public.service_templates USING btree (id)",
+  "indexname": "service_templates_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "service_templates",
+  "indexdef": "CREATE INDEX service_templates_user_idx ON public.service_templates USING btree (user_id)",
+  "indexname": "service_templates_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "service_units",
+  "indexdef": "CREATE UNIQUE INDEX service_units_pkey ON public.service_units USING btree (id)",
+  "indexname": "service_units_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "service_units",
+  "indexdef": "CREATE UNIQUE INDEX service_units_system_code_key ON public.service_units USING btree (code) WHERE (user_id IS NULL)",
+  "indexname": "service_units_system_code_key",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "service_units",
+  "indexdef": "CREATE UNIQUE INDEX service_units_user_code_key ON public.service_units USING btree (user_id, code) WHERE (user_id IS NOT NULL)",
+  "indexname": "service_units_user_code_key",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "service_units",
+  "indexdef": "CREATE INDEX service_units_user_idx ON public.service_units USING btree (user_id)",
+  "indexname": "service_units_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "social_connections",
+  "indexdef": "CREATE UNIQUE INDEX social_connections_pkey ON public.social_connections USING btree (id)",
+  "indexname": "social_connections_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "social_connections",
+  "indexdef": "CREATE UNIQUE INDEX social_connections_unique_idx ON public.social_connections USING btree (user_id, platform, COALESCE(account_id, account_name))",
+  "indexname": "social_connections_unique_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "social_connections",
+  "indexdef": "CREATE INDEX social_connections_user_idx ON public.social_connections USING btree (user_id, platform)",
+  "indexname": "social_connections_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "suggestion_dismissals",
+  "indexdef": "CREATE INDEX idx_suggestion_dismissals_user ON public.suggestion_dismissals USING btree (user_id)",
+  "indexname": "idx_suggestion_dismissals_user",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "suggestion_dismissals",
+  "indexdef": "CREATE UNIQUE INDEX suggestion_dismissals_pkey ON public.suggestion_dismissals USING btree (id)",
+  "indexname": "suggestion_dismissals_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "suggestion_dismissals",
+  "indexdef": "CREATE UNIQUE INDEX suggestion_dismissals_user_id_suggestion_key_key ON public.suggestion_dismissals USING btree (user_id, suggestion_key)",
+  "indexname": "suggestion_dismissals_user_id_suggestion_key_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "suppliers",
+  "indexdef": "CREATE UNIQUE INDEX suppliers_pkey ON public.suppliers USING btree (id)",
+  "indexname": "suppliers_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "suppliers",
+  "indexdef": "CREATE INDEX suppliers_user_idx ON public.suppliers USING btree (user_id, name)",
+  "indexname": "suppliers_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "technicians",
+  "indexdef": "CREATE INDEX technicians_active_idx ON public.technicians USING btree (user_id) WHERE (archived_at IS NULL)",
+  "indexname": "technicians_active_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "technicians",
+  "indexdef": "CREATE UNIQUE INDEX technicians_auth_user_id_key ON public.technicians USING btree (auth_user_id) WHERE (auth_user_id IS NOT NULL)",
+  "indexname": "technicians_auth_user_id_key",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "technicians",
+  "indexdef": "CREATE INDEX technicians_crew_idx ON public.technicians USING btree (crew_id)",
+  "indexname": "technicians_crew_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "technicians",
+  "indexdef": "CREATE UNIQUE INDEX technicians_id_user_key ON public.technicians USING btree (id, user_id)",
+  "indexname": "technicians_id_user_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "technicians",
+  "indexdef": "CREATE UNIQUE INDEX technicians_invite_code_key ON public.technicians USING btree (invite_code) WHERE (invite_code IS NOT NULL)",
+  "indexname": "technicians_invite_code_key",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "technicians",
+  "indexdef": "CREATE UNIQUE INDEX technicians_pkey ON public.technicians USING btree (id)",
+  "indexname": "technicians_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "technicians",
+  "indexdef": "CREATE INDEX technicians_user_idx ON public.technicians USING btree (user_id, is_active)",
+  "indexname": "technicians_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "time_entries",
+  "indexdef": "CREATE INDEX time_entries_job_idx ON public.time_entries USING btree (job_id)",
+  "indexname": "time_entries_job_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "time_entries",
+  "indexdef": "CREATE UNIQUE INDEX time_entries_one_open_per_tech ON public.time_entries USING btree (technician_id) WHERE (clock_out IS NULL)",
+  "indexname": "time_entries_one_open_per_tech",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "time_entries",
+  "indexdef": "CREATE UNIQUE INDEX time_entries_pkey ON public.time_entries USING btree (id)",
+  "indexname": "time_entries_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "time_entries",
+  "indexdef": "CREATE INDEX time_entries_tech_idx ON public.time_entries USING btree (technician_id, clock_in DESC)",
+  "indexname": "time_entries_tech_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "time_entries",
+  "indexdef": "CREATE INDEX time_entries_user_idx ON public.time_entries USING btree (user_id, clock_in DESC)",
+  "indexname": "time_entries_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "travel_fee_tiers",
+  "indexdef": "CREATE UNIQUE INDEX travel_fee_tiers_pkey ON public.travel_fee_tiers USING btree (id)",
+  "indexname": "travel_fee_tiers_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "travel_fee_tiers",
+  "indexdef": "CREATE INDEX travel_fee_tiers_user_idx ON public.travel_fee_tiers USING btree (user_id)",
+  "indexname": "travel_fee_tiers_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "vendors",
+  "indexdef": "CREATE UNIQUE INDEX vendors_pkey ON public.vendors USING btree (id)",
+  "indexname": "vendors_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "vendors",
+  "indexdef": "CREATE INDEX vendors_user_idx ON public.vendors USING btree (user_id) WHERE (archived_at IS NULL)",
+  "indexname": "vendors_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "vendors",
+  "indexdef": "CREATE UNIQUE INDEX vendors_user_name_uniq ON public.vendors USING btree (user_id, lower(TRIM(BOTH FROM name))) WHERE (archived_at IS NULL)",
+  "indexname": "vendors_user_name_uniq",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "verify_fixture_tenants",
+  "indexdef": "CREATE UNIQUE INDEX verify_fixture_tenants_pkey ON public.verify_fixture_tenants USING btree (user_id)",
+  "indexname": "verify_fixture_tenants_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "wage_history",
+  "indexdef": "CREATE UNIQUE INDEX wage_history_pkey ON public.wage_history USING btree (id)",
+  "indexname": "wage_history_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "wage_history",
+  "indexdef": "CREATE INDEX wage_history_tech_idx ON public.wage_history USING btree (technician_id, created_at DESC)",
+  "indexname": "wage_history_tech_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "wage_history",
+  "indexdef": "CREATE INDEX wage_history_tech_seq_idx ON public.wage_history USING btree (technician_id, seq DESC)",
+  "indexname": "wage_history_tech_seq_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "wage_history",
+  "indexdef": "CREATE INDEX wage_history_user_idx ON public.wage_history USING btree (user_id, created_at DESC)",
+  "indexname": "wage_history_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "webhook_deliveries",
+  "indexdef": "CREATE INDEX webhook_deliveries_due_idx ON public.webhook_deliveries USING btree (status, next_attempt_at) WHERE (status = 'pending'::text)",
+  "indexname": "webhook_deliveries_due_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "webhook_deliveries",
+  "indexdef": "CREATE INDEX webhook_deliveries_endpoint_idx ON public.webhook_deliveries USING btree (endpoint_id, created_at DESC)",
+  "indexname": "webhook_deliveries_endpoint_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "webhook_deliveries",
+  "indexdef": "CREATE UNIQUE INDEX webhook_deliveries_pkey ON public.webhook_deliveries USING btree (id)",
+  "indexname": "webhook_deliveries_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "webhook_deliveries",
+  "indexdef": "CREATE INDEX webhook_deliveries_user_idx ON public.webhook_deliveries USING btree (user_id, created_at DESC)",
+  "indexname": "webhook_deliveries_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "webhook_endpoints",
+  "indexdef": "CREATE UNIQUE INDEX webhook_endpoints_pkey ON public.webhook_endpoints USING btree (id)",
+  "indexname": "webhook_endpoints_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "webhook_endpoints",
+  "indexdef": "CREATE INDEX webhook_endpoints_user_idx ON public.webhook_endpoints USING btree (user_id)",
+  "indexname": "webhook_endpoints_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "website_leads",
+  "indexdef": "CREATE INDEX website_leads_customer_idx ON public.website_leads USING btree (customer_id)",
+  "indexname": "website_leads_customer_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "website_leads",
+  "indexdef": "CREATE UNIQUE INDEX website_leads_pkey ON public.website_leads USING btree (id)",
+  "indexname": "website_leads_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "website_leads",
+  "indexdef": "CREATE INDEX website_leads_user_idx ON public.website_leads USING btree (user_id, created_at DESC)",
+  "indexname": "website_leads_user_idx",
+  "backs_constraint": false
+ }
+]

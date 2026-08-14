@@ -75,7 +75,12 @@
     "verify:dispatch-board": "tsx scripts/verify-dispatch-board.ts",
     "verify:lead-journey": "tsx scripts/verify-lead-journey.ts",
     "verify:back-office": "tsx scripts/verify-back-office.ts",
-    "verify:invoice-list": "tsx scripts/verify-invoice-list.ts"
+    "verify:invoice-list": "tsx scripts/verify-invoice-list.ts",
+    "schema:contract": "tsx scripts/schema/capture-contract.mts",
+    "schema:baseline": "tsx scripts/schema/generate-baseline.ts",
+    "verify:rebuild": "tsx scripts/verify-rebuild.ts",
+    "verify:schema": "tsx scripts/verify-schema.ts",
+    "verify:migrations": "tsx scripts/verify-migrations.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

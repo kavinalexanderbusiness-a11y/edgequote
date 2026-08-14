@@ -9,7 +9,7 @@
 //
 // Persisted per user in business_settings.analytics_layout (jsonb), matching the
 // existing per-user config pattern (service_seasons, message_templates,
-// notif_prefs). See supabase/RUN-2026-07-15-analytics-layout.sql.
+// notif_prefs). See supabase/archive/ledger/ (analytics_layout) for the original migration.
 
 export type WidgetId =
   | 'executive' | 'financial' | 'yearly' | 'profitability' | 'customers'

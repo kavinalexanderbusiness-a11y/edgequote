@@ -16,7 +16,7 @@
 //
 // Style follows the other verify scripts: deterministic, no network, no DB.
 
-import { readFileSync } from 'fs'
+import { readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { displayAddress, normalizeTags, findCustomerMatch, phoneMatches, phoneSearchDigits, addressMatches } from '../src/lib/customers'
 import type { Customer } from '../src/types'
@@ -83,8 +83,16 @@ check('CSV import puts the address on the PROPERTY, not the customer row',
 
 // ═══════════════════════════════════════════════════════════════════════════
 H('4. DERIVED PLANS — attribution has one path')
-const schema = readFileSync(join(__dirname, '..', 'supabase', 'schema.sql'), 'utf8')
-const recBlock = schema.slice(schema.indexOf('create table if not exists public.job_recurrences'), schema.indexOf(');', schema.indexOf('create table if not exists public.job_recurrences')))
+// 2026-08-13: reads the generated baseline, not the retired supabase/schema.sql
+// snapshot. Stronger — the baseline is generated FROM production, so "the column is
+// absent" now means absent from the live table rather than absent from a file that
+// had drifted seven weeks behind.
+const MIGRATIONS_DIR = join(__dirname, '..', 'supabase', 'migrations')
+const baselineName = readdirSync(MIGRATIONS_DIR).filter(f => /_baseline\.sql$/.test(f)).sort().pop()
+if (!baselineName) { console.error('✗ no supabase/migrations/*_baseline.sql — run npm run schema:baseline'); process.exit(1) }
+const schema = readFileSync(join(MIGRATIONS_DIR, baselineName), 'utf8')
+const recStart = schema.indexOf('create table if not exists public."job_recurrences"')
+const recBlock = recStart < 0 ? '' : schema.slice(recStart, schema.indexOf(');', recStart))
 check('job_recurrences has NO property_id column (plans derive from jobs.property_id — buildServicePlans)',
   recBlock.includes('property_id'), false)
 

@@ -52,7 +52,7 @@ export default function PartsPage() {
       const { data, error } = await supabase.from('parts').select('*').eq('user_id', user.id).order('name')
       if (error) {
         setLoadError(error.message.includes('does not exist')
-          ? 'Parts inventory isn’t set up yet — run supabase/RUN-2026-07-15-parts.sql, then reload.'
+          ? 'Parts inventory isn’t set up yet — your database is missing the parts tables — see docs/MIGRATIONS.md, then reload.'
           : 'Could not load your parts: ' + error.message)
         return
       }

@@ -193,7 +193,7 @@ check('a crew start preserves banked minutes',
 // ── 5. The migration says what the code assumes ──────────────────────────────
 console.log('\n═══ The database is the boundary ═══')
 
-const sql = read('supabase/RUN-2026-08-07-crew-mode.sql')
+const sql = read('supabase/archive/run/RUN-2026-08-07-crew-mode.sql')
 
 check('no owner policy is dropped',
   !/drop policy[^\n]*(select own|update own|insert own|delete own)/i.test(sql),

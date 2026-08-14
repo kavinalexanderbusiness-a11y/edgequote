@@ -95,7 +95,7 @@ export async function GET(req: NextRequest) {
   if (dueErr) {
     // 42P01 = table missing (migration not run yet) — say so instead of a bare 500.
     console.error('[cron/scheduled-messages] due query failed:', dueErr.message)
-    return NextResponse.json({ ok: false, error: dueErr.message, note: dueErr.code === '42P01' ? 'Run supabase/RUN-2026-07-15-scheduled-messages.sql' : undefined }, { status: 500 })
+    return NextResponse.json({ ok: false, error: dueErr.message, note: dueErr.code === '42P01' ? 'scheduled_messages table is missing — rebuild from supabase/migrations (see docs/MIGRATIONS.md)' : undefined }, { status: 500 })
   }
   const due = (dueRows as ScheduledRow[]) || []
 

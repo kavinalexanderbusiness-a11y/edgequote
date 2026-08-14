@@ -1,0 +1,511 @@
+{
+ "fn_comments": [
+  {
+   "fn": "crew_employer",
+   "args": "",
+   "comment": "The owner user_id this signed-in employee works for, or NULL. NULL for anon, for owners, and for anyone deactivated/archived — every crew RLS predicate fails closed on it."
+  },
+  {
+   "fn": "crew_set_completion_record",
+   "args": "p_job_id uuid, p_summary text, p_issue text",
+   "comment": "Crew Mode: record what was done (customer-visible) and what needs attention (internal) on an assigned, non-cancelled visit. Typed parameters only — writes exactly two columns and no lifecycle field. Re-checks employer + crew because DEFINER runs past RLS."
+  },
+  {
+   "fn": "find_portal_access_customers",
+   "args": "p_email text",
+   "comment": "Portal-link recovery lookup. Normalises both sides (lower+trim). NOT executable by anon/authenticated — service-role only, or the public anon key becomes a customer-existence oracle."
+  },
+  {
+   "fn": "is_verify_fixture_tenant",
+   "args": "",
+   "comment": "True when the CALLER is a verification fixture tenant. Answers only about auth.uid(); takes no arguments so it cannot be used to enumerate or probe. Consulted by scripts/ only — no trigger, policy or application path reads it."
+  },
+  {
+   "fn": "job_session_minutes",
+   "args": "p_job_id uuid",
+   "comment": "Sum of a job's work-session minutes. NULL when it has none (unknown, not zero)."
+  },
+  {
+   "fn": "owner_select_quote_option",
+   "args": "p_quote_id uuid, p_option_id uuid",
+   "comment": "Owner records the option a customer chose by phone/in person. Same core, same money rule as portal_accept_quote - only auth.uid() proves access instead of a token."
+  },
+  {
+   "fn": "portal_add_contact",
+   "args": "p_token text, p_phone text, p_email text",
+   "comment": "Portal self-service: fill a MISSING customer phone/email from a valid portal token. Fills only - never overwrites a populated field (an email change is an identity change). Never touches sms_opt_in/email_opt_in/message_prefs. Refuses a value another customer of the same owner already holds. Returns the row state read back after the write."
+  },
+  {
+   "fn": "portal_set_scheduling_preference",
+   "args": "p_token text, p_quote_id uuid, p_date date, p_date_2 date, p_timing text, p_note text",
+   "comment": "THE writer of a customer's scheduling preference. Token proves the customer; quote must be theirs and 'accepted'. A preference is a request — it never creates, moves, or implies a visit. All-null clears it."
+  },
+  {
+   "fn": "quote_apply_option_choice",
+   "args": "p_quote_id uuid, p_option_id uuid",
+   "comment": "THE single writer of quotes.selected_option_id and the option-derived price. Carries no authorisation - callers must prove access first. Deliberately granted to no role."
+  },
+  {
+   "fn": "schema_contract",
+   "args": "",
+   "comment": "Full catalogue snapshot for npm run schema:contract. SERVICE_ROLE ONLY — it returns every RLS predicate and SECURITY DEFINER body, i.e. the product's authorization logic. Use schema_fingerprint() (hashes only) for anything that merely needs to detect change."
+  },
+  {
+   "fn": "schema_fingerprint",
+   "args": "",
+   "comment": "Counts + md5 per schema section, for npm run verify:schema. Returns NO names and NO data — only shape hashes, so it is safe to expose to any signed-in caller. The instrument that makes repo-vs-production drift visible; before it existed, 30 migrations reached production with no repo file and nothing reported it."
+  }
+ ],
+ "table_comments": [
+  {
+   "tbl": "beta_invites",
+   "comment": "One-time beta signup invites. Raw tokens are never stored — sha256 hex only. Service-role and DEFINER access only: RLS is on with zero policies."
+  },
+  {
+   "tbl": "crew_media",
+   "comment": "CREW AUDIENCE. Reference photos/video the office sends TO the field — what a worker needs BEFORE and DURING the work. Never customer-facing: no portal projection selects it. Not proof of work — that is job_photos + jobs.completion_summary."
+  },
+  {
+   "tbl": "crew_message_reads",
+   "comment": "High-water mark per (visit, reader). Unread is derived from it — deliberately NOT one row per message per user."
+  },
+  {
+   "tbl": "crew_messages",
+   "comment": "CREW AUDIENCE (the business + the crew assigned to this visit). The conversation attached to one visit. Never customer-facing: no portal projection, no PDF, no public API selects it. Not a note — jobs.notes is the standing instruction; this is what was said and when."
+  },
+  {
+   "tbl": "dispatch_notes",
+   "comment": "One note per (date, crew); crew NULL = the day-level note. Upsert on the unique constraint."
+  },
+  {
+   "tbl": "follow_ups",
+   "comment": "Owner follow-up commitments: WHO (customer_id, mandatory) / WHEN (due_on, a local date) / WHY (reason) / open|done. NOT public.schedule_items (empty, unread, calendar-shaped) and NOT lib/followup.ts (the derived quote chaser). Never messages the customer — this is an owner reminder only."
+  },
+  {
+   "tbl": "job_work_sessions",
+   "comment": "One stretch of work on one job on one day. jobs.actual_minutes is the sum of these (enforced by trigger). minutes = elapsed on site; labour_minutes = minutes x workers."
+  },
+  {
+   "tbl": "platform_capabilities",
+   "comment": "Platform-managed grants for SHARED deployment infrastructure (Stripe account, Twilio number, Resend identity). Missing row = no grants. App code reads only; rows are written by the platform operator in SQL."
+  },
+  {
+   "tbl": "platform_operators",
+   "comment": "Who may issue beta invites. NOT a role system: one row today (the founding account). No client access of any kind."
+  },
+  {
+   "tbl": "portal_access_requests",
+   "comment": "Abuse ledger for the public portal-link endpoint. email_key = sha256(lower(trim(email))) — never the address. No customer_id/user_id/token by design."
+  },
+  {
+   "tbl": "property_measurement_events",
+   "comment": "Append-only history for property_measurements, written by trigger. No UPDATE/DELETE policy — history cannot be rewritten. Distinct from `measurements` (the lawn auto-vs-accepted accuracy log that trains neighbourhood ratios)."
+  },
+  {
+   "tbl": "property_measurements",
+   "comment": "THE typed measurement ledger (Measurement Engine V2). One row per (property, kind). Unit follows kind by CHECK. Legacy properties.lawn_sqft/fence_length/mulch_area/rock_area are DERIVED from here by trigger for existing pricing/portal readers — drop them once Quote V2 reads this table."
+  },
+  {
+   "tbl": "purchase_order_items",
+   "comment": "PO lines. qty_received is intentionally absent — it is derived from part_movements linked by purchase_order_item_id, so stock and receipts cannot drift apart."
+  },
+  {
+   "tbl": "quote_options",
+   "comment": "Mutually exclusive alternatives for one quote (Budget/Recommended/Premium). NOT additive: quotes.initial_price always equals ONE option price - the recommended one before the customer chooses, the selected one after. Cannot coexist with quote_services rows."
+  },
+  {
+   "tbl": "report_schedules",
+   "comment": "Scheduled report cadences per owner. last_period_to is the idempotency key: the cron sends a closed period exactly once, however often it runs."
+  },
+  {
+   "tbl": "time_entries",
+   "comment": "THE paid-time ledger. One row per shift. minutes_worked is DB-derived; hourly_rate is snapshotted at clock-in so wage changes never rewrite history. Open shift = clock_out IS NULL (at most one per technician, enforced by index)."
+  },
+  {
+   "tbl": "verify_fixture_tenants",
+   "comment": "Tenants whose data is created by scripts/verify-*.ts. Marker only — grants nothing, relaxes nothing. Guards read it through is_verify_fixture_tenant() and refuse to write when it answers false. Writable only by migration/service_role."
+  }
+ ],
+ "column_comments": [
+  {
+   "col": "redeemed_by",
+   "tbl": "beta_invites",
+   "comment": "Set by claim_beta_invite once the email is verified. This is what can_provision_business() reads."
+  },
+  {
+   "col": "reserved_by",
+   "tbl": "beta_invites",
+   "comment": "The auth account created against this invite. SET NULL on user delete frees the invite for a fresh signup."
+  },
+  {
+   "col": "analytics_layout",
+   "tbl": "business_settings",
+   "comment": "Analytics workspace layout: { \"order\": [widgetId], \"hidden\": [widgetId] }. Unknown ids ignored; missing ids append in default order."
+  },
+  {
+   "col": "business_type",
+   "tbl": "business_settings",
+   "comment": "Trade/vertical key (registry: src/lib/trades). Selects seed data and default copy ONLY — engines never branch on it. Unknown key = neutral pack."
+  },
+  {
+   "col": "enabled_modules",
+   "tbl": "business_settings",
+   "comment": "Feature-module keys visible in navigation (registry: src/lib/modules.ts). NULL = all modules. Core modules (dashboard) are always shown regardless."
+  },
+  {
+   "col": "gst_number",
+   "tbl": "business_settings",
+   "comment": "GST/HST registration number (e.g. 123456789RT0001). Printed on invoices/receipts when gst_percent > 0 — CRA requires it for the customer to claim an ITC on $30+. Null = not registered."
+  },
+  {
+   "col": "module_meta",
+   "tbl": "business_settings",
+   "comment": "Per-module install state { key: { v: installedVersion, at: ISO } } — drives the Modules update badges (registry: src/lib/modules.ts). NULL = treat everything as current."
+  },
+  {
+   "col": "opening_balance_date",
+   "tbl": "business_settings",
+   "comment": "The date opening_bank_balance was true. Cash movements before it are ignored."
+  },
+  {
+   "col": "opening_bank_balance",
+   "tbl": "business_settings",
+   "comment": "Bank balance as at opening_balance_date. Cash = this + every movement since."
+  },
+  {
+   "col": "opening_equity",
+   "tbl": "business_settings",
+   "comment": "Owner capital already in the business at the opening date. NULL = unknown (never plugged)."
+  },
+  {
+   "col": "ot_daily_hours",
+   "tbl": "business_settings",
+   "comment": "Hours in a DAY after which OT applies. NULL = no daily rule (e.g. Ontario). Alberta 8, BC 8."
+  },
+  {
+   "col": "ot_multiplier",
+   "tbl": "business_settings",
+   "comment": "Pay multiplier for overtime minutes (1.5 = time-and-a-half). Never below 1."
+  },
+  {
+   "col": "ot_weekly_hours",
+   "tbl": "business_settings",
+   "comment": "Hours in a WORK WEEK after which OT applies. NULL = no weekly rule. Alberta 44, BC/ON 40/44."
+  },
+  {
+   "col": "pay_period",
+   "tbl": "business_settings",
+   "comment": "weekly | biweekly | semimonthly | monthly. Drives the payroll summary window."
+  },
+  {
+   "col": "pay_period_anchor",
+   "tbl": "business_settings",
+   "comment": "Any start date of a known period. Biweekly needs it to know WHICH two weeks; NULL falls back to the first pay_week_starts_on of 1970 (deterministic)."
+  },
+  {
+   "col": "pay_week_starts_on",
+   "tbl": "business_settings",
+   "comment": "0=Sun..6=Sat. The OT WORK WEEK boundary — legally load-bearing, so it is explicit rather than assumed. Defaults to 1 (Mon) to match the existing timesheet week."
+  },
+  {
+   "col": "message_id",
+   "tbl": "crew_media",
+   "comment": "NULL = office reference material for the visit (the original meaning). Set = an attachment on that crew_messages row. Deleting the message takes its attachments with it."
+  },
+  {
+   "col": "event_type",
+   "tbl": "crew_messages",
+   "comment": "NULL = a person spoke. Non-null = a system event (schedule_changed). Do not dump every mutation here: a system event may only join a conversation that already exists."
+  },
+  {
+   "col": "user_id",
+   "tbl": "crew_messages",
+   "comment": "The BUSINESS that owns the visit — the tenant boundary. Never the crew author's own uid."
+  },
+  {
+   "col": "capacity_minutes",
+   "tbl": "crews",
+   "comment": "Explicit daily capacity override; NULL = derive from day window / business default."
+  },
+  {
+   "col": "color",
+   "tbl": "crews",
+   "comment": "Palette key (lib/crews CREW_PALETTE) — board chips + map pin hues, not a hex."
+  },
+  {
+   "col": "day_start",
+   "tbl": "crews",
+   "comment": "Crew-specific day start; NULL = business work_start_time."
+  },
+  {
+   "col": "archived_at",
+   "tbl": "crm_campaigns",
+   "comment": "Soft delete. A hard DELETE cascades crm_campaign_log (the audit trail AND the dedupe ledger), so an undo would re-send to everyone. The cron and the manager both filter archived_at is null."
+  },
+  {
+   "col": "subject",
+   "tbl": "crm_campaigns",
+   "comment": "Owner-written email subject. Blank → the message template's built-in subject."
+  },
+  {
+   "col": "notes",
+   "tbl": "customers",
+   "comment": "INTERNAL ONLY. What the office knows about this customer. Absent from get_portal_data's customer projection, which names its columns."
+  },
+  {
+   "col": "phone_digits",
+   "tbl": "customers",
+   "comment": "Digits-only form of phone, for search only. Generated — never write to it. Display and dial from `phone`, which keeps the owner's own formatting."
+  },
+  {
+   "col": "crew_id",
+   "tbl": "equipment",
+   "comment": "Crew this vehicle/equipment is assigned to for dispatch. NULL = unassigned pool."
+  },
+  {
+   "col": "kind",
+   "tbl": "expense_categories",
+   "comment": "operating = a real business cost (P&L). owner_draw = a distribution of profit, NOT a cost: excluded from the P&L, still cash out in cash flow, and a reduction of equity on the balance sheet."
+  },
+  {
+   "col": "bill_date",
+   "tbl": "expenses",
+   "comment": "When the cost was INCURRED (accrual date). Always set."
+  },
+  {
+   "col": "is_capital",
+   "tbl": "expenses",
+   "comment": "This cash bought an ASSET, not an operating cost. Excluded from P&L cost; still real cash out in cash flow; the asset itself lives in fixed_assets."
+  },
+  {
+   "col": "spent_at",
+   "tbl": "expenses",
+   "comment": "When the CASH LEFT. NULL = unpaid = accounts payable. Cash-basis reports filter on this."
+  },
+  {
+   "col": "expense_id",
+   "tbl": "fixed_assets",
+   "comment": "The expense row this asset was bought with, when there is one. Traceability only — the P&L uses expenses.is_capital, not this link."
+  },
+  {
+   "col": "completed_at",
+   "tbl": "follow_ups",
+   "comment": "Set iff status = 'done', enforced by follow_ups_completion_consistent. Completing retains the row; history is never deleted."
+  },
+  {
+   "col": "due_on",
+   "tbl": "follow_ups",
+   "comment": "A DATE, compared as a string against the owner's LOCAL today. Never a timestamp — \"Friday\" must not become Thursday for a traveller."
+  },
+  {
+   "col": "deposit_amount",
+   "tbl": "invoices",
+   "comment": "GST-inclusive amount requested up front. A deposit is a PARTIAL PAYMENT of this invoice, not a separate invoice. Percentage is derived, never stored — see lib/payments/deposit.ts."
+  },
+  {
+   "col": "deposit_requested_at",
+   "tbl": "invoices",
+   "comment": "When the deposit request was successfully SENT to the customer. NULL = requested but not sent."
+  },
+  {
+   "col": "internal_notes",
+   "tbl": "invoices",
+   "comment": "Private to the owner: never rendered on any PDF or shown in the portal. Home for system provenance (auto-draft origin) and the AutoPay hold flag, so customer-facing `notes` stays the customer's and editing it cannot break hold detection."
+  },
+  {
+   "col": "last_reminded_at",
+   "tbl": "invoices",
+   "comment": "When the automatic payment reminder last went out. Null = never reminded; the due date is the anchor instead."
+  },
+  {
+   "col": "line_items_edited",
+   "tbl": "invoices",
+   "comment": "True once the owner hand-edits this draft's line items in the invoice editor. syncDraftInvoiceAmounts then skips the draft so a later job-price change never silently overwrites owner-authored line_items/amount (the change-order-loss bug). Defaults false: job-derived drafts keep auto-re-pricing."
+  },
+  {
+   "col": "reminder_count",
+   "tbl": "invoices",
+   "comment": "How many automatic payment reminders have been sent. Compare-and-swapped by /api/cron/invoice-reminders to guarantee at-most-once, and capped by the owner's maximum."
+  },
+  {
+   "col": "completion_issue",
+   "tbl": "jobs",
+   "comment": "INTERNAL ONLY. What the field found that needs attention (leaking sprinkler head, wants a hedge quote). MUST NOT be selected by get_portal_data or reach any customer surface."
+  },
+  {
+   "col": "completion_summary",
+   "tbl": "jobs",
+   "comment": "CUSTOMER-VISIBLE. What was done, written for the person who paid for it. Selected by get_portal_data and rendered verbatim in the portal visit history. Never put internal remarks here."
+  },
+  {
+   "col": "crew_id",
+   "tbl": "jobs",
+   "comment": "Which crew runs this visit. NULL = unassigned (single-crew default). Orthogonal to crew_size (headcount)."
+  },
+  {
+   "col": "notes",
+   "tbl": "jobs",
+   "comment": "INTERNAL ONLY. The access/instruction note for whoever does the work (gate code, where to park). Shipped to the crew by crew_day. Removed from get_portal_data 2026-08-11 — it was being rendered to customers. Customer-facing words go in completion_summary."
+  },
+  {
+   "col": "purchase_order_item_id",
+   "tbl": "part_movements",
+   "comment": "Receipt link. A kind=restock movement carrying this IS the receipt of that PO line; received qty is sum(qty) over these rows (lib/purchasing.receivedQty), never a stored column. CASCADE: deleting the line reverses the stock."
+  },
+  {
+   "col": "supplier_id",
+   "tbl": "parts",
+   "comment": "Vendor entity. Nullable. The legacy parts.supplier text is kept as a fallback and is NOT backfilled — resolve display via lib/suppliers.supplierLabel."
+  },
+  {
+   "col": "quote_id",
+   "tbl": "payments",
+   "comment": "The quote/booking a PRE-INVOICE deposit secures (both legs of the recordDeposit pair carry it). Null on ordinary invoice payments. The scheduling gate sums signed cash rows (isCashRow) by this — a Stripe refund writes a negative row with the same quote_id, so readiness derives honestly."
+  },
+  {
+   "col": "internal_notes",
+   "tbl": "properties",
+   "comment": "Private to the owner and crew: never returned by get_portal_data and never rendered in the customer portal. Home for access and site facts about the PLACE (gate side, dog, shut-off/controller location, parking). Customer-facing property notes stay in `notes`; private notes about the PERSON stay in customers.notes."
+  },
+  {
+   "col": "seq",
+   "tbl": "property_measurement_events",
+   "comment": "Monotonic tiebreaker. ORDER BY seq — created_at can tie at microsecond resolution."
+  },
+  {
+   "col": "kind",
+   "tbl": "quote_services",
+   "comment": "What this line IS: service (labour you perform) or material (goods you supply). A material line is an ESTIMATE ON THE QUOTE — quantity x unit_price, same arithmetic, same discount engine. It never reserves, allocates or deducts stock, and carries no cost: see RUN-2026-07-16-quote-materials.sql."
+  },
+  {
+   "col": "service_type",
+   "tbl": "quote_services",
+   "comment": "The line's display name. For kind=service, the service performed; for kind=material, the material supplied (\"Mulch\"). Historical name — not a claim that the line is a service."
+  },
+  {
+   "col": "accepted_price",
+   "tbl": "quotes",
+   "comment": "SNAPSHOT of what the customer agreed to pay, captured at acceptance. Deliberately a copy, not a reference to total: editing a quote afterwards must never rewrite what was agreed. NULL = accepted before this column existed, or accepted by a path that does not know. Never guess it."
+  },
+  {
+   "col": "deposit_override_at",
+   "tbl": "quotes",
+   "comment": "Owner explicitly scheduled without the required deposit collected (the confirm dialog's stamp). The deposit remains owed — this records the decision, it does not waive the money."
+  },
+  {
+   "col": "deposit_type",
+   "tbl": "quotes",
+   "comment": "Scheduling-deposit rule: 'percent' (deposit_value = % of the accepted price) or 'fixed' (deposit_value = dollars). NULL = no deposit required — the quote behaves exactly as before this feature existed. The dollar figure for percent is DERIVED at read time (lib/payments/depositGate), never stored."
+  },
+  {
+   "col": "internal_notes",
+   "tbl": "quotes",
+   "comment": "INTERNAL ONLY. The owner's private margin on this quote — price floor, who to call before changing scope, why it was priced this way. MUST NOT be selected by get_portal_data or rendered by any PDF. Its customer-facing counterpart is quotes.notes."
+  },
+  {
+   "col": "notes",
+   "tbl": "quotes",
+   "comment": "CUSTOMER-VISIBLE. The scope note the customer reads — printed in QuotePDF's Notes box and selected by get_portal_data. Never put a gate code or a price floor here; that is quotes.internal_notes."
+  },
+  {
+   "col": "preferred_date",
+   "tbl": "quotes",
+   "comment": "The customer's preferred work date — a REQUEST, never a booking. A real visit exists only when the owner schedules one. Written only by portal_set_scheduling_preference while the quote is accepted."
+  },
+  {
+   "col": "selected_cadence",
+   "tbl": "quotes",
+   "comment": "Which cadence was actually bought (one_time|weekly|biweekly|monthly). NULL = nobody said — do NOT infer it from whichever price column is populated; that is the bug this column exists to kill."
+  },
+  {
+   "col": "selected_option_id",
+   "tbl": "quotes",
+   "comment": "The option the customer approved. Composite FK guarantees it belongs to THIS quote; ON DELETE RESTRICT keeps the approved alternative on the record permanently."
+  },
+  {
+   "col": "total",
+   "tbl": "quotes",
+   "comment": "GENERATED = initial_price + travel_fee. NULL when the quote has no price — deliberately NOT 0, because an unpriced quote is not a free one. It must never fall back to hours*crew_size*rate again: that fabricated a price the pricing engine never produced, and two customers were billed on it (see RUN-2026-07-16e)."
+  },
+  {
+   "col": "valid_until",
+   "tbl": "quotes",
+   "comment": "Calendar date this quote stops being valid. Null = never expires (incl. every quote sent before expiry existed). 'expired' is derived for display by lib/quoteStatus — it is never stored in quotes.status."
+  },
+  {
+   "col": "last_period_to",
+   "tbl": "report_schedules",
+   "comment": "The `to` date of the last period SENT. Keyed on the period, not the clock, so retries and missed runs cannot double-send or drift."
+  },
+  {
+   "col": "recipient",
+   "tbl": "report_schedules",
+   "comment": "NULL = defer to business_settings.email_primary (a pointer cannot go stale)."
+  },
+  {
+   "col": "is_favorite",
+   "tbl": "service_templates",
+   "comment": "Owner shortlist — surfaced first in the quote builder picker."
+  },
+  {
+   "col": "material_cost",
+   "tbl": "service_templates",
+   "comment": "Material cost per unit. NULL = not set; never treat as 0."
+  },
+  {
+   "col": "recurrence",
+   "tbl": "service_templates",
+   "comment": "Recurrence eligibility: one_time = never suggest recurring; recurring_ok = recurrence suggestions allowed; usually_recurring = this service is normally a recurring plan. NULL = owner has not said (suggestions then require behavioural cadence evidence)."
+  },
+  {
+   "col": "unit_cost",
+   "tbl": "service_templates",
+   "comment": "What delivering one unit costs (labour/subcontract). NULL = not set; never treat as 0."
+  },
+  {
+   "col": "archived_at",
+   "tbl": "technicians",
+   "comment": "Soft-archive: set when the technician leaves the roster (hidden everywhere, record preserved). NULL = active. Removing a technician must archive, never delete — their time_entries/wage_history/pto_entries are statutory records."
+  },
+  {
+   "col": "auth_user_id",
+   "tbl": "technicians",
+   "comment": "The Supabase auth user this employee signs in as. NULL = records-only (no app access). Unique across the whole project: one login is one employee of one business."
+  },
+  {
+   "col": "hourly_wage",
+   "tbl": "technicians",
+   "comment": "Default pay rate for the NEXT clock-in. Historical cost lives on time_entries.hourly_rate (snapshot) — changing this never rewrites past shifts."
+  },
+  {
+   "col": "invite_code",
+   "tbl": "technicians",
+   "comment": "One-time join code the owner hands out. Cleared the moment it is redeemed."
+  },
+  {
+   "col": "invite_sent_at",
+   "tbl": "technicians",
+   "comment": "When the owner last generated a setup link for this employee. Cleared on revoke. Paired with auth.users.last_sign_in_at (via crew_access_states) to tell \"invited\" from \"active\"."
+  },
+  {
+   "col": "pto_annual_hours",
+   "tbl": "technicians",
+   "comment": "Annual PTO allowance in hours. NULL = no allowance configured -> usage is tracked but no balance is claimed (never guess someone's entitlement)."
+  },
+  {
+   "col": "status",
+   "tbl": "technicians",
+   "comment": "Live dispatch status, owner-flipped from the board (no field login yet)."
+  },
+  {
+   "col": "created_at",
+   "tbl": "wage_history",
+   "comment": "clock_timestamp() (real wall clock), NOT now() — now() is transaction start and ties every row written in one transaction."
+  },
+  {
+   "col": "seq",
+   "tbl": "wage_history",
+   "comment": "Monotonic tiebreaker. ORDER BY seq for a provably total audit order; created_at can tie at microsecond resolution."
+  }
+ ]
+}

@@ -18,7 +18,7 @@
 // Style follows the other verify scripts: deterministic, no network, no DB. These pin
 // CURRENT behavior — this is coverage, not a behavior change.
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { extractBookingPhotos, bookingPhotoViews, bookingPhotosFromQuotes } from '../src/lib/bookingPhotos'
 
 let pass = 0
@@ -96,10 +96,20 @@ H('5. schema.sql — booking-photo UPLOADS accept BOTH anon and authenticated')
 // the booking arrived WITHOUT the photo (0 objects across 26 bookings). INSERT must
 // mirror SELECT: both roles. This guards schema.sql from silently reverting.
 // (RLS can't be unit-tested; pinning the canonical schema text is the closest guard.)
-const schema = readFileSync('supabase/schema.sql', 'utf8')
-const insertPolicy = schema.split('\n').find(l =>
-  /create\s+policy/i.test(l) && /booking_uploads/i.test(l) && /\binsert\b/i.test(l)) || ''
-check('a booking-uploads INSERT policy exists in schema.sql', insertPolicy !== '', true)
+//
+// 2026-08-13: reads the generated baseline instead of the retired supabase/schema.sql
+// snapshot. Strictly stronger — the baseline is generated FROM production, so this
+// now pins the policy the database is actually enforcing rather than one a
+// seven-week-old file claimed. The policy body spans lines here, so match the
+// statement rather than a single line.
+const baselineDir = 'supabase/migrations'
+const baselineName = readdirSync(baselineDir).filter(f => /_baseline\.sql$/.test(f)).sort().pop()
+if (!baselineName) { console.error('✗ no supabase/migrations/*_baseline.sql — run npm run schema:baseline'); process.exit(1) }
+const schema = readFileSync(`${baselineDir}/${baselineName}`, 'utf8')
+// [\s\S] rather than the `s` dotAll flag — this repo's tsconfig target predates it.
+const insertPolicy = (schema.match(/create policy[^;]*?booking_uploads[^;]*?;/gi) || [])
+  .find(s => /\bfor\s+insert\b/i.test(s)) || ''
+check('a booking-uploads INSERT policy exists in the baseline', insertPolicy !== '', true)
 check('...it grants anon (real logged-out customers)', /\banon\b/.test(insertPolicy), true)
 check('...it grants authenticated too (the fix — never anon-only again)', /\bauthenticated\b/.test(insertPolicy), true)
 

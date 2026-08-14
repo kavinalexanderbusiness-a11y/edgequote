@@ -1,0 +1,470 @@
+[
+ {
+  "def": "CREATE TRIGGER business_settings_no_crew_owner BEFORE INSERT ON public.business_settings FOR EACH ROW EXECUTE FUNCTION guard_business_settings_owner()",
+  "tbl": "business_settings",
+  "tgname": "business_settings_no_crew_owner",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER business_settings_updated_at BEFORE UPDATE ON public.business_settings FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "business_settings",
+  "tgname": "business_settings_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_content_pieces_updated BEFORE UPDATE ON public.content_pieces FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "content_pieces",
+  "tgname": "trg_content_pieces_updated",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER crew_message_identity BEFORE INSERT ON public.crew_messages FOR EACH ROW EXECUTE FUNCTION crew_message_identity()",
+  "tbl": "crew_messages",
+  "tgname": "crew_message_identity",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER crew_message_notify AFTER INSERT ON public.crew_messages FOR EACH ROW EXECUTE FUNCTION crew_message_notify()",
+  "tbl": "crew_messages",
+  "tgname": "crew_message_notify",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER crews_updated_at BEFORE UPDATE ON public.crews FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "crews",
+  "tgname": "crews_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_crm_campaign_presets_updated BEFORE UPDATE ON public.crm_campaign_presets FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "crm_campaign_presets",
+  "tgname": "trg_crm_campaign_presets_updated",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_crm_campaigns_updated BEFORE UPDATE ON public.crm_campaigns FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "crm_campaigns",
+  "tgname": "trg_crm_campaigns_updated",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER customers_updated_at BEFORE UPDATE ON public.customers FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "customers",
+  "tgname": "customers_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_crm_sync_referral AFTER INSERT OR UPDATE OF referred_by_customer_id ON public.customers FOR EACH ROW EXECUTE FUNCTION crm_sync_referral()",
+  "tbl": "customers",
+  "tgname": "trg_crm_sync_referral",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_integration_capture AFTER INSERT ON public.customers FOR EACH ROW EXECUTE FUNCTION capture_integration_event()",
+  "tbl": "customers",
+  "tgname": "trg_integration_capture",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_notify_review_received AFTER UPDATE OF reviewed_at ON public.customers FOR EACH ROW EXECUTE FUNCTION notify_review_received()",
+  "tbl": "customers",
+  "tgname": "trg_notify_review_received",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER dispatch_notes_updated_at BEFORE UPDATE ON public.dispatch_notes FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "dispatch_notes",
+  "tgname": "dispatch_notes_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER equipment_service_recompute AFTER INSERT OR DELETE OR UPDATE ON public.equipment_service FOR EACH ROW EXECUTE FUNCTION recompute_equipment_service()",
+  "tbl": "equipment_service",
+  "tgname": "equipment_service_recompute",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_expense_categories_updated BEFORE UPDATE ON public.expense_categories FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "expense_categories",
+  "tgname": "trg_expense_categories_updated",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_expenses_updated BEFORE UPDATE ON public.expenses FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "expenses",
+  "tgname": "trg_expenses_updated",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_fixed_assets_updated BEFORE UPDATE ON public.fixed_assets FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "fixed_assets",
+  "tgname": "trg_fixed_assets_updated",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER follow_ups_set_updated_at BEFORE UPDATE ON public.follow_ups FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "follow_ups",
+  "tgname": "follow_ups_set_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER holidays_updated_at BEFORE UPDATE ON public.holidays FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "holidays",
+  "tgname": "holidays_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_integration_fanout AFTER INSERT ON public.integration_events FOR EACH ROW EXECUTE FUNCTION fanout_integration_event()",
+  "tbl": "integration_events",
+  "tgname": "trg_integration_fanout",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER invoices_updated_at BEFORE UPDATE ON public.invoices FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "invoices",
+  "tgname": "invoices_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_integration_capture AFTER INSERT OR UPDATE OF status ON public.invoices FOR EACH ROW EXECUTE FUNCTION capture_integration_event()",
+  "tbl": "invoices",
+  "tgname": "trg_integration_capture",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_notify_invoice_paid AFTER UPDATE OF status ON public.invoices FOR EACH ROW EXECUTE FUNCTION notify_invoice_paid()",
+  "tbl": "invoices",
+  "tgname": "trg_notify_invoice_paid",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_recompute_invoice_on_edit AFTER UPDATE OF amount, discount_type, discount_value ON public.invoices FOR EACH ROW WHEN (((old.amount IS DISTINCT FROM new.amount) OR (old.discount_type IS DISTINCT FROM new.discount_type) OR (old.discount_value IS DISTINCT FROM new.discount_value))) EXECUTE FUNCTION recompute_invoice_paid_on_edit()",
+  "tbl": "invoices",
+  "tgname": "trg_recompute_invoice_on_edit",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_sync_quote_on_invoice_paid AFTER UPDATE OF status ON public.invoices FOR EACH ROW EXECUTE FUNCTION sync_quote_on_invoice_paid()",
+  "tbl": "invoices",
+  "tgname": "trg_sync_quote_on_invoice_paid",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER aa_carry_forward_job_actual_minutes BEFORE INSERT ON public.job_work_sessions FOR EACH ROW EXECUTE FUNCTION carry_forward_job_actual_minutes()",
+  "tbl": "job_work_sessions",
+  "tgname": "aa_carry_forward_job_actual_minutes",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER job_work_sessions_updated_at BEFORE UPDATE ON public.job_work_sessions FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "job_work_sessions",
+  "tgname": "job_work_sessions_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_sync_job_actual_minutes AFTER INSERT OR DELETE OR UPDATE ON public.job_work_sessions FOR EACH ROW EXECUTE FUNCTION sync_job_actual_minutes()",
+  "tbl": "job_work_sessions",
+  "tgname": "trg_sync_job_actual_minutes",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER aa_bank_job_clock_session BEFORE UPDATE ON public.jobs FOR EACH ROW EXECUTE FUNCTION bank_job_clock_session()",
+  "tbl": "jobs",
+  "tgname": "aa_bank_job_clock_session",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER crew_job_field_guard BEFORE UPDATE ON public.jobs FOR EACH ROW EXECUTE FUNCTION crew_job_field_guard()",
+  "tbl": "jobs",
+  "tgname": "crew_job_field_guard",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER crew_message_schedule_event AFTER UPDATE ON public.jobs FOR EACH ROW EXECUTE FUNCTION crew_message_schedule_event()",
+  "tbl": "jobs",
+  "tgname": "crew_message_schedule_event",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER jobs_updated_at BEFORE UPDATE ON public.jobs FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "jobs",
+  "tgname": "jobs_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_capture_labor AFTER UPDATE OF actual_minutes ON public.jobs FOR EACH ROW EXECUTE FUNCTION capture_labor_observation()",
+  "tbl": "jobs",
+  "tgname": "trg_capture_labor",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_integration_capture AFTER INSERT OR UPDATE OF status ON public.jobs FOR EACH ROW EXECUTE FUNCTION capture_integration_event()",
+  "tbl": "jobs",
+  "tgname": "trg_integration_capture",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_jobs_clear_route_order BEFORE UPDATE OF scheduled_date ON public.jobs FOR EACH ROW EXECUTE FUNCTION clear_route_order_on_move()",
+  "tbl": "jobs",
+  "tgname": "trg_jobs_clear_route_order",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_resync_quote_on_job_recurring AFTER UPDATE OF recurrence_id ON public.jobs FOR EACH ROW EXECUTE FUNCTION resync_quote_on_job_recurring()",
+  "tbl": "jobs",
+  "tgname": "trg_resync_quote_on_job_recurring",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_sync_quote_on_job_complete AFTER UPDATE OF status ON public.jobs FOR EACH ROW EXECUTE FUNCTION sync_quote_on_job_complete()",
+  "tbl": "jobs",
+  "tgname": "trg_sync_quote_on_job_complete",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_liabilities_updated BEFORE UPDATE ON public.liabilities FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "liabilities",
+  "tgname": "trg_liabilities_updated",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_marketing_assets_updated BEFORE UPDATE ON public.marketing_assets FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "marketing_assets",
+  "tgname": "trg_marketing_assets_updated",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_marketing_campaigns_updated BEFORE UPDATE ON public.marketing_campaigns FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "marketing_campaigns",
+  "tgname": "trg_marketing_campaigns_updated",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_bump_conversation AFTER INSERT ON public.messages FOR EACH ROW EXECUTE FUNCTION bump_conversation()",
+  "tbl": "messages",
+  "tgname": "trg_bump_conversation",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_crm_touch_last_contacted AFTER INSERT ON public.messages FOR EACH ROW EXECUTE FUNCTION crm_touch_last_contacted()",
+  "tbl": "messages",
+  "tgname": "trg_crm_touch_last_contacted",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_notify_inbound_message AFTER INSERT ON public.messages FOR EACH ROW EXECUTE FUNCTION notify_inbound_message()",
+  "tbl": "messages",
+  "tgname": "trg_notify_inbound_message",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_crm_stamp_review_requested AFTER INSERT ON public.notification_log FOR EACH ROW EXECUTE FUNCTION crm_stamp_review_requested()",
+  "tbl": "notification_log",
+  "tgname": "trg_crm_stamp_review_requested",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_push_dispatch AFTER INSERT ON public.notifications FOR EACH ROW EXECUTE FUNCTION push_dispatch()",
+  "tbl": "notifications",
+  "tgname": "trg_push_dispatch",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER part_movements_recompute AFTER INSERT OR DELETE OR UPDATE ON public.part_movements FOR EACH ROW EXECUTE FUNCTION recompute_part_stock()",
+  "tbl": "part_movements",
+  "tgname": "part_movements_recompute",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_integration_capture AFTER INSERT ON public.payments FOR EACH ROW EXECUTE FUNCTION capture_integration_event()",
+  "tbl": "payments",
+  "tgname": "trg_integration_capture",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_recompute_invoice_paid AFTER INSERT OR DELETE OR UPDATE ON public.payments FOR EACH ROW EXECUTE FUNCTION recompute_invoice_paid()",
+  "tbl": "payments",
+  "tgname": "trg_recompute_invoice_paid",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER pricing_config_versions_no_mutate BEFORE DELETE OR UPDATE ON public.pricing_config_versions FOR EACH ROW EXECUTE FUNCTION pricing_config_versions_immutable()",
+  "tbl": "pricing_config_versions",
+  "tgname": "pricing_config_versions_no_mutate",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER properties_guard_lawn_sqft BEFORE UPDATE OF lawn_sqft ON public.properties FOR EACH ROW EXECUTE FUNCTION guard_lawn_sqft_writer()",
+  "tbl": "properties",
+  "tgname": "properties_guard_lawn_sqft",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER properties_updated_at BEFORE UPDATE ON public.properties FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "properties",
+  "tgname": "properties_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_property_intelligence_one_active BEFORE INSERT ON public.property_intelligence FOR EACH ROW EXECUTE FUNCTION vision_supersede_prior_active()",
+  "tbl": "property_intelligence",
+  "tgname": "trg_property_intelligence_one_active",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_property_intelligence_updated BEFORE UPDATE ON public.property_intelligence FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "property_intelligence",
+  "tgname": "trg_property_intelligence_updated",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER property_measurements_history AFTER INSERT OR DELETE OR UPDATE ON public.property_measurements FOR EACH ROW EXECUTE FUNCTION log_measurement_event()",
+  "tbl": "property_measurements",
+  "tgname": "property_measurements_history",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER property_measurements_mirror AFTER INSERT OR DELETE OR UPDATE OF value, kind ON public.property_measurements FOR EACH ROW EXECUTE FUNCTION mirror_measurement_to_property()",
+  "tbl": "property_measurements",
+  "tgname": "property_measurements_mirror",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER property_measurements_updated_at BEFORE UPDATE ON public.property_measurements FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "property_measurements",
+  "tgname": "property_measurements_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_property_twin_updated BEFORE UPDATE ON public.property_twin FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "property_twin",
+  "tgname": "trg_property_twin_updated",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER pto_entries_updated_at BEFORE UPDATE ON public.pto_entries FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "pto_entries",
+  "tgname": "pto_entries_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_publish_jobs_updated BEFORE UPDATE ON public.publish_jobs FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "publish_jobs",
+  "tgname": "trg_publish_jobs_updated",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE CONSTRAINT TRIGGER quote_options_shape_trg AFTER INSERT OR DELETE OR UPDATE ON public.quote_options DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION quote_options_shape_guard()",
+  "tbl": "quote_options",
+  "tgname": "quote_options_shape_trg",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE CONSTRAINT TRIGGER quote_services_shape_trg AFTER INSERT OR UPDATE ON public.quote_services DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION quote_options_shape_guard()",
+  "tbl": "quote_services",
+  "tgname": "quote_services_shape_trg",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER quotes_updated_at BEFORE UPDATE ON public.quotes FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "quotes",
+  "tgname": "quotes_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_integration_capture AFTER INSERT OR UPDATE OF status ON public.quotes FOR EACH ROW EXECUTE FUNCTION capture_integration_event()",
+  "tbl": "quotes",
+  "tgname": "trg_integration_capture",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_notify_quote_accepted AFTER UPDATE OF status ON public.quotes FOR EACH ROW EXECUTE FUNCTION notify_quote_accepted()",
+  "tbl": "quotes",
+  "tgname": "trg_notify_quote_accepted",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_referrals_updated BEFORE UPDATE ON public.referrals FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "referrals",
+  "tgname": "trg_referrals_updated",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_report_schedules_updated_at BEFORE UPDATE ON public.report_schedules FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "report_schedules",
+  "tgname": "trg_report_schedules_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER service_bundles_updated_at BEFORE UPDATE ON public.service_bundles FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "service_bundles",
+  "tgname": "service_bundles_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_integration_capture AFTER INSERT ON public.service_requests FOR EACH ROW EXECUTE FUNCTION capture_integration_event()",
+  "tbl": "service_requests",
+  "tgname": "trg_integration_capture",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_sr_to_conversation AFTER INSERT ON public.service_requests FOR EACH ROW EXECUTE FUNCTION sr_to_conversation()",
+  "tbl": "service_requests",
+  "tgname": "trg_sr_to_conversation",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER service_templates_updated_at BEFORE UPDATE ON public.service_templates FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "service_templates",
+  "tgname": "service_templates_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_social_connections_updated BEFORE UPDATE ON public.social_connections FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "social_connections",
+  "tgname": "trg_social_connections_updated",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER technicians_auth_link_guard BEFORE INSERT OR UPDATE ON public.technicians FOR EACH ROW EXECUTE FUNCTION guard_technician_auth_link()",
+  "tbl": "technicians",
+  "tgname": "technicians_auth_link_guard",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER technicians_log_wage_change AFTER INSERT OR UPDATE OF hourly_wage ON public.technicians FOR EACH ROW EXECUTE FUNCTION log_wage_change()",
+  "tbl": "technicians",
+  "tgname": "technicians_log_wage_change",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER technicians_updated_at BEFORE UPDATE ON public.technicians FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "technicians",
+  "tgname": "technicians_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER time_entries_updated_at BEFORE UPDATE ON public.time_entries FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "time_entries",
+  "tgname": "time_entries_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_vendors_updated BEFORE UPDATE ON public.vendors FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "vendors",
+  "tgname": "trg_vendors_updated",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_webhook_deliveries_nudge AFTER INSERT ON public.webhook_deliveries FOR EACH STATEMENT EXECUTE FUNCTION nudge_webhook_deliveries()",
+  "tbl": "webhook_deliveries",
+  "tgname": "trg_webhook_deliveries_nudge",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER webhook_endpoints_updated_at BEFORE UPDATE ON public.webhook_endpoints FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "webhook_endpoints",
+  "tgname": "webhook_endpoints_updated_at",
+  "tgenabled": "O"
+ }
+]

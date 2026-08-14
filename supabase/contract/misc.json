@@ -1,0 +1,297 @@
+{
+ "buckets": [
+  {
+   "id": "booking-uploads",
+   "name": "booking-uploads",
+   "public": true,
+   "file_size_limit": null,
+   "allowed_mime_types": null,
+   "avif_autodetection": false
+  },
+  {
+   "id": "branding",
+   "name": "branding",
+   "public": true,
+   "file_size_limit": null,
+   "allowed_mime_types": null,
+   "avif_autodetection": false
+  },
+  {
+   "id": "crew-media",
+   "name": "crew-media",
+   "public": false,
+   "file_size_limit": 52428800,
+   "allowed_mime_types": [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+    "video/mp4",
+    "video/quicktime",
+    "video/webm"
+   ],
+   "avif_autodetection": false
+  },
+  {
+   "id": "equipment-docs",
+   "name": "equipment-docs",
+   "public": false,
+   "file_size_limit": null,
+   "allowed_mime_types": null,
+   "avif_autodetection": false
+  },
+  {
+   "id": "expense-receipts",
+   "name": "expense-receipts",
+   "public": false,
+   "file_size_limit": null,
+   "allowed_mime_types": null,
+   "avif_autodetection": false
+  },
+  {
+   "id": "job-photos",
+   "name": "job-photos",
+   "public": true,
+   "file_size_limit": null,
+   "allowed_mime_types": null,
+   "avif_autodetection": false
+  },
+  {
+   "id": "lead-uploads",
+   "name": "lead-uploads",
+   "public": true,
+   "file_size_limit": null,
+   "allowed_mime_types": null,
+   "avif_autodetection": false
+  }
+ ],
+ "seq_acls": [
+  {
+   "acl": "{postgres=rwU/postgres,anon=rwU/postgres,authenticated=rwU/postgres,service_role=rwU/postgres}",
+   "name": "property_measurement_events_seq_seq"
+  },
+  {
+   "acl": "{postgres=rwU/postgres,anon=rwU/postgres,authenticated=rwU/postgres,service_role=rwU/postgres}",
+   "name": "wage_history_seq_seq"
+  }
+ ],
+ "extensions": [
+  {
+   "name": "pg_net",
+   "schema": "public",
+   "version": "0.20.3"
+  },
+  {
+   "name": "pg_stat_statements",
+   "schema": "extensions",
+   "version": "1.11"
+  },
+  {
+   "name": "pg_trgm",
+   "schema": "public",
+   "version": "1.6"
+  },
+  {
+   "name": "pgcrypto",
+   "schema": "extensions",
+   "version": "1.3"
+  },
+  {
+   "name": "plpgsql",
+   "schema": "pg_catalog",
+   "version": "1.0"
+  },
+  {
+   "name": "supabase_vault",
+   "schema": "vault",
+   "version": "0.3.1"
+  },
+  {
+   "name": "uuid-ossp",
+   "schema": "extensions",
+   "version": "1.1"
+  }
+ ],
+ "pg_version": "PostgreSQL 17.6 on aarch64-unknown-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit",
+ "captured_at": "2026-08-14 03:57:33.020212+00",
+ "default_acls": [
+  {
+   "acl": "{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
+   "role": "postgres",
+   "schema": "public",
+   "objtype": "r"
+  },
+  {
+   "acl": "{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
+   "role": "postgres",
+   "schema": "public",
+   "objtype": "f"
+  },
+  {
+   "acl": "{postgres=rwU/postgres,anon=rwU/postgres,authenticated=rwU/postgres,service_role=rwU/postgres}",
+   "role": "postgres",
+   "schema": "public",
+   "objtype": "S"
+  },
+  {
+   "acl": "{postgres=rwU/supabase_admin,anon=rwU/supabase_admin,authenticated=rwU/supabase_admin,service_role=rwU/supabase_admin}",
+   "role": "supabase_admin",
+   "schema": "public",
+   "objtype": "S"
+  },
+  {
+   "acl": "{postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}",
+   "role": "supabase_admin",
+   "schema": "public",
+   "objtype": "r"
+  },
+  {
+   "acl": "{postgres=X/supabase_admin,anon=X/supabase_admin,authenticated=X/supabase_admin,service_role=X/supabase_admin}",
+   "role": "supabase_admin",
+   "schema": "public",
+   "objtype": "f"
+  },
+  {
+   "acl": "{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
+   "role": "postgres",
+   "schema": "storage",
+   "objtype": "r"
+  },
+  {
+   "acl": "{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
+   "role": "postgres",
+   "schema": "storage",
+   "objtype": "f"
+  },
+  {
+   "acl": "{postgres=rwU/postgres,anon=rwU/postgres,authenticated=rwU/postgres,service_role=rwU/postgres}",
+   "role": "postgres",
+   "schema": "storage",
+   "objtype": "S"
+  },
+  {
+   "acl": "{postgres=arwdDxtm/supabase_auth_admin,dashboard_user=arwdDxtm/supabase_auth_admin}",
+   "role": "supabase_auth_admin",
+   "schema": "auth",
+   "objtype": "r"
+  },
+  {
+   "acl": "{postgres=rwU/supabase_auth_admin,dashboard_user=rwU/supabase_auth_admin}",
+   "role": "supabase_auth_admin",
+   "schema": "auth",
+   "objtype": "S"
+  },
+  {
+   "acl": "{postgres=X/supabase_auth_admin,dashboard_user=X/supabase_auth_admin}",
+   "role": "supabase_auth_admin",
+   "schema": "auth",
+   "objtype": "f"
+  },
+  {
+   "acl": "{postgres=arwdDxtm/supabase_admin,dashboard_user=arwdDxtm/supabase_admin}",
+   "role": "supabase_admin",
+   "schema": "realtime",
+   "objtype": "r"
+  },
+  {
+   "acl": "{postgres=rwU/supabase_admin,dashboard_user=rwU/supabase_admin}",
+   "role": "supabase_admin",
+   "schema": "realtime",
+   "objtype": "S"
+  },
+  {
+   "acl": "{postgres=X/supabase_admin,dashboard_user=X/supabase_admin}",
+   "role": "supabase_admin",
+   "schema": "realtime",
+   "objtype": "f"
+  },
+  {
+   "acl": "{postgres=rwU/supabase_admin,anon=rwU/supabase_admin,authenticated=rwU/supabase_admin,service_role=rwU/supabase_admin}",
+   "role": "supabase_admin",
+   "schema": "graphql_public",
+   "objtype": "S"
+  },
+  {
+   "acl": "{postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}",
+   "role": "supabase_admin",
+   "schema": "graphql_public",
+   "objtype": "r"
+  },
+  {
+   "acl": "{postgres=X/supabase_admin,anon=X/supabase_admin,authenticated=X/supabase_admin,service_role=X/supabase_admin}",
+   "role": "supabase_admin",
+   "schema": "graphql_public",
+   "objtype": "f"
+  },
+  {
+   "acl": "{postgres=a*r*w*d*D*x*t*m*/supabase_admin}",
+   "role": "supabase_admin",
+   "schema": "extensions",
+   "objtype": "r"
+  },
+  {
+   "acl": "{postgres=X*/supabase_admin}",
+   "role": "supabase_admin",
+   "schema": "extensions",
+   "objtype": "f"
+  },
+  {
+   "acl": "{postgres=r*w*U*/supabase_admin}",
+   "role": "supabase_admin",
+   "schema": "extensions",
+   "objtype": "S"
+  },
+  {
+   "acl": "{postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}",
+   "role": "supabase_admin",
+   "schema": "graphql",
+   "objtype": "r"
+  },
+  {
+   "acl": "{postgres=X/supabase_admin,anon=X/supabase_admin,authenticated=X/supabase_admin,service_role=X/supabase_admin}",
+   "role": "supabase_admin",
+   "schema": "graphql",
+   "objtype": "f"
+  },
+  {
+   "acl": "{postgres=rwU/supabase_admin,anon=rwU/supabase_admin,authenticated=rwU/supabase_admin,service_role=rwU/supabase_admin}",
+   "role": "supabase_admin",
+   "schema": "graphql",
+   "objtype": "S"
+  }
+ ],
+ "latest_migration": "20260814035646",
+ "publication_tables": [
+  "public.content_pieces",
+  "public.conversations",
+  "public.crews",
+  "public.crm_campaign_log",
+  "public.crm_campaigns",
+  "public.customers",
+  "public.day_statuses",
+  "public.dispatch_notes",
+  "public.inbound_events",
+  "public.invoices",
+  "public.jobs",
+  "public.marketing_assets",
+  "public.marketing_campaigns",
+  "public.messages",
+  "public.notifications",
+  "public.payment_methods",
+  "public.payments",
+  "public.properties",
+  "public.property_intelligence",
+  "public.property_twin",
+  "public.publish_jobs",
+  "public.quotes",
+  "public.referrals",
+  "public.schedule_items",
+  "public.service_requests",
+  "public.social_connections",
+  "public.technicians",
+  "public.time_entries",
+  "public.webhook_deliveries",
+  "public.website_leads"
+ ]
+}

@@ -1,0 +1,34 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ARCHIVED MIGRATION — HISTORY ONLY. DO NOT RE-RUN.
+--
+--   version : 20260715092117
+--   name    : analytics_layout
+--
+-- Recovered on 2026-08-13 from supabase_migrations.schema_migrations — the SQL
+-- production actually executed, not a repo file that was believed to match it.
+-- Several of these migrations never had a repo file at all.
+--
+-- Its effects are already folded into supabase/migrations/*_baseline.sql. This
+-- copy exists so the reason a column looks the way it does is answerable, and for
+-- no other purpose. Re-running one replaces a live object with an older body —
+-- silently, with no error. That has already broken the customer portal twice.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- Analytics workspace layout — per-user widget order + hidden set for
+-- /dashboard/intelligence. Follows the existing per-user jsonb config pattern on
+-- business_settings (service_seasons, message_templates, notif_prefs), so it
+-- needs no new table and rides the row's existing RLS.
+--
+-- Shape: { "order": ["executive","financial",...], "hidden": ["yearly"] }
+-- Unknown ids are ignored and missing ids fall back to the default order, so a
+-- saved layout can never hide a widget added in a later release.
+--
+-- NOT reusing the existing `dashboard_cards` column: that belongs to the old home
+-- dashboard shell removed in 019c24c and still holds ids for deleted components
+-- ("suggestions","stats","recent","acquisition"). It is dead but left in place —
+-- dropping it is a separate, explicit decision.
+alter table public.business_settings
+  add column if not exists analytics_layout jsonb;
+
+comment on column public.business_settings.analytics_layout is
+  'Analytics workspace layout: { "order": [widgetId], "hidden": [widgetId] }. Unknown ids ignored; missing ids append in default order.';

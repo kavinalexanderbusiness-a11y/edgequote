@@ -1,8 +1,8 @@
 // THE integration event catalog — the single source of truth for what events
 // exist, what their payloads carry, and what the /api/v1 serializers return.
 //
-// The actual capture happens in DB triggers (supabase/RUN-2026-07-15-
-// integrations-platform.sql, capture_integration_event) because domain writes
+// The actual capture happens in DB triggers (capture_integration_event, defined in
+// supabase/migrations/*_baseline.sql) because domain writes
 // come from the dashboard, the customer portal RPCs, the public booking API,
 // Stripe webhooks AND crons — triggers are the only choke point they share.
 // This file mirrors those payloads for the app side: docs, Zapier samples,

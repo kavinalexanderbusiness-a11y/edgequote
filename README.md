@@ -48,8 +48,12 @@ npm run verify:<x>   # one harness (pricing, labor, accounting, …)
 Verify suites are the contract: check **exit codes**, not checkmark counts — which
 is exactly what `npm run verify` does across the whole set, and it fails fast if the
 set has drifted (a `verify-*.ts` with no npm script, or vice versa).
-`supabase/RUN-*.sql` files are the record of applied production migrations —
-committed, never re-run out of order.
+**Database:** `supabase/migrations/` is the apply path — a generated baseline plus
+anything shipped after it. `supabase/archive/` is history and is **never** applied.
+`npm run verify:schema` asks production whether it still matches; `npm run
+verify:rebuild` proves the repo can rebuild it from an empty database. Process:
+[docs/MIGRATIONS.md](docs/MIGRATIONS.md) · Recovery:
+[docs/DISASTER_RECOVERY.md](docs/DISASTER_RECOVERY.md).
 
 Stack: Next.js (App Router) · Supabase (Postgres/Auth/Storage/Realtime) ·
 Stripe · Twilio/Resend · Vercel (project `kavinalexanderbusiness-a11y-edgequote`).
