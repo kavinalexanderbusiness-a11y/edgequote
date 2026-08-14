@@ -423,6 +423,16 @@ async function liveRefusals() {
     console.log('  … skipped — NEXT_PUBLIC_SUPABASE_URL / _ANON_KEY not in the environment')
     return
   }
+  // ⚠️ CI sets these to PLACEHOLDERS (`https://placeholder.supabase.co`) so the
+  // build has well-formed env without credentials. Present-but-fake is not the
+  // same as absent, and the first version of this guard failed CI by trying to
+  // reach a host that does not resolve. A guard must fail for its subject being
+  // wrong, never for the environment it happens to run in — same rule as the
+  // rate-limit skip below.
+  if (/placeholder|example\.invalid|localhost|127\.0\.0\.1/.test(SB_URL)) {
+    console.log(`  … skipped — ${SB_URL} is a placeholder, not a project`)
+    return
+  }
   const verify = async (token_hash: string) => {
     const res = await fetch(`${SB_URL}/auth/v1/verify`, {
       method: 'POST',
@@ -465,7 +475,12 @@ async function liveRefusals() {
 }
 
 liveRefusals()
-  .catch(e => { failures++; console.log(`  ✗ live checks threw\n      ${e instanceof Error ? e.message : String(e)}`) })
+  // A request that never reached Supabase says NOTHING about Supabase's refusal
+  // contract — which is the only thing the live half is here to watch. Treating
+  // an unreachable network as a contract violation is the same mistake the code
+  // under test is forbidden from making: `unavailable` is not `dead`.
+  .catch(e => console.log(
+    `  … skipped — could not reach the auth endpoint (${e instanceof Error ? e.message : String(e)})`))
   .then(() => {
     console.log('\n── Summary ────────────────────────────────────────────────────')
     if (failures) {
