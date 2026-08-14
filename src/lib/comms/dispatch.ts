@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { sendSms, sendEmail } from './send'
 import { getOrCreateConversation } from './conversation'
-import { reachCheck } from './reach'
+import { reachCheck, capabilityBlocks, type PreferredChannel } from './reach'
 import { governCheck } from './governor'
 import { SKIP_REASON } from './skipReasons'
 import { tenantCapabilities, NO_CAPABILITIES } from '@/lib/capabilities'
@@ -24,6 +24,13 @@ export interface DispatchCustomer {
   // Granular per-category preference (customers.message_prefs). Optional so
   // existing callers keep working; missing/null = channel opt-in only.
   message_prefs?: MessagePrefs | null
+  // customers.preferred_channel. Carried so a caller can hand over a whole
+  // customer row, and DELIBERATELY not acted on here: this function sends on
+  // every requested channel consent allows, and a preference that silently
+  // stopped one of those would be a second consent engine — the exact thing
+  // lib/comms/reach refuses to become. Preference ORDERS channels (see
+  // resolveReach) for the surfaces that pick ONE; it never shrinks this set.
+  preferred_channel?: PreferredChannel | null
 }
 
 export interface DispatchInput {
@@ -105,9 +112,12 @@ export async function dispatchToCustomer(sb: SupabaseClient, inp: DispatchInput)
       ? await tenantCapabilities(sb, inp.userId) : NO_CAPABILITIES
     for (const ch of inp.channels) {
       if (blocked.get(ch)) continue
-      if ((ch === 'sms' && !caps.outboundSms) || (ch === 'email' && !caps.outboundEmail)) {
-        blocked.set(ch, SKIP_REASON.NOT_ENABLED)
-      }
+      // capabilityBlocks (lib/comms/reach) is THE rule — the same one the pure
+      // predicate applies, so an audience preview and this send can't disagree
+      // about whether a channel exists for this business. Read here rather than
+      // passed into reachCheck to keep the read LAZY: a fully-blocked customer
+      // still costs no platform_capabilities query.
+      if (capabilityBlocks(ch, caps)) blocked.set(ch, SKIP_REASON.NOT_ENABLED)
     }
   }
 

@@ -12,14 +12,14 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CampaignKind, CampaignAudience, CampaignSchedule } from '@/types'
 import type { MessagePrefs, MsgType } from '@/lib/comms/templates'
-import { blockedReason } from '@/lib/comms/reach'
+import { blockedReason, type PreferredChannel } from '@/lib/comms/reach'
 import { describeSkip } from '@/lib/comms/skipReasons'
 import { applyCanAskForReview } from './reviews'
 import { dateFieldFiresToday } from './campaigns'
 
 // Everything dispatch needs, plus the fields the trigger rules match on.
 export const AUDIENCE_SELECT =
-  'id, name, phone, email, sms_opt_in, email_opt_in, message_prefs, birthday, anniversary'
+  'id, name, phone, email, sms_opt_in, email_opt_in, message_prefs, preferred_channel, birthday, anniversary'
 
 export interface AudienceCustomer {
   id: string
@@ -29,6 +29,8 @@ export interface AudienceCustomer {
   sms_opt_in: boolean
   email_opt_in: boolean
   message_prefs?: MessagePrefs | null
+  /** Orders which blocked reason the preview reports; never changes the count. */
+  preferred_channel?: PreferredChannel | null
   birthday: string | null
   anniversary: string | null
 }

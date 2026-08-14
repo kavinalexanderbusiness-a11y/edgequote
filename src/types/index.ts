@@ -1,4 +1,5 @@
 import { type Tone, toneSoft } from '@/lib/tone'
+import { type PreferredChannel } from '@/lib/comms/reach'
 
 export type QuoteStatus =
   | 'draft' | 'sent' | 'accepted' | 'scheduled' | 'completed' | 'paid' | 'declined'
@@ -31,6 +32,13 @@ export interface Customer {
   // Communication consent — gates all SMS/email sends (default off).
   sms_opt_in: boolean
   email_opt_in: boolean
+  // How they'd RATHER be contacted. A preference, not a permission: it orders
+  // the channels consent above already allows and can never grant one, so
+  // 'sms' here with sms_opt_in false still never sends a text. null = no
+  // preference, the state every existing customer is in. 'phone' means call
+  // them — the owner does that, this product never places calls.
+  // THE resolver is resolveReach in lib/comms/reach; nothing reads this raw.
+  preferred_channel?: PreferredChannel | null
   // ── CRM automation ──
   // Review lifecycle on top of reviewed_at (status DERIVED in lib/crm/reviews):
   //   declined → review_declined_at · reviewed → reviewed_at · requested →
