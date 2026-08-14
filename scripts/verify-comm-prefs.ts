@@ -280,6 +280,63 @@ check('the migration constrains the value set in the database',
 check('the column is nullable (no preference is a real state)', /not null/i.test(mig), false)
 
 // ═══════════════════════════════════════════════════════════════════════════
+H('9b. BOTH SEND PATHS GO THROUGH THE ONE PRIMITIVE — manual AND automated')
+// "Manual respects it" and "automated respects it" are the same claim in this
+// codebase, and that is the point: every sender — the owner's reply, the nine
+// crons, the campaign sweep, the chaser, receipts — funnels through
+// dispatchToCustomer, which gates on reachCheck. So the way to prove both is to
+// prove there is no second door, not to test two doors.
+// Each sender is named WITH the door it goes through, rather than matched
+// against a loose "any of these calls" pattern. Two of the crons reach dispatch
+// via the shared chase engine (runChaseCron), and a check permissive enough to
+// accept that would also have accepted a sender that gated on nothing.
+const SENDERS = [
+  ['app/api/messages/send/route.ts', "the owner's manual reply", /dispatchToCustomer\s*\(/],
+  // The composer owns its send deliberately (bulk needs per-recipient results),
+  // so its door is the shared PREDICATE rather than the shared dispatcher.
+  ['app/api/comms/send/route.ts', 'the composer (single + bulk)', /reachCheck\s*\(/],
+  ['app/api/cron/campaigns/route.ts', 'the automated campaign sweep', /dispatchToCustomer\s*\(/],
+  ['app/api/cron/notifications/route.ts', 'automated visit reminders', /dispatchToCustomer\s*\(/],
+  ['app/api/cron/scheduled-messages/route.ts', 'send-later messages', /dispatchToCustomer\s*\(/],
+  ['app/api/booking/notify/route.ts', 'booking confirmations', /dispatchToCustomer\s*\(/],
+  ['lib/comms/receipt.ts', 'payment receipts', /dispatchToCustomer\s*\(/],
+  ['lib/automation/chase.ts', 'the automated chaser', /dispatchToCustomer\s*\(/],
+  // These two own no send of their own — they hand rows to the chase engine.
+  ['app/api/cron/invoice-reminders/route.ts', 'automated invoice reminders', /runChaseCron[<(]/],
+  ['app/api/cron/quote-followup/route.ts', 'automated quote follow-up', /runChaseCron[<(]/],
+] as const
+for (const [rel, what, door] of SENDERS) {
+  check(`${what} sends through the ONE gated pipeline`, door.test(read(...rel.split('/'))), true)
+}
+// api/comms/send owns its send deliberately, so it must gate itself.
+check('the composer route gates on reachCheck itself (it does not call dispatch for the gate)',
+  /reachCheck\s*\(/.test(read('app', 'api', 'comms', 'send', 'route.ts')), true)
+// And nothing may reach the raw senders around that gate — verify:capabilities
+// owns the full allowlist; this pins the two that matter for preference.
+check('dispatch is still the chokepoint that imports the raw senders',
+  /import\s*\{[^}]*\bsend(Sms|Email)\b[^}]*\}\s*from\s*'\.\/send'/.test(dispatchSrc), true)
+
+// ═══════════════════════════════════════════════════════════════════════════
+H('9c. CREW SEES CONTACT, NEVER CONSENT COMPLEXITY')
+// A crew session has ZERO table access — the crew_day RPC is a column-limited
+// projection, which is why a worker gets a name and a phone number and not the
+// consent flags, the marketing categories or the lifetime value.
+//
+// The preference is deliberately NOT added to it. Handing a worker "prefers SMS"
+// WITHOUT the consent that governs it is worse than saying nothing: it reads as
+// an instruction to text, and the one thing this whole feature exists to prevent
+// is a preference being mistaken for permission. A worker's legitimate contact
+// is the phone number for today's visit, which they already have.
+const crewSrc = read('lib', 'crewAccess.ts')
+const crewCustomer = /customer:\s*\{[^}]*\}/.exec(crewSrc)
+check('the crew stop carries a customer projection', !!crewCustomer, true)
+check('…limited to name + phone', crewCustomer![0].replace(/\s+/g, ' '),
+  'customer: { name: string; phone: string | null }')
+for (const leak of ['sms_opt_in', 'email_opt_in', 'message_prefs', 'preferred_channel']) {
+  check(`…and never carries ${leak}`, crewSrc.includes(leak), false)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 H('10. THE SCREEN, RENDERED — what an owner actually reads, on a phone')
 // Asserting the FUNCTION is honest is not the same as asserting the SCREEN is.
 // The card is rendered for real (renderToStaticMarkup — the technique
@@ -325,6 +382,16 @@ check('a call preference tells the owner to ring them',
 // reader needs before they "improve" this card into a consent editor.
 check('the card says a preference is not a permission',
   strip(render({})).includes('A preference, not a permission'), true)
+
+// Per-channel status, the shape the brief asked for: the preference AND what
+// each channel can actually do, so the owner never has to infer one from the
+// other. Reasons use describeSkip's wording, not a second vocabulary.
+check('both channels report a status',
+  strip(render({})).includes('SMS: Allowed') && strip(render({})).includes('Email: Allowed'), true)
+check('a blocked channel names its reason instead of saying Allowed',
+  strip(render({ sms_opt_in: false })).includes('SMS: no opt-in'), true)
+check('…and a missing contact reads as the contact gap',
+  strip(render({ email: null })).includes('Email: no email on file'), true)
 
 // Mobile: four options must WRAP on a 375px handset rather than overflow, and
 // every one must be a real tap target. A row that overflows is unreachable in

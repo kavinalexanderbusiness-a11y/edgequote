@@ -7,6 +7,7 @@ import { MessageSquare, Mail, Phone, CircleSlash, AlertTriangle } from 'lucide-r
 import { toast } from '@/lib/toast'
 import { tenantCapabilities, type TenantCapabilities } from '@/lib/capabilities'
 import { resolveReach, reachSummary, type PreferredChannel as Pref } from '@/lib/comms/reach'
+import { describeSkip } from '@/lib/comms/skipReasons'
 import type { Customer } from '@/types'
 
 // ── "How do I reach this person?" — the one answer, and the one place to set it ─
@@ -88,11 +89,28 @@ export function PreferredChannelCard({ customer, onChange }: {
     <Card className={tone === 'bad' ? 'border-red-500/30' : tone === 'warn' ? 'border-amber-500/30' : undefined}>
       <CardBody className="space-y-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Preferred contact</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Contact preference</p>
           <p className={`text-sm mt-1 flex items-start gap-1.5 ${tone === 'bad' ? 'text-red-300' : tone === 'warn' ? 'text-amber-300' : 'text-ink'}`}>
             {tone !== 'ok' && <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />}
             {reachSummary(verdict)}
           </p>
+        </div>
+
+        {/* Per-channel truth, beside the preference rather than instead of it.
+            The sentence above says what WILL happen; this says what is possible
+            on each channel, which is the line an owner reads before deciding to
+            pick up the phone. Reasons come from describeSkip — the same labeller
+            the timeline and the campaign preview use, so one refusal never has
+            two wordings. */}
+        <div className="flex flex-wrap gap-x-4 gap-y-1">
+          {verdict.channels.map(ch => (
+            <span key={ch.channel} className="text-xs text-ink-muted">
+              <span className="text-ink-faint">{ch.channel === 'sms' ? 'SMS' : 'Email'}:</span>{' '}
+              <span className={ch.blocked ? 'text-amber-300' : 'text-emerald-300'}>
+                {ch.blocked ? describeSkip(ch.blocked).label : 'Allowed'}
+              </span>
+            </span>
+          ))}
         </div>
 
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Preferred contact method">
