@@ -161,7 +161,10 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     // wire and got serialized into the RSC payload. This is the union actually
     // consumed by money/KPIs, priorities, needsFollowUp, reactivation and dayPlan.
     pageAll<Quote>(() => sb.from('quotes').select(QUOTE_COLUMNS).eq('user_id', userId)),
-    sb.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', userId),
+    // The series' own dates ride along because the reactivation engine cannot
+    // tell "this plan finished as agreed" from "this plan fell over" without
+    // them — and the difference is whether the dashboard shouts at the owner.
+    sb.from('job_recurrences').select('id, freq, interval_unit, interval_count, start_date, end_date, end_count').eq('user_id', userId),
     // ALL non-archived conversations (not just unread): the lead union needs the
     // full set, and the messages row filters unread>0 from it in memory. One read
     // instead of two overlapping ones.

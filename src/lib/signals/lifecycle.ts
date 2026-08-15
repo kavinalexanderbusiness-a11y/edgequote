@@ -43,6 +43,17 @@ export interface RanOutInput {
   cadenceDays: number
   /** Out of season → dormant, not lost. */
   seasonallyDormant: boolean
+  /** The series reached the ending it was GIVEN — its end date passed, or it
+   *  delivered the number of visits it was booked for. Optional and false by
+   *  default, so every existing caller behaves exactly as before.
+   *
+   *  ⭐ A plan that finished as agreed is not a plan that fell over. Without
+   *  this, the two are the same row — "a recurring customer with nothing
+   *  booked" — and a contract that ran its full term and stopped on the agreed
+   *  day was reported as an emergency the following morning, every year. The
+   *  renewal engine (signals/renewal) picks these up instead and asks at the
+   *  right time. */
+  plannedEnd?: boolean
   today: string
 }
 
@@ -54,11 +65,11 @@ export interface RanOutSignal {
   isUrgent: boolean
   daysSince: number | null
   /** Why it is NOT a ran-out, for surfaces that explain themselves. */
-  reason: 'ran_out' | 'no_recurring' | 'has_upcoming' | 'never_serviced' | 'seasonally_dormant'
+  reason: 'ran_out' | 'no_recurring' | 'has_upcoming' | 'never_serviced' | 'seasonally_dormant' | 'plan_completed'
 }
 
 export function ranOut(input: RanOutInput): RanOutSignal {
-  const { hasRecurring, hasUpcoming, lastServiceDate, cadenceDays, seasonallyDormant, today } = input
+  const { hasRecurring, hasUpcoming, lastServiceDate, cadenceDays, seasonallyDormant, plannedEnd, today } = input
   const none = (reason: RanOutSignal['reason']): RanOutSignal => ({ isRanOut: false, isUrgent: false, daysSince: null, reason })
 
   if (!hasRecurring) return none('no_recurring')
@@ -67,6 +78,9 @@ export function ranOut(input: RanOutInput): RanOutSignal {
   if (seasonallyDormant) return none('seasonally_dormant')
   // A series cancelled before any service isn't a re-book candidate.
   if (!lastServiceDate) return none('never_serviced')
+  // Reached the ending it was given → the renewal queue's customer, not this
+  // one's. Nothing went wrong here, so nothing should read as urgent.
+  if (plannedEnd) return none('plan_completed')
 
   const daysSince = Math.max(0, daysBetween(lastServiceDate, today))
   const urgentWindow = Math.max(RANOUT_URGENT_MIN_DAYS, cadenceDays * RANOUT_URGENT_CADENCES)

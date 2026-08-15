@@ -168,6 +168,23 @@ export function seasonEndDateFor(startISO: string, season: ServiceSeason): strin
   return `${year}-${pad(season.endMonth)}-${pad(clampDay(year, season.endMonth, season.endDay))}`
 }
 
+// The next date this season OPENS, strictly after `afterISO`. The mirror of
+// seasonEndDateFor and the anchor the renewal engine asks about: "when would
+// their next season begin?" Wrapping seasons need no special case — the start is
+// a fixed month/day anchor either way.
+//
+// Lifted out of lib/suggestions, which had it as a private copy. A second answer
+// to "when does the next season start" is exactly the drift this module exists
+// to prevent, and the copy already differed: it padded the day straight in
+// without clampDay, so a season anchored on a day that month doesn't have
+// produced an invalid date string.
+export function nextSeasonStartISO(season: ServiceSeason, afterISO: string): string {
+  const year = Number(afterISO.slice(0, 4))
+  const at = (y: number) => `${y}-${pad(season.startMonth)}-${pad(clampDay(y, season.startMonth, season.startDay))}`
+  const thisYear = at(year)
+  return thisYear > afterISO ? thisYear : at(year + 1)
+}
+
 // Is dateISO within the season that contains/follows it? Used to detect whether
 // a customer's NEXT season has arrived (for reactivation). Returns the active or
 // upcoming-window check relative to a reference date.

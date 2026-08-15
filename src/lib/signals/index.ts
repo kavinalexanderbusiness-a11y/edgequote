@@ -17,9 +17,15 @@
 // second name for the same thing.
 
 export { VIP_LTV, CHURN_RATIO_WARN, CHURN_RATIO_HIGH, RANOUT_URGENT_MIN_DAYS, RANOUT_URGENT_CADENCES, LAPSE_BUCKET_DAYS } from './constants'
+export { RENEWAL_LEAD_FRACTION, RENEWAL_LEAD_MIN_DAYS, RENEWAL_LEAD_MAX_DAYS, RENEWAL_SEASON_CYCLE_DAYS } from './constants'
 export { cadenceDays, type CadenceRecLike } from './cadence'
 export { lifetimeValue, visitValue, isVip, type ValuedJob, type ValueRec } from './value'
 export {
   ranOut, isLapsed, churnRisk, isSeasonallyDormant, daysBetween,
   type RanOutInput, type RanOutSignal, type ChurnRisk, type ChurnLevel,
 } from './lifecycle'
+export {
+  renewalDue, renewalLeadDays, planRenewal,
+  type RenewalInput, type RenewalSignal, type RenewalReason,
+  type PlanFacts, type PlanRenewal,
+} from './renewal'

@@ -192,23 +192,31 @@ H('Revenue intelligence refuses to rank customers it could not read')
 // "At risk: 0" over a green "Every customer is booked or recently served" — the
 // most reassuring sentence in the app, invented from a network blip, on the one
 // screen whose entire job is to warn that people are slipping away.
+// Session 53 moved this gate off the page and into the loader (lib/reactivation
+// loadReactivation), so the page can no longer coerce a failed read at all — it
+// never sees one. The contract is unchanged and is pinned at its new home; the
+// checks below must keep asserting BEHAVIOUR, never the old inline shape.
 H('Reactivation does not invent an all-clear')
 {
+  const REACT_LIB = read('src/lib/reactivation.ts')
   check('the loader gates on all five reads',
-    /if \(cRes\.error \|\| jRes\.error \|\| qRes\.error \|\| rRes\.error \|\| sRes\.error\) \{/.test(REACT_PAGE), true)
+    /const failed = \[cRes, jRes, qRes, rRes, sRes\]\.find\(r => r\.error\)/.test(REACT_LIB)
+    && /if \(failed\?\.error\) return \{ ok: false/.test(REACT_LIB), true)
   check('…and an absent session is not an all-clear',
-    /if \(!user\) \{ setFailed\(true\); setLoading\(false\); return \}/.test(REACT_PAGE), true)
+    /if \(!user\) return \{ ok: false/.test(REACT_LIB), true)
   check('the page has a failed state distinct from "nobody at risk"',
-    /Couldn’t check who is slipping away/.test(REACT_PAGE), true)
+    /Couldn’t load the at-risk list/.test(REACT_PAGE), true)
   check('…which says it is not a sign that everyone is booked',
-    /not a sign that everyone is booked/.test(REACT_PAGE), true)
+    /blank because we don’t know them, not because they’re zero/.test(REACT_PAGE), true)
 
-  // The zeroed metric tiles are themselves a claim — they must not render either.
-  const failReturn = REACT_PAGE.indexOf('if (failed) {')
-  const tiles = REACT_PAGE.indexOf('label="At risk"')
-  check('…and returns before painting "At risk: 0"', failReturn > 0 && tiles > failReturn, true)
-  const positive = REACT_PAGE.indexOf('title="Every customer is booked or recently served"')
-  check('…and before the positive empty state', failReturn > 0 && positive > failReturn, true)
+  // The zeroed metric tiles are themselves a claim. There is no early return now:
+  // every tile reads from `react`, which is null unless the load succeeded, so a
+  // failed read paints an em dash. That is stronger than ordering — it cannot be
+  // reordered into a lie.
+  check('…and never paints "At risk: 0" from a failed read',
+    /label="At risk" value=\{react \? String\(react\.atRisk\) : '—'\}/.test(REACT_PAGE), true)
+  check('…and gates the positive empty state on a successful load',
+    /\{react && risk\.length === 0 && ranOut\.length === 0 && \(!renew \|\| renew\.opportunities\.length === 0\) \?/.test(REACT_PAGE), true)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
