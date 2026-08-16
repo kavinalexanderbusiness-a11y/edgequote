@@ -31,6 +31,7 @@
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { splitStatements, loadPGlite, substitutePlatformStatements } from './lib/pg-sql'
 
 const CONTRACT = join('supabase', 'contract')
 const MIGRATIONS = join('supabase', 'migrations')
@@ -46,28 +47,17 @@ const read = <T>(f: string): T => JSON.parse(readFileSync(join(CONTRACT, f), 'ut
 
 async function main() {
 // ── load PGlite, or skip clean ───────────────────────────────────────────────
-let PGlite: any, contribs: any = {}
-try {
-  // Specifier held in a variable ON PURPOSE. PGlite is an OPTIONAL dependency — it is
-  // deliberately not in package.json (~100 MB, and Vercel builds already OOM), so on
-  // CI and on a fresh clone the package is simply absent. A literal import specifier
-  // would make `tsc`/`next build` demand its types and fail the build for a guard
-  // that is designed to skip. A non-literal one is unresolvable at compile time and
-  // resolved at runtime, which is exactly the semantics this needs.
-  const PGLITE = '@electric-sql/pglite'
-  ;({ PGlite } = await import(PGLITE))
-  const load = async (p: string, k: string) => { try { return (await import(p))[k] } catch { return undefined } }
-  contribs = {
-    pg_trgm: await load('@electric-sql/pglite/contrib/pg_trgm', 'pg_trgm'),
-    pgcrypto: await load('@electric-sql/pglite/contrib/pgcrypto', 'pgcrypto'),
-    uuid_ossp: await load('@electric-sql/pglite/contrib/uuid_ossp', 'uuid_ossp'),
-  }
-} catch {
+// The loader lives in scripts/lib/pg-sql.ts, shared with verify:audit-trail —
+// including the reason its import specifier is held in a variable rather than
+// written literally.
+const pglite = await loadPGlite()
+if (!pglite) {
   console.log('\n⏭  verify:rebuild SKIPPED — PGlite is not installed.')
   console.log('   This is the one guard that proves the repo can rebuild the database.')
   console.log('   Run it before any release:  npm i -D @electric-sql/pglite && npm run verify:rebuild\n')
   process.exit(0)
 }
+const { PGlite, contribs } = pglite
 const prodTables = read<any[]>('tables.json')
 const prodConstraints = read<any[]>('constraints.json')
 const prodIndexes = read<any[]>('indexes.json')
@@ -88,85 +78,12 @@ console.log(`  target: ${String(pgVersion).split(' ').slice(0, 2).join(' ')} (in
 console.log(`  source of truth for comparison: ${CONTRACT}/ (production, PostgreSQL 17)\n`)
 
 // ── apply ────────────────────────────────────────────────────────────────────
-// ── declared platform substitutions ──────────────────────────────────────────
-// A statement is rewritten ONLY when the object is provided by the Supabase
-// platform rather than by this repository, and the prelude already supplies an
-// equivalent. Each substitution is named and printed — never a silent filter,
-// because a quiet skip is how a rebuild test starts lying about what it proved.
-const SUBSTITUTIONS: { pattern: RegExp; what: string; why: string }[] = [
-  {
-    pattern: /^create extension if not exists "?pg_net"?[^;]*;$/gim,
-    what: 'create extension pg_net',
-    why: 'platform-only async HTTP extension; prelude provides net.http_post()',
-  },
-  {
-    pattern: /^create extension if not exists "?pg_stat_statements"?[^;]*;$/gim,
-    what: 'create extension pg_stat_statements',
-    why: 'platform observability, needs shared_preload_libraries; owns no application object',
-  },
-]
-
-const substitute = (sql: string) => {
-  const hits: string[] = []
-  let out = sql
-  for (const s of SUBSTITUTIONS) {
-    if (s.pattern.test(out)) {
-      s.pattern.lastIndex = 0
-      out = out.replace(s.pattern, `-- [rebuild-test substitution] ${s.what} — ${s.why}`)
-      hits.push(`${s.what} → ${s.why}`)
-    }
-    s.pattern.lastIndex = 0
-  }
-  return { sql: out, hits }
-}
-
-/**
- * Split SQL into statements, respecting dollar-quoted bodies ($$ … $$ and
- * $function$ … $function$), line comments and string literals. Handing PGlite the
- * whole 450 KB file at once exhausts the WASM heap; more usefully, splitting means
- * a failure names the exact statement instead of the whole file.
- */
-function splitStatements(sql: string): string[] {
-  const out: string[] = []
-  let buf = '', i = 0
-  while (i < sql.length) {
-    const c = sql[i]
-    if (c === '-' && sql[i + 1] === '-') {
-      const nl = sql.indexOf('\n', i)
-      const end = nl === -1 ? sql.length : nl
-      buf += sql.slice(i, end); i = end
-      continue
-    }
-    if (c === "'") {
-      let j = i + 1
-      while (j < sql.length) {
-        if (sql[j] === "'" && sql[j + 1] === "'") { j += 2; continue }
-        if (sql[j] === "'") break
-        j++
-      }
-      buf += sql.slice(i, j + 1); i = j + 1
-      continue
-    }
-    if (c === '$') {
-      const m = /^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/.exec(sql.slice(i))
-      if (m) {
-        const tag = m[0]
-        const close = sql.indexOf(tag, i + tag.length)
-        const end = close === -1 ? sql.length : close + tag.length
-        buf += sql.slice(i, end); i = end
-        continue
-      }
-    }
-    if (c === ';') { out.push(buf.trim()); buf = ''; i++; continue }
-    buf += c; i++
-  }
-  if (buf.trim()) out.push(buf.trim())
-  return out.filter(s => s && !/^(--[^\n]*\n?)*$/.test(s))
-}
+// The platform substitution table and the statement splitter are shared with
+// verify:audit-trail — see scripts/lib/pg-sql.ts for why each exists.
 
 const apply = async (label: string, rawSql: string) => {
   const t0 = Date.now()
-  const { sql, hits } = substitute(rawSql)
+  const { sql, hits } = substitutePlatformStatements(rawSql)
   for (const h of hits) console.log(`  ⇄ platform substitution — ${h}`)
   const statements = splitStatements(sql)
   let n = 0
