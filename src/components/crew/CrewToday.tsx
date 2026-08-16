@@ -324,14 +324,18 @@ export function CrewToday() {
         <h1 className="text-xl font-bold tracking-tight text-ink">
           {active.length === 0 ? 'Nothing booked today' : `${active.length - done} of ${active.length} to go`}
         </h1>
+        {/* Who you are with today. A worker on no crew is a real and ordinary
+            state now that work can be assigned to a person directly — saying
+            nothing would leave them wondering whether the app had failed. */}
         <p className="mt-0.5 text-xs text-ink-muted flex items-center gap-1.5 flex-wrap">
           {day.crew?.name && <span className="font-medium text-ink">{day.crew.name}</span>}
-          {day.teammates.length > 0 && (
+          {day.crew?.name && day.teammates.length > 0 && (
             <span className="inline-flex items-center gap-1">
               <Users className="w-3.5 h-3.5" aria-hidden /> with {day.teammates.map(t => t.name).join(', ')}
             </span>
           )}
           {day.teammates.length === 0 && day.crew?.name && <span>· on your own today</span>}
+          {!day.crew?.name && active.length > 0 && <span>Assigned to you</span>}
         </p>
       </header>
 
@@ -392,7 +396,9 @@ export function CrewToday() {
           </Notice>
         ) : (
           <Notice tone="neutral" icon={Check} title="No stops on the board">
-            Nothing is assigned to your crew today. Check the Week tab for what’s coming.
+            {day.crew?.name
+              ? 'Nothing is assigned to your crew today. Check the Week tab for what’s coming.'
+              : 'Nothing is assigned to you today. Check the Week tab for what’s coming.'}
           </Notice>
         )
       )}
@@ -438,6 +444,14 @@ export function CrewToday() {
                   <p className="text-xs text-ink-muted truncate">{stop.property.address}</p>
                 )}
                 <p className="mt-0.5 text-[11px] text-ink-faint flex items-center gap-1.5 flex-wrap">
+                  {/* Yours alone, or the crew's. Only worth saying on a day that
+                      holds both — on an all-personal or all-crew day the header
+                      has already said it. */}
+                  {stop.personal && day.crew?.name && (
+                    <span className="rounded px-1.5 py-0.5 border border-accent/30 bg-accent/10 text-accent-text font-medium">
+                      Yours
+                    </span>
+                  )}
                   {stop.service_type && <span className="text-ink-muted">{stop.service_type}</span>}
                   {timeLabel(stop.start_time) && <span>· {timeLabel(stop.start_time)}</span>}
                   {stop.duration_minutes ? <span>· {stop.duration_minutes} min</span> : null}

@@ -159,6 +159,10 @@ export interface CrewStop {
   /** 🔒 INTERNAL — for the office. Shown to the worker who wrote it; never to a
    *  customer (it is not in get_portal_data's payload at all). */
   completion_issue: string | null
+  /** True when this visit was assigned to YOU by name rather than to your crew.
+   *  Both kinds appear on the same board — a worker's day is one list — but the
+   *  card says which, so "mine alone" and "ours" are never confused. */
+  personal?: boolean
   customer: { name: string; phone: string | null } | null
   property: { address: string | null; lat: number | null; lng: number | null } | null
 }
