@@ -27,7 +27,7 @@ import { serviceHistory, type LaborComparison, type ServiceVariance } from '@/li
 import { loadCompletedVisitLearning } from '@/lib/estimateVsActualData'
 import { workersAvailableOn, type DayVisitLike, type DayFitInput } from '@/lib/dayFit'
 import {
-  workerDayStates,
+  workerDayStates, isBookedOff, isMissingRelation,
   type ApprovedTimeOffDay, type AvailabilityPatternRow,
   type WorkerDayDetail, type WorkerForAvailability,
 } from '@/lib/workerAvailability'
@@ -90,13 +90,16 @@ export async function loadDayFitContext(
     supabase.from('technicians')
       .select('id, name, crew_id, is_active, ended_on, archived_at')
       .eq('user_id', userId),
-    // APPROVED only. A request the owner has not decided is not an absence —
-    // planning around a pending ask would let anyone reshape the schedule by
-    // asking, and a declined one must never subtract anybody (Session 67).
+    // Time off is narrowed by `isBookedOff` AFTER the read, not by a status
+    // filter in the query. Two reasons, and the first is the important one:
+    // "does this row take somebody off the schedule?" must have ONE definition
+    // (lib/workerAvailability.isBookedOff) — asking it a second way in SQL is a
+    // second engine, and the two would eventually disagree. It also means this
+    // read is correct against a database that has not run the status migration
+    // yet: a row with no status is an owner booking, which is what it was.
     supabase.from('pto_entries')
-      .select('technician_id, date, hours')
+      .select('technician_id, date, hours, status')
       .eq('user_id', userId)
-      .eq('status', 'approved')
       .gte('date', from).lte('date', to),
     loadCompletedVisitLearning(supabase, userId),
     supabase.from('worker_availability')
@@ -125,10 +128,19 @@ export async function loadDayFitContext(
   // The weekly pattern joins that same fate deliberately: a pattern read that
   // failed would otherwise silently downgrade to "everyone works every day",
   // which is a CLAIM — and the one this module exists not to make.
-  const workforceKnown = !tRes.error && !pRes.error && !aRes.error
+  // ⏳ The one exception, and it expires with the migration: a worker_availability
+  // table that does not exist yet means the FEATURE is not live, not that the
+  // roster is unknown — so the day board keeps the worker counts it has today
+  // instead of going dark for the length of a deploy. Any OTHER error on this
+  // read is a genuine unknown and still darkens the whole workforce answer.
+  const availabilityAbsent = isMissingRelation(aRes.error)
+  const workforceKnown = !tRes.error && !pRes.error && (!aRes.error || availabilityAbsent)
   const techs = workforceKnown ? ((tRes.data as WorkerForAvailability[]) || []) : []
-  const pto = workforceKnown ? ((pRes.data as ApprovedTimeOffDay[]) || []) : []
-  const patterns = workforceKnown ? ((aRes.data as AvailabilityPatternRow[]) || []) : []
+  // GRANTED leave only, through the one shared predicate.
+  const pto = workforceKnown
+    ? (((pRes.data as (ApprovedTimeOffDay & { status?: string | null })[]) || []).filter(isBookedOff))
+    : []
+  const patterns = workforceKnown && !aRes.error ? ((aRes.data as AvailabilityPatternRow[]) || []) : []
   const workersByDate = (date: string): number | null =>
     workforceKnown ? workersAvailableOn(date, techs, pto, patterns) : null
   // The richer per-person answer the day board's staffing warnings read. Same

@@ -85,6 +85,25 @@ export interface ApprovedTimeOffDay {
 export const isBookedOff = (row: { status?: string | null }): boolean =>
   row.status == null || row.status === 'approved'
 
+/**
+ * Does this Postgres/PostgREST error mean the availability table simply is not
+ * there yet — i.e. the code is deployed ahead of its migration?
+ *
+ * That is a DIFFERENT fact from "the read failed", and collapsing the two costs
+ * something either way. Treating a real failure as "no pattern recorded" would
+ * turn an unknown into the most optimistic answer available (everyone works
+ * every day). Treating a not-yet-created table as a failure would blank the
+ * day board's worker counts — a capability production has today — for the whole
+ * window between deploying and applying the migration.
+ *
+ * ⏳ TEMPORARY BY CONSTRUCTION: once the migration is applied this returns false
+ * forever, and it can be deleted. Nothing else may use it to soften an error.
+ */
+export const isMissingRelation = (err: { code?: string | null; message?: string | null } | null): boolean =>
+  !!err && (err.code === '42P01' || err.code === 'PGRST205'
+    || /relation .*worker_availability.* does not exist/i.test(err.message ?? '')
+    || /Could not find the table .*worker_availability/i.test(err.message ?? ''))
+
 export interface WorkerForAvailability {
   id: string
   name?: string | null

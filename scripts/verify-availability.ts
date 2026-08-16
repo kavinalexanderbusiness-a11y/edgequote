@@ -32,7 +32,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   workerDayStates, patternUnavailableOn, weekdayOf, patternWindowMinutes,
-  dayStaffing, canWork, isBookedOff, WEEKDAY_LABELS, WORKER_DAY_STATE_LABELS,
+  dayStaffing, canWork, isBookedOff, isMissingRelation, WEEKDAY_LABELS, WORKER_DAY_STATE_LABELS,
   type AvailabilityPatternRow, type ApprovedTimeOffDay, type WorkerForAvailability,
 } from '../src/lib/workerAvailability'
 import { workersAvailableOn } from '../src/lib/dayFit'
@@ -196,13 +196,6 @@ H('5. PARTIAL availability is available — and says it is short')
 H('6. Only APPROVED time off subtracts anybody')
 
 {
-  // The loader filters to approved BEFORE the engine sees anything, so the
-  // engine's contract is "these are approved". Pin the loader's filter too.
-  const src = read('src/lib/dayFitLoad.ts')
-  check('the loader asks the database for approved rows only',
-    /\.eq\('status',\s*'approved'\)/.test(src),
-    'dayFitLoad must filter pto_entries to status=approved')
-
   const team = [worker('t1'), worker('t2')]
   eq('two approved days off leaves nobody',
     workersAvailableOn(MON, team, [offDay('t1', MON), offDay('t2', MON)]), 0)
@@ -237,6 +230,8 @@ H('6. Only APPROVED time off subtracts anybody')
       applied: /\(\(pRes\.data as PtoEntry\[\]\) \?\? \[\]\)\.filter\(isBookedOff\)/ },
     { file: 'src/components/workforce/TeamAvailabilityWeek.tsx',
       applied: /ptoEntries\.filter\(isBookedOff\)/ },
+    { file: 'src/lib/dayFitLoad.ts',
+      applied: /\)\.filter\(isBookedOff\)\)/ },
   ]
   for (const c of consumers) {
     const src = read(c.file)
@@ -420,10 +415,30 @@ H('12. UNKNOWN STAYS UNKNOWN — a failed read is not a staffed day')
   // "everyone works every day" — the most optimistic possible answer.
   const src = read('src/lib/dayFitLoad.ts')
   check('an unreadable pattern makes the workforce UNKNOWN, not unrestricted',
-    /workforceKnown\s*=\s*!tRes\.error\s*&&\s*!pRes\.error\s*&&\s*!aRes\.error/.test(src),
+    /workforceKnown\s*=\s*!tRes\.error\s*&&\s*!pRes\.error\s*&&\s*\(!aRes\.error\s*\|\|\s*availabilityAbsent\)/.test(src),
     'dayFitLoad.workforceKnown must include the availability read')
-  check('…and the pattern is only used when the read is known good',
-    /const patterns = workforceKnown \?/.test(src))
+  check('…and the pattern is only used when its own read succeeded',
+    /const patterns = workforceKnown && !aRes\.error \?/.test(src))
+
+  // ⏳ The ONE exception — a table that does not exist yet is the feature not
+  // being live, not the roster being unknown. It must stay exactly that narrow:
+  // any other error still darkens the whole answer.
+  check('the not-yet-migrated exception is scoped to a missing relation',
+    /const availabilityAbsent = isMissingRelation\(aRes\.error\)/.test(src))
+  check('a real read failure is NOT softened by it',
+    !isMissingRelation({ code: '08006', message: 'connection failure' })
+    && !isMissingRelation({ code: '42501', message: 'permission denied for table worker_availability' }))
+  check('…while an absent table is recognised on both PostgREST and Postgres codes',
+    isMissingRelation({ code: '42P01', message: '' })
+    && isMissingRelation({ code: 'PGRST205', message: '' })
+    && isMissingRelation({ code: null, message: 'Could not find the table \'public.worker_availability\' in the schema cache' }))
+  check('…and a null error is not an absent table', !isMissingRelation(null))
+
+  // ⭐ ONE definition of "counts as leave": the loader must not ask the same
+  // question a second time in SQL, where the two answers could drift apart.
+  check('the loader narrows time off through the shared predicate, not a SQL filter',
+    /\.filter\(isBookedOff\)/.test(src) && !/\.eq\('status',\s*'approved'\)/.test(src),
+    'a status filter in the query would be a second definition of granted leave')
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
