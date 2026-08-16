@@ -197,7 +197,7 @@ section('5. No rival assignment path')
   // path. The dispatch board's own undo/restore is allowed to (it replays a
   // snapshot), so this asserts the shape rather than banning the string.
   const migration = readFileSync(
-    join('supabase', 'migrations', '20260815120000_crews_team_assignments_v1.sql'), 'utf8')
+    join('supabase', 'migrations', '20260816043000_crews_team_assignments_v1.sql'), 'utf8')
   check('the database makes two assignees unrepresentable',
     /constraint jobs_one_assignee\s*\n?\s*check \(crew_id is null or technician_id is null\)/i.test(migration))
   check('one shared predicate answers "may this worker see this visit"',

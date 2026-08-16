@@ -110,7 +110,7 @@ section('2. Universal — a crew is people with a name, whatever the trade')
 section('3. A crew carries no money')
 {
   const migration = readFileSync(
-    join('supabase', 'migrations', '20260815120000_crews_team_assignments_v1.sql'), 'utf8')
+    join('supabase', 'migrations', '20260816043000_crews_team_assignments_v1.sql'), 'utf8')
   // The crew table's own columns, as this migration leaves them.
   const MONEY = ['wage', 'hourly', 'salary', 'pay_rate', 'cost_per_hour', 'price']
   const crewTouching = migration.split('\n').filter(l =>
