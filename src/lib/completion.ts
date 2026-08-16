@@ -151,6 +151,17 @@ export interface CompletionSaveResult {
   error?: string
   /** true when the input matched the row and no write was needed. */
   unchanged?: boolean
+  /**
+   * ⭐ ACCEPTED, BUT NOT YET ON THE SERVER — the words are durably queued on the
+   * device and will replay when there is signal (lib/field/fieldWrite).
+   *
+   * `ok: true` with `pending: true` is deliberately a distinct state from a
+   * plain success, and callers MUST NOT collapse them: the office cannot read a
+   * note that is still on a phone, so a confirmation that said "Saved" for both
+   * would be the exact false-success this contract forbids. Never set by the
+   * owner's direct write, which is only ever ok or not.
+   */
+  pending?: boolean
 }
 
 export async function saveCompletionRecord(

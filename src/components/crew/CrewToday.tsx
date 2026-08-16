@@ -25,6 +25,12 @@ import { crewSaveCompletionRecord } from '@/lib/crewJob'
 import { CrewChanges } from '@/components/crew/CrewChanges'
 import { crewDaySnapshot, diffCrewDay, crewOrderBasis, type CrewDaySnapshot } from '@/lib/crewBrief'
 import { readCrewDayBaseline, writeCrewDayBaseline } from '@/lib/crewBriefStore'
+import {
+  cacheUserId, readCachedDay, writeCachedDay, clearCachedDays, lastUpdatedLabel,
+} from '@/lib/field/todayCache'
+import { buildVisitIntent, runVisitIntent, runCompletionRecord } from '@/lib/field/fieldWrite'
+import { readDraft, saveDraft, clearDraft } from '@/lib/field/drafts'
+import { useOnline } from '@/hooks/useOnline'
 
 // ── Today ────────────────────────────────────────────────────────────────────
 // The seven questions a worker has, answered in the order they ask them:
@@ -65,6 +71,11 @@ export function CrewToday() {
   // truth held) — but the screen says so, with the time it was loaded, instead
   // of quietly posing as current. Cleared by the next successful load.
   const [staleAsOf, setStaleAsOf] = useState<number | null>(null)
+  // ⭐ TRUE only while the board on screen came off the phone rather than the
+  // server. Kept separate from `staleAsOf` because the two say different things:
+  // a stale board was loaded live earlier THIS session; a cached one was
+  // restored from disk and may predate the app being opened at all.
+  const [fromCache, setFromCache] = useState(false)
   const [acting, setActing] = useState<string | null>(null)
   // The proof-of-work editor. Held by STOP ID rather than by a copy of the stop,
   // so the sheet always reads the freshest row `load()` put on screen — a note
@@ -95,6 +106,15 @@ export function CrewToday() {
     return out
   }, [inboxItems])
   const today = localTodayISO()
+  // Drives the wording of the cached-board banner only. ⛔ Never a gate on a
+  // write: navigator.onLine is famously true on a captive portal, so the write
+  // path asks the reconciliation engine what actually happened instead of
+  // trusting this (lib/field/fieldWrite).
+  const online = useOnline()
+  // This device's signed-in user, resolved WITHOUT the network (a local session
+  // read) — so drafts and the cached day are still scoped correctly on a cold
+  // offline start, which is exactly when they are needed.
+  const [cacheUid, setCacheUid] = useState<string | null>(null)
   const alive = useRef(true)
   const dayRef = useRef<CrewDay | null>(null)
   useEffect(() => { dayRef.current = day }, [day])
@@ -115,13 +135,43 @@ export function CrewToday() {
       setRevoked(false)
       setLoadFailed(false)
       setStaleAsOf(null)
+      setFromCache(false)
       loadedAt.current = Date.now()
+      // Keep the last good day on the phone. Best-effort and deliberately after
+      // the render decision — a cache that refuses to write must never affect
+      // what is on screen.
+      void cacheUserId(supabase).then(uid => {
+        if (uid) void writeCachedDay(uid, today, res.day, loadedAt.current)
+      })
     } else if (res.kind === 'revoked') {
       setRevoked(true)
       setLoadFailed(false)
+      // ⭐ The database ANSWERED that this account is off the roster. A
+      // revocation the phone has actually heard must not leave the day's
+      // customer addresses readable on it. (An `error` must never do this —
+      // dead signal is not revocation.)
+      void clearCachedDays()
     } else {
+      // Couldn't reach the server. Three sub-cases, and they are not the same
+      // sentence: a day already on screen goes stale; a COLD start falls back to
+      // the phone's cached copy; with neither, we say we couldn't load.
       if (dayRef.current) setStaleAsOf(loadedAt.current)
-      else setLoadFailed(true)
+      else {
+        const uid = await cacheUserId(supabase)
+        const hit = uid ? await readCachedDay(uid, today) : null
+        if (!alive.current) return
+        if (hit) {
+          // ⛔ Rendered as CACHED, never as live: `fromCache` drives a banner
+          // carrying the moment the server last answered. A cached day that
+          // looked live would let a worker drive to a stop the office moved.
+          setDay(hit.day)
+          setFromCache(true)
+          setStaleAsOf(hit.fetchedAt)
+          loadedAt.current = hit.fetchedAt
+        } else {
+          setLoadFailed(true)
+        }
+      }
     }
     setLoading(false)
 
@@ -135,6 +185,12 @@ export function CrewToday() {
       if (alive.current && res.ok && d.ok) setMediaCounts(d.counts || {})
     } catch { /* an optional affordance, never the day */ }
   }, [supabase, today])
+
+  useEffect(() => {
+    let on = true
+    void cacheUserId(supabase).then(uid => { if (on) setCacheUid(uid) })
+    return () => { on = false }
+  }, [supabase])
 
   useEffect(() => {
     alive.current = true
@@ -250,13 +306,35 @@ export function CrewToday() {
         status: stop.status, started_at: stop.started_at,
         completed_at: stop.completed_at, actual_minutes: stop.actual_minutes,
       }
-      const res = kind === 'start'
-        ? await crewStartVisit(supabase, stop)
-        : kind === 'stop'
-          ? await crewStopForToday(supabase, stop)
-          : await crewCompleteVisit(supabase, stop)
-      if (!res.ok) { toast.error(res.error || 'That didn’t save. Try again.'); await load(); return }
+      // ⭐⭐ ONE call for all three transitions, and it answers with one of
+      // exactly three words: saved · pending · failed. The intent — including
+      // the client-minted timestamp that makes a retry safe — is built ONCE
+      // here, at the tap, and carried through every replay
+      // (lib/field/visitIntent).
+      const intent = buildVisitIntent(kind === 'stop' ? 'stop_for_day' : kind, stop)
+      const res = await runVisitIntent(supabase, { stop, intent, date: today })
+
+      if (res.state === 'failed') {
+        toast.error(res.message || 'That didn’t save. Try again.')
+        await load()
+        return
+      }
       const who = stop.customer?.name || stop.title
+
+      // ⛔ Queued work is NOT done work, and the sentence must say so. No undo is
+      // offered: the op is on disk and will reconcile itself on reconnect, so an
+      // "undo" here would race its own replay — and the honest affordance for a
+      // mis-tap with no signal is to act again once the board is live.
+      if (res.state === 'pending') {
+        toast(
+          kind === 'start' ? `Started ${who} — saved on your phone, will sync`
+            : kind === 'stop' ? `${who} — today’s time saved on your phone, will sync`
+            : `${who} — finish saved on your phone, will sync`,
+          { tone: 'info', duration: 6000 },
+        )
+        await load()
+        return
+      }
       // ⛔ "Done for today" must never read as "done". The words are as different
       // as the writes are.
       toast.undo(
@@ -335,13 +413,29 @@ export function CrewToday() {
         </p>
       </header>
 
-      {/* A refresh that couldn't reach the server: the day below is still the
-          best truth held, but it stops posing as live. */}
+      {/* ⭐⭐ The board below is not live, and this is the line that says so.
+          Two phrasings for two different facts, because collapsing them would
+          make one of them a lie:
+            offline / cached → the day was restored from this phone, and the
+                               time given is when the SERVER last answered
+            stale            → it loaded live earlier this session and the
+                               latest refresh couldn't reach the server
+          ⛔ Never render a cached board without this. It is the entire
+          justification for storing the day at all (lib/field/todayCache). */}
       {staleAsOf != null && (
         <div className="rounded-card border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2 flex items-center justify-between gap-2" role="status">
           <p className="text-[11px] text-ink-muted">
-            Couldn’t refresh — showing your board from{' '}
-            {new Date(staleAsOf).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}.
+            {fromCache ? (
+              <>
+                <span className="font-semibold text-ink">{online ? 'Can’t reach the server' : 'Offline'}</span>
+                {' · '}{lastUpdatedLabel(staleAsOf)}. The office may have changed your day since.
+              </>
+            ) : (
+              <>
+                Couldn’t refresh — showing your board from{' '}
+                {new Date(staleAsOf).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}.
+              </>
+            )}
           </p>
           <Button size="sm" variant="secondary" onClick={() => load()}>Retry</Button>
         </div>
@@ -645,7 +739,39 @@ export function CrewToday() {
             onClose={() => setRecordingId(null)}
             job={stop}
             photosOutstanding={photosOutstanding[stop.id] ?? 0}
-            onSave={record => crewSaveCompletionRecord(supabase, stop.id, record)}
+            // ⭐ Three answers, not two: a note the phone is holding reports
+            // `pending` so the sheet's confirmation can say so, instead of
+            // "Saved" over words the office cannot read yet.
+            onSave={async record => {
+              const res = await runCompletionRecord(supabase, {
+                jobId: stop.id, title: stop.customer?.name || stop.title, record,
+              })
+              return res.state === 'failed'
+                ? { ok: false, error: res.message }
+                : { ok: true, pending: res.state === 'pending' }
+            }}
+            // Durable across a killed tab, not just a failed request. Keyed by
+            // worker AND visit, so a shared phone never shows one worker the
+            // words another typed.
+            draftStore={{
+              load: () => {
+                if (!cacheUid) return null
+                const s = readDraft(cacheUid, stop.id, 'completion_summary')
+                const i = readDraft(cacheUid, stop.id, 'completion_issue')
+                if (!s && !i) return null
+                return { summary: s?.text ?? '', issue: i?.text ?? '' }
+              },
+              save: record => {
+                if (!cacheUid) return
+                saveDraft(cacheUid, stop.id, 'completion_summary', record.completion_summary || '')
+                saveDraft(cacheUid, stop.id, 'completion_issue', record.completion_issue || '')
+              },
+              clear: () => {
+                if (!cacheUid) return
+                clearDraft(cacheUid, stop.id, 'completion_summary')
+                clearDraft(cacheUid, stop.id, 'completion_issue')
+              },
+            }}
             onSaved={() => { void load() }}
           />
         )

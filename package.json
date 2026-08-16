@@ -56,6 +56,7 @@
     "verify:settings-save": "tsx scripts/verify-settings-save.ts",
     "verify:crew-sync": "tsx scripts/verify-crew-sync.ts",
     "verify:crew-brief": "tsx scripts/verify-crew-brief.ts",
+    "verify:field-reliability": "tsx scripts/verify-field-reliability.ts",
     "verify:recurrence": "tsx scripts/verify-recurrence.ts",
     "verify:dedup": "tsx scripts/verify-dedup.ts",
     "verify:dedup-contract": "tsx scripts/verify-dedup-contract.ts",
