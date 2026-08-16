@@ -136,7 +136,35 @@ skip. Its §4 (live, over HTTP) skips cleanly without `VERIFY_FIXTURE_*`.
 
 ---
 
-## 6 · What this does NOT do
+## 6 · ⚠️ Unrelated finding: `verify:rebuild` is currently RED on main
+
+Not caused by this work, and worth fixing before the next release.
+
+`167ba6e2` (Worker Availability, Session 67) added
+`supabase/migrations/20260815080000_worker_availability_time_off.sql` but
+`supabase/contract/` was not re-captured — it was last written by `6257cdae`. So
+the repository's migrations now build objects the captured contract does not know
+about, and `verify:rebuild` reports them as UNEXPECTED:
+
+- table `worker_availability` (+ its 5 constraints and 4 indexes)
+- `pto_entries.status`, `pto_entries.decided_at`, `pto_entries_status_known`
+- functions `crew_my_availability`, `crew_request_time_off`,
+  `crew_cancel_time_off`, `crew_set_day_availability`
+- and `pto_entries_one_per_day_kind` is now MISSING from the rebuild
+
+⭐ **CI cannot see this.** PGlite is not in `package.json`, so `npm ci` never
+installs it and `verify:rebuild` skips clean — which is why that merge was green.
+
+The fix is the standard four-step resync, and it needs live credentials:
+
+```bash
+npm run schema:contract && npm run schema:baseline
+npm run verify:rebuild && npm run verify:schema
+```
+
+---
+
+## 7 · What this does NOT do
 
 - It does not price, bill or move money. Every figure in `before`/`after` is a
   descriptive snapshot; the quote/invoice/payment/ledger engines remain the
