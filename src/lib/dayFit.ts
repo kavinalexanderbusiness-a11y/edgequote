@@ -57,7 +57,7 @@ export const FIT_BUFFER_MIN = 60
 
 // ── Duration precedence ──────────────────────────────────────────────────────
 
-export type DurationSource = 'estimate' | 'learned' | 'unknown'
+export type DurationSource = 'estimate' | 'learned' | 'catalog' | 'unknown'
 
 export interface ResolvedDuration {
   /** On-site minutes, or null — null means UNKNOWN, and stays unknown. */
@@ -69,16 +69,39 @@ export interface ResolvedDuration {
 
 /**
  * THE precedence: the job's own estimate → the service's established history →
- * unknown. Nothing is invented at the bottom.
+ * the PRICE BOOK's typed default → unknown. Nothing is invented at the bottom.
  *
  * `history` is a lib/estimateVsActual serviceHistory() rollup for this service.
  * Its `established` flag (n ≥ MIN_SERVICE_SAMPLE) is the reliability contract —
  * day fit deliberately has no threshold of its own, so the learning primitive
  * and the scheduler can never disagree about when history is trustworthy.
+ *
+ * ⭐⭐ WHY THE CATALOGUE RANKS *BELOW* LEARNED (Session 76, and the whole reason
+ * this rung is third rather than second). `service_templates.default_minutes` is
+ * a number an owner TYPED ONCE, probably when they set the business up. Measured
+ * history is what the work HAS ACTUALLY TAKEN, accumulated from the stopwatch.
+ * If the typed default outranked it, a catalogue row entered on day one would
+ * permanently mask every hour the crew has since recorded — the learning loop
+ * would still run, still be right, and never be heard. That is precisely the
+ * "do not overwrite learned evidence" rule, expressed as an ordering instead of
+ * as a warning comment somebody has to remember.
+ *
+ * ⭐ It ranks ABOVE 'unknown' because a typed default is strictly better than
+ * nothing: before a service has any history at all, the owner's own expectation
+ * is the best answer available, and silence just makes the day planner say
+ * "unknown" about work the owner could have sized.
+ *
+ * ⭐ IT GETS ITS OWN SOURCE LABEL rather than borrowing 'estimate' or 'learned'.
+ * A surface must be able to say where a number came from, and the two lies
+ * available here are both expensive: calling a typed default 'learned' claims
+ * measurement that never happened, and calling it 'estimate' claims THIS job was
+ * sized when nobody looked at it. `sampleSize` stays null for the same reason —
+ * no visits back this figure.
  */
 export function resolveDuration(
   ownEstimateMinutes: number | null | undefined,
   history: ServiceVariance | null | undefined,
+  catalogDefaultMinutes?: number | null | undefined,
 ): ResolvedDuration {
   const own = Number(ownEstimateMinutes)
   if (Number.isFinite(own) && own > 0) {
@@ -86,6 +109,13 @@ export function resolveDuration(
   }
   if (history?.established && history.medianActualMinutes != null && history.medianActualMinutes > 0) {
     return { minutes: Math.round(history.medianActualMinutes), source: 'learned', sampleSize: history.sampleSize }
+  }
+  // Third, and only third. The parameter is optional so that every existing
+  // two-argument caller keeps its exact previous behaviour — a catalogue default
+  // reaches a surface only where that surface deliberately passed one in.
+  const cat = Number(catalogDefaultMinutes)
+  if (Number.isFinite(cat) && cat > 0) {
+    return { minutes: Math.round(cat), source: 'catalog', sampleSize: null }
   }
   return { minutes: null, source: 'unknown', sampleSize: null }
 }

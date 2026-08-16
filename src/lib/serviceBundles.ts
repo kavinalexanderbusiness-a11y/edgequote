@@ -2,6 +2,7 @@ import type {
   QuoteLineKind, QuoteServiceInput, ServiceBundleItem, ServiceTemplate,
 } from '@/types'
 import { sumServiceLines } from './quoteServices'
+import { resolveEstMinutes } from './priceBook'
 
 // ── Service bundles: a reusable starting scope ───────────────────────────────
 // THE ONE place a bundle turns into quote lines, and the one place quote lines
@@ -129,7 +130,13 @@ export function bundleLines(
       quantity: Number(it.quantity) > 0 ? Number(it.quantity) : 1,
       unit: it.unit || 'each',
       unit_price: resolveUnitPrice(it, templates),
-      est_minutes: Number(it.est_minutes) > 0 ? Number(it.est_minutes) : 0,
+      // ⭐ Session 76: TIME now follows the catalogue exactly as PRICE does.
+      // A bundle item with no minutes of its own resolves to the linked
+      // service's `default_minutes` (lib/priceBook `resolveEstMinutes` — the
+      // same nullable-means-follow-the-catalogue rule as `resolveUnitPrice`
+      // above). Before the catalogue could state a duration there was nothing
+      // to fall back to, so this read 0 and the owner retyped it every quote.
+      est_minutes: resolveEstMinutes(it, templates),
       // See NO DISCOUNTS above.
       discount_type: '' as const,
       discount_value: 0,

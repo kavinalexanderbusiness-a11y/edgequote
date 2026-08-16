@@ -46,6 +46,20 @@ function parseCost(v: string | null | undefined): number | null {
 // null → '' so an unknown cost renders as an empty box, not a literal "null".
 const costToField = (n: number | null | undefined): string => (n == null ? '' : String(n))
 
+// ── Price Book V1 (Session 76): duration and crew, on the same blank-vs-zero
+// discipline as cost. Blank → null → "not stated". A 0 is REFUSED rather than
+// stored, because "this service takes no time" and "we never said" must not be
+// the same row: the first would feed a fabricated zero into day planning, and
+// the DB CHECKs refuse it anyway.
+function parseWholeMin(v: string | null | undefined, min: number): number | null {
+  const s = (v ?? '').trim()
+  if (!s) return null
+  const n = Number(s)
+  if (!Number.isFinite(n) || n < min) return null
+  return Math.round(n)
+}
+const numToField = (n: number | null | undefined): string => (n == null ? '' : String(n))
+
 export default function ServiceTemplatesPage() {
   const { templates, loading, error: loadError, refresh } = useBusinessData()
   const supabase = createClient()
@@ -59,7 +73,7 @@ export default function ServiceTemplatesPage() {
       // category/rate are re-seeded from this business's own catalogue in openNew();
       // 'General' is the neutral member of the starter list, not a trade.
       // Costs default to '' — unknown — never 0.
-      defaultValues: { name: '', category: 'General', pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true, unit_cost: '', material_cost: '', is_favorite: false, recurrence: '' },
+      defaultValues: { name: '', category: 'General', pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true, unit_cost: '', material_cost: '', is_favorite: false, recurrence: '', default_minutes: '', default_crew_size: '' },
     })
 
   const isActive = watch('is_active')
@@ -91,7 +105,7 @@ export default function ServiceTemplatesPage() {
     // it used to be hardcoded 'Lawn Care', so every trade's second service landed
     // in a lawn bucket unless they noticed the dropdown. Falls back to the neutral
     // 'General' before they have any services.
-    reset({ name: '', category: topCategory, pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true, unit_cost: '', material_cost: '', is_favorite: false, recurrence: '' })
+    reset({ name: '', category: topCategory, pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true, unit_cost: '', material_cost: '', is_favorite: false, recurrence: '', default_minutes: '', default_crew_size: '' })
     setCustomCategory('')
     setEditing(null)
     setShowForm(true)
@@ -108,6 +122,9 @@ export default function ServiceTemplatesPage() {
       is_favorite: !!t.is_favorite,
       // A stored null stays '' — "not set", never silently promoted to a value.
       recurrence: t.recurrence || '',
+      // Same rule for the Price Book defaults: a service that has never stated a
+      // duration or a crew opens with empty boxes, so re-saving it cannot invent one.
+      default_minutes: numToField(t.default_minutes), default_crew_size: numToField(t.default_crew_size),
     })
     setEditing(t)
     setShowForm(true)
@@ -134,6 +151,12 @@ export default function ServiceTemplatesPage() {
       // '' (not set) → NULL. The DB CHECK refuses anything else, so the three
       // eligibility words and "unset" are the only states that can exist.
       recurrence: (values.recurrence || null) as ServiceTemplate['recurrence'],
+      // Blank → NULL, and so is a 0 or a negative: "not stated" is the ONLY way
+      // this catalogue can say it does not know how long something takes. The
+      // minimums match the DB CHECKs (>= 1 minute, >= 1 worker) so the client and
+      // the database cannot disagree about what is storable.
+      default_minutes: parseWholeMin(values.default_minutes, 1),
+      default_crew_size: parseWholeMin(values.default_crew_size, 1),
     }
     // A failed save must not close the form as if it succeeded — the owner's
     // edits stay on screen with an honest error instead of silently vanishing.
@@ -316,6 +339,28 @@ export default function ServiceTemplatesPage() {
                     )}
                   </p>
                 )}
+              </div>
+
+              {/* ── How long, and how many ──────────────────────────────────
+                  The two facts that stop an owner re-deriving the same scope on
+                  every quote. Both optional, and both stay BLANK rather than
+                  defaulting: a typed 0 would be a claim, and this catalogue is
+                  only allowed to repeat what it was actually told.
+                  ⭐ The helper text is the honest limit of what these are — a
+                  starting point for a new quote. Measured history still wins
+                  over them everywhere (lib/dayFit resolveDuration), and neither
+                  figure ever reaches a quote that is already saved. */}
+              <div className="space-y-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <Input label="Typical Duration (minutes)" type="number" inputMode="numeric" min={1} step={5}
+                    placeholder="e.g. 90" {...register('default_minutes')} />
+                  <Input label="Typical Crew Size" type="number" inputMode="numeric" min={1} step={1}
+                    placeholder="e.g. 2" {...register('default_crew_size')} />
+                </div>
+                <p className="text-xs text-ink-muted">
+                  Optional starting points for new quotes. Once you&apos;ve completed a few of these
+                  jobs, what they actually took is used instead — these never overwrite that.
+                </p>
               </div>
 
               <Textarea label="Default Description" {...register('default_description')} />

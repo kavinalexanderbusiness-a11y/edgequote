@@ -29,6 +29,7 @@ import { AUDIENCE_COPY } from '@/lib/noteScope'
 import { sumServiceLines, serviceLineTotals, emptyServiceLine } from '@/lib/quoteServices'
 import { BundlePicker } from '@/components/quotes/BundlePicker'
 import { bundleScope, templateIndex } from '@/lib/serviceBundles'
+import { catalogDefaults } from '@/lib/priceBook'
 import { confirm } from '@/lib/confirm'
 import { MATERIAL_SUGGESTIONS, emptyMaterialLine } from '@/lib/quoteMaterials'
 import { QuoteOptionsEditor } from '@/components/quotes/QuoteOptionsEditor'
@@ -887,6 +888,10 @@ export function QuoteBuilder({
   // than what the template ate. Switching between templates still swaps their
   // canned descriptions (that text is ours), but typed notes now survive.
   const autoFilledNotes = useRef<string | null>(null)
+  // Session 76 — the SAME rule, for the two Price Book defaults. See the block
+  // below for why "what we filled" has to be remembered rather than inferred.
+  const autoFilledHours = useRef<string | null>(null)
+  const autoFilledCrew = useRef<string | null>(null)
 
   useEffect(() => {
     if (!templateId) return
@@ -903,6 +908,51 @@ export function QuoteBuilder({
         if (!current.trim() || current === autoFilledNotes.current) {
           setValue('notes', t.default_description)
           autoFilledNotes.current = t.default_description
+        }
+      }
+      // ── The catalogue's typical duration and crew ────────────────────────
+      // ⭐⭐ THE ONLY SAFE WRITE IS INTO A FIELD NOTHING ELSE OWNS. `hours` is
+      // also written by SmartLaborField — the LEARNED estimator, which auto-
+      // applies the median of what this service has actually taken. A catalogue
+      // default that overwrote that would be a typed guess deleting measured
+      // evidence, which is the one thing the duration precedence exists to
+      // prevent (lib/dayFit resolveDuration ranks 'catalog' BELOW 'learned').
+      //
+      // So this writes only when the box is blank or still holds THE VALUE WE
+      // OURSELVES PUT THERE — the `autoFilledNotes` idiom directly above, and
+      // for the same reason. Switching between services swaps our own default;
+      // a figure the owner typed, or one the learned estimator applied, is not
+      // ours and survives untouched. ⛔ Never compare against the catalogue's
+      // current value instead: that would treat a coincidentally-equal typed
+      // number as ours and silently overwrite it on the next switch.
+      //
+      // `!isEdit` because a saved quote's numbers are ITS OWN. Re-opening an old
+      // quote must never re-seed it from a catalogue that has since been edited
+      // — that is the historical-truth guarantee, enforced at the write.
+      if (!isEdit) {
+        const cat = catalogDefaults(t)
+        if (cat.minutes != null) {
+          // Stored as HOURS here (the primary line's unit), minutes everywhere
+          // else. Rounded to the 0.25 the input steps in, so the box never shows
+          // a figure the owner cannot reproduce by typing.
+          const asHours = String(Math.round((cat.minutes / 60) * 100) / 100)
+          const current = String(getValues('hours') ?? '')
+          if (!current.trim() || Number(current) === 0 || current === autoFilledHours.current) {
+            setValue('hours', Number(asHours))
+            autoFilledHours.current = asHours
+          }
+        }
+        if (cat.crewSize != null) {
+          const asStr = String(cat.crewSize)
+          const current = String(getValues('crew_size') ?? '')
+          // ⚠️ 1 counts as untouched. It is the form's structural FLOOR (crew_size
+          // has min=1 and defaults to 1 because you cannot send nobody), not a
+          // statement the owner made — so a catalogue that says "this takes two"
+          // may fill it. Any other number is a real answer and is left alone.
+          if (!current.trim() || current === '1' || current === autoFilledCrew.current) {
+            setValue('crew_size', cat.crewSize)
+            autoFilledCrew.current = asStr
+          }
         }
       }
     }
@@ -2000,6 +2050,15 @@ export function QuoteBuilder({
                           if (Number(t.default_rate) > 0) setValue(`services.${i}.unit_price`, Number(t.default_rate))
                           const d = (t.pricing_display_type || '').toLowerCase()
                           setValue(`services.${i}.unit`, d.includes('hour') ? 'hour' : d.includes('linear') ? 'linear_ft' : d.includes('sq') ? 'sqft' : 'each')
+                          // The catalogue's typical duration, on the same terms as
+                          // its rate above: a STARTING POINT, written only into a
+                          // line that has not been given one. An extra line has no
+                          // learned estimator of its own, so "already has a figure"
+                          // means the owner typed it — and it stands.
+                          const catMin = catalogDefaults(t).minutes
+                          if (catMin != null && !(Number(getValues(`services.${i}.est_minutes`)) > 0)) {
+                            setValue(`services.${i}.est_minutes`, catMin)
+                          }
                         }}
                         onDetach={() => setValue(`services.${i}.service_template_id`, '')}
                         {...register(`services.${i}.service_type` as const, { required: true })} />

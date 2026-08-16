@@ -63,7 +63,11 @@ const T = (over: Partial<ServiceTemplate> & { id: string; default_rate: number }
   created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
   name: 'Fixture service', category: 'General', pricing_display_type: 'starting_from',
   default_description: null, notes: null, is_active: true, sort_order: 0, user_id: 'u1',
-  unit_cost: null, material_cost: null, is_favorite: false, recurrence: null, ...over,
+  unit_cost: null, material_cost: null, is_favorite: false, recurrence: null,
+  // Price Book defaults (Session 76). null = the catalogue states no duration or
+  // crew — which is what every pre-existing assertion in this file assumes, so
+  // the bundle rules it pins are unchanged by their arrival.
+  default_minutes: null, default_crew_size: null, ...over,
 });
 const I = (over: Partial<ServiceBundleItem> & { name: string }): ServiceBundleItem => ({
   id: 'i-' + over.name, created_at: '2026-01-01T00:00:00Z', user_id: 'u1', bundle_id: 'b1',

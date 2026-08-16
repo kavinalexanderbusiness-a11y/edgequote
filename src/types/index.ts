@@ -1685,6 +1685,17 @@ export interface ServiceTemplate {
   // then require behavioural cadence evidence (lib/serviceRecurrence). Never
   // inferred from the service's name.
   recurrence: 'one_time' | 'recurring_ok' | 'usually_recurring' | null
+  // ── Price Book V1 (Session 76) — the two operational facts the catalogue
+  // could not previously hold. Both null = "not stated", NEVER zero: a 0 would
+  // claim the work takes no time / needs nobody, and every duration consumer
+  // already reads `> 0` as the test for a real figure.
+  // ⭐ default_minutes is the LOWEST-priority duration rung — a quote's own
+  // figure wins, then LEARNED history, then this. It is what the owner typed,
+  // never what was measured. See lib/priceBook + lib/dayFit resolveDuration.
+  default_minutes: number | null
+  // ⭐ The catalogue's expectation ONLY. Not the crew scheduled onto a visit,
+  // and not who actually worked it. The three are never reconciled.
+  default_crew_size: number | null
 }
 
 export interface ServiceTemplateFormValues {
@@ -1705,6 +1716,11 @@ export interface ServiceTemplateFormValues {
   // '' = not set (maps to null on submit) — same blank-vs-zero discipline as
   // the cost fields above.
   recurrence: string
+  // STRINGS, for exactly the reason the cost fields are: `Number('')` is 0, and
+  // a 0 here would record "takes no time" / "needs nobody" on every service the
+  // owner never filled in — then feed those claims straight into day planning.
+  default_minutes: string
+  default_crew_size: string
 }
 
 // ── Service bundles ──────────────────────────────────────────────────────────
