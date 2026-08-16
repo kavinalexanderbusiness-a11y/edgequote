@@ -170,8 +170,12 @@ section('4. Capacity resolves the actual assigned workforce — in ONE place')
   // ⭐ THE regression this section replaces: a crew of N must not read as 1.
   // dayFit's supply rule, narrowed to a crew, is what guarantees it.
   const fit = stripComments(SRC('lib/dayFit.ts'))
+  // The narrowing lives as a KEY on the shared options object, which is how
+  // this function was designed to grow — never as a second counter.
   check('availability can be asked per crew, from the ONE rule',
-    /opts\?: \{ crewId\?: string \}/.test(fit) && /t\.crew_id === opts\.crewId/.test(fit))
+    /interface WorkersAvailableOpts[\s\S]{0,400}crewId\?: string/.test(fit) &&
+    /t\.crew_id === opts\.crewId/.test(fit),
+    'crewId must be a key on WorkersAvailableOpts, not a rival availability counter')
   check('…and the solo-owner fallback does NOT apply to a crew',
     /if \(opts\?\.crewId != null\)[\s\S]{0,220}\n  if \(roster\.length === 0\) return 1/.test(fit),
     'an empty crew must count 0, not be rounded up to the solo owner')
