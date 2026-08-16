@@ -140,6 +140,34 @@ H('4. A RECORDED WEEK is honoured — and only for the worker who recorded one')
   check('the pattern rules out exactly the worker who has one', out.has('t1') && !out.has('t2'))
 }
 
+// ⭐ "Wed unavailable" — the brief's own example. A weekday can be excluded two
+// ways: by an EXPLICIT available:false row (what the editor writes when a
+// worker toggles a day off) or by having no row at all. Both mean the same
+// thing, and a mutant that honoured only the second survived until this case
+// existed — an explicitly-marked day off read as a working day.
+{
+  const team = [worker('t1')]
+  const explicit: AvailabilityPatternRow[] = [
+    ...weekdays('t1').filter(r => r.weekday !== 3),
+    { technician_id: 't1', weekday: 3, available: false, start_time: null, end_time: null },
+  ]
+  eq('Wednesday marked unavailable means unavailable',
+    workersAvailableOn(WED, team, [], explicit), 0)
+  eq('…and Tuesday is untouched', workersAvailableOn('2026-08-18', team, [], explicit), 1)
+  check('the row itself rules them out', patternUnavailableOn(WED, explicit).has('t1'))
+  eq('…and the per-worker state says so',
+    workerDayStates(WED, team, explicit, [])[0].state, 'unavailable')
+  eq('an explicit false and a missing row mean the same thing',
+    workersAvailableOn(WED, team, [], explicit),
+    workersAvailableOn(WED, team, [], weekdays('t1').filter(r => r.weekday !== 3)))
+
+  // A full week of explicit refusals is a real zero, not an unknown.
+  const never: AvailabilityPatternRow[] = [0, 1, 2, 3, 4, 5, 6].map(wd =>
+    ({ technician_id: 't1', weekday: wd, available: false, start_time: null, end_time: null }))
+  eq('a worker who works no day of the week counts nowhere',
+    workersAvailableOn(MON, team, [], never), 0)
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 H('5. PARTIAL availability is available — and says it is short')
 
