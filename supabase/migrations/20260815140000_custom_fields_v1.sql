@@ -7,10 +7,18 @@
 -- ⚠️ NOT YET APPLIED TO PRODUCTION (2026-08-15). This file is committed so the
 -- fresh-rebuild proof can apply it from zero, and so review happens against the
 -- real statements. `verify:migrations` will ADVISE that it is in flight — that
--- advisory is correct and is the reconciliation gate. When it is applied, the
--- 14-digit prefix MUST be renamed to the version production actually records in
--- supabase_migrations.schema_migrations, then supabase/contract/ recaptured via
--- `npm run schema:contract && npm run schema:baseline`.
+-- advisory is correct and is the reconciliation gate.
+--
+-- ⚠️ VERSION: 20260815140000, chosen to sort AFTER the regenerated baseline
+-- 20260815130001 (itself derived from the newest ledger entry 20260815130000,
+-- job_forms_fix_photo_projection). It was originally 20260815000000, which sorted
+-- BEFORE that baseline once S69 landed and would therefore have been applied
+-- against tables that did not exist yet. Re-check this ordering after every
+-- rebase onto main: a regenerated baseline moves the floor.
+--
+-- When it is applied, the 14-digit prefix MUST match the version production
+-- actually records in supabase_migrations.schema_migrations, then supabase/
+-- contract/ recaptured via `npm run schema:contract && npm run schema:baseline`.
 --
 -- ══════════════════════════════════════════════════════════════════════════════
 -- ⭐⭐ AUDIENCE: THESE VALUES ARE INTERNAL. FULL STOP.
