@@ -83,7 +83,11 @@ function Form({ pathSegments }: { pathSegments?: string[] }) {
         <p className="mt-2 text-sm text-ink-muted">
           Setup links can only be used once, and not long after they’re made. Ask your manager to send a new one.
         </p>
-        <a href="/login" className="mt-5 inline-block text-sm font-medium text-accent-text hover:underline">
+        {/* A worker holding a spent link taps this on a phone, often in a truck
+            with gloves on. It measured 20px tall — below the 44px floor every
+            other primary control here meets. */}
+        <a href="/login"
+          className="mt-4 tap-target inline-flex items-center justify-center min-h-[44px] px-4 text-sm font-medium text-accent-text hover:underline">
           Already set a password? Sign in
         </a>
       </div>
