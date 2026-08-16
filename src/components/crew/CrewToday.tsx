@@ -22,13 +22,20 @@ import {
 } from '@/lib/crewMessages'
 import { CompletionSheet } from '@/components/completion/CompletionSheet'
 import { crewSaveCompletionRecord } from '@/lib/crewJob'
+import { CrewChanges } from '@/components/crew/CrewChanges'
+import { crewDaySnapshot, diffCrewDay, crewOrderBasis, type CrewDaySnapshot } from '@/lib/crewBrief'
+import { readCrewDayBaseline, writeCrewDayBaseline } from '@/lib/crewBriefStore'
 
 // ── Today ────────────────────────────────────────────────────────────────────
-// The six questions a worker has, answered in the order they ask them:
+// The seven questions a worker has, answered in the order they ask them:
 //   Where am I going?      → the next stop's address, first thing on the screen
 //   What is the work?      → service + duration + the access note
 //   Who is with me?        → the crew line
 //   What state is it in?   → one badge per stop, from the canonical status
+//   What CHANGED?          → the banner above the list (lib/crewBrief), because
+//                            this screen silently re-reads itself every few
+//                            minutes and the office edits the day after the
+//                            worker has already read it
 //   What do I do next?     → ONE button, pinned in the thumb zone
 //   Did that save?         → the button reports the write; a failure says so and
 //                            the row does not move
@@ -179,6 +186,62 @@ export function CrewToday() {
   const next = nextCrewStop(active)
   const done = active.filter(s => s.status === 'completed').length
 
+  // ── What changed since this worker last acknowledged ───────────────────────
+  // The baseline is held in state rather than recomputed per load ON PURPOSE:
+  // `load()` runs on focus, on reconnect and every five minutes, and a baseline
+  // that advanced with it would consume the office's schedule change before the
+  // worker ever looked at the phone (lib/crewBrief honesty rule 3). Only the
+  // "Got it" button moves it.
+  const [baseline, setBaseline] = useState<CrewDaySnapshot | null>(null)
+  const [baselineReady, setBaselineReady] = useState(false)
+
+  // What the worker is being shown right now, in comparable form. Derived, so
+  // it tracks BOTH the day payload and the inbox feed — a message arriving
+  // between day refreshes still counts as a change.
+  const snapshot = useMemo(
+    () => (day ? crewDaySnapshot(day, unreadByJob) : null),
+    [day, unreadByJob],
+  )
+
+  // First successful day only. With nothing stored, TODAY becomes the baseline
+  // and nothing is reported: a phone with cleared storage must not announce an
+  // ordinary morning as eight changes (honesty rule 1). The technician id comes
+  // from the payload, so this cannot run before the first load resolves — and
+  // a failed load leaves `day` null, so an offline start never sets a baseline
+  // it would later diff against (rule 4).
+  useEffect(() => {
+    if (baselineReady || !day || !snapshot) return
+    const stored = readCrewDayBaseline(day.me?.id ?? null, today)
+    if (stored) {
+      setBaseline(stored)
+    } else {
+      writeCrewDayBaseline(snapshot)
+      setBaseline(snapshot)
+    }
+    setBaselineReady(true)
+  }, [baselineReady, day, snapshot, today])
+
+  const changes = useMemo(
+    () => (baselineReady && snapshot ? diffCrewDay(baseline, snapshot) : []),
+    [baselineReady, baseline, snapshot],
+  )
+
+  // ⛔ The one place the baseline advances.
+  const acknowledgeChanges = useCallback(() => {
+    if (!snapshot) return
+    writeCrewDayBaseline(snapshot)
+    setBaseline(snapshot)
+  }, [snapshot])
+
+  const goToStop = useCallback((jobId: string) => {
+    document.getElementById(`crew-stop-${jobId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [])
+
+  // Whose plan the numbered list is. 'booked' means nobody chose this order —
+  // see lib/crewBrief.crewOrderBasis. The sequence itself is the RPC's and is
+  // never recomputed here.
+  const orderBasis = crewOrderBasis(day?.stops ?? [])
+
   async function act(stop: ActiveCrewStop, kind: 'start' | 'complete' | 'stop') {
     if (acting) return
     setActing(stop.id)
@@ -304,6 +367,22 @@ export function CrewToday() {
         </div>
       )}
 
+      {/* WHAT CHANGED. Above the work, because its whole purpose is to be read
+          before the worker acts on a day they have already read once. Renders
+          nothing when nothing changed, and nothing at all on a first open. */}
+      <CrewChanges changes={changes} onDismiss={acknowledgeChanges} onGoToStop={goToStop} />
+
+      {/* WHOSE ORDER THIS IS. The list below is the sequence crew_day returned
+          and this screen never re-sorts it — but on a day nobody hand-ordered,
+          that sequence is the order the visits were BOOKED in, not a route the
+          office chose. One line, so the numbers stop implying a plan that does
+          not exist. */}
+      {orderBasis === 'booked' && (
+        <p className="px-0.5 text-[11px] text-ink-faint">
+          The office hasn’t set an order for today — these are listed as they were booked.
+        </p>
+      )}
+
       {active.length === 0 && (
         // "Nothing assigned" and "everything you saw got cancelled" are
         // different mornings — say which one it is.
@@ -331,6 +410,7 @@ export function CrewToday() {
         return (
           <section
             key={stop.id}
+            id={`crew-stop-${stop.id}`}
             aria-current={isNext ? 'step' : undefined}
             className={cn(
               'rounded-card border p-3.5 transition-colors',
@@ -501,7 +581,7 @@ export function CrewToday() {
           </p>
           <ul className="mt-1.5 space-y-1">
             {cancelled.map(stop => (
-              <li key={stop.id} className="text-xs text-ink-faint line-through truncate">
+              <li key={stop.id} id={`crew-stop-${stop.id}`} className="text-xs text-ink-faint line-through truncate">
                 {stop.customer?.name || stop.title}
                 {stop.property?.address ? ` — ${stop.property.address}` : ''}
               </li>
