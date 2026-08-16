@@ -20,9 +20,16 @@ import { Camera, RotateCw, X } from 'lucide-react'
 //
 // Honest states per shot, because this runs at the edge of coverage:
 //   uploading → spinner tile · uploaded → thumbnail stays · failed → red tile
-//   with Retry (the file is still in hand, nothing pretends). Online-only like
-//   every crew write in V1 — a dead-zone upload FAILS VISIBLY rather than
-//   queueing silently.
+//   with Retry (the file is still in hand, nothing pretends). A dead-zone upload
+//   FAILS VISIBLY rather than queueing silently — bytes are not an intent, and a
+//   photo the app promised to send later is a promise it cannot keep once the
+//   tab is evicted.
+//
+// ⭐ WHAT RETRY IS NOW SAFE (Field Reliability V1): each shot carries an upload
+// token minted when the camera returns it, and the server derives the object's
+// storage path from that token — so a retry after a lost response addresses the
+// SAME object and is answered with the row that already exists. Before this, a
+// retry in a dead zone filed the customer's photo twice.
 
 interface Shot {
   key: string

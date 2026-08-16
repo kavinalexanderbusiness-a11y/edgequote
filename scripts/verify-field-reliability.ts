@@ -232,6 +232,16 @@ console.log('\n── Field reliability + offline resilience ──────�
   console.log('\n6 · which writes may survive a dead zone')
   check('financial/auth writes are online-only',
     !isQueueable('auth.signin') && !isQueueable('auth.password') && !isQueueable('crew.join'))
+  // ⭐⭐ The sharpest line in the table: complete queues, undo does not. A queued
+  // undo would replay the status revert WITHOUT deleting the draft invoice the
+  // completion created — billing a customer for a visit the schedule says never
+  // happened (lib/offline/handlers P6b's lesson).
+  check('⭐⭐ undo is online-only — it has to unwind an invoice, not just a status',
+    !isQueueable('visit.undo') && isQueueable('visit.complete'))
+  check('…and the reason is written down where someone would change it',
+    /live invoice|LIVE INVOICE/.test(read('src/lib/field/writeClass.ts')))
+  check('⛔ nothing enqueues an undo',
+    !/kind: 'field\.undo'|'visit\.undo'/.test(read('src/lib/field/fieldWrite.ts')))
   check('a signed URL is online-only (a queued credential is already expired)',
     writeClass('media.signed_url') === 'online-only')
   check('field-work facts are queueable',
@@ -243,9 +253,9 @@ console.log('\n── Field reliability + offline resilience ──────�
   // forever — which reads to a worker as "it saved" and is the quietest loss
   // this layer can produce.
   const handlers = read('src/lib/field/handlers.ts')
-  const queueableVisitKinds = ['visit.start', 'visit.stop_for_day', 'visit.complete', 'visit.revert']
   check('⭐ every queueable visit transition has a replay path',
-    queueableVisitKinds.every(() => /registerHandler\('field\.visit'/.test(handlers)))
+    ['visit.start', 'visit.stop_for_day', 'visit.complete'].every(k => isQueueable(k as never))
+    && /registerHandler\('field\.visit'/.test(handlers))
   check('…notes have one', /registerHandler\('field\.record'/.test(handlers))
   check('…messages have one', /registerHandler\('field\.message'/.test(handlers))
   check('⭐ photos are NOT in the intent queue (they have their own durable path)',

@@ -25,11 +25,11 @@ export type FieldWriteKind =
   | 'visit.start'
   | 'visit.stop_for_day'
   | 'visit.complete'
-  | 'visit.revert'
   | 'visit.record'          // completion summary / internal issue — proof of work
   | 'crew.message'          // a message to the office about this visit
   | 'crew.photo'            // proof-of-work photo (bytes live in the photo store)
   // ── Connection required ──
+  | 'visit.undo'            // ⭐ reaches an INVOICE — see the note below
   | 'auth.signin'
   | 'auth.password'
   | 'crew.join'             // redeeming an invite code = becoming someone
@@ -55,6 +55,21 @@ export type WriteClass = 'queueable' | 'online-only'
  *   ⛔ This is NOT a licence to queue money: no crew surface takes a payment,
  *   sets a price, or touches an invoice, and none may be added to this list.
  *
+ * • ⭐⭐ `visit.undo` is ONLINE-ONLY, and it is the sharpest line in this table
+ *   because it sits right beside a completion that queues happily. Undoing a
+ *   COMPLETION is not the inverse of a status write: completing drafted an
+ *   invoice, so the undo must delete that draft too, and only the server may
+ *   touch invoices. A queued undo would replay through the plain status revert
+ *   and leave a LIVE INVOICE behind it — the customer billed for a visit the
+ *   schedule now says never happened. (The owner's outbox pays for this exact
+ *   lesson in lib/offline/handlers P6b, where the revert had to be fused to the
+ *   draft removal to be safe at all.)
+ *
+ *   It is also the cheapest thing in the product to require signal for: undo is
+ *   a seven-second affordance on a toast, taken immediately after a mis-tap, by
+ *   somebody who can simply act again when the board is live. ⛔ Do NOT promote
+ *   this to queueable without fusing the draft removal into the replayed op.
+ *
  * • `media.signed_url` is online-only despite being harmless to retry, because
  *   queueing it is MEANINGLESS: a signed URL is a short-lived credential (300s),
  *   so one minted on reconnect has already expired against the moment the worker
@@ -65,11 +80,11 @@ const WRITE_CLASS: Record<FieldWriteKind, WriteClass> = {
   'visit.start': 'queueable',
   'visit.stop_for_day': 'queueable',
   'visit.complete': 'queueable',
-  'visit.revert': 'queueable',
   'visit.record': 'queueable',
   'crew.message': 'queueable',
   'crew.photo': 'queueable',
 
+  'visit.undo': 'online-only',
   'auth.signin': 'online-only',
   'auth.password': 'online-only',
   'crew.join': 'online-only',
@@ -93,6 +108,8 @@ export const FIELD_WRITE_KINDS = Object.keys(WRITE_CLASS) as FieldWriteKind[]
  *  the reason and what to do — "Load failed" is the string this replaces. */
 export function onlineOnlyMessage(kind: FieldWriteKind): string {
   switch (kind) {
+    case 'visit.undo':
+      return 'Undo needs a connection — it has to unwind the paperwork too. Try again once you have signal.'
     case 'auth.signin':
     case 'auth.password':
       return 'Signing in needs a connection. Move somewhere with signal and try again.'
