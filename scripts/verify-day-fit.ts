@@ -290,11 +290,13 @@ console.log('\n13. Tenancy — every read scoped, the engine pure:')
   // block must itself carry the filter, up to that read's closing paren-chain.
   const load = read('src/lib/dayFitLoad.ts')
   const blocks = load.split(/supabase\.from\(/).slice(1)
-  check('the loader has its four reads', blocks.length === 4, `found ${blocks.length}`)
+  // Six since Session 67: the four original reads plus worker_availability
+  // (the standard week) and crews (names for the staffing warnings).
+  check('the loader has its six reads', blocks.length === 6, `found ${blocks.length}`)
   for (const b of blocks) {
     const table = b.match(/^'([a-z_]+)'/)?.[1] ?? '?'
     check(`the ${table} read is tenant-scoped in ITS OWN call chain`,
-      /jobs|business_settings|technicians|pto_entries/.test(table)
+      /jobs|business_settings|technicians|pto_entries|worker_availability|crews/.test(table)
       && /\.eq\('user_id', userId\)/.test(b.split(/\n\s*\n/)[0]),
       `no .eq('user_id', userId) inside the ${table} read`)
   }
@@ -309,8 +311,13 @@ console.log('\n14. Failed reads stay unknown — never free capacity:')
   const load = read('src/lib/dayFitLoad.ts')
   check('a failed jobs read → outcome unavailable', /jRes\.error\)\s*return \{ outcome: 'unavailable'/.test(load), '')
   check('a failed settings read → outcome unavailable', /sRes\.error\)\s*return \{ outcome: 'unavailable'/.test(load), '')
+  // Session 67 added the weekly pattern to this same expression. The pattern
+  // is part of the WORKFORCE read on purpose: if it could fail on its own, "no
+  // pattern" would silently mean "everyone works every day" — an unknown
+  // turning into the most optimistic answer available. verify:availability
+  // pins the workforceKnown conjunction itself.
   check('a failed workforce read → workers null (unknown), not zero',
-    /workforceKnown \? workersAvailableOn\(date, techs, pto\) : null/.test(load), '')
+    /workforceKnown\s*\?\s*workersAvailableOn\(date, techs, pto, \{ patterns \}\)\s*:\s*null/.test(load), '')
   // And the advisor treats the templates read as load-bearing: a failed read
   // must not resurrect a suggestion the owner configured away.
   check('suggestionsLoad honesty gate includes the templates read',

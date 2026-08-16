@@ -8,9 +8,11 @@ import { MoneyBand } from '@/components/dashboard/MoneyBand'
 import { WeatherStrip } from '@/components/weather/WeatherStrip'
 import { createClient } from '@/lib/supabase/server'
 import { loadDashboard } from '@/lib/dashboard/data'
+import { loadInboxSources } from '@/lib/inboxData'
+import { composeInbox } from '@/lib/inbox'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { PageContainer } from '@/components/layout/PageContainer'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, localTodayISO } from '@/lib/utils'
 import { Card } from '@/components/ui/Card'
 import Link from 'next/link'
 import { Plus, CalendarCheck, ArrowRight } from 'lucide-react'
@@ -44,10 +46,29 @@ import { Plus, CalendarCheck, ArrowRight } from 'lucide-react'
 //
 // Deliberately NOT here: growth suggestions, recent quotes, acquisition insights —
 // they don't help you start the day and live on their own pages.
+
+// The dashboard shows the TOP of the inbox, not the inbox — spec'd small on
+// purpose so the queue card stays a glance, and "+N need you" is the door.
+const PREVIEW_ROWS = 3
 export default async function DashboardPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  const d = await loadDashboard(supabase, user!.id)
+  const todayISO = localTodayISO()
+  // The inbox's extra sources load BESIDE the dashboard batch, not inside it:
+  // the dashboard keeps its all-or-throw contract for the numbers it paints,
+  // while a failed inbox source only degrades the preview (named, never silent).
+  const [d, inboxExtras] = await Promise.all([
+    loadDashboard(supabase, user!.id),
+    loadInboxSources(supabase, user!.id, todayISO),
+  ])
+  // THE inbox composition — the same engine the Inbox page runs, fed the same
+  // queue rows, so the preview's count can never disagree with the page it
+  // links to. `work` is the queue this loader already computed (uncapped).
+  const inbox = composeInbox({
+    sources: { work: { ok: true, rows: d.priorities }, ...inboxExtras },
+    now: new Date(),
+    todayISO,
+  })
 
   // The header states TODAY's shape — stops and the revenue booked for them —
   // matching the approved Today board ("Today · N stops · $today"). Both come
@@ -99,7 +120,15 @@ export default async function DashboardPage() {
           its own height instead of stretching the short one. */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 lg:gap-5 items-start">
         <div className="lg:col-span-3 animate-rise stagger-3">
-          <TodaysPriorities items={d.priorities} started={d.started} />
+          {/* A PREVIEW of the Inbox, not a copy of it: the top of the composed
+              queue, the true count, and one door. The full list — sections,
+              snoozed events, updates — lives at /dashboard/inbox. */}
+          <TodaysPriorities
+            items={inbox.needsYou.slice(0, PREVIEW_ROWS)}
+            count={inbox.counts.needsYou}
+            failuresCount={inbox.failures.length}
+            started={d.started}
+          />
         </div>
         <div className="lg:col-span-2 space-y-4 lg:space-y-5">
           {/* Weather sits WITH the day plan it threatens — risk and the work at

@@ -12,6 +12,7 @@ import { Toggle } from '@/components/ui/Toggle'
 import { Collapsible } from '@/components/ui/Collapsible'
 import { cn } from '@/lib/utils'
 import { formatDistanceToNow } from 'date-fns'
+import { appOrigin } from '@/lib/appOrigin'
 import {
   Globe, Copy, Check, ExternalLink, Code2, Send, Loader2, CheckCircle2, AlertTriangle, XCircle,
   ShieldCheck, Inbox, Link as LinkIcon, Server, Activity, RefreshCw, Terminal, MessageSquare, MinusCircle,
@@ -50,7 +51,7 @@ export function WebsiteIntegration() {
   const [test, setTest] = useState<TestState>({ status: 'idle' })
 
   useEffect(() => {
-    setAppBase((process.env.NEXT_PUBLIC_APP_URL || window.location.origin).replace(/\/$/, ''))
+    setAppBase(appOrigin(window.location.origin))
     try { const raw = localStorage.getItem(LAST_TEST_KEY); if (raw) setLastTest(JSON.parse(raw)) } catch { /* ignore */ }
   }, [])
 

@@ -13,14 +13,22 @@ import { HardHat, ShieldCheck } from 'lucide-react'
 // was never true — the project floor is 6). Two numbers in two files is how a
 // policy quietly becomes a suggestion, so both doors now read the same one.
 import { MIN_PASSWORD, passwordProblem } from '@/lib/passwordRecovery'
+import { readSetupToken, readSetupPathToken } from '@/lib/crewInvite'
 
-export function CrewWelcomeForm() {
-  return <Suspense fallback={<Skeleton className="h-64 rounded-card" />}><Form /></Suspense>
+export function CrewWelcomeForm({ pathSegments }: { pathSegments?: string[] }) {
+  return (
+    <Suspense fallback={<Skeleton className="h-64 rounded-card" />}>
+      <Form pathSegments={pathSegments} />
+    </Suspense>
+  )
 }
 
-function Form() {
+function Form({ pathSegments }: { pathSegments?: string[] }) {
   const router = useRouter()
-  const token = useSearchParams().get('token')
+  const params = useSearchParams()
+  // The path segment is canonical (that is the shape we email); the query form
+  // is still read so a link copied out of the old UI keeps working.
+  const token = readSetupPathToken(pathSegments) ?? readSetupToken(k => params.get(k))
   const [phase, setPhase] = useState<'checking' | 'ready' | 'dead'>('checking')
   const [email, setEmail] = useState<string | null>(null)
   const [pw, setPw] = useState('')
@@ -75,7 +83,11 @@ function Form() {
         <p className="mt-2 text-sm text-ink-muted">
           Setup links can only be used once, and not long after they’re made. Ask your manager to send a new one.
         </p>
-        <a href="/login" className="mt-5 inline-block text-sm font-medium text-accent-text hover:underline">
+        {/* A worker holding a spent link taps this on a phone, often in a truck
+            with gloves on. It measured 20px tall — below the 44px floor every
+            other primary control here meets. */}
+        <a href="/login"
+          className="mt-4 tap-target inline-flex items-center justify-center min-h-[44px] px-4 text-sm font-medium text-accent-text hover:underline">
           Already set a password? Sign in
         </a>
       </div>

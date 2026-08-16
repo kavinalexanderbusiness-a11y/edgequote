@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { appOrigin, cleanOrigin } from '@/lib/appOrigin'
 
 // Owner-side helper: get (or mint) the magic-link token for a customer's portal.
 // EXISTING tokens are always reused, so links you've already sent keep working
@@ -102,9 +103,8 @@ export async function rotatePortalToken(supabase: SupabaseClient, userId: string
 // to the browser origin (client) or NEXT_PUBLIC_APP_URL. If none resolve we return
 // a relative path rather than a silently-broken "//portal/…".
 export function portalUrl(token: string, base?: string): string {
-  const origin = (base
+  const origin = cleanOrigin(base)
     || (typeof window !== 'undefined' ? window.location.origin : '')
-    || process.env.NEXT_PUBLIC_APP_URL
-    || '').replace(/\/$/, '')
+    || appOrigin()
   return `${origin}/portal/${token}`
 }
