@@ -171,6 +171,12 @@ export async function GET() {
       // get confused constantly during an incident.
       commit: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? 'local',
       env: process.env.VERCEL_ENV ?? 'local',
+      // The origin this deploy stamps into every generated link — crew invites,
+      // password resets, portal/booking URLs. NEXT_PUBLIC_ = already public, so
+      // reporting it leaks nothing, and it makes the failure mode "the domain
+      // moved but the env var didn't" (every emailed link 404s, silently)
+      // visible from one curl instead of from a confused worker's screenshot.
+      app_url: process.env.NEXT_PUBLIC_APP_URL || null,
       checks,
       capabilities: {
         payments: stripe,

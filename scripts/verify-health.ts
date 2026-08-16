@@ -117,5 +117,17 @@ check('no email/SMS configured does NOT degrade (optional, not declared)',
   statusFor(PROD), 'ok')
 
 // ═══════════════════════════════════════════════════════════════════════════
+H('4. THE LINK ORIGIN — the deploy must report the origin it stamps into links')
+
+// 2026-08-15: the production domain moved to app.edgehq.ca but Vercel's
+// NEXT_PUBLIC_APP_URL still held the old host — so every crew-invite and
+// password-reset email carried a link that 404'd, and nothing observable said
+// so. The env var cannot be asserted from here; what CAN be pinned is that
+// /api/health reports it, so one curl against a deploy answers "which origin do
+// generated links use?" instead of a worker's screenshot being the detector.
+check('health reports the configured app origin (app_url)',
+  /app_url:\s*process\.env\.NEXT_PUBLIC_APP_URL\s*\|\|\s*null/.test(health), true)
+
+// ═══════════════════════════════════════════════════════════════════════════
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:health — ${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)
