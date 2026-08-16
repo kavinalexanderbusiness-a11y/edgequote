@@ -4,6 +4,7 @@
 // are present in the environment. So nothing can send by accident, and the rest
 // of the app (manual buttons, the cron) can be wired now and "just work" the
 // moment the keys are added. Server-only — never import into a client component.
+import { appOrigin } from '@/lib/appOrigin'
 
 // `retryable` answers ONE question, and only for a failure: would sending this
 // exact message again, later, plausibly work? It is NOT "did it fail" — it's the
@@ -71,7 +72,7 @@ function sendError(provider: string, e: unknown): SendResult {
 // localhost) — when absent we simply send without it: no delivery updates, never
 // a failed send.
 function smsStatusCallbackUrl(): string | null {
-  const base = (process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/$/, '')
+  const base = appOrigin()
   if (!/^https:\/\//i.test(base)) return null
   return `${base}/api/sms/status`
 }

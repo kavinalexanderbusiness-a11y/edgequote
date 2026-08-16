@@ -7,6 +7,7 @@
     "beta:invite": "tsx scripts/beta-invite.ts",
     "verify": "tsx scripts/verify-all.ts",
     "verify:beta-signup": "tsx scripts/verify-beta-signup.ts",
+    "verify:app-origin": "tsx scripts/verify-app-origin.ts",
     "verify:automations": "tsx scripts/verify-automations.ts",
     "verify:capabilities": "tsx scripts/verify-capabilities.ts",
     "verify:comms-governor": "tsx scripts/verify-comms-governor.ts",

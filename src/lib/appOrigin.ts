@@ -35,6 +35,16 @@
 export function cleanOrigin(raw: string | null | undefined): string {
   if (!raw) return ''
   return raw
+    // The invisibles `trim()` CANNOT reach. U+FEFF is deliberately absent from
+    // this class — trim() already takes it (see below), and re-listing it here
+    // is the dead code mutation testing correctly deleted once. These are the
+    // ones that are NOT WhiteSpace: zero-width space/joiners, the LTR/RTL marks
+    // and the bidi overrides. A value copied out of a rendered web page rather
+    // than typed picks them up, they survive trim() untouched, and they break a
+    // URL exactly as invisibly as the BOM did.
+    // Load-bearing, and proved so: verify:app-origin drives U+200B through this
+    // and fails if the line is removed.
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069]/g, '')
     // ⭐ `trim()` is what removes the BOM. U+FEFF is <ZWNBSP>, which ECMAScript
     // counts as WhiteSpace, so a leading byte-order mark goes with the spaces
     // and newlines a shell pipe leaves behind. An explicit BOM replace used to
@@ -56,4 +66,27 @@ export function cleanOrigin(raw: string | null | undefined): string {
  */
 export function appOrigin(requestOrigin?: string | null): string {
   return cleanOrigin(process.env.NEXT_PUBLIC_APP_URL) || cleanOrigin(requestOrigin)
+}
+
+/**
+ * Is this a value the app can actually build links on? Cleaning removes what a
+ * value picks up in transit; it cannot rescue a value that was wrong to begin
+ * with — "app.edgehq.ca" with no scheme, or a stray "javascript:" — and those
+ * produce links that fail at the browser rather than here.
+ *
+ * Deliberately SEPARATE from cleanOrigin rather than folded into it: cleanOrigin's
+ * contract (clean it, never invent one) is landed, guarded and mutation-tested,
+ * and every caller's fallback chain is written against it. This is the extra
+ * question /api/health asks so a deploy configured with an unusable origin says
+ * so out loud instead of sending broken links quietly.
+ */
+export function isUsableOrigin(value: string | null | undefined): boolean {
+  const v = cleanOrigin(value)
+  if (!v) return false
+  try {
+    const u = new URL(v)
+    return u.protocol === 'https:' || u.protocol === 'http:'
+  } catch {
+    return false
+  }
 }
