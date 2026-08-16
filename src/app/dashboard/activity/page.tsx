@@ -114,7 +114,12 @@ function Chip({ active, onClick, children }: {
     <button
       type="button" onClick={onClick} aria-pressed={active}
       className={cn(
-        'px-2.5 py-1 rounded-full text-xs border transition-colors',
+        // ⭐ 36px, not the 24px this started as. A filter chip is a finger target
+        //   and three rows of them at the 44px CTA floor would eat a third of a
+        //   phone screen before any history showed — 36px with real spacing is the
+        //   balance. (The History rows themselves are full-row targets; see
+        //   HistoryPanel.)
+        'inline-flex items-center min-h-[36px] px-3 rounded-full text-xs border transition-colors',
         active
           ? 'border-accent/30 bg-accent/10 text-accent-text'
           : 'border-border text-ink-muted hover:text-ink hover:bg-surface-raised',
