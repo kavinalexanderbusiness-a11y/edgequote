@@ -65,17 +65,19 @@
 -- twice (see the crew_messages finding, 2026-08-13). `revoke from anon` alone is
 -- not enough either — the PUBLIC grant is a separate thing and is revoked too.
 
--- ── 0. prerequisites on the tables values may attach to ──────────────────────
--- A composite FK needs a UNIQUE it can point at. (id, user_id) is a strict
--- superset of each table's primary key, so this adds an index and changes no
--- existing behaviour, but it is what makes cross-tenant attachment impossible
--- rather than merely checked.
-alter table public."customers"  drop constraint if exists customers_id_user_id_key;
-alter table public."customers"  add  constraint customers_id_user_id_key  unique (id, user_id);
-alter table public."properties" drop constraint if exists properties_id_user_id_key;
-alter table public."properties" add  constraint properties_id_user_id_key unique (id, user_id);
-alter table public."jobs"       drop constraint if exists jobs_id_user_id_key;
-alter table public."jobs"       add  constraint jobs_id_user_id_key       unique (id, user_id);
+-- ── 0. this migration adds tables and touches nothing that exists ────────────
+-- The tenant-carrying composite foreign keys below need a UNIQUE to point at on
+-- each attachment table. All three ALREADY HAVE ONE — this schema has used the
+-- pattern for a while (change_orders, quotes, service_bundles, technicians too):
+--
+--   customers   UNIQUE (user_id, id)   customers_user_id_id_key
+--   properties  UNIQUE (id, user_id)   properties_id_user_unique
+--   jobs        UNIQUE (id, user_id)   jobs_id_user_key
+--
+-- ⚠️ The column ORDER differs between them, and a composite FK must list its
+-- columns in the referenced constraint's order. That is why the three foreign
+-- keys below are not written identically. Adding matching-order duplicates would
+-- have put three redundant indexes on production's largest tables for nothing.
 
 -- ── 1. definitions ───────────────────────────────────────────────────────────
 create table if not exists public."custom_field_definitions" (
@@ -168,8 +170,9 @@ create table if not exists public."custom_field_values" (
   -- same owner as the value and the definition. Deleting the record it describes
   -- takes its custom values with it — a value about a deleted customer is not
   -- history, it is a leak with no subject.
+  -- Column order follows each target's EXISTING unique constraint — see §0.
   constraint custom_field_values_customer_fkey
-    foreign key (customer_id, user_id) references public."customers" (id, user_id) on delete cascade,
+    foreign key (user_id, customer_id) references public."customers" (user_id, id) on delete cascade,
   constraint custom_field_values_property_fkey
     foreign key (property_id, user_id) references public."properties" (id, user_id) on delete cascade,
   constraint custom_field_values_job_fkey
