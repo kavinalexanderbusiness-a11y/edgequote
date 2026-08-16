@@ -100,7 +100,14 @@ create table if not exists public.audit_events (
     check (source in ('dashboard', 'crew', 'portal', 'service', 'db')),
   constraint audit_events_action_check check (char_length(action) between 1 and 64),
   constraint audit_events_entity_type_check check (char_length(entity_type) between 1 and 32),
-  -- an event about nothing is a bug: at least one of the states must exist
+  -- ⚠️ NO "before or after must be present" constraint, on purpose: plenty of real
+  -- events carry neither. "Mike stopped for the day", "the request was resolved",
+  -- "the worker was archived" are complete facts on their own — the action IS the
+  -- content. Requiring a value pair would force empty JSON in to satisfy a rule.
+  --
+  -- The only FK is the tenant. There is deliberately none to customers/jobs/quotes:
+  -- the audit row must SURVIVE the record it describes, which is exactly when the
+  -- history matters most.
   constraint audit_events_user_id_fkey
     foreign key (user_id) references auth.users(id) on delete cascade
 );
