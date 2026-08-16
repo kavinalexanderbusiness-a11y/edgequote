@@ -1,8 +1,9 @@
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { loadCrewDay } from '@/lib/crewAccess'
 import { CrewSignOut } from '@/components/crew/CrewSignOut'
 import { localTodayISO } from '@/lib/utils'
-import { User, Users, Building2, Phone } from 'lucide-react'
+import { User, Users, Building2, Phone, CalendarOff, ChevronRight } from 'lucide-react'
 
 export const metadata = { title: 'Me — EdgeQuote' }
 
@@ -45,6 +46,16 @@ export default async function CrewProfilePage() {
           </div>
         )}
       </dl>
+
+      <Link href="/crew/availability"
+        className="flex items-center gap-3 rounded-card border border-border bg-bg-secondary px-3.5 py-3 min-h-[48px] hover:border-accent/40">
+        <CalendarOff className="w-4 h-4 shrink-0 text-ink-faint" aria-hidden />
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-medium text-ink">My availability</span>
+          <span className="block text-[11px] text-ink-muted">Your working days, and asking for time off</span>
+        </span>
+        <ChevronRight className="w-4 h-4 shrink-0 text-ink-faint" aria-hidden />
+      </Link>
 
       <p className="px-1 text-[11px] text-ink-faint">
         You see the visits assigned to your crew. Prices, invoices, customer records and company

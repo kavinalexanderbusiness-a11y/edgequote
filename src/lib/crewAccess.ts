@@ -50,6 +50,26 @@ export const CREW_JOIN = '/crew/join'
  *  no valid token, the page does nothing except say the link has expired. */
 export const CREW_WELCOME = '/crew/welcome'
 
+/**
+ * THE landing destination for a role, as data.
+ *
+ * Three surfaces used to hardcode `/dashboard` after a successful sign-in — the
+ * login form, the root page, and the end of a password reset — and leaned on the
+ * middleware to bounce a worker from there to /crew. It does bounce them, so
+ * nobody was stranded; what they got was a round trip through the owner's URL,
+ * which on a slow phone is a flash of the wrong product before the right one.
+ * The brief asks for a worker to land in worker mode, not to arrive there second.
+ *
+ * `none` still resolves to the owner root: an account with no role may be a
+ * brand-new OWNER mid-signup, and /dashboard is what runs the first-run /setup
+ * flow. Sending them to /crew instead would strand a real owner. A worker in
+ * that state is redirected on to /crew/join by routeFor, which is the pre-existing
+ * behaviour and the one place that decision belongs.
+ */
+export function landingFor(role: AppRole): string {
+  return role === 'crew' ? CREW_ROOT : OWNER_ROOT
+}
+
 export function isOwnerPath(pathname: string): boolean {
   return pathname === OWNER_ROOT || pathname.startsWith(OWNER_ROOT + '/')
 }

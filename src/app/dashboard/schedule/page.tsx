@@ -144,6 +144,7 @@ export default function SchedulePage() {
   const propertyParam = searchParams.get('property')
   const focusRec = searchParams.get('focus')
   const jobParam = searchParams.get('job')
+  const dayParam = searchParams.get('d')
 
   const [jobs, setJobs] = useState<Job[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
@@ -349,6 +350,14 @@ export default function SchedulePage() {
     if (!dayFitCtx) return null
     const iso = format(cursor, 'yyyy-MM-dd')
     return dayFitCtx.horizonDates.includes(iso) ? dayFitCtx.workersByDate(iso) : null
+  }, [dayFitCtx, cursor])
+
+  // …and the same answer per person, for the staffing warnings. Same horizon
+  // rule, from the same context, so the count and the names always agree.
+  const staffingOnOpenDay = useMemo(() => {
+    if (!dayFitCtx) return null
+    const iso = format(cursor, 'yyyy-MM-dd')
+    return dayFitCtx.horizonDates.includes(iso) ? dayFitCtx.staffingByDate(iso) : null
   }, [dayFitCtx, cursor])
 
   // ── Effective capacity for the OPEN day (one source: lib/dayStatus) ──────────
@@ -1033,6 +1042,16 @@ export default function SchedulePage() {
       setShowForm(false)
     }
   }, [jobParam, jobs])
+
+  // Day deep link (?d=YYYY-MM-DD) — THE focused destination for one DAY, used by
+  // the Owner Inbox's "Fix Thursday's schedule" rows. Only moves the cursor: a
+  // day-level door opens the board ON that day and touches nothing, so a stale
+  // link can never open, edit or create a visit. Format-checked because this
+  // arrives from a URL — parseISO on garbage would set an Invalid Date cursor.
+  useEffect(() => {
+    if (!dayParam || !/^\d{4}-\d{2}-\d{2}$/.test(dayParam)) return
+    setCursor(parseISO(dayParam + 'T00:00:00'))
+  }, [dayParam])
 
   // ?panel=time|cost — land ON the panel, not merely on the form that contains
   // it. The + offers "Work time" and "Cost" as one-tap doors; a door that opens
@@ -2971,6 +2990,9 @@ export default function SchedulePage() {
           workStartTime={dayView.start}
           capacityHours={dayView.laborHours}
           workersOnDay={workersOnOpenDay}
+          staffingOnDay={staffingOnOpenDay}
+          crewNames={dayFitCtx?.crewNames}
+          availabilityRecorded={dayFitCtx?.availabilityRecorded}
           learnedDurationFor={dayFitCtx?.learnedFor}
           onRainDelay={() => rainDelayDay(dayISO)}
           onAddJob={() => openNewJob(cursor)}

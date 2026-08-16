@@ -161,6 +161,16 @@ const SEND_ALLOWLIST: Record<string, string> = {
   // Throttled per-address AND globally in password_reset_requests, pinned by
   // verify:account-recovery.
   'src/app/api/public/password-reset/route.ts': 'platform-transactional: owner password recovery (no tenant is on the hook for it)',
+  // A crew invitation is the platform telling somebody that their EdgeHQ LOGIN
+  // exists. Same class as the two above: it is about an account, not a message
+  // the business is sending its customer, so no tenant is on the hook for it.
+  // Gating it on outbound_email would make "can this business email its
+  // customers" decide whether its own crew can be given a login — the same
+  // incoherence spelled out for password recovery. The route is
+  // owner-authenticated and proves ownership through RLS before it ever
+  // constructs the admin client; the address is the one the owner typed for
+  // their own employee. Pinned by verify:crew-auth.
+  'src/app/api/crew/invite/route.ts': 'platform-transactional: worker login invitation (about an EdgeHQ account, not tenant→customer)',
   'src/app/api/booking/notify/route.ts': 'owner alert TO the business itself (customer half goes through dispatch)',
   'src/lib/intake.ts': 'lead alert TO the business itself',
   'src/app/api/cron/reports/route.ts': 'scheduled report TO the business itself',

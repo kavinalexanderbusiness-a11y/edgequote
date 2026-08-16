@@ -46,7 +46,9 @@ type PortalRequestRow = { id: string; customer_id: string | null; from_portal: b
 // deposit_type/deposit_value/accepted_price/deposit_override_at feed the
 // scheduling gate: WITHOUT them a deposit-gated quote reads as gateless and the
 // queue would urge scheduling a booking the owner deliberately gated.
-const QUOTE_COLUMNS =
+// Exported: lib/inboxData reads the same union for the same engines — one list,
+// so a column added for the queue can never be missing from the inbox's copy of it.
+export const QUOTE_COLUMNS =
   'id, customer_id, customer_name, status, total, service_type, created_at, sent_at, last_followed_up_at, initial_price, weekly_price, biweekly_price, monthly_price, lead_meta, accepted_price, deposit_type, deposit_value, deposit_override_at'
 
 export interface DashboardData {
@@ -294,10 +296,11 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     seasons: settingsToSeasons(settings?.service_seasons),
     feeSettings: settings,
     today,
-    // 8, up from the default 6: the queue now owns a tall desktop column, and at
-    // 6 the two lowest tiers (messages, lapsed) vanished with no trace whenever
-    // more than six kinds fired — rows silently cut with nothing saying so.
-    limit: 8,
+    // Uncapped in effect (the kinds can't reach 50): the queue now feeds the
+    // Owner Inbox composition, whose COUNT must be the truth — a cap here would
+    // make the dashboard's "N need you" quietly smaller than the inbox it links
+    // to. How many rows to SHOW is the preview's decision, made at render.
+    limit: 50,
   })
 
   // ── Day plan (THE day-plan engine) ──

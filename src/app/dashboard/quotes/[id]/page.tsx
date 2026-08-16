@@ -11,6 +11,7 @@ import {
 } from '@/lib/quoteOptions'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { JobPhotos } from '@/components/photos/JobPhotos'
+import { HistoryPanel } from '@/components/audit/HistoryPanel'
 import { extractBookingPhotos, bookingPhotoViews } from '@/lib/bookingPhotos'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { DetailHeader } from '@/components/layout/DetailHeader'
@@ -1745,6 +1746,20 @@ export default function QuoteDetailPage() {
           </CardBody>
         </Card>
       )}
+
+      {/* History — last, because it is the record rather than the work. It is the
+          same engine as the business Activity feed, filtered to this quote, so
+          "the customer approved this" and "the owner recorded an approval taken by
+          phone" stay visibly different acts here. */}
+      <Card>
+        <CardBody>
+          <HistoryPanel
+            filter={{ entity: { type: 'quote', id: quote.id } }}
+            emptyText="No recorded changes to this quote yet."
+            pageSize={10}
+          />
+        </CardBody>
+      </Card>
     </div>
   )
 }

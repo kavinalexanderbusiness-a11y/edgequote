@@ -21,6 +21,7 @@
 import {
   crewAccessState, accessFacts, normalizeInviteEmail, isPlausibleEmail,
   buildSetupUrl, CREW_WELCOME_PATH, CREW_ACCESS_LABEL,
+  readSetupToken, readSetupPathToken,
 } from '../src/lib/crewInvite'
 import { routeFor } from '../src/lib/crewAccess'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
@@ -71,10 +72,31 @@ check('a typo is caught before the round trip', !isPlausibleEmail('sam@example')
 check('a real address passes', isPlausibleEmail('sam.torres@edgeproperty.ca'))
 
 const url = buildSetupUrl('https://app.example.com/', 'abc/def+ghi=')
-eq('the link points at the welcome page', url.startsWith('https://app.example.com' + CREW_WELCOME_PATH + '?token='), true)
+eq('the link points at the welcome page', url.startsWith('https://app.example.com' + CREW_WELCOME_PATH + '/'), true)
 check('a trailing slash on the origin does not double up', !url.includes('.com//'))
 check('the token is URL-encoded', url.includes('abc%2Fdef%2Bghi%3D'),
   'an un-encoded token breaks the moment Supabase mints one containing / or +')
+
+// ⭐ THE EMAILED-URL RULE. Since 2026-08-15 this link is EMAILED rather than
+// copied by hand, which puts it through the transport that mangled beta
+// signup's: `=73` is a valid quoted-printable escape, so a query-form link can
+// lose bytes between Resend and a real inbox and arrive as a token that cannot
+// be redeemed. Path segments carry no '=' and no '?'. ⛔ Never put '=' in an
+// emailed URL. (The token itself is percent-encoded, which is why the raw '='
+// in the fixture above must not survive into the URL.)
+check('the emailed link contains no "=" and no "?" (quoted-printable safe)',
+  !url.includes('=') && !url.includes('?'),
+  'a query-form link can be re-encoded in transit and arrive with a broken token')
+
+// Both spellings still OPEN on the way in, so a link an owner copied out of the
+// old UI, or one Supabase's own template would emit, still resolves.
+eq('the canonical path token is read', readSetupPathToken(['abc123']), 'abc123')
+eq('a deeper path is not a link we built', readSetupPathToken(['a', 'b']), null)
+eq('no segment is no token', readSetupPathToken(undefined), null)
+eq('the legacy ?token= form is still honoured',
+  readSetupToken(k => (k === 'token' ? 'legacy1' : null)), 'legacy1')
+eq('Supabase\'s own ?token_hash= spelling is honoured too',
+  readSetupToken(k => (k === 'token_hash' ? 'legacy2' : null)), 'legacy2')
 
 // The welcome page must be reachable with NO session — the employee arrives
 // holding a token and nothing else. A gate that bounced them to /login would
@@ -178,9 +200,29 @@ check('a missing key degrades with a named next step',
   'when the key is absent, say which variable is missing AND that the code path still works')
 
 // The setup URL is a credential for the minutes it lives.
-check('nothing logs the setup link or the token',
-  !/console\.(log|info|warn|error)/.test(route),
-  'a logged setup link is a login sitting in a log aggregator')
+//
+// This used to forbid console.* outright. It cannot any more: since the invite
+// is emailed, a rejected send has to be reportable, and the route logs the
+// provider's REASON exactly as /api/public/password-reset does. So the rule is
+// stated precisely instead of bluntly — what may never be logged is the
+// secret-bearing material, whatever else a log line says.
+// ⚠️ Line-based on purpose. A `[^;]*` argument match is wrong in THIS codebase:
+// the house style is semicolon-free, so it runs past the closing paren to the
+// end of the file and reports every later mention of setupUrl as a leaking log.
+check('nothing logs the setup link or the token', (() => {
+  const SECRETS = /\b(setupUrl|hashed|hashed_token|action_link)\b/
+  const leaky = route.split(/\r?\n/)
+    .filter(l => /console\.(log|info|warn|error)\s*\(/.test(l) && SECRETS.test(l))
+  if (leaky.length) console.log(`     leaking line(s): ${leaky.map(l => l.trim()).join(' | ')}`)
+  return leaky.length === 0
+})(), 'a logged setup link is a login sitting in a log aggregator')
+
+// …and the mechanism control: if the extraction above ever stops finding the
+// route's console calls, the check would pass vacuously on a route that logs
+// the token on every line. Assert it finds the one call we know is there.
+check('the log scan actually sees this route\'s console calls',
+  (route.match(/console\.(log|info|warn|error)\s*\(/g) ?? []).length >= 1,
+  'the secret-scan above is vacuous if it matches nothing')
 
 // A found account is only reused when the scan actually completed — otherwise a
 // paging failure reads as "no such user" and creates a DUPLICATE account.
