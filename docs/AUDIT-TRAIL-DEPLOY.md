@@ -10,8 +10,9 @@ is deliberate: an unreadable history must never render as "nothing happened".
 ## 1 · SQL migration — RUN ONCE
 
 The full statement is `supabase/pending/2026-08-15-audit-trail-v1.sql`. It is
-long (≈44 KB, 75 statements) and is **run-once** — it creates a table, 24
-triggers and 13 functions. Do not paste a partial copy.
+long (≈46 KB) and is **run-once** — it creates one table, 13 functions and 29
+triggers (28 capture triggers across 10 tables, plus the immutability trigger on
+`audit_events` itself). Do not paste a partial copy.
 
 **Apply it as a single migration** named `audit_trail_v1`, either through the
 Supabase SQL Editor (paste the whole file) or via MCP `apply_migration`.
