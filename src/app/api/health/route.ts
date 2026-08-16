@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { classifyCronHealth, STALE_AFTER_DAYS, type CronVerdict } from '@/lib/cron/heartbeat'
+import { appOrigin } from '@/lib/appOrigin'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -171,6 +172,17 @@ export async function GET() {
       // get confused constantly during an incident.
       commit: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? 'local',
       env: process.env.VERCEL_ENV ?? 'local',
+      // The origin this deploy stamps into every generated link — crew invites,
+      // password resets, portal/booking URLs. NEXT_PUBLIC_ = already public, so
+      // reporting it leaks nothing, and it makes the failure mode "the domain
+      // moved but the env var didn't" (every emailed link 404s, silently)
+      // visible from one curl instead of from a confused worker's screenshot.
+      //
+      // Reported RAW and CLEANED. The raw value is what caught a UTF-8 BOM
+      // pasted in by a shell on 2026-08-15 — invisible in every dashboard, and
+      // enough to break every link. app_url is what links actually carry.
+      app_url: appOrigin() || null,
+      app_url_raw: process.env.NEXT_PUBLIC_APP_URL || null,
       checks,
       capabilities: {
         payments: stripe,

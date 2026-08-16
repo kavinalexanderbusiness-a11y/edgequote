@@ -10,7 +10,7 @@ import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
 import { Customer, Property, JobFormValues, JobStatus, RecurUnit } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { recurrenceLabel, recurrenceToUi, reseedRepeatUi, type RepeatPreset, type EndMode } from '@/lib/recurrence'
+import { recurrenceLabel, recurrenceToUi, reseedRepeatUi, OPEN_ENDED_HORIZON, type RepeatPreset, type EndMode } from '@/lib/recurrence'
 import { latestSavedRecommendation, savedPriceFor, recommendationIsStale, CadenceKey } from '@/lib/pricing'
 import { servicePricingKind } from '@/lib/servicePricing'
 import {
@@ -541,7 +541,9 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     endMode === 'season' && seasonEndDate ? `ends at season end (${formatDate(seasonEndDate)})`
     : endMode === 'after' ? `ends after ${Math.max(1, endCount)} visit${endCount !== 1 ? 's' : ''}`
     : endMode === 'on' && endDate ? `until ${endDate}`
-    : 'no end date (kept rolling on your calendar)'
+    // Nothing tops a series up, so "no end date" is a fixed horizon, not a
+    // rolling one. Says the number the engine will actually create.
+    : `no end date — ${OPEN_ENDED_HORIZON} visits scheduled ahead`
 
   return (
     <form
@@ -956,8 +958,18 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
                     ...(serviceSeason ? [{ value: 'season', label: 'Season end (recommended)' }] : []),
                     { value: 'on', label: 'Specific date' },
                     { value: 'after', label: 'Number of visits' },
-                    { value: 'never', label: 'Never ends' },
+                    { value: 'never', label: 'No end date' },
                   ]} />
+                {/* "Never ends" promised something no engine delivers: there is no
+                    top-up, so the series is exactly this many visits long. */}
+                {endMode === 'never' && (
+                  <div className="rounded-xl border border-border bg-bg-tertiary px-3 py-2 flex items-center gap-2">
+                    <CalendarRange className="w-4 h-4 text-ink-muted shrink-0" />
+                    <p className="text-xs text-ink-muted">
+                      {OPEN_ENDED_HORIZON} visits are scheduled ahead. Add more when they run low.
+                    </p>
+                  </div>
+                )}
                 {endMode === 'season' && (
                   <div className="rounded-xl border border-accent/20 bg-accent/5 px-3 py-2 flex items-center gap-2">
                     <CalendarRange className="w-4 h-4 text-accent-text shrink-0" />

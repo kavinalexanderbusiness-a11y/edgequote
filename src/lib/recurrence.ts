@@ -2,10 +2,17 @@ import { addDays, addMonths, format, parseISO, differenceInCalendarDays } from '
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Job, JobRecurrence, RecurUnit, RecurrenceScope } from '@/types'
 import { ServiceSeasons, seasonForService, seasonEndDateFor, seasonLabel } from '@/lib/seasons'
+// THE seasonality rule — shared with reactivation/churn so a customer never
+// reads as dormant on one screen and lost on another (see signals/lifecycle).
+import { isSeasonallyDormant } from '@/lib/signals/lifecycle'
 
 // Safety caps so a series never materialises unbounded rows.
 const HARD_CAP = 260            // ~5 years weekly — absolute ceiling
-const OPEN_ENDED_HORIZON = 26   // visits to pre-create when there's no end
+// Visits to pre-create when there's no end. Exported because the job form has to
+// SAY this number: nothing tops a series up, so "no end date" means exactly this
+// many visits and then silence — which the form used to describe as "kept rolling
+// on your calendar". Copy reads the constant so the two cannot drift apart.
+export const OPEN_ENDED_HORIZON = 26
 
 function stepUnit(d: Date, unit: RecurUnit, count: number): Date {
   if (unit === 'day') return addDays(d, count)
@@ -329,6 +336,48 @@ export function dayDelta(fromISO: string, toISO: string): number {
 
 const WEEKDAYS = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays']
 
+// ── Why a plan has nothing booked ────────────────────────────────────────────
+// `paused` was one boolean over FOUR different situations, and every surface
+// rendered them identically: a delivered 10-visit package, a snow series in
+// August, an open-ended series that exhausted its materialised horizon, and a
+// schedule the owner deliberately cleared all read "Paused · schedule it again
+// to resume". The portal told the customer "No visits booked" for all of them.
+//
+// The distinction is fully derivable from rows we already hold — no column, no
+// new write. Seasonality is NOT re-derived here: it comes from
+// signals/lifecycle.isSeasonallyDormant, the same call reactivation.ts makes,
+// so a customer can no longer read as dormant on one screen and lost on another.
+//
+// Order matters, and dormancy is checked before the rule: an out-of-season
+// series is dormant whether it stopped because its end date passed or because it
+// simply ran out, and that is what the lifecycle engine already believes.
+export type PlanStatus =
+  | 'active'          // future visits are booked
+  | 'dormant'         // seasonal service, out of season — back next season
+  | 'ended'           // the rule is exhausted: end date passed, or all N delivered
+  | 'cancelled_ahead' // upcoming visits exist but were cancelled
+  | 'ran_dry'         // nothing left and nothing says why — needs re-booking
+
+// The vocabulary lives with the engine so the customer page, the properties page
+// and the portal cannot drift into three different words for one state.
+// OWNER copy names the state; CUSTOMER copy says only what a homeowner needs and
+// never exposes an internal reason ("ran dry" is the owner's problem to fix).
+export const PLAN_STATUS_LABEL: Record<PlanStatus, string> = {
+  active: 'Active',
+  dormant: 'Season over',
+  ended: 'Plan complete',
+  cancelled_ahead: 'Upcoming cancelled',
+  ran_dry: 'Needs re-booking',
+}
+
+export const PLAN_STATUS_CUSTOMER_LABEL: Record<PlanStatus, string> = {
+  active: 'Active',
+  dormant: 'Back next season',
+  ended: 'Plan complete',
+  cancelled_ahead: 'No visits booked',
+  ran_dry: 'No visits booked',
+}
+
 export interface ServicePlan {
   recurrenceId: string
   propertyId: string | null
@@ -338,7 +387,10 @@ export interface ServicePlan {
   windowLabel: string | null // "Apr 15 → Oct 31" (season or end_date), null = ongoing
   remaining: number          // future scheduled/in-progress visits booked
   nextVisitDate: string | null
-  paused: boolean            // recurring history but zero future visits booked
+  status: PlanStatus
+  /** @deprecated Reads as `status !== 'active'`. Kept so callers migrate one at
+   *  a time; every surface should branch on `status`, which says WHY. */
+  paused: boolean
   initialPrice: number | null   // the anchor (initial) visit's value, when distinct
   recurringPrice: number | null // the per-visit cadence value
 }
@@ -401,6 +453,21 @@ export function buildServicePlans(
       recurringPrice = recurringSample ? Math.round(valueOf(recurringSample)) : null
     }
 
+    // Why is there nothing booked? (see PlanStatus). Dormancy comes from the
+    // canonical lifecycle detector so this agrees with reactivation/churn.
+    let status: PlanStatus = 'active'
+    if (future.length === 0) {
+      const delivered = series.filter(j => j.status !== 'cancelled').length
+      const ruleExhausted =
+        (!!r.end_date && r.end_date < todayISO) ||
+        (!!r.end_count && delivered >= r.end_count)
+      status =
+        isSeasonallyDormant(serviceName, seasons, todayISO) ? 'dormant'
+        : ruleExhausted ? 'ended'
+        : series.some(j => j.scheduled_date >= todayISO && j.status === 'cancelled') ? 'cancelled_ahead'
+        : 'ran_dry'
+    }
+
     plans.push({
       recurrenceId: r.id,
       propertyId,
@@ -410,7 +477,8 @@ export function buildServicePlans(
       windowLabel,
       remaining: future.length,
       nextVisitDate: future[0]?.scheduled_date ?? null,
-      paused: future.length === 0,
+      status,
+      paused: status !== 'active',
       initialPrice,
       recurringPrice,
     })
@@ -501,4 +569,50 @@ export async function createRecurringPlan(
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : 'Create failed' }
   }
+}
+
+// ── What a scope actually costs ──────────────────────────────────────────────
+// The scope chooser offered three bare labels — "This visit only", "This and
+// future visits", "All visits" — for mutations whose reach differs by an order
+// of magnitude. On a mowing customer 15 visits into the season, "All visits" is
+// the only option that READS like "stop this plan", and it is the one that hard-
+// deletes every completed visit: the actual minutes, the profitability, the
+// estimate-vs-actual sample and the customer's timeline.
+//
+// This does not change what any scope does. It says what each one touches, from
+// jobsInScope — THE same predicate the mutation runs — so a label can never
+// promise a different reach than the write. Counting the anchor itself is
+// deliberate: deleting one completed visit is still destroying history.
+export interface ScopeImpact {
+  scope: RecurrenceScope
+  /** "This and 7 later visits" — the reach, in visits. */
+  label: string
+  total: number
+  completed: number
+  inProgress: number
+  /** "includes 15 completed" — null when this scope touches no history. */
+  historyNote: string | null
+}
+
+function historyNote(completed: number, inProgress: number): string | null {
+  if (completed > 0 && inProgress > 0) return `includes ${completed} completed and ${inProgress} in progress`
+  if (completed > 0) return `includes ${completed} completed`
+  if (inProgress > 0) return `includes ${inProgress} in progress`
+  return null
+}
+
+export function scopeImpacts(anchor: Job, allJobs: Job[]): ScopeImpact[] {
+  const SCOPES: RecurrenceScope[] = ['this', 'future', 'all']
+  return SCOPES.map(scope => {
+    const targets = jobsInScope(anchor, allJobs, scope)
+    const completed = targets.filter(j => j.status === 'completed').length
+    const inProgress = targets.filter(j => j.status === 'in_progress').length
+    const later = targets.length - 1
+    const label =
+      scope === 'this' ? 'This visit only'
+      : scope === 'future'
+        ? (later === 0 ? 'This visit — none later' : `This and ${later} later visit${later !== 1 ? 's' : ''}`)
+        : `All ${targets.length} visit${targets.length !== 1 ? 's' : ''}`
+    return { scope, label, total: targets.length, completed, inProgress, historyNote: historyNote(completed, inProgress) }
+  })
 }

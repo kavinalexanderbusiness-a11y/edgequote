@@ -13,6 +13,7 @@ import {
   passwordProblem, MIN_PASSWORD, RESET_SIGNOUT_SCOPE, RESET_DESTINATION, FORGOT_PATH,
   type ResetTokenOutcome,
 } from '@/lib/passwordRecovery'
+import { resolveAppRole, landingFor } from '@/lib/crewAccess'
 import { KeyRound, ShieldCheck, LinkIcon, RefreshCw } from 'lucide-react'
 
 export function ResetPasswordForm() {
@@ -130,7 +131,17 @@ function Form() {
     // useless — it would send the owner round the loop again for nothing.
     await supabase.auth.signOut({ scope: RESET_SIGNOUT_SCOPE }).catch(() => {})
 
-    router.replace(RESET_DESTINATION)
+    // Land where this account actually belongs. Recovery is the same door for an
+    // owner and for a worker — the route never knew or cared which it was
+    // serving — so a worker who resets their password should arrive in the crew
+    // app, not take a lap through the owner's dashboard. The role is read from
+    // the database and fails closed to 'none', which lands on RESET_DESTINATION:
+    // exactly the previous behaviour whenever the answer is unavailable.
+    //
+    // ⚠️ A reset does NOT change what somebody is. Nothing here grants a role;
+    // it only reads the one they already had.
+    const role = await resolveAppRole(supabase)
+    router.replace(role === 'crew' ? landingFor(role) : RESET_DESTINATION)
     router.refresh()
   }
 

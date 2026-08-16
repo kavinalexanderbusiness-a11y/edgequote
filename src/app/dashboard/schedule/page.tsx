@@ -18,7 +18,7 @@ import { DayOpsPanel, QuoteLite, QuickPatch } from '@/components/schedule/DayOps
 import { Coord, geocodeAddress } from '@/lib/geo'
 import { JobForm, Recurrence, SuggestionMeta } from '@/components/schedule/JobForm'
 import { ScopeDialog } from '@/components/schedule/ScopeDialog'
-import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel, visitsBeyondEnd, planSeriesChange, planRecurrenceRemoval, partitionSeriesVisits, type SeriesVisitLite } from '@/lib/recurrence'
+import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel, visitsBeyondEnd, planSeriesChange, planRecurrenceRemoval, partitionSeriesVisits, scopeImpacts, type SeriesVisitLite } from '@/lib/recurrence'
 import { loadVisitEncumbrances } from '@/lib/seriesHistory'
 import type { JobRecurrence } from '@/types'
 import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts, uncompleteJob } from '@/lib/invoicing'
@@ -3007,6 +3007,8 @@ export default function SchedulePage() {
           title={pendingAction.job.title}
           verb={pendingVerb}
           destructive={pendingAction.type === 'delete'}
+          /* Reach per scope, from the same jobsInScope the mutation runs. */
+          impacts={scopeImpacts(pendingAction.job, jobs)}
           onChoose={handleScopeChoice}
           onCancel={() => setPendingAction(null)}
         />

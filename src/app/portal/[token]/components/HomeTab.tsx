@@ -20,6 +20,7 @@ import {
   UserRound, Wallet, XCircle,
 } from 'lucide-react'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { PLAN_STATUS_CUSTOMER_LABEL } from '@/lib/recurrence'
 import { Button } from '@/components/ui/Button'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
@@ -522,16 +523,18 @@ function PlanRow({ p, heroDate }: { p: Derived['plans'][number]; heroDate?: stri
     <div className="rounded-xl border border-border bg-bg-tertiary/40 px-3.5 py-3">
       <div className="flex items-start gap-2.5">
         <span className={cn('w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 mt-0.5',
-          p.paused ? 'border-border bg-bg-tertiary text-ink-faint' : 'border-accent/25 bg-accent/10 text-accent-text')}>
+          p.status !== 'active' ? 'border-border bg-bg-tertiary text-ink-faint' : 'border-accent/25 bg-accent/10 text-accent-text')}>
           <Repeat className="w-3.5 h-3.5" aria-hidden="true" />
         </span>
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-ink flex flex-wrap items-center gap-x-2 gap-y-1">
             {p.serviceName}
             <span className="text-xs font-medium text-ink-muted">· {p.cadenceLabel}</span>
-            {p.paused && (
+            {/* Customer-facing wording from the engine — "Plan complete" and
+                "Back next season" used to both read "No visits booked". */}
+            {p.status !== 'active' && (
               <span className="text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border border-border text-ink-faint">
-                No visits booked
+                {PLAN_STATUS_CUSTOMER_LABEL[p.status]}
               </span>
             )}
           </p>

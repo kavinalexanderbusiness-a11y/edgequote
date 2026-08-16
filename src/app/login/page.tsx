@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Banner } from '@/components/ui/Banner'
 import { FORGOT_PATH } from '@/lib/passwordRecovery'
+import { resolveAppRole, landingFor } from '@/lib/crewAccess'
 import { Zap } from 'lucide-react'
 
 export default function LoginPage() {
@@ -51,10 +52,14 @@ function LoginForm() {
       return
     }
 
-    // Middleware decides where an account actually belongs (owner → /dashboard,
-    // crew → /crew, neither → /crew/join or /setup), so this only has to hand it
-    // a plausible destination — or the one they were originally heading for.
-    router.push(next ?? '/dashboard')
+    // Ask where this account belongs BEFORE navigating. The middleware would
+    // correct a wrong guess, but only after the browser had already asked for
+    // the owner's dashboard — which on a phone is a visible flash of the wrong
+    // product, and for a worker it is the wrong product every single time.
+    // `resolveAppRole` fails closed to 'none', and landingFor sends 'none' to
+    // /dashboard, so an unreachable database lands exactly where this used to.
+    const role = await resolveAppRole(supabase)
+    router.push(next ?? landingFor(role))
     router.refresh()
   }
 
