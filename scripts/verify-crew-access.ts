@@ -335,7 +335,10 @@ if (existsSync(join(ROOT, PHOTO_ROUTE))) {
     !/form\.get\('customerId'\)/.test(R) && !/form\.get\('propertyId'\)/.test(R) && !/form\.get\('userId'\)/.test(R),
     'a crafted customer/property/user id in the form data must have nowhere to go')
   check('kind is whitelisted and the size is capped',
-    /KINDS\.has\(kind\)/.test(R) && /file\.size > MAX_BYTES/.test(R))
+    // Since Job Forms V1 the whitelist is context-dependent: before/after for
+    // the plain capture, +general ONLY when a checklist field is named. The
+    // gating itself is pinned by verify:job-forms.
+    /\(formId \? FORM_KINDS : KINDS\)\.has\(kind\)/.test(R) && /file\.size > MAX_BYTES/.test(R))
   check('a failed catalogue insert rolls the stored file back',
     /storage\.from\(PHOTO_BUCKET\)\.remove\(\[path\]\)/.test(R),
     'storage must never drift from the catalogue (uploadPhoto’s own rule)')

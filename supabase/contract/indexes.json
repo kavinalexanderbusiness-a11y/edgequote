@@ -696,6 +696,30 @@
   "backs_constraint": true
  },
  {
+  "tbl": "form_template_fields",
+  "indexdef": "CREATE UNIQUE INDEX form_template_fields_pkey ON public.form_template_fields USING btree (id)",
+  "indexname": "form_template_fields_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "form_template_fields",
+  "indexdef": "CREATE INDEX form_template_fields_template_idx ON public.form_template_fields USING btree (user_id, template_id, \"position\")",
+  "indexname": "form_template_fields_template_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "form_templates",
+  "indexdef": "CREATE UNIQUE INDEX form_templates_id_user_key ON public.form_templates USING btree (id, user_id)",
+  "indexname": "form_templates_id_user_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "form_templates",
+  "indexdef": "CREATE UNIQUE INDEX form_templates_pkey ON public.form_templates USING btree (id)",
+  "indexname": "form_templates_pkey",
+  "backs_constraint": true
+ },
+ {
   "tbl": "holidays",
   "indexdef": "CREATE UNIQUE INDEX holidays_one_per_day ON public.holidays USING btree (user_id, date)",
   "indexname": "holidays_one_per_day",
@@ -828,6 +852,72 @@
   "backs_constraint": false
  },
  {
+  "tbl": "job_form_response_photos",
+  "indexdef": "CREATE INDEX job_form_response_photos_photo_idx ON public.job_form_response_photos USING btree (user_id, photo_id)",
+  "indexname": "job_form_response_photos_photo_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_form_response_photos",
+  "indexdef": "CREATE UNIQUE INDEX job_form_response_photos_pkey ON public.job_form_response_photos USING btree (response_id, photo_id)",
+  "indexname": "job_form_response_photos_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "job_form_responses",
+  "indexdef": "CREATE UNIQUE INDEX job_form_responses_field_uniq ON public.job_form_responses USING btree (form_id, field_id)",
+  "indexname": "job_form_responses_field_uniq",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "job_form_responses",
+  "indexdef": "CREATE INDEX job_form_responses_form_idx ON public.job_form_responses USING btree (user_id, form_id)",
+  "indexname": "job_form_responses_form_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_form_responses",
+  "indexdef": "CREATE UNIQUE INDEX job_form_responses_id_user_key ON public.job_form_responses USING btree (id, user_id)",
+  "indexname": "job_form_responses_id_user_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "job_form_responses",
+  "indexdef": "CREATE UNIQUE INDEX job_form_responses_pkey ON public.job_form_responses USING btree (id)",
+  "indexname": "job_form_responses_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "job_forms",
+  "indexdef": "CREATE UNIQUE INDEX job_forms_id_user_key ON public.job_forms USING btree (id, user_id)",
+  "indexname": "job_forms_id_user_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "job_forms",
+  "indexdef": "CREATE INDEX job_forms_job_idx ON public.job_forms USING btree (user_id, job_id)",
+  "indexname": "job_forms_job_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "job_forms",
+  "indexdef": "CREATE UNIQUE INDEX job_forms_job_template_uniq ON public.job_forms USING btree (job_id, template_id)",
+  "indexname": "job_forms_job_template_uniq",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "job_forms",
+  "indexdef": "CREATE UNIQUE INDEX job_forms_pkey ON public.job_forms USING btree (id)",
+  "indexname": "job_forms_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "job_forms",
+  "indexdef": "CREATE INDEX job_forms_template_idx ON public.job_forms USING btree (user_id, template_id)",
+  "indexname": "job_forms_template_idx",
+  "backs_constraint": false
+ },
+ {
   "tbl": "job_line_items",
   "indexdef": "CREATE UNIQUE INDEX job_line_items_change_order_uniq ON public.job_line_items USING btree (change_order_id) WHERE (change_order_id IS NOT NULL)",
   "indexname": "job_line_items_change_order_uniq",
@@ -868,6 +958,12 @@
   "indexdef": "CREATE INDEX job_photos_hash_idx ON public.job_photos USING btree (user_id, property_id, content_hash) WHERE (content_hash IS NOT NULL)",
   "indexname": "job_photos_hash_idx",
   "backs_constraint": false
+ },
+ {
+  "tbl": "job_photos",
+  "indexdef": "CREATE UNIQUE INDEX job_photos_id_user_key ON public.job_photos USING btree (id, user_id)",
+  "indexname": "job_photos_id_user_key",
+  "backs_constraint": true
  },
  {
   "tbl": "job_photos",
@@ -1669,15 +1765,21 @@
  },
  {
   "tbl": "pto_entries",
-  "indexdef": "CREATE UNIQUE INDEX pto_entries_one_per_day_kind ON public.pto_entries USING btree (technician_id, date, kind)",
+  "indexdef": "CREATE UNIQUE INDEX pto_entries_one_per_day_kind ON public.pto_entries USING btree (technician_id, date, kind) WHERE (status <> 'declined'::text)",
   "indexname": "pto_entries_one_per_day_kind",
-  "backs_constraint": true
+  "backs_constraint": false
  },
  {
   "tbl": "pto_entries",
   "indexdef": "CREATE UNIQUE INDEX pto_entries_pkey ON public.pto_entries USING btree (id)",
   "indexname": "pto_entries_pkey",
   "backs_constraint": true
+ },
+ {
+  "tbl": "pto_entries",
+  "indexdef": "CREATE INDEX pto_entries_requested_idx ON public.pto_entries USING btree (user_id) WHERE (status = 'requested'::text)",
+  "indexname": "pto_entries_requested_idx",
+  "backs_constraint": false
  },
  {
   "tbl": "pto_entries",
@@ -1785,6 +1887,30 @@
   "tbl": "push_subscriptions",
   "indexdef": "CREATE INDEX push_subscriptions_user_idx ON public.push_subscriptions USING btree (user_id)",
   "indexname": "push_subscriptions_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quote_addons",
+  "indexdef": "CREATE UNIQUE INDEX quote_addons_id_quote_unique ON public.quote_addons USING btree (id, quote_id)",
+  "indexname": "quote_addons_id_quote_unique",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "quote_addons",
+  "indexdef": "CREATE UNIQUE INDEX quote_addons_pkey ON public.quote_addons USING btree (id)",
+  "indexname": "quote_addons_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "quote_addons",
+  "indexdef": "CREATE INDEX quote_addons_quote_idx ON public.quote_addons USING btree (quote_id, sort_order)",
+  "indexname": "quote_addons_quote_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quote_addons",
+  "indexdef": "CREATE INDEX quote_addons_user_idx ON public.quote_addons USING btree (user_id)",
+  "indexname": "quote_addons_user_idx",
   "backs_constraint": false
  },
  {
@@ -2433,6 +2559,30 @@
   "tbl": "website_leads",
   "indexdef": "CREATE INDEX website_leads_user_idx ON public.website_leads USING btree (user_id, created_at DESC)",
   "indexname": "website_leads_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "worker_availability",
+  "indexdef": "CREATE UNIQUE INDEX worker_availability_one_per_weekday ON public.worker_availability USING btree (technician_id, weekday)",
+  "indexname": "worker_availability_one_per_weekday",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "worker_availability",
+  "indexdef": "CREATE UNIQUE INDEX worker_availability_pkey ON public.worker_availability USING btree (id)",
+  "indexname": "worker_availability_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "worker_availability",
+  "indexdef": "CREATE INDEX worker_availability_tech_idx ON public.worker_availability USING btree (technician_id, weekday)",
+  "indexname": "worker_availability_tech_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "worker_availability",
+  "indexdef": "CREATE INDEX worker_availability_user_idx ON public.worker_availability USING btree (user_id)",
+  "indexname": "worker_availability_user_idx",
   "backs_constraint": false
  }
 ]

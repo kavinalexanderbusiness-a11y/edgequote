@@ -51,10 +51,6 @@ function fail(reason: BetaSignupFailureReason, message: string, status: number) 
   )
 }
 
-function appOrigin(req: NextRequest): string {
-  return appOrigin(req.nextUrl.origin)
-}
-
 function clientIp(req: NextRequest): string {
   return req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown'
 }
@@ -150,7 +146,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       if (holder.email_confirmed_at) {
         return fail('verified', 'This email is already confirmed — sign in to finish setting up.', 409)
       }
-      return resendVerification(admin, invite, email, appOrigin(req))
+      return resendVerification(admin, invite, email, appOrigin(req.nextUrl.origin))
     }
     // Holder was deleted; ON DELETE SET NULL freed the invite. Fall through.
   }
@@ -192,7 +188,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return fail('invalid', 'This invite is no longer available.', 409)
   }
 
-  return sendVerification(admin, invite, email, password, appOrigin(req), 'sent')
+  return sendVerification(admin, invite, email, password, appOrigin(req.nextUrl.origin), 'sent')
 }
 
 // Mint a fresh confirmation link and email it. Regenerating INVALIDATES any

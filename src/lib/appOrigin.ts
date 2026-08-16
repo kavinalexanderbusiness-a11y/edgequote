@@ -69,6 +69,27 @@ export function appOrigin(requestOrigin?: string | null): string {
 }
 
 /**
+ * What the deploy STORED versus what it will USE — the two answers the comms
+ * self-test shows side by side.
+ *
+ * `sanitized` is true when cleaning had to change the configured value, which is
+ * the only visible symptom of the failure this module exists for: a BOM, a
+ * zero-width character or a wrapping quote is invisible in every dashboard that
+ * renders the variable, so "it looks right" and "it works" come apart with
+ * nothing on screen to explain it. Reported rather than repaired quietly,
+ * because the stored value is what a human will read next time.
+ *
+ * Note it reports on the CONFIGURED value alone — no request origin fallback.
+ * The question being asked is "is this deploy configured correctly?", and a
+ * request-derived answer would mask an unset variable.
+ */
+export function appOriginReport(): { origin: string; sanitized: boolean } {
+  const raw = process.env.NEXT_PUBLIC_APP_URL ?? ''
+  const origin = cleanOrigin(raw)
+  return { origin, sanitized: raw !== '' && raw !== origin }
+}
+
+/**
  * Is this a value the app can actually build links on? Cleaning removes what a
  * value picks up in transit; it cannot rescue a value that was wrong to begin
  * with — "app.edgehq.ca" with no scheme, or a stray "javascript:" — and those

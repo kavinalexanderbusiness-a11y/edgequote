@@ -1751,6 +1751,10 @@ export interface ServiceTemplate {
   // then require behavioural cadence evidence (lib/serviceRecurrence). Never
   // inferred from the service's name.
   recurrence: 'one_time' | 'recurring_ok' | 'usually_recurring' | null
+  // Default checklist (Job Forms V1, Session 69): visits created for this
+  // service carry it. Resolved lazily at attach time — changing it never
+  // rewrites a form already minted on a visit. null = no checklist.
+  form_template_id: string | null
 }
 
 export interface ServiceTemplateFormValues {
@@ -1771,6 +1775,8 @@ export interface ServiceTemplateFormValues {
   // '' = not set (maps to null on submit) — same blank-vs-zero discipline as
   // the cost fields above.
   recurrence: string
+  // '' = no default checklist (maps to null on submit).
+  form_template_id: string
 }
 
 // ── Service bundles ──────────────────────────────────────────────────────────

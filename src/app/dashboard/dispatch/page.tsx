@@ -31,6 +31,7 @@ import {
   DispatchSheet, SheetLane, sheetCsvRows, SHEET_CSV_COLUMNS, openPrintSheet,
 } from '@/lib/dispatchOps'
 import { startVisit, completeVisit, revertVisit } from '@/lib/jobStatus'
+import { checklistBlockMessage } from '@/lib/jobForms'
 import { formatDuration, formatWorked, workdayMinutes } from '@/lib/workDuration'
 import { resolveAutomations, Automations } from '@/lib/comms/automations'
 import { usePageCommands, PageCommand } from '@/components/command/pageCommands'
@@ -76,6 +77,7 @@ import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { Modal } from '@/components/ui/Modal'
 import { CompletionSheet } from '@/components/completion/CompletionSheet'
 import { JobPhotos } from '@/components/photos/JobPhotos'
+import { JobFormsPanel } from '@/components/forms/JobFormsPanel'
 import { saveCompletionRecord } from '@/lib/completion'
 import { BulkActionBar, BulkAction, SelectCheckbox, SelectAllToggle } from '@/components/ui/BulkActions'
 import { toast as notify } from '@/lib/toast'
@@ -1185,7 +1187,15 @@ export default function DispatchPage() {
     setJobBusy(job.id, true)
     const res = await completeVisit(supabase, job, { notify: automations.job_complete })
     setJobBusy(job.id, false)
-    if (!res.ok) { notify.error('Could not complete the visit: ' + res.error); return }
+    if (!res.ok) {
+      // The completion gate's refusal is instructions, not an error message —
+      // show the checklist sentence, and where to finish it.
+      const gate = checklistBlockMessage(res.error)
+      notify.error(gate
+        ? `${job.customers?.name || job.title} — ${gate} (open its Record sheet to fill the checklist)`
+        : 'Could not complete the visit: ' + res.error)
+      return
+    }
     setJobs(cur => cur.map(j => j.id === job.id ? { ...j, ...res.patch } : j))
     if (res.outcome === 'ran') fetchAll()
     const invoiceCreated = res.invoice?.created === true
@@ -1888,12 +1898,21 @@ export default function DispatchPage() {
             onSave={record => saveCompletionRecord(supabase, job, record)}
             onSaved={fetchAll}
             photos={
-              <JobPhotos
-                propertyId={job.property_id ?? null}
-                jobId={job.id}
-                customerId={job.customer_id ?? null}
-                variant="visit"
-              />
+              <>
+                <JobPhotos
+                  propertyId={job.property_id ?? null}
+                  jobId={job.id}
+                  customerId={job.customer_id ?? null}
+                  variant="visit"
+                />
+                {/* The visit's checklist rides the same sheet — the record of
+                    what was required sits beside the record of what was done.
+                    The panel owns its own loads/writes; the sheet stays the
+                    two-field editor it always was. */}
+                <div className="mt-3 pt-3 border-t border-border">
+                  <JobFormsPanel job={job} onChanged={fetchAll} />
+                </div>
+              </>
             }
           />
         )

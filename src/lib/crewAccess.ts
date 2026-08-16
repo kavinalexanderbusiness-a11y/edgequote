@@ -165,6 +165,16 @@ export interface CrewStop {
   personal?: boolean
   customer: { name: string; phone: string | null } | null
   property: { address: string | null; lat: number | null; lng: number | null } | null
+  /** Counts-only checklist summary (public.job_form_summary's shape): enough
+   *  for "3 of 7 · 2 required open" on the card without shipping a single
+   *  field. The full form loads only when the worker opens it
+   *  (crew_job_forms) — the same load-on-tap contract as reference media.
+   *  null = this visit carries no checklist at all. Absent on payloads from
+   *  before the forms feature — treat undefined as null. */
+  checklist?: {
+    forms: number; items: number; done: number
+    required: number; required_done: number; waived: boolean
+  } | null
 }
 
 export interface CrewDay {

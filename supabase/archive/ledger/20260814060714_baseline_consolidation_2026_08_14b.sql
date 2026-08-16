@@ -1,0 +1,29 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ARCHIVED MIGRATION — HISTORY ONLY. DO NOT RE-RUN.
+--
+--   version : 20260814060714
+--   name    : baseline_consolidation_2026_08_14b
+--
+-- Recovered 2026-08-15 from supabase_migrations.schema_migrations — the SQL
+-- production actually executed, not a repo file believed to match it.
+--
+-- Its effects are already folded into supabase/migrations/*_baseline.sql. This
+-- copy exists so "why is this column here?" is answerable, and for nothing else.
+-- Re-running one replaces a live object with an older body — silently, no error.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- BASELINE MARKER — recorded, not executed.
+--
+-- Full text: supabase/migrations/20260814060714_baseline.sql (~529 KB). Recorded as
+-- APPLIED because production already IS this schema — the baseline was generated
+-- FROM this database, not applied to it.
+--
+-- Why the row exists: without it, tooling reconciling supabase/migrations/ against
+-- this ledger would see the baseline as pending and try to run it. It is idempotent
+-- for tables and functions but NOT for `alter table ... add constraint`, so the
+-- attempt would fail partway and leave a confusing half-state.
+--
+-- SUPERSEDES the 20260814040000 marker, which named a baseline file that never
+-- reached origin/main. Every migration recorded before this row is folded in; their
+-- SQL is preserved under supabase/archive/ledger/ and must never be re-run.
+select 1;

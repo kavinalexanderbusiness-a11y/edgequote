@@ -1,3 +1,19 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ARCHIVED MIGRATION — HISTORY ONLY. DO NOT RE-RUN.
+--
+--   version : 20260815080000
+--   name    : worker_availability_time_off
+--
+-- Written by Session 67, applied to production 2026-08-15 during Session 69's
+-- reconciliation (the merged code expected it), and recorded in
+-- supabase_migrations.schema_migrations. The SQL below is the text production
+-- executed.
+--
+-- Its effects are already folded into supabase/migrations/*_baseline.sql. This
+-- copy exists so "why is this column here?" is answerable, and for nothing else.
+-- Re-running one replaces a live object with an older body — silently, no error.
+-- ═══════════════════════════════════════════════════════════════════════════
+
 -- ══ Session 67 — Worker availability + time off requests ════════════════════
 --
 -- WHAT THIS ADDS
@@ -56,6 +72,12 @@ create index if not exists worker_availability_user_idx
 create index if not exists worker_availability_tech_idx
   on public.worker_availability (technician_id, weekday);
 
+-- Re-runnable: this file is applied BY HAND, so every statement in it has to
+-- survive being run twice. `create trigger` and `create policy` are the two
+-- that do not on their own — dropped first rather than wrapped in an exception
+-- block, so a re-run genuinely restores the definition below rather than
+-- silently keeping an older one.
+drop trigger if exists worker_availability_updated_at on public.worker_availability;
 create trigger worker_availability_updated_at
   before update on public.worker_availability
   for each row execute function public.set_updated_at();
@@ -64,12 +86,16 @@ alter table public.worker_availability enable row level security;
 
 -- Owner-only, like technicians/pto_entries. ⛔ Deliberately NO crew policy:
 -- a crew session reads its own pattern through crew_my_availability below.
+drop policy if exists "worker_availability: select own" on public.worker_availability;
 create policy "worker_availability: select own" on public.worker_availability
   for select using (auth.uid() = user_id);
+drop policy if exists "worker_availability: insert own" on public.worker_availability;
 create policy "worker_availability: insert own" on public.worker_availability
   for insert with check (auth.uid() = user_id);
+drop policy if exists "worker_availability: update own" on public.worker_availability;
 create policy "worker_availability: update own" on public.worker_availability
   for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+drop policy if exists "worker_availability: delete own" on public.worker_availability;
 create policy "worker_availability: delete own" on public.worker_availability
   for delete using (auth.uid() = user_id);
 
