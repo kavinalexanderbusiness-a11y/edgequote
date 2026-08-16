@@ -503,6 +503,29 @@ check('the owner is told, on the screen, that these values stay internal',
   /not shown to customers|not sent to workers/i.test(settings))
 check('archiving is offered alongside deleting', /Archive/.test(settings) && /archived/i.test(settings))
 
+// ── mobile: 375 / 390 / 430 ──────────────────────────────────────────────────
+// These are STRUCTURAL checks — they catch the shapes that overflow a phone, not
+// the pixels. ⚠️ They are not a substitute for looking at the screen; no browser
+// proof was run for this feature.
+for (const [name, src] of [['the record section', section], ['the settings screen', settings]] as const) {
+  const fixedWidths = [...src.matchAll(/\b(?:w|min-w)-\[(\d+)px\]/g)].map(m => Number(m[1])).filter(n => n > 320)
+  check(`${name} pins no width a 375px phone cannot hold`, fixedWidths.length === 0,
+    `${fixedWidths.join('px, ')}px — a fixed width wider than the content box is what forces the page to scroll sideways`)
+  check(`${name} has no horizontal scroll container`, !/overflow-x/.test(src),
+    'a sideways-scrolling attribute list hides the field an owner is looking for')
+}
+check('the record section stacks to one column before it splits into two',
+  /grid-cols-1 sm:grid-cols-2/.test(section),
+  'two columns at 375px gives each attribute about 20 characters')
+check('long values wrap instead of pushing the layout wide',
+  (section.match(/break-words/g) || []).length >= 2,
+  'a 200-character text answer with no break point is a horizontal scrollbar')
+check('the settings rows keep their controls reachable next to the text',
+  /shrink-0/.test(settings) && /min-w-0/.test(settings),
+  'without shrink-0/min-w-0 the action buttons are pushed off a narrow screen')
+check('reorder is buttons, not a drag handle', /Move .* up|ChevronUp/.test(settings),
+  'a drag handle is the one control a thumb cannot use')
+
 console.log(
   failures === 0
     ? '\n✅ verify:custom-fields — typed, tenant-bound, internal, and history-preserving\n'

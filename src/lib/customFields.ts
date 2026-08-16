@@ -436,6 +436,15 @@ export function fieldsForRecord(
  * that turns an attribute store into a search engine nobody costed, and a date or
  * a yes/no matches thousands of records at once, which is not a search result.
  */
+// ⚠️ V1 DOES NOT WIRE THIS INTO GLOBAL SEARCH, and the omission is deliberate.
+// `search_records` is a large SECURITY DEFINER projection, and this repository's
+// hardest-won rule is that replacing one from a repo copy that may be behind
+// production is how a live projection gets rolled backward (2026-08-14). With no
+// database access this session there is no way to read the live definition first,
+// so the function is left alone. What IS in place is everything that makes the
+// addition cheap and safe later: the index (custom_field_values_text_lookup), the
+// normaliser below, and this list. Adding it is one union branch in that function,
+// filtered to these types — not a redesign.
 export const SEARCHABLE_TYPES: readonly CustomFieldType[] = ['text']
 
 export const isSearchable = (def: Pick<CustomFieldDefinition, 'field_type'>) =>

@@ -101,13 +101,37 @@ check('the save claims nothing before the error is checked',
 
 // ── 5. The two patterns are STATED, and edits survive tab switches ───────────
 console.log('\n═══ The contract is written where the owner is standing ═══')
-check('every non-form tab carries a SaveContract line',
-  (PAGE.match(/<SaveContract text=/g) || []).length === 6,
-  'messaging, payroll, modules, notifications, booking, data — six tabs, six sentences')
+// The census is DERIVED from the tab registry rather than hand-kept as a number.
+// A hardcoded count says "6" until somebody adds a tab, and then it fails for the
+// arithmetic rather than for the contract — which teaches the next reader to bump
+// the number instead of asking whether the new tab makes its promise.
+// ⚠️ A tab key may contain a hyphen ('custom-fields'), so these patterns are
+// [\w-]+ and not \w+ — the narrower class silently skipped such a tab entirely.
+const TAB_KEYS = [...PAGE.matchAll(/\{ key: '([\w-]+)', label:/g)].map(m => m[1])
+// The three that share ONE Save footer at the bottom of the page; every other tab
+// owns its own saving behaviour and therefore owes the owner a sentence about it.
+const FORM_TABS = ['business', 'pricing', 'scheduling']
+const selfSavingTabs = TAB_KEYS.filter(k => !FORM_TABS.includes(k))
+// ⚠️ Bounded by the NEXT tab's marker, not by a fixed character count. A fixed
+// window spills into the following block, so a tab that had lost its own
+// SaveContract still "found" its neighbour's and the check passed — verified by
+// deleting one and watching this stay green until the bound was fixed.
+const tabBlock = (key: string) => {
+  const start = PAGE.indexOf(`tab !== '${key}' && 'hidden'`)
+  if (start === -1) return ''
+  const next = PAGE.slice(start + 1).search(/tab !== '[\w-]+' && 'hidden'/)
+  return next === -1 ? PAGE.slice(start) : PAGE.slice(start, start + 1 + next)
+}
+const withoutContract = selfSavingTabs.filter(k => !/<SaveContract text=/.test(tabBlock(k)))
+check(`every non-form tab carries a SaveContract line — ${selfSavingTabs.length} checked`,
+  TAB_KEYS.length > 0 && withoutContract.length === 0,
+  withoutContract.length
+    ? `${withoutContract.join(', ')} — a tab that saves on its own must say so`
+    : 'no tab keys parsed out of SETTINGS_TABS')
 check('instant tabs say instant; payroll says press Save',
   /save the moment you make them/.test(PAGE) && /Nothing on this tab saves until you press its Save button/.test(PAGE))
 check('inactive tabs hide, never unmount (edits survive switching)',
-  (PAGE.match(/tab !== '\w+' && 'hidden'/g) || []).length >= 8,
+  (PAGE.match(/tab !== '[\w-]+' && 'hidden'/g) || []).length >= TAB_KEYS.length - FORM_TABS.length + 2,
   'conditional unmount would throw away half-typed edits on every tab switch')
 
 // ── 6. The instant/own-Save components keep their proven shapes ──────────────

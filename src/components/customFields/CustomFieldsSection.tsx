@@ -201,7 +201,10 @@ export function CustomFieldsSection({ entity, recordId, bare, className }: Props
         return (
           <div key={def.id} className="min-w-0">
             <dt className="text-xs font-semibold text-ink-muted uppercase tracking-wide flex items-center gap-1.5">
-              <span className="truncate">{def.label}</span>
+              {/* Wraps rather than truncates: a label is capped at 60 characters,
+                  and clipping "Warranty expiration" to "Warranty exp…" on a phone
+                  hides the only thing that says what the value below it means. */}
+              <span className="break-words">{def.label}</span>
               {readOnly && (
                 <span className="text-[10px] font-medium normal-case tracking-normal text-ink-faint shrink-0">
                   archived
