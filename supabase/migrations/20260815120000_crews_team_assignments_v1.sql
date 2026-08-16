@@ -268,13 +268,19 @@ create trigger crews_block_delete_with_history
 -- to their crew, or to them personally. Every crew door below uses THIS
 -- function — a door with its own predicate is a second assignment model.
 
+-- ⚠️ NULL-SAFE ON PURPOSE. `j.crew_id = v_crew` is NULL — not false — when the
+-- caller is on no crew, and a function that returns NULL from a boolean is a
+-- trap waiting for the first caller that wraps it in `not`. Every branch is
+-- coalesced so this answers true or false and nothing else. (A NULL would
+-- currently still exclude the row in a WHERE, which is exactly why the bug
+-- would have gone unnoticed until the day it did not.)
 CREATE OR REPLACE FUNCTION public.crew_assignment_covers(j_crew uuid, j_technician uuid, v_crew uuid, v_tech uuid)
  RETURNS boolean
  LANGUAGE sql
  IMMUTABLE
 AS $function$
-  select (j_crew is not null and j_crew = v_crew)
-      or (j_technician is not null and j_technician = v_tech)
+  select coalesce(j_crew = v_crew, false)
+      or coalesce(j_technician = v_tech, false)
 $function$;
 
 revoke all on function public.crew_assignment_covers(uuid, uuid, uuid, uuid) from public, anon, authenticated;

@@ -422,8 +422,12 @@ console.log('\n── 8. The three database facts the brief stands on ───�
     const body = SQL.slice(SQL.toLowerCase().indexOf('create or replace function public.crew_day'))
     // ASSIGNED WORKER / UNASSIGNED WORK. A visit with no crew_id reaches nobody's
     // phone, however the day is ordered.
-    check('crew_day returns only stops assigned to the caller\'s crew',
-      /j\.crew_id\s*=\s*v_crew/.test(body),
+    // Session 65 widened WHO a stop can be assigned to (a crew, or one named
+    // person) without widening WHAT reaches a phone: the filter is now the one
+    // shared predicate, and unassigned work still reaches nobody. The claim is
+    // unchanged — only the spelling of it is.
+    check('crew_day returns only stops assigned to the caller\'s crew or to them',
+      /crew_assignment_covers\(\s*j\.crew_id,\s*j\.technician_id,\s*v_crew,\s*v_tech\s*\)/.test(body),
       'without this an unassigned job would appear on a crew phone')
     // TENANT ISOLATION. The employer is derived server-side from the session.
     check('crew_day is scoped to the caller\'s employer',

@@ -434,6 +434,12 @@ export default function DispatchPage() {
       })),
       availableTechs: laneTechs.filter(t => t.status !== 'off').length,
       rosteredTechs: laneTechs.length,
+      isPerson: !!lane.technician,
+      // Somebody on a crew that is ALSO working today already has their workday
+      // counted in that crew's lane. Their personal lane's work still counts;
+      // a second day of capacity for one person would not.
+      capacityCountedElsewhere: !!lane.technician?.crew_id &&
+        lanes.some(l => l.crew?.id === lane.technician?.crew_id && l.jobs.some(j => j.status !== 'cancelled')),
     }
   }), [lanes, laneRoutes, technicians])
 
@@ -1990,6 +1996,19 @@ const CrewLaneCard = memo(function CrewLaneCard({
   const sinceMin = (iso: string | null | undefined): number | null =>
     iso ? Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000)) : null
   const fmtSince = (m: number) => (m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`)
+  // The room a CREW destination carries in the Move-to menu: the job's minutes
+  // against that crew's spare, from the same laneLoad the capacity meters draw.
+  // "Move to Green — 2.1h free" is an informed reassignment; a bare name list
+  // made the owner open other cards to find out. Takes a crew because only a
+  // crew HAS spare — a person has no capacity row, and quoting the business
+  // default as "their spare" would invent a limit nobody set.
+  const crewRoom = (c: Crew): string => {
+    const spare = crewSpare[c.id]
+    return spare == null ? ''
+      : spare < 0 ? ` — over by ${Math.abs(spare)}m`
+      : spare >= 60 ? ` — ${Math.round(spare / 60 * 10) / 10}h free`
+      : ` — ${spare}m free`
+  }
 
   const timelineStops: TimelineStop[] = seq.map(j => ({
     jobId: j.id,
@@ -2194,26 +2213,19 @@ const CrewLaneCard = memo(function CrewLaneCard({
                 icon: NotebookPen,
                 onSelect: () => onRecord(job),
               } as MenuItem,
-              // Each CREW destination carries its room: the job's own minutes
-              // against that crew's spare, from the same laneLoad the capacity
-              // meters draw. "Move to Green — 2.1h free" is an informed
-              // reassignment; a bare name list made the owner open other cards
-              // to find out. A person has no capacity row, so nothing is quoted
-              // for them rather than a made-up figure.
+              // Crew destinations carry their room (crewRoom); a person carries
+              // the chooser's own line about what picking them means.
               ...[...destinations.filter(o => o.group !== 'none'), ...destinations.filter(o => o.group === 'none')]
                 .map((o): MenuItem => {
-                  const spare = o.assignee.kind === 'crew' ? crewSpare[o.assignee.crewId] : undefined
-                  const room = spare == null ? ''
-                    : spare < 0 ? ` — over by ${Math.abs(spare)}m`
-                    : spare >= 60 ? ` — ${Math.round(spare / 60 * 10) / 10}h free`
-                    : ` — ${spare}m free`
+                  const a = o.assignee
+                  const crew = a.kind === 'crew' ? crews.find(c => c.id === a.crewId) : undefined
                   return {
                     key: o.value,
-                    label: o.assignee.kind === 'unassigned' ? 'Unassign' : `Move to ${o.label}${room}`,
+                    label: a.kind === 'unassigned' ? 'Unassign' : `Move to ${o.label}${crew ? crewRoom(crew) : ''}`,
                     description: o.hint ?? undefined,
-                    icon: o.assignee.kind === 'unassigned' ? UserMinus : o.assignee.kind === 'person' ? HardHat : Users,
+                    icon: a.kind === 'unassigned' ? UserMinus : a.kind === 'person' ? HardHat : Users,
                     disabled: o.disabled,
-                    onSelect: () => onMoveTo(job.id, o.assignee),
+                    onSelect: () => onMoveTo(job.id, a),
                   }
                 }),
               ...(job.properties?.address || (job.properties?.lat != null) ? [{
@@ -2351,7 +2363,10 @@ const CrewLaneCard = memo(function CrewLaneCard({
                     </button>
                   </div>
                   {menuItems.length > 0 && (
-                    <Menu width={220} align="end" ariaLabel="Visit actions" items={menuItems}>
+                    // Wider than the other menus on purpose: each destination
+                    // now carries the line that says what picking it means, and
+                    // a clamped hint is a hint nobody reads.
+                    <Menu width={280} align="end" ariaLabel="Visit actions" items={menuItems}>
                       {({ toggle, triggerProps }) => (
                         <button type="button" onClick={toggle} {...triggerProps} aria-label="Visit actions"
                           className="shrink-0 text-ink-faint hover:text-ink rounded px-1.5 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><MoreHorizontal className="w-4 h-4" /></button>
