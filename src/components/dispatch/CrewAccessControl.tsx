@@ -57,6 +57,10 @@ export function CrewAccessControl({ tech, access, onChanged }: {
   const [emailing, setEmailing] = useState(false)
   const [email, setEmail] = useState(tech.email ?? '')
   const [setupUrl, setSetupUrl] = useState<string | null>(null)
+  /** The address the invitation actually reached, or null when nothing was sent.
+   *  Never inferred from "the call succeeded" — a provider outage still returns
+   *  a working link, and the owner needs to know which case they are in. */
+  const [sentTo, setSentTo] = useState<string | null>(null)
   const [freshCode, setFreshCode] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
 
@@ -65,21 +69,37 @@ export function CrewAccessControl({ tech, access, onChanged }: {
   const facts = accessFacts(tech, access)
   const state = crewAccessState({ ...facts, hasCode: facts.hasCode || codeLive })
 
-  async function invite() {
+  /**
+   * Invite, or re-invite. `override` is what a RESEND must send: once an account
+   * is linked, the only address the route will accept is that account's own —
+   * anything else is refused as `already-linked` (re-pointing an employee at a
+   * different login silently would orphan the old one). The roster's
+   * `technicians.email` is not that address: it is free text an owner may have
+   * left blank or since edited, and seeding a resend from it produced
+   * `bad-email` on a blank row and `already-linked` on an edited one.
+   * crew_access_states() returns the linked account's real address; prefer it.
+   */
+  async function invite(override?: string) {
+    const target = (override ?? email).trim()
     setBusy('invite')
     setSetupUrl(null)
     try {
       const res = await fetch('/api/crew/invite', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ technicianId: tech.id, email }),
+        body: JSON.stringify({ technicianId: tech.id, email: target }),
       })
       const data = (await res.json().catch(() => null)) as CrewInviteResponse | null
       if (!data) { toast.error('Couldn’t reach the server. Try again.'); return }
       if (!data.ok) { toast.error(data.message); return }
       setSetupUrl(data.setupUrl)
+      setSentTo(data.emailed ? data.email : null)
       setEmailing(false)
       setCopied(null)
-      toast.success(data.created ? `Login created for ${tech.name}.` : `Existing login connected to ${tech.name}.`)
+      // Say which of the two things happened. "Invited" when nothing was sent
+      // would leave the owner waiting on an email that does not exist.
+      toast.success(data.emailed
+        ? `Invitation emailed to ${data.email}.`
+        : `Login ready for ${tech.name} — send them the link below.`)
       onChanged()
     } catch {
       toast.error('Couldn’t reach the server. Try again.')
@@ -109,7 +129,7 @@ export function CrewAccessControl({ tech, access, onChanged }: {
     const { error } = await supabase.rpc('crew_revoke_access', { p_technician_id: tech.id })
     setBusy(null)
     if (error) { toast.error(error.message); return }
-    setFreshCode(null); setSetupUrl(null); setEmailing(false)
+    setFreshCode(null); setSetupUrl(null); setSentTo(null); setEmailing(false)
     toast.success(`${tech.name} no longer has app access.`)
     onChanged()
   }
@@ -164,11 +184,11 @@ export function CrewAccessControl({ tech, access, onChanged }: {
             label="Their email" type="email" fieldSize="sm" value={email} autoComplete="off"
             onChange={e => setEmail(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); invite() } }}
-            hint="We create the login — they never need to sign up or wait for an email."
+            hint="We create the login and email them a setup link — they never sign up or wait for a confirmation."
           />
           <div className="flex items-center gap-2 flex-wrap">
-            <Button size="sm" type="button" onClick={invite} loading={busy === 'invite'} disabled={!email.trim()}>
-              <Link2 className="w-3.5 h-3.5" aria-hidden /> Create login &amp; link
+            <Button size="sm" type="button" onClick={() => invite()} loading={busy === 'invite'} disabled={!email.trim()}>
+              <Mail className="w-3.5 h-3.5" aria-hidden /> Send invitation
             </Button>
             <Button size="sm" variant="ghost" type="button" onClick={() => setEmailing(false)}>Cancel</Button>
             {/* The fallback, named up front rather than only after a failure. */}
@@ -180,10 +200,14 @@ export function CrewAccessControl({ tech, access, onChanged }: {
         </div>
       )}
 
-      {/* The one-time setup link, shown once, copyable. */}
+      {/* The one-time setup link, shown once, copyable. Shown even when the
+          email went out: a worker can miss it, and the owner standing next to
+          them should not have to resend to get them going. */}
       {setupUrl && (
         <div className="mt-2 rounded-md border border-accent/30 bg-accent/5 p-2">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-accent-text">Send {tech.name} this link</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-accent-text">
+            {sentTo ? `Emailed to ${sentTo}` : `Send ${tech.name} this link`}
+          </p>
           <div className="mt-1 flex items-center gap-2">
             <code className="min-w-0 flex-1 truncate rounded bg-bg-tertiary px-1.5 py-1 text-[11px] text-ink-muted">{setupUrl}</code>
             <button type="button" onClick={() => copy(setupUrl, 'url')}
@@ -192,8 +216,9 @@ export function CrewAccessControl({ tech, access, onChanged }: {
             </button>
           </div>
           <p className="mt-1 text-[10px] leading-relaxed text-ink-faint">
-            One use, and not for long. They set a password and land straight in the crew app —
-            no sign-up, no confirmation email. Lost it? Tap New link.
+            {sentTo
+              ? 'One use, and not for long. Hand it over directly if the email doesn’t arrive — or tap New link for a fresh one.'
+              : 'One use, and not for long. They set a password and land straight in the crew app — no sign-up. Lost it? Tap New link.'}
           </p>
         </div>
       )}
@@ -215,9 +240,13 @@ export function CrewAccessControl({ tech, access, onChanged }: {
               <span className="text-[10px] text-ink-faint">
                 Invited{facts.inviteSentAt ? ` ${new Date(facts.inviteSentAt).toLocaleDateString()}` : ''} — they haven’t signed in yet.
               </span>
-              <Button variant="ghost" size="sm" type="button" onClick={invite} loading={busy === 'invite'} className="ml-auto"
-                title="Make a fresh one-time setup link">
-                <Link2 className="w-3.5 h-3.5" aria-hidden /> New link
+              {/* Resend. Minting a new token INVALIDATES the previous one
+                  (measured), so this is also how a link that leaked — forwarded,
+                  screenshotted — is killed. */}
+              <Button variant="ghost" size="sm" type="button" loading={busy === 'invite'} className="ml-auto"
+                onClick={() => invite(access?.email ?? tech.email ?? undefined)}
+                title="Email a fresh setup link — the previous one stops working">
+                <Link2 className="w-3.5 h-3.5" aria-hidden /> Resend invite
               </Button>
             </>
           )}

@@ -97,13 +97,44 @@ export function isPlausibleEmail(email: string): boolean {
 //     open that dashboard.
 //  2. action_link lands with the session in the URL FRAGMENT, which the server
 //     cannot see — so middleware would bounce the employee to /login before the
-//     page ever ran. A token in the query string is verified by the page itself
-//     (supabase.auth.verifyOtp), which works the same on every browser.
+//     page ever ran. A token verified by the page itself (verifyOtp) works the
+//     same on every browser.
+//  3. ⭐ PATH SEGMENTS, because `=` belongs to quoted-printable. This link is now
+//     EMAILED (2026-08-15), and beta signup measured a query-form link losing
+//     bytes on the way to a real inbox: `=73` is a valid QP escape, so a
+//     transport that re-encodes the body can eat part of `?token=…` and deliver
+//     a mangled token. A path-segment URL carries no `=` and no `?`, so there is
+//     nothing for a QP decoder to misread. Same shape as buildResetUrl and
+//     buildBetaConfirmUrl. ⛔ Never put '=' in an emailed URL.
 export const CREW_WELCOME_PATH = '/crew/welcome'
 
 export function buildSetupUrl(appOrigin: string, hashedToken: string): string {
   const base = appOrigin.replace(/\/$/, '')
-  return `${base}${CREW_WELCOME_PATH}?token=${encodeURIComponent(hashedToken)}`
+  return `${base}${CREW_WELCOME_PATH}/${encodeURIComponent(hashedToken)}`
+}
+
+/** Query spellings still accepted on the way IN, though nothing we send uses
+ *  them any more: `token` is the shape this feature shipped with, `token_hash`
+ *  is what Supabase's own template snippet emits. Reading both costs nothing and
+ *  means a link an owner copied out of the old UI still opens. */
+export const SETUP_TOKEN_PARAMS = ['token', 'token_hash'] as const
+
+export function readSetupToken(get: (k: string) => string | null): string | null {
+  for (const k of SETUP_TOKEN_PARAMS) {
+    const v = get(k)
+    if (v && v.trim()) return v.trim()
+  }
+  return null
+}
+
+/** THE canonical read: the token as a path segment, from Next's optional
+ *  catch-all. Exactly one segment is accepted — a deeper path is not a link we
+ *  built, and quietly picking one segment out of several would make the route
+ *  guess. Mirrors readResetPathToken. */
+export function readSetupPathToken(segments: string[] | undefined): string | null {
+  if (!segments || segments.length !== 1) return null
+  const v = segments[0]?.trim()
+  return v ? v : null
 }
 
 // ── The wire contract ────────────────────────────────────────────────────────
@@ -115,11 +146,18 @@ export interface CrewInviteRequest {
 export interface CrewInviteSuccess {
   ok: true
   email: string
-  /** One-time. The owner hands this over; it is never emailed by us and never
-   *  logged. Regenerating is one tap, so it is safe to treat as disposable. */
+  /** One-time, and never logged. Since 2026-08-15 this is ALSO emailed to the
+   *  worker; it is still returned so the owner can hand it over directly when
+   *  the send fails, or when they are standing next to the person. Regenerating
+   *  is one tap, so it is safe to treat as disposable. */
   setupUrl: string
   /** True when this call created the auth account (vs. linking an existing one). */
   created: boolean
+  /** Did the invitation email actually go out? ⚠️ NEVER defaulted to true: an
+   *  owner who is told "we emailed them" when nothing was sent will wait instead
+   *  of handing over the link. `false` makes the UI show the copy-this-link
+   *  fallback, which is what the owner can act on. */
+  emailed: boolean
 }
 
 export interface CrewInviteFailure {
