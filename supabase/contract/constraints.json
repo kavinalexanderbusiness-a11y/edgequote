@@ -644,9 +644,9 @@
   "convalidated": true
  },
  {
-  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE",
+  "def": "FOREIGN KEY (user_id, customer_id) REFERENCES customers(user_id, id) ON DELETE CASCADE",
   "tbl": "customer_portal_tokens",
-  "conname": "customer_portal_tokens_customer_id_fkey",
+  "conname": "customer_portal_tokens_customer_same_owner",
   "contype": "f",
   "convalidated": true
  },
@@ -1362,6 +1362,13 @@
   "tbl": "invoices",
   "conname": "invoices_user_id_fkey",
   "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, id)",
+  "tbl": "invoices",
+  "conname": "invoices_user_id_id_key",
+  "contype": "u",
   "convalidated": true
  },
  {
@@ -2345,16 +2352,16 @@
   "convalidated": true
  },
  {
-  "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
+  "def": "FOREIGN KEY (user_id, customer_id) REFERENCES customers(user_id, id) ON DELETE SET NULL (customer_id)",
   "tbl": "payments",
-  "conname": "payments_customer_id_fkey",
+  "conname": "payments_customer_tenant_fkey",
   "contype": "f",
   "convalidated": true
  },
  {
-  "def": "FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE SET NULL",
+  "def": "FOREIGN KEY (user_id, invoice_id) REFERENCES invoices(user_id, id) ON DELETE SET NULL (invoice_id)",
   "tbl": "payments",
-  "conname": "payments_invoice_id_fkey",
+  "conname": "payments_invoice_tenant_fkey",
   "contype": "f",
   "convalidated": true
  },
