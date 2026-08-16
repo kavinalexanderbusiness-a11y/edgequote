@@ -26,6 +26,7 @@ supabase/.temp/
 # Quote-builder measurement output (scripts/qb-cdp.mjs)
 .qb-before/
 .qb-after/
+.inbox-harness/
 
 # CDP investigation output (screenshots / measurements)
 search-*.png

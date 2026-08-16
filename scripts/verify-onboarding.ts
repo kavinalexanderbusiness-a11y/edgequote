@@ -202,8 +202,12 @@ check('`started` is derived from all four full-history reads, not one',
 // ── A mature business that cleared its queue keeps "You're all caught up".
 // The first-run branch must require BOTH conditions; dropping either one is how
 // the wrong card reaches the wrong business.
+// `count` (the composed inbox's own total), not items.length: the card became
+// the Inbox PREVIEW and its rows are a slice — a sliced-empty list on a busy
+// morning must not read as first-run. The protected property is unchanged:
+// BOTH empty-and-never-started, or no first-run card.
 check('first-run needs an empty queue AND a never-started business',
-  /const firstRun = items\.length === 0 && !started/.test(PRIORITIES_UI), true)
+  /const firstRun = count === 0 && !started/.test(PRIORITIES_UI), true)
 check('the "all caught up" card still exists for a queue that was cleared',
   PRIORITIES_UI.includes('You&rsquo;re all caught up'), true)
 check('the first-run card names the one first action',
@@ -216,7 +220,7 @@ check('TodaysPriorities defaults started = true', /started = true/.test(PRIORITI
 check('SetupProgress defaults started = true', /started = true/.test(SETUP_UI), true)
 check('SetupProgress waits for a started business', /if \(!started\) return null/.test(SETUP_UI), true)
 check('the dashboard passes the derived flag to both cards',
-  /<TodaysPriorities items=\{d\.priorities\} started=\{d\.started\}/.test(DASH_PAGE)
+  /<TodaysPriorities[\s\S]{0,400}?started=\{d\.started\}/.test(DASH_PAGE)
   && /<SetupProgress started=\{d\.started\}/.test(DASH_PAGE), true)
 
 // ═══════════════════════════════════════════════════════════════════════════

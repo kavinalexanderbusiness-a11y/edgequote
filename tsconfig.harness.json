@@ -4,7 +4,8 @@
     "jsx": "react-jsx",
     "paths": {
       "@/*": ["./src/*"],
-      "next/navigation": ["./scripts/qb-next-stub.ts"]
+      "next/navigation": ["./scripts/qb-next-stub.ts"],
+      "next/link": ["./scripts/harness-link-stub.tsx"]
     }
   }
 }

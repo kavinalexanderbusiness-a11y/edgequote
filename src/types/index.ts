@@ -1245,6 +1245,12 @@ export interface Quote {
   issued_date: string | null
   property_id: string | null
   user_id: string
+  // The online-booking capture (submit_booking writes it; null everywhere else).
+  // Non-null on a DRAFT is what makes that draft a LEAD (lib/leadResponse door 3)
+  // rather than owner work-in-progress — which is why the priority queue's
+  // quote_drafts row excludes it. Shape is the booking payload; nothing here
+  // reads inside it, so it stays unknown.
+  lead_meta?: unknown
   customers?: Pick<Customer, 'id' | 'name' | 'email' | 'phone'>
 }
 
