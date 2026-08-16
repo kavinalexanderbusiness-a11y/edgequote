@@ -238,10 +238,18 @@ check('quote_services stores its OWN notes', /"notes"/.test(qsDdl))
 
 // If a service is deleted the link goes null and the line keeps every fact it
 // needs — which is only true because the facts were copied.
+//
+// ⚠️ BOUND TO THE CONSTRAINT, NOT TO A SPAN. The first draft of this check was
+// /quote_services.*service_template_id.*on delete set null/is over the whole
+// file: with `.*` and the `s` flag it matched some LATER table's SET NULL and
+// stayed green with this very constraint flipped to CASCADE. Mutation H9 caught
+// it. Extract the one statement, then assert about that.
+const qsFk = (baseline.match(
+  /alter table public\."quote_services" add constraint "quote_services_service_template_id_fkey"[^;]*;/) || [''])[0]
+check('the quote-line → catalogue link exists', !!qsFk)
 check('deleting a catalogue service SET NULLs the link and destroys no line',
-  /quote_services.*service_template_id.*references service_templates\(id\) on delete set null/is
-    .test(baseline.replace(/\s+/g, ' ')),
-  'ON DELETE CASCADE here would delete quoted history with the service')
+  !!qsFk && /on delete set null/i.test(qsFk) && !/on delete cascade/i.test(qsFk),
+  `ON DELETE CASCADE here would delete quoted history along with the service\n      ${qsFk}`)
 
 // The rendering surfaces must not reach into the catalogue for a QUOTE's price.
 const pdfSrc = readIf('src/components/quotes/QuotePDF.tsx')
@@ -370,11 +378,14 @@ eq('the catalogue reports its own typical crew', catalogCrewFor('tpl-1', templat
 ])), 3)
 // The three must remain three separate stores. If a later change made the
 // catalogue the source of a scheduled or worked figure, these break.
+// Line-anchored, for the reason spelled out in §13: an unanchored schema check
+// happily matches a commented-out version of the thing it is defending.
+const jobsDdl = (baseline.match(/^create table if not exists public\."jobs" \([\s\S]*?\n\);/m) || [''])[0]
 check('jobs still own their OWN crew_size (the scheduled assignment)',
-  /create table if not exists public\."jobs"[\s\S]*?"crew_size"[\s\S]*?\n\);/.test(baseline),
+  !!jobsDdl && /"crew_size"/.test(jobsDdl),
   'the scheduled crew is the job\'s, not the catalogue\'s')
 check('work sessions still own who ACTUALLY worked',
-  /create table if not exists public\."job_work_sessions"/.test(baseline),
+  /^create table if not exists public\."job_work_sessions"/m.test(baseline),
   'attendance is recorded, never defaulted')
 // Over the CODE, not the prose — the module's header names job_work_sessions in
 // order to say it never touches it, and a check that cannot tell an explanation
@@ -420,10 +431,18 @@ check('no asset/category association exists on the catalogue',
 // ═════════════════════════════════════════════════════════════════════════════
 console.log('\n── 13 · tenancy ──')
 
+// ⚠️ ANCHORED TO THE START OF A LINE, and that is not pedantry: the unanchored
+// version of the RLS check below matched its own commented-out self. Mutation T3
+// switched RLS off by prefixing `-- ` and the guard stayed green, because
+// "…enable row level security" is still present in the file — inside a comment.
+// Every schema assertion here is line-anchored for that reason.
+const atLineStart = (re: string) => new RegExp(`^\\s*${re}`, 'im')
 check('service_templates is tenant-scoped by user_id',
+  atLineStart(String.raw`create table if not exists public\."service_templates"`).test(baseline) &&
   /create table if not exists public\."service_templates"[\s\S]*?"user_id" uuid not null[\s\S]*?\n\);/.test(baseline))
 check('…and has RLS enabled',
-  /alter table (public\.)?"?service_templates"? enable row level security/i.test(baseline))
+  atLineStart(String.raw`alter table (public\.)?"?service_templates"? enable row level security`).test(baseline),
+  'a commented-out ENABLE is not an enabled policy')
 // The new columns inherit those policies — but only because they were added to
 // the SAME table. A rival table would have needed its own, which is a second
 // place to get tenancy wrong.
