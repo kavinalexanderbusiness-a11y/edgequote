@@ -2014,3 +2014,53 @@ export interface IntegrationEventRow {
   entity_id: string | null
   payload: Record<string, unknown>
 }
+
+// ── Custom fields ────────────────────────────────────────────────────────────
+// The owner-defined attribute store. `src/lib/customFields.ts` is the engine;
+// the constraints in supabase/migrations/*_custom_fields_v1.sql are the law.
+//
+// ⚠️ These values are INTERNAL — owner screens only. There is deliberately no
+// visibility flag on the definition; see the note at the top of customFields.ts
+// and src/lib/noteScope.ts for why, and for where exposure would be added later.
+
+/** One field an owner has defined for a kind of record. */
+export interface CustomFieldDefinition {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  /** 'customer' | 'property' | 'job' — see CUSTOM_FIELD_ENTITIES. */
+  entity: string
+  /** Stable slug. Immutable once created; it is the export/import identity. */
+  field_key: string
+  label: string
+  /** See CUSTOM_FIELD_TYPES. */
+  field_type: string
+  /** Dropdown choices as [{ value, label }]. Empty for every other type. */
+  options: { value: string; label: string }[]
+  help_text: string | null
+  sort_order: number
+  /** Archived fields stop being offered and keep every answer they collected. */
+  archived_at: string | null
+}
+
+/**
+ * One answer. Exactly one `value_*` column is set, and which one is decided by
+ * `field_type` — enforced by a CHECK, not by whoever wrote the last INSERT.
+ */
+export interface CustomFieldValue {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  definition_id: string
+  entity: string
+  field_type: string
+  customer_id: string | null
+  property_id: string | null
+  job_id: string | null
+  value_text: string | null
+  value_number: number | null
+  value_boolean: boolean | null
+  value_date: string | null
+}
