@@ -689,6 +689,17 @@ H('19. The surfaces spend the engine, and do not rival it')
   check('…and the decision goes through the one writer',
     /decideTimeOff\(/.test(timeOff))
 
+  // The request notification joins the EXISTING bell vocabulary rather than
+  // inventing a tier. 'action' is reserved for money and trust problems; a
+  // leave request is a decision that breaks nothing while it waits.
+  const notif = read('src/lib/notifications.ts')
+  check('the request notification is registered in the one classifier',
+    /time_off_requested: 'update'/.test(notif))
+  check('…and is NOT promoted into the money-and-trust tier',
+    !/time_off_requested: 'action'/.test(notif))
+  check('…and offers a verb that matches where it lands',
+    /time_off_requested: 'Review'/.test(notif))
+
   const plan = read('src/lib/dayPlan.ts')
   check('the day plan never reassigns work',
     !/crew_id\s*=/.test(plan) && !/\.update\(/.test(plan))
