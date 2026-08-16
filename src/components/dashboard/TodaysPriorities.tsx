@@ -173,7 +173,7 @@ export function TodaysPriorities({ items, count, failuresCount = 0, started = tr
       {!firstRun && (count > 0 || failuresCount > 0) && (
         <Link
           href="/dashboard/inbox"
-          className="flex items-center justify-between gap-2 px-4 sm:px-5 py-3 border-t border-border text-xs font-semibold text-accent-text hover:bg-surface-raised/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50"
+          className="tap-target-y flex items-center justify-between gap-2 px-4 sm:px-5 py-3 border-t border-border text-xs font-semibold text-accent-text hover:bg-surface-raised/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50"
         >
           <span>
             View inbox

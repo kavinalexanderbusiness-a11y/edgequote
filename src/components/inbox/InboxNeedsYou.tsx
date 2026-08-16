@@ -108,7 +108,7 @@ export function InboxNeedsYou({ items, snoozedEvents, allClear }: {
 
       {snoozedEvents.length > 0 && (
         <details className="rounded-card border border-border bg-surface">
-          <summary className="flex items-center gap-2 px-4 sm:px-5 py-3 text-xs font-medium text-ink-muted cursor-pointer select-none">
+          <summary className="tap-target-y flex items-center gap-2 px-4 sm:px-5 py-3 text-xs font-medium text-ink-muted cursor-pointer select-none">
             <Clock className="w-3.5 h-3.5 text-ink-faint" />
             Snoozed · {snoozedEvents.length} — back when their time comes
           </summary>
