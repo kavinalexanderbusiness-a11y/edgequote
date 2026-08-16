@@ -482,6 +482,40 @@ export interface PtoEntry {
   /** Set when this row was generated from the holiday calendar. */
   holiday_id: string | null
   notes: string | null
+  /** Session 67. 'approved' = counts against planning availability — and the
+   *  default, because an owner BOOKING time off is the approval. 'requested' =
+   *  a worker asked and nobody has decided; it changes no plan. 'declined' =
+   *  kept as a record, never subtracts anyone, never blocks a later booking. */
+  status: PtoStatus
+  decided_at: string | null
+}
+
+export type PtoStatus = 'requested' | 'approved' | 'declined'
+
+export const PTO_STATUS_LABELS: Record<PtoStatus, string> = {
+  requested: 'Requested',
+  approved: 'Approved',
+  declined: 'Declined',
+}
+
+// ── A worker's standard week ─────────────────────────────────────────────────
+// Session 67. NO ROWS for a worker means their availability is ASSUMED, not
+// that they never work — surfaces must label the assumption. A worker who HAS
+// rows works only the weekdays holding an `available` one. Dated exceptions are
+// PtoEntry rows, never edits here: changing someone's standard Monday next
+// month must not rewrite the Mondays already worked.
+export interface WorkerAvailability {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  technician_id: string
+  /** 0 = Sunday … 6 = Saturday. */
+  weekday: number
+  available: boolean
+  /** 'HH:mm[:ss]'. Both set when available, both null when not. */
+  start_time: string | null
+  end_time: string | null
 }
 
 /** THE holiday calendar for the business. Payroll reads it; nothing guesses it. */

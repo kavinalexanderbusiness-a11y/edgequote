@@ -8,6 +8,7 @@ import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, AddonTempl
 import { Coord } from '@/lib/geo'
 import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, sequenceRoute, roundTripMapsUrl, MAX_MAPS_WAYPOINTS, directionsUrl, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
 import { planDay, type DayPlanStopInput } from '@/lib/dayPlan'
+import type { WorkerDayDetail } from '@/lib/workerAvailability'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { buildRoadDistance, type RoadDist, type RoadSeconds, type RoadHas } from '@/lib/distance'
 import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
@@ -76,6 +77,15 @@ interface Props {
   // horizon rather than per day board. `undefined`/null means NOT KNOWN, which
   // lib/dayPlan reports as a caveat; it never reads as a fully-staffed day.
   workersOnDay?: number | null
+  // ⭐ Session 67: the same read, per person — who is off, who does not work
+  // this weekday, who is only ASSUMED available. Feeds the day plan's staffing
+  // warnings so a short crew is named rather than merely counted. Null = not
+  // known (outside the loaded horizon, or the roster read failed).
+  staffingOnDay?: WorkerDayDetail[] | null
+  /** Crew id → name, for naming a crew in a staffing warning. */
+  crewNames?: Record<string, string>
+  /** False when nobody has a recorded weekly pattern — availability is assumed. */
+  availabilityRecorded?: boolean
   learnedDurationFor?: (serviceType: string | null | undefined) => number | null
   onRainDelay: () => void
   onAddJob: () => void
@@ -124,7 +134,7 @@ export interface QuickPatch {
 export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
   onOpenJob, onStartJob, onMarkDone, onMove, onStopForToday, onResume, onSetPrice, workStartTime, capacityHours,
-  workersOnDay, learnedDurationFor, onRainDelay, onAddJob, onQuickSave,
+  workersOnDay, staffingOnDay, crewNames, availabilityRecorded, learnedDurationFor, onRainDelay, onAddJob, onQuickSave,
   addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons, addonTemplates,
   changeOrdersByJobId, onCreateChangeOrder, onSendChangeOrder, onCancelChangeOrder, onOwnerChangeDecision, onRemindChangeOrder,
   onStopOrder, onChatUnread,
@@ -631,6 +641,7 @@ export function DayOpsPanel({
         crewSize: j.crew_size,
         serviceType: j.service_type,
         status: j.status,
+        crewId: j.crew_id ?? null,
         // Session 47: hours already banked against a carried-over visit, so
         // tomorrow plans the remainder rather than the whole estimate again.
         workedMinutes: j.actual_minutes,
@@ -652,6 +663,12 @@ export function DayOpsPanel({
     speed: travel,
     locatedCoords,
     hasBase: !!baseCoord,
+    // Session 67: who, by name, cannot work a day their crew is booked on.
+    // Null outside the loaded horizon, exactly as workersOnDay is — the same
+    // read backs both, so the count and the names can never disagree.
+    staffing: staffingOnDay ?? null,
+    crewNames,
+    availabilityRecorded,
   })
   // Every arrival on this screen comes from that ONE walk.
   const etas = plan.stopCount > 0

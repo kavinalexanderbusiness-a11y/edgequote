@@ -127,6 +127,7 @@
     "verify:deposit-scheduling": "tsx scripts/verify-deposit-scheduling.ts",
     "verify:day-fit": "tsx scripts/verify-day-fit.ts",
     "verify:day-plan": "tsx scripts/verify-day-plan.ts",
+    "verify:availability": "tsx scripts/verify-availability.ts",
     "verify:work-sessions": "tsx scripts/verify-work-sessions.ts",
     "verify:account-recovery": "tsx scripts/verify-account-recovery.ts",
     "verify:renewals": "tsx scripts/verify-renewals.ts",

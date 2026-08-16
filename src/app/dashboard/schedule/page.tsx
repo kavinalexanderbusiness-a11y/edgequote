@@ -351,6 +351,14 @@ export default function SchedulePage() {
     return dayFitCtx.horizonDates.includes(iso) ? dayFitCtx.workersByDate(iso) : null
   }, [dayFitCtx, cursor])
 
+  // …and the same answer per person, for the staffing warnings. Same horizon
+  // rule, from the same context, so the count and the names always agree.
+  const staffingOnOpenDay = useMemo(() => {
+    if (!dayFitCtx) return null
+    const iso = format(cursor, 'yyyy-MM-dd')
+    return dayFitCtx.horizonDates.includes(iso) ? dayFitCtx.staffingByDate(iso) : null
+  }, [dayFitCtx, cursor])
+
   // ── Effective capacity for the OPEN day (one source: lib/dayStatus) ──────────
   // Feeds the Day Ops panel the day's real start time + labour-hours (after any
   // crew / working-hours / start-end / disable override), reusing the SAME
@@ -2976,6 +2984,9 @@ export default function SchedulePage() {
           workStartTime={dayView.start}
           capacityHours={dayView.laborHours}
           workersOnDay={workersOnOpenDay}
+          staffingOnDay={staffingOnOpenDay}
+          crewNames={dayFitCtx?.crewNames}
+          availabilityRecorded={dayFitCtx?.availabilityRecorded}
           learnedDurationFor={dayFitCtx?.learnedFor}
           onRainDelay={() => rainDelayDay(dayISO)}
           onAddJob={() => openNewJob(cursor)}

@@ -8,6 +8,8 @@ import type { Holiday, PtoEntry, PtoKind, Technician } from '@/types'
 import { PTO_KIND_LABELS } from '@/types'
 import { loadTechnicians } from '@/lib/crews'
 import { ptoBalances, holidayPtoRows, ptoPay, parseDateOnly } from '@/lib/pto'
+import { decideTimeOff } from '@/lib/workerAvailabilityData'
+import { isBookedOff } from '@/lib/workerAvailability'
 import { exportRowsToCsv } from '@/lib/csv'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -37,7 +39,7 @@ import {
 // screen mirrors why they're apart in the database — so a vacation day can never
 // be mistaken for worked time and trigger overtime.
 
-type Tab = 'balances' | 'entries' | 'holidays'
+type Tab = 'requests' | 'balances' | 'entries' | 'holidays'
 
 export default function TimeOffPage() {
   const supabase = useMemo(() => createClient(), [])
@@ -79,11 +81,28 @@ export default function TimeOffPage() {
 
   useEffect(() => { fetchAll() }, [fetchAll])
 
+  // The request notification links here with ?tab=requests. Read from the URL
+  // rather than useSearchParams so this client page needs no Suspense boundary.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (new URLSearchParams(window.location.search).get('tab') === 'requests') setTab('requests')
+  }, [])
+
   const active = useMemo(() => techs.filter(t => t.is_active), [techs])
-  const balances = useMemo(() => ptoBalances(entries, active, year), [entries, active, year])
+  // ⭐ Balances, totals and the ledger all read APPROVED time off only. A
+  // request nobody has decided is not leave taken — counting it would show an
+  // allowance being consumed by an ask, and a cost for a day that may never
+  // happen. Declined rows are kept as a record and count for nothing.
+  const approved = useMemo(() => entries.filter(isBookedOff), [entries])
+  const requests = useMemo(
+    () => entries.filter(e => e.status === 'requested')
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    [entries],
+  )
+  const balances = useMemo(() => ptoBalances(approved, active, year), [approved, active, year])
   const yearEntries = useMemo(
-    () => entries.filter(e => parseDateOnly(e.date).getFullYear() === year),
-    [entries, year],
+    () => approved.filter(e => parseDateOnly(e.date).getFullYear() === year),
+    [approved, year],
   )
   const techById = useMemo(() => Object.fromEntries(techs.map(t => [t.id, t])), [techs])
   const years = useMemo(() => {
@@ -97,6 +116,26 @@ export default function TimeOffPage() {
     unpaidHours: Math.round(yearEntries.filter(e => !e.is_paid).reduce((s, e) => s + Number(e.hours), 0) * 100) / 100,
     cost: Math.round(yearEntries.reduce((s, e) => s + ptoPay(e), 0) * 100) / 100,
   }), [yearEntries])
+
+  // ── Deciding a request ────────────────────────────────────────────────────
+  // APPROVING is what changes the plan: from here the day board counts one
+  // fewer person, and the worker's own screen says approved. Pay is decided
+  // HERE, not by the asker — a request carries no money claim at all, and the
+  // wage is stamped at the decision so a later raise never re-values it.
+  async function decide(e: PtoEntry, decision: 'approved' | 'declined') {
+    const tech = techById[e.technician_id]
+    setBusy(true)
+    const res = await decideTimeOff(supabase, e, decision, {
+      paid: decision === 'approved' ? true : undefined,
+      hourlyRate: tech?.hourly_wage == null ? null : Number(tech.hourly_wage),
+    })
+    setBusy(false)
+    if (!res.ok) { notify.error('Could not save that decision: ' + res.message); return }
+    notify.success(decision === 'approved'
+      ? `Approved — ${tech?.name ?? 'they'} won’t be counted as available that day.`
+      : `Declined. ${tech?.name ?? 'They'} can see the answer on their phone.`)
+    fetchAll()
+  }
 
   async function deleteEntry(e: PtoEntry) {
     const { error } = await supabase.from('pto_entries').delete().eq('id', e.id)
@@ -205,6 +244,11 @@ export default function TimeOffPage() {
           </Banner>
 
           <div className="flex items-center gap-1.5 flex-wrap">
+            {requests.length > 0 && (
+              <FilterPill active={tab === 'requests'} onClick={() => setTab('requests')}>
+                Requests ({requests.length})
+              </FilterPill>
+            )}
             <FilterPill active={tab === 'balances'} onClick={() => setTab('balances')}>Balances</FilterPill>
             <FilterPill active={tab === 'entries'} onClick={() => setTab('entries')}>Booked ({yearEntries.length})</FilterPill>
             <FilterPill active={tab === 'holidays'} onClick={() => setTab('holidays')}>Holidays ({holidays.length})</FilterPill>
@@ -220,6 +264,42 @@ export default function TimeOffPage() {
               )}
             </div>
           </div>
+
+          {/* ── Requests ──
+              Sized for a phone: the decision buttons are full-width targets
+              below the detail, not two small icons crushed against the edge. */}
+          {tab === 'requests' && (
+            <Card>
+              <CardBody className="p-0">
+                {requests.length === 0 ? (
+                  <InlineEmpty icon={Palmtree}>Nothing waiting on you.</InlineEmpty>
+                ) : (
+                  <div className="divide-y divide-border">
+                    {requests.map(e => (
+                      <div key={e.id} className="px-5 py-3.5">
+                        <p className="text-sm font-medium text-ink">
+                          {techById[e.technician_id]?.name ?? 'Former employee'}
+                          <span className="text-[11px] font-normal text-ink-faint"> · {PTO_KIND_LABELS[e.kind]}</span>
+                        </p>
+                        <p className="text-[11px] text-ink-faint tabular-nums">
+                          {format(parseDateOnly(e.date), 'EEE MMM d, yyyy')} · {Number(e.hours)} h
+                          {e.notes && ` · ${e.notes}`}
+                        </p>
+                        <div className="mt-2.5 flex items-center gap-2">
+                          <Button size="sm" loading={busy} onClick={() => decide(e, 'approved')} className="flex-1 sm:flex-none">
+                            <Check className="w-3.5 h-3.5" /> Approve
+                          </Button>
+                          <Button size="sm" variant="secondary" loading={busy} onClick={() => decide(e, 'declined')} className="flex-1 sm:flex-none">
+                            Decline
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardBody>
+            </Card>
+          )}
 
           {/* ── Balances ── */}
           {tab === 'balances' && (
