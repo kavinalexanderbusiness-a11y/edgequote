@@ -322,7 +322,9 @@ export function CrewToday() {
           {new Date(today + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}
         </p>
         <h1 className="text-xl font-bold tracking-tight text-ink">
-          {active.length === 0 ? 'Nothing booked today' : `${active.length - done} of ${active.length} to go`}
+          {active.length === 0 ? 'Nothing booked today'
+            : done === active.length ? `All ${active.length} done`
+            : `${active.length - done} of ${active.length} to go`}
         </h1>
         <p className="mt-0.5 text-xs text-ink-muted flex items-center gap-1.5 flex-wrap">
           {day.crew?.name && <span className="font-medium text-ink">{day.crew.name}</span>}
@@ -333,6 +335,21 @@ export function CrewToday() {
           )}
           {day.teammates.length === 0 && day.crew?.name && <span>· on your own today</span>}
         </p>
+        {/* The first thing a worker signs in to learn, answered before any
+            scrolling: where am I going first? Restates the highlighted card and
+            the thumb bar by DESIGN — this is the eye's landing point, those are
+            the finger's — and all three read the same `next` from the same
+            partition, so they cannot disagree. */}
+        {next && (
+          <p className="mt-1 text-xs text-ink-muted truncate">
+            <span className="font-semibold text-ink">
+              {next.status === 'in_progress' && next.started_at ? 'Now' : done === 0 ? 'First up' : 'Next'}
+              {': '}
+            </span>
+            {next.customer?.name || next.title}
+            {timeLabel(next.start_time) ? ` · ${timeLabel(next.start_time)}` : ''}
+          </p>
+        )}
       </header>
 
       {/* A refresh that couldn't reach the server: the day below is still the
