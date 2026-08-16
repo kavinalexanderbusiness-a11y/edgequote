@@ -17,6 +17,7 @@ import {
 import { CrewStopPhotos } from '@/components/crew/CrewStopPhotos'
 import { CrewStopMedia } from '@/components/crew/CrewStopMedia'
 import { CrewStopConversation } from '@/components/crew/CrewStopConversation'
+import { CrewStopChecklist } from '@/components/crew/CrewStopChecklist'
 import {
   startCrewInboxFeed, subscribeCrewInbox, getCrewInboxSnapshot, getCrewInboxServerSnapshot,
 } from '@/lib/crewMessages'
@@ -66,6 +67,11 @@ export function CrewToday() {
   // tap, and this is the affordance for the times there is something to say.
   const [recordingId, setRecordingId] = useState<string | null>(null)
   const [photosOutstanding, setPhotosOutstanding] = useState<Record<string, number>>({})
+  // Per stop: the required checklist items the completion gate refused a Finish
+  // over. Shown as a list ON THE CARD (a toast can't hold a list) and cleared
+  // by the next successful action on that stop. The server's list, verbatim —
+  // this screen holds no opinion of its own about what gates completion.
+  const [gateBlocked, setGateBlocked] = useState<Record<string, { form: string; label: string; field_id: string }[]>>({})
   // How much reference media the office attached to each of today's stops.
   // COUNTS ONLY — one request for the whole day, holding no URLs and nothing
   // signed. It exists so a card can offer "2 photos · 1 video" without a request
@@ -192,7 +198,22 @@ export function CrewToday() {
         : kind === 'stop'
           ? await crewStopForToday(supabase, stop)
           : await crewCompleteVisit(supabase, stop)
-      if (!res.ok) { toast.error(res.error || 'That didn’t save. Try again.'); await load(); return }
+      if (!res.ok) {
+        // A checklist refusal is not a failure of the visit — the required
+        // items land on the card, beside the checklist they belong to.
+        if (res.checklist?.length) {
+          setGateBlocked(prev => ({ ...prev, [stop.id]: res.checklist! }))
+          toast.error('Before completing, finish the required checklist items.')
+        } else {
+          toast.error(res.error || 'That didn’t save. Try again.')
+        }
+        await load()
+        return
+      }
+      setGateBlocked(prev => {
+        if (!(stop.id in prev)) return prev
+        const next = { ...prev }; delete next[stop.id]; return next
+      })
       const who = stop.customer?.name || stop.title
       // ⛔ "Done for today" must never read as "done". The words are as different
       // as the writes are.
@@ -394,6 +415,28 @@ export function CrewToday() {
                     Collapsing the two would bury the gate code under twenty
                     replies. See lib/crewMessages for the full distinction. */}
                 <CrewStopConversation jobId={stop.id} unread={unreadByJob[stop.id] ?? 0} />
+
+                {/* What the office wants done and shown before this visit can
+                    finish — checkboxes, readings, photos. Counts on the card,
+                    fields on tap; the gate's own refusal list renders right
+                    above it when Finish is tried too early. */}
+                {gateBlocked[stop.id]?.length ? (
+                  <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-2" role="status">
+                    <p className="text-[11px] font-semibold text-amber-300">Before completing:</p>
+                    <ul className="mt-0.5 space-y-0.5">
+                      {gateBlocked[stop.id].slice(0, 6).map(m => (
+                        <li key={m.field_id} className="text-[11px] text-ink-muted">• {m.label}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                <CrewStopChecklist
+                  jobId={stop.id}
+                  summary={stop.checklist ?? null}
+                  jobStatus={stop.status}
+                  blockedFieldIds={gateBlocked[stop.id]?.map(m => m.field_id)}
+                  onChanged={() => { void load() }}
+                />
 
                 <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
                   <a

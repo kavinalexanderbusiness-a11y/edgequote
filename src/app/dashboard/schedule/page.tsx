@@ -26,6 +26,7 @@ import { queueOrRun, isNetworkError } from '@/lib/offline/outbox'
 // THE completion stamp. Every door on this page that moves a visit to
 // "completed" writes the same three fields through it — see lib/jobStatus.
 import { completionPatch } from '@/lib/jobStatus'
+import { checklistBlockMessage } from '@/lib/jobForms'
 import { stopForToday, resumeWork, deleteWorkSession, type StopForTodayInput } from '@/lib/workSession'
 import { formatWorked } from '@/lib/workDuration'
 import { loadDayFitContext, type DayFitContext } from '@/lib/dayFitLoad'
@@ -1854,7 +1855,12 @@ export default function SchedulePage() {
         },
       )
     } catch (e) {
-      setBanner('Could not complete the job: ' + (e instanceof Error ? e.message : 'please try again.'))
+      // The checklist gate's refusal (a DB trigger on the completed transition)
+      // is instructions, not a failure — surface its sentence as-is.
+      const gate = checklistBlockMessage(e instanceof Error ? e.message : null)
+      setBanner(gate
+        ? `${gate} Open the visit’s Checklist panel to finish or waive it.`
+        : 'Could not complete the job: ' + (e instanceof Error ? e.message : 'please try again.'))
       return
     }
     setJobs(prev2 => prev2.map(j => (j.id === job.id ? { ...j, ...patch } : j)))
