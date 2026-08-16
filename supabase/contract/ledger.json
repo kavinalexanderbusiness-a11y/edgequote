@@ -1048,5 +1048,12 @@
   "sql_md5": "2da861608587b31bfeb29d33ec8ee83f",
   "version": "20260815130000",
   "stmt_count": 1
+ },
+ {
+  "name": "tenant_weld_portal_payments_storage",
+  "sql_len": 7091,
+  "sql_md5": "f55ba548c55c5817a901a4ed4b3a7989",
+  "version": "20260816020000",
+  "stmt_count": 1
  }
 ]

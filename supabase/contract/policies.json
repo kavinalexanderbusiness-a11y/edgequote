@@ -3590,16 +3590,6 @@
   "with_check": "(auth.uid() = user_id)"
  },
  {
-  "cmd": "SELECT",
-  "qual": "(bucket_id = 'booking-uploads'::text)",
-  "roles": "{authenticated}",
-  "tablename": "objects",
-  "permissive": "PERMISSIVE",
-  "policyname": "booking-uploads: read own",
-  "schemaname": "storage",
-  "with_check": null
- },
- {
   "cmd": "INSERT",
   "qual": null,
   "roles": "{anon,authenticated}",

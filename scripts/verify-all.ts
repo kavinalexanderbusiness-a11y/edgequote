@@ -105,6 +105,15 @@ if (process.argv.includes('--check')) {
 // run stays quiet and a red one shows exactly the guard that broke.
 const started = Date.now()
 const failures: { domain: string; code: number | null; output: string }[] = []
+// Guards that could not run at all. Tracked separately from failures so a suite
+// can be green and still say plainly what it did not prove.
+const unrunnable: { domain: string; why: string }[] = []
+
+/** The line a skipping guard printed, so the summary says WHY, not just that. */
+function skipReason(out: string): string {
+  const m = out.split(/\r?\n/).find(l => /SKIPPED|BLOCKED|cannot run/i.test(l))
+  return (m ?? '').replace(/^[\s⏭✗❌]+/, '').trim() || 'no reason given'
+}
 
 for (const d of fileDomains) {
   const file = join(SCRIPTS_DIR, `verify-${d}.ts`)
@@ -112,9 +121,20 @@ for (const d of fileDomains) {
   process.stdout.write(`  ▶ verify:${d} … `)
   const r = spawnSync(process.execPath, [TSX_CLI, file], { cwd: ROOT, encoding: 'utf8' })
   const ms = Date.now() - t0
+  // Exit 2 is reserved for "this guard could not run" — a live check with no
+  // credentials, an optional engine absent. It is NOT a pass: reporting it as one
+  // is how a suite goes green while proving nothing, which is exactly what
+  // verify:schema and verify:rebuild did through the 2026-08 releases. It is not a
+  // failure either, because a developer without production credentials must still
+  // be able to run the suite. So it gets its own word, and its own line in the
+  // summary, and the release checklist is what insists it be resolved.
+  const skipped = r.status === 2
   // status null = killed by signal or spawn error; treat anything not 0 as failure.
   const ok = r.status === 0
-  if (ok) {
+  if (skipped) {
+    console.log(`SKIPPED — could not run (${ms}ms)`)
+    unrunnable.push({ domain: d, why: skipReason(r.stdout ?? '') })
+  } else if (ok) {
     console.log(`ok (${ms}ms)`)
   } else {
     console.log(`FAIL (exit ${r.status ?? 'signal'}, ${ms}ms)`)
@@ -134,5 +154,13 @@ if (failures.length) {
   process.exit(1)
 }
 
-console.log(`\n✅ all ${fileDomains.length} verify suites passed in ${totalS}s\n`)
+// A suite can be green and still have proved less than it looks. Say so.
+if (unrunnable.length) {
+  console.log(`\n⏭  ${unrunnable.length} suite(s) COULD NOT RUN — not proven, and not failed:`)
+  for (const u of unrunnable) console.log(`     verify:${u.domain} — ${u.why}`)
+  console.log('   Resolve these before a release: a guard that cannot run proves nothing.')
+}
+
+const ran = fileDomains.length - unrunnable.length
+console.log(`\n✅ ${ran}/${fileDomains.length} verify suites passed in ${totalS}s\n`)
 process.exit(0)
