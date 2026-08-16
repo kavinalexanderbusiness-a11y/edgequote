@@ -101,8 +101,8 @@ const MUTATIONS = [
     name: 'authenticated granted INSERT on audit_events',
     why: 'any signed-in client could forge a system event',
     file: SQL,
-    from: `grant select on table public."audit_events" to authenticated;`,
-    to: `grant select, insert on table public."audit_events" to authenticated;`,
+    from: `grant select on table public.audit_events to authenticated;`,
+    to: `grant select, insert on table public.audit_events to authenticated;`,
   },
   {
     name: 'RLS select policy widened to every tenant',
@@ -143,11 +143,17 @@ const MUTATIONS = [
     to: `const stripTsComments = (s: string) => s`,
   },
   {
-    name: 'the statement splitter drops trailing statements',
-    why: 'a rebuild that applies less than the file claims proves nothing',
+    // NOT "drop the trailing buffer": every .sql file here ends in `;`, so that
+    // buffer only ever holds whitespace and the mutation is a semantic no-op. A
+    // mutation that changes nothing is not a blind spot — it is a bad test, and
+    // scoring it as MISSED would train the next person to ignore real misses.
+    name: 'the statement splitter stops honouring dollar-quoted bodies',
+    why: 'function bodies split at their internal semicolons, so the schema applies in fragments',
     file: LIB,
-    from: `  if (buf.trim()) out.push(buf.trim())`,
-    to: `  // [mutation] trailing statement dropped`,
+    from: `    if (c === '$') {
+      const m = /^\\$[A-Za-z_][A-Za-z0-9_]*\\$|^\\$\\$/.exec(sql.slice(i))`,
+    to: `    if (false) {
+      const m = /^\\$[A-Za-z_][A-Za-z0-9_]*\\$|^\\$\\$/.exec(sql.slice(i))`,
   },
 ]
 
