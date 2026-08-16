@@ -56,25 +56,32 @@ export interface VisitOpPayload {
 async function readVisitFacts(
   supabase: ReturnType<typeof createClient>, date: string, jobId: string,
 ): Promise<{ facts: VisitFacts | null; reachable: boolean }> {
-  const res = await loadCrewDay(supabase, date)
-  // ⚠️ THREE OUTCOMES, kept apart (crewAccess's rule). A read that FAILED must
-  // not be reported as "the visit is gone" — that would drop a queued completion
-  // and tell the worker their finished job vanished, when in fact we simply
-  // could not ask. `reachable: false` makes the caller throw a retryable error
-  // instead, leaving the op safely queued.
-  if (res.kind === 'error') return { facts: null, reachable: false }
-  if (res.kind === 'revoked') return { facts: null, reachable: true }
-  const stop = res.day.stops.find(s => s.id === jobId)
-  if (!stop) return { facts: null, reachable: true }
-  return {
-    facts: {
-      status: stop.status,
-      started_at: stop.started_at,
-      completed_at: stop.completed_at,
-      updated_at: stop.updated_at,
-    },
-    reachable: true,
-  }
+  // ⭐ A THROW IS "COULDN'T ASK". Same rule as fieldWrite.reread, and here the
+  // stakes are a queued op: an uncaught throw would propagate out of the handler
+  // as a plain failure, and a plain failure BURNS AN ATTEMPT — six of them and
+  // the outbox drops a completed job as a poison op. "Couldn't reach the server"
+  // must cost nothing, so it is funnelled into the retryable branch.
+  try {
+    const res = await loadCrewDay(supabase, date)
+    // ⚠️ THREE OUTCOMES, kept apart (crewAccess's rule). A read that FAILED must
+    // not be reported as "the visit is gone" — that would drop a queued completion
+    // and tell the worker their finished job vanished, when in fact we simply
+    // could not ask. `reachable: false` makes the caller throw a retryable error
+    // instead, leaving the op safely queued.
+    if (res.kind === 'error') return { facts: null, reachable: false }
+    if (res.kind === 'revoked') return { facts: null, reachable: true }
+    const stop = res.day.stops.find(s => s.id === jobId)
+    if (!stop) return { facts: null, reachable: true }
+    return {
+      facts: {
+        status: stop.status,
+        started_at: stop.started_at,
+        completed_at: stop.completed_at,
+        updated_at: stop.updated_at,
+      },
+      reachable: true,
+    }
+  } catch { return { facts: null, reachable: false } }
 }
 
 /** A verdict of `superseded`/`gone` is terminal — replaying can only overwrite

@@ -85,15 +85,30 @@ export function buildVisitIntent(kind: VisitIntentKind, stop: CrewStop, prev?: V
 async function reread(
   supabase: SupabaseClient, date: string, jobId: string,
 ): Promise<{ facts: VisitFacts | null; reachable: boolean }> {
-  const res = await loadCrewDay(supabase, date)
-  if (res.kind === 'error') return { facts: null, reachable: false }
-  if (res.kind === 'revoked') return { facts: null, reachable: true }
-  const s = res.day.stops.find(x => x.id === jobId)
-  if (!s) return { facts: null, reachable: true }
-  return {
-    facts: { status: s.status, started_at: s.started_at, completed_at: s.completed_at, updated_at: s.updated_at },
-    reachable: true,
-  }
+  // ⭐⭐ A THROW HERE IS "COULDN'T ASK", NOT A CRASH — and this catch is
+  // load-bearing rather than defensive habit. This function runs on the ambiguous
+  // path, the one reached only when a write has already gone wrong; if it throws,
+  // the throw escapes runVisitIntent, escapes the caller's try/finally, and the
+  // worker gets NOTHING AT ALL — no toast, no state change, no queued op. The
+  // single worst outcome in the product (work silently lost with a screen that
+  // looks fine) would be produced by the very code meant to prevent it.
+  //
+  // loadCrewDay is documented to RESOLVE with { kind: 'error' } rather than
+  // throw, so this should be unreachable — but "should be" is exactly the
+  // assumption that costs a day's work, and a real browser run proved the shape:
+  // any client that raises instead of resolving lands here. Unreachable →
+  // queue it, which is always safe (the handler reconciles at replay).
+  try {
+    const res = await loadCrewDay(supabase, date)
+    if (res.kind === 'error') return { facts: null, reachable: false }
+    if (res.kind === 'revoked') return { facts: null, reachable: true }
+    const s = res.day.stops.find(x => x.id === jobId)
+    if (!s) return { facts: null, reachable: true }
+    return {
+      facts: { status: s.status, started_at: s.started_at, completed_at: s.completed_at, updated_at: s.updated_at },
+      reachable: true,
+    }
+  } catch { return { facts: null, reachable: false } }
 }
 
 async function queueVisit(intent: VisitIntent, stop: CrewStop, date: string, why: string): Promise<FieldSaveResult> {
