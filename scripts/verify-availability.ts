@@ -221,18 +221,31 @@ H('6. Only APPROVED time off subtracts anybody')
   // The last one is what keeps a deploy that lands before its migration honest:
   // reading a missing status as "not approved" would empty the balances, which
   // is a WRONG NUMBER rather than an unknown.
-  const consumers = [
-    'src/app/dashboard/dispatch/time-off/page.tsx',
-    'src/app/dashboard/dispatch/payroll/page.tsx',
-    'src/app/dashboard/dispatch/payroll/history/[id]/page.tsx',
-    'src/app/dashboard/workforce/page.tsx',
-    'src/components/workforce/TeamAvailabilityWeek.tsx',
+  // ⚠️ Assert the filter is APPLIED, not merely imported — an unused import
+  // satisfies a bare /isBookedOff/ grep, and two mutants proved it: removing
+  // `.filter(isBookedOff)` from the payroll and workforce reads went unnoticed
+  // while the import line sat there. Each consumer names the expression that
+  // actually narrows its own read.
+  const consumers: { file: string; applied: RegExp }[] = [
+    { file: 'src/app/dashboard/dispatch/time-off/page.tsx',
+      applied: /entries\.filter\(isBookedOff\)/ },
+    { file: 'src/app/dashboard/dispatch/payroll/page.tsx',
+      applied: /\(\(ptoRes\.data as PtoEntry\[\]\) \?\? \[\]\)\.filter\(isBookedOff\)/ },
+    { file: 'src/app/dashboard/dispatch/payroll/history/[id]/page.tsx',
+      applied: /\(\(ptoRes\.data as PtoEntry\[\]\) \?\? \[\]\)\.filter\(isBookedOff\)/ },
+    { file: 'src/app/dashboard/workforce/page.tsx',
+      applied: /\(\(pRes\.data as PtoEntry\[\]\) \?\? \[\]\)\.filter\(isBookedOff\)/ },
+    { file: 'src/components/workforce/TeamAvailabilityWeek.tsx',
+      applied: /ptoEntries\.filter\(isBookedOff\)/ },
   ]
-  for (const f of consumers) {
-    const src = read(f)
-    check(`${f.split('/').slice(-2).join('/')}: filters leave through the shared predicate`,
-      /isBookedOff/.test(src) && !/status === 'approved'/.test(src),
-      'must use isBookedOff, never an inline status comparison')
+  for (const c of consumers) {
+    const src = read(c.file)
+    const label = c.file.split('/').slice(-2).join('/')
+    check(`${label}: the leave read is narrowed by the shared predicate`,
+      c.applied.test(src), 'the filter is not applied to this file’s pto_entries read')
+    check(`${label}: and does not compare the status inline`,
+      !/status === 'approved'/.test(src),
+      'a second definition of "counts as leave" is a second engine')
   }
 }
 
