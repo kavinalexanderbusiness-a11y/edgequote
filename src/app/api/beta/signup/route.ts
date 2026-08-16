@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { commsEnabled, sendEmail } from '@/lib/comms/send'
 import { normalizeInviteEmail, isPlausibleEmail } from '@/lib/crewInvite'
-import { configuredAppOrigin } from '@/lib/appOrigin'
+import { appOrigin } from '@/lib/appOrigin'
 import {
   BETA_TOKEN_RE, MIN_PASSWORD, buildBetaConfirmUrl,
   type BetaInviteState, type BetaSignupFailureReason, type BetaSignupResponse,
@@ -52,7 +52,7 @@ function fail(reason: BetaSignupFailureReason, message: string, status: number) 
 }
 
 function appOrigin(req: NextRequest): string {
-  return configuredAppOrigin() || req.nextUrl.origin
+  return appOrigin(req.nextUrl.origin)
 }
 
 function clientIp(req: NextRequest): string {

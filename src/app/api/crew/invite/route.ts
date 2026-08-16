@@ -2,11 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { resolveAppRole } from '@/lib/crewAccess'
-import { configuredAppOrigin } from '@/lib/appOrigin'
 import {
   normalizeInviteEmail, isPlausibleEmail, buildSetupUrl,
   type CrewInviteResponse, type CrewInviteFailure,
 } from '@/lib/crewInvite'
+import { crewInviteEmail } from '@/lib/crewInviteServer'
+import { commsEnabled, sendEmail } from '@/lib/comms/send'
+import { appOrigin } from '@/lib/appOrigin'
 
 export const runtime = 'nodejs'          // the service role must never run at the edge
 export const dynamic = 'force-dynamic'
@@ -45,12 +47,10 @@ function fail(reason: CrewInviteFailure['reason'], message: string, status: numb
   return NextResponse.json<CrewInviteResponse>({ ok: false, reason, message }, { status })
 }
 
-/** The origin to build the setup link on. NEXT_PUBLIC_APP_URL is the deploy's
- *  own answer (already used for portal + booking links); the request origin is
- *  the fallback so this works on a preview deploy and in local dev. */
-function appOrigin(req: NextRequest): string {
-  return configuredAppOrigin() || req.nextUrl.origin
-}
+// The origin the setup link is built on comes from lib/appOrigin — THE one
+// answer, which also strips the BOM/quote/slash corruption a hand-entered
+// environment variable can carry. This link is emailed; a value that is wrong by
+// one invisible character is a worker who cannot get in.
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient()
@@ -192,10 +192,40 @@ export async function POST(req: NextRequest) {
       `${tech.name}’s login is connected, but the setup link couldn’t be created. Tap “New link” to try again.`, 502)
   }
 
+  // ── Send it ────────────────────────────────────────────────────────────────
+  // Until 2026-08-15 this route only RETURNED the link, and the owner was left
+  // to deliver it by hand. That is not an invitation flow — it is a link the
+  // owner has to notice, copy out of a modal, and paste somewhere. Worse, the
+  // one time it was done for real the link carried a retired hostname and
+  // nobody found out until the worker tapped it and got a 404.
+  //
+  // So the invitation is now emailed, through the same Resend path every other
+  // account email uses. The link is STILL returned: a send can fail, the owner
+  // may be standing next to the person, and a copyable link is the fallback
+  // that always works. `emailed` says which happened — never assumed.
+  const setupUrl = buildSetupUrl(appOrigin(req.nextUrl.origin), hashed)
+
+  // The employer's name, so the recipient can tell this from phishing. Read with
+  // the caller's OWN client: it is their tenant's row, and RLS is what proves
+  // that — the admin client is never used to read it.
+  const { data: settings } = await supabase
+    .from('business_settings').select('company_name').eq('user_id', user.id).maybeSingle()
+
+  let emailed = false
+  if (commsEnabled().email) {
+    const msg = crewInviteEmail(setupUrl, settings?.company_name ?? null, tech.name)
+    const res = await sendEmail(email, msg.subject, msg.html, msg.text)
+    emailed = res.sent
+    // Reason only — never the address, never the link. A failed send is not a
+    // failed invite: the account exists and the link in the response works.
+    if (!res.sent) console.error('[crew-invite] provider rejected the send:', res.reason, res.error ?? '')
+  }
+
   return NextResponse.json<CrewInviteResponse>({
     ok: true,
     email,
-    setupUrl: buildSetupUrl(appOrigin(req), hashed),
+    setupUrl,
     created,
+    emailed,
   }, { headers: { 'Cache-Control': 'no-store' } })
 }

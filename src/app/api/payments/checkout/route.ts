@@ -4,7 +4,7 @@ import { createInvoiceCheckoutSession, stripeEnabled } from '@/lib/stripe/config
 import { ensureStripeCustomerId, type CardCustomer } from '@/lib/payments/cards'
 import { depositChargeAmount } from '@/lib/payments/deposit'
 import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
-import { configuredAppOrigin } from '@/lib/appOrigin'
+import { appOrigin } from '@/lib/appOrigin'
 
 export const dynamic = 'force-dynamic'
 
@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const base = configuredAppOrigin()
+  const base = appOrigin()
   const result = await createInvoiceCheckoutSession(invoice, {
     successUrl: `${base}/dashboard/invoices?paid=1`,
     cancelUrl: `${base}/dashboard/invoices`,

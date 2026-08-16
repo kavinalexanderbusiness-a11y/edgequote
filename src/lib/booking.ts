@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { configuredAppOrigin } from '@/lib/appOrigin'
+import { appOrigin } from '@/lib/appOrigin'
 
 // ── Online booking link ──────────────────────────────────────────────────────
 // One stable per-owner token powers the public /book/<token> instant-quote page.
@@ -29,6 +29,6 @@ export async function ensureBookingToken(supabase: SupabaseClient, userId: strin
 }
 
 export function bookingUrl(token: string): string {
-  const base = configuredAppOrigin() || (typeof window !== 'undefined' ? window.location.origin : '')
+  const base = appOrigin() || (typeof window !== 'undefined' ? window.location.origin : '')
   return `${base}/book/${token}`
 }

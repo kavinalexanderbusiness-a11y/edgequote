@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { classifyCronHealth, STALE_AFTER_DAYS, type CronVerdict } from '@/lib/cron/heartbeat'
-import { appOriginReport } from '@/lib/appOrigin'
+import { appOrigin, isUsableOrigin } from '@/lib/appOrigin'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -162,19 +162,25 @@ export async function GET() {
   const crons = await cronHealth(url, service, cron)
   const cronsStopped = process.env.VERCEL_ENV === 'production' && cron && crons.readable && !crons.operational
 
-  // The origin every generated link, Stripe return URL and reconstructed webhook
-  // URL is built from. 2026-08-15: this env var was updated for the new domain
-  // and arrived with a UTF-8 BOM in front of it, which broke Stripe checkout,
-  // 403'd every inbound SMS and silently dropped the SMS status callback —
-  // each in a different direction, so no single symptom ever pointed here.
-  // lib/appOrigin now normalizes it, so a repeat is survivable; what this adds is
-  // the part normalization cannot do — SAYING so, rather than quietly papering
-  // over an env var that is still wrong at the source.
-  const appOrigin = appOriginReport()
+  // The origin every generated link, every Stripe return URL and every webhook
+  // URL we RECONSTRUCT to check a signature is built from. On 2026-08-15 this
+  // env var picked up a UTF-8 BOM, which broke Stripe checkout, 403'd every
+  // inbound SMS (the signature is computed over the URL) and silently dropped
+  // the SMS status callback — three different directions of failure, so no
+  // single symptom ever pointed back at the variable.
+  //
   // Configured but unusable = every link this deploy sends is broken. That is an
   // outage, and it degrades. Production only, for the same reason as the crons:
-  // a local run legitimately has no origin configured.
-  const appOriginUnusable = process.env.VERCEL_ENV === 'production' && appOrigin.configured && !appOrigin.usable
+  // a local run legitimately has no origin configured, and degrading there would
+  // train everyone to ignore the word.
+  //
+  // Note the asymmetry with the BOM: cleanOrigin REPAIRS a value that merely
+  // picked something up in transit, so that case is not an outage and does not
+  // degrade — app_url_raw is what exposes it. This catches the value cleaning
+  // cannot rescue: a host with no scheme, or something that is not a URL at all.
+  const appOriginUnusable = process.env.VERCEL_ENV === 'production'
+    && !!process.env.NEXT_PUBLIC_APP_URL?.trim()
+    && !isUsableOrigin(process.env.NEXT_PUBLIC_APP_URL)
 
   const down = !checks.database.ok
   const degraded = !checks.config.ok || stripeKeyOnly || cronsDeclaredButUnusable || cronsStopped || appOriginUnusable
@@ -191,12 +197,14 @@ export async function GET() {
       // reporting it leaks nothing, and it makes the failure mode "the domain
       // moved but the env var didn't" (every emailed link 404s, silently)
       // visible from one curl instead of from a confused worker's screenshot.
-      app_url: appOrigin.origin,
+      //
+      // Reported RAW and CLEANED. The raw value is what caught a UTF-8 BOM
+      // pasted in by a shell on 2026-08-15 — invisible in every dashboard, and
+      // enough to break every link. app_url is what links actually carry.
+      app_url: appOrigin() || null,
+      app_url_raw: process.env.NEXT_PUBLIC_APP_URL || null,
       ...(appOriginUnusable
-        ? { app_url_warning: 'NEXT_PUBLIC_APP_URL is set but is not a usable http(s) origin — every generated link, Stripe return URL and signature-checked webhook URL is built from it' }
-        : {}),
-      ...(appOrigin.sanitized
-        ? { app_url_warning: 'NEXT_PUBLIC_APP_URL contains characters that had to be stripped (invisible characters, or a path/trailing content). Links are correct because the app normalizes it — fix the env var at the source anyway' }
+        ? { app_url_warning: 'NEXT_PUBLIC_APP_URL is set but is not a usable http(s) origin — every generated link, every Stripe return URL and every signature-checked webhook URL is built from it' }
         : {}),
       checks,
       capabilities: {

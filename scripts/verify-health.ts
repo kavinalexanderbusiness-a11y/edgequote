@@ -125,19 +125,22 @@ H('4. THE LINK ORIGIN — the deploy must report the origin it stamps into links
 // so. The env var cannot be asserted from here; what CAN be pinned is that
 // /api/health reports it, so one curl against a deploy answers "which origin do
 // generated links use?" instead of a worker's screenshot being the detector.
-// 2026-08-15, the sequel: the env var was updated for the new domain and arrived
-// with a UTF-8 BOM in front of it. Reporting the RAW value was what made that
-// findable — but only to an eye that noticed an invisible character in JSON. So
-// the origin is now normalized in lib/appOrigin and health reports the origin
-// links ACTUALLY use, plus a warning when the stored value needed repair.
-check('health reports the app origin it actually stamps into links',
-  /app_url:\s*appOrigin\.origin/.test(health), true)
-check('health warns when the configured origin had to be sanitized',
-  /appOrigin\.sanitized/.test(health) && /app_url_warning/.test(health), true)
-// The degrade is the point: a configured-but-unusable origin means every emailed
-// link, Stripe return URL and signature-checked webhook URL is built on sand.
+// Reported twice on purpose: the CLEANED origin is what links actually carry,
+// and the RAW value is what catches a corruption you cannot see — a UTF-8 BOM
+// pasted in by a shell was invisible in the dashboard and broke every link.
+check('health reports the origin links are built on (cleaned)',
+  /app_url:\s*appOrigin\(\)/.test(health), true)
+check('health also reports the raw configured value',
+  /app_url_raw:\s*process\.env\.NEXT_PUBLIC_APP_URL/.test(health), true)
+
+// …and the case cleaning CANNOT rescue. A BOM is repaired, so it is not an
+// outage; a value that is not a URL at all (a host with no scheme, a typo)
+// leaves every emailed link, Stripe return URL and signature-checked webhook
+// URL built on sand, and that must not sit inside a body that says "ok".
 check('a configured-but-unusable app origin degrades the deploy',
-  /appOriginUnusable/.test(health) && /degraded\s*=[^\n]*appOriginUnusable/.test(health), true)
+  /appOriginUnusable/.test(health) && /const\s+degraded\s*=[^\n]*appOriginUnusable/.test(health), true)
+check('…and the deploy says which variable is at fault',
+  /app_url_warning/.test(health), true)
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:health — ${pass} passed, ${fail} failed\n`)

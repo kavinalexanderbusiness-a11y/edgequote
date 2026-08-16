@@ -1,38 +1,36 @@
 // ── App origin verification — npm run verify:app-origin ─────────────────────
 //
-// THE invariant this pins: the origin every generated link is built from is
-// resolved in ONE place, is normalized before use, and a deploy whose configured
-// origin is unusable says so instead of sending broken links quietly.
+// THE invariant this pins: EVERY door that builds a link, a Stripe return URL or
+// a webhook URL gets its origin from lib/appOrigin — never from a raw env read.
 //
-// The production state it was written for (2026-08-15): the domain moved to
-// app.edgehq.ca and the new value was pasted into Vercel with a UTF-8 BOM
-// (U+FEFF) in front of it. /api/health reported
-//     "app_url": "<U+FEFF>https://app.edgehq.ca"
-// which renders identically to the correct value in every viewer. Downstream,
-// each consumer failed in a DIFFERENT direction, so no single symptom pointed
-// back here:
-//   · new URL(origin)            → throws Invalid URL
-//   · Stripe success_url         → rejected; Pay Now 502s
-//   · Twilio signature check     → HMAC over the BOM'd URL never matches the one
-//                                  Twilio computed → 403 on every inbound SMS
-//   · /^https:\/\//.test(base)   → false → the SMS status callback silently
-//                                  stopped being attached; sends "succeed" with
-//                                  no delivery updates, forever
+// Deliberately COMPLEMENTARY to verify:crew-auth, which already drives
+// cleanOrigin over the corruption shapes it was written for (BOM, quotes,
+// newlines, trailing slash). This guard covers the three things that one does
+// not, all learned on 2026-08-15:
 //
-// Four halves, so a regression on any of them fails loudly:
-//   1. normalizeOrigin — the pure decision table, including the exact production
-//      value that caused the outage.
-//   2. The Twilio consequence — proved behaviourally against the real signing
-//      algorithm, not asserted in a comment.
-//   3. ONE READER — no file outside lib/appOrigin.ts may read the env var to
-//      build an origin. This is the half that stops the bug coming back: the
-//      normalizer is worthless if the next door re-reads process.env directly.
-//   4. Health honesty — an unusable origin degrades, a sanitized one is reported.
+//   1. THE INVISIBLES trim() CANNOT REACH. cleanOrigin leans on trim() for the
+//      BOM, which is correct — U+FEFF is WhiteSpace in ECMAScript. But U+200B
+//      and the bidi controls are NOT, so trim() walks straight past them. The
+//      explicit replace is therefore load-bearing, and this file is the reason a
+//      future mutation test will not delete it as "dead" the way the BOM replace
+//      (correctly) was.
+//
+//   2. ONE READER, ACROSS ALL OF src/. The fix that landed with the crew-invite
+//      lane cleaned three doors — crew invite, password reset, health. Seventeen
+//      others still read process.env.NEXT_PUBLIC_APP_URL raw, including
+//      /api/sms/inbound, where the origin is not decoration: the Twilio signature
+//      is an HMAC over the reconstructed URL, so a corrupt origin does not
+//      produce an ugly link, it produces 403 on every inbound message. A
+//      normalizer only helps the callers that actually call it.
+//
+//   3. THE TWILIO CONSEQUENCE, PROVED. Re-implements the real signing algorithm
+//      and shows the mismatch appearing and disappearing, so the claim in the
+//      comments is executable rather than remembered.
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import crypto from 'node:crypto'
-import { normalizeOrigin, configuredAppOrigin, appOriginReport } from '../src/lib/appOrigin'
+import { cleanOrigin, appOrigin, isUsableOrigin } from '../src/lib/appOrigin'
 
 const ROOT = join(__dirname, '..')
 
@@ -49,65 +47,49 @@ function ok(name: string, cond: boolean, detail = '') {
   else { fail++; console.log(`  ❌ ${name}${detail ? `\n     ${detail}` : ''}`) }
 }
 
-// Built from char codes so this file stays pure ASCII — a literal BOM in a test
-// fixture is invisible in a diff, which is the property that caused the outage.
-const BOM = String.fromCharCode(0xFEFF)
-const ZWSP = String.fromCharCode(0x200B)
-const RLO = String.fromCharCode(0x202E)
+// Built from char codes so this file stays pure ASCII. A literal zero-width
+// character in a test fixture is invisible in review — the exact property that
+// let the production value stay broken through a migration everyone watched.
+const ZWSP = String.fromCharCode(0x200B)   // zero-width space   — NOT trim()-able
+const RLO = String.fromCharCode(0x202E)    // bidi override      — NOT trim()-able
+const LRM = String.fromCharCode(0x200E)    // left-to-right mark — NOT trim()-able
+const BOM = String.fromCharCode(0xFEFF)    // byte-order mark    — trim() takes this one
 const GOOD = 'https://app.edgehq.ca'
 
 // ═══════════════════════════════════════════════════════════════════════════
-H('1. normalizeOrigin — the decision table')
+H('1. the invisibles trim() cannot reach')
 
-check('THE production regression: a BOM-prefixed origin is repaired',
-  normalizeOrigin(BOM + GOOD), GOOD)
-check('a clean origin is returned unchanged', normalizeOrigin(GOOD), GOOD)
-check('a trailing slash is dropped', normalizeOrigin(GOOD + '/'), GOOD)
-check('several trailing slashes are dropped', normalizeOrigin(GOOD + '///'), GOOD)
-check('surrounding whitespace is dropped', normalizeOrigin('  ' + GOOD + '  '), GOOD)
-check('a zero-width space is stripped', normalizeOrigin(GOOD + ZWSP), GOOD)
-check('a bidi override is stripped', normalizeOrigin(RLO + GOOD), GOOD)
-check('a path is reduced to the origin', normalizeOrigin(GOOD + '/dashboard?x=1'), GOOD)
-check('http is allowed (local/preview deploys)', normalizeOrigin('http://localhost:3000'), 'http://localhost:3000')
-check('a port is preserved', normalizeOrigin('https://app.edgehq.ca:8443'), 'https://app.edgehq.ca:8443')
+// The premise, asserted so the reasoning above cannot rot: these really are
+// invisible to trim(), so the explicit replace really is doing the work.
+check('premise: trim() does NOT remove a zero-width space', (ZWSP + GOOD).trim(), ZWSP + GOOD)
+check('premise: trim() DOES remove the BOM (so re-listing it would be dead code)',
+  (BOM + GOOD).trim(), GOOD)
 
-// The refusals. Every one of these must read as ABSENT, never as a guess.
-check('undefined → absent', normalizeOrigin(undefined), '')
-check('null → absent', normalizeOrigin(null), '')
-check('empty → absent', normalizeOrigin(''), '')
-check('whitespace only → absent', normalizeOrigin('   '), '')
-check('invisible characters only → absent', normalizeOrigin(BOM + ZWSP), '')
-check('a bare host with no scheme → absent', normalizeOrigin('app.edgehq.ca'), '')
-check('not a URL at all → absent', normalizeOrigin('not a url'), '')
-check('a javascript: URL → absent', normalizeOrigin('javascript:alert(1)'), '')
-check('a mailto: URL → absent', normalizeOrigin('mailto:a@b.ca'), '')
-check('a file: URL → absent', normalizeOrigin('file:///etc/passwd'), '')
+check('a leading zero-width space is stripped', cleanOrigin(ZWSP + GOOD), GOOD)
+check('a trailing zero-width space is stripped', cleanOrigin(GOOD + ZWSP), GOOD)
+check('a bidi override is stripped', cleanOrigin(RLO + GOOD), GOOD)
+check('a left-to-right mark is stripped', cleanOrigin(LRM + GOOD), GOOD)
+check('one embedded in the host is stripped', cleanOrigin('https://app' + ZWSP + '.edgehq.ca'), GOOD)
+check('invisibles combined with the shapes crew-auth covers',
+  cleanOrigin(' "' + ZWSP + GOOD + '/" '), GOOD)
+check('a value that is ONLY invisible characters is empty, not a stray character',
+  cleanOrigin(ZWSP + RLO), '')
 
 // ═══════════════════════════════════════════════════════════════════════════
-H('2. the Twilio consequence — proved, not asserted')
+H('2. isUsableOrigin — the value cleaning cannot rescue')
 
-// The real signing scheme (lib/comms/twilioSignature): HMAC-SHA1 over the URL
-// followed by the sorted params, base64. Reproduced here so the test fails if the
-// normalizer stops repairing the URL — not merely if a comment goes stale.
-function twilioSig(url: string, params: Record<string, string>, token: string): string {
-  const data = url + Object.keys(params).sort().map(k => k + params[k]).join('')
-  return crypto.createHmac('sha1', token).update(Buffer.from(data, 'utf-8')).digest('base64')
-}
-const TOKEN = 'test_auth_token'
-const PARAMS = { From: '+15875551234', Body: 'STOP', MessageSid: 'SM123' }
-const realUrl = `${GOOD}/api/sms/inbound`
-
-ok('a BOM in the origin DOES break the signature (the outage, reproduced)',
-  twilioSig(realUrl, PARAMS, TOKEN) !== twilioSig(BOM + realUrl, PARAMS, TOKEN))
-ok('…and normalizing the origin makes the signature match again',
-  twilioSig(realUrl, PARAMS, TOKEN) === twilioSig(`${normalizeOrigin(BOM + GOOD)}/api/sms/inbound`, PARAMS, TOKEN))
+ok('a clean https origin is usable', isUsableOrigin(GOOD))
+ok('http is usable (local and preview deploys)', isUsableOrigin('http://localhost:3000'))
+ok('a BOM-corrupted value is STILL usable — cleaning repairs it', isUsableOrigin(BOM + GOOD))
+ok('a host with no scheme is NOT usable', !isUsableOrigin('app.edgehq.ca'))
+ok('a javascript: URL is NOT usable', !isUsableOrigin('javascript:alert(1)'))
+ok('a mailto: URL is NOT usable', !isUsableOrigin('mailto:a@b.ca'))
+ok('nonsense is NOT usable', !isUsableOrigin('not a url'))
+ok('an absent value is NOT usable', !isUsableOrigin(undefined))
 
 // ═══════════════════════════════════════════════════════════════════════════
-H('3. ONE READER — the half that stops it coming back')
+H('3. ONE READER — every door, not just the three that were bleeding')
 
-// Walk src/ and find every file that reads the env var directly. Only the engine
-// may: a door that re-reads process.env has opted out of normalization, which is
-// exactly how this bug reached eleven call sites in the first place.
 function walk(dir: string, out: string[] = []): string[] {
   for (const e of readdirSync(dir)) {
     const p = join(dir, e)
@@ -117,53 +99,103 @@ function walk(dir: string, out: string[] = []): string[] {
   return out
 }
 const ENGINE = join(ROOT, 'src', 'lib', 'appOrigin.ts')
+// The ONE deliberate exception, and the reason it is allowed: /api/health
+// reports the RAW value as app_url_raw. That is the whole diagnostic — a
+// corrupted origin is invisible once cleaned, and reporting only the clean
+// answer would have hidden the BOM that broke every link. It is allowed to READ
+// the variable; it is asserted below that it never BUILDS a URL from it.
+const HEALTH = join(ROOT, 'src', 'app', 'api', 'health', 'route.ts')
+const ALLOWED = [ENGINE, HEALTH]
 const readers = walk(join(ROOT, 'src')).filter(p => {
   const src = readFileSync(p, 'utf8')
-  // Strip line comments before looking: the var is NAMED in prose all over the
-  // codebase, and a comment mentioning it is not a reader.
-  const code = src.split('\n').filter(l => !l.trimStart().startsWith('//') && !l.trimStart().startsWith('*')).join('\n')
+  // The variable is NAMED in prose all over this codebase; a comment is not a read.
+  const code = src.split('\n').filter(l => {
+    const s = l.trimStart()
+    return !s.startsWith('//') && !s.startsWith('*') && !s.startsWith('/*')
+  }).join('\n')
   return /process\.env\.NEXT_PUBLIC_APP_URL/.test(code)
 })
-const strays = readers.filter(p => p !== ENGINE).map(p => p.slice(ROOT.length + 1).replace(/\\/g, '/'))
-ok('lib/appOrigin.ts is the ONLY reader of NEXT_PUBLIC_APP_URL in src/',
+const strays = readers.filter(p => !ALLOWED.includes(p)).map(p => p.slice(ROOT.length + 1).replace(/\\/g, '/'))
+
+ok('lib/appOrigin.ts is the only place src/ reads NEXT_PUBLIC_APP_URL to build an origin',
   strays.length === 0,
-  strays.length ? `also read raw by:\n     ${strays.join('\n     ')}` : '')
-ok('…and the engine does read it (the guard is not passing vacuously)',
+  strays.length ? `still reading it raw:\n     ${strays.join('\n     ')}` : '')
+ok('…and the engine does read it (this guard is not passing vacuously)',
   readers.includes(ENGINE))
 
+// The exception has to stay an exception. health may read the raw value, but only
+// to REPORT it — the moment it builds a link from it, the allowance is a hole.
+const healthSrc = readFileSync(HEALTH, 'utf8')
+ok('health reads the raw value only to report it (app_url_raw)',
+  /app_url_raw:\s*process\.env\.NEXT_PUBLIC_APP_URL/.test(healthSrc))
+ok('…and health builds its reported origin through appOrigin()',
+  /app_url:\s*appOrigin\(\)/.test(healthSrc))
+ok('…and never interpolates the raw value into a URL',
+  !/\$\{\s*process\.env\.NEXT_PUBLIC_APP_URL/.test(healthSrc))
+
+// The doors where a corrupt origin is not cosmetic. Named individually so a
+// regression says WHICH one, and so deleting a call site fails loudly.
+const CRITICAL: [string, string][] = [
+  ['src/app/api/sms/inbound/route.ts', 'the Twilio signature is computed over this URL — a corrupt origin is 403 on every inbound message'],
+  ['src/app/api/sms/status/route.ts', 'delivery status callbacks'],
+  ['src/app/api/payments/checkout/route.ts', 'Stripe return URLs'],
+  ['src/app/api/portal/pay/route.ts', 'Stripe return URLs for the customer portal'],
+  ['src/app/api/portal/quote-deposit/route.ts', 'Stripe return URLs for deposits'],
+  ['src/app/api/beta/signup/route.ts', 'the beta confirmation link — the front door of the private beta'],
+  ['src/app/api/beta/resend/route.ts', 'the re-sent beta confirmation link'],
+  ['src/app/api/crew/invite/route.ts', 'the worker setup link'],
+  ['src/app/api/public/password-reset/route.ts', 'the password reset link'],
+]
+for (const [rel, why] of CRITICAL) {
+  const src = readFileSync(join(ROOT, rel), 'utf8')
+  ok(`${rel.replace('src/app/api/', '')} builds its origin from lib/appOrigin`,
+    /from '@\/lib\/appOrigin'/.test(src), why)
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
-H('4. health honesty')
+H('4. the Twilio consequence — proved, not asserted')
 
-const health = readFileSync(join(ROOT, 'src', 'app', 'api', 'health', 'route.ts'), 'utf8')
-ok('health reports the origin links are actually built on', /app_url:\s*appOrigin\.origin/.test(health))
-ok('a configured-but-unusable origin degrades the deploy',
-  /appOriginUnusable/.test(health) && /degraded\s*=[^\n]*appOriginUnusable/.test(health))
-ok('a sanitized origin is reported (the fix must not hide its own evidence)',
-  /appOrigin\.sanitized/.test(health) && /app_url_warning/.test(health))
+// The real scheme (lib/comms/twilioSignature): HMAC-SHA1 over the URL followed
+// by the sorted params, base64. Reproduced so this fails if the normalizer ever
+// stops repairing the URL — not merely if a comment goes stale.
+function twilioSig(url: string, params: Record<string, string>, token: string): string {
+  const data = url + Object.keys(params).sort().map(k => k + params[k]).join('')
+  return crypto.createHmac('sha1', token).update(Buffer.from(data, 'utf-8')).digest('base64')
+}
+const TOKEN = 'test_auth_token'
+const PARAMS = { From: '+15875551234', Body: 'STOP', MessageSid: 'SM123' }
+const realUrl = `${GOOD}/api/sms/inbound`
+const expected = twilioSig(realUrl, PARAMS, TOKEN)
 
-// The report's three states, driven through the real env var.
+ok('a corrupt origin DOES break the signature (the outage, reproduced)',
+  twilioSig(ZWSP + realUrl, PARAMS, TOKEN) !== expected)
+ok('…and cleaning the origin makes it match again',
+  twilioSig(`${cleanOrigin(ZWSP + GOOD)}/api/sms/inbound`, PARAMS, TOKEN) === expected)
+ok('…the same holds for the BOM that actually shipped',
+  twilioSig(`${cleanOrigin(BOM + GOOD)}/api/sms/inbound`, PARAMS, TOKEN) === expected)
+
+// The route must reconstruct the URL from the engine, or none of the above helps.
+const inbound = readFileSync(join(ROOT, 'src/app/api/sms/inbound/route.ts'), 'utf8')
+ok('the inbound route reconstructs its URL from appOrigin()',
+  /appOrigin\(\)/.test(inbound) && !/process\.env\.NEXT_PUBLIC_APP_URL/.test(inbound))
+// Guard the guard: signature verification itself must stay strict.
+const sig = readFileSync(join(ROOT, 'src/lib/comms/twilioSignature.ts'), 'utf8')
+ok('signature verification still fails closed with no token or no signature',
+  /if\s*\(!token\s*\|\|\s*!signature\)\s*return false/.test(sig))
+ok('…and still compares in constant time', /timingSafeEqual/.test(sig))
+
+// ═══════════════════════════════════════════════════════════════════════════
+H('5. the configured origin resolves ahead of the request origin')
+
 const saved = process.env.NEXT_PUBLIC_APP_URL
 try {
+  process.env.NEXT_PUBLIC_APP_URL = BOM + GOOD + '/'
+  check('a corrupt configured value still wins over the request origin, cleaned',
+    appOrigin('https://preview.vercel.app'), GOOD)
   delete process.env.NEXT_PUBLIC_APP_URL
-  check('unset → not configured, not usable, not sanitized',
-    appOriginReport(), { origin: null, configured: false, usable: false, sanitized: false })
-
-  process.env.NEXT_PUBLIC_APP_URL = GOOD
-  check('clean → usable, nothing sanitized',
-    appOriginReport(), { origin: GOOD, configured: true, usable: true, sanitized: false })
-  check('configuredAppOrigin returns it', configuredAppOrigin(), GOOD)
-
-  process.env.NEXT_PUBLIC_APP_URL = BOM + GOOD
-  check('THE production value → usable, and flagged as sanitized',
-    appOriginReport(), { origin: GOOD, configured: true, usable: true, sanitized: true })
-
-  process.env.NEXT_PUBLIC_APP_URL = GOOD + '/'
-  check('a trailing slash is benign — repaired but NOT flagged as sanitized',
-    appOriginReport(), { origin: GOOD, configured: true, usable: true, sanitized: false })
-
-  process.env.NEXT_PUBLIC_APP_URL = 'app.edgehq.ca'
-  check('configured but unusable → configured true, usable false',
-    appOriginReport(), { origin: null, configured: true, usable: false, sanitized: false })
+  check('with none configured, the request origin is the honest fallback',
+    appOrigin('http://localhost:3000'), 'http://localhost:3000')
+  check('with neither, the answer is empty — never a guessed host', appOrigin(), '')
 } finally {
   if (saved === undefined) delete process.env.NEXT_PUBLIC_APP_URL
   else process.env.NEXT_PUBLIC_APP_URL = saved

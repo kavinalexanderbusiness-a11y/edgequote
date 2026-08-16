@@ -5,7 +5,7 @@ import { commsEnabled, sendEmail } from '@/lib/comms/send'
 import { buildResetUrl } from '@/lib/passwordRecovery'
 import { normalizeEmail } from '@/lib/portalAccess'
 import { passwordResetEmail, PER_EMAIL_HOURLY, GLOBAL_HOURLY } from '@/lib/passwordRecoveryServer'
-import { configuredAppOrigin } from '@/lib/appOrigin'
+import { appOrigin } from '@/lib/appOrigin'
 
 export const runtime = 'nodejs'          // the service role must never run at the edge
 export const dynamic = 'force-dynamic'
@@ -133,7 +133,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return ok()
   }
 
-  const origin = configuredAppOrigin() || req.nextUrl.origin
+  // lib/appOrigin — the same cleaned answer the crew invitation uses. A reset
+  // link is emailed, so a stray BOM or trailing slash in the configured value is
+  // a locked-out owner, not a cosmetic defect.
+  const origin = appOrigin(req.nextUrl.origin)
   const msg = passwordResetEmail(buildResetUrl(origin, hashed))
   const res = await sendEmail(email, msg.subject, msg.html, msg.text)
 
