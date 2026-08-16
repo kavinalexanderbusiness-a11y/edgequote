@@ -21,6 +21,7 @@ import { Banner } from '@/components/ui/Banner'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { CodeBlock, CopyRow } from './CodeBlock'
+import { configuredAppOrigin } from '@/lib/appOrigin'
 
 const ACTION_LABEL: Record<InboundWebhookRow['action'], string> = {
   lead: 'Create lead (customer + service request)',
@@ -40,7 +41,7 @@ export function InboundHooksManager({ userId }: { userId: string }) {
   const [expandedReceipt, setExpandedReceipt] = useState<string | null>(null)
 
   const base = typeof window !== 'undefined'
-    ? (process.env.NEXT_PUBLIC_APP_URL || window.location.origin).replace(/\/$/, '')
+    ? configuredAppOrigin() || window.location.origin
     : ''
 
   const load = useCallback(async () => {

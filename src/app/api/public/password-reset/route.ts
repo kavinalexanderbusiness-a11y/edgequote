@@ -5,6 +5,7 @@ import { commsEnabled, sendEmail } from '@/lib/comms/send'
 import { buildResetUrl } from '@/lib/passwordRecovery'
 import { normalizeEmail } from '@/lib/portalAccess'
 import { passwordResetEmail, PER_EMAIL_HOURLY, GLOBAL_HOURLY } from '@/lib/passwordRecoveryServer'
+import { configuredAppOrigin } from '@/lib/appOrigin'
 
 export const runtime = 'nodejs'          // the service role must never run at the edge
 export const dynamic = 'force-dynamic'
@@ -132,7 +133,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return ok()
   }
 
-  const origin = (process.env.NEXT_PUBLIC_APP_URL || req.nextUrl.origin).replace(/\/$/, '')
+  const origin = configuredAppOrigin() || req.nextUrl.origin
   const msg = passwordResetEmail(buildResetUrl(origin, hashed))
   const res = await sendEmail(email, msg.subject, msg.html, msg.text)
 

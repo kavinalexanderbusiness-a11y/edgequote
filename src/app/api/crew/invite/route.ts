@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { resolveAppRole } from '@/lib/crewAccess'
+import { configuredAppOrigin } from '@/lib/appOrigin'
 import {
   normalizeInviteEmail, isPlausibleEmail, buildSetupUrl,
   type CrewInviteResponse, type CrewInviteFailure,
@@ -48,7 +49,7 @@ function fail(reason: CrewInviteFailure['reason'], message: string, status: numb
  *  own answer (already used for portal + booking links); the request origin is
  *  the fallback so this works on a preview deploy and in local dev. */
 function appOrigin(req: NextRequest): string {
-  return (process.env.NEXT_PUBLIC_APP_URL || req.nextUrl.origin).replace(/\/$/, '')
+  return configuredAppOrigin() || req.nextUrl.origin
 }
 
 export async function POST(req: NextRequest) {

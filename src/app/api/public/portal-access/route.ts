@@ -4,6 +4,7 @@ import { serviceClient } from '@/lib/cron/guard'
 import { commsEnabled, sendEmail } from '@/lib/comms/send'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { NEUTRAL_RESULT, normalizeEmail, portalAccessEmail, type PortalLink } from '@/lib/portalAccess'
+import { configuredAppOrigin } from '@/lib/appOrigin'
 
 export const dynamic = 'force-dynamic'
 
@@ -124,7 +125,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   const customers = (rows as { customer_id: string; customer_name: string | null; owner_id: string }[]) ?? []
 
-  const origin = req.nextUrl?.origin || process.env.NEXT_PUBLIC_APP_URL || ''
+  const origin = req.nextUrl?.origin || configuredAppOrigin()
   const links: PortalLink[] = []
   for (const c of customers) {
     // Respect a withdrawn portal. ensurePortalToken only looks for a LIVE token

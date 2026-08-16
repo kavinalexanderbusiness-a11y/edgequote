@@ -20,6 +20,7 @@ import { BACKOFF_MINUTES, MAX_ATTEMPTS, AUTO_DISABLE_AFTER, RETENTION_DAYS } fro
 // crypto-browserify polyfill into this page's browser bundle. Same constants,
 // same no-drift contract.
 import { API_RATE_LIMIT_PER_MINUTE, SIGNATURE_HEADER, SIGNATURE_TOLERANCE_SECONDS } from '@/lib/integrations/constants'
+import { configuredAppOrigin } from '@/lib/appOrigin'
 
 const RESOURCES: { path: string; method: string; scope: string; note: string }[] = [
   { path: '/api/v1/me', method: 'GET', scope: 'read', note: 'Key introspection — use as the connection test.' },
@@ -54,7 +55,7 @@ export function verifyEdgeQuote(secret, header, rawBody) {
 export default function IntegrationDocsPage() {
   const [base, setBase] = useState('https://your-app.example')
   useEffect(() => {
-    setBase((process.env.NEXT_PUBLIC_APP_URL || window.location.origin).replace(/\/$/, ''))
+    setBase(configuredAppOrigin() || window.location.origin)
   }, [])
 
   return (

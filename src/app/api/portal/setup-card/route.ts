@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { stripeEnabled, createSetupCheckoutSession } from '@/lib/stripe/config'
 import { ensureStripeCustomerId } from '@/lib/payments/cards'
 import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
+import { configuredAppOrigin } from '@/lib/appOrigin'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -37,7 +38,7 @@ export async function POST(req: NextRequest) {
   if (!ensured.id) return NextResponse.json({ error: ensured.error || 'Could not start card setup.' }, { status: 502 })
   const stripeCustomerId = ensured.id
 
-  const origin = (req.nextUrl?.origin || process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/$/, '')
+  const origin = req.nextUrl?.origin || configuredAppOrigin()
   const result = await createSetupCheckoutSession({
     stripeCustomerId,
     successUrl: `${origin}/portal/${token}?cardsaved=1`,

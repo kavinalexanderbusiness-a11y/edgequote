@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { constructWebhookEvent, fetchSetupIntentCard, fetchPaymentIntentCard } from '@/lib/stripe/config'
 import { saveCardForCustomer } from '@/lib/payments/cards'
 import { sendPaymentReceipt } from '@/lib/comms/receipt'
+import { configuredAppOrigin } from '@/lib/appOrigin'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -41,7 +42,7 @@ export async function POST(req: NextRequest) {
   }
   const sb = createClient(url, svc)
   const now = () => new Date().toISOString()
-  const origin = req.nextUrl?.origin || process.env.NEXT_PUBLIC_APP_URL || ''
+  const origin = req.nextUrl?.origin || configuredAppOrigin()
   const cad = (n: number) => new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(n)
   // Find the recorded payment (+ its invoice number) for a Stripe PaymentIntent —
   // used by the refund + dispute branches to locate the affected invoice/owner.

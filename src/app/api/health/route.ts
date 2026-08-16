@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { classifyCronHealth, STALE_AFTER_DAYS, type CronVerdict } from '@/lib/cron/heartbeat'
+import { appOriginReport } from '@/lib/appOrigin'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -161,8 +162,22 @@ export async function GET() {
   const crons = await cronHealth(url, service, cron)
   const cronsStopped = process.env.VERCEL_ENV === 'production' && cron && crons.readable && !crons.operational
 
+  // The origin every generated link, Stripe return URL and reconstructed webhook
+  // URL is built from. 2026-08-15: this env var was updated for the new domain
+  // and arrived with a UTF-8 BOM in front of it, which broke Stripe checkout,
+  // 403'd every inbound SMS and silently dropped the SMS status callback —
+  // each in a different direction, so no single symptom ever pointed here.
+  // lib/appOrigin now normalizes it, so a repeat is survivable; what this adds is
+  // the part normalization cannot do — SAYING so, rather than quietly papering
+  // over an env var that is still wrong at the source.
+  const appOrigin = appOriginReport()
+  // Configured but unusable = every link this deploy sends is broken. That is an
+  // outage, and it degrades. Production only, for the same reason as the crons:
+  // a local run legitimately has no origin configured.
+  const appOriginUnusable = process.env.VERCEL_ENV === 'production' && appOrigin.configured && !appOrigin.usable
+
   const down = !checks.database.ok
-  const degraded = !checks.config.ok || stripeKeyOnly || cronsDeclaredButUnusable || cronsStopped
+  const degraded = !checks.config.ok || stripeKeyOnly || cronsDeclaredButUnusable || cronsStopped || appOriginUnusable
 
   return NextResponse.json(
     {
@@ -176,7 +191,13 @@ export async function GET() {
       // reporting it leaks nothing, and it makes the failure mode "the domain
       // moved but the env var didn't" (every emailed link 404s, silently)
       // visible from one curl instead of from a confused worker's screenshot.
-      app_url: process.env.NEXT_PUBLIC_APP_URL || null,
+      app_url: appOrigin.origin,
+      ...(appOriginUnusable
+        ? { app_url_warning: 'NEXT_PUBLIC_APP_URL is set but is not a usable http(s) origin — every generated link, Stripe return URL and signature-checked webhook URL is built from it' }
+        : {}),
+      ...(appOrigin.sanitized
+        ? { app_url_warning: 'NEXT_PUBLIC_APP_URL contains characters that had to be stripped (invisible characters, or a path/trailing content). Links are correct because the app normalizes it — fix the env var at the source anyway' }
+        : {}),
       checks,
       capabilities: {
         payments: stripe,

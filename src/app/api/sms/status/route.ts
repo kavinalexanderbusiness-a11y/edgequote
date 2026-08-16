@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { verifyTwilioSignature } from '@/lib/comms/twilioSignature'
 import { applyDelivery, twilioStatus } from '@/lib/comms/delivery'
+import { configuredAppOrigin } from '@/lib/appOrigin'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -24,7 +25,7 @@ export async function POST(req: NextRequest) {
     const params: Record<string, string> = {}
     form.forEach((v, k) => { params[k] = String(v) })
 
-    const url = `${(process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/$/, '')}/api/sms/status`
+    const url = `${configuredAppOrigin()}/api/sms/status`
     if (!verifyTwilioSignature(url, params, req.headers.get('x-twilio-signature'))) {
       return new NextResponse('forbidden', { status: 403 })
     }

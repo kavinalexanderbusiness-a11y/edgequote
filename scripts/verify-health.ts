@@ -125,8 +125,19 @@ H('4. THE LINK ORIGIN — the deploy must report the origin it stamps into links
 // so. The env var cannot be asserted from here; what CAN be pinned is that
 // /api/health reports it, so one curl against a deploy answers "which origin do
 // generated links use?" instead of a worker's screenshot being the detector.
-check('health reports the configured app origin (app_url)',
-  /app_url:\s*process\.env\.NEXT_PUBLIC_APP_URL\s*\|\|\s*null/.test(health), true)
+// 2026-08-15, the sequel: the env var was updated for the new domain and arrived
+// with a UTF-8 BOM in front of it. Reporting the RAW value was what made that
+// findable — but only to an eye that noticed an invisible character in JSON. So
+// the origin is now normalized in lib/appOrigin and health reports the origin
+// links ACTUALLY use, plus a warning when the stored value needed repair.
+check('health reports the app origin it actually stamps into links',
+  /app_url:\s*appOrigin\.origin/.test(health), true)
+check('health warns when the configured origin had to be sanitized',
+  /appOrigin\.sanitized/.test(health) && /app_url_warning/.test(health), true)
+// The degrade is the point: a configured-but-unusable origin means every emailed
+// link, Stripe return URL and signature-checked webhook URL is built on sand.
+check('a configured-but-unusable app origin degrades the deploy',
+  /appOriginUnusable/.test(health) && /degraded\s*=[^\n]*appOriginUnusable/.test(health), true)
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:health — ${pass} passed, ${fail} failed\n`)

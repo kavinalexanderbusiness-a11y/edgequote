@@ -11,6 +11,7 @@ import { logSend } from '@/lib/comms/log'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { claimSend, finalizeSend } from '@/lib/comms/idempotency'
 import { tenantCapabilities } from '@/lib/capabilities'
+import { configuredAppOrigin } from '@/lib/appOrigin'
 
 // Manual send — fired by an owner action (Day Ops one-tap buttons, the editable
 // scheduler composer, Weather Ops notifications, quote/invoice send). Uses the
@@ -81,7 +82,7 @@ export async function POST(req: NextRequest) {
   const token = await ensurePortalToken(supabase, user.id, customerId)
   // Build portal links off the REQUEST origin so they're always absolute and work
   // in SMS/email (NEXT_PUBLIC_APP_URL may be unset in some deploys).
-  const origin = req.nextUrl?.origin || process.env.NEXT_PUBLIC_APP_URL || ''
+  const origin = req.nextUrl?.origin || configuredAppOrigin()
   const msgVars = {
     firstName: c.name,
     // Neutral fallback — never sign messages with a brand the owner didn't set.
