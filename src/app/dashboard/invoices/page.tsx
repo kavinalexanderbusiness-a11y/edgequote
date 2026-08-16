@@ -160,8 +160,15 @@ export default function InvoicesPage() {
           .from('payments').select('customer_id, amount').eq('user_id', user.id).eq('kind', 'credit')),
         // Every invoice-linked ledger row → permanent per-invoice receipts + revert.
         // Paged: past 1000 payments, an invoice would silently lose its receipts.
+        // `in ('payment','tip')` rather than `eq 'payment'`: a gratuity taken with
+        // an online payment belongs on that invoice's payment list — it is money
+        // the customer sent alongside this bill, and an owner looking at the
+        // invoice should see it there rather than only in the ledger. It changes
+        // no figure: the balance comes from invoices.amount_paid, which the
+        // trigger derives from kind='payment' alone. Credit rows stay excluded —
+        // they are the liability ledger and have their own reader above.
         pageAll<Payment>(() => supabase
-          .from('payments').select('*').eq('user_id', user.id).eq('kind', 'payment').not('invoice_id', 'is', null).order('paid_at', { ascending: true })),
+          .from('payments').select('*').eq('user_id', user.id).in('kind', ['payment', 'tip']).not('invoice_id', 'is', null).order('paid_at', { ascending: true })),
       ])
       // A failed fetch must NOT render as "No invoices yet" on billing day.
       if (iRes.error) { setLoadError('Could not load invoices: ' + iRes.error); return }

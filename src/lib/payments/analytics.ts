@@ -25,16 +25,27 @@ const round2 = (n: number) => Math.round(n * 100) / 100
 //   overpaymentToCredit  → kind=payment, provider=credit, amt<0  → NOT cash
 //                        + kind=credit,  amount>0                → credit issued
 //   recordRefund         → kind=payment, provider=refund, amt<0  → cash out
+//   the Stripe webhook   → kind=tip,     amt>0                   → GRATUITY, not cash
+//                        + kind=tip,     amt<0                   → gratuity reversed
 //
 // The trap this closes: "settled from credit" is kind='payment' with a POSITIVE
 // amount, so anything that types a row by `kind` alone (or by the sign of the
 // amount) calls it a payment and counts the customer's deposit as revenue twice.
+//
+// A tip has the same shape of trap in reverse: it is a positive row with a
+// provider of 'stripe', so the final fall-through would have called it 'Payment'
+// and put a gratuity in a column labelled revenue. It gets its own name, and
+// every consumer of this classifier — the portal's payment list, the owner's
+// payments table, both CSV exports — inherits the fix without knowing about tips.
 export type LedgerRowType =
   | 'Payment' | 'Refund' | 'Settled from credit' | 'Overpayment to credit'
-  | 'Credit issued' | 'Credit applied'
+  | 'Credit issued' | 'Credit applied' | 'Tip' | 'Tip refunded'
 
 export function ledgerRowType(r: { kind?: string | null; provider?: string | null; amount?: number | null }): LedgerRowType {
   const amt = Number(r.amount) || 0
+  // Gratuity. Checked FIRST: it is neither cash toward an invoice nor a credit
+  // movement, and it must never fall through to either.
+  if (r.kind === 'tip') return amt >= 0 ? 'Tip' : 'Tip refunded'
   // The credit LEDGER — the liability side. Never cash.
   if (r.kind === 'credit') return amt >= 0 ? 'Credit issued' : 'Credit applied'
   // A payment row settled FROM credit: real settlement, but the cash arrived

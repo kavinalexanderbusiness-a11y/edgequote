@@ -329,7 +329,13 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
   const depositPayments = new Set<TlPayment>()
   const byInvoice = new Map<string, TlPayment[]>()
   for (const p of s.payments || []) {
-    if (p.status !== 'paid' || p.kind === 'credit' || !p.invoice_id) continue
+    // `kind !== 'payment'` rather than `kind === 'credit'`: this walk decides
+    // whether an up-front DEPOSIT ASK has been covered, and only money applied to
+    // the invoice can cover it. A tip carries invoice_id (it belongs on the same
+    // receipt and the same timeline) but is not payment toward the bill — an
+    // exclusion list would have let it count toward `covered` and either satisfy
+    // a deposit that was never paid, or mislabel the next real payment.
+    if (p.status !== 'paid' || p.kind !== 'payment' || !p.invoice_id) continue
     const list = byInvoice.get(p.invoice_id)
     if (list) list.push(p); else byInvoice.set(p.invoice_id, [p])
   }
@@ -352,7 +358,19 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
   for (const p of s.payments || []) {
     if (p.status !== 'paid') continue
     const amt = Number(p.amount) || 0
-    if (p.kind === 'credit') {
+    if (p.kind === 'tip') {
+      // Its own event, never folded into "Payment received": a tip is money the
+      // customer chose to give on top of the bill, and the invoice it links to
+      // is UNCHANGED by it. The sub-line says so, because "Tip · $75" beside an
+      // invoice number otherwise reads as part of what was owed.
+      const inv = p.invoice_id ? invoiceById.get(p.invoice_id) : undefined
+      out.push({
+        at: p.created_at, kind: 'payment',
+        title: `${amt >= 0 ? 'Tip received' : 'Tip refunded'} · ${money(Math.abs(amt))}`,
+        sub: join(inv ? `with ${inv.invoice_number}` : null, 'not part of the invoice total'),
+        href: inv ? `/dashboard/invoices?invoice=${encodeURIComponent(inv.invoice_number)}` : undefined,
+      })
+    } else if (p.kind === 'credit') {
       out.push({ at: p.created_at, kind: 'credit', title: `${amt >= 0 ? 'Credit added' : 'Credit applied'} · ${money(Math.abs(amt))}`, sub: p.notes || undefined })
     } else if (amt < 0) {
       out.push({ at: p.created_at, kind: 'refund', title: `Refund · ${money(Math.abs(amt))}`, sub: p.notes || undefined })

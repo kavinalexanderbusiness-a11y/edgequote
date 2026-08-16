@@ -843,7 +843,13 @@ export interface Payment {
   amount: number
   currency: string
   provider: string
-  kind: 'payment' | 'credit'
+  /** 'payment' = money applied to an invoice — the ONLY kind the
+   *  recompute_invoice_paid trigger sums and the only kind isCashRow accepts.
+   *  'credit' = the customer-credit liability ledger.
+   *  'tip' = voluntary gratuity collected alongside an invoice payment, kept
+   *  outside every invoice balance and every cash/revenue figure by that same
+   *  filter (see lib/payments/tips). A reversal is a NEGATIVE row of its kind. */
+  kind: 'payment' | 'credit' | 'tip'
   method: string | null
   notes: string | null
   status: string
@@ -1645,6 +1651,16 @@ export interface BusinessSettings {
   // $30+ for the CUSTOMER to claim an input tax credit — missing = ITC denied on
   // audit. Also mandatory on a credit note (ETA s.232(3)). null = not registered.
   gst_number?: string | null
+  // ── Optional gratuity on online invoice payments ──
+  // OFF by default and never inferred from the trade: most service businesses do
+  // not take tips, and a tip prompt the owner never asked for appears on THEIR
+  // invoice under THEIR name. Read only through lib/payments/tips.tipConfig,
+  // which collapses a half-configured state (no presets, no custom) to off.
+  tips_enabled?: boolean | null
+  /** Up to three suggested PERCENTAGES. The dollar figure is derived at display
+   *  time from the amount being charged, so a preset can never disagree with the ask. */
+  tip_presets?: number[] | null
+  tip_custom_enabled?: boolean | null
   // ── Balance sheet opening position ──
   // Cash is not derivable from a payment ledger alone: it knows every movement
   // since it started, but not what was in the bank the day before. Without these,
@@ -1833,6 +1849,12 @@ export interface BusinessSettingsFormValues {
   gst_number: string
   autopay_charge_mode: 'auto' | 'manual_review'
   autopay_variance_pct: number
+  tips_enabled: boolean
+  /** Comma-separated percentages in the form ("10, 15, 20"); parsed on save. A
+   *  text field rather than three numbers because "up to three" is the rule, and
+   *  three separate inputs make "I want two" an exercise in clearing a box. */
+  tip_presets: string
+  tip_custom_enabled: boolean
 }
 
 export const SERVICE_CATEGORIES = [

@@ -1110,10 +1110,14 @@ export function recentPayments(
       // "Refund issued · $50.00" rather than a minus sign the eye can miss.
       amount: Math.abs(Number(p.amount) || 0),
       label: rt === 'Refund' ? 'Refund issued'
+        // A tip is named as a tip. Falling through to "Payment received" would
+        // tell the customer their bill collected money it never did.
+        : rt === 'Tip' ? 'Tip — thank you'
+        : rt === 'Tip refunded' ? 'Tip refunded'
         : rt === 'Overpayment to credit' ? 'Overpayment moved to credit'
         : rt === 'Settled from credit' ? 'Settled from account credit'
         : `Payment received · ${paymentMethodLabel(p.provider)}`,
-      isRefund: rt === 'Refund',
+      isRefund: rt === 'Refund' || rt === 'Tip refunded',
     })
   }
   return out.sort((a, b) => b.at.localeCompare(a.at)).slice(0, max)

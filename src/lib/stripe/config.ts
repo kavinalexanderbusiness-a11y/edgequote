@@ -53,6 +53,19 @@ export async function createInvoiceCheckoutSession(
     // the checkout page is the one surface where our own copy can't add context.
     // Cosmetic by design: the amount stays chargeCents, server-derived.
     chargeLabel?: string | null
+    // ── Voluntary gratuity, already resolved by lib/payments/tips ────────────
+    // Integer cents, ALWAYS server-derived (resolveTipCents), never the raw
+    // number the browser sent. Zero/absent is the ordinary case and produces a
+    // byte-identical session to the one this function built before tips existed.
+    //
+    // It rides as a SECOND line item rather than being folded into chargeCents,
+    // because line item 0's label is load-bearing (see chargeLabel above) and
+    // because the customer must see on Stripe's own page — and on Stripe's own
+    // receipt email — that they are paying an invoice PLUS a tip, not a bigger
+    // invoice. Stripe's "customer chooses price" mode is deliberately NOT used:
+    // it carries documented restrictions when combined with other line items,
+    // and the tip is already chosen before the redirect.
+    tipCents?: number
   },
 ): Promise<CheckoutResult> {
   if (!stripeEnabled()) return { ok: false, error: 'Payments are not set up yet.' }
@@ -60,6 +73,9 @@ export async function createInvoiceCheckoutSession(
   // otherwise charge the invoice amount as-is.
   const cents = opts.chargeCents != null ? Math.round(opts.chargeCents) : Math.round(Number(invoice.amount) * 100)
   if (!Number.isFinite(cents) || cents <= 0) return { ok: false, error: 'This invoice has no payable amount.' }
+  // Defence in depth: the door has already clamped this, but a non-integer or
+  // negative reaching Stripe would be a 400 at best and a wrong charge at worst.
+  const tipCents = Number.isSafeInteger(opts.tipCents) && (opts.tipCents as number) > 0 ? (opts.tipCents as number) : 0
 
   const form = new URLSearchParams()
   form.set('mode', 'payment')
@@ -71,6 +87,13 @@ export async function createInvoiceCheckoutSession(
   form.set('line_items[0][price_data][unit_amount]', String(cents))
   form.set('line_items[0][price_data][product_data][name]', opts.chargeLabel || `Invoice ${invoice.invoice_number}`)
   if (invoice.service_type) form.set('line_items[0][price_data][product_data][description]', invoice.service_type.slice(0, 200))
+  if (tipCents > 0) {
+    form.set('line_items[1][quantity]', '1')
+    form.set('line_items[1][price_data][currency]', 'cad')
+    form.set('line_items[1][price_data][unit_amount]', String(tipCents))
+    form.set('line_items[1][price_data][product_data][name]', 'Tip')
+    form.set('line_items[1][price_data][product_data][description]', 'Thank you — a voluntary gratuity for the crew’s work.')
+  }
   // `customer` and `customer_email` are mutually exclusive — sending both is a
   // Stripe 400. Prefer the Customer: it's the only shape a card can be saved to,
   // and Stripe shows the address/email it already knows.
@@ -99,7 +122,17 @@ export async function createInvoiceCheckoutSession(
   form.set('metadata[user_id]', invoice.user_id)
   if (invoice.customer_id) form.set('metadata[customer_id]', invoice.customer_id)
   form.set('metadata[invoice_number]', invoice.invoice_number)
+  // ── The tip declaration: the ONLY thing that tells the webhook how to split ──
+  // We write it, Stripe echoes it back on the session, and the webhook subtracts
+  // it from amount_total. That is a server→server channel: the browser never
+  // touches it, so a tampered client can change what it ASKS for (which the door
+  // re-derives and clamps) but can never change how a settled charge is booked.
+  // Always emitted, including '0', so the webhook's read is never ambiguous
+  // between "no tip" and "an older session from before this shipped" — both are
+  // 0 either way, but an explicit key is what makes the guard able to assert it.
+  form.set('metadata[tip_cents]', String(tipCents))
   form.set('payment_intent_data[metadata][invoice_id]', invoice.id)
+  form.set('payment_intent_data[metadata][tip_cents]', String(tipCents))
 
   // Read + TRIM the secret here. A stray newline/space in the env var makes fetch
   // throw a TypeError whose message embeds the header value (the key) — which is

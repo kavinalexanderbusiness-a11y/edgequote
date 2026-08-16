@@ -227,12 +227,18 @@ export function PaymentsSection({ view, actions }: TabProps) {
         // real cash-out refund gets the refund label, badge, red tone and "refund
         // receipt" wording; a credit move reads as what it is.
         const rt = ledgerRowType(p)
-        const isRefund = rt === 'Refund'
+        const isRefund = rt === 'Refund' || rt === 'Tip refunded'
+        // A tip the customer chose to give is named as such, and never as a
+        // payment against a bill — their invoice total did not include it.
+        const isTip = rt === 'Tip' || rt === 'Tip refunded'
         const rowLabel = rt === 'Payment' ? paymentMethodLabel(p.provider)
+          : rt === 'Tip' ? 'Tip — thank you'
+          : rt === 'Tip refunded' ? 'Tip refunded'
           : rt === 'Overpayment to credit' ? 'Moved to credit'
           : rt === 'Settled from credit' ? 'Settled from credit'
           : 'Refund'
-        const badge = isRefund ? 'Refunded'
+        const badge = rt === 'Tip' ? 'Tip'
+          : isRefund ? 'Refunded'
           : rt === 'Overpayment to credit' ? 'To credit'
           : rt === 'Settled from credit' ? 'From credit'
           : 'Paid'
@@ -241,17 +247,21 @@ export function PaymentsSection({ view, actions }: TabProps) {
             {/* Details + status — the badge stays with the details on every width. */}
             <div className="flex items-center justify-between gap-3 min-w-0 flex-1">
               <div className="flex items-center gap-3 min-w-0">
-                <div className={cn('w-9 h-9 rounded-lg border flex items-center justify-center shrink-0', isRefund ? 'border-red-500/25 bg-red-500/10' : 'border-emerald-500/25 bg-emerald-500/10')}><CheckCircle2 className={cn('w-4 h-4', isRefund ? 'text-red-400' : 'text-emerald-400')} /></div>
+                <div className={cn('w-9 h-9 rounded-lg border flex items-center justify-center shrink-0', isRefund ? 'border-red-500/25 bg-red-500/10' : isTip ? 'border-sky-500/25 bg-sky-500/10' : 'border-emerald-500/25 bg-emerald-500/10')}><CheckCircle2 className={cn('w-4 h-4', isRefund ? 'text-red-400' : isTip ? 'text-sky-400' : 'text-emerald-400')} /></div>
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-ink tabular-nums">{Number(p.amount) < 0 ? '−' : ''}{formatCurrency(Math.abs(Number(p.amount)))}</p>
                   <p className="text-xs text-ink-muted truncate">{p.paid_at ? formatDate(p.paid_at) : formatDate(p.created_at)}{inv ? ` · ${inv.invoice_number}` : ''} · {rowLabel}</p>
                 </div>
               </div>
-              <span className={cn('shrink-0 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', isRefund ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>{badge}</span>
+              <span className={cn('shrink-0 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', isRefund ? 'text-red-400 border-red-500/30 bg-red-500/10' : isTip ? 'text-sky-400 border-sky-500/30 bg-sky-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>{badge}</span>
             </div>
             {/* Receipt download — a quiet utility action (the paid status is the
-                story), full-width on mobile, right-aligned on desktop. */}
-            {inv && (
+                story), full-width on mobile, right-aligned on desktop.
+                Not offered for a tip: the receipt document backs GST out of the
+                row's amount at the invoice's rate, which would print a tax figure
+                for a gratuity that was never part of a taxable supply. The tip is
+                named on the invoice payment's own receipt. */}
+            {inv && !isTip && (
               <div className="w-full sm:w-auto shrink-0">
                 <Button size="sm" variant="secondary" className="w-full sm:w-auto"
                   onClick={() => downloadReceipt(p, inv)} loading={receiptBusy === p.id}>

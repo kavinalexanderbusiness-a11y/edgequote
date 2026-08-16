@@ -20,6 +20,7 @@ import {
 } from './shared'
 import { PaymentsSection } from './PaymentsSection'
 import { ChangeBreakdown, PendingChangeCard } from './ChangesCard'
+import { TipBreakdown, TipSelector, tipCentsFor, type TipChoice } from './TipSelector'
 
 const KIND_META: Record<DocKind, { label: string; icon: typeof FileText; tone: string }> = {
   quote: { label: 'Quote', icon: FileText, tone: 'text-accent-text border-accent/25 bg-accent/10' },
@@ -289,6 +290,22 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
   // confirmed, this row's balance is the PRE-payment one and a second Pay tap
   // starts a second real charge. The confirming banner already says not to.
   const canPay = d.kind === 'invoice' && actions.paymentsEnabled && !actions.paymentPending && d.balance > 0 && d.status !== 'draft' && d.status !== 'cancelled'
+  // ── The tip, offered only where it is honest ────────────────────────────────
+  // NOT on a deposit / part payment (`d.payIsDeposit`). That figure has already
+  // been communicated to the customer — "we cannot text someone $1,500 and then
+  // charge them something else" — and adding a tip would make Stripe's total
+  // disagree with the ask at the exact moment their card is out. The tip belongs
+  // on the payment that CLOSES the invoice, which includes the final instalment
+  // of a part-paid one. The route enforces this same rule server-side; this is
+  // the half that keeps the UI from offering what the server would refuse.
+  const canTip = canPay && actions.tips.enabled && !d.payIsDeposit
+  const payCents = Math.round(d.payAmount * 100)
+  const [tipChoice, setTipChoice] = useState<TipChoice>({ kind: 'none' })
+  const [tipText, setTipText] = useState('')
+  const tipCents = canTip ? tipCentsFor(tipChoice, tipText, payCents) : 0
+  // A chosen-but-unfinished custom amount is "not ready", not "$0" — the button
+  // waits rather than quietly charging no tip after they asked to type one.
+  const tipReady = tipCents !== null
   // The deposit ask (or null) — model-derived once, read by the headline AND the
   // Pay button's sub-line so the two can never quote different figures.
   const depAsk = invoiceDepositNote(d)
@@ -662,6 +679,23 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
               </p>
             </>
           )}
+          {canTip && (
+            <>
+              <TipSelector
+                config={actions.tips}
+                chargeCents={payCents}
+                choice={tipChoice}
+                onChoice={setTipChoice}
+                customText={tipText}
+                onCustomText={setTipText}
+                busy={actions.payingId === d.rawId}
+              />
+              {/* Invoice payment / Tip / Total charged — the invoice line never
+                  moves when the tip does, which is the whole model shown to the
+                  person paying rather than only asserted in the ledger. */}
+              <TipBreakdown invoiceCents={payCents} tipCents={tipCents ?? 0} />
+            </>
+          )}
           {canPay && (
             <>
               {/* The button quotes payAmount — depositChargeAmount's answer, the
@@ -669,10 +703,20 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
                   button and the figure on Stripe's checkout are one number by
                   construction. While a deposit is outstanding it says so
                   ("Pay $2,000 deposit"), and the sub-line finishes the story:
-                  what remains, and that it isn't being charged today. */}
-              <Button className="w-full sm:w-auto" onClick={() => actions.pay(d.rawId)} loading={actions.payingId === d.rawId}>
-                <CreditCard className="w-4 h-4" /> Pay {formatCurrency(d.payAmount)}{d.payIsDeposit ? ' deposit' : ''}
+                  what remains, and that it isn't being charged today.
+                  With a tip chosen it quotes the TOTAL about to be charged, so
+                  the button and the card statement agree. */}
+              <Button
+                className={cn('w-full sm:w-auto', canTip && 'mt-3')}
+                disabled={!tipReady}
+                onClick={() => actions.pay(d.rawId, tipCents ?? 0)}
+                loading={actions.payingId === d.rawId}
+              >
+                <CreditCard className="w-4 h-4" /> Pay {formatCurrency(((tipCents ?? 0) + payCents) / 100)}{d.payIsDeposit ? ' deposit' : ''}
               </Button>
+              {canTip && !tipReady && (
+                <p className="text-[11px] text-ink-faint mt-1.5">Enter a tip amount, or choose No tip, to continue.</p>
+              )}
               {depAsk && (
                 <p className="text-[11px] text-ink-faint mt-1.5 tabular-nums">
                   This is the upfront deposit — the remaining {depAsk.after} is due after the work, not today.

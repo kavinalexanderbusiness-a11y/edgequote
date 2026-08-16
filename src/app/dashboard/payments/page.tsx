@@ -6,6 +6,7 @@ import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { Payment, BusinessSettings, Invoice, PAYMENT_METHODS, paymentMethodLabel } from '@/types'
 import { receiptNumberFor, recordDeposit } from '@/lib/payments/ledger'
 import { summarizeTransactions, creditBalances, ledgerRowType, cashAmountOf } from '@/lib/payments/analytics'
+import { summarizeTips, tipAmountOf } from '@/lib/payments/tips'
 import { exportRowsToCsv, type CsvColumn } from '@/lib/csv'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -30,7 +31,7 @@ import { Wallet, FileDown, Search, AlertTriangle, Gift, Plus, X, Receipt } from 
 // Read-only over the ledger except for one write (take a deposit), which goes through
 // the ledger engine like everything else. No new money rules live here.
 
-type Kind = 'all' | 'payments' | 'refunds' | 'credits'
+type Kind = 'all' | 'payments' | 'refunds' | 'credits' | 'tips'
 type Range = '30' | '90' | '365' | 'all'
 
 const RANGE_LABEL: Record<Range, string> = { '30': 'Last 30 days', '90': 'Last 90 days', '365': 'Last year', all: 'All time' }
@@ -71,9 +72,15 @@ function filterRows(rows: Row[], q: string, kind: Kind): Row[] {
   const asNum = Number(needle.replace(/[^0-9.]/g, ''))
   return rows.filter(r => {
     const amt = Number(r.amount) || 0
+    // Each narrow filter names its kind explicitly. A tip is kind='tip', so it
+    // is excluded from Payments and Refunds by the same predicate that includes
+    // it in Tips — no row can appear under two headings, and none can vanish
+    // from all of them (which is what an exclusion-list filter would have done
+    // the moment a new kind existed).
     if (kind === 'payments' && !(r.kind === 'payment' && amt >= 0)) return false
     if (kind === 'refunds' && !(r.kind === 'payment' && amt < 0)) return false
     if (kind === 'credits' && r.kind !== 'credit') return false
+    if (kind === 'tips' && r.kind !== 'tip') return false
     if (!needle) return true
     const hay = [
       r.customers?.name, r.invoices?.invoice_number, r.notes,
@@ -91,9 +98,14 @@ function filterRows(rows: Row[], q: string, kind: Kind): Row[] {
 // There is deliberately NO bare `Amount` column. A $200 deposit writes a cash row AND a
 // credit row, and settling it later writes a THIRD row that is kind='payment' with a
 // POSITIVE amount — so one summable Amount column reads $400 of revenue against $200 of
-// cash. Every row's amount lands in exactly one of Cash/Credit instead: lossless, and no
-// single column can double-count. Cash Amount ties to the Collected tile above the export
-// button by construction — both are isCashRow, via the one classifier.
+// cash. Every row's amount lands in exactly one of Cash/Credit/Tip instead: lossless, and
+// no single column can double-count. Cash Amount ties to the Collected tile above the
+// export button by construction — both are isCashRow, via the one classifier.
+//
+// Tip Amount is the THIRD such column, and it exists for exactly the reason the other
+// two do: without it a gratuity row would export with Cash blank AND Credit blank — a
+// dated row, with a customer and a receipt number, and no money on it anywhere. That is
+// a lossy export, which is worse than a wrong one because it looks complete.
 const CSV_COLUMNS: CsvColumn<Row>[] = [
   { label: 'Date', value: r => localDateOf(r.paid_at || r.created_at) },
   { label: 'Receipt', value: r => receiptNumberFor(r.id) },
@@ -105,6 +117,9 @@ const CSV_COLUMNS: CsvColumn<Row>[] = [
   // when the truth is "this row is not cash at all".
   { label: 'Cash Amount', value: r => cashAmountOf(r) || '' },
   { label: 'Credit Amount', value: r => (r.kind === 'credit' ? Number(r.amount) || 0 : '') },
+  // Signed, so a reversed tip nets out when the column is summed — the same
+  // convention Cash Amount follows for refunds.
+  { label: 'Tip Amount', value: r => tipAmountOf(r) || '' },
   { label: 'Currency', value: r => (r.currency || 'cad').toUpperCase() },
   { label: 'Note', value: r => r.notes || '' },
 ]
@@ -175,6 +190,11 @@ export default function PaymentsPage() {
   const visible = useMemo(() => filterRows(rows, q, kind), [rows, q, kind])
 
   const summary = useMemo(() => summarizeTransactions(visible), [visible])
+  // Deliberately a SECOND summary over the same rows, not a field on the first.
+  // summarizeTransactions answers "how much cash came in"; this answers "how
+  // much gratuity". Folding them together is how a tip ends up inside a revenue
+  // figure, which is the one thing this whole feature must not do.
+  const tips = useMemo(() => summarizeTips(visible), [visible])
   const nameOf = useMemo(() => {
     const m = new Map(customers.map(c => [c.id, c.name]))
     return (id: string) => m.get(id) || 'Unknown customer'
@@ -320,6 +340,14 @@ export default function PaymentsPage() {
           <StatTile label="Refunded" value={summary.refunded > 0 ? `−${formatCurrency(summary.refunded)}` : formatCurrency(0)} />
           <StatTile label="Net" value={formatCurrency(summary.net)} />
           <StatTile label="Payments" value={String(summary.count)} />
+          {/* BESIDE the cash figures, never inside them. Collected/Refunded/Net
+              are isCashRow sums and a tip is not a cash row, so this tile can
+              only ever be additional information — it cannot move the three
+              numbers to its left. Rendered only when a tip exists, so a business
+              that does not take them never sees a permanently-$0 tile. */}
+          {tips.net !== 0 && (
+            <StatTile label="Tips" value={formatCurrency(tips.net)} tone="accent" />
+          )}
         </div>
       )}
 
@@ -328,7 +356,7 @@ export default function PaymentsPage() {
         <Input aria-label="Search payments" fieldSize="sm" value={q} onChange={e => setQ(e.target.value)}
           placeholder="Search by customer, invoice, receipt #, method, note or amount…" />
         <div className="flex items-center gap-2 flex-wrap">
-          {(['all', 'payments', 'refunds', 'credits'] as Kind[]).map(k => (
+          {(['all', 'payments', 'refunds', 'credits', 'tips'] as Kind[]).map(k => (
             <FilterPill key={k} active={kind === k} onClick={() => setKind(k)}>
               {k === 'all' ? 'All' : k.charAt(0).toUpperCase() + k.slice(1)}
             </FilterPill>
@@ -382,7 +410,8 @@ export default function PaymentsPage() {
               {visible.map(r => {
                 const amt = Number(r.amount) || 0
                 const isCredit = r.kind === 'credit'
-                const isRefund = !isCredit && amt < 0
+                const isTip = r.kind === 'tip'
+                const isRefund = !isCredit && !isTip && amt < 0
                 return (
                   <div key={r.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
                     <div className="min-w-0">
@@ -391,17 +420,23 @@ export default function PaymentsPage() {
                         {r.invoices?.invoice_number && <span className="text-ink-faint"> · {r.invoices.invoice_number}</span>}
                       </p>
                       <p className="text-[11px] text-ink-faint truncate">
-                        {formatDate(r.paid_at || r.created_at)} · {isCredit ? (amt >= 0 ? 'Credit added' : 'Credit applied') : paymentMethodLabel(r.method || r.provider)}
+                        {formatDate(r.paid_at || r.created_at)} · {isCredit ? (amt >= 0 ? 'Credit added' : 'Credit applied') : isTip ? ledgerRowType(r) : paymentMethodLabel(r.method || r.provider)}
                         <span className="font-mono"> · {receiptNumberFor(r.id)}</span>
                         {r.notes ? ` · ${r.notes}` : ''}
                       </p>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <span className={cn('text-sm font-bold tabular-nums',
-                        isCredit ? 'text-violet-400' : isRefund ? 'text-red-400' : 'text-emerald-400')}>
+                        isCredit ? 'text-violet-400' : isTip ? 'text-sky-400' : isRefund ? 'text-red-400' : 'text-emerald-400')}>
                         {amt < 0 ? '−' : ''}{formatCurrency(Math.abs(amt))}
                       </span>
-                      {!isCredit && r.invoices && (
+                      {/* No receipt button on a tip row. ReceiptPDF backs GST OUT
+                          of payment.amount at the invoice's rate — on a gratuity
+                          that would print a tax figure for a supply that was
+                          never invoiced, and on a reversal it would issue a
+                          credit note claiming GST back. The tip is already named
+                          on the invoice payment's own receipt. */}
+                      {!isCredit && !isTip && r.invoices && (
                         <button onClick={() => downloadReceipt(r)} disabled={receiptId === r.id}
                           className="p-1.5 rounded-lg text-ink-faint hover:text-accent-text transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                           aria-label={isRefund ? `Download refund receipt ${receiptNumberFor(r.id)}` : `Download receipt ${receiptNumberFor(r.id)}`}

@@ -6,6 +6,7 @@
 import type { CsvColumn } from '@/lib/csv'
 import type { Payment } from '@/types'
 import { ledgerRowType, cashAmountOf } from '@/lib/payments/analytics'
+import { tipAmountOf } from '@/lib/payments/tips'
 import type { ScheduledReport } from '@/lib/reports/schedule'
 import { summarize } from '@/lib/reports/summary'
 
@@ -37,6 +38,11 @@ export const PAYMENT_COLUMNS: CsvColumn<Payment & { customers?: { name: string }
   { label: 'Method', value: p => p.method ?? p.provider ?? '' },
   { label: 'Amount', value: p => Number(p.amount) || 0 },
   { label: 'Cash', value: p => cashAmountOf(p) },
+  // A gratuity is neither Cash (isCashRow rejects it) nor part of "Money in", so
+  // without this column a tip row exports as Cash=0 with a bare Amount beside it
+  // — indistinguishable from a credit application, and the one shape a
+  // bookkeeper would have to guess at. Named, it is attributable.
+  { label: 'Tip', value: p => tipAmountOf(p) },
 ]
 
 /** `report-daily-2026-07-15.csv` — sorts chronologically in a folder. */

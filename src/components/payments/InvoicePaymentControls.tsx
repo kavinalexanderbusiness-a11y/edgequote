@@ -8,6 +8,8 @@ import { formatCurrency } from '@/lib/utils'
 import { Invoice, BusinessSettings, Payment, PAYMENT_METHODS, paymentMethodLabel } from '@/types'
 import { Button } from '@/components/ui/Button'
 import { invoiceBalance, recordPayment, applyCreditToInvoice, overpaymentToCredit, recordRefund, receiptNumberFor, removePayment, restorePayment } from '@/lib/payments/ledger'
+import { ledgerRowType } from '@/lib/payments/analytics'
+import { summarizeTips } from '@/lib/payments/tips'
 import { receiptMessageBody } from '@/lib/comms/templates'
 import { Collapsible } from '@/components/ui/Collapsible'
 import { Wallet, Gift, RotateCcw, Banknote, TrendingUp, X, FileDown, Mail, MessageSquare, ReceiptText } from 'lucide-react'
@@ -114,9 +116,19 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
   // Stripe (no charge exists there), and "Record refund" must never imply the app
   // moved the money — it only records money the owner moved. Shared by the refund
   // form and the overpayment resolver, so both tell the same story about the money.
+  // `kind === 'payment'` — named, not excluded. This decides whether the refund
+  // door is a Stripe dead-end or a record-it-here form, and the question is
+  // "how did the money TOWARD THIS INVOICE arrive". A gratuity is neither the
+  // answer nor a candidate: an exclusion list (`!== 'credit'`) would have let a
+  // tip become the most recent "money in" and answer for the payment.
   const lastMoneyIn = [...payments]
-    .filter(p => p.kind !== 'credit' && Number(p.amount) > 0)
+    .filter(p => p.kind === 'payment' && Number(p.amount) > 0)
     .sort((a, b) => String(b.paid_at || b.created_at).localeCompare(String(a.paid_at || a.created_at)))[0]
+  // Gratuity collected with this invoice's online payments. Displayed BESIDE the
+  // received figure, never added to it: `paid` is invoices.amount_paid, which the
+  // trigger derives from kind='payment' alone, and that is the number every
+  // balance in the app agrees on.
+  const tips = summarizeTips(payments)
   // A card refund has exactly ONE writer — the charge.refunded webhook — for the same
   // reason a card PAYMENT does: Stripe is where the money actually moves, so Stripe is
   // what we listen to. Hand-recording one on top DOUBLE-COUNTS: the webhook dedupes
@@ -292,7 +304,7 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
         <Collapsible
           title="Payment history"
           icon={ReceiptText}
-          summary={`${payments.length || '—'} ${payments.length === 1 ? 'movement' : 'movements'} · ${formatCurrency(paid)} received`}
+          summary={`${payments.length || '—'} ${payments.length === 1 ? 'movement' : 'movements'} · ${formatCurrency(paid)} received${tips.net > 0 ? ` · ${formatCurrency(tips.net)} tip` : ''}`}
         >
           {payments.length === 0 ? (
             <p className="text-xs text-ink-faint">
@@ -302,14 +314,20 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
           <div className="rounded-lg border border-border bg-bg-secondary divide-y divide-border">
           {payments.map(p => {
             const negative = Number(p.amount) < 0
-            const revertable = !negative && p.provider !== 'stripe'
+            const isTip = p.kind === 'tip'
+            const revertable = !negative && !isTip && p.provider !== 'stripe'
             return (
               <div key={p.id} className="flex items-center justify-between gap-2 px-2.5 py-1.5">
                 <div className="min-w-0 text-xs">
-                  <span className={`font-semibold ${negative ? 'text-red-400' : 'text-emerald-400'}`}>
+                  {/* A tip is its own colour and its own word. Rendered green
+                      beside the payments it arrived with, it would read as part
+                      of what the invoice collected — which is the one thing it
+                      is not. */}
+                  <span className={`font-semibold ${negative ? 'text-red-400' : isTip ? 'text-sky-400' : 'text-emerald-400'}`}>
                     {negative ? '−' : ''}{formatCurrency(Math.abs(Number(p.amount)))}
                   </span>
-                  <span className="text-ink-faint"> · {negative ? 'Refund' : paymentMethodLabel(p.method || p.provider)} · {new Date(p.paid_at || p.created_at).toLocaleDateString()}</span>
+                  <span className="text-ink-faint"> · {isTip ? ledgerRowType(p) : negative ? 'Refund' : paymentMethodLabel(p.method || p.provider)} · {new Date(p.paid_at || p.created_at).toLocaleDateString()}</span>
+                  {isTip && <span className="text-ink-faint"> · not part of the invoice total</span>}
                   <span className="block font-mono text-[10px] text-ink-faint mt-0.5">{receiptNumberFor(p.id)}</span>
                 </div>
                 {/* `.tap-target` (44px, coarse-pointer only) + gap-2. These three
@@ -318,13 +336,19 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
                     "text the receipt to the customer". Desktop density is
                     unchanged; the utility is `pointer: coarse`-gated. */}
                 <div className="flex items-center gap-2 shrink-0">
-                  <button onClick={() => downloadRowReceipt(p)} disabled={rowBusy === p.id}
+                  {/* No receipt document for a tip row. ReceiptPDF backs GST OUT
+                      of payment.amount at the invoice's rate — on a gratuity that
+                      prints a tax figure for a supply that was never invoiced,
+                      and on a reversal it issues a credit note claiming that tax
+                      back (ETA s.232(3)). The tip is named on the invoice
+                      payment's own receipt instead. */}
+                  {!isTip && <button onClick={() => downloadRowReceipt(p)} disabled={rowBusy === p.id}
                     className="tap-target inline-flex items-center justify-center p-1.5 text-ink-faint hover:text-accent-text transition-colors"
                     aria-label={negative ? 'Download refund receipt' : 'Download receipt'}
                     title={`Download ${negative ? 'refund receipt' : 'receipt'} ${receiptNumberFor(p.id)}`}>
                     <FileDown className="w-3.5 h-3.5" />
-                  </button>
-                  {invoice.customers?.phone && (
+                  </button>}
+                  {!isTip && invoice.customers?.phone && (
                     <button onClick={() => sendReceipt(p, 'sms')} disabled={rowBusy === p.id || sendingReceipt !== null}
                       className="tap-target inline-flex items-center justify-center p-1.5 text-ink-faint hover:text-accent-text transition-colors"
                       aria-label="Text this receipt to the customer" title={`Text ${negative ? 'refund receipt' : 'receipt'} ${receiptNumberFor(p.id)} to the customer`}>

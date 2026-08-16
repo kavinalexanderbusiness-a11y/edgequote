@@ -10,6 +10,7 @@ import { displayQuoteStatus } from '@/lib/quoteStatus'
 // THE scheduling-deposit rule (lib/payments/depositGate) — the approve dialog and
 // success banner name the exact ask the charge route will make, from one engine.
 import { requiredDeposit } from '@/lib/payments/depositGate'
+import { tipConfig, TIPS_OFF, type TipConfig } from '@/lib/payments/tips'
 import type { QuoteStatus } from '@/types'
 import { renderPortalInvoiceBlob, renderPortalQuoteBlob } from '@/lib/portalPdf'
 import { REQUEST_PHOTO_BUCKET, requestPhotoExt, requestPhotoPath } from '@/lib/portalRequests'
@@ -78,6 +79,10 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   // Which change order is mid-decision (locks both buttons on that card).
   const [decidingChangeId, setDecidingChangeId] = useState<string | null>(null)
   const [paymentsEnabled, setPaymentsEnabled] = useState(false)
+  // The owner's gratuity configuration. Starts OFF and only ever moves on a
+  // successful read, so a failed/slow status call shows no tip section rather
+  // than a section the business never enabled.
+  const [tips, setTips] = useState<TipConfig>(TIPS_OFF)
   const [payingId, setPayingId] = useState<string | null>(null)
   // 'confirming' = the customer came back from Stripe but our ledger hasn't recorded
   // it yet; 'confirmed' = a new payment row actually landed. Never conflate the two.
@@ -219,7 +224,15 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     // OWNER (and their platform online_payments grant) from the token
     // server-side. Without it the answer would be the deployment-wide one, which
     // is wrong for a business the platform hasn't granted online payments.
-    fetch(`/api/payments/status?portal=${encodeURIComponent(token)}`).then(r => r.json()).then(d => setPaymentsEnabled(!!d.enabled)).catch(() => {})
+    fetch(`/api/payments/status?portal=${encodeURIComponent(token)}`).then(r => r.json()).then(d => {
+      setPaymentsEnabled(!!d.enabled)
+      // Re-normalise what the server sent. The route already returns a
+      // TipConfig, but tipConfig() is idempotent and this is the one place a
+      // malformed/legacy payload could otherwise put a bad preset on screen.
+      setTips(tipConfig(d.enabled && d.tips?.enabled
+        ? { tips_enabled: true, tip_presets: d.tips.presets, tip_custom_enabled: d.tips.customAllowed }
+        : null))
+    }).catch(() => {})
     if (typeof window !== 'undefined') {
       const sp = new URLSearchParams(window.location.search)
       if (sp.get('paid') === '1') {
@@ -655,14 +668,18 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     return true
   }
 
-  async function pay(invoiceId: string) {
+  async function pay(invoiceId: string, tipCents?: number) {
     if (payingId) return // re-entry guard — never start two checkout sessions
     setPayingId(invoiceId)
     markInvoiceViewed(invoiceId)
     try {
       const res = await fetch('/api/portal/pay', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, invoiceId }),
+        // tipCents is sent ONLY when the customer chose one, so an untipped
+        // payment posts the exact body it always did. It is an intent: the route
+        // re-derives the configuration, the tippability and the ceiling, and
+        // answers 400 rather than silently charging a clamped amount.
+        body: JSON.stringify(tipCents && tipCents > 0 ? { token, invoiceId, tipCents } : { token, invoiceId }),
       })
       const d = await res.json().catch(() => ({}))
       if (res.ok && d.url) { window.location.href = d.url; return } // redirecting to Stripe — stay disabled
@@ -676,6 +693,12 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       if (res.status === 404 || res.status === 409) {
         await load()
         setActionError('This invoice looks already settled — we’ve refreshed your billing below. If you think that’s wrong, message us and we’ll check.')
+      } else if (res.status === 400) {
+        // The ONE thing this route 400s on is the tip: everything else about the
+        // charge is server-derived and cannot be malformed. Fixed copy — a
+        // server-provided string is never rendered in the public portal — and it
+        // names the way out, because the payment itself is perfectly fine.
+        setActionError('That tip amount isn’t valid. Choose one of the suggested tips, enter a smaller amount, or continue with no tip.')
       } else {
         setActionError('We couldn’t start the payment — please try again in a moment, or contact us and we’ll sort it out.')
       }
@@ -714,7 +737,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
 
   const biz = data.business
   const actions: PortalActions = {
-    token, accept, accepting, pay, payingId, paymentsEnabled,
+    token, accept, accepting, pay, payingId, paymentsEnabled, tips,
     payQuoteDeposit, payingQuoteId, savePreference,
     paymentPending: justPaid === 'confirming',
     request: (message: string) => request(message),

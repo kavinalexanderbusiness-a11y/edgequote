@@ -32,7 +32,26 @@ import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
 import { ServiceSeasons, ServiceSeason, DEFAULT_SEASONS, settingsToSeasons, seasonLabel, LAWN_HINTS, SNOW_HINTS } from '@/lib/seasons'
 import { weekdayLong } from '@/lib/preferences'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
-import { Download, Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin, LayoutGrid, Wallet, X, ArrowRight, LayoutTemplate, ClipboardCheck } from 'lucide-react'
+import { TIP_DEFAULT_PRESETS, TIP_MAX_PRESETS } from '@/lib/payments/tips'
+import { Toggle } from '@/components/ui/Toggle'
+import { Download, Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, Gift, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin, LayoutGrid, Wallet, X, ArrowRight, LayoutTemplate, ClipboardCheck } from 'lucide-react'
+
+// ── Tip presets: one text field ↔ the integer[] column ──────────────────────
+// A comma-separated field rather than three number inputs, because the rule is
+// "up to three" — with three fixed boxes, wanting two means clearing one and
+// hoping the blank is understood. Bounded here (1..100, ≤3, de-duplicated,
+// ascending) so the column's CHECK is a backstop and never the error message the
+// owner sees; the same normalisation runs again in tipConfig at read time.
+function parseTipPresets(raw: string): number[] {
+  return [...new Set(
+    String(raw ?? '').split(/[,\s]+/)
+      .map(s => Math.round(Number(s.replace('%', ''))))
+      .filter(n => Number.isFinite(n) && n > 0 && n <= 100),
+  )].sort((a, b) => a - b).slice(0, TIP_MAX_PRESETS)
+}
+function formatTipPresets(v: number[] | null | undefined): string {
+  return (Array.isArray(v) ? v : TIP_DEFAULT_PRESETS).join(', ')
+}
 
 const SETTINGS_TABS: TabItem[] = [
   { key: 'business', label: 'Business', icon: Building2 },
@@ -122,8 +141,12 @@ export default function SettingsPage() {
     try { window.localStorage.setItem('eq-logo', JSON.stringify({ url: logoUrl, scale: v })) } catch { /* ignore */ }
   }
 
-  const { register, handleSubmit, reset, control, formState: { isSubmitting, isDirty } } =
+  const { register, handleSubmit, reset, control, watch, formState: { isSubmitting, isDirty } } =
     useForm<BusinessSettingsFormValues>()
+  // The preset/custom fields only mean anything once tips are on — collapsed
+  // rather than disabled, so the card stays short for the businesses (most of
+  // them) that will never turn this on.
+  const tipsOn = !!watch('tips_enabled')
 
   // The re-seed guard. useBusinessData paints from cache and ALWAYS background-
   // revalidates, so this effect re-fires seconds after mount with a fresh
@@ -163,6 +186,11 @@ export default function SettingsPage() {
         gst_number: settings.gst_number || '',
         autopay_charge_mode: settings.autopay_charge_mode ?? 'auto',
         autopay_variance_pct: settings.autopay_variance_pct ?? 40,
+        // A row written before tips existed reads `undefined` and lands on OFF —
+        // the correct answer for every business that never asked for them.
+        tips_enabled: settings.tips_enabled ?? false,
+        tip_presets: formatTipPresets(settings.tip_presets),
+        tip_custom_enabled: settings.tip_custom_enabled ?? true,
       })
       setLogoUrl(settings.logo_url)
       setWorkDays(settings.preferred_work_days?.length ? settings.preferred_work_days : DEFAULT_WORK_DAYS)
@@ -255,6 +283,13 @@ export default function SettingsPage() {
         gst_number: values.gst_number?.trim() || null,
         autopay_charge_mode: values.autopay_charge_mode === 'manual_review' ? 'manual_review' : 'auto',
         autopay_variance_pct: Number(values.autopay_variance_pct) >= 0 ? Number(values.autopay_variance_pct) : 40,
+        // Percentages, parsed and bounded here so the column CHECK is a backstop
+        // rather than the error message. An unparseable field saves as an empty
+        // array — presets off — never as a rejected write that loses the rest of
+        // the form.
+        tips_enabled: !!values.tips_enabled,
+        tip_presets: parseTipPresets(values.tip_presets),
+        tip_custom_enabled: !!values.tip_custom_enabled,
         preferred_work_days: workDays,
         work_start_time: /^\d{1,2}:\d{2}$/.test(workStart) ? workStart : '08:00',
         daily_capacity_hours: Number(capacityHours) > 0 ? Number(capacityHours) : 8,
@@ -607,6 +642,43 @@ export default function SettingsPage() {
               <Input label="E-transfer email" type="email" placeholder="pay@yourbusiness.com"
                 hint="The email registered with your bank for Interac e-transfers (often your business email). Shown to customers in the portal's Ways to Pay."
                 {...register('etransfer_email')} />
+            </div>
+
+            {/* ── Tips on online payments ──────────────────────────────────────
+                OFF by default, and nothing here infers anything from the trade:
+                most service businesses do not take gratuity, and a tip prompt
+                appears on the CUSTOMER's invoice under the OWNER's name. The
+                business decides — there is deliberately no "cleaning gets tips,
+                electricians don't" logic anywhere in this feature.
+
+                Only available where card payments already are: the tip settles
+                into the same Stripe account, so it cannot outlive the
+                online_payments capability that carries it (enforced server-side
+                by /api/portal/pay, which re-derives both). */}
+            <div className="pt-4 mt-2 border-t border-border">
+              <h3 className="text-sm font-semibold text-ink flex items-center gap-2"><Gift className="w-4 h-4 text-accent-text" /> Tips</h3>
+              <p className="text-xs text-ink-faint mt-0.5 mb-3">
+                Offer customers an optional tip when they pay an invoice online. Off by default. A tip is recorded separately —
+                it never changes an invoice&rsquo;s total, its balance, or your revenue figures, and it isn&rsquo;t offered on deposits or part payments.
+              </p>
+              <div className="space-y-3">
+                <Controller name="tips_enabled" control={control} render={({ field }) => (
+                  <Toggle checked={!!field.value} onChange={field.onChange} label="Accept tips on online payments" />
+                )} />
+                {tipsOn && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <Input label="Suggested tips (%)" placeholder="10, 15, 20"
+                      hint={`Up to ${TIP_MAX_PRESETS} percentages, separated by commas. The dollar figure is worked out from the amount being paid. Leave blank for no suggestions.`}
+                      {...register('tip_presets')} />
+                    <div className="flex flex-col justify-center">
+                      <Controller name="tip_custom_enabled" control={control} render={({ field }) => (
+                        <Toggle checked={!!field.value} onChange={field.onChange} label="Let customers enter their own amount" />
+                      )} />
+                      <p className="text-xs text-ink-faint mt-1.5">Turn both this and the suggestions off and no tip is offered at all.</p>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* ── Recurring AutoPay ── */}

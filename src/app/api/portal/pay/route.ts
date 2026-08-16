@@ -5,6 +5,7 @@ import { ensureStripeCustomerId, type CardCustomer } from '@/lib/payments/cards'
 import { depositChargeAmount } from '@/lib/payments/deposit'
 import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
 import { appOrigin } from '@/lib/appOrigin'
+import { tipConfig, resolveTipCents, tipRejectionMessage, type TipSettings } from '@/lib/payments/tips'
 
 export const dynamic = 'force-dynamic'
 
@@ -41,6 +42,10 @@ export async function POST(req: NextRequest) {
   let gst = Number(invoice.gst_percent)
   let depositAmount: number | null = null
   let depositRequestedAt: string | null = null
+  // The owner's gratuity configuration, resolved from the same service-role read
+  // as the GST rate. Never from the client: the browser tells us what the
+  // customer CHOSE, and this tells us what they were allowed to choose.
+  let tips = tipConfig(null)
   {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL, svc = process.env.SUPABASE_SERVICE_ROLE_KEY
     // The deposit columns are what decide HOW MUCH this session charges, and the
@@ -66,11 +71,21 @@ export async function POST(req: NextRequest) {
     if (!(await tenantCapabilities(admin, invoice.user_id)).onlinePayments) {
       return NextResponse.json({ error: CAPABILITY_MESSAGE.payments }, { status: 503 })
     }
+    // ONE settings read for both the tax rate and the tip configuration. Same
+    // refusal contract as the deposit read above: a settings read we cannot
+    // complete is a session we must not build. Answering "couldn't read the
+    // settings" as "no tips" would silently drop a gratuity the customer chose
+    // and was shown; answering it as "tips allowed" would charge one the owner
+    // may never have enabled. Neither is a guess worth making — refuse (502) and
+    // let them tap again.
+    const { data: bs, error: bsErr } = await admin.from('business_settings')
+      .select('gst_percent, tips_enabled, tip_presets, tip_custom_enabled')
+      .eq('user_id', invoice.user_id).maybeSingle()
+    if (bsErr) return NextResponse.json({ error: 'We couldn’t start the payment — please try again in a moment.' }, { status: 502 })
     if (!Number.isFinite(gst)) {
-      const { data: bs, error: bsErr } = await admin.from('business_settings').select('gst_percent').eq('user_id', invoice.user_id).maybeSingle()
-      if (bsErr) return NextResponse.json({ error: 'We couldn’t start the payment — please try again in a moment.' }, { status: 502 })
       gst = Number((bs as { gst_percent?: number | null } | null)?.gst_percent) || 0
     }
+    tips = tipConfig(bs as TipSettings | null)
     const { data: dep, error: depErr } = await admin.from('invoices')
       .select('deposit_amount, deposit_requested_at').eq('id', invoice.id).eq('user_id', invoice.user_id).maybeSingle()
     if (depErr) return NextResponse.json({ error: 'We couldn’t start the payment — please try again in a moment.' }, { status: 502 })
@@ -99,6 +114,29 @@ export async function POST(req: NextRequest) {
     { gst_percent: gst },
   )
   if (!(charge.amount > 0)) return NextResponse.json({ error: 'This invoice is already paid.' }, { status: 409 })
+  const chargeCents = Math.round(charge.amount * 100)
+
+  // ── The tip: intent from the browser, money from here ───────────────────────
+  // `body.tipCents` is the ONLY figure this route ever accepts from a client, and
+  // it is not an amount owed — it is a request. resolveTipCents re-derives
+  // whether this business takes tips, whether THIS charge may carry one, and
+  // what the ceiling is, from state the browser cannot reach. A tampered value
+  // is rejected, not clamped: a customer charged $1,000 after asking for $5,000
+  // has been overcharged from where they sit, so the honest answer is to refuse
+  // and let the portal re-render.
+  //
+  // ⛔ NOT TIPPABLE: a DEPOSIT / part payment (charge.isDeposit). The deposit ask
+  // is a number the business has already communicated — "you cannot text someone
+  // $1,500 and then charge them something else" — and a tip would make Stripe's
+  // total disagree with it at the exact moment the card is out. That is the
+  // display-vs-charge split the whole deposit lane exists to prevent. A tip is
+  // offered on the payment that CLOSES the invoice, which includes the final
+  // instalment of a part-paid one. AutoPay is untippable for a simpler reason:
+  // nobody is present to choose.
+  const tip = resolveTipCents(body.tipCents, { chargeCents, config: tips, tippable: !charge.isDeposit })
+  if (tip.rejected) {
+    return NextResponse.json({ error: tipRejectionMessage(tip.rejected, chargeCents) }, { status: 400 })
+  }
 
   // The customer paying their own invoice is the ONE moment they already have the
   // card out — so it's the only moment worth offering to keep it. Needs a Stripe
@@ -121,7 +159,8 @@ export async function POST(req: NextRequest) {
   const result = await createInvoiceCheckoutSession(invoice, {
     successUrl: `${base}/portal/${token}?paid=1`,
     cancelUrl: `${base}/portal/${token}`,
-    chargeCents: Math.round(charge.amount * 100),
+    chargeCents,
+    tipCents: tip.cents,
     // Stripe's page is where the customer decides the smaller number is right —
     // name the charge as the deposit it is, or $2,000 against a $4,000 invoice
     // reads as an error at the exact moment their card is out.

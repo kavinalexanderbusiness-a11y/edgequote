@@ -12,6 +12,7 @@ import {
 import { cn, formatCurrency } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import { downloadBlob, printBlob, viewBlob } from '@/lib/portalPdf'
+import type { TipConfig } from '@/lib/payments/tips'
 import { buildVisitICS, type CalendarVisit, type JourneyStep, type LiveStatus, type PortalView, type SubmitRequestFn, type TabKey } from '../model'
 
 // ── The contract every tab implements ───────────────────────────────────────
@@ -25,9 +26,17 @@ export interface PortalActions {
    *  not a default. */
   accept: (quoteId: string, optionId?: string) => void
   accepting: string | null
-  /** Start Stripe checkout for one invoice (POST /api/portal/pay). */
-  pay: (invoiceId: string) => void
+  /** Start Stripe checkout for one invoice (POST /api/portal/pay).
+   *  `tipCents` is the customer's chosen gratuity — an INTENT only. The route
+   *  re-derives whether tips are allowed at all, whether THIS charge may carry
+   *  one, and the ceiling, then clamps or rejects. Omitted / 0 is no tip. */
+  pay: (invoiceId: string, tipCents?: number) => void
   payingId: string | null
+  /** The owner's normalised tip configuration, from /api/payments/status (which
+   *  resolves the tenant from the portal token server-side). Disabled unless the
+   *  tenant ALSO holds the online_payments capability — a tip settles into the
+   *  same Stripe account as the payment, so it cannot outlive that grant. */
+  tips: TipConfig
   /** Start Stripe checkout for a quote's SCHEDULING DEPOSIT
    *  (POST /api/portal/quote-deposit — the amount is derived server-side). */
   payQuoteDeposit: (quoteId: string) => void
