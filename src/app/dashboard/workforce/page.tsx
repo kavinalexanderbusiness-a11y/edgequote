@@ -6,7 +6,8 @@ import { useRouter } from 'next/navigation'
 import { addDays, format, startOfDay, startOfWeek, endOfWeek, subMonths, startOfMonth } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
-import type { BusinessSettings, Crew, PayRun, PtoEntry, Technician, TimeEntry, WageHistoryEntry } from '@/types'
+import type { BusinessSettings, Crew, PayRun, PtoEntry, Technician, TimeEntry, WageHistoryEntry, WorkerAvailability } from '@/types'
+import { loadWorkerAvailability } from '@/lib/workerAvailabilityData'
 import { loadCrews, loadTechnicians } from '@/lib/crews'
 import { loadTimeEntries, decimalHours, formatDuration } from '@/lib/timeTracking'
 import { payrollRules, payPeriodFor, overtimeOff } from '@/lib/payroll'
@@ -17,6 +18,7 @@ import {
   laborTrend, forecastNextPeriod, ptoAnalytics, wageTrends, payRunStats,
 } from '@/lib/workforce'
 import { TeamPanel } from '@/components/workforce/TeamPanel'
+import { TeamAvailabilityWeek } from '@/components/workforce/TeamAvailabilityWeek'
 import { EmployeeEditor } from '@/components/workforce/EmployeeEditor'
 import { WageHistoryDialog } from '@/components/dispatch/WageHistoryDialog'
 import type { CrewAccessRow } from '@/lib/crewInvite'
@@ -67,6 +69,10 @@ export default function WorkforcePage() {
   // App-access state for the whole roster in ONE call — "has this person ever
   // signed in" lives in auth.users, which no owner client can read.
   const [accessById, setAccessById] = useState<Record<string, CrewAccessRow>>({})
+  // The team's standard weeks (Session 67), and whether that read succeeded —
+  // "no pattern set" and "couldn't read the patterns" are different answers.
+  const [availabilityRows, setAvailabilityRows] = useState<WorkerAvailability[]>([])
+  const [availabilityReadable, setAvailabilityReadable] = useState(true)
 
   const fetchAll = useCallback(async () => {
     try {
@@ -76,7 +82,7 @@ export default function WorkforcePage() {
       setUid(user.id)
       // A year back covers the trend + forecast window and the PTO year.
       const from = startOfMonth(subMonths(new Date(), 12))
-      const [sRes, t, c, e, pRes, rRes, wRes] = await Promise.all([
+      const [sRes, t, c, e, pRes, rRes, wRes, aRes] = await Promise.all([
         supabase.from('business_settings').select('*').eq('user_id', user.id).maybeSingle(),
         // includeArchived, like every other surface that reads paid time. The
         // roster list does NOT gate the money — payrollSummary groups by the
@@ -95,6 +101,7 @@ export default function WorkforcePage() {
         supabase.from('pto_entries').select('*').eq('user_id', user.id).gte('date', format(from, 'yyyy-MM-dd')),
         supabase.from('pay_runs').select('*').eq('user_id', user.id).order('period_start', { ascending: false }),
         supabase.from('wage_history').select('*').eq('user_id', user.id).order('seq', { ascending: false }).limit(200),
+        loadWorkerAvailability(supabase, user.id),
       ])
       setSettings(sRes.data as BusinessSettings | null)
       setTechs(t); setCrews(c); setEntries(e)
@@ -104,6 +111,10 @@ export default function WorkforcePage() {
         if (!error && data) setAccessById(data as Record<string, CrewAccessRow>)
       })
       setPtoEntries((pRes.data as PtoEntry[]) ?? [])
+      // A failed availability read is reported as unknown, never as an empty
+      // week — the panel says so instead of implying everyone is free.
+      setAvailabilityRows(aRes.outcome === 'ok' ? aRes.rows : [])
+      setAvailabilityReadable(aRes.outcome === 'ok')
       setRuns((rRes.data as PayRun[]) ?? [])
       setWageHistory((wRes.data as WageHistoryEntry[]) ?? [])
       setLoadError(null)
@@ -288,6 +299,18 @@ export default function WorkforcePage() {
           but cost $0.
         </Banner>
       )}
+
+      {/* ── The week ahead: who is actually there when the work is planned ──
+          "Today" below answers who is on the clock NOW (time entries). This
+          answers who CAN work each of the next seven days — the question the
+          schedule asks. Different questions, different engines, side by side. */}
+      <TeamAvailabilityWeek
+        technicians={roster}
+        patterns={availabilityRows}
+        ptoEntries={ptoEntries}
+        readable={availabilityReadable}
+        capacityHours={settings?.daily_capacity_hours ?? null}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* ── Availability: the three systems, finally joined ── */}

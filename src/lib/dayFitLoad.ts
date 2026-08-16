@@ -25,7 +25,12 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { addDays, format, parseISO } from 'date-fns'
 import { serviceHistory, type LaborComparison, type ServiceVariance } from '@/lib/estimateVsActual'
 import { loadCompletedVisitLearning } from '@/lib/estimateVsActualData'
-import { workersAvailableOn, type DayVisitLike, type DayFitInput, type TechForAvailability } from '@/lib/dayFit'
+import { workersAvailableOn, type DayVisitLike, type DayFitInput } from '@/lib/dayFit'
+import {
+  workerDayStates,
+  type ApprovedTimeOffDay, type AvailabilityPatternRow,
+  type WorkerDayDetail, type WorkerForAvailability,
+} from '@/lib/workerAvailability'
 
 export interface DayFitContext {
   /** business_settings.daily_capacity_hours (null follows dayLoad's 8h default). */
@@ -36,6 +41,14 @@ export interface DayFitContext {
   visitsByDate: Record<string, DayVisitLike[]>
   /** Workers available on a date, or null when the workforce read failed. */
   workersByDate: (date: string) => number | null
+  /** Per-worker states for that same date — who is off, who is unavailable,
+   *  who is only assumed available. Null when the workforce read failed. */
+  staffingByDate: (date: string) => WorkerDayDetail[] | null
+  /** True when at least one worker has a recorded weekly pattern. False means
+   *  every "available" in this context is an ASSUMPTION and must be labelled. */
+  availabilityRecorded: boolean
+  /** Crew id → name, for naming a crew in a staffing warning. */
+  crewNames: Record<string, string>
   /** Established learned on-site minutes for a service, else null. */
   learnedFor: (serviceType: string | null | undefined) => number | null
   /** The full canonical history rollup for a service (resolveDuration input). */
@@ -65,7 +78,7 @@ export async function loadDayFitContext(
   const from = opts.fromISO
   const to = format(addDays(parseISO(from + 'T00:00:00'), horizon), 'yyyy-MM-dd')
 
-  const [jRes, sRes, tRes, pRes, learn] = await Promise.all([
+  const [jRes, sRes, tRes, pRes, learn, aRes, cRes] = await Promise.all([
     supabase.from('jobs')
       .select('scheduled_date, status, duration_minutes, crew_size, service_type')
       .eq('user_id', userId)
@@ -75,13 +88,23 @@ export async function loadDayFitContext(
       .select('daily_capacity_hours, preferred_work_days')
       .eq('user_id', userId).maybeSingle(),
     supabase.from('technicians')
-      .select('id, is_active, ended_on, archived_at')
+      .select('id, name, crew_id, is_active, ended_on, archived_at')
       .eq('user_id', userId),
+    // APPROVED only. A request the owner has not decided is not an absence —
+    // planning around a pending ask would let anyone reshape the schedule by
+    // asking, and a declined one must never subtract anybody (Session 67).
     supabase.from('pto_entries')
-      .select('technician_id, date')
+      .select('technician_id, date, hours')
       .eq('user_id', userId)
+      .eq('status', 'approved')
       .gte('date', from).lte('date', to),
     loadCompletedVisitLearning(supabase, userId),
+    supabase.from('worker_availability')
+      .select('technician_id, weekday, available, start_time, end_time')
+      .eq('user_id', userId),
+    supabase.from('crews')
+      .select('id, name')
+      .eq('user_id', userId),
   ])
 
   // Load-bearing: the committed schedule and the capacity setting. Without them
@@ -99,11 +122,24 @@ export async function loadDayFitContext(
   const preferredWorkDays = settings?.preferred_work_days?.length ? settings.preferred_work_days : []
 
   // Degrading, not load-bearing: an unreadable roster means "unknown", never 0.
-  const workforceKnown = !tRes.error && !pRes.error
-  const techs = workforceKnown ? ((tRes.data as TechForAvailability[]) || []) : []
-  const pto = workforceKnown ? ((pRes.data as { technician_id: string; date: string }[]) || []) : []
+  // The weekly pattern joins that same fate deliberately: a pattern read that
+  // failed would otherwise silently downgrade to "everyone works every day",
+  // which is a CLAIM — and the one this module exists not to make.
+  const workforceKnown = !tRes.error && !pRes.error && !aRes.error
+  const techs = workforceKnown ? ((tRes.data as WorkerForAvailability[]) || []) : []
+  const pto = workforceKnown ? ((pRes.data as ApprovedTimeOffDay[]) || []) : []
+  const patterns = workforceKnown ? ((aRes.data as AvailabilityPatternRow[]) || []) : []
   const workersByDate = (date: string): number | null =>
-    workforceKnown ? workersAvailableOn(date, techs, pto) : null
+    workforceKnown ? workersAvailableOn(date, techs, pto, patterns) : null
+  // The richer per-person answer the day board's staffing warnings read. Same
+  // inputs as the count above, so the two can never disagree about a Tuesday.
+  const staffingByDate = (date: string): WorkerDayDetail[] | null =>
+    workforceKnown ? workerDayStates(date, techs, patterns, pto, { capacityHours }) : null
+  const availabilityRecorded = patterns.length > 0
+  // Names only, so a staffing warning can say "Crew A" rather than a uuid. An
+  // unreadable crew list costs a NAME, not a fact — the warning still fires.
+  const crewNames: Record<string, string> = Object.fromEntries(
+    ((cRes.error ? [] : (cRes.data as { id: string; name: string }[])) || []).map(c => [c.id, c.name]))
 
   // Learning: canonical rollups, memoized per service bucket.
   const comparisons: LaborComparison[] =
@@ -138,6 +174,7 @@ export async function loadDayFitContext(
     outcome: 'ok',
     ctx: {
       capacityHours, preferredWorkDays, visitsByDate, workersByDate,
+      staffingByDate, availabilityRecorded, crewNames,
       learnedFor, historyFor, workforceKnown, dayInput, horizonDates,
     },
   }
