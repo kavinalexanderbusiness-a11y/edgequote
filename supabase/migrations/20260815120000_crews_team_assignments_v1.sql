@@ -26,21 +26,37 @@
 -- user_id, not what its foreign keys aim at). Same class of hole the
 -- actual-cost-capture audit closed on job_line_items. Composite FKs close it.
 
-alter table public.crews add constraint crews_id_user_key unique (id, user_id);
+-- Added conditionally rather than dropped-and-recreated: the composite foreign
+-- keys below depend on this key, so a re-run that dropped it first would fail on
+-- its own dependants.
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'crews_id_user_key' and conrelid = 'public.crews'::regclass
+  ) then
+    alter table public.crews add constraint crews_id_user_key unique (id, user_id);
+  end if;
+end
+$$;
 
 alter table public.technicians drop constraint if exists technicians_crew_id_fkey;
+alter table public.technicians drop constraint if exists technicians_crew_same_owner;
 alter table public.technicians add constraint technicians_crew_same_owner
   foreign key (crew_id, user_id) references public.crews(id, user_id) on delete set null (crew_id);
 
 alter table public.jobs drop constraint if exists jobs_crew_id_fkey;
+alter table public.jobs drop constraint if exists jobs_crew_same_owner;
 alter table public.jobs add constraint jobs_crew_same_owner
   foreign key (crew_id, user_id) references public.crews(id, user_id) on delete set null (crew_id);
 
 alter table public.equipment drop constraint if exists equipment_crew_id_fkey;
+alter table public.equipment drop constraint if exists equipment_crew_same_owner;
 alter table public.equipment add constraint equipment_crew_same_owner
   foreign key (crew_id, user_id) references public.crews(id, user_id) on delete set null (crew_id);
 
 alter table public.dispatch_notes drop constraint if exists dispatch_notes_crew_id_fkey;
+alter table public.dispatch_notes drop constraint if exists dispatch_notes_crew_same_owner;
 alter table public.dispatch_notes add constraint dispatch_notes_crew_same_owner
   foreign key (crew_id, user_id) references public.crews(id, user_id) on delete cascade;
 
@@ -48,12 +64,14 @@ alter table public.dispatch_notes add constraint dispatch_notes_crew_same_owner
 
 alter table public.jobs add column if not exists technician_id uuid;
 
+alter table public.jobs drop constraint if exists jobs_technician_same_owner;
 alter table public.jobs add constraint jobs_technician_same_owner
   foreign key (technician_id, user_id) references public.technicians(id, user_id)
   on delete set null (technician_id);
 
 -- A visit has ONE assignee. A crew and a person at once is two answers to
 -- "who is coming" — the double-assignment semantics this model refuses.
+alter table public.jobs drop constraint if exists jobs_one_assignee;
 alter table public.jobs add constraint jobs_one_assignee
   check (crew_id is null or technician_id is null);
 
@@ -95,6 +113,10 @@ $function$;
 
 revoke all on function public.jobs_assignment_guard() from public, anon, authenticated;
 
+-- Every `create trigger`/`create policy` in this file is preceded by a drop, so
+-- a half-applied run can be re-run to completion rather than needing to be
+-- unpicked by hand. (Postgres has no `create trigger if not exists`.)
+drop trigger if exists jobs_assignment_guard on public.jobs;
 create trigger jobs_assignment_guard
   before insert or update of crew_id, technician_id on public.jobs
   for each row execute function public.jobs_assignment_guard();
@@ -106,6 +128,7 @@ create trigger jobs_assignment_guard
 
 alter table public.crews add column if not exists lead_technician_id uuid;
 
+alter table public.crews drop constraint if exists crews_lead_same_owner;
 alter table public.crews add constraint crews_lead_same_owner
   foreign key (lead_technician_id, user_id) references public.technicians(id, user_id)
   on delete set null (lead_technician_id);
@@ -140,6 +163,7 @@ $function$;
 
 revoke all on function public.crews_lead_is_member() from public, anon, authenticated;
 
+drop trigger if exists crews_lead_is_member on public.crews;
 create trigger crews_lead_is_member
   before insert or update of lead_technician_id on public.crews
   for each row execute function public.crews_lead_is_member();
@@ -164,6 +188,7 @@ $function$;
 
 revoke all on function public.clear_crew_lead_on_departure() from public, anon, authenticated;
 
+drop trigger if exists technicians_clear_crew_lead on public.technicians;
 create trigger technicians_clear_crew_lead
   after update of crew_id, is_active, archived_at on public.technicians
   for each row execute function public.clear_crew_lead_on_departure();
@@ -196,6 +221,7 @@ comment on table public.technician_crew_history is
 
 alter table public.technician_crew_history enable row level security;
 
+drop policy if exists "technician_crew_history: select own" on public.technician_crew_history;
 create policy "technician_crew_history: select own" on public.technician_crew_history
   as permissive for select to public using (auth.uid() = user_id);
 
@@ -222,6 +248,7 @@ $function$;
 
 revoke all on function public.record_technician_crew_history() from public, anon, authenticated;
 
+drop trigger if exists technicians_crew_history on public.technicians;
 create trigger technicians_crew_history
   after insert or update of crew_id on public.technicians
   for each row execute function public.record_technician_crew_history();
@@ -259,6 +286,7 @@ $function$;
 
 revoke all on function public.crews_block_delete_with_history() from public, anon, authenticated;
 
+drop trigger if exists crews_block_delete_with_history on public.crews;
 create trigger crews_block_delete_with_history
   before delete on public.crews
   for each row execute function public.crews_block_delete_with_history();
