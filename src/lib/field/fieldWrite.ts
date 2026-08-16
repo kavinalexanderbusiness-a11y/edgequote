@@ -44,6 +44,21 @@ export interface FieldSaveResult {
   /** The row version after a `saved` write, so an immediate undo carries a live
    *  guard rather than the version it just replaced. */
   nextUpdatedAt?: string
+  /**
+   * ⭐ The completion gate's refusal, carried through intact: the required
+   * checklist items still open (crewJob.CrewWriteResult.checklist).
+   *
+   * ⛔ This must NOT be flattened into `message`. It is a refusal with a
+   * REMEDY — a list the worker can go and complete — and the card renders it
+   * beside the checklist itself, which a toast-sized apology cannot do. A
+   * resilience layer that swallowed it would turn "three items left" into
+   * "that didn't save", which is true and useless.
+   *
+   * It is also unambiguous by construction: a deterministic 422 leaves the row
+   * untouched, so reconciliation returns `unapplied` and we know this is a real
+   * server refusal rather than a lost response.
+   */
+  checklist?: { form: string; label: string; field_id: string }[]
 }
 
 const SAVED: FieldSaveResult = { state: 'saved' }
@@ -173,7 +188,7 @@ export async function runVisitIntent(
     case 'applied':
       return { ...SAVED, nextUpdatedAt: facts?.updated_at }
     case 'unapplied':
-      return { state: 'failed', message: res.error || 'That didn’t save. Try again.' }
+      return { state: 'failed', message: res.error || 'That didn’t save. Try again.', checklist: res.checklist }
     case 'gone':
       return { state: 'failed', message: 'That visit is no longer on your board. Pull to refresh.' }
     case 'superseded':

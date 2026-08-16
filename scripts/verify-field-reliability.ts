@@ -318,6 +318,21 @@ console.log('\n── Field reliability + offline resilience ──────�
   check('⭐ the row version survives — a queued write needs its base',
     projected.stops[0].updated_at === V0)
 
+  // ⭐ The checklist SUMMARY is carried (counts only, no field content) so a
+  // worker offline still knows what is outstanding. It reached CrewStop after
+  // the projection was written and was dropped until reviewed — which is the
+  // whitelist working, and the reason the next new field must be reviewed too.
+  const withList = projectDayForCache({
+    ...day,
+    stops: [{ ...stop, checklist: { forms: 1, items: 7, done: 3, required: 2, required_done: 0, waived: false } }],
+  })
+  check('⭐ the checklist summary is cached — counts only',
+    withList.stops[0].checklist?.items === 7 && withList.stops[0].checklist?.required_done === 0)
+  check('…and a visit with no checklist caches null, not undefined',
+    projected.stops[0].checklist === null)
+  check('⛔ no checklist FIELD CONTENT is cached',
+    !/label|answer|value|prompt|question/i.test(JSON.stringify(withList.stops[0].checklist)))
+
   check('a cached day expires', isExpired(Date.now() - FIELD_CACHE_MAX_AGE_MS - 1))
   check('…but not within a working day', !isExpired(Date.now() - 10 * 60 * 60_000))
   check('⭐ the bound is under a day, so a revoked worker loses access fast',

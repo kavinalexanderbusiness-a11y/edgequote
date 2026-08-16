@@ -146,6 +146,25 @@ function stopProjection(s: CrewStop): CrewStop {
     property: s.property
       ? { address: s.property.address, lat: s.property.lat, lng: s.property.lng }
       : null,
+    // ⭐ COUNTS ONLY — the checklist summary, never a single field's content
+    // (crew_job_forms loads the real form on tap). A worker offline still needs
+    // to see "3 of 7 · 2 required open" to know what is outstanding, and the
+    // numbers carry no customer data and nothing business-wide.
+    //
+    // ⚠️ This field arrived on CrewStop from the job-forms feature AFTER this
+    // projection was written, and the whitelist did exactly its job: it dropped
+    // it, silently and safely, until a human decided. That is the trade the
+    // whitelist exists to make — a missing count offline, rather than an
+    // unreviewed field landing on a phone that may be lost. ⛔ Same review is
+    // owed to the NEXT field crew_day grows; do not switch this to a spread.
+    // `undefined` is normalised to null (payloads predating the feature).
+    checklist: s.checklist
+      ? {
+          forms: s.checklist.forms, items: s.checklist.items, done: s.checklist.done,
+          required: s.checklist.required, required_done: s.checklist.required_done,
+          waived: s.checklist.waived,
+        }
+      : null,
   }
 }
 

@@ -142,6 +142,15 @@ export function registerFieldHandlers(): void {
     // definition nothing landed, so no duplicate can result. Recording the tap
     // time instead would need the RPC to accept it as a parameter; noted for the
     // work-session accuracy pass rather than papered over here.
+    // ⭐ The checklist gate is a REFUSAL WITH A REMEDY, not a transport failure.
+    // Retrying can never clear it — only the worker filling in the required
+    // items can — so replaying on every reconnect would burn all six attempts
+    // and then DROP a finished visit as a poison op. Terminal instead, with the
+    // reason in words: the completion leaves the queue and the person is told
+    // what to go and do.
+    if (!res.ok && res.checklist?.length) {
+      throw conflict(p.intent, 'the required checklist items are still open on it', 'changed')
+    }
     if (!res.ok) throw new Error(res.error || 'field.visit replay failed')
   })
 

@@ -1,3 +1,19 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ARCHIVED MIGRATION — HISTORY ONLY. DO NOT RE-RUN.
+--
+--   version : 20260815080000
+--   name    : worker_availability_time_off
+--
+-- Written by Session 67, applied to production 2026-08-15 during Session 69's
+-- reconciliation (the merged code expected it), and recorded in
+-- supabase_migrations.schema_migrations. The SQL below is the text production
+-- executed.
+--
+-- Its effects are already folded into supabase/migrations/*_baseline.sql. This
+-- copy exists so "why is this column here?" is answerable, and for nothing else.
+-- Re-running one replaces a live object with an older body — silently, no error.
+-- ═══════════════════════════════════════════════════════════════════════════
+
 -- ══ Session 67 — Worker availability + time off requests ════════════════════
 --
 -- WHAT THIS ADDS

@@ -117,6 +117,20 @@ export async function POST(req: NextRequest) {
   })
 
   if (action === 'complete') {
+    // 0 — the checklist gate, asked of THE definition (job_form_missing_items,
+    // the same function the jobs BEFORE UPDATE trigger enforces). Asking first
+    // turns a database refusal into a readable list on the worker's phone;
+    // skipping this step would not skip the rule — the trigger backstops it.
+    // A failed read fails CLOSED: "couldn't check" is never "checked out fine".
+    const { data: missing, error: gateErr } = await admin.rpc('job_form_missing_items', {
+      p_job_id: jobId, p_user_id: ownerId,
+    })
+    if (gateErr) return NextResponse.json({ error: 'Couldn’t check this visit’s checklist — try again.' }, { status: 502 })
+    const checklist = (missing ?? []) as { form: string; label: string; field_id: string }[]
+    if (Array.isArray(checklist) && checklist.length > 0) {
+      return NextResponse.json({ ok: false, checklist }, { status: 422 })
+    }
+
     // 1 — status, through the SAME door as always (caller's session: the RPC
     // re-checks assignment and the optimistic version itself).
     const { data: rpcData, error: rpcErr } = await supabase.rpc('crew_set_visit_status', rpcParams(body?.next, 'completed'))
