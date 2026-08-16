@@ -60,6 +60,10 @@ const APP = (p: string) => readFileSync(p, 'utf8').replace(/\r\n?/g, '\n')
 const stripSqlComments = (s: string) =>
   s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/--[^\n\r]*/g, '')
 
+/** The same rule for TypeScript. `[^\n\r]`, again, for the same CRLF reason. */
+const stripTsComments = (s: string) =>
+  s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n\r]*/g, '')
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 1 · WHERE THE AUDIT SCHEMA LIVES  (the lifecycle this file must not lose)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -223,7 +227,70 @@ if (projection) {
   check('the projection never emits actor identity to a customer',
     !/actor_label|actor_id/.test(projBody),
     'a customer must not learn which worker did what')
+  check('the projection filters by the asking customer as well as by action',
+    /r\.customer_id === customerId/.test(projBody),
+    'a token proves which TENANT, never which ROW — the customer must be checked here too')
 }
+
+// -- 2j. the read path is one engine, and it pages ---------------------------
+const historyLib = existsSync('src/lib/audit/history.ts') ? APP('src/lib/audit/history.ts') : ''
+check('there is one history loader', historyLib.length > 0)
+if (historyLib) {
+  // ⚠️ Strip comments FIRST. An earlier version of the OFFSET check failed on this
+  //    file's own comment explaining why OFFSET is not used — the grep-your-own-
+  //    subject trap. Every absence assertion below reads the stripped body.
+  const code = stripTsComments(historyLib)
+  check('the comment stripper works (else every absence check below is vacuous)',
+    !/keyset-paginated/.test(code) && /supabase\.from\('audit_events'\)/.test(code),
+    'the stripper removed too much or too little')
+  check('history reads are keyset-paginated, never OFFSET',
+    /\.lt\('seq'/.test(code) && !/\.range\(|\boffset\b/i.test(code),
+    'OFFSET re-scans, and shifts rows between pages as new events arrive')
+  check('a failed read is reported, not rendered as an empty history',
+    /failed: true/.test(code) && /reason/.test(code),
+    'supabase-js resolves failures with {data:null,error} — `data || []` says "nothing happened"')
+  check('the loader never scopes by a caller-supplied tenant',
+    !/\.eq\('user_id'/.test(code),
+    'RLS scopes the rows; a client that can name a tenant can name someone else\'s')
+  check('grouping is by txid, not by a time window',
+    /txid/.test(code) && !/SETTLE_WINDOW|\b\d{4,}\s*\)?\s*(?:ms|milliseconds)/i.test(code),
+    'the dedup contract is causal here — merge what ONE WRITE caused')
+}
+
+const panel = existsSync('src/components/audit/HistoryPanel.tsx')
+  ? APP('src/components/audit/HistoryPanel.tsx') : ''
+check('there is one history renderer', panel.length > 0)
+if (panel) {
+  check('a failed load says so instead of showing an empty state',
+    /could not be loaded/.test(panel) && /Try again/.test(panel),
+    'an empty history and an unreadable one are opposite messages')
+  check('the row shows who, what and when without expanding',
+    /actorName\(/.test(panel) && /actionLabel\(/.test(panel) && /<time/.test(panel))
+  check('the timestamp never wraps under the text on a phone',
+    /whitespace-nowrap[^"]*shrink-0|shrink-0[^"]*whitespace-nowrap/.test(panel))
+  check('long values wrap instead of forcing a horizontal scroll',
+    (panel.match(/break-words/g) ?? []).length >= 3,
+    'a 430px viewport must not scroll sideways to read a change')
+  check('the phrasing lives in the engine, not in the component',
+    !/'Rescheduled|'Approved quote|'Disabled access/.test(panel),
+    'a second vocabulary is a second thing to keep in sync')
+}
+
+// -- 2k. the business feed filters server-side -------------------------------
+const activity = existsSync('src/app/dashboard/activity/page.tsx')
+  ? APP('src/app/dashboard/activity/page.tsx') : ''
+check('a business-wide activity surface exists', activity.length > 0)
+if (activity) {
+  check('its filters are passed to the query, not applied in the browser',
+    /filter=\{filter\}/.test(activity) && !/\.filter\(e =>/.test(activity),
+    'filtering in the browser means fetching every audit record ever')
+  check('it offers the practical filters: who, what and when',
+    /actorType/.test(activity) && /actions:/.test(activity) && /from:/.test(activity))
+}
+const modules = APP('src/lib/modules.ts')
+check('the activity surface is registered, so the sidebar and ⌘K agree',
+  /href: '\/dashboard\/activity'/.test(modules),
+  'never hand-keep a nav list — the registry is what the sidebar, palette and manager read')
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 3 · BEHAVIOUR, FROM ZERO  (an empty Postgres + this repository)
