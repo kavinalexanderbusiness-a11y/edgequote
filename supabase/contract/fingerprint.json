@@ -1,10 +1,10 @@
 {
   "_comment": "Production's schema shape at capture time, from public.schema_fingerprint(). `npm run verify:schema` compares live production against this. Regenerate with `npm run schema:contract` — never hand-edit a hash to make the guard pass, because the hash is the only thing standing between a silent production change and a rebuild that quietly omits it.",
-  "captured_at": "2026-08-16 03:14:37.796978+00",
+  "captured_at": "2026-08-16 03:39:42.8167+00",
   "captured_from": "production, PostgreSQL 17.6 on aarch64-unknown-linux-gnu",
   "baseline": "supabase/migrations/*_baseline.sql",
-  "overall": "ae71a2814dc335c27c95511c62ae8550",
-  "latest_migration": "20260815124500",
+  "overall": "7eeaf2b455d0117cc549e0f5a198fe81",
+  "latest_migration": "20260815130000",
   "sections": {
     "tables": {
       "n": 109,
@@ -40,7 +40,7 @@
     },
     "functions": {
       "n": 127,
-      "md5": "0be2cb38039b077606aa36f6a8d6af1b"
+      "md5": "dc983c39f10f3100c688943ff0083436"
     },
     "constraints": {
       "n": 577,

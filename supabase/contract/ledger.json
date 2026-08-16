@@ -1034,5 +1034,12 @@
   "sql_md5": "cbd5ffb1dbdfae8cbd7832f96d2085aa",
   "version": "20260815124500",
   "stmt_count": 1
+ },
+ {
+  "name": "job_forms_fix_photo_projection",
+  "sql_len": 2466,
+  "sql_md5": "2da861608587b31bfeb29d33ec8ee83f",
+  "version": "20260815130000",
+  "stmt_count": 1
  }
 ]

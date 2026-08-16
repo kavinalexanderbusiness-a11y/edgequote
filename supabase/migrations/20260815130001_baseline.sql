@@ -2639,7 +2639,7 @@ begin
            limit 1),
           'Office'),
         'photos', coalesce((
-          select jsonb_agg(jsonb_build_object('id', p.id, 'storage_path', ph.storage_path)
+          select jsonb_agg(jsonb_build_object('id', ph.id, 'storage_path', ph.storage_path)
                            order by p.created_at)
           from public.job_form_response_photos p
           join public.job_photos ph on ph.id = p.photo_id and ph.user_id = p.user_id
