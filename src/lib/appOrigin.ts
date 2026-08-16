@@ -69,6 +69,24 @@ export function appOrigin(requestOrigin?: string | null): string {
 }
 
 /**
+ * The origin plus the flag every diagnostics surface wants beside it: whether
+ * the STORED value needed cleaning to become this answer. `sanitized: true`
+ * means the raw variable carries characters that are invisible in any viewer
+ * that renders it (a BOM, zero-widths, wrapping quotes, a trailing slash) —
+ * the exact condition that once broke every emailed link while every dashboard
+ * showed the value as fine. Consumed by /api/comms/test's diagnostics.
+ * (Session 75 shipped the consumer; the export itself lands here.)
+ */
+export function appOriginReport(): { origin: string | null; sanitized: boolean } {
+  const raw = process.env.NEXT_PUBLIC_APP_URL
+  const cleaned = cleanOrigin(raw)
+  return {
+    origin: appOrigin() || null,
+    sanitized: raw != null && raw !== '' && raw !== cleaned,
+  }
+}
+
+/**
  * Is this a value the app can actually build links on? Cleaning removes what a
  * value picks up in transit; it cannot rescue a value that was wrong to begin
  * with — "app.edgehq.ca" with no scheme, or a stray "javascript:" — and those
