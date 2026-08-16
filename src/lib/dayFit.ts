@@ -424,23 +424,35 @@ export interface TechForAvailability {
  * `ptoDates` must already be filtered to APPROVED time off — a request nobody
  * has decided is not an absence, and lib/dayFitLoad filters at the read.
  *
- * `patterns` is optional and additive: absent, this is exactly the pre-Session
- * 67 count. Present, a worker who HAS a recorded week is not counted on a
- * weekday their week excludes. A worker with no pattern rows is still counted —
- * no recorded week means availability is ASSUMED, and the surfaces label that
- * assumption (lib/workerAvailability owns the rule and the vocabulary).
+ * `opts.patterns` is optional and additive: absent, this is exactly the
+ * pre-Session-67 count. Present, a worker who HAS a recorded week is not
+ * counted on a weekday their week excludes. A worker with no pattern rows is
+ * still counted — no recorded week means availability is ASSUMED, and the
+ * surfaces label that assumption (lib/workerAvailability owns the vocabulary).
+ *
+ * ⭐ The fourth parameter is an OPTIONS OBJECT rather than a bare array on
+ * purpose: this is the one place the product answers "how many people can work
+ * this date", so every future narrowing of that question belongs INSIDE this
+ * function as another key — never as a second counter, and never as a fight
+ * over a positional slot. (Session 65's crew-scoped variant, `{ crewId }`,
+ * lands here as exactly that: one more key on this object.)
  */
+export interface WorkersAvailableOpts {
+  /** Weekly patterns for the whole business (lib/workerAvailability). */
+  patterns?: AvailabilityPatternRow[]
+}
+
 export function workersAvailableOn(
   date: string,
   technicians: TechForAvailability[],
   ptoDates: { technician_id: string; date: string }[],
-  patterns?: AvailabilityPatternRow[],
+  opts?: WorkersAvailableOpts,
 ): number {
   const roster = technicians.filter(t =>
     t.is_active && !t.archived_at && (!t.ended_on || t.ended_on >= date))
   if (roster.length === 0) return 1
   const off = new Set(ptoDates.filter(p => p.date.slice(0, 10) === date).map(p => p.technician_id))
-  const patternOff = patterns?.length ? patternUnavailableOn(date, patterns) : null
+  const patternOff = opts?.patterns?.length ? patternUnavailableOn(date, opts.patterns) : null
   return Math.max(0, roster.filter(t => !off.has(t.id) && !patternOff?.has(t.id)).length)
 }
 

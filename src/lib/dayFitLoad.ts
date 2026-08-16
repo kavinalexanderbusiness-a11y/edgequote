@@ -142,7 +142,7 @@ export async function loadDayFitContext(
     : []
   const patterns = workforceKnown && !aRes.error ? ((aRes.data as AvailabilityPatternRow[]) || []) : []
   const workersByDate = (date: string): number | null =>
-    workforceKnown ? workersAvailableOn(date, techs, pto, patterns) : null
+    workforceKnown ? workersAvailableOn(date, techs, pto, { patterns }) : null
   // The richer per-person answer the day board's staffing warnings read. Same
   // inputs as the count above, so the two can never disagree about a Tuesday.
   const staffingByDate = (date: string): WorkerDayDetail[] | null =>

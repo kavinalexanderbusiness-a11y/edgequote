@@ -89,7 +89,7 @@ H('2. THE SOLO WORKER — a business with no roster is one person, not zero')
 eq('no technician rows at all = the solo owner = 1',
   workersAvailableOn(MON, [], []), 1)
 eq('…and a pattern table cannot reduce that below 1',
-  workersAvailableOn(MON, [], [], weekdays('nobody')), 1)
+  workersAvailableOn(MON, [], [], { patterns: weekdays('nobody') }), 1)
 {
   const solo = [worker('t1')]
   eq('one active worker, no pattern, no time off = 1',
@@ -110,7 +110,7 @@ H('3. NO PATTERN = ASSUMED AVAILABLE, and the word is "assumed"')
   check('…and both are labelled ASSUMED, not stated',
     states.every(s => s.state === 'assumed'))
   eq('the label the product shows says so', WORKER_DAY_STATE_LABELS.assumed, 'Assumed available')
-  eq('the count agrees', workersAvailableOn(SAT, team, [], []), 2)
+  eq('the count agrees', workersAvailableOn(SAT, team, []), 2)
 
   const staffing = dayStaffing(SAT, states, [{ id: 'crew-a', name: 'Crew A' }])
   check('the day reports that EVERY availability on it is an assumption', staffing.allAssumed)
@@ -128,8 +128,8 @@ H('4. A RECORDED WEEK is honoured — and only for the worker who recorded one')
   const team = [worker('t1'), worker('t2')]
   const patterns = weekdays('t1')            // t1 works Mon–Fri; t2 said nothing
 
-  eq('Monday: both available', workersAvailableOn(MON, team, [], patterns), 2)
-  eq('Saturday: t1 does not work it; t2 is still assumed', workersAvailableOn(SAT, team, [], patterns), 1)
+  eq('Monday: both available', workersAvailableOn(MON, team, [], { patterns }), 2)
+  eq('Saturday: t1 does not work it; t2 is still assumed', workersAvailableOn(SAT, team, [], { patterns }), 1)
 
   const sat = workerDayStates(SAT, team, patterns, [])
   eq('t1 reads as unavailable', sat.find(s => s.technicianId === 't1')!.state, 'unavailable')
@@ -152,20 +152,20 @@ H('4. A RECORDED WEEK is honoured — and only for the worker who recorded one')
     { technician_id: 't1', weekday: 3, available: false, start_time: null, end_time: null },
   ]
   eq('Wednesday marked unavailable means unavailable',
-    workersAvailableOn(WED, team, [], explicit), 0)
-  eq('…and Tuesday is untouched', workersAvailableOn('2026-08-18', team, [], explicit), 1)
+    workersAvailableOn(WED, team, [], { patterns: explicit }), 0)
+  eq('…and Tuesday is untouched', workersAvailableOn('2026-08-18', team, [], { patterns: explicit }), 1)
   check('the row itself rules them out', patternUnavailableOn(WED, explicit).has('t1'))
   eq('…and the per-worker state says so',
     workerDayStates(WED, team, explicit, [])[0].state, 'unavailable')
   eq('an explicit false and a missing row mean the same thing',
-    workersAvailableOn(WED, team, [], explicit),
-    workersAvailableOn(WED, team, [], weekdays('t1').filter(r => r.weekday !== 3)))
+    workersAvailableOn(WED, team, [], { patterns: explicit }),
+    workersAvailableOn(WED, team, [], { patterns: weekdays('t1').filter(r => r.weekday !== 3) }))
 
   // A full week of explicit refusals is a real zero, not an unknown.
   const never: AvailabilityPatternRow[] = [0, 1, 2, 3, 4, 5, 6].map(wd =>
     ({ technician_id: 't1', weekday: wd, available: false, start_time: null, end_time: null }))
   eq('a worker who works no day of the week counts nowhere',
-    workersAvailableOn(MON, team, [], never), 0)
+    workersAvailableOn(MON, team, [], { patterns: never }), 0)
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -180,7 +180,7 @@ H('5. PARTIAL availability is available — and says it is short')
   eq('a 4-hour Monday against an 8-hour day is PARTIAL', states[0].state, 'partial')
   eq('…and reports its real minutes', states[0].minutes, 240)
   check('…and still counts as someone who can work', canWork(states[0]))
-  eq('the head-count agrees — a part day is a person', workersAvailableOn(MON, team, [], half), 1)
+  eq('the head-count agrees — a part day is a person', workersAvailableOn(MON, team, [], { patterns: half }), 1)
 
   const full = workerDayStates(MON, team, weekdays('t1'), [], { capacityHours: 8 })
   eq('a 9-hour window on an 8-hour day is simply available', full[0].state, 'available')
@@ -189,7 +189,7 @@ H('5. PARTIAL availability is available — and says it is short')
   // hours. A part-day worker is not pro-rated into it — the minutes are
   // surfaced so the conservatism is visible, not silently banked.
   eq('a part-day worker still counts as one whole person in the pool',
-    workersAvailableOn(MON, team, [], half), 1)
+    workersAvailableOn(MON, team, [], { patterns: half }), 1)
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -263,7 +263,7 @@ H('7. PAST and FUTURE dated exceptions land on their own dates only')
   // yesterday's answer is made of yesterday's rows.
   const patterns = weekdays('t1')                       // Mon–Fri, recorded now
   eq('a Saturday LAST year is answered by that date’s own rows, not by today’s week',
-    workersAvailableOn('2025-08-23', team, [offDay('t1', '2025-08-23')], patterns), 0)
+    workersAvailableOn('2025-08-23', team, [offDay('t1', '2025-08-23')], { patterns }), 0)
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -302,7 +302,7 @@ H('9. ONE COUNT — the two answers can never disagree')
   for (const c of cases) {
     const states = workerDayStates(c.date, team, c.patterns, c.off)
     const fromStates = states.filter(canWork).length
-    const fromCount = workersAvailableOn(c.date, team, c.off, c.patterns)
+    const fromCount = workersAvailableOn(c.date, team, c.off, { patterns: c.patterns })
     if (fromStates === fromCount) agreed++
     else fail(`states and count disagree on ${c.date}`, `states=${fromStates} count=${fromCount}`)
   }
@@ -322,7 +322,7 @@ H('10. THE 3-PERSON CREW that is really 1 — the owner’s case')
   ]
   const off = [offDay('t1', SAT)]
   eq('Saturday: 3 on the roster, 1 off, 1 not working — 1 available',
-    workersAvailableOn(SAT, team, off, patterns), 1)
+    workersAvailableOn(SAT, team, off, { patterns }), 1)
 
   const states = workerDayStates(SAT, team, patterns, off)
   const stop = (over: Partial<DayPlanStopInput> = {}): DayPlanStopInput => ({
@@ -332,7 +332,7 @@ H('10. THE 3-PERSON CREW that is really 1 — the owner’s case')
   const input = (over: Partial<DayPlanInput> = {}): DayPlanInput => ({
     stops: [stop({ jobId: 'a' })],
     startTime: '08:00', capacityHours: 8,
-    workers: workersAvailableOn(SAT, team, off, patterns),
+    workers: workersAvailableOn(SAT, team, off, { patterns }),
     hasBase: true, speed: { minPerKm: 2, overheadMin: 0 },
     staffing: states, crewNames: { 'crew-a': 'Crew A' },
     ...over,
@@ -499,7 +499,7 @@ H('14. A CREW CHANGE moves the shortfall with the person')
   // The business-wide count is unchanged by which crew someone is on: moving
   // people between crews must not change how many people exist.
   eq('the head-count does not move with the crew',
-    workersAvailableOn(SAT, onA, off, patterns), workersAvailableOn(SAT, moved, off, patterns))
+    workersAvailableOn(SAT, onA, off, { patterns }), workersAvailableOn(SAT, moved, off, { patterns }))
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -718,15 +718,25 @@ H('20. The count is additive — the old call still means the old thing')
   const team = [worker('t1'), worker('t2'), worker('t3')]
   const off = [offDay('t2', MON)]
   eq('three-argument call: roster minus time off', workersAvailableOn(MON, team, off), 2)
-  eq('…identical to passing an empty pattern list', workersAvailableOn(MON, team, off, []), 2)
+  eq('…identical to passing an empty pattern list', workersAvailableOn(MON, team, off, { patterns: [] }), 2)
   eq('…and to passing patterns that do not exclude anyone',
-    workersAvailableOn(MON, team, off, weekdays('t1')), 2)
+    workersAvailableOn(MON, team, off, { patterns: weekdays('t1') }), 2)
 
   const src = read('src/lib/dayFit.ts')
   check('the patterns parameter is optional',
     /patterns\?:\s*AvailabilityPatternRow\[\]/.test(src))
   check('…and is skipped entirely when empty',
-    /patterns\?\.length \? patternUnavailableOn\(date, patterns\) : null/.test(src))
+    /opts\?\.patterns\?\.length \? patternUnavailableOn\(date, opts\.patterns\) : null/.test(src))
+
+  // ⭐ The fourth parameter is an OPTIONS OBJECT so that every future narrowing
+  // of "how many people can work this date" lands inside this one function as
+  // another key. Session 65's crew-scoped count (`{ crewId }`) is exactly that,
+  // and a positional array here would have made the two lanes fight over the
+  // slot instead of composing.
+  check('the fourth parameter is an extensible options object, not a bare array',
+    /opts\?:\s*WorkersAvailableOpts/.test(src)
+    && /export interface WorkersAvailableOpts/.test(src),
+    'a positional array cannot absorb a second narrowing without a breaking change')
 }
 
 // ── Verdict ──────────────────────────────────────────────────────────────────
