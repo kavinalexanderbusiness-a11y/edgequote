@@ -274,6 +274,12 @@ if (panel) {
   check('the phrasing lives in the engine, not in the component',
     !/'Rescheduled|'Approved quote|'Disabled access/.test(panel),
     'a second vocabulary is a second thing to keep in sync')
+  // ⭐ Measured at 375/390/430: the disclosure used to be a 48×16px control — a
+  //   finger-sized miss on every phone. The whole row is the target now, which is
+  //   why the button wraps the row body instead of sitting inside it.
+  check('the expandable row is itself the tap target',
+    /expandable \? \(\s*<button/.test(panel) && /w-full text-left/.test(panel),
+    'a small inline disclosure fails a 44px tap target on every phone width')
 }
 
 // -- 2k. the business feed filters server-side -------------------------------

@@ -142,8 +142,14 @@ function HistoryRow({ group }: { group: HistoryGroup }) {
   // Expandable only when there is more to say than the summary already says.
   const expandable = detail.length > 1 || group.consequences.length > 0 || !!e.meta
 
-  return (
-    <li className="py-3 first:pt-0">
+  // ⭐ THE WHOLE ROW IS THE TAP TARGET when there is detail to open.
+  //   The 375/390/430 pass measured the old "Detail ⌄" control at 48×16px — a
+  //   finger-sized miss on every phone. Padding it out to 44px would have added
+  //   ~28px to every expandable row (700px across a full page); making the row
+  //   itself the target gives a ~112px × full-width hit area and adds nothing.
+  //   The small "Detail" text stays as the affordance, not as the target.
+  const body = (
+    <>
       <div className="flex items-baseline justify-between gap-3">
         <p className="text-sm min-w-0 flex-1">
           {/* WHO, then WHAT — the two things a reader scans for. */}
@@ -172,17 +178,26 @@ function HistoryRow({ group }: { group: HistoryGroup }) {
             <span className="text-[11px] uppercase tracking-wide text-ink-faint">{src}</span>
           )}
           {expandable && (
-            <button
-              type="button" onClick={() => setOpen(o => !o)}
-              aria-expanded={open}
-              className="inline-flex items-center gap-1 text-xs text-ink-faint hover:text-ink-muted transition-colors"
-            >
+            <span className="inline-flex items-center gap-1 text-xs text-ink-faint">
               {open ? 'Hide detail' : 'Detail'}
               <ChevronDown className={cn('h-3 w-3 transition-transform', open && 'rotate-180')} aria-hidden />
-            </button>
+            </span>
           )}
         </div>
       )}
+    </>
+  )
+
+  return (
+    <li className="py-3 first:pt-0">
+      {expandable ? (
+        <button
+          type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
+          className="w-full text-left rounded-lg -mx-2 px-2 py-1 -my-1 hover:bg-surface-raised/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        >
+          {body}
+        </button>
+      ) : body}
 
       {open && (
         <div className="mt-2 space-y-1.5 border-l-2 border-border/60 pl-3">
