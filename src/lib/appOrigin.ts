@@ -69,21 +69,24 @@ export function appOrigin(requestOrigin?: string | null): string {
 }
 
 /**
- * The origin plus the flag every diagnostics surface wants beside it: whether
- * the STORED value needed cleaning to become this answer. `sanitized: true`
- * means the raw variable carries characters that are invisible in any viewer
- * that renders it (a BOM, zero-widths, wrapping quotes, a trailing slash) —
- * the exact condition that once broke every emailed link while every dashboard
- * showed the value as fine. Consumed by /api/comms/test's diagnostics.
- * (Session 75 shipped the consumer; the export itself lands here.)
+ * What the deploy STORED versus what it will USE — the two answers the comms
+ * self-test shows side by side.
+ *
+ * `sanitized` is true when cleaning had to change the configured value, which is
+ * the only visible symptom of the failure this module exists for: a BOM, a
+ * zero-width character or a wrapping quote is invisible in every dashboard that
+ * renders the variable, so "it looks right" and "it works" come apart with
+ * nothing on screen to explain it. Reported rather than repaired quietly,
+ * because the stored value is what a human will read next time.
+ *
+ * Note it reports on the CONFIGURED value alone — no request origin fallback.
+ * The question being asked is "is this deploy configured correctly?", and a
+ * request-derived answer would mask an unset variable.
  */
-export function appOriginReport(): { origin: string | null; sanitized: boolean } {
-  const raw = process.env.NEXT_PUBLIC_APP_URL
-  const cleaned = cleanOrigin(raw)
-  return {
-    origin: appOrigin() || null,
-    sanitized: raw != null && raw !== '' && raw !== cleaned,
-  }
+export function appOriginReport(): { origin: string; sanitized: boolean } {
+  const raw = process.env.NEXT_PUBLIC_APP_URL ?? ''
+  const origin = cleanOrigin(raw)
+  return { origin, sanitized: raw !== '' && raw !== origin }
 }
 
 /**

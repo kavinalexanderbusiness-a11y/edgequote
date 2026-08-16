@@ -317,7 +317,7 @@ console.log('\n14. Failed reads stay unknown — never free capacity:')
   // turning into the most optimistic answer available. verify:availability
   // pins the workforceKnown conjunction itself.
   check('a failed workforce read → workers null (unknown), not zero',
-    /workforceKnown\s*\?\s*workersAvailableOn\(date, techs, pto, patterns\)\s*:\s*null/.test(load), '')
+    /workforceKnown\s*\?\s*workersAvailableOn\(date, techs, pto, \{ patterns \}\)\s*:\s*null/.test(load), '')
   // And the advisor treats the templates read as load-bearing: a failed read
   // must not resurrect a suggestion the owner configured away.
   check('suggestionsLoad honesty gate includes the templates read',
