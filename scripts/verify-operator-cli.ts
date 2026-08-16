@@ -120,35 +120,61 @@ ok('the CLI no longer calls process.exit() on the success path',
 ok('token auto-refresh is off (a one-shot CLI needs no refresh timer)',
   /autoRefreshToken: false/.test(code))
 
-// The behavioural half. Deliberately invalid account on a reserved TLD.
-const run = spawnSync(process.execPath, [
-  join(ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs'), CLI, 'list',
-], {
-  cwd: ROOT,
-  encoding: 'utf8',
-  timeout: 120_000,
-  env: {
-    ...process.env,
+// ── The behavioural half ─────────────────────────────────────────────────────
+// Split in two on purpose. The first part needs NO network and therefore runs
+// everywhere, CI included — CI points NEXT_PUBLIC_SUPABASE_URL at
+// placeholder.supabase.co, so a guard that could only prove itself by reaching a
+// real Supabase would be a guard CI never actually runs.
+function runCli(env: Record<string, string | undefined>, args: string[] = ['list']) {
+  const r = spawnSync(process.execPath, [join(ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs'), CLI, ...args], {
+    cwd: ROOT, encoding: 'utf8', timeout: 120_000, env: { ...process.env, ...env },
+  })
+  return { status: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` }
+}
+
+H('5a. BEHAVIOUR without a network — the half CI can actually run')
+
+// stdin is not a TTY under spawnSync, and no credentials are exported, so this
+// exercises the real refusal path: no prompt is possible, so it must explain.
+const noCreds = runCli({ PORTAL_RPC_OWNER_EMAIL: undefined, PORTAL_RPC_OWNER_PASSWORD: undefined })
+if (/Cannot find module/i.test(noCreds.out)) {
+  ok('the CLI could be launched at all', false, noCreds.out.slice(0, 200))
+} else {
+  ok('with no credentials and no TTY it refuses instead of hanging', noCreds.status === 1,
+    `exit was ${noCreds.status}`)
+  ok('…and says how to supply them', /interactive terminal|PORTAL_RPC_OWNER/.test(noCreds.out))
+  ok('…and does NOT fall back to a password sitting in .env.local',
+    !/Signed in as/.test(noCreds.out),
+    'a stale file password must never satisfy this path — that is the incident')
+  ok('…and exits without the libuv assertion', !/Assertion failed/.test(noCreds.out))
+  ok('…and reports it as a sentence, not a stack trace', !/at operatorCredentials/.test(noCreds.out))
+}
+
+H('5b. BEHAVIOUR against a real Supabase — extra proof when one is reachable')
+
+const liveUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? ''
+const reachable = /^https:\/\//.test(liveUrl) && !/placeholder|example\.invalid/i.test(liveUrl)
+if (!reachable) {
+  // NOT a pass. Said plainly, and counted nowhere.
+  console.log('  ⏭  NOT ATTEMPTED — no reachable Supabase in this environment')
+  console.log(`     (NEXT_PUBLIC_SUPABASE_URL = ${liveUrl || 'unset'})`)
+  console.log('     The rejected-credentials path is proven on a developer machine and')
+  console.log('     before a release; CI proves everything above it.')
+} else {
+  const rejected = runCli({
     PORTAL_RPC_OWNER_EMAIL: 's75-nonexistent-probe@example.invalid',
     PORTAL_RPC_OWNER_PASSWORD: 'deliberately-not-a-real-password',
-  },
-})
-const out = `${run.stdout ?? ''}${run.stderr ?? ''}`
-
-if (/Cannot find module/i.test(out)) {
-  // Do not report green because the harness could not start.
-  ok('the CLI could be launched for the behavioural check', false, out.slice(0, 200))
-} else {
-  ok('a rejected sign-in exits non-zero', run.status === 1, `exit was ${run.status}`)
+  })
+  ok('a rejected sign-in exits non-zero', rejected.status === 1, `exit was ${rejected.status}`)
   ok('…and says the server rejected the pair, not that parsing failed',
-    /Invalid login credentials/.test(out) && /not a parsing problem/.test(out))
+    /Invalid login credentials/.test(rejected.out) && /not a parsing problem/.test(rejected.out))
   ok('…and names the project it tried, so a wrong-project run is visible',
-    /Project: https:\/\//.test(out))
+    /Project: https:\/\//.test(rejected.out))
   ok('…and does NOT abort with the libuv assertion',
-    !/Assertion failed/.test(out),
+    !/Assertion failed/.test(rejected.out),
     'the crash returns the moment process.exit() runs before the pool is closed')
   ok('…and never prints the password it was given',
-    !/deliberately-not-a-real-password/.test(out))
+    !/deliberately-not-a-real-password/.test(rejected.out))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
