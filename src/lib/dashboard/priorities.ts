@@ -60,6 +60,12 @@ export type PriorityKind =
   // requests = a customer asked for something from their portal and is waiting.
   // Distinct from `messages` because reading it does not answer it.
   | 'requests'
+  // quote_drafts = a quote the OWNER started and never sent. Distinct from
+  // `drafts` (invoice drafts — money ready to be asked for) because the verb is
+  // different: finish pricing vs press send on a bill. Booking-created drafts
+  // (lead_meta) are deliberately NOT here — the leads row already owns them and
+  // its door already says "build the quote".
+  | 'quote_drafts'
 
 export interface Priority {
   kind: PriorityKind
@@ -86,6 +92,15 @@ export interface Priority {
    * customer never reads as a claim that they are the only one.
    */
   more?: number
+  /**
+   * Engine-owned urgency flag, set ONLY where the domain's own semantics say the
+   * situation is broken rather than merely waiting: money past its due date, a
+   * visit whose day has already passed. Consumers (the Owner Inbox's sections)
+   * read this instead of re-deriving "is it overdue?" from the copy — a second
+   * date comparison outside the ledger overlay is the drift this codebase keeps
+   * paying for. Absent = the row is work, not an emergency.
+   */
+  urgency?: 'urgent'
 }
 
 // Matches what the ledger's invoiceBalance needs, with the optional fields left
@@ -273,6 +288,11 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
     // through any `balance > 0` test. That trap has already cost this codebase a
     // live Stripe link on a cancelled bill — the filter above is the guard.
     const one = pickInvoice(owed, feeSettings, today)
+    // Urgent exactly when at least one owed invoice is past its due date — asked
+    // of THE ledger overlay (the same call pickInvoice and the Invoices page
+    // make), never a bare date comparison here.
+    const anyOverdue = owed.some(inv =>
+      displayInvoiceStatus({ ...inv, due_date: inv.due_date ?? null }, feeSettings, today) === 'overdue')
     next.push({
       kind: 'unpaid',
       label: one ? `Collect from ${one.name}` : 'Collect unpaid invoices',
@@ -280,6 +300,7 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
       value: one ? one.balance : owedTotal,
       more: one ? owed.length - 1 : 0,
       href: one ? invoiceHref(one.number) : '/dashboard/invoices',
+      ...(anyOverdue ? { urgency: 'urgent' as const } : {}),
       // Ranked on the WHOLE pile, opened on one of it — see the header.
       score: 100_000 + adder(owedTotal),
     })
@@ -379,11 +400,12 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
   }
 
   // 4) Missed visits — past-date jobs still open, customers falling behind.
+  //    Always urgent: the day has already passed, so this is never merely waiting.
   const missed = jobs.filter(j => isMissed(j, today))
   if (missed.length > 0) {
     next.push({
       kind: 'missed', label: 'Resolve missed jobs', detail: `${missed.length} past due`,
-      href: '/dashboard/schedule', score: 70_000 + adder(missed.length * 200),
+      href: '/dashboard/schedule', urgency: 'urgent', score: 70_000 + adder(missed.length * 200),
     })
   }
 
@@ -404,6 +426,40 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
       more: one ? drafts.length - 1 : 0,
       href: one ? invoiceHref(one.number) : '/dashboard/invoices',
       score: 60_000 + adder(draftTotal),
+    })
+  }
+
+  // 5b) Quote drafts the owner started and never sent — priced work that never
+  //     got asked for. Sits between invoice drafts (money ready to collect) and
+  //     follow-ups (money already asked for): a quote that was never sent can
+  //     never be accepted, which makes it earlier-stage than both.
+  //
+  //     Booking-created drafts (lead_meta) are EXCLUDED — the leads engine
+  //     already counts each of those as an online-booking lead whose door is the
+  //     draft itself, so listing them here would tell the owner to do one thing
+  //     twice (the same double-count rule the messages row applies below).
+  const quoteDrafts = quotes.filter(q => q.status === 'draft' && !q.lead_meta)
+  if (quoteDrafts.length > 0) {
+    // Oldest first — the queue's grammar names the most at-risk member, and for
+    // an unsent draft that is the one that has sat longest (same posture as the
+    // leads engine's oldest-first and compareFollowUp's oldest-anchor).
+    const top = [...quoteDrafts].sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')))[0]
+    const named = displayName(top?.customer_name)
+    const draftQuoteTotal = quoteDrafts.reduce((s, q) => s + Number(q.total || 0), 0)
+    // Whole days since creation, same construction as the followups row's
+    // "quiet N days" — a timestamp difference, not a date-string slice (slicing
+    // a timestamptz to its UTC date then comparing locally drifts at midnight).
+    const age = top?.created_at ? Math.floor((Date.now() - new Date(top.created_at).getTime()) / 86_400_000) : 0
+    next.push({
+      kind: 'quote_drafts',
+      label: named ? `Finish ${possessive(named)} quote` : 'Finish draft quotes',
+      detail: named
+        ? (age > 0 ? `Draft quote · started ${age} day${age !== 1 ? 's' : ''} ago` : 'Draft quote · not sent yet')
+        : `${quoteDrafts.length} draft quote${quoteDrafts.length !== 1 ? 's' : ''} not sent`,
+      value: named ? Number(top.total || 0) : draftQuoteTotal,
+      more: named ? quoteDrafts.length - 1 : 0,
+      href: named ? `/dashboard/quotes/${encodeURIComponent(top.id)}` : '/dashboard/quotes',
+      score: 55_000 + adder(draftQuoteTotal),
     })
   }
 

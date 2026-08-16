@@ -402,9 +402,18 @@ console.log('\nThe row keeps exactly one destination:')
 {
   const C = readFileSync(join(process.cwd(), 'src/components/dashboard/TodaysPriorities.tsx'), 'utf8')
   check('more is rendered', /\+\{p\.more\} more/.test(C))
-  check('the row has ONE <Link> and the "+N more" is not another one',
-    (C.match(/<Link/g) || []).length === 1,
+  // The rule is per ROW: each queue row keeps exactly one destination. Since the
+  // card became the Inbox preview it also carries ONE footer door to
+  // /dashboard/inbox — a card-level affordance, not a second action on a row.
+  // Two <Link>s total, and the second must be that footer; a third is the
+  // card-wall failure mode creeping back.
+  const rowLoop = C.slice(C.indexOf('items.map'), C.indexOf('</ol>'))
+  check('the row itself has ONE <Link> and the "+N more" is not another one',
+    (rowLoop.match(/<Link/g) || []).length === 1,
     'a second link per row is the card-wall failure mode creeping back')
+  check('the only other <Link> in the card is the inbox footer door',
+    (C.match(/<Link/g) || []).length === 2 && /href="\/dashboard\/inbox"/.test(C),
+    'the preview earns exactly one extra door — the full Inbox — and nothing else')
   check('only rendered when there ARE others',
     /p\.more != null && p\.more > 0/.test(C),
     '"+0 more" on a single-record row is noise')
