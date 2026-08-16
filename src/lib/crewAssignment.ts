@@ -25,7 +25,6 @@
 // appears.
 
 import type { Crew, Technician, Job, CrewMembershipChange } from '@/types'
-import { workersAvailableOn, type TechForAvailability } from '@/lib/dayFit'
 
 // ── Vocabulary ───────────────────────────────────────────────────────────────
 
@@ -261,76 +260,23 @@ export const ASSIGNMENT_ISSUE_TEXT: Record<AssignmentIssue, string> = {
   person_off_roster: 'assigned to someone no longer on the roster',
 }
 
-// ── Staffing: does the assignment actually cover the work? ───────────────────
-// This asks a DIFFERENT question from lib/dayFit ("does this day fit at all?")
-// and deliberately borrows dayFit's own availability rule rather than counting
-// people again: supply comes from workersAvailableOn, narrowed to the crew.
-// ⛔ Never re-derive availability here — one rule, asked twice.
-
-export type StaffingVerdict = 'ok' | 'short' | 'nobody' | 'unknown'
-
-export interface AssignmentStaffing {
-  /** jobs.crew_size — the headcount the work was planned to need. */
-  needed: number
-  /** People currently attached to the assignee (crew members, or 1). */
-  assigned: number | null
-  /** Those of them not booked off on the day. null = unknown, never 0. */
-  available: number | null
-  verdict: StaffingVerdict
-}
-
-export interface StaffingContext extends ResolveContext {
-  ptoDates: { technician_id: string; date: string }[]
-}
-
-export function assignmentStaffing(
-  visit: AssignableVisit & { crew_size?: number | null; scheduled_date?: string | null },
-  dateISO: string,
-  ctx: StaffingContext,
-): AssignmentStaffing {
-  const needed = Math.max(1, Number(visit.crew_size) || 1)
-  const resolved = expectedWorkers(visit, ctx)
-  if (!resolved.known || resolved.kind === 'unassigned') {
-    return { needed, assigned: null, available: null, verdict: 'unknown' }
-  }
-
-  const forAvailability: TechForAvailability[] = ctx.technicians.map(t => ({
-    id: t.id, is_active: t.is_active, ended_on: t.ended_on, archived_at: t.archived_at, crew_id: t.crew_id,
-  }))
-
-  let available: number
-  if (resolved.kind === 'crew' && resolved.crew) {
-    available = workersAvailableOn(dateISO, forAvailability, ctx.ptoDates, { crewId: resolved.crew.id })
-  } else if (resolved.kind === 'person' && resolved.person) {
-    const off = ctx.ptoDates.some(p => p.technician_id === resolved.person!.id && p.date.slice(0, 10) === dateISO)
-    available = resolved.expectedCount === 1 && !off ? 1 : 0
-  } else {
-    // Assigned to something that no longer resolves — the issue says so; a
-    // staffing number here would be inventing a roster for a ghost.
-    return { needed, assigned: null, available: null, verdict: 'unknown' }
-  }
-
-  return {
-    needed,
-    assigned: resolved.expectedCount,
-    available,
-    verdict: available === 0 ? 'nobody' : available < needed ? 'short' : 'ok',
-  }
-}
-
-// ⛔ THERE IS NO staffingWarnings() HERE, DELIBERATELY.
+// ⛔ THERE IS NO STAFFING VERDICT HERE, DELIBERATELY.
 //
 // "Is this day staffed?" has ONE home: lib/dayPlan, which raises
 // crew_understaffed / worker_unavailable / availability_assumed from Session
-// 67's per-worker states. This file briefly grew a rival that answered the same
-// question from a different input, and it was removed rather than merged — two
-// engines warning about one day is how a board starts contradicting itself
-// (engineering-principles §3).
+// 67's per-worker availability states, and which Session 65 extended to judge a
+// personally-assigned visit against THAT person rather than their crew.
+//
+// This file briefly grew a rival that answered the same question from a
+// different input (crew membership + PTO rows). It was removed rather than
+// merged: two engines warning about one day is how a board starts contradicting
+// itself, and the surviving one knows about weekly patterns and approval status
+// that this one never did (engineering-principles §3 — one engine per
+// responsibility).
 //
 // What stays here is the question dayPlan does NOT answer: given an assignment,
-// WHO is expected and is that assignment real (`expectedWorkers`,
-// `assignmentStaffing`). dayPlan consumes availability; this consumes
-// assignment. Keep it that way.
+// WHO is expected, and is that assignment still real. dayPlan consumes
+// availability; this consumes assignment. Keep it that way.
 
 // ── Membership as of a moment ────────────────────────────────────────────────
 // ⭐⭐ THE POINT OF THE WHOLE HISTORY TABLE: someone joining Crew A tomorrow must

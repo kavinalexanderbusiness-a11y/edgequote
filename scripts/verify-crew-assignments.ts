@@ -18,7 +18,7 @@ import { join } from 'node:path'
 import { bootCrewDb } from './lib/crew-db'
 import {
   assigneeOf, assigneeColumns, sameAssignee, assignmentOptions, assigneeValue,
-  parseAssigneeValue, expectedWorkers, assignmentStaffing, staffingWarnings, UNASSIGNED,
+  parseAssigneeValue, expectedWorkers, UNASSIGNED,
 } from '../src/lib/crewAssignment'
 import type { Crew, Technician } from '../src/types'
 
@@ -140,60 +140,44 @@ section('3. Who is expected — and when that is unknown')
     expectedWorkers({ crew_id: 'gone', technician_id: null }, ctx).issue === 'crew_unknown')
 }
 
-// ── 4. Staffing: a crew of three is three ───────────────────────────────────
-section('4. Capacity resolves the ACTUAL assigned workforce')
+// ── 4. ONE staffing engine, and it is not this one ──────────────────────────
+// Session 67 landed per-crew staffing warnings inside lib/dayPlan, built on
+// per-worker availability states. Session 65 briefly grew a second answer from
+// crew membership + PTO rows; it was DELETED rather than merged. This section
+// exists so it cannot quietly come back.
+section('4. Capacity resolves the actual assigned workforce — in ONE place')
 {
-  const D = '2026-08-20'
-  const ctx = { crews: CREWS, technicians: TECHS, ptoDates: [] as { technician_id: string; date: string }[] }
-
-  const ok = assignmentStaffing({ crew_id: 'c1', technician_id: null, crew_size: 2 }, D, ctx)
-  check('a 2-person job on a 2-person crew is staffed',
-    ok.verdict === 'ok' && ok.available === 2, JSON.stringify(ok))
-
-  // ⭐ THE regression this pins: the crew must not collapse to one worker.
-  check('a crew of 2 is not read as a single worker', ok.available === 2)
-
-  const short = assignmentStaffing({ crew_id: 'c1', technician_id: null, crew_size: 3 }, D, ctx)
-  check('a 3-person job on a 2-person crew is short-handed', short.verdict === 'short')
-
-  const withPto = { ...ctx, ptoDates: [{ technician_id: 't1', date: D }] }
-  check('a member booked off reduces availability, not headcount',
-    assignmentStaffing({ crew_id: 'c1', technician_id: null, crew_size: 2 }, D, withPto).verdict === 'short')
-  check('everybody booked off is "nobody", explicitly',
-    assignmentStaffing({ crew_id: 'c1', technician_id: null, crew_size: 1 }, D,
-      { ...ctx, ptoDates: [{ technician_id: 't1', date: D }, { technician_id: 't2', date: D }] }).verdict === 'nobody')
-
-  check('an unreadable roster makes no staffing claim',
-    assignmentStaffing({ crew_id: 'c1', technician_id: null, crew_size: 2 }, D,
-      { ...ctx, rosterKnown: false }).verdict === 'unknown')
-  check('unassigned work makes no staffing claim either',
-    assignmentStaffing({ crew_id: null, technician_id: null, crew_size: 1 }, D, ctx).verdict === 'unknown')
-
-  // Day-level warnings
-  const warns = staffingWarnings([
-    { id: 'j1', crew_id: 'c1', technician_id: null, crew_size: 4 },
-    { id: 'j2', crew_id: null, technician_id: null, crew_size: 1 },
-  ], D, ctx)
-  check('the day says a crew is short for a visit it holds',
-    warns.some(w => w.kind === 'short_handed' && /4 people/.test(w.message)),
-    warns.map(w => w.message).join(' | '))
-  check('…and that unassigned work reaches nobody',
-    warns.some(w => w.kind === 'unassigned_work' && /phone/i.test(w.message)))
-  check('blocking warnings sort above cautions',
-    warns[0].severity === 'blocking')
-  check('a cancelled visit raises nothing',
-    staffingWarnings([{ id: 'j3', crew_id: 'c1', technician_id: null, crew_size: 9, status: 'cancelled' }], D, ctx)
-      .length === 0)
-  check('an unknown roster is silent rather than alarming',
-    staffingWarnings([{ id: 'j1', crew_id: 'c1', technician_id: null, crew_size: 9 }], D,
-      { ...ctx, rosterKnown: false }).length === 0)
-
-  // The supply rule must be BORROWED, not re-implemented.
   const engine = stripComments(SRC('lib/crewAssignment.ts'))
-  check('staffing borrows dayFit\'s availability rule',
-    /import \{ workersAvailableOn/.test(engine) && /workersAvailableOn\(dateISO/.test(engine))
-  check('the crew engine defines no capacity/hours arithmetic of its own',
-    !/capacityHours|daily_capacity|FIT_BUFFER|\* 60/.test(engine))
+  const plan = stripComments(SRC('lib/dayPlan.ts'))
+
+  check('the assignment engine raises no day-staffing warnings of its own',
+    !/staffingWarnings|StaffingWarning|assignmentStaffing/.test(engine),
+    'a second engine answering "is this day staffed?" has come back')
+  check('…and defines no capacity or availability arithmetic',
+    !/capacityHours|daily_capacity|FIT_BUFFER|workersAvailableOn/.test(engine))
+
+  // dayPlan owns it, and knows about BOTH kinds of assignment.
+  check('lib/dayPlan owns the crew shortfall warning',
+    /crew_understaffed/.test(plan) && /crewsWithWork/.test(plan))
+  check('…and judges a personally-assigned visit against THAT person',
+    /technicianId/.test(plan) && /personalIds/.test(plan),
+    'a visit given to one person by name must not be covered by their crewmates')
+  check('a personal shortfall blocks rather than warns',
+    /personalIds[\s\S]{0,700}severity: 'blocking'/.test(plan))
+  check('the stop input carries both assignment columns',
+    /crewId\?: string \| null/.test(plan) && /technicianId\?: string \| null/.test(plan))
+
+  // ⭐ THE regression this section replaces: a crew of N must not read as 1.
+  // dayFit's supply rule, narrowed to a crew, is what guarantees it.
+  const fit = stripComments(SRC('lib/dayFit.ts'))
+  check('availability can be asked per crew, from the ONE rule',
+    /opts\?: \{ crewId\?: string \}/.test(fit) && /t\.crew_id === opts\.crewId/.test(fit))
+  check('…and the solo-owner fallback does NOT apply to a crew',
+    /if \(opts\?\.crewId != null\)[\s\S]{0,220}\n  if \(roster\.length === 0\) return 1/.test(fit),
+    'an empty crew must count 0, not be rounded up to the solo owner')
+  check('approved leave and weekly patterns apply to the crew view too',
+    /const free = \(t: TechForAvailability\)[\s\S]{0,240}crew_id === opts\.crewId && free\(t\)/.test(fit),
+    'the crew branch must reuse the same free() predicate, not a bare PTO check')
 }
 
 // ── 5. One writer, one predicate ────────────────────────────────────────────

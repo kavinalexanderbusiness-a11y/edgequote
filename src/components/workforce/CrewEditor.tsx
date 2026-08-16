@@ -6,6 +6,7 @@ import { Crew, Technician, Job } from '@/types'
 import {
   renameCrew, setCrewActive, setCrewLead, setTechnicianCrew, deleteCrew, crewPalette,
 } from '@/lib/crews'
+import { expectedWorkers } from '@/lib/crewAssignment'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
@@ -57,9 +58,13 @@ export function CrewEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, key])
 
+  // Who is on this crew comes from THE resolver, not a filter written here —
+  // so "who would turn up to a visit on Crew A" and "who this dialog lists" can
+  // never drift apart.
   const members = useMemo(
-    () => technicians.filter(t => t.is_active && !t.archived_at && crew && t.crew_id === crew.id)
-      .sort((a, b) => a.name.localeCompare(b.name)),
+    () => (crew
+      ? expectedWorkers({ crew_id: crew.id, technician_id: null }, { crews: [crew], technicians }).expected
+      : []),
     [technicians, crew],
   )
   const addable = useMemo(

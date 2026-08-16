@@ -25,7 +25,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { addDays, format, parseISO } from 'date-fns'
 import { serviceHistory, type LaborComparison, type ServiceVariance } from '@/lib/estimateVsActual'
 import { loadCompletedVisitLearning } from '@/lib/estimateVsActualData'
-import { workersAvailableOn, type DayVisitLike, type DayFitInput } from '@/lib/dayFit'
+import { workersAvailableOn, type DayVisitLike, type DayFitInput, type TechForAvailability } from '@/lib/dayFit'
 import {
   workerDayStates, isBookedOff, isMissingRelation,
   type ApprovedTimeOffDay, type AvailabilityPatternRow,
