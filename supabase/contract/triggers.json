@@ -550,5 +550,11 @@
   "tbl": "webhook_endpoints",
   "tgname": "webhook_endpoints_updated_at",
   "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER worker_availability_updated_at BEFORE UPDATE ON public.worker_availability FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "worker_availability",
+  "tgname": "worker_availability_updated_at",
+  "tgenabled": "O"
  }
 ]

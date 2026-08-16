@@ -1765,15 +1765,21 @@
  },
  {
   "tbl": "pto_entries",
-  "indexdef": "CREATE UNIQUE INDEX pto_entries_one_per_day_kind ON public.pto_entries USING btree (technician_id, date, kind)",
+  "indexdef": "CREATE UNIQUE INDEX pto_entries_one_per_day_kind ON public.pto_entries USING btree (technician_id, date, kind) WHERE (status <> 'declined'::text)",
   "indexname": "pto_entries_one_per_day_kind",
-  "backs_constraint": true
+  "backs_constraint": false
  },
  {
   "tbl": "pto_entries",
   "indexdef": "CREATE UNIQUE INDEX pto_entries_pkey ON public.pto_entries USING btree (id)",
   "indexname": "pto_entries_pkey",
   "backs_constraint": true
+ },
+ {
+  "tbl": "pto_entries",
+  "indexdef": "CREATE INDEX pto_entries_requested_idx ON public.pto_entries USING btree (user_id) WHERE (status = 'requested'::text)",
+  "indexname": "pto_entries_requested_idx",
+  "backs_constraint": false
  },
  {
   "tbl": "pto_entries",
@@ -2553,6 +2559,30 @@
   "tbl": "website_leads",
   "indexdef": "CREATE INDEX website_leads_user_idx ON public.website_leads USING btree (user_id, created_at DESC)",
   "indexname": "website_leads_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "worker_availability",
+  "indexdef": "CREATE UNIQUE INDEX worker_availability_one_per_weekday ON public.worker_availability USING btree (technician_id, weekday)",
+  "indexname": "worker_availability_one_per_weekday",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "worker_availability",
+  "indexdef": "CREATE UNIQUE INDEX worker_availability_pkey ON public.worker_availability USING btree (id)",
+  "indexname": "worker_availability_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "worker_availability",
+  "indexdef": "CREATE INDEX worker_availability_tech_idx ON public.worker_availability USING btree (technician_id, weekday)",
+  "indexname": "worker_availability_tech_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "worker_availability",
+  "indexdef": "CREATE INDEX worker_availability_user_idx ON public.worker_availability USING btree (user_id)",
+  "indexname": "worker_availability_user_idx",
   "backs_constraint": false
  }
 ]

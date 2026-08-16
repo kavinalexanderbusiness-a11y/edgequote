@@ -3550,6 +3550,46 @@
   "with_check": null
  },
  {
+  "cmd": "DELETE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "worker_availability",
+  "permissive": "PERMISSIVE",
+  "policyname": "worker_availability: delete own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "INSERT",
+  "qual": null,
+  "roles": "{public}",
+  "tablename": "worker_availability",
+  "permissive": "PERMISSIVE",
+  "policyname": "worker_availability: insert own",
+  "schemaname": "public",
+  "with_check": "(auth.uid() = user_id)"
+ },
+ {
+  "cmd": "SELECT",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "worker_availability",
+  "permissive": "PERMISSIVE",
+  "policyname": "worker_availability: select own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "UPDATE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "worker_availability",
+  "permissive": "PERMISSIVE",
+  "policyname": "worker_availability: update own",
+  "schemaname": "public",
+  "with_check": "(auth.uid() = user_id)"
+ },
+ {
   "cmd": "SELECT",
   "qual": "(bucket_id = 'booking-uploads'::text)",
   "roles": "{authenticated}",

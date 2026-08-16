@@ -8858,6 +8858,22 @@
     "notnull": false,
     "identity": "",
     "generated": ""
+   },
+   {
+    "name": "status",
+    "type": "text",
+    "default": "'approved'::text",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "decided_at",
+    "type": "timestamp with time zone",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
    }
   ],
   "relname": "pto_entries",
@@ -12789,6 +12805,86 @@
    }
   ],
   "relname": "website_leads",
+  "force_rls": false
+ },
+ {
+  "acl": "{postgres=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
+  "rls": true,
+  "cols": [
+   {
+    "name": "id",
+    "type": "uuid",
+    "default": "gen_random_uuid()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "user_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "technician_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "weekday",
+    "type": "smallint",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "available",
+    "type": "boolean",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "start_time",
+    "type": "time without time zone",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "end_time",
+    "type": "time without time zone",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   }
+  ],
+  "relname": "worker_availability",
   "force_rls": false
  }
 ]

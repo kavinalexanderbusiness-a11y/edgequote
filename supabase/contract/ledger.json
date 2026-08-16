@@ -1022,6 +1022,13 @@
   "stmt_count": 1
  },
  {
+  "name": "worker_availability_time_off",
+  "sql_len": 13949,
+  "sql_md5": "8b76d5907bdce193c99bbe93d2e3d4d9",
+  "version": "20260815080000",
+  "stmt_count": 1
+ },
+ {
   "name": "job_forms_v1",
   "sql_len": 56289,
   "sql_md5": "ee82282896147da50370de7507a3ddc0",

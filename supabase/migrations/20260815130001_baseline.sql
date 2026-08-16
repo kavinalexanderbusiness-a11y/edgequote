@@ -8,8 +8,8 @@
 --
 -- This file is the ONE starting point for a database. Applying it to an empty
 -- Postgres 17 database produces the production schema contract:
---   109 tables · 127 functions · 92 triggers · 355 policies
---   575 constraints · 272 standalone indexes · 7 storage buckets
+--   110 tables · 131 functions · 93 triggers · 359 policies
+--   581 constraints · 276 standalone indexes · 7 storage buckets
 --
 -- IT DOES NOT RESTORE DATA. Not one row. Rebuilding a working production system
 -- is: this file, THEN a backup restore, THEN storage objects, THEN env config.
@@ -1230,7 +1230,9 @@ create table if not exists public."pto_entries" (
   "is_paid" boolean default true not null,
   "hourly_rate" numeric(10,2),
   "holiday_id" uuid,
-  "notes" text
+  "notes" text,
+  "status" text default 'approved'::text not null,
+  "decided_at" timestamp with time zone
 );
 create table if not exists public."publish_jobs" (
   "id" uuid default extensions.uuid_generate_v4() not null,
@@ -1761,10 +1763,21 @@ create table if not exists public."website_leads" (
   "budget" text,
   "preferred_schedule" text
 );
+create table if not exists public."worker_availability" (
+  "id" uuid default gen_random_uuid() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "technician_id" uuid not null,
+  "weekday" smallint not null,
+  "available" boolean not null,
+  "start_time" time without time zone,
+  "end_time" time without time zone
+);
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 3 · FUNCTIONS
--- 127 application functions, verbatim from pg_get_functiondef.
+-- 131 application functions, verbatim from pg_get_functiondef.
 -- Emitted BEFORE constraints: a CHECK constraint can call one, and the dependency
 -- is resolved when the constraint is added.
 -- SECURITY DEFINER + `set search_path` is not decoration here: these functions are
@@ -2415,6 +2428,31 @@ AS $function$
     and exists (select 1 from public.business_settings b where b.user_id = auth.uid())
 $function$;
 
+CREATE OR REPLACE FUNCTION public.crew_cancel_time_off(p_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_employer uuid := public.crew_employer();
+  v_tech     uuid := public.crew_technician_id();
+  v_gone     uuid;
+begin
+  if v_employer is null or v_tech is null then
+    raise exception 'you are not on an active crew' using errcode = '42501';
+  end if;
+  delete from public.pto_entries p
+   where p.id = p_id and p.technician_id = v_tech and p.user_id = v_employer
+     and p.status = 'requested'
+  returning p.id into v_gone;
+  if v_gone is null then
+    return jsonb_build_object('ok', false, 'reason', 'not_pending');
+  end if;
+  return jsonb_build_object('ok', true);
+end
+$function$;
+
 CREATE OR REPLACE FUNCTION public.crew_crew_id()
  RETURNS uuid
  LANGUAGE sql
@@ -2897,6 +2935,41 @@ begin
 end
 $function$;
 
+CREATE OR REPLACE FUNCTION public.crew_my_availability()
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_employer uuid := public.crew_employer();
+  v_tech     uuid := public.crew_technician_id();
+begin
+  if v_employer is null or v_tech is null then
+    return null;
+  end if;
+  return jsonb_build_object(
+    'pattern', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'weekday', w.weekday, 'available', w.available,
+        'start_time', w.start_time, 'end_time', w.end_time
+      ) order by w.weekday)
+      from public.worker_availability w
+      where w.technician_id = v_tech and w.user_id = v_employer
+    ), '[]'::jsonb),
+    'time_off', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'id', p.id, 'date', p.date, 'hours', p.hours,
+        'kind', p.kind, 'status', p.status
+      ) order by p.date desc)
+      from public.pto_entries p
+      where p.technician_id = v_tech and p.user_id = v_employer
+        and p.date >= current_date - 60
+    ), '[]'::jsonb)
+  );
+end
+$function$;
+
 CREATE OR REPLACE FUNCTION public.crew_post_message(p_job_id uuid, p_body text, p_client_token text DEFAULT NULL::text)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -3001,6 +3074,57 @@ begin
    where id = v_tech.id;
 
   return jsonb_build_object('technician_id', v_tech.id, 'name', v_tech.name);
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_request_time_off(p_date date, p_hours numeric, p_kind text, p_note text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_employer uuid := public.crew_employer();
+  v_tech     uuid := public.crew_technician_id();
+  v_name     text;
+  v_id       uuid;
+begin
+  if v_employer is null or v_tech is null then
+    raise exception 'you are not on an active crew' using errcode = '42501';
+  end if;
+  if p_date is null or p_date < current_date then
+    return jsonb_build_object('ok', false, 'reason', 'past_date');
+  end if;
+  if p_hours is null or p_hours <= 0 or p_hours > 24 then
+    return jsonb_build_object('ok', false, 'reason', 'bad_hours');
+  end if;
+  -- 'holiday' is owner-applied from the holiday calendar, never requested.
+  if p_kind not in ('vacation', 'sick', 'personal', 'bereavement') then
+    return jsonb_build_object('ok', false, 'reason', 'bad_kind');
+  end if;
+
+  begin
+    insert into public.pto_entries
+      (user_id, technician_id, date, hours, kind, is_paid, hourly_rate, notes, status)
+    values (
+      v_employer, v_tech, p_date, p_hours, p_kind,
+      false, null, nullif(left(trim(coalesce(p_note, '')), 500), ''), 'requested'
+    )
+    returning id into v_id;
+  exception when unique_violation then
+    return jsonb_build_object('ok', false, 'reason', 'already_booked');
+  end;
+
+  select t.name into v_name from public.technicians t where t.id = v_tech;
+  insert into public.notifications (user_id, type, title, body, entity_type, entity_id, href)
+  values (
+    v_employer, 'time_off_requested', 'Time-off request',
+    coalesce(v_name, 'A worker') || ' asked for ' || to_char(p_date, 'Mon FMDD') ||
+      ' off (' || p_hours || ' h, ' || p_kind || ').',
+    'pto_entry', v_id, '/dashboard/dispatch/time-off?tab=requests'
+  );
+
+  return jsonb_build_object('ok', true, 'id', v_id);
 end
 $function$;
 
@@ -3134,6 +3258,42 @@ begin
      );
   end if;
 
+  return jsonb_build_object('ok', true);
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_set_day_availability(p_weekday smallint, p_available boolean, p_start_time time without time zone DEFAULT NULL::time without time zone, p_end_time time without time zone DEFAULT NULL::time without time zone)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_employer uuid := public.crew_employer();
+  v_tech     uuid := public.crew_technician_id();
+begin
+  if v_employer is null or v_tech is null then
+    raise exception 'you are not on an active crew' using errcode = '42501';
+  end if;
+  if p_weekday is null or p_weekday < 0 or p_weekday > 6 then
+    return jsonb_build_object('ok', false, 'reason', 'bad_weekday');
+  end if;
+  if p_available and (p_start_time is null or p_end_time is null or p_end_time <= p_start_time) then
+    return jsonb_build_object('ok', false, 'reason', 'bad_window');
+  end if;
+
+  insert into public.worker_availability
+    (user_id, technician_id, weekday, available, start_time, end_time)
+  values (
+    v_employer, v_tech, p_weekday, p_available,
+    case when p_available then p_start_time end,
+    case when p_available then p_end_time end
+  )
+  on conflict (technician_id, weekday) do update
+    set available  = excluded.available,
+        start_time = excluded.start_time,
+        end_time   = excluded.end_time,
+        updated_at = now();
   return jsonb_build_object('ok', true);
 end
 $function$;
@@ -6122,7 +6282,7 @@ end $function$;
 -- tenant attaching a child row to another tenant's parent. Do not "simplify".
 -- ══════════════════════════════════════════════════════════════════════════
 
--- primary keys (109)
+-- primary keys (110)
 alter table public."api_keys" add constraint "api_keys_pkey" PRIMARY KEY (id);
 alter table public."automation_runs" add constraint "automation_runs_pkey" PRIMARY KEY (id);
 alter table public."automation_signals" add constraint "automation_signals_pkey" PRIMARY KEY (id);
@@ -6232,6 +6392,7 @@ alter table public."wage_history" add constraint "wage_history_pkey" PRIMARY KEY
 alter table public."webhook_deliveries" add constraint "webhook_deliveries_pkey" PRIMARY KEY (id);
 alter table public."webhook_endpoints" add constraint "webhook_endpoints_pkey" PRIMARY KEY (id);
 alter table public."website_leads" add constraint "website_leads_pkey" PRIMARY KEY (id);
+alter table public."worker_availability" add constraint "worker_availability_pkey" PRIMARY KEY (id);
 
 -- unique (45)
 alter table public."api_keys" add constraint "api_keys_key_hash_key" UNIQUE (key_hash);
@@ -6264,7 +6425,6 @@ alter table public."payments" add constraint "payments_stripe_session_id_key" UN
 alter table public."properties" add constraint "properties_id_user_unique" UNIQUE (id, user_id);
 alter table public."property_measurements" add constraint "property_measurements_one_per_kind" UNIQUE (property_id, kind);
 alter table public."property_twin" add constraint "property_twin_user_id_property_id_key" UNIQUE (user_id, property_id);
-alter table public."pto_entries" add constraint "pto_entries_one_per_day_kind" UNIQUE (technician_id, date, kind);
 alter table public."publish_jobs" add constraint "publish_jobs_idempotency_key_key" UNIQUE (idempotency_key);
 alter table public."push_subscriptions" add constraint "push_subscriptions_user_id_endpoint_key" UNIQUE (user_id, endpoint);
 alter table public."quote_addons" add constraint "quote_addons_id_quote_unique" UNIQUE (id, quote_id);
@@ -6279,8 +6439,9 @@ alter table public."service_bundles" add constraint "service_bundles_id_user_uk"
 alter table public."service_templates" add constraint "service_templates_id_user_uk" UNIQUE (id, user_id);
 alter table public."suggestion_dismissals" add constraint "suggestion_dismissals_user_id_suggestion_key_key" UNIQUE (user_id, suggestion_key);
 alter table public."technicians" add constraint "technicians_id_user_key" UNIQUE (id, user_id);
+alter table public."worker_availability" add constraint "worker_availability_one_per_weekday" UNIQUE (technician_id, weekday);
 
--- check (174)
+-- check (177)
 alter table public."automation_runs" add constraint "automation_runs_decision_check" CHECK ((decision = ANY (ARRAY['fired'::text, 'suppressed'::text])));
 alter table public."automation_runs" add constraint "automation_runs_suppressed_reason_check" CHECK ((suppressed_reason = ANY (ARRAY['mode_off'::text, 'mode_suggest'::text, 'quiet_hours'::text, 'frequency_cap'::text, 'no_consent'::text, 'deduped'::text, 'signal_absent'::text])));
 alter table public."beta_invites" add constraint "beta_invites_token_hash_is_sha256" CHECK ((token_hash ~ '^[0-9a-f]{64}$'::text));
@@ -6406,6 +6567,7 @@ alter table public."property_observations" add constraint "property_observations
 alter table public."pto_entries" add constraint "pto_entries_hours_range" CHECK (((hours > (0)::numeric) AND (hours <= (24)::numeric)));
 alter table public."pto_entries" add constraint "pto_entries_kind_known" CHECK ((kind = ANY (ARRAY['vacation'::text, 'sick'::text, 'holiday'::text, 'personal'::text, 'bereavement'::text])));
 alter table public."pto_entries" add constraint "pto_entries_rate_nonneg" CHECK (((hourly_rate IS NULL) OR (hourly_rate >= (0)::numeric)));
+alter table public."pto_entries" add constraint "pto_entries_status_known" CHECK ((status = ANY (ARRAY['requested'::text, 'approved'::text, 'declined'::text])));
 alter table public."publish_jobs" add constraint "publish_jobs_mode_check" CHECK ((mode = ANY (ARRAY['manual'::text, 'api'::text])));
 alter table public."publish_jobs" add constraint "publish_jobs_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'scheduled'::text, 'queued'::text, 'publishing'::text, 'published'::text, 'failed'::text, 'canceled'::text])));
 alter table public."purchase_orders" add constraint "purchase_orders_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'ordered'::text, 'cancelled'::text])));
@@ -6455,8 +6617,10 @@ alter table public."wage_history" add constraint "wage_history_actually_changed"
 alter table public."wage_history" add constraint "wage_history_wages_nonneg" CHECK ((((old_wage IS NULL) OR (old_wage >= (0)::numeric)) AND ((new_wage IS NULL) OR (new_wage >= (0)::numeric))));
 alter table public."webhook_deliveries" add constraint "webhook_deliveries_status_check" CHECK ((status = ANY (ARRAY['pending'::text, 'processing'::text, 'success'::text, 'dead'::text])));
 alter table public."webhook_endpoints" add constraint "webhook_endpoints_source_check" CHECK ((source = ANY (ARRAY['manual'::text, 'api'::text, 'zapier'::text, 'make'::text])));
+alter table public."worker_availability" add constraint "worker_availability_weekday_range" CHECK (((weekday >= 0) AND (weekday <= 6)));
+alter table public."worker_availability" add constraint "worker_availability_window" CHECK (((available AND (start_time IS NOT NULL) AND (end_time IS NOT NULL) AND (end_time > start_time)) OR ((NOT available) AND (start_time IS NULL) AND (end_time IS NULL))));
 
--- foreign keys (247)
+-- foreign keys (249)
 alter table public."api_keys" add constraint "api_keys_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."automation_runs" add constraint "automation_runs_signal_id_fkey" FOREIGN KEY (signal_id) REFERENCES automation_signals(id) ON DELETE SET NULL;
 alter table public."automation_runs" add constraint "automation_runs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
@@ -6704,11 +6868,13 @@ alter table public."website_leads" add constraint "website_leads_conversation_id
 alter table public."website_leads" add constraint "website_leads_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
 alter table public."website_leads" add constraint "website_leads_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
 alter table public."website_leads" add constraint "website_leads_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."worker_availability" add constraint "worker_availability_technician_same_owner" FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE CASCADE;
+alter table public."worker_availability" add constraint "worker_availability_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 5 · TRIGGERS
--- 92 triggers, including the two DEFERRABLE constraint triggers that
+-- 93 triggers, including the two DEFERRABLE constraint triggers that
 -- enforce quote-option/quote-service shape at commit time.
 -- ══════════════════════════════════════════════════════════════════════════
 
@@ -6896,10 +7062,12 @@ drop trigger if exists "trg_webhook_deliveries_nudge" on public."webhook_deliver
 CREATE TRIGGER trg_webhook_deliveries_nudge AFTER INSERT ON public.webhook_deliveries FOR EACH STATEMENT EXECUTE FUNCTION nudge_webhook_deliveries();
 drop trigger if exists "webhook_endpoints_updated_at" on public."webhook_endpoints";
 CREATE TRIGGER webhook_endpoints_updated_at BEFORE UPDATE ON public.webhook_endpoints FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "worker_availability_updated_at" on public."worker_availability";
+CREATE TRIGGER worker_availability_updated_at BEFORE UPDATE ON public.worker_availability FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 6 · INDEXES
--- 272 standalone indexes. Constraint-backing indexes are omitted on purpose —
+-- 276 standalone indexes. Constraint-backing indexes are omitted on purpose —
 -- section 4 already created them; declaring both would fail or duplicate.
 -- The partial UNIQUE indexes are correctness, not speed: they are what stops a
 -- second open shift per technician and a duplicate invoice number.
@@ -7095,6 +7263,8 @@ create index if not exists property_observations_run_idx ON public.property_obse
 create index if not exists property_twin_customer_idx ON public.property_twin USING btree (customer_id);
 create index if not exists property_twin_property_idx ON public.property_twin USING btree (property_id);
 create index if not exists property_twin_user_idx ON public.property_twin USING btree (user_id, last_analyzed_at DESC);
+create unique index if not exists pto_entries_one_per_day_kind ON public.pto_entries USING btree (technician_id, date, kind) WHERE (status <> 'declined'::text);
+create index if not exists pto_entries_requested_idx ON public.pto_entries USING btree (user_id) WHERE (status = 'requested'::text);
 create index if not exists pto_entries_tech_date_idx ON public.pto_entries USING btree (technician_id, date);
 create index if not exists pto_entries_user_date_idx ON public.pto_entries USING btree (user_id, date);
 create index if not exists publish_jobs_due_idx ON public.publish_jobs USING btree (status, scheduled_for);
@@ -7177,10 +7347,12 @@ create index if not exists webhook_deliveries_user_idx ON public.webhook_deliver
 create index if not exists webhook_endpoints_user_idx ON public.webhook_endpoints USING btree (user_id);
 create index if not exists website_leads_customer_idx ON public.website_leads USING btree (customer_id);
 create index if not exists website_leads_user_idx ON public.website_leads USING btree (user_id, created_at DESC);
+create index if not exists worker_availability_tech_idx ON public.worker_availability USING btree (technician_id, weekday);
+create index if not exists worker_availability_user_idx ON public.worker_availability USING btree (user_id);
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 7 · ROW LEVEL SECURITY
--- RLS enabled on all 109 tables, then 355 policies.
+-- RLS enabled on all 110 tables, then 359 policies.
 -- Every table carries RLS. The tenant boundary audit found the holes were always
 -- RLS being OFF, never a policy being wrong — so enabling is emitted for every
 -- table unconditionally, before any policy.
@@ -7295,6 +7467,7 @@ alter table public."wage_history" enable row level security;
 alter table public."webhook_deliveries" enable row level security;
 alter table public."webhook_endpoints" enable row level security;
 alter table public."website_leads" enable row level security;
+alter table public."worker_availability" enable row level security;
 
 drop policy if exists "api_keys: delete own" on public."api_keys";
 create policy "api_keys: delete own" on public."api_keys" as permissive for delete to public
@@ -8390,6 +8563,19 @@ create policy "website_leads: select own" on public."website_leads" as permissiv
 drop policy if exists "website_leads: update own" on public."website_leads";
 create policy "website_leads: update own" on public."website_leads" as permissive for update to public
   using ((auth.uid() = user_id));
+drop policy if exists "worker_availability: delete own" on public."worker_availability";
+create policy "worker_availability: delete own" on public."worker_availability" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "worker_availability: insert own" on public."worker_availability";
+create policy "worker_availability: insert own" on public."worker_availability" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "worker_availability: select own" on public."worker_availability";
+create policy "worker_availability: select own" on public."worker_availability" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "worker_availability: update own" on public."worker_availability";
+create policy "worker_availability: update own" on public."worker_availability" as permissive for update to public
+  using ((auth.uid() = user_id))
+  with check ((auth.uid() = user_id));
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 8 · GRANTS
@@ -8825,6 +9011,9 @@ revoke all on table public."website_leads" from public, anon, authenticated, ser
 grant ALL on table public."website_leads" to anon;
 grant ALL on table public."website_leads" to authenticated;
 grant ALL on table public."website_leads" to service_role;
+revoke all on table public."worker_availability" from public, anon, authenticated, service_role;
+grant ALL on table public."worker_availability" to authenticated;
+grant ALL on table public."worker_availability" to service_role;
 
 -- column-level grants (narrower than the table grant on purpose)
 grant SELECT ("error") on table public."automation_sweeps" to authenticated;
@@ -8902,6 +9091,9 @@ grant execute on function public."create_beta_invite"(p_token_hash text, p_label
 revoke all on function public."crew_access_states"() from public, anon, authenticated, service_role;
 grant execute on function public."crew_access_states"() to authenticated;
 grant execute on function public."crew_access_states"() to service_role;
+revoke all on function public."crew_cancel_time_off"(p_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."crew_cancel_time_off"(p_id uuid) to authenticated;
+grant execute on function public."crew_cancel_time_off"(p_id uuid) to service_role;
 revoke all on function public."crew_crew_id"() from public, anon, authenticated, service_role;
 grant execute on function public."crew_crew_id"() to service_role;
 revoke all on function public."crew_day"(p_date date) from public, anon, authenticated, service_role;
@@ -8935,12 +9127,18 @@ grant execute on function public."crew_message_schedule_event"() to public;
 grant execute on function public."crew_message_schedule_event"() to anon;
 grant execute on function public."crew_message_schedule_event"() to authenticated;
 grant execute on function public."crew_message_schedule_event"() to service_role;
+revoke all on function public."crew_my_availability"() from public, anon, authenticated, service_role;
+grant execute on function public."crew_my_availability"() to authenticated;
+grant execute on function public."crew_my_availability"() to service_role;
 revoke all on function public."crew_post_message"(p_job_id uuid, p_body text, p_client_token text) from public, anon, authenticated, service_role;
 grant execute on function public."crew_post_message"(p_job_id uuid, p_body text, p_client_token text) to authenticated;
 grant execute on function public."crew_post_message"(p_job_id uuid, p_body text, p_client_token text) to service_role;
 revoke all on function public."crew_redeem_invite"(p_code text) from public, anon, authenticated, service_role;
 grant execute on function public."crew_redeem_invite"(p_code text) to authenticated;
 grant execute on function public."crew_redeem_invite"(p_code text) to service_role;
+revoke all on function public."crew_request_time_off"(p_date date, p_hours numeric, p_kind text, p_note text) from public, anon, authenticated, service_role;
+grant execute on function public."crew_request_time_off"(p_date date, p_hours numeric, p_kind text, p_note text) to authenticated;
+grant execute on function public."crew_request_time_off"(p_date date, p_hours numeric, p_kind text, p_note text) to service_role;
 revoke all on function public."crew_revoke_access"(p_technician_id uuid) from public, anon, authenticated, service_role;
 grant execute on function public."crew_revoke_access"(p_technician_id uuid) to authenticated;
 grant execute on function public."crew_revoke_access"(p_technician_id uuid) to service_role;
@@ -8950,6 +9148,9 @@ grant execute on function public."crew_save_form_response"(p_form_id uuid, p_fie
 revoke all on function public."crew_set_completion_record"(p_job_id uuid, p_summary text, p_issue text) from public, anon, authenticated, service_role;
 grant execute on function public."crew_set_completion_record"(p_job_id uuid, p_summary text, p_issue text) to authenticated;
 grant execute on function public."crew_set_completion_record"(p_job_id uuid, p_summary text, p_issue text) to service_role;
+revoke all on function public."crew_set_day_availability"(p_weekday smallint, p_available boolean, p_start_time time without time zone, p_end_time time without time zone) from public, anon, authenticated, service_role;
+grant execute on function public."crew_set_day_availability"(p_weekday smallint, p_available boolean, p_start_time time without time zone, p_end_time time without time zone) to authenticated;
+grant execute on function public."crew_set_day_availability"(p_weekday smallint, p_available boolean, p_start_time time without time zone, p_end_time time without time zone) to service_role;
 revoke all on function public."crew_set_visit_status"(p_job_id uuid, p_status text, p_base_updated_at timestamp with time zone, p_started_at timestamp with time zone, p_completed_at timestamp with time zone, p_actual_minutes integer) from public, anon, authenticated, service_role;
 grant execute on function public."crew_set_visit_status"(p_job_id uuid, p_status text, p_base_updated_at timestamp with time zone, p_started_at timestamp with time zone, p_completed_at timestamp with time zone, p_actual_minutes integer) to authenticated;
 grant execute on function public."crew_set_visit_status"(p_job_id uuid, p_status text, p_base_updated_at timestamp with time zone, p_started_at timestamp with time zone, p_completed_at timestamp with time zone, p_actual_minutes integer) to service_role;
@@ -9291,6 +9492,7 @@ comment on table public."quote_options" is 'Mutually exclusive alternatives for 
 comment on table public."report_schedules" is 'Scheduled report cadences per owner. last_period_to is the idempotency key: the cron sends a closed period exactly once, however often it runs.';
 comment on table public."time_entries" is 'THE paid-time ledger. One row per shift. minutes_worked is DB-derived; hourly_rate is snapshotted at clock-in so wage changes never rewrite history. Open shift = clock_out IS NULL (at most one per technician, enforced by index).';
 comment on table public."verify_fixture_tenants" is 'Tenants whose data is created by scripts/verify-*.ts. Marker only — grants nothing, relaxes nothing. Guards read it through is_verify_fixture_tenant() and refuse to write when it answers false. Writable only by migration/service_role.';
+comment on table public."worker_availability" is 'A worker''s standard week, one row per weekday (0=Sun.6=Sat). No rows for a worker = availability is ASSUMED, and surfaces must say so. A worker with rows is available only on weekdays holding an available=true row. Dated exceptions live in pto_entries.';
 
 comment on column public."beta_invites"."redeemed_by" is 'Set by claim_beta_invite once the email is verified. This is what can_provision_business() reads.';
 comment on column public."beta_invites"."reserved_by" is 'The auth account created against this invite. SET NULL on user delete frees the invite for a fresh signup.';
@@ -9346,6 +9548,7 @@ comment on column public."parts"."supplier_id" is 'Vendor entity. Nullable. The 
 comment on column public."payments"."quote_id" is 'The quote/booking a PRE-INVOICE deposit secures (both legs of the recordDeposit pair carry it). Null on ordinary invoice payments. The scheduling gate sums signed cash rows (isCashRow) by this — a Stripe refund writes a negative row with the same quote_id, so readiness derives honestly.';
 comment on column public."properties"."internal_notes" is 'Private to the owner and crew: never returned by get_portal_data and never rendered in the customer portal. Home for access and site facts about the PLACE (gate side, dog, shut-off/controller location, parking). Customer-facing property notes stay in `notes`; private notes about the PERSON stay in customers.notes.';
 comment on column public."property_measurement_events"."seq" is 'Monotonic tiebreaker. ORDER BY seq — created_at can tie at microsecond resolution.';
+comment on column public."pto_entries"."status" is 'requested = a worker asked and the owner has not decided; approved = counts against planning availability (every pre-existing row: the owner booked it); declined = kept as a record, never subtracts availability and never blocks a later booking.';
 comment on column public."quote_services"."kind" is 'What this line IS: service (labour you perform) or material (goods you supply). A material line is an ESTIMATE ON THE QUOTE — quantity x unit_price, same arithmetic, same discount engine. It never reserves, allocates or deducts stock, and carries no cost: see RUN-2026-07-16-quote-materials.sql.';
 comment on column public."quote_services"."service_type" is 'The line''s display name. For kind=service, the service performed; for kind=material, the material supplied ("Mulch"). Historical name — not a claim that the line is a service.';
 comment on column public."quotes"."accepted_price" is 'SNAPSHOT of what the customer agreed to pay, captured at acceptance. Deliberately a copy, not a reference to total: editing a quote afterwards must never rewrite what was agreed. NULL = accepted before this column existed, or accepted by a path that does not know. Never guess it.';

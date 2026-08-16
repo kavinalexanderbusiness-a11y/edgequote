@@ -575,7 +575,7 @@ H('17. A worker can only ever address their OWN week')
 
 {
   const lib = read('src/lib/crewAvailability.ts')
-  const sql = read('supabase/migrations/20260815080000_worker_availability_time_off.sql')
+  const sql = read('supabase/archive/ledger/20260815080000_worker_availability_time_off.sql')
 
   // ⭐ The structural guarantee: no crew RPC takes a technician id, so "edit
   // somebody else's availability" is not a request that can be expressed.
@@ -617,7 +617,7 @@ H('17. A worker can only ever address their OWN week')
 H('18. The SCHEMA says what the product says')
 
 {
-  const sql = read('supabase/migrations/20260815080000_worker_availability_time_off.sql')
+  const sql = read('supabase/archive/ledger/20260815080000_worker_availability_time_off.sql')
 
   check('a weekday is 0..6', /weekday between 0 and 6/.test(sql))
   check('one row per worker per weekday', /unique \(technician_id, weekday\)/.test(sql))

@@ -147,6 +147,10 @@
   {
    "tbl": "verify_fixture_tenants",
    "comment": "Tenants whose data is created by scripts/verify-*.ts. Marker only — grants nothing, relaxes nothing. Guards read it through is_verify_fixture_tenant() and refuse to write when it answers false. Writable only by migration/service_role."
+  },
+  {
+   "tbl": "worker_availability",
+   "comment": "A worker's standard week, one row per weekday (0=Sun.6=Sat). No rows for a worker = availability is ASSUMED, and surfaces must say so. A worker with rows is available only on weekdays holding an available=true row. Dated exceptions live in pto_entries."
   }
  ],
  "column_comments": [
@@ -419,6 +423,11 @@
    "col": "seq",
    "tbl": "property_measurement_events",
    "comment": "Monotonic tiebreaker. ORDER BY seq — created_at can tie at microsecond resolution."
+  },
+  {
+   "col": "status",
+   "tbl": "pto_entries",
+   "comment": "requested = a worker asked and the owner has not decided; approved = counts against planning availability (every pre-existing row: the owner booked it); declined = kept as a record, never subtracts availability and never blocks a later booking."
   },
   {
    "col": "kind",

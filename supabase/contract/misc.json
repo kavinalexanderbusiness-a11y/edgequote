@@ -114,7 +114,7 @@
   }
  ],
  "pg_version": "PostgreSQL 17.6 on aarch64-unknown-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit",
- "captured_at": "2026-08-16 03:39:42.8167+00",
+ "captured_at": "2026-08-16 04:09:54.719528+00",
  "default_acls": [
   {
    "acl": "{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",

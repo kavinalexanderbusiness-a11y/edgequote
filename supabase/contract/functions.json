@@ -133,6 +133,13 @@
   "proname": "crew_access_states"
  },
  {
+  "acl": "{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
+  "def": "CREATE OR REPLACE FUNCTION public.crew_cancel_time_off(p_id uuid)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public', 'pg_temp'\nAS $function$\r\ndeclare\r\n  v_employer uuid := public.crew_employer();\r\n  v_tech     uuid := public.crew_technician_id();\r\n  v_gone     uuid;\r\nbegin\r\n  if v_employer is null or v_tech is null then\r\n    raise exception 'you are not on an active crew' using errcode = '42501';\r\n  end if;\r\n  delete from public.pto_entries p\r\n   where p.id = p_id and p.technician_id = v_tech and p.user_id = v_employer\r\n     and p.status = 'requested'\r\n  returning p.id into v_gone;\r\n  if v_gone is null then\r\n    return jsonb_build_object('ok', false, 'reason', 'not_pending');\r\n  end if;\r\n  return jsonb_build_object('ok', true);\r\nend\r\n$function$\n",
+  "args": "p_id uuid",
+  "owner": "postgres",
+  "proname": "crew_cancel_time_off"
+ },
+ {
   "acl": "{postgres=X/postgres,service_role=X/postgres}",
   "def": "CREATE OR REPLACE FUNCTION public.crew_crew_id()\n RETURNS uuid\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO 'public', 'pg_temp'\nAS $function$\n  select t.crew_id from public.technicians t\n  where t.auth_user_id = auth.uid() and t.is_active and t.archived_at is null limit 1\n$function$\n",
   "args": "",
@@ -211,6 +218,13 @@
  },
  {
   "acl": "{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
+  "def": "CREATE OR REPLACE FUNCTION public.crew_my_availability()\n RETURNS jsonb\n LANGUAGE plpgsql\n STABLE SECURITY DEFINER\n SET search_path TO 'public', 'pg_temp'\nAS $function$\r\ndeclare\r\n  v_employer uuid := public.crew_employer();\r\n  v_tech     uuid := public.crew_technician_id();\r\nbegin\r\n  if v_employer is null or v_tech is null then\r\n    return null;\r\n  end if;\r\n  return jsonb_build_object(\r\n    'pattern', coalesce((\r\n      select jsonb_agg(jsonb_build_object(\r\n        'weekday', w.weekday, 'available', w.available,\r\n        'start_time', w.start_time, 'end_time', w.end_time\r\n      ) order by w.weekday)\r\n      from public.worker_availability w\r\n      where w.technician_id = v_tech and w.user_id = v_employer\r\n    ), '[]'::jsonb),\r\n    'time_off', coalesce((\r\n      select jsonb_agg(jsonb_build_object(\r\n        'id', p.id, 'date', p.date, 'hours', p.hours,\r\n        'kind', p.kind, 'status', p.status\r\n      ) order by p.date desc)\r\n      from public.pto_entries p\r\n      where p.technician_id = v_tech and p.user_id = v_employer\r\n        and p.date >= current_date - 60\r\n    ), '[]'::jsonb)\r\n  );\r\nend\r\n$function$\n",
+  "args": "",
+  "owner": "postgres",
+  "proname": "crew_my_availability"
+ },
+ {
+  "acl": "{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
   "def": "CREATE OR REPLACE FUNCTION public.crew_post_message(p_job_id uuid, p_body text, p_client_token text DEFAULT NULL::text)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public', 'pg_temp'\nAS $function$\ndeclare\n  v_employer uuid := public.crew_employer();\n  v_crew     uuid := public.crew_crew_id();\n  v_uid      uuid := auth.uid();\n  v_job      uuid;\n  v_body     text := btrim(coalesce(p_body, ''));\n  v_row      public.crew_messages%rowtype;\nbegin\n  if v_employer is null or v_crew is null then\n    return null;\n  end if;\n  if v_body = '' then\n    return jsonb_build_object('ok', false, 'reason', 'empty');\n  end if;\n  if char_length(v_body) > 2000 then\n    return jsonb_build_object('ok', false, 'reason', 'too_long');\n  end if;\n\n  select j.id into v_job\n    from public.jobs j\n   where j.id = p_job_id and j.user_id = v_employer and j.crew_id = v_crew;\n  if v_job is null then\n    return jsonb_build_object('ok', false, 'reason', 'not_found');\n  end if;\n\n  insert into public.crew_messages (user_id, job_id, body, author_kind, author_name, client_token)\n  values (v_employer, v_job, v_body, 'crew', 'Crew', nullif(btrim(coalesce(p_client_token, '')), ''))\n  on conflict (job_id, created_by, client_token) where client_token is not null do nothing\n  returning * into v_row;\n\n  if v_row.id is null then\n    select * into v_row from public.crew_messages\n     where job_id = v_job and created_by = v_uid\n       and client_token = nullif(btrim(coalesce(p_client_token, '')), '')\n     limit 1;\n  end if;\n  if v_row.id is null then\n    return jsonb_build_object('ok', false, 'reason', 'failed');\n  end if;\n\n  insert into public.crew_message_reads (user_id, job_id, reader_id, last_read_at)\n  values (v_employer, v_job, v_uid, v_row.created_at)\n  on conflict (job_id, reader_id) do update\n    set last_read_at = greatest(public.crew_message_reads.last_read_at, excluded.last_read_at);\n\n  return jsonb_build_object('ok', true, 'message', jsonb_build_object(\n    'id', v_row.id,\n    'body', v_row.body,\n    'author_kind', v_row.author_kind,\n    'author_name', v_row.author_name,\n    'author_technician_id', v_row.author_technician_id,\n    'event_type', v_row.event_type,\n    'mine', true,\n    'created_at', v_row.created_at\n  ));\nend\n$function$\n",
   "args": "p_job_id uuid, p_body text, p_client_token text",
   "owner": "postgres",
@@ -222,6 +236,13 @@
   "args": "p_code text",
   "owner": "postgres",
   "proname": "crew_redeem_invite"
+ },
+ {
+  "acl": "{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
+  "def": "CREATE OR REPLACE FUNCTION public.crew_request_time_off(p_date date, p_hours numeric, p_kind text, p_note text DEFAULT NULL::text)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public', 'pg_temp'\nAS $function$\r\ndeclare\r\n  v_employer uuid := public.crew_employer();\r\n  v_tech     uuid := public.crew_technician_id();\r\n  v_name     text;\r\n  v_id       uuid;\r\nbegin\r\n  if v_employer is null or v_tech is null then\r\n    raise exception 'you are not on an active crew' using errcode = '42501';\r\n  end if;\r\n  if p_date is null or p_date < current_date then\r\n    return jsonb_build_object('ok', false, 'reason', 'past_date');\r\n  end if;\r\n  if p_hours is null or p_hours <= 0 or p_hours > 24 then\r\n    return jsonb_build_object('ok', false, 'reason', 'bad_hours');\r\n  end if;\r\n  -- 'holiday' is owner-applied from the holiday calendar, never requested.\r\n  if p_kind not in ('vacation', 'sick', 'personal', 'bereavement') then\r\n    return jsonb_build_object('ok', false, 'reason', 'bad_kind');\r\n  end if;\r\n\r\n  begin\r\n    insert into public.pto_entries\r\n      (user_id, technician_id, date, hours, kind, is_paid, hourly_rate, notes, status)\r\n    values (\r\n      v_employer, v_tech, p_date, p_hours, p_kind,\r\n      false, null, nullif(left(trim(coalesce(p_note, '')), 500), ''), 'requested'\r\n    )\r\n    returning id into v_id;\r\n  exception when unique_violation then\r\n    return jsonb_build_object('ok', false, 'reason', 'already_booked');\r\n  end;\r\n\r\n  select t.name into v_name from public.technicians t where t.id = v_tech;\r\n  insert into public.notifications (user_id, type, title, body, entity_type, entity_id, href)\r\n  values (\r\n    v_employer, 'time_off_requested', 'Time-off request',\r\n    coalesce(v_name, 'A worker') || ' asked for ' || to_char(p_date, 'Mon FMDD') ||\r\n      ' off (' || p_hours || ' h, ' || p_kind || ').',\r\n    'pto_entry', v_id, '/dashboard/dispatch/time-off?tab=requests'\r\n  );\r\n\r\n  return jsonb_build_object('ok', true, 'id', v_id);\r\nend\r\n$function$\n",
+  "args": "p_date date, p_hours numeric, p_kind text, p_note text",
+  "owner": "postgres",
+  "proname": "crew_request_time_off"
  },
  {
   "acl": "{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
@@ -243,6 +264,13 @@
   "args": "p_job_id uuid, p_summary text, p_issue text",
   "owner": "postgres",
   "proname": "crew_set_completion_record"
+ },
+ {
+  "acl": "{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
+  "def": "CREATE OR REPLACE FUNCTION public.crew_set_day_availability(p_weekday smallint, p_available boolean, p_start_time time without time zone DEFAULT NULL::time without time zone, p_end_time time without time zone DEFAULT NULL::time without time zone)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public', 'pg_temp'\nAS $function$\r\ndeclare\r\n  v_employer uuid := public.crew_employer();\r\n  v_tech     uuid := public.crew_technician_id();\r\nbegin\r\n  if v_employer is null or v_tech is null then\r\n    raise exception 'you are not on an active crew' using errcode = '42501';\r\n  end if;\r\n  if p_weekday is null or p_weekday < 0 or p_weekday > 6 then\r\n    return jsonb_build_object('ok', false, 'reason', 'bad_weekday');\r\n  end if;\r\n  if p_available and (p_start_time is null or p_end_time is null or p_end_time <= p_start_time) then\r\n    return jsonb_build_object('ok', false, 'reason', 'bad_window');\r\n  end if;\r\n\r\n  insert into public.worker_availability\r\n    (user_id, technician_id, weekday, available, start_time, end_time)\r\n  values (\r\n    v_employer, v_tech, p_weekday, p_available,\r\n    case when p_available then p_start_time end,\r\n    case when p_available then p_end_time end\r\n  )\r\n  on conflict (technician_id, weekday) do update\r\n    set available  = excluded.available,\r\n        start_time = excluded.start_time,\r\n        end_time   = excluded.end_time,\r\n        updated_at = now();\r\n  return jsonb_build_object('ok', true);\r\nend\r\n$function$\n",
+  "args": "p_weekday smallint, p_available boolean, p_start_time time without time zone, p_end_time time without time zone",
+  "owner": "postgres",
+  "proname": "crew_set_day_availability"
  },
  {
   "acl": "{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}",

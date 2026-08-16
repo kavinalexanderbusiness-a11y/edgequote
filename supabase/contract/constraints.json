@@ -2800,13 +2800,6 @@
   "convalidated": true
  },
  {
-  "def": "UNIQUE (technician_id, date, kind)",
-  "tbl": "pto_entries",
-  "conname": "pto_entries_one_per_day_kind",
-  "contype": "u",
-  "convalidated": true
- },
- {
   "def": "PRIMARY KEY (id)",
   "tbl": "pto_entries",
   "conname": "pto_entries_pkey",
@@ -2817,6 +2810,13 @@
   "def": "CHECK (((hourly_rate IS NULL) OR (hourly_rate >= (0)::numeric)))",
   "tbl": "pto_entries",
   "conname": "pto_entries_rate_nonneg",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['requested'::text, 'approved'::text, 'declined'::text])))",
+  "tbl": "pto_entries",
+  "conname": "pto_entries_status_known",
   "contype": "c",
   "convalidated": true
  },
@@ -4036,6 +4036,48 @@
   "tbl": "website_leads",
   "conname": "website_leads_user_id_fkey",
   "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (technician_id, weekday)",
+  "tbl": "worker_availability",
+  "conname": "worker_availability_one_per_weekday",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "worker_availability",
+  "conname": "worker_availability_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE CASCADE",
+  "tbl": "worker_availability",
+  "conname": "worker_availability_technician_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "worker_availability",
+  "conname": "worker_availability_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((weekday >= 0) AND (weekday <= 6)))",
+  "tbl": "worker_availability",
+  "conname": "worker_availability_weekday_range",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((available AND (start_time IS NOT NULL) AND (end_time IS NOT NULL) AND (end_time > start_time)) OR ((NOT available) AND (start_time IS NULL) AND (end_time IS NULL))))",
+  "tbl": "worker_availability",
+  "conname": "worker_availability_window",
+  "contype": "c",
   "convalidated": true
  }
 ]
