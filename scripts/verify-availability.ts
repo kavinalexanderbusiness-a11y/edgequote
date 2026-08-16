@@ -32,7 +32,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   workerDayStates, patternUnavailableOn, weekdayOf, patternWindowMinutes,
-  dayStaffing, canWork, WEEKDAY_LABELS, WORKER_DAY_STATE_LABELS,
+  dayStaffing, canWork, isBookedOff, WEEKDAY_LABELS, WORKER_DAY_STATE_LABELS,
   type AvailabilityPatternRow, type ApprovedTimeOffDay, type WorkerForAvailability,
 } from '../src/lib/workerAvailability'
 import { workersAvailableOn } from '../src/lib/dayFit'
@@ -208,6 +208,32 @@ H('6. Only APPROVED time off subtracts anybody')
     workersAvailableOn(MON, team, [offDay('t1', MON), offDay('t2', MON)]), 0)
   eq('…and a different date is untouched',
     workersAvailableOn(WED, team, [offDay('t1', MON), offDay('t2', MON)]), 2)
+
+  // ⭐ ONE predicate for "does this row take somebody off the schedule?",
+  // shared by planning, the balances, payroll and the team week — so leave
+  // cannot be counted by one surface and ignored by another.
+  check('approved counts', isBookedOff({ status: 'approved' }))
+  check('requested does NOT count — asking is not booking', !isBookedOff({ status: 'requested' }))
+  check('declined does NOT count', !isBookedOff({ status: 'declined' }))
+  check('a row with NO status counts — every pre-Session-67 row was owner-booked',
+    isBookedOff({}) && isBookedOff({ status: null }))
+
+  // The last one is what keeps a deploy that lands before its migration honest:
+  // reading a missing status as "not approved" would empty the balances, which
+  // is a WRONG NUMBER rather than an unknown.
+  const consumers = [
+    'src/app/dashboard/dispatch/time-off/page.tsx',
+    'src/app/dashboard/dispatch/payroll/page.tsx',
+    'src/app/dashboard/dispatch/payroll/history/[id]/page.tsx',
+    'src/app/dashboard/workforce/page.tsx',
+    'src/components/workforce/TeamAvailabilityWeek.tsx',
+  ]
+  for (const f of consumers) {
+    const src = read(f)
+    check(`${f.split('/').slice(-2).join('/')}: filters leave through the shared predicate`,
+      /isBookedOff/.test(src) && !/status === 'approved'/.test(src),
+      'must use isBookedOff, never an inline status comparison')
+  }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -607,8 +633,8 @@ H('19. The surfaces spend the engine, and do not rival it')
     /workerDayStates/.test(week) && /from '@\/lib\/workerAvailability'/.test(week))
   check('…and counts with the shared predicate, not its own test',
     /canWork/.test(week) && !/state === 'available' \|\| /.test(week))
-  check('…and filters time off to approved before counting',
-    /status === 'approved'/.test(week))
+  check('…and filters time off through the shared predicate before counting',
+    /isBookedOff/.test(week))
   check('…and renders an unreadable week as unknown, not as a full one',
     /couldn’t be read|couldn't be read/.test(week))
 
@@ -628,8 +654,8 @@ H('19. The surfaces spend the engine, and do not rival it')
   check('…and says asking is not booking', /Asking isn’t booking|Asking isn't booking/.test(crew))
 
   const timeOff = read('src/app/dashboard/dispatch/time-off/page.tsx')
-  check('the owner’s balances count APPROVED time off only',
-    /const approved = useMemo\(\(\) => entries\.filter\(e => e\.status === 'approved'\)/.test(timeOff))
+  check('the owner’s balances count GRANTED time off only',
+    /const approved = useMemo\(\(\) => entries\.filter\(isBookedOff\)/.test(timeOff))
   check('…and the requests queue is its own list',
     /e\.status === 'requested'/.test(timeOff))
   check('…and the decision goes through the one writer',

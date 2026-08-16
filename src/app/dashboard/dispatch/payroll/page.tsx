@@ -10,6 +10,7 @@ import type { BusinessSettings, PtoEntry, Technician, TimeEntry } from '@/types'
 import { PAY_PERIOD_LABELS, PTO_KIND_LABELS } from '@/types'
 import { loadTechnicians } from '@/lib/crews'
 import { loadTimeEntries, formatDuration, decimalHours } from '@/lib/timeTracking'
+import { isBookedOff } from '@/lib/workerAvailability'
 import {
   payrollRules, payPeriodFor, shiftPayPeriod, overtimeOff, inPeriod, periodSplitsWeeks,
   type PayPeriod,
@@ -88,7 +89,10 @@ export default function PayrollPage() {
           .gte('date', format(p.start, 'yyyy-MM-dd')).lte('date', format(p.end, 'yyyy-MM-dd')),
       ])
       setEntries(e)
-      setPtoEntries((ptoRes.data as PtoEntry[]) ?? [])
+      // ⭐ Only time off that was actually GRANTED reaches pay. A request the
+      // owner hasn't decided, or declined, is not leave taken — paying or even
+      // reporting it as absence would bill a day that may never happen.
+      setPtoEntries(((ptoRes.data as PtoEntry[]) ?? []).filter(isBookedOff))
       setLoadError(null)
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : 'Could not load payroll.')

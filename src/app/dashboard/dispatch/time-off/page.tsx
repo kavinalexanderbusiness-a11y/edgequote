@@ -9,6 +9,7 @@ import { PTO_KIND_LABELS } from '@/types'
 import { loadTechnicians } from '@/lib/crews'
 import { ptoBalances, holidayPtoRows, ptoPay, parseDateOnly } from '@/lib/pto'
 import { decideTimeOff } from '@/lib/workerAvailabilityData'
+import { isBookedOff } from '@/lib/workerAvailability'
 import { exportRowsToCsv } from '@/lib/csv'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -92,7 +93,7 @@ export default function TimeOffPage() {
   // request nobody has decided is not leave taken — counting it would show an
   // allowance being consumed by an ask, and a cost for a day that may never
   // happen. Declined rows are kept as a record and count for nothing.
-  const approved = useMemo(() => entries.filter(e => e.status === 'approved'), [entries])
+  const approved = useMemo(() => entries.filter(isBookedOff), [entries])
   const requests = useMemo(
     () => entries.filter(e => e.status === 'requested')
       .sort((a, b) => a.date.localeCompare(b.date)),

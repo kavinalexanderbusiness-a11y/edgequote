@@ -65,12 +65,25 @@ export interface AvailabilityPatternRow {
   end_time?: string | null
 }
 
-/** An APPROVED absence on a date. Callers must pre-filter to status='approved'. */
+/** An APPROVED absence on a date. Callers must pre-filter with `isBookedOff`. */
 export interface ApprovedTimeOffDay {
   technician_id: string
   date: string
   hours?: number | null
 }
+
+/**
+ * THE test for "does this time-off row take somebody off the schedule?" — one
+ * definition, used by every surface that counts, costs or plans around leave.
+ *
+ * A row with NO status is approved. That is not leniency: every row written
+ * before Session 67 was booked by the owner, and booking IS approval — the
+ * column's default says the same thing. Reading a missing status as anything
+ * else would silently empty the balances (a wrong number, not an unknown) on
+ * any row the migration has not reached yet.
+ */
+export const isBookedOff = (row: { status?: string | null }): boolean =>
+  row.status == null || row.status === 'approved'
 
 export interface WorkerForAvailability {
   id: string

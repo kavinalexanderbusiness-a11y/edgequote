@@ -4,7 +4,7 @@ import { useMemo } from 'react'
 import { addDays, format } from 'date-fns'
 import type { PtoEntry, Technician, WorkerAvailability } from '@/types'
 import {
-  workerDayStates, WORKER_DAY_STATE_LABELS, canWork,
+  workerDayStates, WORKER_DAY_STATE_LABELS, canWork, isBookedOff,
   type WorkerDayDetail,
 } from '@/lib/workerAvailability'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -38,7 +38,7 @@ export function TeamAvailabilityWeek({
   technicians, patterns, ptoEntries, readable = true, capacityHours, days = 7,
 }: TeamAvailabilityWeekProps) {
   const week = useMemo(() => {
-    const approved = ptoEntries.filter(p => p.status === 'approved')
+    const approved = ptoEntries.filter(isBookedOff)
     return Array.from({ length: days }, (_, i) => {
       const date = addDays(new Date(), i)
       const iso = format(date, 'yyyy-MM-dd')

@@ -8,6 +8,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import type { BusinessSettings, Crew, PayRun, PtoEntry, Technician, TimeEntry, WageHistoryEntry, WorkerAvailability } from '@/types'
 import { loadWorkerAvailability } from '@/lib/workerAvailabilityData'
+import { isBookedOff } from '@/lib/workerAvailability'
 import { loadCrews, loadTechnicians } from '@/lib/crews'
 import { loadTimeEntries, decimalHours, formatDuration } from '@/lib/timeTracking'
 import { payrollRules, payPeriodFor, overtimeOff } from '@/lib/payroll'
@@ -110,7 +111,11 @@ export default function WorkforcePage() {
       supabase.rpc('crew_access_states').then(({ data, error }) => {
         if (!error && data) setAccessById(data as Record<string, CrewAccessRow>)
       })
-      setPtoEntries((pRes.data as PtoEntry[]) ?? [])
+      // ⭐ GRANTED leave only, filtered once at the read. Everything below —
+      // the draft pay run, who's off today, the trend, the allowance analytics
+      // — reads this state, and none of them may count a day nobody approved.
+      // (The requests queue itself lives on the time-off page.)
+      setPtoEntries(((pRes.data as PtoEntry[]) ?? []).filter(isBookedOff))
       // A failed availability read is reported as unknown, never as an empty
       // week — the panel says so instead of implying everyone is free.
       setAvailabilityRows(aRes.outcome === 'ok' ? aRes.rows : [])
