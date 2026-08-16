@@ -145,7 +145,11 @@ function forDeposit(i: PortalInvoice) {
   }
 }
 
-export type TabKey = 'home' | 'property' | 'visits' | 'billing' | 'messages' | 'requests'
+// `documents` is durable paperwork the business deliberately shared — permits,
+// warranties, work authorizations. It is NOT `billing`: a quote and an invoice
+// are figures the customer acts on, and burying a permit among them would make
+// both harder to find. The pill only exists when something was actually shared.
+export type TabKey = 'home' | 'property' | 'visits' | 'billing' | 'documents' | 'messages' | 'requests'
 export type LiveStatus = 'scheduled' | 'on_my_way' | 'in_progress' | 'completed'
 export type DocKind = 'quote' | 'invoice'
 
@@ -179,7 +183,7 @@ export const MAX_REQUEST_PRESETS = 8
 // customer can't see simply lands them on Billing with nothing to highlight —
 // wrong-answer-proof, like resolveDocAddress. It reuses the existing tab keys;
 // it never invents a route or a second navigation model.
-const TAB_KEYS: TabKey[] = ['home', 'property', 'visits', 'billing', 'messages', 'requests']
+const TAB_KEYS: TabKey[] = ['home', 'property', 'visits', 'billing', 'documents', 'messages', 'requests']
 
 export interface PortalDeepLink {
   tab: TabKey | null

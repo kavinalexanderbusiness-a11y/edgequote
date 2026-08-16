@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle2, ChevronRight, Clock, FileSignature, FileText, History, Home, Leaf, Loader2, MapPin, MessageSquare, Receipt, Wallet, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { confirm as confirmDialog } from '@/lib/confirm'
@@ -25,6 +25,7 @@ import { VisitsTab } from './components/VisitsTab'
 import { BillingTab } from './components/BillingTab'
 import { MessagesTab } from './components/MessagesTab'
 import { RequestsTab } from './components/RequestsTab'
+import { DocumentsTab, type PortalDocument } from './components/DocumentsTab'
 
 // ── Premium Customer Portal ─────────────────────────────────────────────────
 // Public, no-login, scoped to the token's customer via get_portal_data — still
@@ -43,9 +44,15 @@ import { RequestsTab } from './components/RequestsTab'
 // `multiProperty` decides one of them: a single-address customer's Property tab
 // folded into Visits (their address, measurements and provider note now open it),
 // so ?tab=property must land on Visits for them and stay put for a landlord.
-function resolveTab(t: TabKey, multiProperty: boolean): TabKey {
+// `hasDocuments` decides the other: the Documents pill exists only when the
+// business actually shared something, so a stale ?tab=documents link — or one
+// followed before the shared list has arrived — must land somewhere that
+// renders. Selecting a pill that isn't there is the blank portal this resolver
+// exists to prevent.
+function resolveTab(t: TabKey, multiProperty: boolean, hasDocuments: boolean): TabKey {
   if (t === 'requests') return 'messages'
   if (t === 'property' && !multiProperty) return 'visits'
+  if (t === 'documents' && !hasDocuments) return 'home'
   return t
 }
 
@@ -68,12 +75,31 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   // straight off the payload so it is available to the effects and handlers ABOVE
   // the view memo — the tab resolver needs it and runs in both places.
   const multiProperty = (data?.properties?.length ?? 0) > 1
+  // Documents the business deliberately shared with this customer. Fetched
+  // separately from get_portal_data on purpose: that RPC is the canonical portal
+  // projection and re-issuing an older definition of it has silently rolled the
+  // portal back before (see the migration audit). A new projection belongs
+  // ALONGSIDE it, like portal_get_messages, never inside it.
+  //
+  // ⭐ `null` means "we haven't looked yet" and is NOT "nothing was shared". The
+  // tab stays hidden until we actually know, so it never flashes an empty
+  // promise — and a failed read keeps whatever we already had.
+  const [portalDocs, setPortalDocs] = useState<PortalDocument[] | null>(null)
+  const hasDocuments = (portalDocs?.length ?? 0) > 0
+
+  const loadDocuments = useCallback(async () => {
+    const { data: rows, error } = await supabase.rpc('portal_get_documents', { p_token: token })
+    if (error) return
+    setPortalDocs((rows as PortalDocument[] | null) ?? [])
+  }, [supabase, token])
+
+  useEffect(() => { void loadDocuments() }, [loadDocuments])
   // THE tab actually shown. `tab` holds whatever was ASKED for — a pill, an in-app
   // navigate, or a deep link naming a folded destination — and this resolves it
   // against the payload. Resolving at render rather than at setTab time means the
   // answer is never guessed from data that hadn't loaded yet, and there is exactly
   // one place a folded key gets mapped.
-  const activeTab = resolveTab(tab, multiProperty)
+  const activeTab = resolveTab(tab, multiProperty, hasDocuments)
   const [accepting, setAccepting] = useState<string | null>(null)
   // Which change order is mid-decision (locks both buttons on that card).
   const [decidingChangeId, setDecidingChangeId] = useState<string | null>(null)
@@ -308,7 +334,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   // or a bookmark lands on the same tab instead of bouncing to Home. Billing's
   // category resets to 'all' unless a caller pre-filters it (the Home signpost).
   function goTab(rawNext: TabKey, cat?: 'all' | 'quote' | 'invoice') {
-    const next = resolveTab(rawNext, multiProperty)
+    const next = resolveTab(rawNext, multiProperty, hasDocuments)
     setTab(next)
     if (cat) setDocsCat(cat)
     else if (next === 'billing') setDocsCat('all')
@@ -764,11 +790,18 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     // itself was the second-biggest thing on the screen. They are one destination
     // now: ask for a service, or just say something. `requests` still resolves here
     // (see goTab) so existing deep links and Home's "Request a service" keep working.
+    // Durable paperwork, deliberately NOT folded into Billing: a quote and an
+    // invoice are figures the customer acts on, and a permit filed among them is
+    // harder to find while making the bills noisier.
+    { key: 'documents', label: 'Documents', icon: FileText, n: portalDocs?.length, unit: 'documents' },
     { key: 'messages', label: 'Contact', icon: MessageSquare },
   ] as { key: TabKey; label: string; icon: typeof Home; n?: number; unit?: string }[]).filter(t =>
     t.key === 'billing' ? (docCount > 0 || data.payments.length > 0) :
     t.key === 'visits' ? (data.jobs.length > 0 || data.photos.length > 0) :
     t.key === 'property' ? (view.hasProperty && view.multiProperty) :
+    // Only when something was actually shared. `null` (not looked yet) hides it
+    // too — six pills already wrap at 375px, and an empty one earns no width.
+    t.key === 'documents' ? hasDocuments :
     true)
 
   return (
@@ -931,6 +964,9 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
             {activeTab === 'property' && <PropertyTab view={view} actions={actions} />}
             {activeTab === 'visits' && <VisitsTab view={view} actions={actions} />}
             {activeTab === 'billing' && <BillingTab view={view} actions={actions} initialCat={docsCat} focusDocId={focusDocId} />}
+            {activeTab === 'documents' && portalDocs && (
+              <DocumentsTab token={token} documents={portalDocs} onSigned={() => void loadDocuments()} />
+            )}
             {/* Contact = ask for something, or say something. The catalogue leads
                 because "I want another service" is the commoner errand and it is
                 answerable without typing; the thread follows for everything else.
