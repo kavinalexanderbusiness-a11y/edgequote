@@ -35,8 +35,13 @@
 export function cleanOrigin(raw: string | null | undefined): string {
   if (!raw) return ''
   return raw
-    .replace(/^﻿/, '')        // UTF-8 BOM, invisible everywhere it is displayed
-    .trim()                        // whitespace and newlines from a shell pipe
+    // ⭐ `trim()` is what removes the BOM. U+FEFF is <ZWNBSP>, which ECMAScript
+    // counts as WhiteSpace, so a leading byte-order mark goes with the spaces
+    // and newlines a shell pipe leaves behind. An explicit BOM replace used to
+    // sit here and was DEAD CODE — mutation testing proved deleting it changed
+    // nothing, which is exactly how a line that looks load-bearing gets trusted.
+    // The behaviour is asserted directly in verify:crew-auth instead.
+    .trim()
     .replace(/^["']|["']$/g, '')   // quotes a .env line can carry in
     .trim()
     .replace(/\/+$/, '')           // trailing slash — every caller appends its own

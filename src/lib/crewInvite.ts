@@ -137,6 +137,25 @@ export function readSetupPathToken(segments: string[] | undefined): string | nul
   return v ? v : null
 }
 
+// ── What a signed-in account is told about its OWN access ────────────────────
+// The router has one word for "not in the crew app": 'none'. Two very different
+// people land on it — somebody who was never invited, and somebody whose access
+// the owner turned off this morning — and telling the second one to "enter the
+// code your manager gave you" sends them after a code that cannot work
+// (crew_redeem_invite refuses an inactive roster row).
+//
+// `unknown` is the honest fourth answer, and it must never be collapsed into
+// 'none': it means we could not ask (no service key, or the read failed), and
+// the screen it renders asserts nothing about why the person is there. Same
+// three-outcome discipline as CrewDayResult and classifyAuthError.
+export type CrewSelfStatus = 'signed-out' | 'owner' | 'active' | 'disabled' | 'none' | 'unknown'
+
+/** What the join screen shows for each answer. Pure, so the guard drives it
+ *  without a browser. `disabled` is the only one that must NOT offer a code. */
+export function joinScreenFor(status: CrewSelfStatus): 'code-form' | 'turned-off' {
+  return status === 'disabled' ? 'turned-off' : 'code-form'
+}
+
 // ── The wire contract ────────────────────────────────────────────────────────
 export interface CrewInviteRequest {
   technicianId: string

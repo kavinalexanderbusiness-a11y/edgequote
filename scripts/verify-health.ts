@@ -125,8 +125,13 @@ H('4. THE LINK ORIGIN — the deploy must report the origin it stamps into links
 // so. The env var cannot be asserted from here; what CAN be pinned is that
 // /api/health reports it, so one curl against a deploy answers "which origin do
 // generated links use?" instead of a worker's screenshot being the detector.
-check('health reports the configured app origin (app_url)',
-  /app_url:\s*process\.env\.NEXT_PUBLIC_APP_URL\s*\|\|\s*null/.test(health), true)
+// Reported twice on purpose: the CLEANED origin is what links actually carry,
+// and the RAW value is what catches a corruption you cannot see — a UTF-8 BOM
+// pasted in by a shell was invisible in the dashboard and broke every link.
+check('health reports the origin links are built on (cleaned)',
+  /app_url:\s*appOrigin\(\)/.test(health), true)
+check('health also reports the raw configured value',
+  /app_url_raw:\s*process\.env\.NEXT_PUBLIC_APP_URL/.test(health), true)
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:health — ${pass} passed, ${fail} failed\n`)
