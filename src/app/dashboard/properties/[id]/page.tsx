@@ -16,6 +16,7 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { CustomFieldsSection } from '@/components/customFields/CustomFieldsSection'
 import { Textarea } from '@/components/ui/Textarea'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { getPropertyContext, type PropertyIntelligence } from '@/lib/ai/propertyContext'
@@ -291,6 +292,11 @@ export default function PropertyDetailPage() {
         onRetry={reload}
         photosHref="#property-history"
       />
+
+      {/* Whatever this business records about a service location — a gate code, a
+          building type. Sits with the other at-the-gate information rather than
+          down among the desk reading. */}
+      <CustomFieldsSection entity="property" recordId={property.id} />
 
       {/* Latest AI analysis — read through THE propertyContext seam, shown only
           when one exists. Reused, never re-run (the BeforeAfterStudio pattern). */}

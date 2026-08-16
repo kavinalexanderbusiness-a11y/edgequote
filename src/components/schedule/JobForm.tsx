@@ -26,6 +26,7 @@ import DurationField from '@/components/jobs/DurationField'
 import WorkSessionsPanel from '@/components/jobs/WorkSessionsPanel'
 import { formatDuration, workdayMinutes } from '@/lib/workDuration'
 import { JobReferenceMedia } from '@/components/schedule/JobReferenceMedia'
+import { CustomFieldsSection } from '@/components/customFields/CustomFieldsSection'
 import { AUDIENCE_COPY } from '@/lib/noteScope'
 import { loadCompletedVisitLearning, type LearningLoad } from '@/lib/estimateVsActualData'
 
@@ -811,6 +812,15 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           file to yet, and the component says so instead of offering a control
           that would fail. */}
       <JobReferenceMedia jobId={isEdit ? (excludeJobId || null) : null} />
+
+      {/* Whatever this business records per visit — a permit number, a PO. Only
+          on EDIT: an answer is stored against a visit's id, and on create there
+          is no visit yet to answer about. Same rule as the reference media above.
+          ⚠️ A `jobs` row is one VISIT, so a recurring series' visits each carry
+          their own answer — there is no series-level custom field in V1. */}
+      {isEdit && excludeJobId && (
+        <CustomFieldsSection entity="job" recordId={excludeJobId} bare className="pt-1" />
+      )}
 
       {/* Time & crew — expanded while creating (the smart duration suggestion
           matters then), a one-line summary when editing. */}

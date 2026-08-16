@@ -46,6 +46,7 @@ import { Modal } from '@/components/ui/Modal'
 import { CustomerForm } from '@/components/customers/CustomerForm'
 import { Banner } from '@/components/ui/Banner'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { CustomFieldsSection } from '@/components/customFields/CustomFieldsSection'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Button, ButtonLink } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
@@ -1105,6 +1106,11 @@ export default function CustomerDetailPage() {
           )}
         </CardBody>
       </Card>
+
+      {/* The owner's own attributes for a customer. Renders nothing at all when
+          this business has defined none, so an account that never opens Settings
+          › Custom fields never sees a trace of the feature. */}
+      <CustomFieldsSection entity="customer" recordId={customer.id} />
 
       {/* Revenue + service history — anchor target for the header's "Owes" chip */}
       <div id="customer-revenue" className="grid grid-cols-2 lg:grid-cols-4 gap-4">
