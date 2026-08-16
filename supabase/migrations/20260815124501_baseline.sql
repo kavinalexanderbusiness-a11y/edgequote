@@ -8,8 +8,8 @@
 --
 -- This file is the ONE starting point for a database. Applying it to an empty
 -- Postgres 17 database produces the production schema contract:
---   103 tables · 111 functions · 82 triggers · 332 policies
---   522 constraints · 265 standalone indexes · 7 storage buckets
+--   109 tables · 127 functions · 92 triggers · 355 policies
+--   575 constraints · 272 standalone indexes · 7 storage buckets
 --
 -- IT DOES NOT RESTORE DATA. Not one row. Rebuilding a working production system
 -- is: this file, THEN a backup restore, THEN storage objects, THEN env config.
@@ -396,7 +396,8 @@ create table if not exists public."customers" (
   "anniversary" date,
   "last_contacted_at" timestamp with time zone,
   "message_prefs" jsonb,
-  "phone_digits" text generated always as (regexp_replace(COALESCE(phone, ''::text), '\D'::text, ''::text, 'g'::text)) stored
+  "phone_digits" text generated always as (regexp_replace(COALESCE(phone, ''::text), '\D'::text, ''::text, 'g'::text)) stored,
+  "preferred_channel" text
 );
 create table if not exists public."data_exports" (
   "id" uuid default gen_random_uuid() not null,
@@ -544,6 +545,30 @@ create table if not exists public."follow_ups" (
   "created_at" timestamp with time zone default now() not null,
   "updated_at" timestamp with time zone default now() not null
 );
+create table if not exists public."form_template_fields" (
+  "id" uuid default gen_random_uuid() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "template_id" uuid not null,
+  "position" integer default 0 not null,
+  "field_type" text not null,
+  "label" text not null,
+  "help_text" text,
+  "required" boolean default false not null,
+  "options" jsonb,
+  "unit" text,
+  "photo_kind" text
+);
+create table if not exists public."form_templates" (
+  "id" uuid default gen_random_uuid() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "name" text not null,
+  "description" text,
+  "archived_at" timestamp with time zone
+);
 create table if not exists public."holidays" (
   "id" uuid default gen_random_uuid() not null,
   "created_at" timestamp with time zone default now() not null,
@@ -621,6 +646,46 @@ create table if not exists public."invoices" (
   "deposit_amount" numeric,
   "deposit_requested_at" timestamp with time zone
 );
+create table if not exists public."job_form_response_photos" (
+  "response_id" uuid not null,
+  "photo_id" uuid not null,
+  "user_id" uuid not null,
+  "created_at" timestamp with time zone default now() not null
+);
+create table if not exists public."job_form_responses" (
+  "id" uuid default gen_random_uuid() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "form_id" uuid not null,
+  "field_id" uuid not null,
+  "value_text" text,
+  "value_number" numeric,
+  "value_bool" boolean,
+  "value_date" date,
+  "value_time" time without time zone,
+  "value_choice" text,
+  "answered_by" uuid not null,
+  "answered_role" text not null,
+  "answered_at" timestamp with time zone default now() not null,
+  "corrected_at" timestamp with time zone,
+  "corrected_by" uuid,
+  "correction_reason" text
+);
+create table if not exists public."job_forms" (
+  "id" uuid default gen_random_uuid() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "job_id" uuid not null,
+  "template_id" uuid not null,
+  "template_name" text not null,
+  "fields" jsonb not null,
+  "source" text default 'manual'::text not null,
+  "waived_at" timestamp with time zone,
+  "waived_by" uuid,
+  "waive_reason" text
+);
 create table if not exists public."job_line_items" (
   "id" uuid default extensions.uuid_generate_v4() not null,
   "created_at" timestamp with time zone default now() not null,
@@ -669,7 +734,8 @@ create table if not exists public."job_recurrences" (
   "customer_id" uuid,
   "interval_unit" text,
   "interval_count" integer,
-  "end_count" integer
+  "end_count" integer,
+  "form_template_id" uuid
 );
 create table if not exists public."job_work_sessions" (
   "id" uuid default gen_random_uuid() not null,
@@ -1224,6 +1290,20 @@ create table if not exists public."push_subscriptions" (
   "created_at" timestamp with time zone default now() not null,
   "last_seen_at" timestamp with time zone default now() not null
 );
+create table if not exists public."quote_addons" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "updated_at" timestamp with time zone default now() not null,
+  "quote_id" uuid not null,
+  "user_id" uuid not null,
+  "name" text not null,
+  "description" text,
+  "price" numeric(10,2) not null,
+  "sort_order" integer default 0 not null,
+  "is_selected" boolean default false not null,
+  "selected_via" text,
+  "selected_at" timestamp with time zone
+);
 create table if not exists public."quote_options" (
   "id" uuid default extensions.uuid_generate_v4() not null,
   "created_at" timestamp with time zone default now() not null,
@@ -1309,7 +1389,7 @@ create table if not exists public."quotes" (
   "valid_until" date,
   "accepted_price" numeric(10,2),
   "selected_cadence" text,
-  "total" numeric(10,2) generated always as ((initial_price + COALESCE(travel_fee, (0)::numeric))) stored,
+  "total" numeric(10,2) generated always as (((initial_price + COALESCE(travel_fee, (0)::numeric)) + COALESCE(addons_total, (0)::numeric))) stored,
   "pricing_config_version_id" uuid,
   "value_grade" text,
   "nearby_count" integer,
@@ -1323,7 +1403,8 @@ create table if not exists public."quotes" (
   "preferred_timing" text,
   "preferred_note" text,
   "deposit_override_at" timestamp with time zone,
-  "renewal_of_recurrence_id" uuid
+  "renewal_of_recurrence_id" uuid,
+  "addons_total" numeric(10,2) default 0 not null
 );
 create table if not exists public."referrals" (
   "id" uuid default extensions.uuid_generate_v4() not null,
@@ -1472,7 +1553,8 @@ create table if not exists public."service_templates" (
   "unit_cost" numeric,
   "material_cost" numeric,
   "is_favorite" boolean default false not null,
-  "recurrence" text
+  "recurrence" text,
+  "form_template_id" uuid
 );
 create table if not exists public."service_units" (
   "id" uuid default gen_random_uuid() not null,
@@ -1682,13 +1764,41 @@ create table if not exists public."website_leads" (
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 3 · FUNCTIONS
--- 111 application functions, verbatim from pg_get_functiondef.
+-- 127 application functions, verbatim from pg_get_functiondef.
 -- Emitted BEFORE constraints: a CHECK constraint can call one, and the dependency
 -- is resolved when the constraint is added.
 -- SECURITY DEFINER + `set search_path` is not decoration here: these functions are
 -- the ONLY door a crew session or a portal token has to the data. Section 8 revokes
 -- and re-grants EXECUTE explicitly — a function is not safe merely by being defined.
 -- ══════════════════════════════════════════════════════════════════════════
+
+CREATE OR REPLACE FUNCTION public.attach_job_form(p_job_id uuid, p_template_id uuid)
+ RETURNS SETOF job_forms
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_uid uuid := auth.uid();
+  v_job public.jobs;
+  v_tpl public.form_templates;
+begin
+  if v_uid is null then return; end if;
+  select * into v_job from public.jobs where id = p_job_id and user_id = v_uid;
+  if not found then return; end if;
+  select * into v_tpl from public.form_templates
+  where id = p_template_id and user_id = v_uid and archived_at is null;
+  if not found then return; end if;
+
+  insert into public.job_forms (user_id, job_id, template_id, template_name, fields, source)
+  values (v_uid, v_job.id, v_tpl.id, v_tpl.name,
+          public.form_template_snapshot(v_tpl.id, v_uid), 'manual')
+  on conflict (job_id, template_id) do nothing;
+
+  return query select * from public.job_forms
+    where job_id = v_job.id and user_id = v_uid and template_id = v_tpl.id;
+end;
+$function$;
 
 CREATE OR REPLACE FUNCTION public.authenticate_api_key(p_hash text)
  RETURNS TABLE(key_id uuid, key_user_id uuid, key_name text, key_scopes text[], rate_limited boolean)
@@ -2380,6 +2490,7 @@ begin
             'notes', j.notes,
             'completion_summary', j.completion_summary,
             'completion_issue', j.completion_issue,
+            'checklist', public.job_form_summary(j.id, j.user_id),
             'customer', case when cu.id is null then null else
               jsonb_build_object('name', cu.name, 'phone', cu.phone) end,
             'property', case when p.id is null then null else
@@ -2484,6 +2595,67 @@ begin
 
   return new;
 end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_job_forms(p_job_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_employer uuid := public.crew_employer();
+  v_crew uuid := public.crew_crew_id();
+  v_job public.jobs;
+  v_out jsonb;
+begin
+  if v_employer is null or v_crew is null then return null; end if;
+  select * into v_job from public.jobs
+  where id = p_job_id and user_id = v_employer and crew_id = v_crew;
+  if not found then return null; end if;
+
+  perform public.ensure_job_forms(p_job_id);
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'id', jf.id,
+    'template_name', jf.template_name,
+    'fields', jf.fields,
+    'waived', jf.waived_at is not null,
+    'frozen', v_job.status = 'completed',
+    'responses', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'field_id', r.field_id,
+        'value_text', r.value_text,
+        'value_number', r.value_number,
+        'value_bool', r.value_bool,
+        'value_date', r.value_date,
+        'value_time', r.value_time,
+        'value_choice', r.value_choice,
+        'answered_role', r.answered_role,
+        'answered_at', r.answered_at,
+        'answered_name', coalesce(
+          (select t.name from public.technicians t
+           where t.auth_user_id = r.answered_by and t.user_id = jf.user_id
+           limit 1),
+          'Office'),
+        'photos', coalesce((
+          select jsonb_agg(jsonb_build_object('id', p.id, 'storage_path', ph.storage_path)
+                           order by p.created_at)
+          from public.job_form_response_photos p
+          join public.job_photos ph on ph.id = p.photo_id and ph.user_id = p.user_id
+          where p.response_id = r.id and p.user_id = r.user_id
+        ), '[]'::jsonb)
+      ) order by r.created_at)
+      from public.job_form_responses r
+      where r.form_id = jf.id and r.user_id = jf.user_id
+    ), '[]'::jsonb)
+  ) order by jf.created_at), '[]'::jsonb)
+  into v_out
+  from public.job_forms jf
+  where jf.job_id = v_job.id and jf.user_id = v_job.user_id;
+
+  return v_out;
+end;
 $function$;
 
 CREATE OR REPLACE FUNCTION public.crew_job_messages(p_job_id uuid)
@@ -2854,6 +3026,64 @@ begin
 end
 $function$;
 
+CREATE OR REPLACE FUNCTION public.crew_save_form_response(p_form_id uuid, p_field_id uuid, p_value_text text, p_value_number numeric, p_value_bool boolean, p_value_date date, p_value_time time without time zone, p_value_choice text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_employer uuid := public.crew_employer();
+  v_crew uuid := public.crew_crew_id();
+  v_form public.job_forms;
+  v_job public.jobs;
+  v_empty boolean;
+begin
+  if v_employer is null or v_crew is null then
+    return jsonb_build_object('ok', false, 'reason', 'not_yours');
+  end if;
+  select * into v_form from public.job_forms where id = p_form_id and user_id = v_employer;
+  if not found then return jsonb_build_object('ok', false, 'reason', 'not_yours'); end if;
+  select * into v_job from public.jobs
+  where id = v_form.job_id and user_id = v_employer and crew_id = v_crew;
+  if not found then return jsonb_build_object('ok', false, 'reason', 'not_yours'); end if;
+  if v_job.status = 'cancelled' then
+    return jsonb_build_object('ok', false, 'reason', 'cancelled');
+  end if;
+  if v_job.status = 'completed' then
+    return jsonb_build_object('ok', false, 'reason', 'completed');
+  end if;
+
+  v_empty := p_value_text is null and p_value_number is null and p_value_bool is null
+         and p_value_date is null and p_value_time is null and p_value_choice is null;
+
+  if v_empty then
+    delete from public.job_form_responses
+    where form_id = v_form.id and user_id = v_employer and field_id = p_field_id;
+    return jsonb_build_object('ok', true, 'cleared', true);
+  end if;
+
+  insert into public.job_form_responses as r
+    (user_id, form_id, field_id, value_text, value_number, value_bool,
+     value_date, value_time, value_choice, answered_by, answered_role, answered_at)
+  values
+    (v_employer, v_form.id, p_field_id, p_value_text, p_value_number, p_value_bool,
+     p_value_date, p_value_time, p_value_choice, auth.uid(), 'crew', now())
+  on conflict (form_id, field_id) do update set
+    value_text = excluded.value_text,
+    value_number = excluded.value_number,
+    value_bool = excluded.value_bool,
+    value_date = excluded.value_date,
+    value_time = excluded.value_time,
+    value_choice = excluded.value_choice,
+    answered_by = excluded.answered_by,
+    answered_role = excluded.answered_role,
+    answered_at = now();
+
+  return jsonb_build_object('ok', true);
+end;
+$function$;
+
 CREATE OR REPLACE FUNCTION public.crew_set_completion_record(p_job_id uuid, p_summary text DEFAULT NULL::text, p_issue text DEFAULT NULL::text)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -3060,6 +3290,47 @@ AS $function$
   end
 $function$;
 
+CREATE OR REPLACE FUNCTION public.ensure_job_forms(p_job_id uuid)
+ RETURNS SETOF job_forms
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_job public.jobs;
+  v_uid uuid := auth.uid();
+  v_employer uuid;
+  v_crew uuid;
+  v_default record;
+begin
+  select * into v_job from public.jobs where id = p_job_id;
+  if not found then return; end if;
+
+  if v_uid is not null and v_uid <> v_job.user_id then
+    v_employer := public.crew_employer();
+    v_crew := public.crew_crew_id();
+    if v_employer is null or v_employer <> v_job.user_id
+       or v_crew is null or v_job.crew_id is distinct from v_crew then
+      return; -- not yours: say nothing, mint nothing
+    end if;
+  end if;
+
+  select * into v_default from public.job_form_default_template(v_job);
+  if v_default.template_id is not null then
+    insert into public.job_forms (user_id, job_id, template_id, template_name, fields, source)
+    select v_job.user_id, v_job.id, ft.id, ft.name,
+           public.form_template_snapshot(ft.id, v_job.user_id), v_default.source
+    from public.form_templates ft
+    where ft.id = v_default.template_id and ft.user_id = v_job.user_id
+    on conflict (job_id, template_id) do nothing;
+  end if;
+
+  return query select * from public.job_forms
+    where job_id = v_job.id and user_id = v_job.user_id
+    order by created_at;
+end;
+$function$;
+
 CREATE OR REPLACE FUNCTION public.ensure_pricing_config_version(p_user uuid)
  RETURNS uuid
  LANGUAGE plpgsql
@@ -3201,6 +3472,41 @@ AS $function$
     and lower(trim(c.email)) = lower(trim(p_email))
 $function$;
 
+CREATE OR REPLACE FUNCTION public.form_options_ok(p jsonb)
+ RETURNS boolean
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+  select jsonb_typeof(p) = 'array'
+     and jsonb_array_length(p) between 1 and 30
+     and not exists (
+       select 1 from jsonb_array_elements(p) e
+       where jsonb_typeof(e) <> 'string'
+          or char_length(e #>> '{}') not between 1 and 100
+     )
+$function$;
+
+CREATE OR REPLACE FUNCTION public.form_template_snapshot(p_template_id uuid, p_user_id uuid)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  select coalesce(jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
+           'id', f.id,
+           'position', f.position,
+           'type', f.field_type,
+           'label', f.label,
+           'help', f.help_text,
+           'required', case when f.required then true else null end,
+           'options', f.options,
+           'unit', f.unit,
+           'photo_kind', f.photo_kind
+         )) order by f.position, f.created_at, f.id), '[]'::jsonb)
+  from public.form_template_fields f
+  where f.template_id = p_template_id and f.user_id = p_user_id
+$function$;
+
 CREATE OR REPLACE FUNCTION public.get_booking_business(p_token text)
  RETURNS json
  LANGUAGE plpgsql
@@ -3277,6 +3583,10 @@ begin
                select qo.id, qo.name, qo.description, qo.price, qo.sort_order, qo.is_recommended
                from public.quote_options qo where qo.quote_id = qt.id
              ) o), '[]'::json) as options,
+             coalesce((select json_agg(a order by a.sort_order) from (
+               select qa.id, qa.name, qa.description, qa.price, qa.sort_order, qa.is_selected
+               from public.quote_addons qa where qa.quote_id = qt.id
+             ) a), '[]'::json) as addons,
              coalesce((select json_agg(s order by s.sort_order) from (
                select qs.service_type, qs.quantity, qs.unit, qs.unit_price, qs.est_minutes,
                       qs.discount_type, qs.discount_value, qs.notes, qs.sort_order
@@ -3421,6 +3731,429 @@ AS $function$
   select exists (
     select 1 from public.verify_fixture_tenants t where t.user_id = auth.uid()
   );
+$function$;
+
+CREATE OR REPLACE FUNCTION public.job_form_default_template(p_job jobs)
+ RETURNS TABLE(template_id uuid, source text)
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_id uuid;
+begin
+  if p_job.recurrence_id is not null then
+    select r.form_template_id into v_id
+    from public.job_recurrences r
+    join public.form_templates ft on ft.id = r.form_template_id and ft.user_id = r.user_id
+    where r.id = p_job.recurrence_id and r.user_id = p_job.user_id
+      and r.form_template_id is not null and ft.archived_at is null;
+    if v_id is not null then
+      template_id := v_id; source := 'series'; return next; return;
+    end if;
+  end if;
+
+  if p_job.quote_id is not null then
+    select st.form_template_id into v_id
+    from public.quotes q
+    join public.service_templates st on st.id = q.service_template_id and st.user_id = q.user_id
+    join public.form_templates ft on ft.id = st.form_template_id and ft.user_id = st.user_id
+    where q.id = p_job.quote_id and q.user_id = p_job.user_id
+      and st.form_template_id is not null and ft.archived_at is null;
+    if v_id is not null then
+      template_id := v_id; source := 'service_template'; return next; return;
+    end if;
+  end if;
+
+  if p_job.service_type is not null and btrim(p_job.service_type) <> '' then
+    select st.form_template_id into v_id
+    from public.service_templates st
+    join public.form_templates ft on ft.id = st.form_template_id and ft.user_id = st.user_id
+    where st.user_id = p_job.user_id
+      and lower(btrim(st.name)) = lower(btrim(p_job.service_type))
+      and st.form_template_id is not null and ft.archived_at is null
+    order by st.sort_order nulls last, st.created_at
+    limit 1;
+    if v_id is not null then
+      template_id := v_id; source := 'service_template'; return next; return;
+    end if;
+  end if;
+
+  return;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.job_form_gate(p_job_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_uid uuid := auth.uid();
+  v_missing jsonb;
+begin
+  if v_uid is null then return null; end if;
+  if not exists (select 1 from public.jobs where id = p_job_id and user_id = v_uid) then
+    return null;
+  end if;
+  v_missing := public.job_form_missing_items(p_job_id, v_uid);
+  return jsonb_build_object('ready', jsonb_array_length(v_missing) = 0, 'missing', v_missing);
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.job_form_missing_items(p_job_id uuid, p_user_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_job public.jobs;
+  v_missing jsonb := '[]'::jsonb;
+  v_default record;
+  v_form record;
+  v_field record;
+  v_answered boolean;
+begin
+  select * into v_job from public.jobs where id = p_job_id and user_id = p_user_id;
+  if not found then return '[]'::jsonb; end if;
+
+  for v_form in
+    select jf.id, jf.template_name, jf.fields, jf.waived_at
+    from public.job_forms jf
+    where jf.job_id = v_job.id and jf.user_id = v_job.user_id
+  loop
+    if v_form.waived_at is not null then continue; end if;
+    for v_field in
+      select (f ->> 'id')::uuid as id, f ->> 'label' as label, f ->> 'type' as type
+      from jsonb_array_elements(v_form.fields) f
+      where (f ->> 'required')::boolean is true
+        and f ->> 'type' not in ('section','instruction')
+    loop
+      if v_field.type = 'photo' then
+        select exists (
+          select 1 from public.job_form_responses r
+          join public.job_form_response_photos p on p.response_id = r.id and p.user_id = r.user_id
+          where r.form_id = v_form.id and r.user_id = v_job.user_id and r.field_id = v_field.id
+        ) into v_answered;
+      else
+        select exists (
+          select 1 from public.job_form_responses r
+          where r.form_id = v_form.id and r.user_id = v_job.user_id and r.field_id = v_field.id
+        ) into v_answered;
+      end if;
+      if not v_answered then
+        v_missing := v_missing || jsonb_build_object(
+          'form_id', v_form.id, 'form', v_form.template_name,
+          'field_id', v_field.id, 'label', v_field.label, 'type', v_field.type);
+      end if;
+    end loop;
+  end loop;
+
+  -- A default that never got opened still gates: count its required fields
+  -- from the LIVE template (nothing was snapshotted yet, so the live
+  -- definition is exactly what would have attached).
+  select * into v_default from public.job_form_default_template(v_job);
+  if v_default.template_id is not null and not exists (
+    select 1 from public.job_forms jf
+    where jf.job_id = v_job.id and jf.user_id = v_job.user_id and jf.template_id = v_default.template_id
+  ) then
+    for v_field in
+      select f.id, f.label, f.field_type as type, ft.name as form_name
+      from public.form_template_fields f
+      join public.form_templates ft on ft.id = f.template_id and ft.user_id = f.user_id
+      where f.template_id = v_default.template_id and f.user_id = v_job.user_id
+        and f.required and f.field_type not in ('section','instruction')
+    loop
+      v_missing := v_missing || jsonb_build_object(
+        'form_id', null, 'form', v_field.form_name,
+        'field_id', v_field.id, 'label', v_field.label, 'type', v_field.type);
+    end loop;
+  end if;
+
+  return v_missing;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.job_form_response_guard()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_row public.job_form_responses;
+  v_form public.job_forms;
+  v_job public.jobs;
+  v_field jsonb;
+  v_type text;
+  v_values int;
+begin
+  if tg_op = 'DELETE' then v_row := old; else v_row := new; end if;
+  select * into v_form from public.job_forms where id = v_row.form_id and user_id = v_row.user_id;
+  if not found then
+    raise exception 'response does not belong to a form of this business';
+  end if;
+  select * into v_job from public.jobs where id = v_form.job_id;
+
+  -- ?? the freeze ?????????????????????????????????????????????????????????????
+  if v_job.status = 'completed' then
+    if tg_op = 'DELETE' then
+      raise exception 'this visit is completed - its checklist is a historical record and answers cannot be removed';
+    end if;
+    if new.correction_reason is null or new.corrected_at is null or new.corrected_by is null then
+      raise exception 'this visit is completed - a change to its checklist must be an explicit correction with a reason';
+    end if;
+    if auth.uid() is not null and new.corrected_by is distinct from auth.uid() then
+      raise exception 'a correction must name the person who made it';
+    end if;
+    if new.answered_role = 'crew' and tg_op = 'UPDATE' then
+      raise exception 'a completed checklist is frozen for crew - ask the office to correct it';
+    end if;
+  end if;
+  if tg_op = 'DELETE' then return old; end if;
+
+  -- ?? attribution is real ???????????????????????????????????????????????????
+  -- A new answer names the session that wrote it. A re-answer moves the
+  -- attribution to the re-answerer. The ONE exception: an owner CORRECTION may
+  -- keep the original answered_by (history says who answered; corrected_by
+  -- says who amended it) - but then corrected_by must be the session.
+  if auth.uid() is not null and new.answered_by is distinct from auth.uid() then
+    if not (tg_op = 'UPDATE'
+            and new.answered_by = old.answered_by
+            and new.corrected_by = auth.uid()) then
+      raise exception 'an answer must be attributed to the session that wrote it';
+    end if;
+  end if;
+
+  -- ?? the field must exist in the snapshot, and be answerable ???????????????
+  select f into v_field
+  from jsonb_array_elements(v_form.fields) f
+  where (f ->> 'id')::uuid = new.field_id;
+  if v_field is null then
+    raise exception 'that field is not on this form';
+  end if;
+  v_type := v_field ->> 'type';
+  if v_type in ('section','instruction') then
+    raise exception 'headings and instructions are not answerable';
+  end if;
+
+  -- ?? exactly the right value, never an empty one ???????????????????????????
+  v_values := (new.value_text is not null)::int + (new.value_number is not null)::int
+            + (new.value_bool is not null)::int + (new.value_date is not null)::int
+            + (new.value_time is not null)::int + (new.value_choice is not null)::int;
+
+  if v_type = 'photo' then
+    if v_values <> 0 then
+      raise exception 'a photo field carries photos, not a typed value';
+    end if;
+  elsif v_values <> 1 then
+    raise exception 'a response carries exactly one value (got %)', v_values;
+  elsif v_type = 'checkbox' then
+    if new.value_bool is not true then
+      raise exception 'a checkbox is either checked (true) or has no response row at all';
+    end if;
+  elsif v_type = 'yes_no' then
+    if new.value_bool is null then
+      raise exception 'a yes/no answer is the value_bool column';
+    end if;
+  elsif v_type in ('short_text','long_text') then
+    if new.value_text is null or btrim(new.value_text) = '' then
+      raise exception 'a text answer cannot be blank';
+    end if;
+    if v_type = 'short_text' and char_length(new.value_text) > 200 then
+      raise exception 'a short answer is at most 200 characters';
+    end if;
+  elsif v_type = 'number' then
+    if new.value_number is null then
+      raise exception 'a number answer is the value_number column';
+    end if;
+  elsif v_type = 'dropdown' then
+    if new.value_choice is null then
+      raise exception 'a dropdown answer is the value_choice column';
+    end if;
+    if not exists (
+      select 1 from jsonb_array_elements(coalesce(v_field -> 'options', '[]'::jsonb)) o
+      where o #>> '{}' = new.value_choice
+    ) then
+      raise exception 'that choice is not one of this field''s options';
+    end if;
+  elsif v_type = 'date' then
+    if new.value_date is null then
+      raise exception 'a date answer is the value_date column';
+    end if;
+  elsif v_type = 'time' then
+    if new.value_time is null then
+      raise exception 'a time answer is the value_time column';
+    end if;
+  end if;
+
+  return new;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.job_form_response_photo_guard()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_resp public.job_form_responses;
+  v_form public.job_forms;
+  v_job public.jobs;
+  v_photo public.job_photos;
+  v_field jsonb;
+begin
+  select * into v_resp from public.job_form_responses where id = new.response_id and user_id = new.user_id;
+  if not found then raise exception 'that response does not exist in this business'; end if;
+  select * into v_form from public.job_forms where id = v_resp.form_id and user_id = v_resp.user_id;
+  select * into v_job from public.jobs where id = v_form.job_id;
+  select * into v_photo from public.job_photos where id = new.photo_id and user_id = new.user_id;
+  if not found then raise exception 'that photo does not exist in this business'; end if;
+
+  if v_photo.job_id is distinct from v_form.job_id then
+    raise exception 'a checklist photo must be a photo of this visit, not another one';
+  end if;
+  select f into v_field
+  from jsonb_array_elements(v_form.fields) f
+  where (f ->> 'id')::uuid = v_resp.field_id;
+  if v_field is null or (v_field ->> 'type') <> 'photo' then
+    raise exception 'photos attach to photo fields only';
+  end if;
+  if v_job.status = 'completed' then
+    raise exception 'this visit is completed - its checklist evidence is a historical record';
+  end if;
+  return new;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.job_form_summary(p_job_id uuid, p_user_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_job public.jobs;
+  v_total int := 0;
+  v_done int := 0;
+  v_req_total int := 0;
+  v_req_done int := 0;
+  v_forms int := 0;
+  v_waived boolean := false;
+  v_default record;
+  v_form record;
+  v_field record;
+  v_answered boolean;
+begin
+  select * into v_job from public.jobs where id = p_job_id and user_id = p_user_id;
+  if not found then return null; end if;
+
+  for v_form in
+    select jf.id, jf.fields, jf.waived_at
+    from public.job_forms jf
+    where jf.job_id = v_job.id and jf.user_id = v_job.user_id
+  loop
+    v_forms := v_forms + 1;
+    if v_form.waived_at is not null then v_waived := true; end if;
+    for v_field in
+      select (f ->> 'id')::uuid as id, f ->> 'type' as type,
+             coalesce((f ->> 'required')::boolean, false) as required
+      from jsonb_array_elements(v_form.fields) f
+      where f ->> 'type' not in ('section','instruction')
+    loop
+      if v_field.type = 'photo' then
+        select exists (
+          select 1 from public.job_form_responses r
+          join public.job_form_response_photos p on p.response_id = r.id and p.user_id = r.user_id
+          where r.form_id = v_form.id and r.user_id = v_job.user_id and r.field_id = v_field.id
+        ) into v_answered;
+      else
+        select exists (
+          select 1 from public.job_form_responses r
+          where r.form_id = v_form.id and r.user_id = v_job.user_id and r.field_id = v_field.id
+        ) into v_answered;
+      end if;
+      v_total := v_total + 1;
+      if v_answered then v_done := v_done + 1; end if;
+      if v_field.required then
+        v_req_total := v_req_total + 1;
+        if v_answered then v_req_done := v_req_done + 1; end if;
+      end if;
+    end loop;
+  end loop;
+
+  select * into v_default from public.job_form_default_template(v_job);
+  if v_default.template_id is not null and not exists (
+    select 1 from public.job_forms jf
+    where jf.job_id = v_job.id and jf.user_id = v_job.user_id and jf.template_id = v_default.template_id
+  ) then
+    v_forms := v_forms + 1;
+    select v_total + count(*),
+           v_req_total + count(*) filter (where f.required)
+      into v_total, v_req_total
+    from public.form_template_fields f
+    where f.template_id = v_default.template_id and f.user_id = v_job.user_id
+      and f.field_type not in ('section','instruction');
+  end if;
+
+  if v_forms = 0 then return null; end if;
+  return jsonb_build_object(
+    'forms', v_forms, 'items', v_total, 'done', v_done,
+    'required', v_req_total, 'required_done', v_req_done,
+    'waived', v_waived);
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.job_forms_completion_gate()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_missing jsonb;
+  v_labels text;
+begin
+  if new.status = 'completed' and old.status is distinct from 'completed' then
+    v_missing := public.job_form_missing_items(new.id, new.user_id);
+    if jsonb_array_length(v_missing) > 0 then
+      select string_agg(m ->> 'label', ' � ') into v_labels
+      from (select m from jsonb_array_elements(v_missing) m limit 4) s;
+      raise exception 'CHECKLIST_INCOMPLETE Before completing: %', v_labels
+        using hint = 'Finish the required checklist items, or waive the checklist with a reason.';
+    end if;
+  end if;
+  return new;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.job_forms_freeze_guard()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+begin
+  if new.fields is distinct from old.fields
+     or new.template_name is distinct from old.template_name
+     or new.template_id is distinct from old.template_id
+     or new.job_id is distinct from old.job_id
+     or new.user_id is distinct from old.user_id
+     or new.source is distinct from old.source
+     or new.created_at is distinct from old.created_at then
+    raise exception 'a job form is a historical record - its snapshot cannot be edited (only waive fields may change)';
+  end if;
+  -- a waive is an override with a name on it: the waiver must be the session
+  if new.waived_at is not null and old.waived_at is null then
+    if auth.uid() is not null and new.waived_by is distinct from auth.uid() then
+      raise exception 'a waive must name the person who waived it';
+    end if;
+  end if;
+  return new;
+end;
 $function$;
 
 CREATE OR REPLACE FUNCTION public.job_session_minutes(p_job_id uuid)
@@ -3649,7 +4382,7 @@ begin
   return null;
 end; $function$;
 
-CREATE OR REPLACE FUNCTION public.owner_select_quote_option(p_quote_id uuid, p_option_id uuid)
+CREATE OR REPLACE FUNCTION public.owner_select_quote_option(p_quote_id uuid, p_option_id uuid DEFAULT NULL::uuid, p_addon_ids uuid[] DEFAULT NULL::uuid[])
  RETURNS boolean
  LANGUAGE plpgsql
  SECURITY DEFINER
@@ -3664,45 +4397,34 @@ begin
   ) then
     return false;
   end if;
-  return public.quote_apply_option_choice(p_quote_id, p_option_id);
+  return public.quote_apply_choice(p_quote_id, p_option_id, p_addon_ids, 'owner');
 end $function$;
 
-CREATE OR REPLACE FUNCTION public.portal_accept_quote(p_token text, p_quote_id uuid, p_option_id uuid DEFAULT NULL::uuid)
+CREATE OR REPLACE FUNCTION public.portal_accept_quote(p_token text, p_quote_id uuid, p_option_id uuid DEFAULT NULL::uuid, p_addon_ids uuid[] DEFAULT NULL::uuid[])
  RETURNS boolean
  LANGUAGE plpgsql
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-declare
-  v_customer uuid;
-  v_options int;
+declare v_customer uuid;
 begin
-  select customer_id into v_customer from public.customer_portal_tokens where token = p_token and not revoked;
+  select customer_id into v_customer from public.customer_portal_tokens
+   where token = p_token and not revoked;
   if v_customer is null then return false; end if;
 
-  select count(*) into v_options from public.quote_options where quote_id = p_quote_id;
-
-  -- Branch on what was ASKED FOR, not on what the quote happens to have.
-  if p_option_id is not null then
-    -- This door proves the quote is this token's customer's and still out for
-    -- approval. Whether the OPTION belongs to the quote is the core's question.
-    if not exists (
-      select 1 from public.quotes
-       where id = p_quote_id and customer_id = v_customer and status = 'sent'
-    ) then
-      return false;
-    end if;
-    return public.quote_apply_option_choice(p_quote_id, p_option_id);
+  -- This door proves the quote is this token's customer's and still out for
+  -- approval. Which OPTION and which EXTRAS belong to the quote is the core's
+  -- question — a token proves WHICH CUSTOMER, never WHICH ROW.
+  -- ⛔ 'sent' only: a draft is the owner's unfinished document and is never
+  -- shown to a customer, so it can never be approved from here.
+  if not exists (
+    select 1 from public.quotes
+     where id = p_quote_id and customer_id = v_customer and status = 'sent'
+  ) then
+    return false;
   end if;
 
-  -- A quote that offers alternatives cannot be approved without one.
-  if v_options > 0 then return false; end if;
-
-  update public.quotes
-     set status = 'accepted',
-         accepted_price = coalesce(accepted_price, total)
-   where id = p_quote_id and customer_id = v_customer and status = 'sent';
-  return found;
+  return public.quote_apply_choice(p_quote_id, p_option_id, p_addon_ids, 'portal');
 end $function$;
 
 CREATE OR REPLACE FUNCTION public.portal_add_contact(p_token text, p_phone text DEFAULT NULL::text, p_email text DEFAULT NULL::text)
@@ -4234,38 +4956,132 @@ begin
   return new;
 end; $function$;
 
-CREATE OR REPLACE FUNCTION public.quote_apply_option_choice(p_quote_id uuid, p_option_id uuid)
+CREATE OR REPLACE FUNCTION public.quote_addons_sync_total()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public'
+AS $function$
+declare v_quote uuid; v_sum numeric(10,2);
+begin
+  v_quote := coalesce(new.quote_id, old.quote_id);
+  if v_quote is null then return null; end if;
+  select coalesce(sum(a.price), 0) into v_sum
+    from public.quote_addons a where a.quote_id = v_quote and a.is_selected;
+  update public.quotes q set addons_total = v_sum
+   where q.id = v_quote and q.addons_total is distinct from v_sum;
+  return null;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.quote_addons_write_guard()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public'
+AS $function$
+declare v_quote uuid; v_status text; v_count int;
+begin
+  v_quote := coalesce(new.quote_id, old.quote_id);
+  select q.status into v_status from public.quotes q where q.id = v_quote;
+
+  -- The parent quote is already gone: this row is going with it via ON DELETE
+  -- CASCADE. Refusing here would make an APPROVED quote impossible to delete.
+  if v_status is null then return coalesce(new, old); end if;
+
+  -- ⭐⭐ THE FREEZE. 'draft'/'sent' = not yet decided. Any other status means a
+  -- real person approved an exact set of extras at an exact price, and that set
+  -- IS the record. Additional scope after approval is a CHANGE ORDER.
+  if v_status not in ('draft', 'sent') then
+    raise exception 'This quote has been decided — its optional extras are part of the record now. Additional work goes on a change order.'
+      using errcode = 'check_violation';
+  end if;
+
+  if tg_op = 'DELETE' then return old; end if;
+
+  -- The selection invariant is the DATABASE's to keep, so app code only ever has
+  -- to say `is_selected` and cannot leave a half-recorded choice behind.
+  if new.is_selected then
+    if new.selected_via is null then new.selected_via := 'default'; end if;
+    if new.selected_at  is null then new.selected_at  := now();     end if;
+  else
+    new.selected_via := null;
+    new.selected_at  := null;
+  end if;
+  new.updated_at := now();
+
+  select count(*) into v_count from public.quote_addons where quote_id = v_quote and id <> new.id;
+  if v_count + 1 > 6 then
+    raise exception 'A quote may offer at most 6 optional extras (this one would have %)', v_count + 1
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.quote_apply_choice(p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[], p_via text)
  RETURNS boolean
  LANGUAGE plpgsql
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
 declare
-  v_price numeric(10,2);
-  v_travel numeric(10,2);
-  v_follow int;
+  v_status text; v_travel numeric(10,2); v_follow int;
+  v_base numeric(10,2); v_addons numeric(10,2);
+  v_ids uuid[]; v_known int; v_want int;
 begin
+  -- Provenance is passed in by the door that knows it, never inferred here.
+  if p_via is null or p_via not in ('portal', 'owner') then return false; end if;
+
+  -- 'draft' or 'sent' = NOT YET DECIDED. Anything else means a choice already
+  -- stands, and re-deciding would silently rewrite the approved price.
+  select q.status, coalesce(q.travel_fee, 0), coalesce(q.follow_up_count, 0), q.initial_price
+    into v_status, v_travel, v_follow, v_base
+    from public.quotes q
+   where q.id = p_quote_id and q.status in ('draft', 'sent');
+  if v_status is null then return false; end if;
+
   -- THE tenancy statement: o.quote_id = p_quote_id. Resolving the option THROUGH
   -- the quote is what makes "you may not name another quote's option" true here
   -- rather than wherever someone remembered to check it.
-  -- 'draft' or 'sent' = NOT YET DECIDED. Anything else means a choice already
-  -- stands, and re-deciding would silently rewrite the approved price.
-  select o.price, coalesce(q.travel_fee, 0), coalesce(q.follow_up_count, 0)
-    into v_price, v_travel, v_follow
-    from public.quote_options o
-    join public.quotes q on q.id = o.quote_id
-   where o.id = p_option_id
-     and o.quote_id = p_quote_id
-     and q.status in ('draft', 'sent');
-  if v_price is null then return false; end if;
+  if p_option_id is not null then
+    select o.price into v_base from public.quote_options o
+     where o.id = p_option_id and o.quote_id = p_quote_id;
+    if v_base is null then return false; end if;
+  elsif exists (select 1 from public.quote_options where quote_id = p_quote_id) then
+    -- A quote that offers alternatives cannot be approved without naming one.
+    return false;
+  end if;
+
+  -- Every id must resolve THROUGH this quote, and an id we cannot name is a
+  -- REFUSAL, never a silent drop: approving "the ones we recognised" would record
+  -- consent to a configuration the customer never saw. De-duplicated first, so
+  -- naming the same extra twice cannot bill it twice.
+  select coalesce(array_agg(distinct x), '{}'::uuid[]) into v_ids
+    from unnest(coalesce(p_addon_ids, '{}'::uuid[])) x where x is not null;
+  v_want := coalesce(array_length(v_ids, 1), 0);
+  if v_want > 0 then
+    select count(*) into v_known from public.quote_addons
+     where quote_id = p_quote_id and id = any(v_ids);
+    if v_known <> v_want then return false; end if;
+  end if;
+
+  -- The selection is set for EVERY add-on on the quote, not just the chosen ones:
+  -- an extra the customer unticked must stop being selected, or a pre-ticked
+  -- suggestion would be billed because nobody said no loudly enough.
+  update public.quote_addons
+     set is_selected  = (id = any(v_ids)),
+         selected_via = case when id = any(v_ids) then p_via else null end,
+         selected_at  = case when id = any(v_ids) then now()  else null end
+   where quote_id = p_quote_id;
+
+  select coalesce(sum(price), 0) into v_addons
+    from public.quote_addons where quote_id = p_quote_id and is_selected;
 
   update public.quotes
      set status = 'accepted',
-         selected_option_id = p_option_id,
-         initial_price = v_price,
-         -- NOT coalesce(accepted_price, total): total is GENERATED over
-         -- initial_price and every SET expression reads the OLD row.
-         accepted_price = v_price + v_travel,
+         selected_option_id = coalesce(p_option_id, selected_option_id),
+         initial_price = v_base,
+         -- ⭐ Computed EXPLICITLY, never coalesce(accepted_price, total): `total`
+         -- is GENERATED over initial_price/addons_total and every SET expression
+         -- reads the OLD row, so it would snapshot the pre-choice price.
+         accepted_price = v_base + v_travel + v_addons,
          accepted_after_followup = v_follow > 0,
          follow_up_count_at_acceptance = v_follow
    where id = p_quote_id and status in ('draft', 'sent');
@@ -5306,7 +6122,7 @@ end $function$;
 -- tenant attaching a child row to another tenant's parent. Do not "simplify".
 -- ══════════════════════════════════════════════════════════════════════════
 
--- primary keys (103)
+-- primary keys (109)
 alter table public."api_keys" add constraint "api_keys_pkey" PRIMARY KEY (id);
 alter table public."automation_runs" add constraint "automation_runs_pkey" PRIMARY KEY (id);
 alter table public."automation_signals" add constraint "automation_signals_pkey" PRIMARY KEY (id);
@@ -5337,12 +6153,17 @@ alter table public."expense_categories" add constraint "expense_categories_pkey"
 alter table public."expenses" add constraint "expenses_pkey" PRIMARY KEY (id);
 alter table public."fixed_assets" add constraint "fixed_assets_pkey" PRIMARY KEY (id);
 alter table public."follow_ups" add constraint "follow_ups_pkey" PRIMARY KEY (id);
+alter table public."form_template_fields" add constraint "form_template_fields_pkey" PRIMARY KEY (id);
+alter table public."form_templates" add constraint "form_templates_pkey" PRIMARY KEY (id);
 alter table public."holidays" add constraint "holidays_pkey" PRIMARY KEY (id);
 alter table public."inbound_events" add constraint "inbound_events_pkey" PRIMARY KEY (id);
 alter table public."inbound_webhooks" add constraint "inbound_webhooks_pkey" PRIMARY KEY (id);
 alter table public."integration_events" add constraint "integration_events_pkey" PRIMARY KEY (id);
 alter table public."integrations_config" add constraint "integrations_config_pkey" PRIMARY KEY (id);
 alter table public."invoices" add constraint "invoices_pkey" PRIMARY KEY (id);
+alter table public."job_form_response_photos" add constraint "job_form_response_photos_pkey" PRIMARY KEY (response_id, photo_id);
+alter table public."job_form_responses" add constraint "job_form_responses_pkey" PRIMARY KEY (id);
+alter table public."job_forms" add constraint "job_forms_pkey" PRIMARY KEY (id);
 alter table public."job_line_items" add constraint "job_line_items_pkey" PRIMARY KEY (id);
 alter table public."job_photos" add constraint "job_photos_pkey" PRIMARY KEY (id);
 alter table public."job_price_changes" add constraint "job_price_changes_pkey" PRIMARY KEY (id);
@@ -5382,6 +6203,7 @@ alter table public."purchase_order_items" add constraint "purchase_order_items_p
 alter table public."purchase_orders" add constraint "purchase_orders_pkey" PRIMARY KEY (id);
 alter table public."push_config" add constraint "push_config_pkey" PRIMARY KEY (id);
 alter table public."push_subscriptions" add constraint "push_subscriptions_pkey" PRIMARY KEY (id);
+alter table public."quote_addons" add constraint "quote_addons_pkey" PRIMARY KEY (id);
 alter table public."quote_options" add constraint "quote_options_pkey" PRIMARY KEY (id);
 alter table public."quote_outcomes" add constraint "quote_outcomes_pkey" PRIMARY KEY (id);
 alter table public."quote_services" add constraint "quote_services_pkey" PRIMARY KEY (id);
@@ -5411,7 +6233,7 @@ alter table public."webhook_deliveries" add constraint "webhook_deliveries_pkey"
 alter table public."webhook_endpoints" add constraint "webhook_endpoints_pkey" PRIMARY KEY (id);
 alter table public."website_leads" add constraint "website_leads_pkey" PRIMARY KEY (id);
 
--- unique (38)
+-- unique (45)
 alter table public."api_keys" add constraint "api_keys_key_hash_key" UNIQUE (key_hash);
 alter table public."beta_invites" add constraint "beta_invites_token_hash_key" UNIQUE (token_hash);
 alter table public."business_settings" add constraint "business_settings_user_id_key" UNIQUE (user_id);
@@ -5423,8 +6245,14 @@ alter table public."crm_campaign_presets" add constraint "crm_campaign_presets_u
 alter table public."customers" add constraint "customers_user_id_id_key" UNIQUE (user_id, id);
 alter table public."day_statuses" add constraint "day_statuses_user_id_date_key" UNIQUE (user_id, date);
 alter table public."dispatch_notes" add constraint "dispatch_notes_day_crew_unique" UNIQUE NULLS NOT DISTINCT (user_id, date, crew_id);
+alter table public."form_templates" add constraint "form_templates_id_user_key" UNIQUE (id, user_id);
 alter table public."holidays" add constraint "holidays_one_per_day" UNIQUE (user_id, date);
 alter table public."inbound_webhooks" add constraint "inbound_webhooks_token_key" UNIQUE (token);
+alter table public."job_form_responses" add constraint "job_form_responses_field_uniq" UNIQUE (form_id, field_id);
+alter table public."job_form_responses" add constraint "job_form_responses_id_user_key" UNIQUE (id, user_id);
+alter table public."job_forms" add constraint "job_forms_id_user_key" UNIQUE (id, user_id);
+alter table public."job_forms" add constraint "job_forms_job_template_uniq" UNIQUE (job_id, template_id);
+alter table public."job_photos" add constraint "job_photos_id_user_key" UNIQUE (id, user_id);
 alter table public."job_recurrences" add constraint "job_recurrences_user_id_id_key" UNIQUE (user_id, id);
 alter table public."jobs" add constraint "jobs_id_user_key" UNIQUE (id, user_id);
 alter table public."labor_observations" add constraint "labor_observations_user_id_job_id_key" UNIQUE (user_id, job_id);
@@ -5439,6 +6267,7 @@ alter table public."property_twin" add constraint "property_twin_user_id_propert
 alter table public."pto_entries" add constraint "pto_entries_one_per_day_kind" UNIQUE (technician_id, date, kind);
 alter table public."publish_jobs" add constraint "publish_jobs_idempotency_key_key" UNIQUE (idempotency_key);
 alter table public."push_subscriptions" add constraint "push_subscriptions_user_id_endpoint_key" UNIQUE (user_id, endpoint);
+alter table public."quote_addons" add constraint "quote_addons_id_quote_unique" UNIQUE (id, quote_id);
 alter table public."quote_options" add constraint "quote_options_id_quote_unique" UNIQUE (id, quote_id);
 alter table public."quote_outcomes" add constraint "quote_outcomes_user_id_quote_id_key" UNIQUE (user_id, quote_id);
 alter table public."quotes" add constraint "quotes_user_id_id_key" UNIQUE (user_id, id);
@@ -5451,7 +6280,7 @@ alter table public."service_templates" add constraint "service_templates_id_user
 alter table public."suggestion_dismissals" add constraint "suggestion_dismissals_user_id_suggestion_key_key" UNIQUE (user_id, suggestion_key);
 alter table public."technicians" add constraint "technicians_id_user_key" UNIQUE (id, user_id);
 
--- check (149)
+-- check (174)
 alter table public."automation_runs" add constraint "automation_runs_decision_check" CHECK ((decision = ANY (ARRAY['fired'::text, 'suppressed'::text])));
 alter table public."automation_runs" add constraint "automation_runs_suppressed_reason_check" CHECK ((suppressed_reason = ANY (ARRAY['mode_off'::text, 'mode_suggest'::text, 'quiet_hours'::text, 'frequency_cap'::text, 'no_consent'::text, 'deduped'::text, 'signal_absent'::text])));
 alter table public."beta_invites" add constraint "beta_invites_token_hash_is_sha256" CHECK ((token_hash ~ '^[0-9a-f]{64}$'::text));
@@ -5481,6 +6310,7 @@ alter table public."customer_imports" add constraint "customer_imports_counts_sa
 alter table public."customer_imports" add constraint "customer_imports_initiated_by_len" CHECK (((initiated_by IS NULL) OR (char_length(initiated_by) <= 200)));
 alter table public."customer_imports" add constraint "customer_imports_source_name_len" CHECK (((source_name IS NULL) OR (char_length(source_name) <= 200)));
 alter table public."customers" add constraint "customers_autopay_charge_mode_check" CHECK ((autopay_charge_mode = ANY (ARRAY['auto'::text, 'manual_review'::text])));
+alter table public."customers" add constraint "customers_preferred_channel_chk" CHECK (((preferred_channel IS NULL) OR (preferred_channel = ANY (ARRAY['sms'::text, 'email'::text, 'phone'::text]))));
 alter table public."expense_categories" add constraint "expense_categories_kind_check" CHECK ((kind = ANY (ARRAY['operating'::text, 'owner_draw'::text])));
 alter table public."expenses" add constraint "expenses_amount_check" CHECK ((amount >= (0)::numeric));
 alter table public."expenses" add constraint "expenses_tax_amount_check" CHECK ((tax_amount >= (0)::numeric));
@@ -5500,6 +6330,16 @@ alter table public."follow_ups" add constraint "follow_ups_completion_consistent
 alter table public."follow_ups" add constraint "follow_ups_reason_check" CHECK (((length(btrim(reason)) >= 1) AND (length(btrim(reason)) <= 500)));
 alter table public."follow_ups" add constraint "follow_ups_source_check" CHECK ((source = ANY (ARRAY['customer'::text, 'quote'::text, 'conversation'::text])));
 alter table public."follow_ups" add constraint "follow_ups_status_check" CHECK ((status = ANY (ARRAY['open'::text, 'done'::text])));
+alter table public."form_template_fields" add constraint "form_template_fields_help_len" CHECK (((help_text IS NULL) OR (char_length(help_text) <= 500)));
+alter table public."form_template_fields" add constraint "form_template_fields_label_len" CHECK (((char_length(btrim(label)) >= 1) AND (char_length(btrim(label)) <= 200)));
+alter table public."form_template_fields" add constraint "form_template_fields_options_scope" CHECK ((((field_type = 'dropdown'::text) AND form_options_ok(options)) OR ((field_type <> 'dropdown'::text) AND (options IS NULL))));
+alter table public."form_template_fields" add constraint "form_template_fields_photo_kind_scope" CHECK (((photo_kind IS NULL) OR ((field_type = 'photo'::text) AND (photo_kind = ANY (ARRAY['before'::text, 'after'::text, 'general'::text])))));
+alter table public."form_template_fields" add constraint "form_template_fields_required_actionable" CHECK (((NOT required) OR (field_type <> ALL (ARRAY['section'::text, 'instruction'::text]))));
+alter table public."form_template_fields" add constraint "form_template_fields_type_check" CHECK ((field_type = ANY (ARRAY['section'::text, 'instruction'::text, 'checkbox'::text, 'short_text'::text, 'long_text'::text, 'number'::text, 'yes_no'::text, 'dropdown'::text, 'date'::text, 'time'::text, 'photo'::text])));
+alter table public."form_template_fields" add constraint "form_template_fields_unit_len" CHECK (((unit IS NULL) OR ((char_length(unit) >= 1) AND (char_length(unit) <= 20))));
+alter table public."form_template_fields" add constraint "form_template_fields_unit_scope" CHECK (((unit IS NULL) OR (field_type = 'number'::text)));
+alter table public."form_templates" add constraint "form_templates_description_len" CHECK (((description IS NULL) OR (char_length(description) <= 500)));
+alter table public."form_templates" add constraint "form_templates_name_len" CHECK (((char_length(btrim(name)) >= 1) AND (char_length(btrim(name)) <= 120)));
 alter table public."holidays" add constraint "holidays_hours_range" CHECK (((default_hours >= (0)::numeric) AND (default_hours <= (24)::numeric)));
 alter table public."inbound_webhooks" add constraint "inbound_webhooks_action_check" CHECK ((action = ANY (ARRAY['lead'::text, 'customer'::text])));
 alter table public."integrations_config" add constraint "integrations_config_singleton" CHECK ((id = 1));
@@ -5507,6 +6347,16 @@ alter table public."invoices" add constraint "invoices_deposit_amount_positive" 
 alter table public."invoices" add constraint "invoices_discount_type_check" CHECK (((discount_type IS NULL) OR (discount_type = ANY (ARRAY['amount'::text, 'percent'::text]))));
 alter table public."invoices" add constraint "invoices_payment_method_chk" CHECK (((payment_method IS NULL) OR (payment_method = ANY (ARRAY['stripe'::text, 'etransfer'::text, 'cash'::text, 'cheque'::text]))));
 alter table public."invoices" add constraint "invoices_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'unpaid'::text, 'sent'::text, 'partial'::text, 'paid'::text, 'overpaid'::text, 'cancelled'::text])));
+alter table public."job_form_responses" add constraint "job_form_responses_choice_len" CHECK (((value_choice IS NULL) OR ((char_length(value_choice) >= 1) AND (char_length(value_choice) <= 100))));
+alter table public."job_form_responses" add constraint "job_form_responses_correction_consistent" CHECK ((((corrected_at IS NULL) = (corrected_by IS NULL)) AND ((corrected_at IS NULL) = (correction_reason IS NULL))));
+alter table public."job_form_responses" add constraint "job_form_responses_correction_len" CHECK (((correction_reason IS NULL) OR ((char_length(btrim(correction_reason)) >= 1) AND (char_length(btrim(correction_reason)) <= 300))));
+alter table public."job_form_responses" add constraint "job_form_responses_number_sane" CHECK (((value_number IS NULL) OR (abs(value_number) <= (1000000000)::numeric)));
+alter table public."job_form_responses" add constraint "job_form_responses_role_check" CHECK ((answered_role = ANY (ARRAY['owner'::text, 'crew'::text])));
+alter table public."job_form_responses" add constraint "job_form_responses_text_len" CHECK (((value_text IS NULL) OR (char_length(value_text) <= 2000)));
+alter table public."job_forms" add constraint "job_forms_fields_shape" CHECK ((jsonb_typeof(fields) = 'array'::text));
+alter table public."job_forms" add constraint "job_forms_source_check" CHECK ((source = ANY (ARRAY['service_template'::text, 'series'::text, 'manual'::text])));
+alter table public."job_forms" add constraint "job_forms_waive_consistent" CHECK ((((waived_at IS NULL) = (waived_by IS NULL)) AND ((waived_at IS NULL) = (waive_reason IS NULL))));
+alter table public."job_forms" add constraint "job_forms_waive_reason_len" CHECK (((waive_reason IS NULL) OR ((char_length(btrim(waive_reason)) >= 1) AND (char_length(btrim(waive_reason)) <= 300))));
 alter table public."job_recurrences" add constraint "job_recurrences_freq_check" CHECK ((freq = ANY (ARRAY['weekly'::text, 'biweekly'::text, 'monthly'::text])));
 alter table public."job_recurrences" add constraint "job_recurrences_interval_unit_check" CHECK ((interval_unit = ANY (ARRAY['day'::text, 'week'::text, 'month'::text])));
 alter table public."job_work_sessions" add constraint "job_work_sessions_check" CHECK (((ended_at IS NULL) OR (started_at IS NULL) OR (ended_at >= started_at)));
@@ -5560,6 +6410,10 @@ alter table public."publish_jobs" add constraint "publish_jobs_mode_check" CHECK
 alter table public."publish_jobs" add constraint "publish_jobs_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'scheduled'::text, 'queued'::text, 'publishing'::text, 'published'::text, 'failed'::text, 'canceled'::text])));
 alter table public."purchase_orders" add constraint "purchase_orders_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'ordered'::text, 'cancelled'::text])));
 alter table public."push_config" add constraint "push_config_singleton" CHECK ((id = 1));
+alter table public."quote_addons" add constraint "quote_addons_name_check" CHECK ((btrim(name) <> ''::text));
+alter table public."quote_addons" add constraint "quote_addons_price_check" CHECK ((price >= (0)::numeric));
+alter table public."quote_addons" add constraint "quote_addons_selection_check" CHECK (((is_selected AND (selected_via IS NOT NULL) AND (selected_at IS NOT NULL)) OR ((NOT is_selected) AND (selected_via IS NULL) AND (selected_at IS NULL))));
+alter table public."quote_addons" add constraint "quote_addons_via_check" CHECK ((selected_via = ANY (ARRAY['default'::text, 'portal'::text, 'owner'::text])));
 alter table public."quote_options" add constraint "quote_options_name_check" CHECK ((btrim(name) <> ''::text));
 alter table public."quote_options" add constraint "quote_options_price_check" CHECK ((price >= (0)::numeric));
 alter table public."quote_services" add constraint "quote_services_discount_type_check" CHECK ((discount_type = ANY (ARRAY['amount'::text, 'percent'::text])));
@@ -5602,7 +6456,7 @@ alter table public."wage_history" add constraint "wage_history_wages_nonneg" CHE
 alter table public."webhook_deliveries" add constraint "webhook_deliveries_status_check" CHECK ((status = ANY (ARRAY['pending'::text, 'processing'::text, 'success'::text, 'dead'::text])));
 alter table public."webhook_endpoints" add constraint "webhook_endpoints_source_check" CHECK ((source = ANY (ARRAY['manual'::text, 'api'::text, 'zapier'::text, 'make'::text])));
 
--- foreign keys (232)
+-- foreign keys (247)
 alter table public."api_keys" add constraint "api_keys_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."automation_runs" add constraint "automation_runs_signal_id_fkey" FOREIGN KEY (signal_id) REFERENCES automation_signals(id) ON DELETE SET NULL;
 alter table public."automation_runs" add constraint "automation_runs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
@@ -5667,6 +6521,9 @@ alter table public."fixed_assets" add constraint "fixed_assets_vendor_id_fkey" F
 alter table public."follow_ups" add constraint "follow_ups_customer_same_tenant" FOREIGN KEY (user_id, customer_id) REFERENCES customers(user_id, id) ON DELETE CASCADE;
 alter table public."follow_ups" add constraint "follow_ups_quote_same_tenant" FOREIGN KEY (user_id, quote_id) REFERENCES quotes(user_id, id) ON DELETE SET NULL (quote_id);
 alter table public."follow_ups" add constraint "follow_ups_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."form_template_fields" add constraint "form_template_fields_template_same_owner" FOREIGN KEY (template_id, user_id) REFERENCES form_templates(id, user_id) ON DELETE CASCADE;
+alter table public."form_template_fields" add constraint "form_template_fields_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."form_templates" add constraint "form_templates_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."holidays" add constraint "holidays_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."inbound_events" add constraint "inbound_events_hook_id_fkey" FOREIGN KEY (hook_id) REFERENCES inbound_webhooks(id) ON DELETE CASCADE;
 alter table public."inbound_events" add constraint "inbound_events_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
@@ -5677,6 +6534,14 @@ alter table public."invoices" add constraint "invoices_job_id_fkey" FOREIGN KEY 
 alter table public."invoices" add constraint "invoices_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
 alter table public."invoices" add constraint "invoices_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
 alter table public."invoices" add constraint "invoices_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."job_form_response_photos" add constraint "job_form_response_photos_photo_same_owner" FOREIGN KEY (photo_id, user_id) REFERENCES job_photos(id, user_id) ON DELETE CASCADE;
+alter table public."job_form_response_photos" add constraint "job_form_response_photos_response_same_owner" FOREIGN KEY (response_id, user_id) REFERENCES job_form_responses(id, user_id) ON DELETE CASCADE;
+alter table public."job_form_response_photos" add constraint "job_form_response_photos_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."job_form_responses" add constraint "job_form_responses_form_same_owner" FOREIGN KEY (form_id, user_id) REFERENCES job_forms(id, user_id) ON DELETE CASCADE;
+alter table public."job_form_responses" add constraint "job_form_responses_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."job_forms" add constraint "job_forms_job_same_owner" FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE CASCADE;
+alter table public."job_forms" add constraint "job_forms_template_same_owner" FOREIGN KEY (template_id, user_id) REFERENCES form_templates(id, user_id) ON DELETE RESTRICT;
+alter table public."job_forms" add constraint "job_forms_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."job_line_items" add constraint "job_line_items_change_order_same_owner" FOREIGN KEY (change_order_id, user_id) REFERENCES change_orders(id, user_id) ON DELETE CASCADE;
 alter table public."job_line_items" add constraint "job_line_items_job_same_owner" FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE CASCADE;
 alter table public."job_line_items" add constraint "job_line_items_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
@@ -5688,6 +6553,7 @@ alter table public."job_price_changes" add constraint "job_price_changes_job_id_
 alter table public."job_price_changes" add constraint "job_price_changes_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
 alter table public."job_price_changes" add constraint "job_price_changes_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."job_recurrences" add constraint "job_recurrences_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+alter table public."job_recurrences" add constraint "job_recurrences_form_template_same_owner" FOREIGN KEY (form_template_id, user_id) REFERENCES form_templates(id, user_id) ON DELETE RESTRICT;
 alter table public."job_recurrences" add constraint "job_recurrences_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."job_work_sessions" add constraint "job_work_sessions_job_same_owner" FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE CASCADE;
 alter table public."job_work_sessions" add constraint "job_work_sessions_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
@@ -5774,6 +6640,8 @@ alter table public."purchase_order_items" add constraint "purchase_order_items_u
 alter table public."purchase_orders" add constraint "purchase_orders_supplier_id_fkey" FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE RESTRICT;
 alter table public."purchase_orders" add constraint "purchase_orders_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."push_subscriptions" add constraint "push_subscriptions_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."quote_addons" add constraint "quote_addons_quote_fkey" FOREIGN KEY (user_id, quote_id) REFERENCES quotes(user_id, id) ON DELETE CASCADE;
+alter table public."quote_addons" add constraint "quote_addons_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."quote_options" add constraint "quote_options_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE;
 alter table public."quote_options" add constraint "quote_options_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."quote_outcomes" add constraint "quote_outcomes_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE;
@@ -5812,6 +6680,7 @@ alter table public."service_requests" add constraint "service_requests_customer_
 alter table public."service_requests" add constraint "service_requests_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
 alter table public."service_requests" add constraint "service_requests_recurrence_id_fkey" FOREIGN KEY (recurrence_id) REFERENCES job_recurrences(id) ON DELETE SET NULL;
 alter table public."service_requests" add constraint "service_requests_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."service_templates" add constraint "service_templates_form_template_same_owner" FOREIGN KEY (form_template_id, user_id) REFERENCES form_templates(id, user_id) ON DELETE RESTRICT;
 alter table public."service_templates" add constraint "service_templates_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."service_units" add constraint "service_units_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."social_connections" add constraint "social_connections_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
@@ -5839,7 +6708,7 @@ alter table public."website_leads" add constraint "website_leads_user_id_fkey" F
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 5 · TRIGGERS
--- 82 triggers, including the two DEFERRABLE constraint triggers that
+-- 92 triggers, including the two DEFERRABLE constraint triggers that
 -- enforce quote-option/quote-service shape at commit time.
 -- ══════════════════════════════════════════════════════════════════════════
 
@@ -5887,6 +6756,10 @@ drop trigger if exists "trg_fixed_assets_updated" on public."fixed_assets";
 CREATE TRIGGER trg_fixed_assets_updated BEFORE UPDATE ON public.fixed_assets FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 drop trigger if exists "follow_ups_set_updated_at" on public."follow_ups";
 CREATE TRIGGER follow_ups_set_updated_at BEFORE UPDATE ON public.follow_ups FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "form_template_fields_updated_at" on public."form_template_fields";
+CREATE TRIGGER form_template_fields_updated_at BEFORE UPDATE ON public.form_template_fields FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "form_templates_updated_at" on public."form_templates";
+CREATE TRIGGER form_templates_updated_at BEFORE UPDATE ON public.form_templates FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
 drop trigger if exists "holidays_updated_at" on public."holidays";
 CREATE TRIGGER holidays_updated_at BEFORE UPDATE ON public.holidays FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 drop trigger if exists "trg_integration_fanout" on public."integration_events";
@@ -5901,6 +6774,16 @@ drop trigger if exists "trg_recompute_invoice_on_edit" on public."invoices";
 CREATE TRIGGER trg_recompute_invoice_on_edit AFTER UPDATE OF amount, discount_type, discount_value ON public.invoices FOR EACH ROW WHEN (((old.amount IS DISTINCT FROM new.amount) OR (old.discount_type IS DISTINCT FROM new.discount_type) OR (old.discount_value IS DISTINCT FROM new.discount_value))) EXECUTE FUNCTION recompute_invoice_paid_on_edit();
 drop trigger if exists "trg_sync_quote_on_invoice_paid" on public."invoices";
 CREATE TRIGGER trg_sync_quote_on_invoice_paid AFTER UPDATE OF status ON public.invoices FOR EACH ROW EXECUTE FUNCTION sync_quote_on_invoice_paid();
+drop trigger if exists "job_form_response_photo_gate" on public."job_form_response_photos";
+CREATE TRIGGER job_form_response_photo_gate BEFORE INSERT OR UPDATE ON public.job_form_response_photos FOR EACH ROW EXECUTE FUNCTION job_form_response_photo_guard();
+drop trigger if exists "job_form_response_gate" on public."job_form_responses";
+CREATE TRIGGER job_form_response_gate BEFORE INSERT OR DELETE OR UPDATE ON public.job_form_responses FOR EACH ROW EXECUTE FUNCTION job_form_response_guard();
+drop trigger if exists "job_form_responses_updated_at" on public."job_form_responses";
+CREATE TRIGGER job_form_responses_updated_at BEFORE UPDATE ON public.job_form_responses FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "job_forms_freeze" on public."job_forms";
+CREATE TRIGGER job_forms_freeze BEFORE UPDATE ON public.job_forms FOR EACH ROW EXECUTE FUNCTION job_forms_freeze_guard();
+drop trigger if exists "job_forms_updated_at" on public."job_forms";
+CREATE TRIGGER job_forms_updated_at BEFORE UPDATE ON public.job_forms FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
 drop trigger if exists "aa_carry_forward_job_actual_minutes" on public."job_work_sessions";
 CREATE TRIGGER aa_carry_forward_job_actual_minutes BEFORE INSERT ON public.job_work_sessions FOR EACH ROW EXECUTE FUNCTION carry_forward_job_actual_minutes();
 drop trigger if exists "job_work_sessions_updated_at" on public."job_work_sessions";
@@ -5909,6 +6792,8 @@ drop trigger if exists "trg_sync_job_actual_minutes" on public."job_work_session
 CREATE TRIGGER trg_sync_job_actual_minutes AFTER INSERT OR DELETE OR UPDATE ON public.job_work_sessions FOR EACH ROW EXECUTE FUNCTION sync_job_actual_minutes();
 drop trigger if exists "aa_bank_job_clock_session" on public."jobs";
 CREATE TRIGGER aa_bank_job_clock_session BEFORE UPDATE ON public.jobs FOR EACH ROW EXECUTE FUNCTION bank_job_clock_session();
+drop trigger if exists "ab_job_forms_completion_gate" on public."jobs";
+CREATE TRIGGER ab_job_forms_completion_gate BEFORE UPDATE ON public.jobs FOR EACH ROW EXECUTE FUNCTION job_forms_completion_gate();
 drop trigger if exists "crew_job_field_guard" on public."jobs";
 CREATE TRIGGER crew_job_field_guard BEFORE UPDATE ON public.jobs FOR EACH ROW EXECUTE FUNCTION crew_job_field_guard();
 drop trigger if exists "crew_message_schedule_event" on public."jobs";
@@ -5969,6 +6854,10 @@ drop trigger if exists "pto_entries_updated_at" on public."pto_entries";
 CREATE TRIGGER pto_entries_updated_at BEFORE UPDATE ON public.pto_entries FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 drop trigger if exists "trg_publish_jobs_updated" on public."publish_jobs";
 CREATE TRIGGER trg_publish_jobs_updated BEFORE UPDATE ON public.publish_jobs FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "quote_addons_total_trg" on public."quote_addons";
+CREATE TRIGGER quote_addons_total_trg AFTER INSERT OR DELETE OR UPDATE ON public.quote_addons FOR EACH ROW EXECUTE FUNCTION quote_addons_sync_total();
+drop trigger if exists "quote_addons_write_trg" on public."quote_addons";
+CREATE TRIGGER quote_addons_write_trg BEFORE INSERT OR DELETE OR UPDATE ON public.quote_addons FOR EACH ROW EXECUTE FUNCTION quote_addons_write_guard();
 drop trigger if exists "quote_options_shape_trg" on public."quote_options";
 CREATE CONSTRAINT TRIGGER quote_options_shape_trg AFTER INSERT OR DELETE OR UPDATE ON public.quote_options DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION quote_options_shape_guard();
 drop trigger if exists "quote_services_shape_trg" on public."quote_services";
@@ -6010,7 +6899,7 @@ CREATE TRIGGER webhook_endpoints_updated_at BEFORE UPDATE ON public.webhook_endp
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 6 · INDEXES
--- 265 standalone indexes. Constraint-backing indexes are omitted on purpose —
+-- 272 standalone indexes. Constraint-backing indexes are omitted on purpose —
 -- section 4 already created them; declaring both would fail or duplicate.
 -- The partial UNIQUE indexes are correctness, not speed: they are what stops a
 -- second open shift per technician and a duplicate invoice number.
@@ -6091,6 +6980,7 @@ create index if not exists fixed_assets_user_active_idx ON public.fixed_assets U
 create index if not exists fixed_assets_user_idx ON public.fixed_assets USING btree (user_id, in_service_date DESC) WHERE (archived_at IS NULL);
 create index if not exists follow_ups_customer_idx ON public.follow_ups USING btree (user_id, customer_id, due_on DESC);
 create index if not exists follow_ups_open_due_idx ON public.follow_ups USING btree (user_id, due_on) WHERE (status = 'open'::text);
+create index if not exists form_template_fields_template_idx ON public.form_template_fields USING btree (user_id, template_id, "position");
 create index if not exists holidays_user_date_idx ON public.holidays USING btree (user_id, date);
 create index if not exists inbound_events_hook_idx ON public.inbound_events USING btree (hook_id, created_at DESC);
 create index if not exists inbound_webhooks_user_idx ON public.inbound_webhooks USING btree (user_id);
@@ -6105,6 +6995,10 @@ create index if not exists invoices_property_id_idx ON public.invoices USING btr
 create index if not exists invoices_quote_id_idx ON public.invoices USING btree (quote_id);
 create index if not exists invoices_reminder_scan_idx ON public.invoices USING btree (user_id, status, due_date) WHERE (status = ANY (ARRAY['unpaid'::text, 'sent'::text, 'partial'::text]));
 create index if not exists invoices_user_id_idx ON public.invoices USING btree (user_id);
+create index if not exists job_form_response_photos_photo_idx ON public.job_form_response_photos USING btree (user_id, photo_id);
+create index if not exists job_form_responses_form_idx ON public.job_form_responses USING btree (user_id, form_id);
+create index if not exists job_forms_job_idx ON public.job_forms USING btree (user_id, job_id);
+create index if not exists job_forms_template_idx ON public.job_forms USING btree (user_id, template_id);
 create unique index if not exists job_line_items_change_order_uniq ON public.job_line_items USING btree (change_order_id) WHERE (change_order_id IS NOT NULL);
 create index if not exists job_line_items_group_idx ON public.job_line_items USING btree (group_id);
 create index if not exists job_line_items_job_id_idx ON public.job_line_items USING btree (job_id);
@@ -6212,6 +7106,8 @@ create index if not exists purchase_order_items_po_idx ON public.purchase_order_
 create index if not exists purchase_orders_supplier_idx ON public.purchase_orders USING btree (supplier_id) WHERE (supplier_id IS NOT NULL);
 create index if not exists purchase_orders_user_idx ON public.purchase_orders USING btree (user_id, created_at DESC);
 create index if not exists push_subscriptions_user_idx ON public.push_subscriptions USING btree (user_id);
+create index if not exists quote_addons_quote_idx ON public.quote_addons USING btree (quote_id, sort_order);
+create index if not exists quote_addons_user_idx ON public.quote_addons USING btree (user_id);
 create unique index if not exists quote_options_one_recommended ON public.quote_options USING btree (quote_id) WHERE is_recommended;
 create index if not exists quote_options_quote_idx ON public.quote_options USING btree (quote_id, sort_order);
 create index if not exists quote_options_user_idx ON public.quote_options USING btree (user_id);
@@ -6284,7 +7180,7 @@ create index if not exists website_leads_user_idx ON public.website_leads USING 
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 7 · ROW LEVEL SECURITY
--- RLS enabled on all 103 tables, then 332 policies.
+-- RLS enabled on all 109 tables, then 355 policies.
 -- Every table carries RLS. The tenant boundary audit found the holes were always
 -- RLS being OFF, never a policy being wrong — so enabling is emitted for every
 -- table unconditionally, before any policy.
@@ -6320,12 +7216,17 @@ alter table public."expense_categories" enable row level security;
 alter table public."expenses" enable row level security;
 alter table public."fixed_assets" enable row level security;
 alter table public."follow_ups" enable row level security;
+alter table public."form_template_fields" enable row level security;
+alter table public."form_templates" enable row level security;
 alter table public."holidays" enable row level security;
 alter table public."inbound_events" enable row level security;
 alter table public."inbound_webhooks" enable row level security;
 alter table public."integration_events" enable row level security;
 alter table public."integrations_config" enable row level security;
 alter table public."invoices" enable row level security;
+alter table public."job_form_response_photos" enable row level security;
+alter table public."job_form_responses" enable row level security;
+alter table public."job_forms" enable row level security;
 alter table public."job_line_items" enable row level security;
 alter table public."job_photos" enable row level security;
 alter table public."job_price_changes" enable row level security;
@@ -6365,6 +7266,7 @@ alter table public."purchase_order_items" enable row level security;
 alter table public."purchase_orders" enable row level security;
 alter table public."push_config" enable row level security;
 alter table public."push_subscriptions" enable row level security;
+alter table public."quote_addons" enable row level security;
 alter table public."quote_options" enable row level security;
 alter table public."quote_outcomes" enable row level security;
 alter table public."quote_services" enable row level security;
@@ -6667,6 +7569,30 @@ drop policy if exists "follow_ups: update own" on public."follow_ups";
 create policy "follow_ups: update own" on public."follow_ups" as permissive for update to public
   using ((auth.uid() = user_id))
   with check ((auth.uid() = user_id));
+drop policy if exists "form_template_fields: delete own" on public."form_template_fields";
+create policy "form_template_fields: delete own" on public."form_template_fields" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "form_template_fields: insert own" on public."form_template_fields";
+create policy "form_template_fields: insert own" on public."form_template_fields" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "form_template_fields: select own" on public."form_template_fields";
+create policy "form_template_fields: select own" on public."form_template_fields" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "form_template_fields: update own" on public."form_template_fields";
+create policy "form_template_fields: update own" on public."form_template_fields" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "form_templates: delete own" on public."form_templates";
+create policy "form_templates: delete own" on public."form_templates" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "form_templates: insert own" on public."form_templates";
+create policy "form_templates: insert own" on public."form_templates" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "form_templates: select own" on public."form_templates";
+create policy "form_templates: select own" on public."form_templates" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "form_templates: update own" on public."form_templates";
+create policy "form_templates: update own" on public."form_templates" as permissive for update to public
+  using ((auth.uid() = user_id));
 drop policy if exists "holidays_delete" on public."holidays";
 create policy "holidays_delete" on public."holidays" as permissive for delete to public
   using ((auth.uid() = user_id));
@@ -6715,6 +7641,39 @@ create policy "invoices: select own" on public."invoices" as permissive for sele
   using ((auth.uid() = user_id));
 drop policy if exists "invoices: update own" on public."invoices";
 create policy "invoices: update own" on public."invoices" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "job_form_response_photos: delete own" on public."job_form_response_photos";
+create policy "job_form_response_photos: delete own" on public."job_form_response_photos" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "job_form_response_photos: insert own" on public."job_form_response_photos";
+create policy "job_form_response_photos: insert own" on public."job_form_response_photos" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "job_form_response_photos: select own" on public."job_form_response_photos";
+create policy "job_form_response_photos: select own" on public."job_form_response_photos" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "job_form_responses: delete own" on public."job_form_responses";
+create policy "job_form_responses: delete own" on public."job_form_responses" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "job_form_responses: insert own" on public."job_form_responses";
+create policy "job_form_responses: insert own" on public."job_form_responses" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "job_form_responses: select own" on public."job_form_responses";
+create policy "job_form_responses: select own" on public."job_form_responses" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "job_form_responses: update own" on public."job_form_responses";
+create policy "job_form_responses: update own" on public."job_form_responses" as permissive for update to public
+  using ((auth.uid() = user_id));
+drop policy if exists "job_forms: delete own" on public."job_forms";
+create policy "job_forms: delete own" on public."job_forms" as permissive for delete to public
+  using ((auth.uid() = user_id));
+drop policy if exists "job_forms: insert own" on public."job_forms";
+create policy "job_forms: insert own" on public."job_forms" as permissive for insert to public
+  with check ((auth.uid() = user_id));
+drop policy if exists "job_forms: select own" on public."job_forms";
+create policy "job_forms: select own" on public."job_forms" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "job_forms: update own" on public."job_forms";
+create policy "job_forms: update own" on public."job_forms" as permissive for update to public
   using ((auth.uid() = user_id));
 drop policy if exists "job_line_items: delete own" on public."job_line_items";
 create policy "job_line_items: delete own" on public."job_line_items" as permissive for delete to public
@@ -7092,6 +8051,25 @@ create policy "push_subs: select own" on public."push_subscriptions" as permissi
 drop policy if exists "push_subs: update own" on public."push_subscriptions";
 create policy "push_subs: update own" on public."push_subscriptions" as permissive for update to public
   using ((auth.uid() = user_id));
+drop policy if exists "quote_addons: delete own" on public."quote_addons";
+create policy "quote_addons: delete own" on public."quote_addons" as permissive for delete to public
+  using (((auth.uid() = user_id) AND (EXISTS ( SELECT 1
+   FROM quotes q
+  WHERE ((q.id = quote_addons.quote_id) AND (q.user_id = auth.uid()) AND (q.status = ANY (ARRAY['draft'::text, 'sent'::text])))))));
+drop policy if exists "quote_addons: insert own" on public."quote_addons";
+create policy "quote_addons: insert own" on public."quote_addons" as permissive for insert to public
+  with check (((auth.uid() = user_id) AND (EXISTS ( SELECT 1
+   FROM quotes q
+  WHERE ((q.id = quote_addons.quote_id) AND (q.user_id = auth.uid()) AND (q.status = ANY (ARRAY['draft'::text, 'sent'::text])))))));
+drop policy if exists "quote_addons: select own" on public."quote_addons";
+create policy "quote_addons: select own" on public."quote_addons" as permissive for select to public
+  using ((auth.uid() = user_id));
+drop policy if exists "quote_addons: update own" on public."quote_addons";
+create policy "quote_addons: update own" on public."quote_addons" as permissive for update to public
+  using (((auth.uid() = user_id) AND (EXISTS ( SELECT 1
+   FROM quotes q
+  WHERE ((q.id = quote_addons.quote_id) AND (q.user_id = auth.uid()) AND (q.status = ANY (ARRAY['draft'::text, 'sent'::text])))))))
+  with check ((auth.uid() = user_id));
 drop policy if exists "quote_options: delete own" on public."quote_options";
 create policy "quote_options: delete own" on public."quote_options" as permissive for delete to public
   using ((auth.uid() = user_id));
@@ -7549,6 +8527,12 @@ revoke all on table public."follow_ups" from public, anon, authenticated, servic
 grant ALL on table public."follow_ups" to anon;
 grant ALL on table public."follow_ups" to authenticated;
 grant ALL on table public."follow_ups" to service_role;
+revoke all on table public."form_template_fields" from public, anon, authenticated, service_role;
+grant INSERT, SELECT, UPDATE, DELETE on table public."form_template_fields" to authenticated;
+grant ALL on table public."form_template_fields" to service_role;
+revoke all on table public."form_templates" from public, anon, authenticated, service_role;
+grant INSERT, SELECT, UPDATE, DELETE on table public."form_templates" to authenticated;
+grant ALL on table public."form_templates" to service_role;
 revoke all on table public."holidays" from public, anon, authenticated, service_role;
 grant ALL on table public."holidays" to anon;
 grant ALL on table public."holidays" to authenticated;
@@ -7571,6 +8555,15 @@ revoke all on table public."invoices" from public, anon, authenticated, service_
 grant ALL on table public."invoices" to anon;
 grant ALL on table public."invoices" to authenticated;
 grant ALL on table public."invoices" to service_role;
+revoke all on table public."job_form_response_photos" from public, anon, authenticated, service_role;
+grant INSERT, SELECT, DELETE on table public."job_form_response_photos" to authenticated;
+grant ALL on table public."job_form_response_photos" to service_role;
+revoke all on table public."job_form_responses" from public, anon, authenticated, service_role;
+grant INSERT, SELECT, UPDATE, DELETE on table public."job_form_responses" to authenticated;
+grant ALL on table public."job_form_responses" to service_role;
+revoke all on table public."job_forms" from public, anon, authenticated, service_role;
+grant INSERT, SELECT, UPDATE, DELETE on table public."job_forms" to authenticated;
+grant ALL on table public."job_forms" to service_role;
 revoke all on table public."job_line_items" from public, anon, authenticated, service_role;
 grant ALL on table public."job_line_items" to anon;
 grant ALL on table public."job_line_items" to authenticated;
@@ -7720,8 +8713,10 @@ revoke all on table public."push_subscriptions" from public, anon, authenticated
 grant ALL on table public."push_subscriptions" to anon;
 grant ALL on table public."push_subscriptions" to authenticated;
 grant ALL on table public."push_subscriptions" to service_role;
+revoke all on table public."quote_addons" from public, anon, authenticated, service_role;
+grant ALL on table public."quote_addons" to authenticated;
+grant ALL on table public."quote_addons" to service_role;
 revoke all on table public."quote_options" from public, anon, authenticated, service_role;
-grant ALL on table public."quote_options" to anon;
 grant ALL on table public."quote_options" to authenticated;
 grant ALL on table public."quote_options" to service_role;
 revoke all on table public."quote_outcomes" from public, anon, authenticated, service_role;
@@ -7849,6 +8844,9 @@ grant SELECT, UPDATE, USAGE on sequence public."wage_history_seq_seq" to authent
 grant SELECT, UPDATE, USAGE on sequence public."wage_history_seq_seq" to service_role;
 
 -- functions — the security-critical half of this section
+revoke all on function public."attach_job_form"(p_job_id uuid, p_template_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."attach_job_form"(p_job_id uuid, p_template_id uuid) to authenticated;
+grant execute on function public."attach_job_form"(p_job_id uuid, p_template_id uuid) to service_role;
 revoke all on function public."authenticate_api_key"(p_hash text) from public, anon, authenticated, service_role;
 grant execute on function public."authenticate_api_key"(p_hash text) to service_role;
 revoke all on function public."bank_job_clock_session"() from public, anon, authenticated, service_role;
@@ -7916,6 +8914,9 @@ grant execute on function public."crew_issue_invite"(p_technician_id uuid, p_hou
 grant execute on function public."crew_issue_invite"(p_technician_id uuid, p_hours integer) to service_role;
 revoke all on function public."crew_job_field_guard"() from public, anon, authenticated, service_role;
 grant execute on function public."crew_job_field_guard"() to service_role;
+revoke all on function public."crew_job_forms"(p_job_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."crew_job_forms"(p_job_id uuid) to authenticated;
+grant execute on function public."crew_job_forms"(p_job_id uuid) to service_role;
 revoke all on function public."crew_job_messages"(p_job_id uuid) from public, anon, authenticated, service_role;
 grant execute on function public."crew_job_messages"(p_job_id uuid) to authenticated;
 grant execute on function public."crew_job_messages"(p_job_id uuid) to service_role;
@@ -7943,6 +8944,9 @@ grant execute on function public."crew_redeem_invite"(p_code text) to service_ro
 revoke all on function public."crew_revoke_access"(p_technician_id uuid) from public, anon, authenticated, service_role;
 grant execute on function public."crew_revoke_access"(p_technician_id uuid) to authenticated;
 grant execute on function public."crew_revoke_access"(p_technician_id uuid) to service_role;
+revoke all on function public."crew_save_form_response"(p_form_id uuid, p_field_id uuid, p_value_text text, p_value_number numeric, p_value_bool boolean, p_value_date date, p_value_time time without time zone, p_value_choice text) from public, anon, authenticated, service_role;
+grant execute on function public."crew_save_form_response"(p_form_id uuid, p_field_id uuid, p_value_text text, p_value_number numeric, p_value_bool boolean, p_value_date date, p_value_time time without time zone, p_value_choice text) to authenticated;
+grant execute on function public."crew_save_form_response"(p_form_id uuid, p_field_id uuid, p_value_text text, p_value_number numeric, p_value_bool boolean, p_value_date date, p_value_time time without time zone, p_value_choice text) to service_role;
 revoke all on function public."crew_set_completion_record"(p_job_id uuid, p_summary text, p_issue text) from public, anon, authenticated, service_role;
 grant execute on function public."crew_set_completion_record"(p_job_id uuid, p_summary text, p_issue text) to authenticated;
 grant execute on function public."crew_set_completion_record"(p_job_id uuid, p_summary text, p_issue text) to service_role;
@@ -7963,6 +8967,9 @@ grant execute on function public."crm_touch_last_contacted"() to service_role;
 revoke all on function public."current_app_role"() from public, anon, authenticated, service_role;
 grant execute on function public."current_app_role"() to authenticated;
 grant execute on function public."current_app_role"() to service_role;
+revoke all on function public."ensure_job_forms"(p_job_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."ensure_job_forms"(p_job_id uuid) to authenticated;
+grant execute on function public."ensure_job_forms"(p_job_id uuid) to service_role;
 revoke all on function public."ensure_pricing_config_version"(p_user uuid) from public, anon, authenticated, service_role;
 grant execute on function public."ensure_pricing_config_version"(p_user uuid) to authenticated;
 grant execute on function public."ensure_pricing_config_version"(p_user uuid) to service_role;
@@ -7974,6 +8981,11 @@ revoke all on function public."find_inbound_sms_customer"(p_phone text) from pub
 grant execute on function public."find_inbound_sms_customer"(p_phone text) to service_role;
 revoke all on function public."find_portal_access_customers"(p_email text) from public, anon, authenticated, service_role;
 grant execute on function public."find_portal_access_customers"(p_email text) to service_role;
+revoke all on function public."form_options_ok"(p jsonb) from public, anon, authenticated, service_role;
+grant execute on function public."form_options_ok"(p jsonb) to authenticated;
+grant execute on function public."form_options_ok"(p jsonb) to service_role;
+revoke all on function public."form_template_snapshot"(p_template_id uuid, p_user_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."form_template_snapshot"(p_template_id uuid, p_user_id uuid) to service_role;
 revoke all on function public."get_booking_business"(p_token text) from public, anon, authenticated, service_role;
 grant execute on function public."get_booking_business"(p_token text) to public;
 grant execute on function public."get_booking_business"(p_token text) to anon;
@@ -8012,6 +9024,23 @@ grant execute on function public."inbox_counts"() to service_role;
 revoke all on function public."is_verify_fixture_tenant"() from public, anon, authenticated, service_role;
 grant execute on function public."is_verify_fixture_tenant"() to authenticated;
 grant execute on function public."is_verify_fixture_tenant"() to service_role;
+revoke all on function public."job_form_default_template"(p_job jobs) from public, anon, authenticated, service_role;
+grant execute on function public."job_form_default_template"(p_job jobs) to service_role;
+revoke all on function public."job_form_gate"(p_job_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."job_form_gate"(p_job_id uuid) to authenticated;
+grant execute on function public."job_form_gate"(p_job_id uuid) to service_role;
+revoke all on function public."job_form_missing_items"(p_job_id uuid, p_user_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."job_form_missing_items"(p_job_id uuid, p_user_id uuid) to service_role;
+revoke all on function public."job_form_response_guard"() from public, anon, authenticated, service_role;
+grant execute on function public."job_form_response_guard"() to service_role;
+revoke all on function public."job_form_response_photo_guard"() from public, anon, authenticated, service_role;
+grant execute on function public."job_form_response_photo_guard"() to service_role;
+revoke all on function public."job_form_summary"(p_job_id uuid, p_user_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."job_form_summary"(p_job_id uuid, p_user_id uuid) to service_role;
+revoke all on function public."job_forms_completion_gate"() from public, anon, authenticated, service_role;
+grant execute on function public."job_forms_completion_gate"() to service_role;
+revoke all on function public."job_forms_freeze_guard"() from public, anon, authenticated, service_role;
+grant execute on function public."job_forms_freeze_guard"() to service_role;
 revoke all on function public."job_session_minutes"(p_job_id uuid) from public, anon, authenticated, service_role;
 grant execute on function public."job_session_minutes"(p_job_id uuid) to public;
 grant execute on function public."job_session_minutes"(p_job_id uuid) to anon;
@@ -8046,12 +9075,11 @@ revoke all on function public."notify_review_received"() from public, anon, auth
 grant execute on function public."notify_review_received"() to service_role;
 revoke all on function public."nudge_webhook_deliveries"() from public, anon, authenticated, service_role;
 grant execute on function public."nudge_webhook_deliveries"() to service_role;
-revoke all on function public."owner_select_quote_option"(p_quote_id uuid, p_option_id uuid) from public, anon, authenticated, service_role;
-grant execute on function public."owner_select_quote_option"(p_quote_id uuid, p_option_id uuid) to authenticated;
-revoke all on function public."portal_accept_quote"(p_token text, p_quote_id uuid, p_option_id uuid) from public, anon, authenticated, service_role;
-grant execute on function public."portal_accept_quote"(p_token text, p_quote_id uuid, p_option_id uuid) to anon;
-grant execute on function public."portal_accept_quote"(p_token text, p_quote_id uuid, p_option_id uuid) to authenticated;
-grant execute on function public."portal_accept_quote"(p_token text, p_quote_id uuid, p_option_id uuid) to service_role;
+revoke all on function public."owner_select_quote_option"(p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[]) from public, anon, authenticated, service_role;
+grant execute on function public."owner_select_quote_option"(p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[]) to authenticated;
+revoke all on function public."portal_accept_quote"(p_token text, p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[]) from public, anon, authenticated, service_role;
+grant execute on function public."portal_accept_quote"(p_token text, p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[]) to anon;
+grant execute on function public."portal_accept_quote"(p_token text, p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[]) to authenticated;
 revoke all on function public."portal_add_contact"(p_token text, p_phone text, p_email text) from public, anon, authenticated, service_role;
 grant execute on function public."portal_add_contact"(p_token text, p_phone text, p_email text) to anon;
 grant execute on function public."portal_add_contact"(p_token text, p_phone text, p_email text) to authenticated;
@@ -8146,7 +9174,17 @@ grant execute on function public."public_services"(p_token text) to authenticate
 grant execute on function public."public_services"(p_token text) to service_role;
 revoke all on function public."push_dispatch"() from public, anon, authenticated, service_role;
 grant execute on function public."push_dispatch"() to service_role;
-revoke all on function public."quote_apply_option_choice"(p_quote_id uuid, p_option_id uuid) from public, anon, authenticated, service_role;
+revoke all on function public."quote_addons_sync_total"() from public, anon, authenticated, service_role;
+grant execute on function public."quote_addons_sync_total"() to public;
+grant execute on function public."quote_addons_sync_total"() to anon;
+grant execute on function public."quote_addons_sync_total"() to authenticated;
+grant execute on function public."quote_addons_sync_total"() to service_role;
+revoke all on function public."quote_addons_write_guard"() from public, anon, authenticated, service_role;
+grant execute on function public."quote_addons_write_guard"() to public;
+grant execute on function public."quote_addons_write_guard"() to anon;
+grant execute on function public."quote_addons_write_guard"() to authenticated;
+grant execute on function public."quote_addons_write_guard"() to service_role;
+revoke all on function public."quote_apply_choice"(p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[], p_via text) from public, anon, authenticated, service_role;
 revoke all on function public."quote_options_shape_guard"() from public, anon, authenticated, service_role;
 grant execute on function public."quote_options_shape_guard"() to public;
 grant execute on function public."quote_options_shape_guard"() to anon;
@@ -8236,6 +9274,11 @@ comment on table public."crew_message_reads" is 'High-water mark per (visit, rea
 comment on table public."crew_messages" is 'CREW AUDIENCE (the business + the crew assigned to this visit). The conversation attached to one visit. Never customer-facing: no portal projection, no PDF, no public API selects it. Not a note — jobs.notes is the standing instruction; this is what was said and when.';
 comment on table public."dispatch_notes" is 'One note per (date, crew); crew NULL = the day-level note. Upsert on the unique constraint.';
 comment on table public."follow_ups" is 'Owner follow-up commitments: WHO (customer_id, mandatory) / WHEN (due_on, a local date) / WHY (reason) / open|done. NOT public.schedule_items (empty, unread, calendar-shaped) and NOT lib/followup.ts (the derived quote chaser). Never messages the customer — this is an owner reminder only.';
+comment on table public."form_template_fields" is 'The fields of a form template. Editing them affects FUTURE instances only - job_forms carries a frozen snapshot.';
+comment on table public."form_templates" is 'Reusable checklist/form definitions (Job Forms V1). Owner+crew audience - no portal projection may select these tables. Archive (archived_at), never hard-delete: job_forms.template_id RESTRICTs deletion once instances exist.';
+comment on table public."job_form_response_photos" is 'Links a photo-field response to canonical job_photos rows OF THE SAME VISIT (trigger-enforced). No second upload path exists.';
+comment on table public."job_form_responses" is 'Answers, one row per (form, field). answered_by/answered_role/answered_at record who actually wrote it - never inferred. Frozen with the visit: post-completion changes require correction_reason (owner only).';
+comment on table public."job_forms" is 'A form instance attached to ONE visit (a jobs row). fields = frozen snapshot at attach time, immutable by trigger. waived_* = the owner''s recorded completion-gate override (the audit-trail seam).';
 comment on table public."job_work_sessions" is 'One stretch of work on one job on one day. jobs.actual_minutes is the sum of these (enforced by trigger). minutes = elapsed on site; labour_minutes = minutes x workers.';
 comment on table public."password_reset_requests" is 'Abuse ledger for the public password-reset endpoint. email_key = sha256(lower(trim(email))) — never the address. No user_id/email/token/IP by design.';
 comment on table public."platform_capabilities" is 'Platform-managed grants for SHARED deployment infrastructure (Stripe account, Twilio number, Resend identity). Missing row = no grants. App code reads only; rows are written by the platform operator in SQL.';
@@ -8276,6 +9319,7 @@ comment on column public."crm_campaigns"."archived_at" is 'Soft delete. A hard D
 comment on column public."crm_campaigns"."subject" is 'Owner-written email subject. Blank → the message template''s built-in subject.';
 comment on column public."customers"."notes" is 'INTERNAL ONLY. What the office knows about this customer. Absent from get_portal_data''s customer projection, which names its columns.';
 comment on column public."customers"."phone_digits" is 'Digits-only form of phone, for search only. Generated — never write to it. Display and dial from `phone`, which keeps the owner''s own formatting.';
+comment on column public."customers"."preferred_channel" is 'How the customer prefers to be contacted: sms | email | phone | NULL (no preference). A PREFERENCE, never consent — it orders the channels consent already allows and can never grant one. ''phone'' is an instruction to the owner; the send pipeline never places calls.';
 comment on column public."equipment"."crew_id" is 'Crew this vehicle/equipment is assigned to for dispatch. NULL = unassigned pool.';
 comment on column public."expense_categories"."kind" is 'operating = a real business cost (P&L). owner_draw = a distribution of profit, NOT a cost: excluded from the P&L, still cash out in cash flow, and a reduction of equity on the balance sheet.';
 comment on column public."expenses"."bill_date" is 'When the cost was INCURRED (accrual date). Always set.';
@@ -8290,7 +9334,9 @@ comment on column public."invoices"."internal_notes" is 'Private to the owner: n
 comment on column public."invoices"."last_reminded_at" is 'When the automatic payment reminder last went out. Null = never reminded; the due date is the anchor instead.';
 comment on column public."invoices"."line_items_edited" is 'True once the owner hand-edits this draft''s line items in the invoice editor. syncDraftInvoiceAmounts then skips the draft so a later job-price change never silently overwrites owner-authored line_items/amount (the change-order-loss bug). Defaults false: job-derived drafts keep auto-re-pricing.';
 comment on column public."invoices"."reminder_count" is 'How many automatic payment reminders have been sent. Compare-and-swapped by /api/cron/invoice-reminders to guarantee at-most-once, and capped by the owner''s maximum.';
+comment on column public."job_forms"."fields" is 'Frozen snapshot of the template''s fields at attach time. Historical record - guarded by job_forms_freeze.';
 comment on column public."job_line_items"."change_order_id" is 'Set only by change_order_apply_approval(). Its presence means this money exists BECAUSE a customer approved a change order - never hand-write it.';
+comment on column public."job_recurrences"."form_template_id" is 'Default checklist for this recurring series'' visits; wins over the service template''s default. Each visit mints its own independent instance.';
 comment on column public."jobs"."completion_issue" is 'INTERNAL ONLY. What the field found that needs attention (leaking sprinkler head, wants a hedge quote). MUST NOT be selected by get_portal_data or reach any customer surface.';
 comment on column public."jobs"."completion_summary" is 'CUSTOMER-VISIBLE. What was done, written for the person who paid for it. Selected by get_portal_data and rendered verbatim in the portal visit history. Never put internal remarks here.';
 comment on column public."jobs"."crew_id" is 'Which crew runs this visit. NULL = unassigned (single-crew default). Orthogonal to crew_size (headcount).';
@@ -8318,6 +9364,7 @@ comment on column public."report_schedules"."recipient" is 'NULL = defer to busi
 comment on column public."service_requests"."dedup_key" is 'Set by portal_submit_request. With service_requests_open_dedup_idx it makes a repeated submission of the same ask a no-op while the first is still open.';
 comment on column public."service_requests"."from_portal" is 'True only for rows created by portal_submit_request (incl. its portal_request_service wrapper) — a customer acting in their own portal. Website leads, online bookings and system notes stay false.';
 comment on column public."service_requests"."photos" is 'booking-uploads STORAGE PATHS (never URLs) the customer attached. The bucket is named in application code at render time; see portal_request_photos_ok for the enforced shape.';
+comment on column public."service_templates"."form_template_id" is 'Default checklist for work created from this service. Resolved at attach time (lazily) - changing it never rewrites an already-minted job form.';
 comment on column public."service_templates"."is_favorite" is 'Owner shortlist — surfaced first in the quote builder picker.';
 comment on column public."service_templates"."material_cost" is 'Material cost per unit. NULL = not set; never treat as 0.';
 comment on column public."service_templates"."recurrence" is 'Recurrence eligibility: one_time = never suggest recurring; recurring_ok = recurrence suggestions allowed; usually_recurring = this service is normally a recurring plan. NULL = owner has not said (suggestions then require behavioural cadence evidence).';
@@ -8337,11 +9384,9 @@ comment on function public."crew_set_completion_record"(p_job_id uuid, p_summary
 comment on function public."find_portal_access_customers"(p_email text) is 'Portal-link recovery lookup. Normalises both sides (lower+trim). NOT executable by anon/authenticated — service-role only, or the public anon key becomes a customer-existence oracle.';
 comment on function public."is_verify_fixture_tenant"() is 'True when the CALLER is a verification fixture tenant. Answers only about auth.uid(); takes no arguments so it cannot be used to enumerate or probe. Consulted by scripts/ only — no trigger, policy or application path reads it.';
 comment on function public."job_session_minutes"(p_job_id uuid) is 'Sum of a job''s work-session minutes. NULL when it has none (unknown, not zero).';
-comment on function public."owner_select_quote_option"(p_quote_id uuid, p_option_id uuid) is 'Owner records the option a customer chose by phone/in person. Same core, same money rule as portal_accept_quote - only auth.uid() proves access instead of a token.';
 comment on function public."portal_add_contact"(p_token text, p_phone text, p_email text) is 'Portal self-service: fill a MISSING customer phone/email from a valid portal token. Fills only - never overwrites a populated field (an email change is an identity change). Never touches sms_opt_in/email_opt_in/message_prefs. Refuses a value another customer of the same owner already holds. Returns the row state read back after the write.';
 comment on function public."portal_request_photos_ok"(p text[]) is 'Validator for service_requests.photos: at most 6 elements, each a booking-uploads path of the shape portal/<uuid>/<uuid>.<ext>. Used by a CHECK constraint, so it holds no matter which door writes.';
 comment on function public."portal_set_scheduling_preference"(p_token text, p_quote_id uuid, p_date date, p_date_2 date, p_timing text, p_note text) is 'THE writer of a customer''s scheduling preference. Token proves the customer; quote must be theirs and ''accepted''. A preference is a request — it never creates, moves, or implies a visit. All-null clears it.';
-comment on function public."quote_apply_option_choice"(p_quote_id uuid, p_option_id uuid) is 'THE single writer of quotes.selected_option_id and the option-derived price. Carries no authorisation - callers must prove access first. Deliberately granted to no role.';
 comment on function public."schema_contract"() is 'Full catalogue snapshot for npm run schema:contract. SERVICE_ROLE ONLY — it returns every RLS predicate and SECURITY DEFINER body, i.e. the product''s authorization logic. Use schema_fingerprint() (hashes only) for anything that merely needs to detect change.';
 comment on function public."schema_fingerprint"() is 'Counts + md5 per schema section, for npm run verify:schema. Returns NO names and NO data — only shape hashes, so it is safe to expose to any signed-in caller. The instrument that makes repo-vs-production drift visible; before it existed, 30 migrations reached production with no repo file and nothing reported it.';
 

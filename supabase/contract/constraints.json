@@ -679,6 +679,13 @@
   "convalidated": true
  },
  {
+  "def": "CHECK (((preferred_channel IS NULL) OR (preferred_channel = ANY (ARRAY['sms'::text, 'email'::text, 'phone'::text]))))",
+  "tbl": "customers",
+  "conname": "customers_preferred_channel_chk",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
   "def": "FOREIGN KEY (referred_by_customer_id) REFERENCES customers(id) ON DELETE SET NULL",
   "tbl": "customers",
   "conname": "customers_referred_by_customer_id_fkey",
@@ -1071,6 +1078,118 @@
   "convalidated": true
  },
  {
+  "def": "CHECK (((help_text IS NULL) OR (char_length(help_text) <= 500)))",
+  "tbl": "form_template_fields",
+  "conname": "form_template_fields_help_len",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((char_length(btrim(label)) >= 1) AND (char_length(btrim(label)) <= 200)))",
+  "tbl": "form_template_fields",
+  "conname": "form_template_fields_label_len",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((((field_type = 'dropdown'::text) AND form_options_ok(options)) OR ((field_type <> 'dropdown'::text) AND (options IS NULL))))",
+  "tbl": "form_template_fields",
+  "conname": "form_template_fields_options_scope",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((photo_kind IS NULL) OR ((field_type = 'photo'::text) AND (photo_kind = ANY (ARRAY['before'::text, 'after'::text, 'general'::text])))))",
+  "tbl": "form_template_fields",
+  "conname": "form_template_fields_photo_kind_scope",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "form_template_fields",
+  "conname": "form_template_fields_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((NOT required) OR (field_type <> ALL (ARRAY['section'::text, 'instruction'::text]))))",
+  "tbl": "form_template_fields",
+  "conname": "form_template_fields_required_actionable",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (template_id, user_id) REFERENCES form_templates(id, user_id) ON DELETE CASCADE",
+  "tbl": "form_template_fields",
+  "conname": "form_template_fields_template_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((field_type = ANY (ARRAY['section'::text, 'instruction'::text, 'checkbox'::text, 'short_text'::text, 'long_text'::text, 'number'::text, 'yes_no'::text, 'dropdown'::text, 'date'::text, 'time'::text, 'photo'::text])))",
+  "tbl": "form_template_fields",
+  "conname": "form_template_fields_type_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((unit IS NULL) OR ((char_length(unit) >= 1) AND (char_length(unit) <= 20))))",
+  "tbl": "form_template_fields",
+  "conname": "form_template_fields_unit_len",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((unit IS NULL) OR (field_type = 'number'::text)))",
+  "tbl": "form_template_fields",
+  "conname": "form_template_fields_unit_scope",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "form_template_fields",
+  "conname": "form_template_fields_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((description IS NULL) OR (char_length(description) <= 500)))",
+  "tbl": "form_templates",
+  "conname": "form_templates_description_len",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (id, user_id)",
+  "tbl": "form_templates",
+  "conname": "form_templates_id_user_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((char_length(btrim(name)) >= 1) AND (char_length(btrim(name)) <= 120)))",
+  "tbl": "form_templates",
+  "conname": "form_templates_name_len",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "form_templates",
+  "conname": "form_templates_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "form_templates",
+  "conname": "form_templates_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
   "def": "CHECK (((default_hours >= (0)::numeric) AND (default_hours <= (24)::numeric)))",
   "tbl": "holidays",
   "conname": "holidays_hours_range",
@@ -1246,6 +1365,181 @@
   "convalidated": true
  },
  {
+  "def": "FOREIGN KEY (photo_id, user_id) REFERENCES job_photos(id, user_id) ON DELETE CASCADE",
+  "tbl": "job_form_response_photos",
+  "conname": "job_form_response_photos_photo_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (response_id, photo_id)",
+  "tbl": "job_form_response_photos",
+  "conname": "job_form_response_photos_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (response_id, user_id) REFERENCES job_form_responses(id, user_id) ON DELETE CASCADE",
+  "tbl": "job_form_response_photos",
+  "conname": "job_form_response_photos_response_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "job_form_response_photos",
+  "conname": "job_form_response_photos_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((value_choice IS NULL) OR ((char_length(value_choice) >= 1) AND (char_length(value_choice) <= 100))))",
+  "tbl": "job_form_responses",
+  "conname": "job_form_responses_choice_len",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((((corrected_at IS NULL) = (corrected_by IS NULL)) AND ((corrected_at IS NULL) = (correction_reason IS NULL))))",
+  "tbl": "job_form_responses",
+  "conname": "job_form_responses_correction_consistent",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((correction_reason IS NULL) OR ((char_length(btrim(correction_reason)) >= 1) AND (char_length(btrim(correction_reason)) <= 300))))",
+  "tbl": "job_form_responses",
+  "conname": "job_form_responses_correction_len",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (form_id, field_id)",
+  "tbl": "job_form_responses",
+  "conname": "job_form_responses_field_uniq",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (form_id, user_id) REFERENCES job_forms(id, user_id) ON DELETE CASCADE",
+  "tbl": "job_form_responses",
+  "conname": "job_form_responses_form_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (id, user_id)",
+  "tbl": "job_form_responses",
+  "conname": "job_form_responses_id_user_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((value_number IS NULL) OR (abs(value_number) <= (1000000000)::numeric)))",
+  "tbl": "job_form_responses",
+  "conname": "job_form_responses_number_sane",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "job_form_responses",
+  "conname": "job_form_responses_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((answered_role = ANY (ARRAY['owner'::text, 'crew'::text])))",
+  "tbl": "job_form_responses",
+  "conname": "job_form_responses_role_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((value_text IS NULL) OR (char_length(value_text) <= 2000)))",
+  "tbl": "job_form_responses",
+  "conname": "job_form_responses_text_len",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "job_form_responses",
+  "conname": "job_form_responses_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((jsonb_typeof(fields) = 'array'::text))",
+  "tbl": "job_forms",
+  "conname": "job_forms_fields_shape",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (id, user_id)",
+  "tbl": "job_forms",
+  "conname": "job_forms_id_user_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE CASCADE",
+  "tbl": "job_forms",
+  "conname": "job_forms_job_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (job_id, template_id)",
+  "tbl": "job_forms",
+  "conname": "job_forms_job_template_uniq",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "job_forms",
+  "conname": "job_forms_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((source = ANY (ARRAY['service_template'::text, 'series'::text, 'manual'::text])))",
+  "tbl": "job_forms",
+  "conname": "job_forms_source_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (template_id, user_id) REFERENCES form_templates(id, user_id) ON DELETE RESTRICT",
+  "tbl": "job_forms",
+  "conname": "job_forms_template_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "job_forms",
+  "conname": "job_forms_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((((waived_at IS NULL) = (waived_by IS NULL)) AND ((waived_at IS NULL) = (waive_reason IS NULL))))",
+  "tbl": "job_forms",
+  "conname": "job_forms_waive_consistent",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((waive_reason IS NULL) OR ((char_length(btrim(waive_reason)) >= 1) AND (char_length(btrim(waive_reason)) <= 300))))",
+  "tbl": "job_forms",
+  "conname": "job_forms_waive_reason_len",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
   "def": "FOREIGN KEY (change_order_id, user_id) REFERENCES change_orders(id, user_id) ON DELETE CASCADE",
   "tbl": "job_line_items",
   "conname": "job_line_items_change_order_same_owner",
@@ -1278,6 +1572,13 @@
   "tbl": "job_photos",
   "conname": "job_photos_customer_id_fkey",
   "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (id, user_id)",
+  "tbl": "job_photos",
+  "conname": "job_photos_id_user_key",
+  "contype": "u",
   "convalidated": true
  },
  {
@@ -1340,6 +1641,13 @@
   "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
   "tbl": "job_recurrences",
   "conname": "job_recurrences_customer_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (form_template_id, user_id) REFERENCES form_templates(id, user_id) ON DELETE RESTRICT",
+  "tbl": "job_recurrences",
+  "conname": "job_recurrences_form_template_same_owner",
   "contype": "f",
   "convalidated": true
  },
@@ -2668,6 +2976,62 @@
  },
  {
   "def": "UNIQUE (id, quote_id)",
+  "tbl": "quote_addons",
+  "conname": "quote_addons_id_quote_unique",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((btrim(name) <> ''::text))",
+  "tbl": "quote_addons",
+  "conname": "quote_addons_name_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "quote_addons",
+  "conname": "quote_addons_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((price >= (0)::numeric))",
+  "tbl": "quote_addons",
+  "conname": "quote_addons_price_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id, quote_id) REFERENCES quotes(user_id, id) ON DELETE CASCADE",
+  "tbl": "quote_addons",
+  "conname": "quote_addons_quote_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((is_selected AND (selected_via IS NOT NULL) AND (selected_at IS NOT NULL)) OR ((NOT is_selected) AND (selected_via IS NULL) AND (selected_at IS NULL))))",
+  "tbl": "quote_addons",
+  "conname": "quote_addons_selection_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "quote_addons",
+  "conname": "quote_addons_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((selected_via = ANY (ARRAY['default'::text, 'portal'::text, 'owner'::text])))",
+  "tbl": "quote_addons",
+  "conname": "quote_addons_via_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (id, quote_id)",
   "tbl": "quote_options",
   "conname": "quote_options_id_quote_unique",
   "contype": "u",
@@ -3279,6 +3643,13 @@
   "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
   "tbl": "service_requests",
   "conname": "service_requests_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (form_template_id, user_id) REFERENCES form_templates(id, user_id) ON DELETE RESTRICT",
+  "tbl": "service_templates",
+  "conname": "service_templates_form_template_same_owner",
   "contype": "f",
   "convalidated": true
  },

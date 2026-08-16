@@ -26,11 +26,6 @@
    "comment": "Sum of a job's work-session minutes. NULL when it has none (unknown, not zero)."
   },
   {
-   "fn": "owner_select_quote_option",
-   "args": "p_quote_id uuid, p_option_id uuid",
-   "comment": "Owner records the option a customer chose by phone/in person. Same core, same money rule as portal_accept_quote - only auth.uid() proves access instead of a token."
-  },
-  {
    "fn": "portal_add_contact",
    "args": "p_token text, p_phone text, p_email text",
    "comment": "Portal self-service: fill a MISSING customer phone/email from a valid portal token. Fills only - never overwrites a populated field (an email change is an identity change). Never touches sms_opt_in/email_opt_in/message_prefs. Refuses a value another customer of the same owner already holds. Returns the row state read back after the write."
@@ -44,11 +39,6 @@
    "fn": "portal_set_scheduling_preference",
    "args": "p_token text, p_quote_id uuid, p_date date, p_date_2 date, p_timing text, p_note text",
    "comment": "THE writer of a customer's scheduling preference. Token proves the customer; quote must be theirs and 'accepted'. A preference is a request — it never creates, moves, or implies a visit. All-null clears it."
-  },
-  {
-   "fn": "quote_apply_option_choice",
-   "args": "p_quote_id uuid, p_option_id uuid",
-   "comment": "THE single writer of quotes.selected_option_id and the option-derived price. Carries no authorisation - callers must prove access first. Deliberately granted to no role."
   },
   {
    "fn": "schema_contract",
@@ -89,6 +79,26 @@
   {
    "tbl": "follow_ups",
    "comment": "Owner follow-up commitments: WHO (customer_id, mandatory) / WHEN (due_on, a local date) / WHY (reason) / open|done. NOT public.schedule_items (empty, unread, calendar-shaped) and NOT lib/followup.ts (the derived quote chaser). Never messages the customer — this is an owner reminder only."
+  },
+  {
+   "tbl": "form_template_fields",
+   "comment": "The fields of a form template. Editing them affects FUTURE instances only - job_forms carries a frozen snapshot."
+  },
+  {
+   "tbl": "form_templates",
+   "comment": "Reusable checklist/form definitions (Job Forms V1). Owner+crew audience - no portal projection may select these tables. Archive (archived_at), never hard-delete: job_forms.template_id RESTRICTs deletion once instances exist."
+  },
+  {
+   "tbl": "job_form_response_photos",
+   "comment": "Links a photo-field response to canonical job_photos rows OF THE SAME VISIT (trigger-enforced). No second upload path exists."
+  },
+  {
+   "tbl": "job_form_responses",
+   "comment": "Answers, one row per (form, field). answered_by/answered_role/answered_at record who actually wrote it - never inferred. Frozen with the visit: post-completion changes require correction_reason (owner only)."
+  },
+  {
+   "tbl": "job_forms",
+   "comment": "A form instance attached to ONE visit (a jobs row). fields = frozen snapshot at attach time, immutable by trigger. waived_* = the owner's recorded completion-gate override (the audit-trail seam)."
   },
   {
    "tbl": "job_work_sessions",
@@ -276,6 +286,11 @@
    "comment": "Digits-only form of phone, for search only. Generated — never write to it. Display and dial from `phone`, which keeps the owner's own formatting."
   },
   {
+   "col": "preferred_channel",
+   "tbl": "customers",
+   "comment": "How the customer prefers to be contacted: sms | email | phone | NULL (no preference). A PREFERENCE, never consent — it orders the channels consent already allows and can never grant one. 'phone' is an instruction to the owner; the send pipeline never places calls."
+  },
+  {
    "col": "crew_id",
    "tbl": "equipment",
    "comment": "Crew this vehicle/equipment is assigned to for dispatch. NULL = unassigned pool."
@@ -346,9 +361,19 @@
    "comment": "How many automatic payment reminders have been sent. Compare-and-swapped by /api/cron/invoice-reminders to guarantee at-most-once, and capped by the owner's maximum."
   },
   {
+   "col": "fields",
+   "tbl": "job_forms",
+   "comment": "Frozen snapshot of the template's fields at attach time. Historical record - guarded by job_forms_freeze."
+  },
+  {
    "col": "change_order_id",
    "tbl": "job_line_items",
    "comment": "Set only by change_order_apply_approval(). Its presence means this money exists BECAUSE a customer approved a change order - never hand-write it."
+  },
+  {
+   "col": "form_template_id",
+   "tbl": "job_recurrences",
+   "comment": "Default checklist for this recurring series' visits; wins over the service template's default. Each visit mints its own independent instance."
   },
   {
    "col": "completion_issue",
@@ -484,6 +509,11 @@
    "col": "photos",
    "tbl": "service_requests",
    "comment": "booking-uploads STORAGE PATHS (never URLs) the customer attached. The bucket is named in application code at render time; see portal_request_photos_ok for the enforced shape."
+  },
+  {
+   "col": "form_template_id",
+   "tbl": "service_templates",
+   "comment": "Default checklist for work created from this service. Resolved at attach time (lazily) - changing it never rewrites an already-minted job form."
   },
   {
    "col": "is_favorite",

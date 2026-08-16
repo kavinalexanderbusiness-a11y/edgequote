@@ -1,3 +1,17 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ARCHIVED MIGRATION — HISTORY ONLY. DO NOT RE-RUN.
+--
+--   version : 20260815120000
+--   name    : job_forms_v1
+--
+-- Recovered 2026-08-15 from supabase_migrations.schema_migrations — the SQL
+-- production actually executed, not a repo file believed to match it.
+--
+-- Its effects are already folded into supabase/migrations/*_baseline.sql. This
+-- copy exists so "why is this column here?" is answerable, and for nothing else.
+-- Re-running one replaces a live object with an older body — silently, no error.
+-- ═══════════════════════════════════════════════════════════════════════════
+
 -- ── Job Forms + Checklists V1 (Session 69) ──────────────────────────────────
 --
 -- A service business standardises how work is performed and documented without

@@ -929,5 +929,110 @@
   "sql_md5": "a080916bb8660150fcf2259d76d15c68",
   "version": "20260814060713",
   "stmt_count": 1
+ },
+ {
+  "name": "baseline_consolidation_2026_08_14b",
+  "sql_len": 828,
+  "sql_md5": "5db7bdc452778bb6bcc71fdcf322dbf9",
+  "version": "20260814060714",
+  "stmt_count": 1
+ },
+ {
+  "name": "customer_preferred_channel",
+  "sql_len": 665,
+  "sql_md5": "8339fae07db9c6fe2c5a9124da84ce6c",
+  "version": "20260814074454",
+  "stmt_count": 1
+ },
+ {
+  "name": "quote_addons_v1_schema",
+  "sql_len": 8170,
+  "sql_md5": "ed4adba31ea5eec07853afb3c912e5c3",
+  "version": "20260814074818",
+  "stmt_count": 1
+ },
+ {
+  "name": "quote_addons_v1_choice_core",
+  "sql_len": 8318,
+  "sql_md5": "6f7e055e15544d78b180649b02e838c7",
+  "version": "20260814074915",
+  "stmt_count": 1
+ },
+ {
+  "name": "quote_addons_v1_portal_projection",
+  "sql_len": 1598,
+  "sql_md5": "b1fecf4deb1f1574720737b6237b2da9",
+  "version": "20260814074926",
+  "stmt_count": 1
+ },
+ {
+  "name": "temp_mutation_test_addons_freeze_disabled",
+  "sql_len": 1196,
+  "sql_md5": "603640b1c5f1d6bfc58af4f0378d4065",
+  "version": "20260814083236",
+  "stmt_count": 1
+ },
+ {
+  "name": "quote_addons_v1_restore_write_guard_after_mutation_test",
+  "sql_len": 1938,
+  "sql_md5": "3c378468977687082f952cabe3b7afdb",
+  "version": "20260814083315",
+  "stmt_count": 1
+ },
+ {
+  "name": "temp_mutation_test_addons_rls_freeze_disabled",
+  "sql_len": 742,
+  "sql_md5": "456db973c4f6b33f8807bb3432c443da",
+  "version": "20260814083328",
+  "stmt_count": 1
+ },
+ {
+  "name": "quote_addons_v1_restore_rls_after_mutation_test",
+  "sql_len": 1389,
+  "sql_md5": "3eaea5db587fdf819ad7582ef63ef4ba",
+  "version": "20260814083359",
+  "stmt_count": 1
+ },
+ {
+  "name": "temp_mutation_test_addons_core_sums_every_option",
+  "sql_len": 2569,
+  "sql_md5": "e47da81c8b1ba4e3d29f3923708ac414",
+  "version": "20260814083415",
+  "stmt_count": 1
+ },
+ {
+  "name": "quote_addons_v1_restore_choice_core_after_mutation_test",
+  "sql_len": 3754,
+  "sql_md5": "09226a176de95c3e2c61805c8efe9c05",
+  "version": "20260814083449",
+  "stmt_count": 1
+ },
+ {
+  "name": "temp_mutation_test_addons_single_column_fk",
+  "sql_len": 403,
+  "sql_md5": "ba273aec4d2083a5d57ac4d956a94cdb",
+  "version": "20260814083456",
+  "stmt_count": 1
+ },
+ {
+  "name": "quote_addons_v1_restore_composite_fk_after_mutation_test",
+  "sql_len": 468,
+  "sql_md5": "60e6248b2d4e5cb10bdfc1261afdd07f",
+  "version": "20260814083542",
+  "stmt_count": 1
+ },
+ {
+  "name": "job_forms_v1",
+  "sql_len": 56289,
+  "sql_md5": "ee82282896147da50370de7507a3ddc0",
+  "version": "20260815120000",
+  "stmt_count": 1
+ },
+ {
+  "name": "job_forms_attach_rpc",
+  "sql_len": 1762,
+  "sql_md5": "cbd5ffb1dbdfae8cbd7832f96d2085aa",
+  "version": "20260815124500",
+  "stmt_count": 1
  }
 ]
