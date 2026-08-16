@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { commsEnabled, sendSms, sendEmail } from '@/lib/comms/send'
 import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
+import { appOriginReport } from '@/lib/appOrigin'
 
 // Communications self-test. Owner-only. NEVER touches customers — the POST sends
 // ONLY to the number/email typed into the Settings test page.
@@ -118,6 +119,7 @@ export async function GET() {
         truncated: rows.length >= MAX_LOG_ROWS,
       }
 
+  const appOrigin = appOriginReport()
   return NextResponse.json({
     enabled,
     restricted,
@@ -129,7 +131,13 @@ export async function GET() {
     twilioCreds,
     resendCreds,
     recentSends,
-    appUrl: process.env.NEXT_PUBLIC_APP_URL || null,
+    // The origin links in these messages are actually built on — normalized, so
+    // this answers "where will the link point?" rather than "what string is
+    // stored?". appUrlSanitized flags the case those two answers differ: the
+    // stored value had characters that had to be stripped, which is invisible in
+    // any viewer that renders it (a BOM in this var once 403'd every inbound SMS).
+    appUrl: appOrigin.origin,
+    appUrlSanitized: appOrigin.sanitized,
   })
 }
 

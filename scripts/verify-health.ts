@@ -133,6 +133,15 @@ check('health reports the origin links are built on (cleaned)',
 check('health also reports the raw configured value',
   /app_url_raw:\s*process\.env\.NEXT_PUBLIC_APP_URL/.test(health), true)
 
+// …and the case cleaning CANNOT rescue. A BOM is repaired, so it is not an
+// outage; a value that is not a URL at all (a host with no scheme, a typo)
+// leaves every emailed link, Stripe return URL and signature-checked webhook
+// URL built on sand, and that must not sit inside a body that says "ok".
+check('a configured-but-unusable app origin degrades the deploy',
+  /appOriginUnusable/.test(health) && /const\s+degraded\s*=[^\n]*appOriginUnusable/.test(health), true)
+check('…and the deploy says which variable is at fault',
+  /app_url_warning/.test(health), true)
+
 // ═══════════════════════════════════════════════════════════════════════════
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:health — ${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

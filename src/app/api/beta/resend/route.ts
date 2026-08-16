@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { commsEnabled, sendEmail } from '@/lib/comms/send'
+import { appOrigin } from '@/lib/appOrigin'
 import {
   BETA_TOKEN_RE, buildBetaConfirmUrl,
   type BetaSignupFailureReason, type BetaSignupResponse,
@@ -81,7 +82,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const vtype = link?.properties?.verification_type || 'signup'
   if (linkErr || !hashed) return fail('email-failed', 'Couldn’t prepare a new confirmation email — try again shortly.', 502)
 
-  const origin = (process.env.NEXT_PUBLIC_APP_URL || req.nextUrl.origin).replace(/\/$/, '')
+  const origin = appOrigin(req.nextUrl.origin)
   const message = betaVerifyEmail(buildBetaConfirmUrl(origin, hashed, vtype))
   const sent = await sendEmail(holder.email, message.subject, message.html, message.text)
   if (!sent.sent) return fail('email-failed', 'The confirmation email didn’t send — try again shortly.', 502)

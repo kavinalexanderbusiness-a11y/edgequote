@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { classifyCronHealth, STALE_AFTER_DAYS, type CronVerdict } from '@/lib/cron/heartbeat'
-import { appOrigin } from '@/lib/appOrigin'
+import { appOrigin, isUsableOrigin } from '@/lib/appOrigin'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -162,8 +162,28 @@ export async function GET() {
   const crons = await cronHealth(url, service, cron)
   const cronsStopped = process.env.VERCEL_ENV === 'production' && cron && crons.readable && !crons.operational
 
+  // The origin every generated link, every Stripe return URL and every webhook
+  // URL we RECONSTRUCT to check a signature is built from. On 2026-08-15 this
+  // env var picked up a UTF-8 BOM, which broke Stripe checkout, 403'd every
+  // inbound SMS (the signature is computed over the URL) and silently dropped
+  // the SMS status callback — three different directions of failure, so no
+  // single symptom ever pointed back at the variable.
+  //
+  // Configured but unusable = every link this deploy sends is broken. That is an
+  // outage, and it degrades. Production only, for the same reason as the crons:
+  // a local run legitimately has no origin configured, and degrading there would
+  // train everyone to ignore the word.
+  //
+  // Note the asymmetry with the BOM: cleanOrigin REPAIRS a value that merely
+  // picked something up in transit, so that case is not an outage and does not
+  // degrade — app_url_raw is what exposes it. This catches the value cleaning
+  // cannot rescue: a host with no scheme, or something that is not a URL at all.
+  const appOriginUnusable = process.env.VERCEL_ENV === 'production'
+    && !!process.env.NEXT_PUBLIC_APP_URL?.trim()
+    && !isUsableOrigin(process.env.NEXT_PUBLIC_APP_URL)
+
   const down = !checks.database.ok
-  const degraded = !checks.config.ok || stripeKeyOnly || cronsDeclaredButUnusable || cronsStopped
+  const degraded = !checks.config.ok || stripeKeyOnly || cronsDeclaredButUnusable || cronsStopped || appOriginUnusable
 
   return NextResponse.json(
     {
@@ -183,6 +203,9 @@ export async function GET() {
       // enough to break every link. app_url is what links actually carry.
       app_url: appOrigin() || null,
       app_url_raw: process.env.NEXT_PUBLIC_APP_URL || null,
+      ...(appOriginUnusable
+        ? { app_url_warning: 'NEXT_PUBLIC_APP_URL is set but is not a usable http(s) origin — every generated link, every Stripe return URL and every signature-checked webhook URL is built from it' }
+        : {}),
       checks,
       capabilities: {
         payments: stripe,
