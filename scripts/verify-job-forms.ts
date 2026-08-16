@@ -47,8 +47,12 @@ const check = (name: string, cond: boolean, detail = '') => cond ? ok(name) : fa
 const src = (p: string) => readFileSync(join(process.cwd(), p), 'utf8')
 // Strip comments BEFORE asserting absence/presence — a rule must not be
 // satisfiable (or breakable) by the prose that states it. [^\n] not '.' — CRLF.
+// ⚠️ A bare /\/\*…\*\// stripper eats 10KB of REAL JSX here: `accept="image/*"`
+// opens a "comment" that runs to the next */ (found 2026-08-15 — six checks
+// went vacuous on the truncated text). A comment opener is only a /* NOT
+// preceded by a word character, so image/* and application/* survive.
 const code = (s: string) => s
-  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/(^|[^\w"'])\/\*[\s\S]*?\*\//gm, '$1')
   .replace(/^[^\S\n]*\/\/[^\n]*$/gm, '')
 const sql = (s: string) => s.replace(/--[^\n]*/g, '')
 const flat = (s: string) => s.replace(/\r/g, '')
@@ -322,9 +326,27 @@ check('the gate marker parses into the human sentence',
 check('empty-value detection treats undefined and null alike',
   isEmptyValue({}) && isEmptyValue({ text: null }) && !isEmptyValue({ bool: false }) && !isEmptyValue({ number: 0 }))
 
-// ═══ 11 · live, in the marked fixture tenant (skips clean without creds) ═════
+// ═══ 11 · phone-shaped, asserted in the markup ═══════════════════════════════
+console.log('\n═══ 11 · phone-shaped (static): targets, keyboards, wrapping ═══')
+check('every interactive crew control is a ≥40px thumb target',
+  (crewChecklist.match(/tap-target h-10|'h-10'|, 'h-10'\)/g) || []).length >= 5,
+  'checkbox/yes-no/dropdown/number/photo controls must all be tappable from a driveway')
+check('number fields summon the number keyboard',
+  /inputMode="decimal"/.test(crewChecklist))
+check('date and time fields use the native pickers',
+  /type=\{field\.type\}/.test(crewChecklist))
+check('photo capture opens the camera, not a file browser',
+  /capture="environment"/.test(crewChecklist))
+check('labels wrap instead of overflowing a 375px card',
+  /min-w-0 break-words/.test(crewChecklist) && /whitespace-pre-wrap break-words/.test(crewChecklist))
+check('saves are per-control (commit on tap/blur) — there is no distant Save for a keyboard to cover',
+  !/type="submit"/.test(crewChecklist) && /onBlur=\{/.test(crewChecklist))
+check('failed saves render beside the field they failed on, with the words kept',
+  /role="status"/.test(crewChecklist) && /save\.error/.test(crewChecklist))
+
+// ═══ 12 · live, in the marked fixture tenant (skips clean without creds) ═════
 async function liveChecks() {
-  console.log('\n═══ 11 · live (fixture tenant) ═══')
+  console.log('\n═══ 12 · live (fixture tenant) ═══')
   const t = await openFixtureTenant('verify:job-forms')
   if (isSkipped(t)) { console.log(`  · live half skipped — ${t.skipped}`); return }
   const jobIds: string[] = []
