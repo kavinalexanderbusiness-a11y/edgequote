@@ -47,6 +47,9 @@ type Load =
   | { kind: 'ok'; media: MediaItem[]; at: number }
   | { kind: 'error'; message: string }
 
+// (Documents shared to the visit are a separate, deliberately parallel section —
+// see CrewStopDocuments. Reference media is what the work LOOKS like; a permit is
+// paperwork, and folding them together would bury one in the other.)
 export function CrewStopMedia({ jobId, photos, videos }: {
   jobId: string
   photos: number

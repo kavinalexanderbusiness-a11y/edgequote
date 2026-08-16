@@ -1046,6 +1046,51 @@ end;
 $function$;
 
 
+-- ⭐ ONE request for the whole day, not one per stop. The crew day already
+-- resolves reference-media counts this way, for the reason that matters on a
+-- phone at the edge of coverage: an affordance that costs a round trip per stop
+-- is fifteen round trips before the worker has tapped anything. The counts drive
+-- whether the section is offered; the list itself is fetched only when opened.
+create or replace function public.crew_document_counts(p_date date)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+declare
+  v_employer uuid := public.crew_employer();
+  v_crew     uuid := public.crew_crew_id();
+  v_out      jsonb;
+begin
+  if v_employer is null or v_crew is null then
+    return jsonb_build_object('ok', false, 'reason', 'not_authorized');
+  end if;
+
+  select coalesce(jsonb_object_agg(x.job_id, x.n), '{}'::jsonb)
+    into v_out
+    from (
+      select d.job_id::text as job_id, count(*) as n
+        from public.documents d
+        join public.jobs j
+          on j.id = d.job_id
+         and j.user_id = v_employer
+         and j.crew_id = v_crew
+         and j.scheduled_date = p_date
+       where d.user_id = v_employer
+         and d.visibility = 'worker'
+         and d.archived_at is null
+         -- A document with no version has no file to open. Counting it would
+         -- offer the worker a section that turns out to be empty.
+         and exists (select 1 from public.document_versions v where v.document_id = d.id)
+       group by d.job_id
+    ) x;
+
+  return jsonb_build_object('ok', true, 'counts', v_out);
+end;
+$function$;
+
+
 -- ── 12 · function grants ─────────────────────────────────────────────────────
 -- Portal functions are reachable by anon BY DESIGN (the portal has no JWT) and
 -- are safe because each one re-scopes by the token it was handed. Crew functions
@@ -1072,3 +1117,6 @@ grant execute on function public.crew_job_documents(uuid) to authenticated, serv
 
 revoke all on function public.crew_document_file(uuid) from public, anon;
 grant execute on function public.crew_document_file(uuid) to authenticated, service_role;
+
+revoke all on function public.crew_document_counts(date) from public, anon;
+grant execute on function public.crew_document_counts(date) to authenticated, service_role;

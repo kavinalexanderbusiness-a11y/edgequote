@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { CrewStopPhotos } from '@/components/crew/CrewStopPhotos'
 import { CrewStopMedia } from '@/components/crew/CrewStopMedia'
+import { CrewStopDocuments } from '@/components/crew/CrewStopDocuments'
 import { CrewStopConversation } from '@/components/crew/CrewStopConversation'
 import {
   startCrewInboxFeed, subscribeCrewInbox, getCrewInboxSnapshot, getCrewInboxServerSnapshot,
@@ -83,6 +84,10 @@ export function CrewToday() {
   // fact about the work. Missing them hides an optional section; an error banner
   // over it would push the day's real work off the screen.
   const [mediaCounts, setMediaCounts] = useState<Record<string, { photos: number; videos: number }>>({})
+  // Same contract as mediaCounts, for the same reason: ONE request for the day
+  // rather than one per stop, and a silent failure — the counts drive an optional
+  // affordance, never a fact about the work.
+  const [docCounts, setDocCounts] = useState<Record<string, number>>({})
   // ⭐ ONE inbox fetch feeds BOTH the per-stop "Crew chat · 2 new" badges here
   // and the count on the Messages tab. Two components each running their own
   // effect against the same source is the bug NotificationBell already paid for
@@ -133,6 +138,16 @@ export function CrewToday() {
       const res = await fetch(`/api/crew/media?date=${encodeURIComponent(today)}`)
       const d = await res.json().catch(() => ({}))
       if (alive.current && res.ok && d.ok) setMediaCounts(d.counts || {})
+    } catch { /* an optional affordance, never the day */ }
+
+    // Documents shared to today's visits. A crew session has no table access, so
+    // this is an RPC like every other crew read. Kept in its own try for the same
+    // reason as the media counts: it must never be able to affect whether the day
+    // renders, or in which state.
+    try {
+      const { data: dc } = await supabase.rpc('crew_document_counts', { p_date: today })
+      const res = dc as { ok?: boolean; counts?: Record<string, number> } | null
+      if (alive.current && res?.ok) setDocCounts(res.counts || {})
     } catch { /* an optional affordance, never the day */ }
   }, [supabase, today])
 
@@ -466,6 +481,13 @@ export function CrewToday() {
                   photos={mediaCounts[stop.id]?.photos ?? 0}
                   videos={mediaCounts[stop.id]?.videos ?? 0}
                 />
+
+                {/* …and the PAPERWORK for it — the permit, the site plan, the
+                    access letter. Read-only: there is no crew upload and no crew
+                    signing door, because field capture is Forms' territory and a
+                    second signature path racing it would be a competing engine.
+                    Renders nothing when nothing was shared to this visit. */}
+                <CrewStopDocuments jobId={stop.id} count={docCounts[stop.id] ?? 0} />
 
                 {/* …and what is being SAID about it. Deliberately beside the work
                     instructions and not merged with them: the note above is the

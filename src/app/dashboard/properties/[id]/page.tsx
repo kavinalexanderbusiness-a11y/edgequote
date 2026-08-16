@@ -16,6 +16,7 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { DocumentsPanel } from '@/components/documents/DocumentsPanel'
 import { Textarea } from '@/components/ui/Textarea'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { getPropertyContext, type PropertyIntelligence } from '@/lib/ai/propertyContext'
@@ -365,6 +366,22 @@ export default function PropertyDetailPage() {
       {/* The summary's photo door targets this — the photos ARE timeline events,
           so the honest destination is the history that already renders them
           rather than a second gallery that would have to stay in sync. */}
+      {/* Site paperwork — the permit, the gate code letter, the inspection report.
+          Filed against the ADDRESS rather than the customer, because it stays true
+          when the customer changes. `customerId` is what makes a signature
+          requestable here: the site resolves to its customer, and a document with
+          nobody to ask cannot be sent for signature. */}
+      <Card>
+        <CardBody>
+          <DocumentsPanel
+            userId={property.user_id}
+            entity={{ kind: 'property', id: property.id }}
+            customerId={property.customer_id}
+            heading="Site documents"
+          />
+        </CardBody>
+      </Card>
+
       <div id="property-history" className="scroll-mt-4">
       <TimelineCard
         key={id}

@@ -45,6 +45,7 @@ import { Modal } from '@/components/ui/Modal'
 import { CustomerForm } from '@/components/customers/CustomerForm'
 import { Banner } from '@/components/ui/Banner'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { DocumentsPanel } from '@/components/documents/DocumentsPanel'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Button, ButtonLink } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
@@ -1433,6 +1434,18 @@ export default function CustomerDetailPage() {
           component mounted, and a search typed for one customer must not silently
           filter the next one's history. */}
       <TimelineCard key={id} events={allEvents} missing={tlMissing} onRetry={reload} />
+
+      {/* Durable paperwork filed against this customer — the signed authorization,
+          the warranty, the permit. It sits with the record it belongs to rather
+          than in a business-wide file browser: a document is found where the work
+          is, and that is also the only place its visibility means anything.
+          Below the timeline for the same reason the timeline is below today's
+          work — paperwork is reference, not the next action. */}
+      <Card>
+        <CardBody>
+          <DocumentsPanel userId={customer.user_id} entity={{ kind: 'customer', id }} customerId={id} />
+        </CardBody>
+      </Card>
 
       {/* The comms cluster — health, AI brief, live thread, then consent + reference.
           It follows the daily-use cards above: the phone-call answers (owed · notes ·

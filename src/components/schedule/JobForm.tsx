@@ -24,6 +24,7 @@ import { ServiceEstimateLearning } from '@/components/labor/ServiceEstimateLearn
 import { JobCostPanel } from '@/components/jobs/JobCostPanel'
 import DurationField from '@/components/jobs/DurationField'
 import WorkSessionsPanel from '@/components/jobs/WorkSessionsPanel'
+import { DocumentsPanel } from '@/components/documents/DocumentsPanel'
 import { formatDuration, workdayMinutes } from '@/lib/workDuration'
 import { JobReferenceMedia } from '@/components/schedule/JobReferenceMedia'
 import { AUDIENCE_COPY } from '@/lib/noteScope'
@@ -700,6 +701,21 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           // against the same number every other surface shows.
           onTotalChange={m => setValue('actual_minutes', m ?? 0, { shouldValidate: false })} />
         </div>
+      )}
+
+      {/* Documents attached to THIS visit. Only on a saved visit — a document
+          needs a job id to point at, and there is none until the visit exists.
+          ⭐ This is also the ONLY place a document can be made worker-visible:
+          the crew is authorized against a visit, so a document with no visit has
+          no crew to share it with (documents_worker_needs_job says the same thing
+          in the schema). */}
+      {isEdit && excludeJobId && ownerId && (
+        <DocumentsPanel
+          userId={ownerId}
+          entity={{ kind: 'job', id: excludeJobId }}
+          customerId={customerId || null}
+          heading="Visit documents"
+        />
       )}
 
       {status === 'completed' && (
