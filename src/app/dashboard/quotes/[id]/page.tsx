@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Quote, Customer, QuoteFormValues, QuoteService, QuoteOption, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, STATUS_LABELS, PAYMENT_METHODS } from '@/types'
 import { sumServiceLines, serviceLineTotals, splitServices, recentTemplateIdsFrom } from '@/lib/quoteServices'
@@ -135,7 +136,7 @@ export default function QuoteDetailPage() {
         supabase.from('quote_services').select('*').eq('quote_id', id).order('sort_order'),
         // The owner's own order, which is the order the customer saw.
         supabase.from('quote_options').select('*').eq('quote_id', id).order('sort_order'),
-        supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
+        supabase.from('customers').select('*, properties(id, address, city, province, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
         supabase.from('service_templates').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('travel_fee_tiers').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('business_settings').select('*').eq('user_id', user!.id).maybeSingle(),
@@ -1476,8 +1477,25 @@ export default function QuoteDetailPage() {
       <Card>
         <div className="p-6 border-b border-border bg-gradient-to-r from-accent/5 to-transparent">
           <p className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide mb-1">Customer</p>
-          <p className="text-lg font-bold text-ink">{quote.customer_name}</p>
-          <p className="text-sm text-ink-muted mt-0.5">{quote.address}</p>
+          {/* Doors, not captions — from a quote you constantly need the customer
+              (call them, check what they owe) or the location (access notes, what
+              else happened there). Plain text when the quote has no linked row. */}
+          {quote.customer_id ? (
+            <Link href={`/dashboard/customers/${quote.customer_id}`}
+              className="text-lg font-bold text-ink hover:text-accent-text transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              {quote.customer_name}
+            </Link>
+          ) : (
+            <p className="text-lg font-bold text-ink">{quote.customer_name}</p>
+          )}
+          {quote.property_id ? (
+            <Link href={`/dashboard/properties/${quote.property_id}`}
+              className="block text-sm text-ink-muted mt-0.5 hover:text-accent-text transition-colors rounded w-fit focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              {quote.address}
+            </Link>
+          ) : (
+            <p className="text-sm text-ink-muted mt-0.5">{quote.address}</p>
+          )}
         </div>
         <CardBody className="space-y-3">
           <div className="grid grid-cols-2 gap-4 text-sm">

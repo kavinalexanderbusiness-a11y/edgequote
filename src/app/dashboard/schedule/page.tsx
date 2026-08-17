@@ -79,7 +79,7 @@ import { orderDayStops, nextFieldStop } from '@/lib/fieldStops'
 import { toast } from '@/lib/toast'
 import { confirm } from '@/lib/confirm'
 import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays, parseISO, getDay } from 'date-fns'
-import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info, Phone, MessageSquare, Navigation, User as UserIcon, FileText, Receipt } from 'lucide-react'
+import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info, Phone, MessageSquare, Navigation, User as UserIcon, FileText, Receipt, MapPin } from 'lucide-react'
 import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
 import { RainDelayCenter } from '@/components/schedule/RainDelayCenter'
 import { WeatherStrip } from '@/components/weather/WeatherStrip'
@@ -2898,6 +2898,10 @@ export default function SchedulePage() {
                     href={directionsUrl({ lat: editing.properties?.lat ?? null, lng: editing.properties?.lng ?? null, address: editing.properties?.address }, baseCoord)} />
                 )}
                 {editing.customer_id && <QuickAction href={`/dashboard/customers/${editing.customer_id}`} icon={UserIcon} label="Customer" />}
+                {/* The visit's LOCATION page — its history, access notes and siblings.
+                    Distinct from Navigate (directions to it) and Customer (who it's
+                    for): a customer with several addresses needs the door to THIS one. */}
+                {editing.property_id && <QuickAction href={`/dashboard/properties/${editing.property_id}`} icon={MapPin} label="Location" />}
                 {editing.quote_id && <QuickAction href={`/dashboard/quotes/${editing.quote_id}`} icon={FileText} label="Quote" />}
                 {editing.status === 'completed' && <QuickAction href="/dashboard/invoices" icon={Receipt} label="Invoice" />}
               </div>
