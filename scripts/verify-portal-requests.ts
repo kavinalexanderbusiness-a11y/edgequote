@@ -400,7 +400,12 @@ H('10 · the dashboard counts it once, not twice')
   check('the tier sits above unread messages',
     /kind: 'requests'[\s\S]{0,200}score: 32_000/.test(pri) && /kind: 'messages'[\s\S]{0,200}score: 30_000/.test(pri))
   check('the engine is fed rows already filtered by ITS OWN predicate',
-    /requests: openRequests\(/.test(data))
+    // Either form of the same chain: the inline call, or S97's named binding —
+    // ONE openRequests() result feeding both the engine and the briefing's
+    // requestsOpen count, so the two can never disagree. What must never pass
+    // is computePriorities receiving reqRes rows raw.
+    /requests: openRequests\(/.test(data)
+    || (/const openReqs = openRequests\(/.test(data) && /requests: openReqs,/.test(data)))
   check('the dashboard query asks the database for open portal rows',
     /from\('service_requests'\)[\s\S]{0,200}\.eq\('from_portal', true\)[\s\S]{0,60}\.eq\('status', 'new'\)/.test(data))
   check('a failed request read takes the dashboard down rather than painting a reassuring zero',
