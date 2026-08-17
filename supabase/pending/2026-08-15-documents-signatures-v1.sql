@@ -332,12 +332,23 @@ create index if not exists document_signature_requests_user_id_idx on public.doc
 create index if not exists document_signature_requests_document_id_idx on public.document_signature_requests (document_id);
 create index if not exists document_signature_requests_customer_id_idx on public.document_signature_requests (customer_id);
 
--- ⭐ REPLAY DEFENCE, PART 1. At most ONE open request per document. Without this
--- a caller could hold two pending request ids for the same file and satisfy both
--- with one act of consent.
-create unique index if not exists document_signature_requests_one_open
-  on public.document_signature_requests (document_id)
-  where cancelled_at is null;
+-- ⚠️ THERE IS DELIBERATELY NO PARTIAL UNIQUE INDEX HERE, and the reason is worth
+-- writing down because the obvious version is wrong.
+--
+--   create unique index … on (document_id) where cancelled_at is null
+--
+-- reads as "at most one OPEN request per document", but a partial index cannot
+-- see another table, so it cannot tell a PENDING request from a FULFILLED one. A
+-- signed request is not cancelled, so it keeps occupying the slot forever: sign
+-- v1, upload v2, ask for a signature on v2 — refused, permanently. That would
+-- make a signed document impossible to re-sign after a revision, which is the
+-- exact flow versioning exists to support.
+--
+-- "One open request" is a cross-table fact, so it is enforced where cross-table
+-- facts belong — in the guard trigger below, which excludes requests that
+-- already have a signature. Replay is a separate concern and is fully handled by
+-- document_signatures_one_per_request: one request, one signature, enforced by
+-- the database.
 
 
 -- ── 5 · the signature (the act) ──────────────────────────────────────────────
@@ -590,6 +601,21 @@ begin
   ) then
     raise exception 'version % does not belong to document %', new.version_id, new.document_id
       using errcode = 'check_violation';
+  end if;
+
+  -- ⭐ ONE OPEN REQUEST AT A TIME — the cross-table version of it. "Open" means
+  -- not cancelled AND not yet signed; a fulfilled request must not block asking
+  -- again after a new version lands.
+  if exists (
+    select 1 from public.document_signature_requests r
+     where r.document_id = new.document_id
+       and r.cancelled_at is null
+       and not exists (select 1 from public.document_signatures s where s.request_id = r.id)
+  ) then
+    raise exception
+      'document % is already waiting on a signature — cancel that request before asking again',
+      new.document_id
+      using errcode = 'unique_violation';
   end if;
 
   v_resolved := public.document_customer_id(v_doc.customer_id, v_doc.property_id, v_doc.job_id);

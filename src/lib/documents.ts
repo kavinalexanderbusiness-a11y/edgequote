@@ -67,6 +67,8 @@ export interface DocumentVersion {
 export interface DocumentSignature {
   id: string
   document_id: string
+  /** The request this satisfied. Unique — one request, one signature. */
+  request_id: string
   version_id: string
   customer_id: string
   signer_name: string
@@ -196,7 +198,7 @@ export function toView(row: DocumentRecord): DocumentView {
   const signature = signatures.length
     ? signatures.reduce((a, b) => (b.signed_at > a.signed_at ? b : a))
     : null
-  const signedRequestIds = new Set(signatures.map(s => (s as { request_id?: string }).request_id))
+  const signedRequestIds = new Set(signatures.map(s => s.request_id))
   const openRequest = (row.document_signature_requests ?? []).find(
     r => !r.cancelled_at && !signedRequestIds.has(r.id),
   ) ?? null

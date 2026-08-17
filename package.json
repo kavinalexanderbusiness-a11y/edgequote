@@ -11,6 +11,7 @@
     "verify:capabilities": "tsx scripts/verify-capabilities.ts",
     "verify:comms-governor": "tsx scripts/verify-comms-governor.ts",
     "verify:completion": "tsx scripts/verify-completion.ts",
+    "verify:documents": "tsx scripts/verify-documents.ts",
     "verify:scoped-notes": "tsx scripts/verify-scoped-notes.ts",
     "verify:business-shape": "tsx scripts/verify-business-shape.ts",
     "verify:trades": "tsx scripts/verify-trades.ts",
