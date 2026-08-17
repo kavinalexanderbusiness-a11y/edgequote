@@ -304,6 +304,10 @@ export interface Job {
   // Which crew runs this visit (RUN-2026-07-15-dispatch-crews). null = unassigned —
   // the single-crew status quo. Orthogonal to crew_size, which stays headcount.
   crew_id?: string | null
+  // The OTHER half of the one assignment truth: this visit is one named person's.
+  // A visit carries a crew or a person, never both (jobs_one_assignee enforces it
+  // in the database). Read them through lib/crewAssignment, never separately.
+  technician_id?: string | null
   // `email` joined the pick for change orders: whether an approval ask can be
   // DELIVERED at all is "phone or email", and a phone-only test would have hidden
   // the Send button from every email-only customer.
@@ -364,6 +368,23 @@ export interface Crew {
   capacity_minutes: number | null // explicit daily capacity; null = derive from window
   is_active: boolean
   sort_order: number
+  /** Optional crew lead — a MEMBER wearing a hat, not a rank. The database keeps
+   *  the pointer honest: it must be an active member of this crew, and it clears
+   *  itself the moment they leave the crew or the roster. Never a pay grade. */
+  lead_technician_id?: string | null
+}
+
+/** One append-only fact: as of `changed_at`, this person's crew became `crew_id`
+ *  (null = no crew). Written only by a database trigger — no client role may
+ *  insert, update or delete one. It exists so that moving somebody between crews
+ *  today cannot restate which crew they belonged to when last week's work
+ *  happened. See lib/crewAssignment.crewIdAsOf. */
+export interface CrewMembershipChange {
+  id: string
+  user_id: string
+  technician_id: string
+  crew_id: string | null
+  changed_at: string
 }
 
 export type TechnicianStatus = 'available' | 'en_route' | 'on_job' | 'break' | 'off'
@@ -637,12 +658,11 @@ export interface JobFormValues {
   notes: string
   actual_minutes: number
   price: number
-  // Which crew runs this visit ('' = unassigned). Mirrors jobs.crew_id — the
-  // ONLY assignment model on main (crews are identities; crew_size stays the
-  // headcount). The save applies it ONLY when it changed this session, so a
-  // scope-wide edit can never silently overwrite the dispatch board's
-  // per-visit crew assignments.
-  crew_id: string
+  /** Who is coming — the two assignment columns, written together and never
+   *  independently (see lib/crewAssignment). Optional so existing callers that
+   *  do not offer the chooser keep working; absent means "leave as it is". */
+  crew_id?: string | null
+  technician_id?: string | null
 }
 
 export const JOB_STATUS_LABELS: Record<JobStatus, string> = {

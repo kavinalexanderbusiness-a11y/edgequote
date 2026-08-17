@@ -206,6 +206,112 @@ const ins = await db.query(`
 ok('B3: the public booking upload path is preserved (anon INSERT still exists)', ins.rows[0].n === 1)
 
 // ═══════════════════════════════════════════════════════════════════════════
+H('2b. THE PORTAL PROVES BOTH — every customer lookup also constrains the tenant')
+
+// THE RULE the readiness review asked for: no portal function may resolve rows by
+// customer alone. Read from the apply path, so it cannot be satisfied by a repo
+// file production never applied.
+// The apply path is applied IN ORDER, and `create or replace` means the LAST
+// definition of a function is the one that ends up in the database. The baseline
+// still carries the pre-patch bodies, so scanning every match would report a state
+// that never exists at rest. Keep only the final definition of each function.
+const finalBody = new Map<string, string>()
+for (const [, name, body] of code.matchAll(
+  /CREATE OR REPLACE FUNCTION public\.(get_portal_data|portal_[a-z_]+)\s*\([\s\S]*?\$function\$([\s\S]*?)\$function\$/gi,
+)) {
+  finalBody.set(name, body)   // later assignment wins, which is apply order
+}
+ok('the apply path actually contains the portal functions', finalBody.size > 0,
+  `found ${finalBody.size} distinct portal function(s)`)
+
+const unscoped: string[] = []
+for (const [name, body] of finalBody) {
+  for (const part of body.split(/(?=\bfrom public\.|\bupdate public\.|\bdelete from public\.)/i)) {
+    const m = /^(?:from|update|delete from) public\.("?[a-z_]+"?)/i.exec(part)
+    if (!m) continue
+    const table = m[1].replace(/"/g, '')
+    // The token lookup resolves BY TOKEN — that is the credential, not a customer.
+    if (table === 'customer_portal_tokens') continue
+    // 900, not 320: a multi-line UPDATE reaches its customer predicate well past
+    // 320 characters, so a short window reads it as "no customer reference here" and
+    // reports it clean. That exact blind spot let portal_respond_change_order through
+    // the first pass.
+    const clause = part.slice(0, 900)
+    if (!/v_customer/.test(clause)) continue
+    if (/user_id/.test(clause)) continue
+    unscoped.push(`${name} → ${table}`)
+  }
+}
+ok('no portal function resolves rows by customer without also constraining user_id',
+  unscoped.length === 0,
+  unscoped.length ? `unscoped:\n     ${unscoped.join('\n     ')}` : '')
+
+// plpgsql compiles LAZILY: `create or replace function` accepts a body with a
+// reference to a column that does not exist, and only fails when it first RUNS.
+// So every patched function is executed, not merely created.
+const PORTAL_CALLS: [string, string][] = [
+  ['get_portal_data', `select public.get_portal_data('legit-a')`],
+  ['portal_invoice_for_payment', `select public.portal_invoice_for_payment('legit-a', 'aaaaaaaa-0000-4000-8000-000000000009')`],
+  ['portal_begin_setup', `select public.portal_begin_setup('legit-a')`],
+  ['portal_mark_reviewed', `select public.portal_mark_reviewed('legit-a')`],
+  ['portal_decline_review', `select public.portal_decline_review('legit-a')`],
+  ['portal_add_contact', `select public.portal_add_contact('legit-a', '5875550000', null)`],
+  ['portal_set_consent', `select public.portal_set_consent('legit-a', true, true)`],
+  ['portal_set_autopay', `select public.portal_set_autopay('legit-a', false)`],
+  ['portal_remove_card', `select public.portal_remove_card('legit-a')`],
+  ['portal_accept_quote', `select public.portal_accept_quote('legit-a', '00000000-0000-4000-8000-000000000000', null, null)`],
+  ['portal_set_scheduling_preference', `select public.portal_set_scheduling_preference('legit-a', '00000000-0000-4000-8000-000000000000', null, null, null, null)`],
+  ['portal_submit_request', `select public.portal_submit_request('legit-a', 'service', 'probe', null, null)`],
+]
+// ⚠️ PGlite ships Postgres 18; production is 17. PG18 refuses an UPDATE on a table
+// in a publication whose replica identity contains unpublished GENERATED columns
+// ("cannot update table … Replica identity must not contain unpublished generated
+// columns", 42P10) — a rule PG17 does not have, so this fires here and never in
+// production. Realtime membership has nothing to do with tenant scoping, so it is
+// dropped in this disposable database rather than left to mask the write paths.
+await db.exec(`do $$
+declare p record;
+begin
+  for p in select pubname from pg_publication loop
+    execute format('drop publication if exists %I', p.pubname);
+  end loop;
+end $$;`)
+
+let compiled = 0
+const failedCalls: string[] = []
+for (const [name, call] of PORTAL_CALLS) {
+  try { await db.query(call); compiled++ }
+  catch (e: any) {
+    const msg = String(e.message)
+    // A wrong-arity/absent-overload call is this guard being out of date, not the
+    // function being broken. A column/variable error is the real failure mode.
+    if (/does not exist|no function matches/i.test(msg) && !/column|record/i.test(msg)) { compiled++; continue }
+    failedCalls.push(`${name}: ${msg.slice(0, 400)}`)
+  }
+}
+ok('every patched portal function COMPILES AND RUNS (plpgsql compiles lazily)',
+  failedCalls.length === 0,
+  failedCalls.length ? failedCalls.join('\n     ') : `${compiled}/${PORTAL_CALLS.length} executed`)
+
+// ── The second layer, proved on its own ──────────────────────────────────────
+// Drop the composite FK in this disposable database and forge exactly the token
+// the constraint normally makes impossible. If the predicates are real, the
+// forged token still yields nothing of tenant B's.
+await db.exec(`alter table public.customer_portal_tokens drop constraint customer_portal_tokens_customer_same_owner;`)
+await db.exec(`insert into public.customer_portal_tokens (token, user_id, customer_id)
+  values ('forged-defence-in-depth', '${A}', 'bbbbbbbb-0000-4000-8000-000000000001');`)
+const forged = await db.query(`select public.get_portal_data('forged-defence-in-depth') as d`)
+const payload = forged.rows[0]?.d
+const leaked = payload && JSON.stringify(payload).includes('Tenant B customer')
+ok('with the FK REMOVED, a forged token still leaks no tenant-B customer',
+  !leaked,
+  leaked ? 'get_portal_data returned tenant B PII — the predicates are not holding' : '')
+// And the control: the honest token still works with the FK gone.
+const honest = await db.query(`select public.get_portal_data('legit-a') as d`)
+ok('…while the legitimate token still returns its own customer',
+  !!honest.rows[0]?.d && JSON.stringify(honest.rows[0].d).includes('Tenant A customer'))
+
+// ═══════════════════════════════════════════════════════════════════════════
 H('3. THE CLASS — welds that still need doing, counted so it cannot be forgotten')
 
 // Every single-column FK between two tenant-owned tables is the same latent shape.

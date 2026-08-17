@@ -8,7 +8,9 @@ import { Select } from '@/components/ui/Select'
 import { PropertySelect } from '@/components/ui/PropertySelect'
 import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
-import { Crew, Customer, Property, JobFormValues, JobStatus, RecurUnit } from '@/types'
+import { Customer, Property, JobFormValues, JobStatus, RecurUnit, Crew, Technician } from '@/types'
+import { AssigneeSelect } from '@/components/schedule/AssigneeSelect'
+import { assigneeOf, assigneeColumns } from '@/lib/crewAssignment'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { recurrenceLabel, recurrenceToUi, reseedRepeatUi, OPEN_ENDED_HORIZON, type RepeatPreset, type EndMode } from '@/lib/recurrence'
 import { latestSavedRecommendation, savedPriceFor, recommendationIsStale, CadenceKey } from '@/lib/pricing'
@@ -65,6 +67,10 @@ export interface SuggestionMeta {
 
 interface JobFormProps {
   customers: Customer[]
+  /** Who work can be assigned to. Omit both and the form shows no "Assigned to"
+   *  control and leaves assignment exactly as it found it. */
+  crews?: Crew[]
+  technicians?: Technician[]
   defaultValues?: Partial<JobFormValues>
   excludeJobId?: string
   // Existing series for the job being edited, so the Repeat controls pre-fill.
@@ -75,9 +81,6 @@ interface JobFormProps {
   seriesStartDate?: string
   allowAddAnother?: boolean
   suggestedPrice?: number // quote-derived per-visit price, shown as the price hint
-  /** Active crews for the Assignee control. Optional — a business with no crews
-   *  simply never sees the field. */
-  crews?: Crew[]
   /** True when the visit under the editor is linked to a quote. Drives the
    *  service-change disclosure: renaming the service NEVER re-prices the visit
    *  (price is the manual override or the quote-derived value — see
@@ -143,7 +146,7 @@ function presetToInterval(preset: RepeatPreset, customUnit: RecurUnit, customCou
 }
 
 
-export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, seriesStartDate, allowAddAnother, suggestedPrice, crews, quoteLinked, initialMoreOpen, warnFor, onSubmit, onCancel, onDirtyChange, isEdit }: JobFormProps) {
+export function JobForm({ customers, crews, technicians, defaultValues, excludeJobId, initialRecurrence, seriesStartDate, allowAddAnother, suggestedPrice, quoteLinked, initialMoreOpen, warnFor, onSubmit, onCancel, onDirtyChange, isEdit }: JobFormProps) {
   const supabase = createClient()
   const [properties, setProperties] = useState<Property[]>([])
   const addAnotherRef = useRef(false)
@@ -183,7 +186,8 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         notes: '',
         actual_minutes: 0,
         price: 0,
-        crew_id: '',
+        crew_id: null,
+        technician_id: null,
         ...defaultValues,
       },
     })
@@ -582,16 +586,30 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   // "More options" disclosure). One definition per control, composed per mode —
   // never two implementations of the same field.
 
-  const activeCrews = (crews ?? []).filter(c => c.is_active)
-  // Assignee = which crew runs this visit. Only rendered when the business has
-  // crews at all; assignment stays optional (Unassigned is the single-crew
-  // status quo). The save applies it ONLY when changed this session.
-  const assigneeField = activeCrews.length > 0 ? (
+  // WHO is coming — a different question from how MANY (crew size), and the
+  // one that decides whose phone this visit lands on. THE chooser is
+  // AssigneeSelect (lib/crewAssignment): crew XOR person, both columns moving
+  // together so a visit can never carry two answers. Only rendered when the
+  // caller supplied the roster; a form without it saves assignment unchanged
+  // rather than silently unassigning.
+  const assigneeField = (crews?.length || technicians?.length) ? (
     <Controller name="crew_id" control={control}
-      render={({ field }) => (
-        <Select label="Assigned crew"
-          options={[{ value: '', label: 'Unassigned' }, ...activeCrews.map(c => ({ value: c.id, label: c.name }))]}
-          {...field} value={field.value || ''} />
+      render={({ field: crewField }) => (
+        <Controller name="technician_id" control={control}
+          render={({ field: techField }) => (
+            <AssigneeSelect
+              crews={crews ?? []}
+              technicians={technicians ?? []}
+              value={assigneeOf({ crew_id: crewField.value ?? null, technician_id: techField.value ?? null })}
+              onChange={next => {
+                // Both columns move together — that is what keeps one
+                // visit from carrying two answers.
+                const cols = assigneeColumns(next)
+                crewField.onChange(cols.crew_id)
+                techField.onChange(cols.technician_id)
+              }}
+            />
+          )} />
       )} />
   ) : null
 

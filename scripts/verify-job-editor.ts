@@ -90,30 +90,33 @@ for (const banned of ['crew_id', 'quote_id', 'recurrence_id', 'is_initial_visit'
 // ═══ 2. Crew assignment: gated on change, one reassignment semantic ═══
 console.log('\n═══ Assignee: silence is not consent, and one route_order semantic ═══')
 
-check('crew change is detected against the loaded row',
-  /const crewChanged = \(values\.crew_id \|\| null\) !== \(job\.crew_id \?\? null\)/.test(afe),
-  'crewChanged comparison missing from applyFieldEdits')
-check('the crew patch resets route_order (assignJobCrew semantic)',
-  /crewChanged \? \{ crew_id: values\.crew_id \|\| null, route_order: null \}/.test(afe),
-  'crewPatch must mirror lib/crews.assignJobCrew: crew_id + route_order: null')
-check('the crew patch is applied to the save',
+check('assignment change is detected through THE engine (sameAssignee/assigneeOf)',
+  /const crewChanged = !sameAssignee\(\r?\n\s*assigneeOf\(\{ crew_id: values\.crew_id \?\? null, technician_id: values\.technician_id \?\? null \}\),\r?\n\s*assigneeOf\(job\),?\r?\n\s*\)/.test(afe),
+  'the change test must compare Assignees via lib/crewAssignment, not raw columns')
+check('the assignment patch carries BOTH columns + the route_order reset',
+  /crewChanged\r?\n\s*\? \{ crew_id: values\.crew_id \?\? null, technician_id: values\.technician_id \?\? null, route_order: null \}/.test(afe),
+  'half a write leaves a stale second answer; jobs_one_assignee would refuse it at save time')
+check('the assignment patch is applied to the save',
   /\.\.\.crewPatch,/.test(afe), 'the update spread no longer includes crewPatch')
-check('lib/crews.assignJobCrew still IS that semantic',
-  /update\(\{ crew_id: crewId, route_order: null \}\)/.test(read('src/lib/crews.ts')),
-  'assignJobCrew changed shape — update the two mirrors (applyFieldEdits, quickSaveJob) together')
+check('lib/crews.assignJob still IS that semantic',
+  /update\(\{ \.\.\.assigneeColumns\(assignee\), route_order: null \}\)/.test(read('src/lib/crews.ts')),
+  'assignJob changed shape — update the two mirrors (applyFieldEdits, quickSaveJob) together')
+check('the form assigns through THE chooser (AssigneeSelect), both columns together',
+  /<AssigneeSelect/.test(read(FORM)) && /const cols = assigneeColumns\(next\)/.test(form),
+  'a second assignee control (bare crew list) is a second implementation of the one chooser')
 
 // ═══ 3. Quick save: apply ONLY the keys sent ═══
 console.log('\n═══ quickSaveJob: a partial editor can never null hidden columns ═══')
 
 const qsj = slice(page, 'async function quickSaveJob', 'quickSaveJob')
-for (const k of ['start_time', 'crew_size', 'duration_minutes', 'status', 'notes', 'service_type', 'crew_id']) {
+for (const k of ['start_time', 'crew_size', 'duration_minutes', 'status', 'notes', 'service_type']) {
   check(`"${k}" applies only when present in the patch`,
     new RegExp(`if \\('${k}' in patch\\)`).test(qsj),
     `base.${k} must be guarded by ('${k}' in patch) — an unconditional copy nulls it for every caller that omits it`)
 }
-check('crew_id in the quick patch resets route_order too',
-  /if \('crew_id' in patch\) \{ base\.crew_id = patch\.crew_id \?\? null; base\.route_order = null \}/.test(qsj),
-  'the quick door lost the assignJobCrew route_order semantic')
+check('assignment applies only when the pair is present — both columns + route_order reset',
+  /if \('crew_id' in patch \|\| 'technician_id' in patch\) \{\r?\n\s*base\.crew_id = patch\.crew_id \?\? null\r?\n\s*base\.technician_id = patch\.technician_id \?\? null\r?\n\s*base\.route_order = null\r?\n\s*\}/.test(qsj),
+  'the quick door must mirror lib/crews.assignJob: both columns together, route_order cleared, only when sent')
 check('a quick save never writes price',
   !/base\.price|patch\.price/.test(qsj) && /syncPrice: false/.test(qsj),
   'price belongs to setJobPrice (audit row + draft sync) — quickSaveJob must not carry it')

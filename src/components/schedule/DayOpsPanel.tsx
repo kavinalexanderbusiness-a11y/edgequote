@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { toast } from '@/lib/toast'
 import { confirm } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
-import { Crew, Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, AddonTemplate, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
+import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, AddonTemplate, Crew, Technician, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
 import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, sequenceRoute, roundTripMapsUrl, MAX_MAPS_WAYPOINTS, directionsUrl, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
 import { planDay, type DayPlanStopInput } from '@/lib/dayPlan'
@@ -90,9 +90,11 @@ interface Props {
   staffingOnDay?: WorkerDayDetail[] | null
   /** Crew id → name, for naming a crew in a staffing warning. */
   crewNames?: Record<string, string>
-  /** The crew roster, for the quick-edit sheet's Assignee control. Empty =
-   *  the business has no crews and the control simply never renders. */
+  /** The assignable roster, for the quick-edit sheet's Assignee control
+   *  (AssigneeSelect: crew XOR person). Empty = the business has neither and
+   *  the control simply never renders. */
   crews?: Crew[]
+  technicians?: Technician[]
   /** False when nobody has a recorded weekly pattern — availability is assumed. */
   availabilityRecorded?: boolean
   learnedDurationFor?: (serviceType: string | null | undefined) => number | null
@@ -135,7 +137,7 @@ interface Props {
 export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
   onOpenJob, onStartJob, onMarkDone, onMove, onStopForToday, onResume, onSetPrice, workStartTime, capacityHours,
-  workersOnDay, staffingOnDay, crewNames, crews, availabilityRecorded, learnedDurationFor, onRainDelay, onAddJob, onQuickSave,
+  workersOnDay, staffingOnDay, crewNames, crews, technicians, availabilityRecorded, learnedDurationFor, onRainDelay, onAddJob, onQuickSave,
   addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons, addonTemplates,
   changeOrdersByJobId, onCreateChangeOrder, onSendChangeOrder, onCancelChangeOrder, onOwnerChangeDecision, onRemindChangeOrder,
   onStopOrder, onChatUnread,
@@ -626,6 +628,7 @@ export function DayOpsPanel({
         serviceType: j.service_type,
         status: j.status,
         crewId: j.crew_id ?? null,
+        technicianId: j.technician_id ?? null,
         // Session 47: hours already banked against a carried-over visit, so
         // tomorrow plans the remainder rather than the whole estimate again.
         workedMinutes: j.actual_minutes,
@@ -654,6 +657,11 @@ export function DayOpsPanel({
     crewNames,
     availabilityRecorded,
   })
+  // ⛔ "Can the people this day was assigned to actually staff it?" is answered
+  // by ONE engine — lib/dayPlan's staffing warnings (Session 67), fed by
+  // staffingOnDay above. Session 65 briefly grew a second answer here; it was
+  // removed rather than merged, because two engines warning about one day is
+  // exactly how a board starts contradicting itself.
   // Every arrival on this screen comes from that ONE walk.
   const etas = plan.stopCount > 0
     ? { startMin: plan.startMin, finishMin: plan.finishMin, finish: plan.finish, stops: plan.stops }
@@ -1455,6 +1463,7 @@ export function DayOpsPanel({
       <VisitQuickEdit
         job={quickJob}
         crews={crews ?? []}
+        technicians={technicians ?? []}
         onClose={() => setQuickJob(null)}
         onSave={onQuickSave}
         onMove={onMove}

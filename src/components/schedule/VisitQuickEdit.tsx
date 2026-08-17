@@ -8,7 +8,9 @@ import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
 import { confirm } from '@/lib/confirm'
 import { AUDIENCE_COPY } from '@/lib/noteScope'
-import { Crew, Job, JobStatus, JOB_STATUS_LABELS } from '@/types'
+import { Crew, Job, JobStatus, Technician, JOB_STATUS_LABELS } from '@/types'
+import { AssigneeSelect } from '@/components/schedule/AssigneeSelect'
+import { assigneeOf, assigneeColumns, parseAssigneeValue, assigneeValue } from '@/lib/crewAssignment'
 import { AlertTriangle, SlidersHorizontal, Trash2 } from 'lucide-react'
 
 // ── The one quick-edit patch ──────────────────────────────────────────────────
@@ -27,15 +29,19 @@ export interface QuickPatch {
   status?: JobStatus
   notes?: string | null
   service_type?: string | null
-  /** Which crew runs this visit (null = unassigned). Applied with the same
-   *  route_order reset as lib/crews.assignJobCrew — one reassignment semantic. */
+  /** Who is coming — the two assignment columns, ALWAYS sent as a pair
+   *  (lib/crewAssignment.assigneeColumns; jobs_one_assignee refuses half a
+   *  write). Applied with the same route_order reset as lib/crews.assignJob —
+   *  one reassignment semantic, however many doors. */
   crew_id?: string | null
+  technician_id?: string | null
 }
 
 interface Props {
   /** The visit being edited, or null when the sheet is closed. */
   job: Job | null
   crews: Crew[]
+  technicians: Technician[]
   onClose: () => void
   /** Field save — the page's quickSaveJob engine (status transitions keep
    *  routing through the completion/uncomplete engines there). */
@@ -54,7 +60,10 @@ type Draft = {
   scheduled_date: string
   start_time: string
   duration_minutes: string
-  crew_id: string
+  /** AssigneeSelect's stable string ('unassigned' | 'crew:<id>' | 'person:<id>')
+   *  — parsed back to the TWO columns only at save time, so the draft can never
+   *  hold half an assignment. */
+  assignee: string
   crew_size: string
   status: JobStatus
   notes: string
@@ -66,7 +75,7 @@ function draftFrom(job: Job): Draft {
     scheduled_date: job.scheduled_date,
     start_time: job.start_time || '',
     duration_minutes: job.duration_minutes ? String(job.duration_minutes) : '',
-    crew_id: job.crew_id || '',
+    assignee: assigneeValue(assigneeOf(job)),
     crew_size: String(job.crew_size || 1),
     status: job.status,
     notes: job.notes || '',
@@ -79,7 +88,7 @@ function draftFrom(job: Job): Draft {
 // Modal (mobile bottom-sheet, focus trap, Escape, scroll lock) instead of the
 // old hand-styled inline panel, so every touch/keyboard rule is inherited
 // rather than re-implemented.
-export function VisitQuickEdit({ job, crews, onClose, onSave, onMove }: Props) {
+export function VisitQuickEdit({ job, crews, technicians, onClose, onSave, onMove }: Props) {
   const [draft, setDraft] = useState<Draft | null>(null)
   const [seed, setSeed] = useState<Draft | null>(null)
   const [saving, setSaving] = useState(false)
@@ -130,7 +139,12 @@ export function VisitQuickEdit({ job, crews, onClose, onSave, onMove }: Props) {
       if (draft.crew_size !== seed.crew_size) patch.crew_size = Math.max(1, Number(draft.crew_size) || 1)
       if (draft.status !== seed.status) patch.status = draft.status
       if (draft.notes !== seed.notes) patch.notes = draft.notes || null
-      if (draft.crew_id !== seed.crew_id) patch.crew_id = draft.crew_id || null
+      if (draft.assignee !== seed.assignee) {
+        // Both columns, always together — lib/crewAssignment's write shape.
+        const cols = assigneeColumns(parseAssigneeValue(draft.assignee))
+        patch.crew_id = cols.crew_id
+        patch.technician_id = cols.technician_id
+      }
 
       if (Object.keys(patch).length > 0) await onSave(job, patch)
       // The reschedule half, through the page's move engine (may open the scope
@@ -145,7 +159,7 @@ export function VisitQuickEdit({ job, crews, onClose, onSave, onMove }: Props) {
     }
   }
 
-  const activeCrews = crews.filter(c => c.is_active)
+  const hasRoster = crews.length > 0 || technicians.length > 0
   const open = !!job && !!draft
   const dateChanged = !!draft && !!seed && draft.scheduled_date !== seed.scheduled_date
   const serviceChanged = !!draft && !!seed && draft.service_type !== seed.service_type
@@ -216,11 +230,15 @@ export function VisitQuickEdit({ job, crews, onClose, onSave, onMove }: Props) {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {activeCrews.length > 0 && (
-              <Select label="Assigned crew"
-                value={draft.crew_id}
-                onChange={e => setDraft(d => d && { ...d, crew_id: e.target.value })}
-                options={[{ value: '', label: 'Unassigned' }, ...activeCrews.map(c => ({ value: c.id, label: c.name }))]} />
+            {hasRoster && (
+              /* THE chooser — crew XOR person (lib/crewAssignment), same
+                 control as the job form and the dispatch board. */
+              <AssigneeSelect
+                crews={crews}
+                technicians={technicians}
+                value={parseAssigneeValue(draft.assignee)}
+                onChange={next => setDraft(d => d && { ...d, assignee: assigneeValue(next) })}
+              />
             )}
             <Select label="Status"
               value={draft.status}

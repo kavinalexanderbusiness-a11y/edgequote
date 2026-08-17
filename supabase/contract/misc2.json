@@ -1,6 +1,10 @@
 {
  "sequences": [
   {
+   "name": "audit_events_seq_seq",
+   "data_type": "bigint"
+  },
+  {
    "name": "property_measurement_events_seq_seq",
    "data_type": "bigint"
   },
