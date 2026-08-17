@@ -522,6 +522,41 @@ if ('skipped' in booted) {
   await db.close()
 }
 
+// ── 8. The refusal reaches the phone, and fits on it ────────────────────────
+// ⭐ THE UX HALF OF AUTHORISATION. A worker standing in somebody's garden must
+// read a sentence, not a status code and not a database error. These doors hand
+// `error` straight to the crew components, so the copy in WORKER_DENIAL_MESSAGE
+// is literally what appears on the phone — which makes its shape a testable
+// property, not a matter of taste.
+section('8. The refusal on a 375px phone')
+{
+  const surfaces = [
+    'components/crew/CrewStopPhotos.tsx',
+    'components/crew/CrewStopMedia.tsx',
+  ]
+  for (const s of surfaces) {
+    const src = strip(SRC(s))
+    check(`${s} shows the server's sentence, not a status code`,
+      /d\.error/.test(src) && !/res\.status/.test(src.replace(/!res\.ok/g, '')),
+      'a worker must never be shown an HTTP number')
+  }
+
+  const messages = Object.values(WORKER_DENIAL_MESSAGE)
+  // 375px at the crew card's type size fits roughly 40 characters per line; two
+  // lines is the budget before the button below it is pushed off the fold.
+  check('every refusal fits two lines on the narrowest phone (≤80 chars)',
+    messages.every(m => m.length <= 80),
+    messages.filter(m => m.length > 80).join(' | '))
+  // ⚠️ A long unbreakable token (a uuid, a table name, a URL) is what actually
+  // forces a horizontal scrollbar — wrapping cannot save it.
+  const longestWord = (m: string) => Math.max(...m.split(/\s+/).map(w => w.length))
+  check('no refusal contains an unbreakable token that would overflow 375px',
+    messages.every(m => longestWord(m) <= 24),
+    messages.filter(m => longestWord(m) > 24).join(' | '))
+  check('every refusal is plain sentence case, not SHOUTED or coded',
+    messages.every(m => !/^[A-Z_]{4,}$/.test(m.split(' ')[0]) && !/\b[45]\d\d\b/.test(m)))
+}
+
 console.log(`\n── ${pass} passed, ${fail} failed ──\n`)
 if (fail > 0) process.exit(1)
 }
