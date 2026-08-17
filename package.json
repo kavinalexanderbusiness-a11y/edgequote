@@ -104,6 +104,7 @@
     "verify:job-forms": "tsx scripts/verify-job-forms.ts",
     "verify:audit-trail": "tsx scripts/verify-audit-trail.ts",
     "verify:auth-session": "tsx scripts/verify-auth-session.ts",
+    "verify:google-auth": "tsx scripts/verify-google-auth.ts",
     "verify:crew-access": "tsx scripts/verify-crew-access.ts",
     "verify:public-edge": "tsx scripts/verify-public-edge.ts",
     "verify:tenant-boundary": "tsx scripts/verify-tenant-boundary.ts",
