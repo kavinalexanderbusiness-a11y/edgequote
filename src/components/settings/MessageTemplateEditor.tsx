@@ -17,6 +17,7 @@ const TYPES: MsgType[] = [
   'confirm', 'reminder', 'eta', 'on_my_way', 'running_late', 'arrived', 'early_arrival',
   'rescheduled', 'rain_delay', 'job_complete', 'thanks', 'review_request', 'quote', 'invoice',
   'estimate_reminder', 'payment_reminder', 'estimate_followup',
+  'estimate_appt_scheduled', 'estimate_appt_on_my_way', 'estimate_appt_rescheduled',
 ]
 
 // One plain-English line per template: when it fires / what it's for — so the owner
@@ -41,6 +42,9 @@ const TEMPLATE_DESC: Partial<Record<MsgType, string>> = {
   estimate_reminder: 'Reminds them of an upcoming estimate appointment.',
   payment_reminder: 'A gentle nudge about an outstanding invoice.',
   estimate_followup: 'Follows up on a quote you already sent.',
+  estimate_appt_scheduled: 'Confirms a booked estimate visit — the visit, not the work.',
+  estimate_appt_on_my_way: 'Tells them you’re on your way to take a look and price it.',
+  estimate_appt_rescheduled: 'Confirms a new date for an estimate visit.',
 }
 
 export function MessageTemplateEditor() {
@@ -117,7 +121,10 @@ export function MessageTemplateEditor() {
           </div>
         ) : (
           <>
-            <Input label="Google review link" placeholder="https://g.page/r/…/review" value={reviewUrl} onChange={e => setReviewUrl(e.target.value)} hint="Used by the {{review_link}} variable in the review request." />
+            {/* Universal on purpose: Google today, but any public review page —
+                Facebook, Yelp, an industry directory — works the same way. One
+                neutral link; no happy/unhappy routing. */}
+            <Input label="Public review link" placeholder="https://g.page/r/…/review (Google, Facebook, Yelp…)" value={reviewUrl} onChange={e => setReviewUrl(e.target.value)} hint="Where review requests send customers — the {{review_link}} variable." />
 
             <div className="rounded-lg border border-border bg-bg-tertiary px-3 py-2.5">
               <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2">Variables you can use — they fill in automatically for each customer</p>

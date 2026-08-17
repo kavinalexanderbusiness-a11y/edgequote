@@ -999,6 +999,11 @@ export default function CustomerDetailPage() {
             <Link href={`/dashboard/schedule?customer=${customer.id}`} className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border border-border bg-surface text-ink hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
               <CalendarPlus className="w-4 h-4" /> Schedule
             </Link>
+            {/* Booking a visit to PRICE the work, which is not the same door as
+                booking the work — see lib/estimateAppointments. */}
+            <Link href={`/dashboard/schedule?estimate=new&customer=${customer.id}`} title="Book a visit to look at the work and quote it" className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border border-border bg-surface text-ink hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+              <Ruler className="w-4 h-4" /> Estimate
+            </Link>
             <a href={phone ? `tel:${phone}` : undefined} aria-disabled={!phone} className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${phone ? 'bg-surface border-border text-ink hover:border-border-strong' : 'border-border text-ink-faint pointer-events-none opacity-50'}`}>
               <Phone className="w-4 h-4" /> Call
             </a>

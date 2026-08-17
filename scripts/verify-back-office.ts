@@ -11,6 +11,11 @@
 //      inserted into `schedule_items` — a table with writers and NO READERS
 //      (Calendar takes a `scheduleItems` prop the schedule page never passes).
 //      The toast said "it's on your schedule". It was nowhere.
+//      ⭐ RESOLVED THE OTHER WAY (Session 79): rather than stay empty forever, the
+//      table got its readers — estimate appointments load, render in Day view and
+//      are finally passed to Calendar. The check below asserts the RULE (a writer
+//      needs a reader) instead of the 2026-08-10 FACT (there are no writers), so
+//      it now also fails if the readers are ever taken away again.
 //   2. A FAILED READ RENDERED AS A REASSURING ANSWER. A failed inbox query
 //      became "No conversations yet"; a failed invoice query became the money
 //      claim "Paid up".
@@ -59,10 +64,23 @@ console.log('\nEvery action that promises persistence has a reader:')
     }
   }
   walk(join(ROOT, 'src'))
-  const writers = files.filter(f => /from\('schedule_items'\)\s*\.(insert|upsert|update)/.test(readFileSync(f, 'utf8')))
-  check('nothing inserts a reminder into schedule_items',
-    writers.length === 0,
-    `still written by: ${writers.map(f => f.slice(ROOT.length + 1)).join(', ')} — the schedule page never passes \`scheduleItems\` to Calendar, so the row is invisible forever`)
+  const writers = files.filter(f => /from\('schedule_items'\)[\s\S]{0,120}?\.(insert|upsert|update)\(/.test(readFileSync(f, 'utf8')))
+  const readers = files.filter(f => /from\('schedule_items'\)[\s\S]{0,120}?\.select\(/.test(readFileSync(f, 'utf8')))
+  // Session 79 answered this the other way round. The rule was never "schedule_items
+  // must stay empty" — it is the heading above: an action that promises persistence
+  // must have a reader. That was enforced by pinning the FACT (no writers), because
+  // in 2026-08-10 the table genuinely had none. Estimate appointments gave it
+  // readers — the schedule page loads them, Day view renders them, and Calendar is
+  // finally passed the `scheduleItems` prop it always accepted — so the fact moved
+  // and the rule did not. Asserting the rule directly is also STRICTER than before:
+  // it now fails if the readers are ever removed while writers remain, which the
+  // old spelling could not see.
+  check('nothing writes schedule_items unless something reads it back',
+    writers.length === 0 || readers.length > 0,
+    `written by ${writers.map(f => f.slice(ROOT.length + 1)).join(', ')} and read by NOBODY — the row would be invisible forever`)
+  check('…and the calendar is actually handed those items',
+    writers.length === 0 || files.some(f => /scheduleItems=\{/.test(readFileSync(f, 'utf8'))),
+    'schedule_items is written and Calendar is never passed `scheduleItems` — exactly the dead end this rule exists to catch')
   // Asserted on the RENDERED form (a toast call), not the bare phrase — the
   // comment recording why this was removed contains the phrase on purpose.
   check('…and the "it\'s on your schedule" toast is gone',

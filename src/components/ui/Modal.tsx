@@ -176,7 +176,11 @@ export function Modal({ open, onClose, title, icon: Icon, children, footer, size
                 type="button"
                 onClick={onClose}
                 aria-label="Close"
-                className="ml-auto shrink-0 h-7 w-7 rounded-lg flex items-center justify-center text-ink-muted hover:text-ink hover:bg-surface-raised transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                // tap-target: 28×28 measured under (pointer: coarse) — a gloved
+                // thumb aiming at the one button that abandons a form deserves
+                // the full 44px. Desktop density untouched (the class is
+                // coarse-gated).
+                className="tap-target ml-auto shrink-0 h-7 w-7 rounded-lg flex items-center justify-center text-ink-muted hover:text-ink hover:bg-surface-raised transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               >
                 <X className="w-4 h-4" />
               </button>

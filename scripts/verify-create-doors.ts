@@ -108,6 +108,10 @@ const BARE_QUOTE_DOORS: Record<string, string> = {
   // customer is on screen to carry. The pipeline's PER-ROW doors are not bare —
   // lib/pipeline builds every prepare_quote / renew_service href with ?customer=.
   'app/dashboard/pipeline/page.tsx':       'the pipeline header — the board is every customer’s',
+  // Same species again: a report ABOUT every customer has none on screen to
+  // carry. Note this covers the page header only — the Sales page's per-row
+  // doors all link to the quote or invoice they describe, never to the builder.
+  'app/dashboard/sales/page.tsx':          'the sales report header — the report is every customer’s',
   'components/command/CommandPalette.tsx': 'global ⌘K — reachable from anywhere, belongs to nobody',
   // Not "we forgot the customer" — there cannot be one. This card renders only
   // while the business has no customer, quote, job or invoice at all, and the
@@ -179,7 +183,10 @@ check('a successful save closes WITHOUT asking',
   'the row is already written by then — confirming would be nonsense')
 check('the form reports its own dirtiness',
   /onDirtyChange=\{d => \{ formDirty\.current = d \}\}/.test(schedule)
-  && /onDirtyChange\?\.\(isDirty\)/.test(read('src/components/schedule/JobForm.tsx')),
+  // S81: the report widened to include the non-RHF Repeat/Ends controls
+  // (recDirty) — isDirty alone could not see them, so a touched Repeat was
+  // discardable in silence. Both dirt sources, one report.
+  && /onDirtyChange\?\.\(isDirty \|\| recDirty\)/.test(read('src/components/schedule/JobForm.tsx')),
   'only the form knows; the page must not guess from its props')
 
 // The other two create forms protect typing a different way — autosave. Pinned
