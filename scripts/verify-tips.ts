@@ -650,6 +650,25 @@ H('11. CAPABILITY + SETTINGS — a tip cannot outlive the payment rail')
     !/tip/i.test(caps),
     'tips use the same Stripe account online_payments already governs; a new grant needs operator SQL and has no app write path')
 
+  // ── The cross-tenant wall a tip row inherits (S75 B2) ────────────────────
+  // payments.invoice_id is welded COMPOSITE: (user_id, invoice_id) must name a
+  // row that exists in invoices as (user_id, id). A tip row carries both, taken
+  // from the SAME Stripe metadata as its payment row, so a forged or mismatched
+  // tenant/invoice pair is refused by Postgres rather than by a code path. This
+  // is asserted here because a tip is a SECOND row shape on that ledger and must
+  // never be the one that slips a single-column FK back in.
+  const base = baselineSql()
+  check('payments.invoice_id is tenant-welded, so a tip row cannot cross tenants',
+    /payments_invoice_tenant_fkey" FOREIGN KEY \(user_id, invoice_id\) REFERENCES invoices\(user_id, id\)/.test(base),
+    'a single-column invoice FK lets an attacker-chosen invoice_id move another tenant’s invoice — the tip row would inherit that hole')
+  check('  …and invoices carries the UNIQUE (user_id, id) the weld references',
+    /invoices_user_id_id_key" UNIQUE \(user_id, id\)/.test(base),
+    'the composite FK cannot exist without it')
+  const wh = read('src/app/api/stripe/webhook/route.ts')
+  check('  …and the tip row takes BOTH keys from the same verified metadata',
+    /kind:\s*'tip'[\s\S]{0,400}|user_id: userId,\s*\n\s*customer_id: s\.metadata\?\.customer_id \?\? null,\s*\n\s*invoice_id: invoiceId,[\s\S]{0,400}kind:\s*'tip'/.test(wh),
+    'the tip must be scoped to the owner the invoice resolved to, never to anything a client sent')
+
   // Owner configuration, and the closed-by-default rule.
   deep('a business with no configuration gets NO tips', tipConfig(null), TIPS_OFF)
   deep('a business that never heard of tips gets NO tips', tipConfig({}), TIPS_OFF)

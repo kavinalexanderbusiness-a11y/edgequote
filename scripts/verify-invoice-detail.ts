@@ -317,8 +317,14 @@ console.log('\nFirst paint carries who / how much / what next — and nothing el
   check('the line-item breakdown is disclosed, not stacked above the money',
     /title="What's on this invoice"/.test(DETAIL) && /<Collapsible/.test(DETAIL),
     'the breakdown sat at 12px above the total and above every action, on every invoice')
+  // The summary must name the RECEIVED figure, and it must be `paid` — the
+  // ledger's trigger-maintained number, not something recomputed for the label.
+  // This used to be pinned as `received\``, i.e. "received is the last thing in
+  // the template". That was incidental: the tip lane appends a second clause
+  // (`… · $75.00 tip`) and the disclosure is no less honest for it. Pinning the
+  // interpolation instead is stricter about the part that matters.
   check('payment history is disclosed and says what it holds',
-    /title="Payment history"/.test(CONTROLS) && /received`/.test(CONTROLS),
+    /title="Payment history"/.test(CONTROLS) && /\$\{formatCurrency\(paid\)\} received/.test(CONTROLS),
     'a summary the owner can read without opening is what makes a disclosure honest')
   check('…and stays closed even when settled',
     !/title="Payment history"[\s\S]{0,300}defaultOpen/.test(CONTROLS),

@@ -290,9 +290,23 @@ console.log('\nThe charge paths all ask the engine, and the webhook cannot doubl
   check(`every webhook money write dedupes on stripe_session_id (found ${upserts.length}, need ≥3)`,
     upserts.length >= 3,
     'checkout, autopay and refund branches must all upsert with onConflict stripe_session_id + ignoreDuplicates')
-  check('the webhook records the amount CHARGED, never the invoice total',
-    /amount:\s*\(s\.amount_total\s*\?\?\s*0\)\s*\/\s*100/.test(webhook),
-    'a deposit charge must land in the ledger as the charged amount_total — recording the invoice total would close the invoice on a deposit')
+  // THE RULE: the ledger records what Stripe actually CHARGED — never the
+  // invoice total. Recording the total would close an invoice on a deposit.
+  //
+  // This was pinned as the literal `amount: (s.amount_total ?? 0) / 100`. The
+  // tips lane splits that gross before recording it (the invoice half, with any
+  // declared gratuity subtracted — see lib/payments/tips.splitGrossCents), so the
+  // literal no longer appears. The RULE is unchanged and in fact tightened: the
+  // recorded figure is still derived from Stripe's charged total and from
+  // nothing else. Both halves of that are asserted, because "it mentions
+  // amount_total somewhere" would pass on code that also read the invoice.
+  check('the webhook derives the recorded amount from Stripe’s CHARGED total',
+    /const \{ invoiceCents, tipCents \} = splitGrossCents\(s\.amount_total \?\? 0,/.test(webhook)
+    && /amount:\s*invoiceCents \/ 100/.test(webhook),
+    'a deposit charge must land in the ledger as the charged amount (gross minus any declared tip) — recording the invoice total would close the invoice on a deposit')
+  check('…and never from the invoice row’s own total',
+    !/amount:\s*(Number\()?invoice\.amount|from\('invoices'\)\.select\([^)]*\bamount\b/.test(webhook),
+    'the webhook must not read invoices.amount — that is the total, not what was charged')
   check('the webhook never writes invoice status directly',
     !/from\('invoices'\)\.update\(\{[^}]*status/.test(webhook),
     'the recompute trigger owns status; the webhook only stamps payment_method')
