@@ -212,7 +212,7 @@ console.log('\n■ 4. The LIVE SCHEMA states the guarantees (read from the gener
   check('get_portal_data projects change_orders', /'change_orders', coalesce/.test(portal),
     'the customer cannot see, or answer, what is not serialized')
   check('…and withholds DRAFTS (a privacy predicate, not a preference)',
-    /from public\.change_orders where customer_id = v_customer and status <> 'draft'/.test(portal),
+    /from public\.change_orders where customer_id = v_customer and user_id = v_user and status <> 'draft'/.test(portal),
     'a draft is the owner\'s unfinished ask — a price nobody has decided to charge')
   check('…scoped to the token\'s customer, like every other projection',
     !/from public\.change_orders(?![^\n]*customer_id = v_customer)/.test(portal))

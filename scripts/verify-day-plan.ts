@@ -435,7 +435,8 @@ H('11. What the CREW sees is derived from the RPC\'s own ordering')
     fn.includes(`coalesce(j.route_order, ${UNORDERED_CREW_RANK})`))
   check(`…and an absent start time to ${NO_START_TIME_KEY}`,
     fn.includes(`coalesce(j.start_time::text, '${NO_START_TIME_KEY}')`))
-  check('…and still returns only this crew\'s stops', /and j\.crew_id = v_crew/.test(fn))
+  check('…and still returns only this worker\'s stops (their crew\'s, or personally theirs)',
+    /and public\.crew_assignment_covers\(j\.crew_id, j\.technician_id, v_crew, v_tech\)/.test(fn))
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

@@ -129,8 +129,8 @@ const invoiceSelect = sqlOnly.match(/'invoices',[\s\S]*?from public\.invoices[^)
 const quoteSelect = sqlOnly.match(/from public\.quotes qt[^)]*\)/)?.[0] ?? ''
 
 check('invoices are filtered server-side: draft never leaves the DB',
-  /from public\.invoices\s+where\s+customer_id\s*=\s*v_customer\s+and\s+status\s*<>\s*'draft'/.test(invoiceSelect),
-  'the privacy predicate is missing from the INVOICES select')
+  /from public\.invoices\s+where\s+customer_id\s*=\s*v_customer\s+and\s+user_id\s*=\s*v_user\s+and\s+status\s*<>\s*'draft'/.test(invoiceSelect),
+  'the privacy predicate (customer + tenant weld + draft filter) is missing from the INVOICES select')
 check('quotes keep their own draft filter', /qt\.status\s*<>\s*'draft'/.test(quoteSelect))
 for (const field of ['deposit_amount', 'deposit_requested_at']) {
   check(`invoice projection still carries ${field}`, invoiceSelect.includes(field))
