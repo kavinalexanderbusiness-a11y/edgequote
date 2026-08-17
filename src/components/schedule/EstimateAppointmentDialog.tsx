@@ -20,6 +20,7 @@ import { Textarea } from '@/components/ui/Textarea'
 import { CustomerPicker } from '@/components/ui/CustomerPicker'
 import { PropertySelect } from '@/components/ui/PropertySelect'
 import { Ruler, ChevronDown } from 'lucide-react'
+import { createClient } from '@/lib/supabase/client'
 import type { Customer, Property } from '@/types'
 import {
   DEFAULT_ESTIMATE_MIN, newEstimateDraft, validateEstimate,
@@ -34,8 +35,6 @@ interface Props {
   /** Save handler — returns an error sentence, or null on success. */
   onSave: (input: EstimateInput) => Promise<string | null>
   customers: Customer[]
-  /** Every property the owner has, filtered here to the chosen customer's. */
-  properties?: Property[]
   /** Crews and people the visit can be given to. Solo owners pass neither. */
   crews?: Assignee[]
   technicians?: Assignee[]
@@ -52,9 +51,10 @@ interface Props {
 const DURATIONS = [15, 30, 45, 60, 90, 120]
 
 export function EstimateAppointmentDialog({
-  open, onClose, onSave, customers, properties = [], crews = [], technicians = [],
+  open, onClose, onSave, customers, crews = [], technicians = [],
   existing, defaultDateISO, defaultCustomerId, defaultPropertyId, quoteId,
 }: Props) {
+  const supabase = useMemo(() => createClient(), [])
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), [])
   const [form, setForm] = useState<EstimateInput>(() =>
     newEstimateDraft({ dateISO: defaultDateISO || todayISO }))
@@ -98,9 +98,17 @@ export function EstimateAppointmentDialog({
 
   const set = (patch: Partial<EstimateInput>) => setForm(f => ({ ...f, ...patch }))
 
-  const customerProperties = useMemo(
-    () => properties.filter(p => p.customer_id === form.customer_id),
-    [properties, form.customer_id])
+  // The dialog fetches the chosen customer's addresses itself. Five surfaces open
+  // it (calendar, customer, property, quote, day board) and making each one carry
+  // a properties list would mean five chances to pass a stale or partial one.
+  const [customerProperties, setCustomerProperties] = useState<Property[]>([])
+  useEffect(() => {
+    if (!open || !form.customer_id) { setCustomerProperties([]); return }
+    let live = true
+    supabase.from('properties').select('*').eq('customer_id', form.customer_id).order('is_primary', { ascending: false })
+      .then(({ data }) => { if (live) setCustomerProperties((data || []) as Property[]) })
+    return () => { live = false }
+  }, [supabase, open, form.customer_id])
 
   // Picking a customer names the visit — but only while the owner hasn't taken
   // the title over themselves. Overwriting a typed title would be rude.

@@ -23,7 +23,7 @@ import { LocationSummaryCard } from '@/components/properties/LocationSummaryCard
 import { loadLocationSummary } from '@/lib/locationSummaryData'
 import type { LocationSummary } from '@/lib/locationSummary'
 import { toast } from '@/lib/toast'
-import { Home, Ruler, FileText, User, MapPin, Edit2, StickyNote, Sparkles, CalendarPlus } from 'lucide-react'
+import { Home, Ruler, FileText, User, MapPin, Edit2, StickyNote, Sparkles, CalendarPlus, CalendarClock } from 'lucide-react'
 
 // The history of ONE address. The properties list already shows what a property IS
 // (health, plan, performance, pricing, latest measurement) — this shows what
@@ -389,6 +389,16 @@ export default function PropertyDetailPage() {
               <Link href={`/dashboard/schedule?customer=${property.customer_id}&property=${property.id}`}
                 className="text-[11px] font-medium px-2 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong transition-colors inline-flex items-center gap-1">
                 <CalendarPlus className="w-3 h-3" /> Schedule
+              </Link>
+            )}
+            {property.customer_id && (
+              // A visit to price the work, not to do it. CalendarClock rather
+              // than the Ruler this page already spends on Measure — two rulers
+              // side by side would read as one feature.
+              <Link href={`/dashboard/schedule?estimate=new&customer=${property.customer_id}&property=${property.id}`}
+                title="Book a visit to look at the work and quote it"
+                className="text-[11px] font-medium px-2 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong transition-colors inline-flex items-center gap-1">
+                <CalendarClock className="w-3 h-3" /> Estimate
               </Link>
             )}
             <Link href={`/dashboard/properties/measure?id=${property.id}`}
