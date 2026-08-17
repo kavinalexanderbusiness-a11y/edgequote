@@ -32,6 +32,7 @@
 
 import { readFileSync, existsSync } from 'node:fs'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { endProcess } from './lib/shutdown'
 
 for (const line of existsSync('.env.local') ? readFileSync('.env.local', 'utf8').split(/\r?\n/) : []) {
   const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim())
@@ -160,5 +161,5 @@ main()
     console.log(failures === 0
       ? '\n✅ measurement RPC: only a real booking of the token\'s own business can record a measurement.\n'
       : `\n❌ measurement RPC: ${failures} contract${failures === 1 ? '' : 's'} broken.\n`)
-    process.exit(failures === 0 ? 0 : 1)
+    void endProcess(failures === 0 ? 0 : 1)
   })

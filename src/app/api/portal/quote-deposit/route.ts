@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { createQuoteDepositCheckoutSession, stripeEnabled } from '@/lib/stripe/config'
 import { schedulingGate, type GateLedgerRow } from '@/lib/payments/depositGate'
 import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
+import { appOrigin } from '@/lib/appOrigin'
 
 export const dynamic = 'force-dynamic'
 
@@ -79,7 +80,7 @@ export async function POST(req: NextRequest) {
   if (gate.required <= 0) return NextResponse.json({ error: 'This quote doesn’t require a deposit.' }, { status: 409 })
   if (gate.outstanding <= 0) return NextResponse.json({ error: 'This deposit is already paid — nothing more is needed.' }, { status: 409 })
 
-  const base = (process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/$/, '')
+  const base = appOrigin()
   const result = await createQuoteDepositCheckoutSession(quote, {
     successUrl: `${base}/portal/${token}?paid=1`,
     cancelUrl: `${base}/portal/${token}`,

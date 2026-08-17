@@ -8,6 +8,7 @@ import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, AddonTempl
 import { Coord } from '@/lib/geo'
 import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, sequenceRoute, roundTripMapsUrl, MAX_MAPS_WAYPOINTS, directionsUrl, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
 import { planDay, type DayPlanStopInput } from '@/lib/dayPlan'
+import type { WorkerDayDetail } from '@/lib/workerAvailability'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { buildRoadDistance, type RoadDist, type RoadSeconds, type RoadHas } from '@/lib/distance'
 import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
@@ -20,6 +21,7 @@ import { Button } from '@/components/ui/Button'
 import { Menu } from '@/components/ui/Menu'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { JobPhotos } from '@/components/photos/JobPhotos'
+import { JobFormsPanel } from '@/components/forms/JobFormsPanel'
 import { RouteTimeline, type TimelineStop } from '@/components/schedule/RouteTimeline'
 import { VisitAddress } from '@/components/schedule/VisitAddress'
 import { JobAddons } from '@/components/schedule/JobAddons'
@@ -33,7 +35,7 @@ import {
   DollarSign, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
   Plus, Pencil, Move, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send, Receipt,
   ChevronUp, ChevronDown, Wand2, MoreHorizontal, CalendarDays, StickyNote, MessagesSquare, PauseCircle,
-  FileSignature,
+  FileSignature, ClipboardCheck,
 } from 'lucide-react'
 import StopForTodaySheet from '@/components/jobs/StopForTodaySheet'
 import type { StopForTodayInput } from '@/lib/workSession'
@@ -76,6 +78,15 @@ interface Props {
   // horizon rather than per day board. `undefined`/null means NOT KNOWN, which
   // lib/dayPlan reports as a caveat; it never reads as a fully-staffed day.
   workersOnDay?: number | null
+  // ⭐ Session 67: the same read, per person — who is off, who does not work
+  // this weekday, who is only ASSUMED available. Feeds the day plan's staffing
+  // warnings so a short crew is named rather than merely counted. Null = not
+  // known (outside the loaded horizon, or the roster read failed).
+  staffingOnDay?: WorkerDayDetail[] | null
+  /** Crew id → name, for naming a crew in a staffing warning. */
+  crewNames?: Record<string, string>
+  /** False when nobody has a recorded weekly pattern — availability is assumed. */
+  availabilityRecorded?: boolean
   learnedDurationFor?: (serviceType: string | null | undefined) => number | null
   onRainDelay: () => void
   onAddJob: () => void
@@ -124,7 +135,7 @@ export interface QuickPatch {
 export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
   onOpenJob, onStartJob, onMarkDone, onMove, onStopForToday, onResume, onSetPrice, workStartTime, capacityHours,
-  workersOnDay, learnedDurationFor, onRainDelay, onAddJob, onQuickSave,
+  workersOnDay, staffingOnDay, crewNames, availabilityRecorded, learnedDurationFor, onRainDelay, onAddJob, onQuickSave,
   addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons, addonTemplates,
   changeOrdersByJobId, onCreateChangeOrder, onSendChangeOrder, onCancelChangeOrder, onOwnerChangeDecision, onRemindChangeOrder,
   onStopOrder, onChatUnread,
@@ -149,6 +160,9 @@ export function DayOpsPanel({
   const [savingPrice, setSavingPrice] = useState(false)
   // Which job's before/after photo panel is open.
   const [photoId, setPhotoId] = useState<string | null>(null)
+  // Which job's checklist panel is open (Job Forms V1 — the owner view of the
+  // forms this visit carries, plus the waive door).
+  const [checklistId, setChecklistId] = useState<string | null>(null)
   // Which job's add-on services panel is open.
   const [addonsId, setAddonsId] = useState<string | null>(null)
   // Which job's change-order panel is open.
@@ -227,8 +241,9 @@ export function DayOpsPanel({
   function closePanels() {
     setPriceId(null); setQuickId(null); setMoveId(null)
     setPhotoId(null); setAddonsId(null); setMessageId(null)
-    setChatId(null); setChangesId(null)
+    setChatId(null); setChangesId(null); setChecklistId(null)
   }
+  const toggleChecklist = (job: Job) => { const was = checklistId === job.id; closePanels(); if (!was) setChecklistId(job.id) }
   const toggleChat = (job: Job) => { const was = chatId === job.id; closePanels(); if (!was) setChatId(job.id) }
   const togglePhoto = (job: Job) => { const was = photoId === job.id; closePanels(); if (!was) setPhotoId(job.id) }
   const toggleAddons = (job: Job) => { const was = addonsId === job.id; closePanels(); if (!was) setAddonsId(job.id) }
@@ -631,6 +646,7 @@ export function DayOpsPanel({
         crewSize: j.crew_size,
         serviceType: j.service_type,
         status: j.status,
+        crewId: j.crew_id ?? null,
         // Session 47: hours already banked against a carried-over visit, so
         // tomorrow plans the remainder rather than the whole estimate again.
         workedMinutes: j.actual_minutes,
@@ -652,6 +668,12 @@ export function DayOpsPanel({
     speed: travel,
     locatedCoords,
     hasBase: !!baseCoord,
+    // Session 67: who, by name, cannot work a day their crew is booked on.
+    // Null outside the loaded horizon, exactly as workersOnDay is — the same
+    // read backs both, so the count and the names can never disagree.
+    staffing: staffingOnDay ?? null,
+    crewNames,
+    availabilityRecorded,
   })
   // Every arrival on this screen comes from that ONE walk.
   const etas = plan.stopCount > 0
@@ -1267,6 +1289,11 @@ export function DayOpsPanel({
                             row would render full and then collapse under the
                             thumb that was already moving. */}
                         <ActionBtn className="hidden sm:inline-flex" onClick={() => togglePhoto(job)} icon={Camera} label="Photos" />
+                        {/* The visit's checklist — what the office requires
+                            done and shown before Complete counts. Folds on a
+                            phone like its neighbours; the completion door
+                            itself reports missing items either way. */}
+                        <ActionBtn className="hidden sm:inline-flex" onClick={() => toggleChecklist(job)} icon={ClipboardCheck} label="Checklist" />
                         {/* ⚠️ "Crew chat" ≠ the "Message" button above it. That
                             one TEXTS THE CUSTOMER (consent-gated, costs money,
                             leaves the building). This one reaches the crew
@@ -1297,6 +1324,7 @@ export function DayOpsPanel({
                           // action twice.
                           { key: 'p-message', className: 'sm:hidden', label: 'Message', description: 'Text this customer', icon: MessageSquare, onSelect: () => toggleMessage(job) },
                           { key: 'p-photos', className: 'sm:hidden', label: 'Photos', description: 'Before & after for this visit', icon: Camera, onSelect: () => togglePhoto(job) },
+                          { key: 'p-checklist', className: 'sm:hidden', label: 'Checklist', description: 'What must be done and shown before completing', icon: ClipboardCheck, onSelect: () => toggleChecklist(job) },
                           ...(chatUnread[job.id] ? [] : [{ key: 'p-chat', className: 'sm:hidden', label: 'Crew chat', description: 'The crew conversation for this visit', icon: MessagesSquare, onSelect: () => toggleChat(job) }]),
                           { key: 'p-services', className: 'sm:hidden', label: ownerExtras.length ? `Services (${ownerExtras.length})` : 'Services', description: 'Extra work billed with this visit', icon: PlusCircle, onSelect: () => toggleAddons(job) },
                           ...(av.pendingCount ? [] : [{ key: 'p-changes', className: 'sm:hidden', label: changes.length ? `Changes (${changes.length})` : 'Add change', description: 'New scope the customer has to approve first', icon: FileSignature, onSelect: () => toggleChanges(job) }]),
@@ -1336,6 +1364,17 @@ export function DayOpsPanel({
                         ) : (
                           <p className="mt-2 text-xs text-amber-400">Link a property to this visit to attach photos.</p>
                         )
+                      )}
+
+                      {/* The visit's checklist — owner view of the forms it
+                          carries: fill, see who answered, waive with a reason.
+                          Internal+crew audience; nothing here reaches the
+                          portal. */}
+                      {checklistId === job.id && (
+                        <div className="mt-2 rounded-lg border border-border bg-bg-secondary p-2.5" onClick={e => e.stopPropagation()}>
+                          <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1"><ClipboardCheck className="w-3 h-3" /> Checklist · your team only</p>
+                          <JobFormsPanel job={job} />
+                        </div>
                       )}
 
                       {/* One-tap messages — text the customer without typing */}

@@ -65,10 +65,14 @@ async function main() {
   const password = process.env.PORTAL_RPC_OWNER_PASSWORD
 
   if (!url || !anonKey || !email || !password) {
-    console.log('  ⏭  SKIPPED — no credentials in .env.local.')
+    console.log('  ⏭  SKIPPED — no credentials, so production was never contacted.')
     console.log('     This guard is the only thing that notices production changing underneath')
     console.log('     the repo. Run it with credentials before any release.\n')
-    process.exit(0)
+    // Exit 2, not 0. Answering "success" because the check could not be attempted
+    // is how this suite stayed green through two schema drifts: verify-all counts
+    // a 0 as proof. 2 means "could not run", which is reported separately and
+    // never as a pass.
+    process.exit(2)
   }
 
   const supabase = createClient(url, anonKey, { auth: { persistSession: false } })

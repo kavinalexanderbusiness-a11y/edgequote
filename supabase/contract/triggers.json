@@ -132,6 +132,18 @@
   "tgenabled": "O"
  },
  {
+  "def": "CREATE TRIGGER form_template_fields_updated_at BEFORE UPDATE ON public.form_template_fields FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "form_template_fields",
+  "tgname": "form_template_fields_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER form_templates_updated_at BEFORE UPDATE ON public.form_templates FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "form_templates",
+  "tgname": "form_templates_updated_at",
+  "tgenabled": "O"
+ },
+ {
   "def": "CREATE TRIGGER holidays_updated_at BEFORE UPDATE ON public.holidays FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
   "tbl": "holidays",
   "tgname": "holidays_updated_at",
@@ -174,6 +186,36 @@
   "tgenabled": "O"
  },
  {
+  "def": "CREATE TRIGGER job_form_response_photo_gate BEFORE INSERT OR UPDATE ON public.job_form_response_photos FOR EACH ROW EXECUTE FUNCTION job_form_response_photo_guard()",
+  "tbl": "job_form_response_photos",
+  "tgname": "job_form_response_photo_gate",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER job_form_response_gate BEFORE INSERT OR DELETE OR UPDATE ON public.job_form_responses FOR EACH ROW EXECUTE FUNCTION job_form_response_guard()",
+  "tbl": "job_form_responses",
+  "tgname": "job_form_response_gate",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER job_form_responses_updated_at BEFORE UPDATE ON public.job_form_responses FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "job_form_responses",
+  "tgname": "job_form_responses_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER job_forms_freeze BEFORE UPDATE ON public.job_forms FOR EACH ROW EXECUTE FUNCTION job_forms_freeze_guard()",
+  "tbl": "job_forms",
+  "tgname": "job_forms_freeze",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER job_forms_updated_at BEFORE UPDATE ON public.job_forms FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "job_forms",
+  "tgname": "job_forms_updated_at",
+  "tgenabled": "O"
+ },
+ {
   "def": "CREATE TRIGGER aa_carry_forward_job_actual_minutes BEFORE INSERT ON public.job_work_sessions FOR EACH ROW EXECUTE FUNCTION carry_forward_job_actual_minutes()",
   "tbl": "job_work_sessions",
   "tgname": "aa_carry_forward_job_actual_minutes",
@@ -195,6 +237,12 @@
   "def": "CREATE TRIGGER aa_bank_job_clock_session BEFORE UPDATE ON public.jobs FOR EACH ROW EXECUTE FUNCTION bank_job_clock_session()",
   "tbl": "jobs",
   "tgname": "aa_bank_job_clock_session",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER ab_job_forms_completion_gate BEFORE UPDATE ON public.jobs FOR EACH ROW EXECUTE FUNCTION job_forms_completion_gate()",
+  "tbl": "jobs",
+  "tgname": "ab_job_forms_completion_gate",
   "tgenabled": "O"
  },
  {
@@ -378,6 +426,18 @@
   "tgenabled": "O"
  },
  {
+  "def": "CREATE TRIGGER quote_addons_total_trg AFTER INSERT OR DELETE OR UPDATE ON public.quote_addons FOR EACH ROW EXECUTE FUNCTION quote_addons_sync_total()",
+  "tbl": "quote_addons",
+  "tgname": "quote_addons_total_trg",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER quote_addons_write_trg BEFORE INSERT OR DELETE OR UPDATE ON public.quote_addons FOR EACH ROW EXECUTE FUNCTION quote_addons_write_guard()",
+  "tbl": "quote_addons",
+  "tgname": "quote_addons_write_trg",
+  "tgenabled": "O"
+ },
+ {
   "def": "CREATE CONSTRAINT TRIGGER quote_options_shape_trg AFTER INSERT OR DELETE OR UPDATE ON public.quote_options DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION quote_options_shape_guard()",
   "tbl": "quote_options",
   "tgname": "quote_options_shape_trg",
@@ -489,6 +549,12 @@
   "def": "CREATE TRIGGER webhook_endpoints_updated_at BEFORE UPDATE ON public.webhook_endpoints FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
   "tbl": "webhook_endpoints",
   "tgname": "webhook_endpoints_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER worker_availability_updated_at BEFORE UPDATE ON public.worker_availability FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+  "tbl": "worker_availability",
+  "tgname": "worker_availability_updated_at",
   "tgenabled": "O"
  }
 ]

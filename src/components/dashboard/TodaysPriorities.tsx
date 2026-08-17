@@ -1,39 +1,32 @@
 import Link from 'next/link'
 import { ButtonLink } from '@/components/ui/Button'
 import { cn, formatCurrency } from '@/lib/utils'
-import type { Priority, PriorityKind } from '@/lib/dashboard/priorities'
-import {
-  ListChecks, CheckCircle2, ArrowRight, Plus,
-  DollarSign, FileText, Bell, CalendarPlus, AlertTriangle, MessageSquare, MessageSquarePlus, Repeat, UserPlus, HeartPulse, PhoneOff,
-} from 'lucide-react'
+import type { InboxItem } from '@/lib/inbox'
+import { ITEM_META } from '@/components/inbox/itemMeta'
+import { ListChecks, CheckCircle2, ArrowRight, Plus, FileText, AlertTriangle } from 'lucide-react'
 
-// ONE ranked queue of the highest-value things to do right now. The ranking and
-// the numbers come from lib/dashboard/priorities (pure, shared with nothing else
-// to disagree with); this file is presentation only — it maps each `kind` to its
-// icon and tone and renders links. Server-rendered: no fetch, no skeleton, the
-// queue is simply there when the page paints.
-
-const META: Record<PriorityKind, { icon: typeof DollarSign; tone: string }> = {
-  unpaid:       { icon: DollarSign,    tone: 'text-red-400 bg-red-500/10 border-red-500/20' },
-  leads:        { icon: UserPlus,      tone: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
-  unscheduled:  { icon: CalendarPlus,  tone: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
-  missed:       { icon: AlertTriangle, tone: 'text-red-400 bg-red-500/10 border-red-500/20' },
-  drafts:       { icon: FileText,      tone: 'text-sky-400 bg-sky-500/10 border-sky-500/20' },
-  followups:    { icon: Bell,          tone: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
-  // Muted on purpose: it's real money, but nothing can be DONE about it until a
-  // contact detail exists, so it must not compete with the rows you can act on.
-  followups_blocked: { icon: PhoneOff, tone: 'text-ink-muted bg-bg-tertiary border-border' },
-  reactivation: { icon: Repeat,        tone: 'text-accent-text bg-accent/10 border-accent/20' },
-  lapsed:       { icon: HeartPulse,    tone: 'text-violet-400 bg-violet-500/10 border-violet-500/20' },
-  messages:     { icon: MessageSquare, tone: 'text-sky-400 bg-sky-500/10 border-sky-500/20' },
-  // Accent rather than sky: a customer asking for work is a revenue row wearing
-  // an inbox icon, and it must not read as "more unread messages".
-  requests:     { icon: MessageSquarePlus, tone: 'text-accent-text bg-accent/10 border-accent/20' },
-}
+// ONE ranked queue of the highest-value things to do right now — the TOP of the
+// Owner Inbox, previewed. The ranking and the numbers come from lib/inbox's
+// composition over lib/dashboard/priorities (pure, shared with the Inbox page,
+// so this card and that page can never disagree about the count or the order);
+// this file is presentation only — it maps each `kind` to its icon and tone via
+// the shared ITEM_META and renders links. Server-rendered: no fetch, no
+// skeleton, the queue is simply there when the page paints.
+//
+// This card shows AT MOST the top few rows (the page decides how many) plus one
+// honest footer: the full count and the door to the Inbox. It is a preview, not
+// a replica — sections, snoozed events and updates live on the Inbox page.
 
 // `started` defaults TRUE so the only behaviour that can change is the one an
 // explicitly-brand-new account opts into — every other caller keeps today’s card.
-export function TodaysPriorities({ items, started = true }: { items: Priority[]; started?: boolean }) {
+export function TodaysPriorities({ items, count, failuresCount = 0, started = true }: {
+  items: InboxItem[]
+  /** THE inbox count — composed server-side, never re-derived here. */
+  count: number
+  /** How many inbox sources failed to load — 0 means the count is complete. */
+  failuresCount?: number
+  started?: boolean
+}) {
   // An empty queue means two opposite things. For a business that has worked, it
   // is an achievement — "you’re all caught up". For one that has never had a
   // customer, a quote or a job, the same words say "there is nothing for you to
@@ -47,7 +40,10 @@ export function TodaysPriorities({ items, started = true }: { items: Priority[];
   // creates the customer and the property as it saves, so nothing has to exist
   // first), and everything downstream — the job, the schedule, the invoice —
   // follows from it.
-  const firstRun = items.length === 0 && !started
+  const firstRun = count === 0 && !started
+  // A failed source must never wear the celebration: with sources missing, an
+  // empty list means "unknown", and unknown must not look like done.
+  const degradedEmpty = count === 0 && failuresCount > 0
   return (
     <div className="rounded-card border border-accent/20 hero-aurora overflow-hidden">
       <div className="px-4 sm:px-5 py-3.5 border-b border-border flex items-center gap-2.5">
@@ -55,7 +51,7 @@ export function TodaysPriorities({ items, started = true }: { items: Priority[];
           <ListChecks className="w-4 h-4 text-accent-text" />
         </span>
         <div className="min-w-0">
-          <h2 className="text-sm font-bold tracking-tight text-ink">{firstRun ? 'Start here' : 'Today\u2019s Priorities'}</h2>
+          <h2 className="text-sm font-bold tracking-tight text-ink">{firstRun ? 'Start here' : 'Needs you'}</h2>
           {/* Name the ordering. The queue IS ranked (urgency × value, per the
               engine's own description) and #1 wears "Do first" — but nothing told
               the owner the list is deliberately ordered rather than an arbitrary
@@ -84,7 +80,17 @@ export function TodaysPriorities({ items, started = true }: { items: Priority[];
             <Plus className="w-4 h-4" /> New quote
           </ButtonLink>
         </div>
-      ) : items.length === 0 ? (
+      ) : degradedEmpty ? (
+        <div className="px-5 py-10 text-center">
+          <div className="w-11 h-11 mx-auto rounded-full bg-amber-500/10 border border-amber-500/25 flex items-center justify-center mb-3">
+            <AlertTriangle className="w-5 h-5 text-amber-400" />
+          </div>
+          <p className="text-sm font-semibold text-ink">Couldn&rsquo;t check everything</p>
+          <p className="text-xs text-ink-muted mt-1">
+            {failuresCount === 1 ? 'One source' : `${failuresCount} sources`} didn&rsquo;t load, so this may not be the whole picture.
+          </p>
+        </div>
+      ) : count === 0 ? (
         <div className="px-5 py-10 text-center">
           <div className="w-11 h-11 mx-auto rounded-full bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center mb-3">
             <CheckCircle2 className="w-5 h-5 text-emerald-400" />
@@ -95,10 +101,10 @@ export function TodaysPriorities({ items, started = true }: { items: Priority[];
       ) : (
         <ol className="divide-y divide-border">
           {items.map((p, i) => {
-            const meta = META[p.kind]
+            const meta = ITEM_META[p.kind]
             const Icon = meta.icon
             return (
-              <li key={p.kind}>
+              <li key={p.key}>
                 <Link
                   href={p.href}
                   // -outline-offset pulls the ring INSIDE the row: these rows sit
@@ -158,6 +164,24 @@ export function TodaysPriorities({ items, started = true }: { items: Priority[];
             )
           })}
         </ol>
+      )}
+
+      {/* THE door — a preview must say it is one. The count is the composed
+          inbox's own (server-side, same engine as the page this opens), so the
+          number here and the number there cannot disagree. Shown even at zero
+          items when sources failed, so degraded mornings still have the door. */}
+      {!firstRun && (count > 0 || failuresCount > 0) && (
+        <Link
+          href="/dashboard/inbox"
+          className="tap-target-y flex items-center justify-between gap-2 px-4 sm:px-5 py-3 border-t border-border text-xs font-semibold text-accent-text hover:bg-surface-raised/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50"
+        >
+          <span>
+            View inbox
+            {count > items.length && <span className="text-ink-muted font-medium"> · {count - items.length} more waiting</span>}
+            {failuresCount > 0 && <span className="text-amber-400 font-medium"> · {failuresCount === 1 ? '1 source' : `${failuresCount} sources`} unavailable</span>}
+          </span>
+          <ArrowRight className="w-3.5 h-3.5" />
+        </Link>
       )}
     </div>
   )

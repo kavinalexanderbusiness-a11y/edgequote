@@ -25,6 +25,7 @@ import {
   type CustomerTimelineSources, type JobTimelineSources,
 } from '@/lib/timelineData'
 import { TimelineCard } from '@/components/timeline/TimelineCard'
+import { HistoryPanel } from '@/components/audit/HistoryPanel'
 import { needsFollowUp, daysSince } from '@/lib/followup'
 import { isWon } from '@/lib/salesStage'
 import { quoteNextAction, type PQuote, type PInvoice, type PCustomer } from '@/lib/pipeline'
@@ -1478,6 +1479,24 @@ export default function CustomerDetailPage() {
           friction. Behind one disclosure they cost a line instead of half the page,
           and NOTHING is removed — one tap restores every card exactly as it was. */}
       <MoreAboutCustomer>
+      {/* Change history — WHO changed what on this customer's records.
+          Deliberately NOT a second timeline: TimelineCard above says what happened
+          WITH this customer (quotes, visits, money, messages) and is the reason the
+          page gets opened; this answers the different question of who changed it and
+          what it was before. It lives in the disclosure because that is reference
+          material — and because the relationship history must keep the position
+          verify:mobile-shell pins for it. */}
+      <Card>
+        <CardBody>
+          <HistoryPanel
+            filter={{ customerId: customer.id }}
+            title="Change history"
+            emptyText="No recorded changes for this customer yet."
+            pageSize={10}
+          />
+        </CardBody>
+      </Card>
+
       {/* Communication — consent + history */}
       <CustomerComms customerId={customer.id} smsOptIn={!!customer.sms_opt_in} emailOptIn={!!customer.email_opt_in}
         onChange={patch => setCustomer({ ...customer, ...patch })} />

@@ -10,6 +10,7 @@ import { PAY_PERIOD_LABELS } from '@/types'
 import { loadTechnicians } from '@/lib/crews'
 import { loadTimeEntries, decimalHours, formatDuration } from '@/lib/timeTracking'
 import { detectDrift, type PayRunDrift } from '@/lib/payRun'
+import { isBookedOff } from '@/lib/workerAvailability'
 import { exportRowsToCsv } from '@/lib/csv'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -71,7 +72,9 @@ export default function PayRunDetailPage() {
         supabase.from('pto_entries').select('*').eq('user_id', user.id)
           .gte('date', r.period_start.slice(0, 10)).lte('date', r.period_end.slice(0, 10)),
       ])
-      const ptos = (ptoRes.data as PtoEntry[]) ?? []
+      // Granted leave only — drift detection compares this pay run against what
+      // was actually owed, and an undecided request was never owed.
+      const ptos = ((ptoRes.data as PtoEntry[]) ?? []).filter(isBookedOff)
 
       const em = new Map<string, TimeEntry[]>()
       for (const e of entries) {
