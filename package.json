@@ -59,7 +59,7 @@
     "verify:secondary-surfaces": "tsx scripts/verify-secondary-surfaces.ts",
     "verify:settings-save": "tsx scripts/verify-settings-save.ts",
     "verify:crew-sync": "tsx scripts/verify-crew-sync.ts",
-    "verify:crew-brief": "tsx scripts/verify-crew-brief.ts",
+    "verify:field-home": "tsx scripts/verify-field-home.ts",
     "verify:crews": "tsx scripts/verify-crews.ts",
     "verify:crew-assignments": "tsx scripts/verify-crew-assignments.ts",
     "verify:recurrence": "tsx scripts/verify-recurrence.ts",

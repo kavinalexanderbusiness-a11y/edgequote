@@ -36,10 +36,15 @@ const PRECACHE = ['/offline.html', '/manifest.webmanifest', '/icon.svg', '/icon-
 //
 // So: an allowlist, not a pattern. A denylist would silently start caching money
 // the day someone converts one of these to a server component; an allowlist fails
-// closed (worst case a route just isn't available offline). Both entries below are
-// 'use client' — they hold no server-rendered data — and they are the field
-// workflow: the day board, and the invoice a deep link opens.
-const FIELD_SHELLS = ['/dashboard/schedule', '/dashboard/invoices']
+// closed (worst case a route just isn't available offline). Every entry below
+// renders no server data: the two /dashboard routes are 'use client' pages, and
+// /crew is a client Today under a gate layout whose HTML is shell + nav only.
+// They are the field workflow: the owner's day board, the invoice a deep link
+// opens, and the worker's day.
+// ⛔ /crew/schedule stays OFF this list: it is an async server component that
+// bakes the next two weeks' day counts into its HTML — cached, a stale week
+// would replay as live. verify:field-home pins this.
+const FIELD_SHELLS = ['/dashboard/schedule', '/dashboard/invoices', '/crew']
 function isFieldShell(url) {
   return FIELD_SHELLS.indexOf(url.pathname) !== -1
 }
@@ -69,13 +74,19 @@ self.addEventListener('activate', (event) => {
     // went straight to offline.html: there was no guaranteed-openable state after
     // install. Best-effort: signed-out users get a redirect (skipped), and a failure
     // here must never block activation.
-    try {
-      const res = await fetch('/dashboard/schedule', { credentials: 'same-origin' })
-      if (res && res.ok && !res.redirected) {
-        const c = await caches.open(SHELL)
-        await c.put(new Request(self.location.origin + '/dashboard/schedule'), res.clone())
-      }
-    } catch (e) { /* offline at activate — the next online visit caches it */ }
+    // Warm the shell that answers for THIS session's role: an owner fetching
+    // /crew (or a worker fetching the day board) gets a redirect, which the
+    // !res.redirected guard skips — so each device ends up holding its own
+    // home and nothing else's.
+    for (const path of ['/dashboard/schedule', '/crew']) {
+      try {
+        const res = await fetch(path, { credentials: 'same-origin' })
+        if (res && res.ok && !res.redirected) {
+          const c = await caches.open(SHELL)
+          await c.put(new Request(self.location.origin + path), res.clone())
+        }
+      } catch (e) { /* offline at activate — the next online visit caches it */ }
+    }
     await self.clients.claim()
   })())
 })
@@ -122,6 +133,12 @@ self.addEventListener('fetch', (event) => {
         if (url.pathname === '/dashboard') {
           const day = await caches.match(new Request(url.origin + '/dashboard/schedule'))
           if (day) return Response.redirect(url.origin + '/dashboard/schedule', 302)
+          // A worker's installed PWA also starts at /dashboard (the manifest's
+          // start_url) and rides the routeFor bounce to /crew when online.
+          // Offline, honour the same destination: if this device holds the
+          // worker's shell, that is where its person works.
+          const crew = await caches.match(new Request(url.origin + '/crew'))
+          if (crew) return Response.redirect(url.origin + '/crew', 302)
         }
         return (await caches.match('/offline.html')) || Response.error()
       }
