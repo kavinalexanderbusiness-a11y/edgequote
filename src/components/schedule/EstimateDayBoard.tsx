@@ -20,6 +20,8 @@ import Link from 'next/link'
 import { Button } from '@/components/ui/Button'
 import { Menu } from '@/components/ui/Menu'
 import { Ruler, MapPin, Phone, MessageSquare, Check, X, UserX, FileText, Pencil, RotateCcw } from 'lucide-react'
+import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
+import type { MsgType } from '@/lib/comms/templates'
 import { ITEM_META } from '@/lib/scheduleItems'
 import type { ScheduleItemStatus } from '@/lib/scheduleItems'
 import {
@@ -33,9 +35,18 @@ interface Props {
   error?: string | null
   onEdit: (item: EstimateAppointment) => void
   onSetStatus: (item: EstimateAppointment, to: ScheduleItemStatus) => void
-  onMessage?: (item: EstimateAppointment) => void
   onAdd?: () => void
 }
+
+// ── The templates this surface may send ──────────────────────────────────────
+// The estimate-appointment set ONLY. Deliberately excludes on_my_way,
+// job_complete and the rest of the job-timing family: offering them here is how
+// a customer who has been quoted nothing gets told their service is finished —
+// the precise failure the $0-job workaround used to produce.
+const ESTIMATE_TEMPLATES: MsgType[] = [
+  'estimate_appt_scheduled', 'estimate_appt_on_my_way', 'estimate_appt_rescheduled',
+  'estimate_reminder', 'custom',
+]
 
 function statusTone(s: ScheduleItemStatus): string {
   switch (s) {
@@ -50,7 +61,7 @@ function EstimateRow({ item, onEdit, onSetStatus, onMessage }: {
   item: EstimateAppointment
   onEdit: Props['onEdit']
   onSetStatus: Props['onSetStatus']
-  onMessage?: Props['onMessage']
+  onMessage: (item: EstimateAppointment) => void
 }) {
   const address = item.properties?.address ?? null
   const phone = item.customers?.phone ?? item.phone ?? null
@@ -113,9 +124,9 @@ function EstimateRow({ item, onEdit, onSetStatus, onMessage }: {
             <Phone className="w-3.5 h-3.5" /> Call
           </Button>
         )}
-        {onMessage && item.customer_id && (
+        {item.customer_id && (
           <Button variant="secondary" size="sm" onClick={() => onMessage(item)}>
-            <MessageSquare className="w-3.5 h-3.5" /> Text
+            <MessageSquare className="w-3.5 h-3.5" /> Message
           </Button>
         )}
 
@@ -156,8 +167,11 @@ function EstimateRow({ item, onEdit, onSetStatus, onMessage }: {
   )
 }
 
-export function EstimateDayBoard({ items, error, onEdit, onSetStatus, onMessage, onAdd }: Props) {
+export function EstimateDayBoard({ items, error, onEdit, onSetStatus, onAdd }: Props) {
   const [showClosed, setShowClosed] = useState(false)
+  // The board owns the composer so the estimate templates have a real sender.
+  // A template nobody can send is the same dead end this whole table was in.
+  const [messaging, setMessaging] = useState<EstimateAppointment | null>(null)
 
   if (error) {
     return (
@@ -207,9 +221,28 @@ export function EstimateDayBoard({ items, error, onEdit, onSetStatus, onMessage,
       ) : (
         <div className="space-y-2">
           {shown.map(i => (
-            <EstimateRow key={i.id} item={i} onEdit={onEdit} onSetStatus={onSetStatus} onMessage={onMessage} />
+            <EstimateRow key={i.id} item={i} onEdit={onEdit} onSetStatus={onSetStatus} onMessage={setMessaging} />
           ))}
         </div>
+      )}
+
+      {/* THE shared composer — consent, STOP state, channel availability and the
+          send governor all live behind it, so this surface inherits every one of
+          them instead of re-deciding who may be texted. */}
+      {messaging && messaging.customer_id && (
+        <SendMessageDialog
+          open
+          onClose={() => setMessaging(null)}
+          customerId={messaging.customer_id}
+          customerName={messaging.customers?.name ?? undefined}
+          templates={ESTIMATE_TEMPLATES}
+          defaultTemplate="estimate_appt_on_my_way"
+          title="Message about the estimate visit"
+          vars={{
+            dateLabel: messaging.scheduled_date,
+            address: messaging.properties?.address ?? undefined,
+          }}
+        />
       )}
     </section>
   )

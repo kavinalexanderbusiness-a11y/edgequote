@@ -201,6 +201,22 @@ check('…and that matcher would catch a violation (negative control)',
   COMPLETION_WORDS.test('Hi, we have finished up — thanks for your business!'),
   'the completion-language matcher is vacuous; it cannot fail, so it proves nothing')
 
+// ⭐ THE LESSON THIS WHOLE FEATURE CAME FROM. schedule_items sat empty for months
+// because it had writers and no readers; `estimate_reminder` has sat unused for
+// just as long because it has wording, a label and an editor entry but NOTHING
+// THAT SENDS IT. A template nobody can reach is the same dead end, so each new
+// one must be offered by a surface that can actually send it.
+const dayBoard = stripComments(src('src/components/schedule/EstimateDayBoard.tsx'))
+for (const t of APPT_TYPES) {
+  check(`${t} has a surface that can actually send it`,
+    dayBoard.includes(t),
+    'defined, labelled, editable — and unreachable. That is how estimate_reminder ended up unused')
+}
+check('the composer does NOT offer the job-timing templates',
+  !/'(job_complete|on_my_way|arrived|thanks|review_request)'/.test(
+    dayBoard.slice(dayBoard.indexOf('ESTIMATE_TEMPLATES'), dayBoard.indexOf('ESTIMATE_TEMPLATES') + 400)),
+  'offering job wording here is how a customer who has been quoted nothing is told their service is finished')
+
 check('there is deliberately no estimate analogue of job_complete',
   !Object.keys(MSG_LABELS).some(k => /^estimate_appt.*(complete|done|finish)/i.test(k)),
   'an estimate visit ending is not a service completion and must have no template that says so')
