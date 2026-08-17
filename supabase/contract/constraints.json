@@ -21,6 +21,48 @@
   "convalidated": true
  },
  {
+  "def": "CHECK (((char_length(action) >= 1) AND (char_length(action) <= 64)))",
+  "tbl": "audit_events",
+  "conname": "audit_events_action_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((actor_type = ANY (ARRAY['owner'::text, 'worker'::text, 'customer'::text, 'system'::text])))",
+  "tbl": "audit_events",
+  "conname": "audit_events_actor_type_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((char_length(entity_type) >= 1) AND (char_length(entity_type) <= 32)))",
+  "tbl": "audit_events",
+  "conname": "audit_events_entity_type_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "audit_events",
+  "conname": "audit_events_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((source = ANY (ARRAY['dashboard'::text, 'crew'::text, 'portal'::text, 'service'::text, 'db'::text])))",
+  "tbl": "audit_events",
+  "conname": "audit_events_source_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "audit_events",
+  "conname": "audit_events_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
   "def": "CHECK ((decision = ANY (ARRAY['fired'::text, 'suppressed'::text])))",
   "tbl": "automation_runs",
   "conname": "automation_runs_decision_check",
@@ -504,6 +546,20 @@
   "convalidated": true
  },
  {
+  "def": "UNIQUE (id, user_id)",
+  "tbl": "crews",
+  "conname": "crews_id_user_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (lead_technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (lead_technician_id)",
+  "tbl": "crews",
+  "conname": "crews_lead_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
   "def": "PRIMARY KEY (id)",
   "tbl": "crews",
   "conname": "crews_pkey",
@@ -742,9 +798,9 @@
   "convalidated": true
  },
  {
-  "def": "FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE CASCADE",
+  "def": "FOREIGN KEY (crew_id, user_id) REFERENCES crews(id, user_id) ON DELETE CASCADE",
   "tbl": "dispatch_notes",
-  "conname": "dispatch_notes_crew_id_fkey",
+  "conname": "dispatch_notes_crew_same_owner",
   "contype": "f",
   "convalidated": true
  },
@@ -770,9 +826,9 @@
   "convalidated": true
  },
  {
-  "def": "FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL",
+  "def": "FOREIGN KEY (crew_id, user_id) REFERENCES crews(id, user_id) ON DELETE SET NULL (crew_id)",
   "tbl": "equipment",
-  "conname": "equipment_crew_id_fkey",
+  "conname": "equipment_crew_same_owner",
   "contype": "f",
   "convalidated": true
  },
@@ -1750,9 +1806,9 @@
   "convalidated": true
  },
  {
-  "def": "FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL",
+  "def": "FOREIGN KEY (crew_id, user_id) REFERENCES crews(id, user_id) ON DELETE SET NULL (crew_id)",
   "tbl": "jobs",
-  "conname": "jobs_crew_id_fkey",
+  "conname": "jobs_crew_same_owner",
   "contype": "f",
   "convalidated": true
  },
@@ -1768,6 +1824,13 @@
   "tbl": "jobs",
   "conname": "jobs_id_user_key",
   "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((crew_id IS NULL) OR (technician_id IS NULL)))",
+  "tbl": "jobs",
+  "conname": "jobs_one_assignee",
+  "contype": "c",
   "convalidated": true
  },
  {
@@ -1803,6 +1866,13 @@
   "tbl": "jobs",
   "conname": "jobs_status_check",
   "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (technician_id)",
+  "tbl": "jobs",
+  "conname": "jobs_technician_same_owner",
+  "contype": "f",
   "convalidated": true
  },
  {
@@ -3766,6 +3836,34 @@
   "convalidated": true
  },
  {
+  "def": "FOREIGN KEY (crew_id, user_id) REFERENCES crews(id, user_id)",
+  "tbl": "technician_crew_history",
+  "conname": "technician_crew_history_crew_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "technician_crew_history",
+  "conname": "technician_crew_history_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE CASCADE",
+  "tbl": "technician_crew_history",
+  "conname": "technician_crew_history_technician_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "technician_crew_history",
+  "conname": "technician_crew_history_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
   "def": "FOREIGN KEY (auth_user_id) REFERENCES auth.users(id) ON DELETE SET NULL",
   "tbl": "technicians",
   "conname": "technicians_auth_user_id_fkey",
@@ -3773,9 +3871,9 @@
   "convalidated": true
  },
  {
-  "def": "FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL",
+  "def": "FOREIGN KEY (crew_id, user_id) REFERENCES crews(id, user_id) ON DELETE SET NULL (crew_id)",
   "tbl": "technicians",
-  "conname": "technicians_crew_id_fkey",
+  "conname": "technicians_crew_same_owner",
   "contype": "f",
   "convalidated": true
  },

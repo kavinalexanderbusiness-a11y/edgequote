@@ -1,5 +1,11 @@
 [
  {
+  "def": "CREATE TRIGGER audit_events_no_mutate BEFORE DELETE OR UPDATE ON public.audit_events FOR EACH ROW EXECUTE FUNCTION audit_events_immutable()",
+  "tbl": "audit_events",
+  "tgname": "audit_events_no_mutate",
+  "tgenabled": "O"
+ },
+ {
   "def": "CREATE TRIGGER business_settings_no_crew_owner BEFORE INSERT ON public.business_settings FOR EACH ROW EXECUTE FUNCTION guard_business_settings_owner()",
   "tbl": "business_settings",
   "tgname": "business_settings_no_crew_owner",
@@ -9,6 +15,18 @@
   "def": "CREATE TRIGGER business_settings_updated_at BEFORE UPDATE ON public.business_settings FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
   "tbl": "business_settings",
   "tgname": "business_settings_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_change_orders_insert AFTER INSERT ON public.change_orders FOR EACH ROW EXECUTE FUNCTION audit_change_orders()",
+  "tbl": "change_orders",
+  "tgname": "trg_audit_change_orders_insert",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_change_orders_update AFTER UPDATE OF status ON public.change_orders FOR EACH ROW EXECUTE FUNCTION audit_change_orders()",
+  "tbl": "change_orders",
+  "tgname": "trg_audit_change_orders_update",
   "tgenabled": "O"
  },
  {
@@ -54,6 +72,18 @@
   "tgenabled": "O"
  },
  {
+  "def": "CREATE TRIGGER crews_block_delete_with_history BEFORE DELETE ON public.crews FOR EACH ROW EXECUTE FUNCTION crews_block_delete_with_history()",
+  "tbl": "crews",
+  "tgname": "crews_block_delete_with_history",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER crews_lead_is_member BEFORE INSERT OR UPDATE OF lead_technician_id ON public.crews FOR EACH ROW EXECUTE FUNCTION crews_lead_is_member()",
+  "tbl": "crews",
+  "tgname": "crews_lead_is_member",
+  "tgenabled": "O"
+ },
+ {
   "def": "CREATE TRIGGER crews_updated_at BEFORE UPDATE ON public.crews FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
   "tbl": "crews",
   "tgname": "crews_updated_at",
@@ -75,6 +105,24 @@
   "def": "CREATE TRIGGER customers_updated_at BEFORE UPDATE ON public.customers FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
   "tbl": "customers",
   "tgname": "customers_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_customers_delete AFTER DELETE ON public.customers FOR EACH ROW EXECUTE FUNCTION audit_customers()",
+  "tbl": "customers",
+  "tgname": "trg_audit_customers_delete",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_customers_insert AFTER INSERT ON public.customers FOR EACH ROW EXECUTE FUNCTION audit_customers()",
+  "tbl": "customers",
+  "tgname": "trg_audit_customers_insert",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_customers_update AFTER UPDATE OF archived_at, name, email, phone ON public.customers FOR EACH ROW EXECUTE FUNCTION audit_customers()",
+  "tbl": "customers",
+  "tgname": "trg_audit_customers_update",
   "tgenabled": "O"
  },
  {
@@ -162,6 +210,24 @@
   "tgenabled": "O"
  },
  {
+  "def": "CREATE TRIGGER trg_audit_invoices_delete AFTER DELETE ON public.invoices FOR EACH ROW EXECUTE FUNCTION audit_invoices()",
+  "tbl": "invoices",
+  "tgname": "trg_audit_invoices_delete",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_invoices_insert AFTER INSERT ON public.invoices FOR EACH ROW EXECUTE FUNCTION audit_invoices()",
+  "tbl": "invoices",
+  "tgname": "trg_audit_invoices_insert",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_invoices_update AFTER UPDATE OF status, amount, discount_value ON public.invoices FOR EACH ROW EXECUTE FUNCTION audit_invoices()",
+  "tbl": "invoices",
+  "tgname": "trg_audit_invoices_update",
+  "tgenabled": "O"
+ },
+ {
   "def": "CREATE TRIGGER trg_integration_capture AFTER INSERT OR UPDATE OF status ON public.invoices FOR EACH ROW EXECUTE FUNCTION capture_integration_event()",
   "tbl": "invoices",
   "tgname": "trg_integration_capture",
@@ -216,6 +282,30 @@
   "tgenabled": "O"
  },
  {
+  "def": "CREATE TRIGGER trg_audit_job_forms_waive AFTER UPDATE OF waived_at ON public.job_forms FOR EACH ROW EXECUTE FUNCTION audit_job_forms()",
+  "tbl": "job_forms",
+  "tgname": "trg_audit_job_forms_waive",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_job_recurrences_delete AFTER DELETE ON public.job_recurrences FOR EACH ROW EXECUTE FUNCTION audit_job_recurrences()",
+  "tbl": "job_recurrences",
+  "tgname": "trg_audit_job_recurrences_delete",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_job_recurrences_insert AFTER INSERT ON public.job_recurrences FOR EACH ROW EXECUTE FUNCTION audit_job_recurrences()",
+  "tbl": "job_recurrences",
+  "tgname": "trg_audit_job_recurrences_insert",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_job_recurrences_update AFTER UPDATE OF freq, interval_unit, interval_count, end_date, end_count ON public.job_recurrences FOR EACH ROW EXECUTE FUNCTION audit_job_recurrences()",
+  "tbl": "job_recurrences",
+  "tgname": "trg_audit_job_recurrences_update",
+  "tgenabled": "O"
+ },
+ {
   "def": "CREATE TRIGGER aa_carry_forward_job_actual_minutes BEFORE INSERT ON public.job_work_sessions FOR EACH ROW EXECUTE FUNCTION carry_forward_job_actual_minutes()",
   "tbl": "job_work_sessions",
   "tgname": "aa_carry_forward_job_actual_minutes",
@@ -225,6 +315,24 @@
   "def": "CREATE TRIGGER job_work_sessions_updated_at BEFORE UPDATE ON public.job_work_sessions FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
   "tbl": "job_work_sessions",
   "tgname": "job_work_sessions_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_work_sessions_delete AFTER DELETE ON public.job_work_sessions FOR EACH ROW EXECUTE FUNCTION audit_work_sessions()",
+  "tbl": "job_work_sessions",
+  "tgname": "trg_audit_work_sessions_delete",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_work_sessions_insert AFTER INSERT ON public.job_work_sessions FOR EACH ROW EXECUTE FUNCTION audit_work_sessions()",
+  "tbl": "job_work_sessions",
+  "tgname": "trg_audit_work_sessions_insert",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_work_sessions_update AFTER UPDATE OF minutes, workers, worked_on ON public.job_work_sessions FOR EACH ROW EXECUTE FUNCTION audit_work_sessions()",
+  "tbl": "job_work_sessions",
+  "tgname": "trg_audit_work_sessions_update",
   "tgenabled": "O"
  },
  {
@@ -258,9 +366,33 @@
   "tgenabled": "O"
  },
  {
+  "def": "CREATE TRIGGER jobs_assignment_guard BEFORE INSERT OR UPDATE OF crew_id, technician_id ON public.jobs FOR EACH ROW EXECUTE FUNCTION jobs_assignment_guard()",
+  "tbl": "jobs",
+  "tgname": "jobs_assignment_guard",
+  "tgenabled": "O"
+ },
+ {
   "def": "CREATE TRIGGER jobs_updated_at BEFORE UPDATE ON public.jobs FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
   "tbl": "jobs",
   "tgname": "jobs_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_jobs_delete BEFORE DELETE ON public.jobs FOR EACH ROW EXECUTE FUNCTION audit_jobs()",
+  "tbl": "jobs",
+  "tgname": "trg_audit_jobs_delete",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_jobs_insert AFTER INSERT ON public.jobs FOR EACH ROW EXECUTE FUNCTION audit_jobs()",
+  "tbl": "jobs",
+  "tgname": "trg_audit_jobs_insert",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_jobs_update AFTER UPDATE OF scheduled_date, start_time, status, started_at, crew_id, price ON public.jobs FOR EACH ROW EXECUTE FUNCTION audit_jobs()",
+  "tbl": "jobs",
+  "tgname": "trg_audit_jobs_update",
   "tgenabled": "O"
  },
  {
@@ -345,6 +477,24 @@
   "def": "CREATE TRIGGER part_movements_recompute AFTER INSERT OR DELETE OR UPDATE ON public.part_movements FOR EACH ROW EXECUTE FUNCTION recompute_part_stock()",
   "tbl": "part_movements",
   "tgname": "part_movements_recompute",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_payments_delete AFTER DELETE ON public.payments FOR EACH ROW EXECUTE FUNCTION audit_payments()",
+  "tbl": "payments",
+  "tgname": "trg_audit_payments_delete",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_payments_insert AFTER INSERT ON public.payments FOR EACH ROW EXECUTE FUNCTION audit_payments()",
+  "tbl": "payments",
+  "tgname": "trg_audit_payments_insert",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_payments_update AFTER UPDATE OF status ON public.payments FOR EACH ROW EXECUTE FUNCTION audit_payments()",
+  "tbl": "payments",
+  "tgname": "trg_audit_payments_update",
   "tgenabled": "O"
  },
  {
@@ -456,6 +606,24 @@
   "tgenabled": "O"
  },
  {
+  "def": "CREATE TRIGGER trg_audit_quotes_delete AFTER DELETE ON public.quotes FOR EACH ROW EXECUTE FUNCTION audit_quotes()",
+  "tbl": "quotes",
+  "tgname": "trg_audit_quotes_delete",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_quotes_insert AFTER INSERT ON public.quotes FOR EACH ROW EXECUTE FUNCTION audit_quotes()",
+  "tbl": "quotes",
+  "tgname": "trg_audit_quotes_insert",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_quotes_update AFTER UPDATE OF status, initial_price, travel_fee ON public.quotes FOR EACH ROW EXECUTE FUNCTION audit_quotes()",
+  "tbl": "quotes",
+  "tgname": "trg_audit_quotes_update",
+  "tgenabled": "O"
+ },
+ {
   "def": "CREATE TRIGGER trg_integration_capture AFTER INSERT OR UPDATE OF status ON public.quotes FOR EACH ROW EXECUTE FUNCTION capture_integration_event()",
   "tbl": "quotes",
   "tgname": "trg_integration_capture",
@@ -483,6 +651,18 @@
   "def": "CREATE TRIGGER service_bundles_updated_at BEFORE UPDATE ON public.service_bundles FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
   "tbl": "service_bundles",
   "tgname": "service_bundles_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_service_requests_insert AFTER INSERT ON public.service_requests FOR EACH ROW EXECUTE FUNCTION audit_service_requests()",
+  "tbl": "service_requests",
+  "tgname": "trg_audit_service_requests_insert",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_service_requests_update AFTER UPDATE OF resolved_at ON public.service_requests FOR EACH ROW EXECUTE FUNCTION audit_service_requests()",
+  "tbl": "service_requests",
+  "tgname": "trg_audit_service_requests_update",
   "tgenabled": "O"
  },
  {
@@ -516,6 +696,18 @@
   "tgenabled": "O"
  },
  {
+  "def": "CREATE TRIGGER technicians_clear_crew_lead AFTER UPDATE OF crew_id, is_active, archived_at ON public.technicians FOR EACH ROW EXECUTE FUNCTION clear_crew_lead_on_departure()",
+  "tbl": "technicians",
+  "tgname": "technicians_clear_crew_lead",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER technicians_crew_history AFTER INSERT OR UPDATE OF crew_id ON public.technicians FOR EACH ROW EXECUTE FUNCTION record_technician_crew_history()",
+  "tbl": "technicians",
+  "tgname": "technicians_crew_history",
+  "tgenabled": "O"
+ },
+ {
   "def": "CREATE TRIGGER technicians_log_wage_change AFTER INSERT OR UPDATE OF hourly_wage ON public.technicians FOR EACH ROW EXECUTE FUNCTION log_wage_change()",
   "tbl": "technicians",
   "tgname": "technicians_log_wage_change",
@@ -525,6 +717,24 @@
   "def": "CREATE TRIGGER technicians_updated_at BEFORE UPDATE ON public.technicians FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
   "tbl": "technicians",
   "tgname": "technicians_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_technicians_delete AFTER DELETE ON public.technicians FOR EACH ROW EXECUTE FUNCTION audit_technicians()",
+  "tbl": "technicians",
+  "tgname": "trg_audit_technicians_delete",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_technicians_insert AFTER INSERT ON public.technicians FOR EACH ROW EXECUTE FUNCTION audit_technicians()",
+  "tbl": "technicians",
+  "tgname": "trg_audit_technicians_insert",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_audit_technicians_update AFTER UPDATE OF is_active, archived_at, crew_id, auth_user_id ON public.technicians FOR EACH ROW EXECUTE FUNCTION audit_technicians()",
+  "tbl": "technicians",
+  "tgname": "trg_audit_technicians_update",
   "tgenabled": "O"
  },
  {
