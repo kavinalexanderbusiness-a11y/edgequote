@@ -21,6 +21,48 @@
   "convalidated": true
  },
  {
+  "def": "CHECK (((char_length(action) >= 1) AND (char_length(action) <= 64)))",
+  "tbl": "audit_events",
+  "conname": "audit_events_action_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((actor_type = ANY (ARRAY['owner'::text, 'worker'::text, 'customer'::text, 'system'::text])))",
+  "tbl": "audit_events",
+  "conname": "audit_events_actor_type_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((char_length(entity_type) >= 1) AND (char_length(entity_type) <= 32)))",
+  "tbl": "audit_events",
+  "conname": "audit_events_entity_type_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "audit_events",
+  "conname": "audit_events_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((source = ANY (ARRAY['dashboard'::text, 'crew'::text, 'portal'::text, 'service'::text, 'db'::text])))",
+  "tbl": "audit_events",
+  "conname": "audit_events_source_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "audit_events",
+  "conname": "audit_events_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
   "def": "CHECK ((decision = ANY (ARRAY['fired'::text, 'suppressed'::text])))",
   "tbl": "automation_runs",
   "conname": "automation_runs_decision_check",
@@ -805,6 +847,13 @@
   "convalidated": true
  },
  {
+  "def": "UNIQUE (user_id, id)",
+  "tbl": "equipment",
+  "conname": "equipment_user_id_id_key",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
   "def": "FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE CASCADE",
   "tbl": "equipment_docs",
   "conname": "equipment_docs_equipment_id_fkey",
@@ -826,9 +875,9 @@
   "convalidated": true
  },
  {
-  "def": "FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE CASCADE",
+  "def": "FOREIGN KEY (user_id, equipment_id) REFERENCES equipment(user_id, id) ON DELETE CASCADE",
   "tbl": "equipment_service",
-  "conname": "equipment_service_equipment_id_fkey",
+  "conname": "equipment_service_equipment_tenant_fkey",
   "contype": "f",
   "convalidated": true
  },
@@ -2191,9 +2240,9 @@
   "convalidated": true
  },
  {
-  "def": "FOREIGN KEY (part_id) REFERENCES parts(id) ON DELETE CASCADE",
+  "def": "FOREIGN KEY (user_id, part_id) REFERENCES parts(user_id, id) ON DELETE CASCADE",
   "tbl": "part_movements",
-  "conname": "part_movements_part_id_fkey",
+  "conname": "part_movements_part_tenant_fkey",
   "contype": "f",
   "convalidated": true
  },
@@ -2237,6 +2286,13 @@
   "tbl": "parts",
   "conname": "parts_user_id_fkey",
   "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, id)",
+  "tbl": "parts",
+  "conname": "parts_user_id_id_key",
+  "contype": "u",
   "convalidated": true
  },
  {
@@ -3465,10 +3521,24 @@
   "convalidated": true
  },
  {
+  "def": "FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL",
+  "tbl": "schedule_items",
+  "conname": "schedule_items_crew_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
   "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
   "tbl": "schedule_items",
   "conname": "schedule_items_customer_id_fkey",
   "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((crew_id IS NULL) OR (technician_id IS NULL)))",
+  "tbl": "schedule_items",
+  "conname": "schedule_items_one_assignee_check",
+  "contype": "c",
   "convalidated": true
  },
  {
@@ -3483,6 +3553,27 @@
   "tbl": "schedule_items",
   "conname": "schedule_items_property_id_fkey",
   "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((status = ANY (ARRAY['scheduled'::text, 'completed'::text, 'cancelled'::text, 'no_show'::text])))",
+  "tbl": "schedule_items",
+  "conname": "schedule_items_status_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (technician_id) REFERENCES technicians(id) ON DELETE SET NULL",
+  "tbl": "schedule_items",
+  "conname": "schedule_items_technician_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((type = ANY (ARRAY['estimate'::text, 'callback'::text, 'appointment'::text, 'task'::text, 'reminder'::text])))",
+  "tbl": "schedule_items",
+  "conname": "schedule_items_type_check",
+  "contype": "c",
   "convalidated": true
  },
  {

@@ -53,6 +53,10 @@
  ],
  "table_comments": [
   {
+   "tbl": "audit_events",
+   "comment": "Canonical audit trail: one row per meaningful business mutation, written ONLY by DB triggers/definer functions in the same transaction as the write it describes. Append-only: no client insert path, and audit_events_no_mutate refuses UPDATE/DELETE for every role. Money figures inside before/after are descriptive snapshots â€” the ledger engines remain the financial truth."
+  },
+  {
    "tbl": "beta_invites",
    "comment": "One-time beta signup invites. Raw tokens are never stored — sha256 hex only. Service-role and DEFINER access only: RLS is on with zero policies."
   },
@@ -141,6 +145,10 @@
    "comment": "Scheduled report cadences per owner. last_period_to is the idempotency key: the cron sends a closed period exactly once, however often it runs."
   },
   {
+   "tbl": "schedule_items",
+   "comment": "Non-job calendar entries: estimate / callback / appointment / task / reminder. A row here is NEVER work — labour, revenue, invoicing, recurrence, work sessions, proof-of-work and review eligibility all read public.jobs, so completing an estimate appointment cannot reach any of them. type='estimate' is the scheduled visit that produces a quote (Session 79); converted_quote_id is the quote it is about, whether that quote existed first or was written afterwards."
+  },
+  {
    "tbl": "technician_crew_history",
    "comment": "Append-only crew membership log, written only by trigger. Answers \"which crew was this person on AT that time\" so past attribution cannot be rewritten by moving someone today. Rows are never updated or deleted by any client role."
   },
@@ -158,6 +166,41 @@
   }
  ],
  "column_comments": [
+  {
+   "col": "actor_label",
+   "tbl": "audit_events",
+   "comment": "Display snapshot at write time (technician name, customer name). Survives renames and deletions; never re-resolved."
+  },
+  {
+   "col": "actor_type",
+   "tbl": "audit_events",
+   "comment": "owner | worker | customer | system â€” resolved in-database by audit_actor_context(), never supplied by a client. Do not lie about actor identity: a customer decision recorded by the owner is actor=owner (the write) with the decision provenance in after/meta."
+  },
+  {
+   "col": "before",
+   "tbl": "audit_events",
+   "comment": "Meaningful changed values only â€” never a whole-row dump. Null-valued keys are kept deliberately: \"end_date: null\" IS the before-state of setting one."
+  },
+  {
+   "col": "entity_label",
+   "tbl": "audit_events",
+   "comment": "Display reference snapshot (quote_number, invoice_number, job title). Survives the entity's deletion."
+  },
+  {
+   "col": "occurred_at",
+   "tbl": "audit_events",
+   "comment": "clock_timestamp() (real wall clock), NOT now() â€” now() is transaction start and ties every row written in one transaction."
+  },
+  {
+   "col": "seq",
+   "tbl": "audit_events",
+   "comment": "Monotonic tiebreaker. ORDER BY seq for a provably total audit order; occurred_at can tie at microsecond resolution."
+  },
+  {
+   "col": "txid",
+   "tbl": "audit_events",
+   "comment": "txid_current() at write time. Events sharing a txid were caused by ONE write; the UI folds them (the customer-timeline dedup contract, made structural)."
+  },
   {
    "col": "redeemed_by",
    "tbl": "beta_invites",
@@ -517,6 +560,21 @@
    "col": "recipient",
    "tbl": "report_schedules",
    "comment": "NULL = defer to business_settings.email_primary (a pointer cannot go stale)."
+  },
+  {
+   "col": "converted_quote_id",
+   "tbl": "schedule_items",
+   "comment": "The quote this visit is about. Set when the owner writes the quote from the visit, or when an existing draft quote is given an appointment. One link, both directions."
+  },
+  {
+   "col": "customer_note",
+   "tbl": "schedule_items",
+   "comment": "Optional customer-facing note for the appointment. The audience is the COLUMN, never a visibility flag."
+  },
+  {
+   "col": "notes",
+   "tbl": "schedule_items",
+   "comment": "INTERNAL only — never rendered to a customer. Customer-facing wording lives in customer_note."
   },
   {
    "col": "dedup_key",

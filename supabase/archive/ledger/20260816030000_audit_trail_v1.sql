@@ -1,0 +1,1043 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ARCHIVED MIGRATION 
+—
+ HISTORY ONLY. DO NOT RE-RUN.
+--
+--   version : 20260816030000
+--   name    : audit_trail_v1
+--
+-- Applied to production 2026-08-16 by another session; the repo had no file.
+-- Recovered from supabase_migrations.schema_migrations.statements by Session 75
+-- so npm run verify:migrations can see it. Application code not landed here.
+--
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+-- AUDIT TRAIL + ACCOUNTABILITY V1 â€” pending migration (Session 68)
+--
+-- âš ï¸ LIFECYCLE OF THIS FILE â€” read before touching:
+--   This file is NOT in the apply path (supabase/migrations/) and NOT archive.
+--   It is the audit-trail schema, waiting for production. The intended flow is
+--   the same one change-orders used:
+--     1. apply this file to production via MCP apply_migration
+--        (MCP assigns the version; name it audit_trail_v1),
+--     2. npm run schema:contract && npm run schema:baseline
+--        (the objects fold into the regenerated baseline),
+--     3. DELETE this file in the same commit â€” once the baseline carries
+--        audit_events, a second copy here is the retired-CANONICAL-file
+--        mistake again.
+--   verify:audit-trail Â§1 pins exactly that lifecycle: it fails if this file
+--   and the baseline both define audit_events, and if neither does.
+--   Until step 1 runs, the app's History surfaces report "couldn't load"
+--   honestly (the table does not exist yet) â€” they never invent an empty
+--   history. The offline half of verify:audit-trail applies this file on top
+--   of the baseline in PGlite and proves every behaviour below from zero.
+--
+-- WHAT THIS IS:
+--   One canonical record of meaningful business mutations: WHO changed WHAT,
+--   WHEN, from WHERE, what it was BEFORE and what it BECAME. It is evidence,
+--   not analytics. Nothing here is a second source of financial truth â€” every
+--   row DESCRIBES a canonical write that the existing quote/invoice/payment/
+--   ledger engines performed; money is still read from those engines.
+--
+-- WHY DB TRIGGERS (and not app code):
+--   ~85% of EdgeHQ's business writes are browser supabase-js calls with no
+--   server seam; the rest arrive through portal RPCs (anon + token), crew RPCs,
+--   service-role webhooks and crons, and other DB triggers (a jobs update banks
+--   a work session; a payment insert flips an invoice). Triggers are the only
+--   choke point all of those share â€” the same reasoning capture_integration_event
+--   already wrote down. Triggers also give atomicity for free: the event commits
+--   and rolls back WITH the write it describes, so a failed mutation can never
+--   leave a "success" event behind.
+--
+-- ACTOR ATTRIBUTION (never client-supplied, never inferred loosely):
+--   owner    â€” auth.uid() equals the row's tenant (user_id IS the owner uid)
+--   worker   â€” auth.uid() linked via technicians.auth_user_id (attribution
+--              deliberately does NOT require is_active: a just-deactivated
+--              tech's in-flight write is still that tech's act)
+--   customer â€” no JWT, PostgREST anon role: the portal/booking surfaces are
+--              the only anonymous writers (a token proves WHICH TENANT;
+--              portal RPCs re-scope to WHICH ROW â€” public-edge rules)
+--   system   â€” service_role, or no PostgREST claims at all (direct SQL,
+--              triggers running under maintenance, MCP)
+--   change_orders.decided_via stays the provenance of the DECISION itself;
+--   the audit event records who performed the WRITE. An owner recording a
+--   customer's phone approval is actor=owner with decided_via='owner' in the
+--   after-state â€” exactly the "owner recorded customer decision" phrasing.
+--
+-- DEDUP / "one write, one act" (customer-timeline's hard-won rule):
+--   Every event carries txid_current(). Two events with one txid were caused
+--   by ONE write (payment insert + trigger-flipped invoice status; job update
+--   + banked work session; series create + its visits). The UI folds by txid;
+--   the store never guesses by timestamp proximity.
+--
+-- WHAT IS DELIBERATELY NOT AUDITED HERE (one engine per responsibility):
+--   wages            â†’ wage_history already is that audit (trigger-written)
+--   consent          â†’ consent_changes already is (with its own actor column)
+--   comms sends      â†’ notification_log / messages own their record; we never
+--                      log message CONTENTS into the general audit trail
+--   measurements     â†’ property_measurement_events (trigger-written, seq'd)
+--   route_order      â†’ daily ops churn, not evidence
+--   UI noise         â†’ nothing here fires on reads, opens, tabs, scrolls
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+-- â”€â”€ 1 Â· the table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+create table if not exists public.audit_events (
+  "id"           uuid default gen_random_uuid() not null,
+  -- clock_timestamp(), NOT now(): now() is transaction start and would tie
+  -- every row written in one transaction (wage_history precedent).
+  "occurred_at"  timestamp with time zone default clock_timestamp() not null,
+  -- Monotonic tiebreaker. ORDER BY seq for a provably total order; occurred_at
+  -- can tie at microsecond resolution (wage_history precedent).
+  "seq"          bigint generated by default as identity not null,
+  -- One transaction = one act. Events sharing txid were mechanically caused by
+  -- the same write; surfaces fold them instead of guessing by timestamps.
+  "txid"         bigint default txid_current() not null,
+  "user_id"      uuid not null,
+  "actor_type"   text not null,
+  "actor_id"     uuid,
+  "actor_label"  text,
+  "action"       text not null,
+  "entity_type"  text not null,
+  "entity_id"    uuid,
+  "entity_label" text,
+  "customer_id"  uuid,
+  "source"       text not null,
+  "before"       jsonb,
+  "after"        jsonb,
+  "meta"         jsonb,
+  constraint audit_events_pkey primary key (id),
+  constraint audit_events_actor_type_check
+    check (actor_type in ('owner', 'worker', 'customer', 'system')),
+  constraint audit_events_source_check
+    check (source in ('dashboard', 'crew', 'portal', 'service', 'db')),
+  constraint audit_events_action_check check (char_length(action) between 1 and 64),
+  constraint audit_events_entity_type_check check (char_length(entity_type) between 1 and 32),
+  -- âš ï¸ NO "before or after must be present" constraint, on purpose: plenty of real
+  -- events carry neither. "Mike stopped for the day", "the request was resolved",
+  -- "the worker was archived" are complete facts on their own â€” the action IS the
+  -- content. Requiring a value pair would force empty JSON in to satisfy a rule.
+  --
+  -- The only FK is the tenant. There is deliberately none to customers/jobs/quotes:
+  -- the audit row must SURVIVE the record it describes, which is exactly when the
+  -- history matters most.
+  constraint audit_events_user_id_fkey
+    foreign key (user_id) references auth.users(id) on delete cascade
+);
+
+comment on table public.audit_events is
+  'Canonical audit trail: one row per meaningful business mutation, written ONLY by DB triggers/definer functions in the same transaction as the write it describes. Append-only: no client insert path, and audit_events_no_mutate refuses UPDATE/DELETE for every role. Money figures inside before/after are descriptive snapshots â€” the ledger engines remain the financial truth.';
+comment on column public.audit_events.occurred_at is
+  'clock_timestamp() (real wall clock), NOT now() â€” now() is transaction start and ties every row written in one transaction.';
+comment on column public.audit_events.seq is
+  'Monotonic tiebreaker. ORDER BY seq for a provably total audit order; occurred_at can tie at microsecond resolution.';
+comment on column public.audit_events.txid is
+  'txid_current() at write time. Events sharing a txid were caused by ONE write; the UI folds them (the customer-timeline dedup contract, made structural).';
+comment on column public.audit_events.actor_type is
+  'owner | worker | customer | system â€” resolved in-database by audit_actor_context(), never supplied by a client. Do not lie about actor identity: a customer decision recorded by the owner is actor=owner (the write) with the decision provenance in after/meta.';
+comment on column public.audit_events.actor_label is
+  'Display snapshot at write time (technician name, customer name). Survives renames and deletions; never re-resolved.';
+comment on column public.audit_events.entity_label is
+  'Display reference snapshot (quote_number, invoice_number, job title). Survives the entity''s deletion.';
+comment on column public.audit_events.before is
+  'Meaningful changed values only â€” never a whole-row dump. Null-valued keys are kept deliberately: "end_date: null" IS the before-state of setting one.';
+
+-- â”€â”€ 2 Â· indexes (keyset pagination + the three filter shapes) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+create index if not exists audit_events_tenant_seq
+  on public.audit_events (user_id, seq desc);
+create index if not exists audit_events_entity
+  on public.audit_events (user_id, entity_type, entity_id, seq desc);
+create index if not exists audit_events_customer
+  on public.audit_events (user_id, customer_id, seq desc)
+  where customer_id is not null;
+create index if not exists audit_events_actor
+  on public.audit_events (user_id, actor_type, seq desc);
+
+-- â”€â”€ 3 Â· immutability (pricing_config_versions precedent, both locks) â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- Lock 1: RLS has a select-own policy and NOTHING else â€” no insert/update/
+--         delete policy exists for any client role.
+-- Lock 2: a BEFORE UPDATE OR DELETE trigger raises for EVERY role, including
+--         service_role. Maintenance (retention, GDPR erasure) is a deliberate
+--         superuser act: ALTER TABLE ... DISABLE TRIGGER audit_events_no_mutate,
+--         do the maintenance, re-enable â€” impossible to do by accident from
+--         any application path.
+
+create or replace function public.audit_events_immutable()
+returns trigger
+language plpgsql
+as $function$
+begin
+  raise exception
+    'audit_events is append-only: the audit trail is evidence, and evidence does not get edited. Maintenance requires deliberately disabling trigger audit_events_no_mutate as superuser.'
+    using errcode = 'restrict_violation';
+end;
+$function$;
+
+create trigger audit_events_no_mutate
+  before delete or update on public.audit_events
+  for each row execute function public.audit_events_immutable();
+
+-- â”€â”€ 4 Â· RLS + grants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- Owner-only reads. A crew session is `authenticated` but its uid never equals
+-- a tenant's user_id, so workers read nothing â€” business-wide audit access is
+-- an owner surface. Customers (anon) have no grant at all. Nobody but
+-- service_role can INSERT over the API, and even service_role cannot UPDATE or
+-- DELETE (the trigger refuses).
+
+alter table public.audit_events enable row level security;
+
+drop policy if exists "audit_events: select own" on public.audit_events;
+create policy "audit_events: select own" on public.audit_events
+  as permissive for select to public
+  using ((auth.uid() = user_id));
+
+revoke all on table public.audit_events from public, anon, authenticated, service_role;
+grant select on table public.audit_events to authenticated;
+grant select, insert on table public.audit_events to service_role;
+
+-- â”€â”€ 5 Â· actor resolution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- The one place "who did this" is decided. SECURITY DEFINER so the technician/
+-- customer lookups work from any calling context; STABLE; search_path pinned.
+-- Client code can neither call it usefully nor influence it: the app.audit_context
+-- override GUC is settable only by in-database code and service connections â€”
+-- PostgREST exposes no set_config surface to clients.
+
+create or replace function public.audit_actor_context(p_tenant uuid, p_customer uuid)
+returns table (actor_type text, actor_id uuid, actor_label text, source text)
+language plpgsql
+stable
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+declare
+  v_uid uuid := auth.uid();
+  v_override jsonb;
+  v_claims text;
+  v_role text;
+  v_tech record;
+begin
+  -- Trusted override: transaction-local GUC set by in-DB code (or a service
+  -- connection) that knows better than inference â€” e.g. a future RPC recording
+  -- "owner recorded customer decision". Honored only when it parses and names
+  -- a legal actor_type; garbage falls through to inference.
+  begin
+    v_override := nullif(current_setting('app.audit_context', true), '')::jsonb;
+  exception when others then
+    v_override := null;
+  end;
+  if v_override is not null
+     and v_override->>'actor_type' in ('owner', 'worker', 'customer', 'system') then
+    return query select
+      v_override->>'actor_type',
+      nullif(v_override->>'actor_id', '')::uuid,
+      nullif(v_override->>'actor_label', ''),
+      case when v_override->>'source' in ('dashboard','crew','portal','service','db')
+           then v_override->>'source' else 'service' end;
+    return;
+  end if;
+
+  if v_uid is not null then
+    -- The tenant key IS the owner's auth uid â€” equality is the ownership test.
+    if v_uid = p_tenant then
+      return query select 'owner'::text, v_uid, null::text, 'dashboard'::text;
+      return;
+    end if;
+    -- Attribution deliberately ignores is_active/archived_at: authorization is
+    -- the RPCs' job; attribution must still name a just-deactivated tech.
+    select t.id, t.name into v_tech
+      from public.technicians t
+     where t.auth_user_id = v_uid and t.user_id = p_tenant
+     limit 1;
+    if found then
+      return query select 'worker'::text, v_uid, v_tech.name, 'crew'::text;
+      return;
+    end if;
+    -- A signed-in uid that is neither this tenant nor its worker: a privileged
+    -- server path acting across tenants. Named honestly as system.
+    return query select 'system'::text, v_uid, 'unrecognized session'::text, 'service'::text;
+    return;
+  end if;
+
+  -- No JWT subject. PostgREST stamps request.jwt.claims for every API request
+  -- (anon included); its absence means a direct database session.
+  v_claims := nullif(current_setting('request.jwt.claims', true), '');
+  if v_claims is null then
+    return query select 'system'::text, null::uuid, null::text, 'db'::text;
+    return;
+  end if;
+  begin
+    v_role := v_claims::jsonb->>'role';
+  exception when others then
+    v_role := null;
+  end;
+  if v_role = 'anon' then
+    -- The portal and public booking funnel are the only anonymous writers.
+    return query select
+      'customer'::text,
+      p_customer,
+      (select c.name from public.customers c
+        where c.id = p_customer and c.user_id = p_tenant),
+      'portal'::text;
+    return;
+  end if;
+  return query select 'system'::text, null::uuid, null::text,
+    case when v_role = 'service_role' then 'service' else 'db' end;
+end;
+$function$;
+
+-- â”€â”€ 6 Â· the one writer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- Every audit row passes through here. SECURITY DEFINER (owned by postgres, the
+-- table owner) so the insert clears RLS without any client-facing INSERT path
+-- existing. EXECUTE is revoked from every client role below â€” only other
+-- definer code (the triggers) can reach it.
+
+create or replace function public.audit_log(
+  p_tenant uuid,
+  p_action text,
+  p_entity_type text,
+  p_entity_id uuid,
+  p_entity_label text,
+  p_customer uuid,
+  p_before jsonb,
+  p_after jsonb,
+  p_meta jsonb default null
+)
+returns void
+language plpgsql
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+declare
+  v_actor record;
+begin
+  select * into v_actor from public.audit_actor_context(p_tenant, p_customer);
+  insert into public.audit_events
+    (user_id, actor_type, actor_id, actor_label, action,
+     entity_type, entity_id, entity_label, customer_id, source,
+     before, after, meta)
+  values
+    (p_tenant, v_actor.actor_type, v_actor.actor_id, v_actor.actor_label, p_action,
+     p_entity_type, p_entity_id, p_entity_label, p_customer, v_actor.source,
+     p_before, p_after, p_meta);
+end;
+$function$;
+
+-- â”€â”€ 7 Â· per-table capture triggers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- Each function curates MEANINGFUL columns â€” never a whole-row dump â€” and
+-- guards every branch with IS DISTINCT FROM, because `update ... set x = x`
+-- fires an UPDATE OF x trigger without changing anything, and a no-op is not
+-- an act. All AFTER ROW (same transaction: rollback removes the event) except
+-- jobs BEFORE DELETE, which must count its children before the cascade takes
+-- them (recording what was affected BEFORE destruction).
+
+-- 7a Â· quotes ----------------------------------------------------------------
+
+create or replace function public.audit_quotes()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+declare
+  v_action text;
+begin
+  if tg_op = 'INSERT' then
+    perform public.audit_log(new.user_id, 'quote_created', 'quote', new.id,
+      new.quote_number, new.customer_id,
+      null,
+      jsonb_build_object('status', new.status, 'total', new.total));
+    return null;
+  end if;
+
+  if tg_op = 'DELETE' then
+    perform public.audit_log(old.user_id, 'quote_deleted', 'quote', old.id,
+      old.quote_number, old.customer_id,
+      jsonb_build_object('status', old.status, 'total', old.total),
+      null);
+    return null;
+  end if;
+
+  if new.status is distinct from old.status then
+    v_action := case new.status
+      when 'sent'      then 'quote_sent'
+      when 'accepted'  then 'quote_accepted'
+      when 'declined'  then 'quote_declined'
+      when 'scheduled' then 'quote_scheduled'
+      when 'completed' then 'quote_completed'
+      when 'paid'      then 'quote_paid'
+      else 'quote_status_changed'
+    end;
+    perform public.audit_log(new.user_id, v_action, 'quote', new.id,
+      new.quote_number, new.customer_id,
+      jsonb_build_object('status', old.status),
+      jsonb_build_object('status', new.status)
+        || case when new.status = 'accepted' then
+             jsonb_build_object('accepted_price', new.accepted_price,
+                                'selected_cadence', new.selected_cadence)
+           else '{}'::jsonb end);
+  end if;
+
+  -- Price edits. `total` is GENERATED from initial_price + travel_fee â€” the
+  -- one money path â€” so before/after quote the generated figure, not the parts.
+  if (new.initial_price is distinct from old.initial_price
+      or new.travel_fee is distinct from old.travel_fee) then
+    perform public.audit_log(new.user_id, 'quote_price_changed', 'quote', new.id,
+      new.quote_number, new.customer_id,
+      jsonb_build_object('total', old.total),
+      jsonb_build_object('total', new.total));
+  end if;
+
+  return null;
+end;
+$function$;
+
+create trigger trg_audit_quotes_insert
+  after insert on public.quotes
+  for each row execute function public.audit_quotes();
+create trigger trg_audit_quotes_update
+  after update of status, initial_price, travel_fee on public.quotes
+  for each row execute function public.audit_quotes();
+create trigger trg_audit_quotes_delete
+  after delete on public.quotes
+  for each row execute function public.audit_quotes();
+
+-- 7b Â· change orders ---------------------------------------------------------
+
+create or replace function public.audit_change_orders()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+declare
+  v_action text;
+begin
+  if tg_op = 'INSERT' then
+    perform public.audit_log(new.user_id, 'change_order_created', 'change_order',
+      new.id, new.co_number, new.customer_id,
+      null,
+      jsonb_build_object('status', new.status, 'amount', new.amount,
+                         'description', left(new.description, 140)));
+    return null;
+  end if;
+
+  if new.status is distinct from old.status then
+    v_action := case new.status
+      when 'pending'   then 'change_order_sent'
+      when 'approved'  then 'change_order_approved'
+      when 'declined'  then 'change_order_declined'
+      when 'cancelled' then 'change_order_cancelled'
+      else 'change_order_status_changed'
+    end;
+    -- decided_via is the provenance of the DECISION (portal = the customer
+    -- tapped it; owner = the owner recorded a decision taken elsewhere). The
+    -- event's actor is who performed the WRITE. Both are kept, neither is
+    -- inferred from the other.
+    perform public.audit_log(new.user_id, v_action, 'change_order', new.id,
+      new.co_number, new.customer_id,
+      jsonb_build_object('status', old.status),
+      jsonb_build_object('status', new.status, 'amount', new.amount)
+        || case when new.decided_via is not null
+             then jsonb_build_object('decided_via', new.decided_via)
+             else '{}'::jsonb end
+        || case when new.decline_reason is not null
+             then jsonb_build_object('decline_reason', new.decline_reason)
+             else '{}'::jsonb end);
+  end if;
+
+  return null;
+end;
+$function$;
+
+create trigger trg_audit_change_orders_insert
+  after insert on public.change_orders
+  for each row execute function public.audit_change_orders();
+create trigger trg_audit_change_orders_update
+  after update of status on public.change_orders
+  for each row execute function public.audit_change_orders();
+
+-- 7c Â· jobs (a jobs row IS a visit â€” vocabulary: act-on-one says "visit") -----
+
+create or replace function public.audit_jobs()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+declare
+  v_action text;
+  v_sessions int;
+  v_lines int;
+  v_photos int;
+  v_old_crew text;
+  v_new_crew text;
+begin
+  if tg_op = 'INSERT' then
+    perform public.audit_log(new.user_id, 'visit_booked', 'visit', new.id,
+      new.title, new.customer_id,
+      null,
+      jsonb_build_object('scheduled_date', new.scheduled_date,
+                         'start_time', new.start_time,
+                         'status', new.status)
+        || case when new.recurrence_id is not null
+             then jsonb_build_object('recurrence_id', new.recurrence_id)
+             else '{}'::jsonb end);
+    return null;
+  end if;
+
+  if tg_op = 'DELETE' then
+    -- BEFORE DELETE: count what the cascade is about to take (work sessions,
+    -- billable lines, photos) while they still exist. Deleting a visit is the
+    -- destructive act this trail exists for â€” record the world before it.
+    select count(*) into v_sessions from public.job_work_sessions s where s.job_id = old.id;
+    select count(*) into v_lines    from public.job_line_items   l where l.job_id = old.id;
+    select count(*) into v_photos   from public.job_photos       p where p.job_id = old.id;
+    perform public.audit_log(old.user_id, 'visit_deleted', 'visit', old.id,
+      old.title, old.customer_id,
+      jsonb_build_object('scheduled_date', old.scheduled_date,
+                         'status', old.status,
+                         'price', old.price),
+      null,
+      jsonb_build_object('cascade', jsonb_build_object(
+        'work_sessions', v_sessions, 'line_items', v_lines, 'photos', v_photos)));
+    return old;
+  end if;
+
+  -- Reschedule: the date/time pair, before â†’ after.
+  if (new.scheduled_date is distinct from old.scheduled_date
+      or new.start_time is distinct from old.start_time) then
+    perform public.audit_log(new.user_id, 'visit_rescheduled', 'visit', new.id,
+      new.title, new.customer_id,
+      jsonb_build_object('scheduled_date', old.scheduled_date, 'start_time', old.start_time),
+      jsonb_build_object('scheduled_date', new.scheduled_date, 'start_time', new.start_time));
+  end if;
+
+  if new.status is distinct from old.status then
+    v_action := case
+      when new.status = 'in_progress' then 'visit_started'
+      when new.status = 'completed'   then 'visit_completed'
+      when new.status = 'cancelled'   then 'visit_cancelled'
+      when new.status = 'scheduled'
+       and old.status in ('completed', 'in_progress', 'cancelled') then 'visit_reopened'
+      else 'visit_status_changed'
+    end;
+    perform public.audit_log(new.user_id, v_action, 'visit', new.id,
+      new.title, new.customer_id,
+      jsonb_build_object('status', old.status),
+      jsonb_build_object('status', new.status));
+  elsif new.started_at is distinct from old.started_at then
+    -- Same status, clock changed: `in_progress` + started_at NULL is the
+    -- established stopped-for-the-day state (work-sessions contract, no new
+    -- status). Started â†’ cleared = paused; cleared â†’ started = resumed.
+    if old.started_at is not null and new.started_at is null then
+      perform public.audit_log(new.user_id, 'work_paused', 'visit', new.id,
+        new.title, new.customer_id, null, null);
+    elsif old.started_at is null and new.started_at is not null then
+      perform public.audit_log(new.user_id, 'work_resumed', 'visit', new.id,
+        new.title, new.customer_id, null, null);
+    end if;
+  end if;
+
+  if new.crew_id is distinct from old.crew_id then
+    select c.name into v_old_crew from public.crews c where c.id = old.crew_id;
+    select c.name into v_new_crew from public.crews c where c.id = new.crew_id;
+    perform public.audit_log(new.user_id, 'visit_crew_changed', 'visit', new.id,
+      new.title, new.customer_id,
+      jsonb_build_object('crew', v_old_crew),
+      jsonb_build_object('crew', v_new_crew));
+  end if;
+
+  if new.price is distinct from old.price then
+    perform public.audit_log(new.user_id, 'visit_price_changed', 'visit', new.id,
+      new.title, new.customer_id,
+      jsonb_build_object('price', old.price),
+      jsonb_build_object('price', new.price));
+  end if;
+
+  return null;
+end;
+$function$;
+
+create trigger trg_audit_jobs_insert
+  after insert on public.jobs
+  for each row execute function public.audit_jobs();
+create trigger trg_audit_jobs_update
+  after update of scheduled_date, start_time, status, started_at, crew_id, price on public.jobs
+  for each row execute function public.audit_jobs();
+create trigger trg_audit_jobs_delete
+  before delete on public.jobs
+  for each row execute function public.audit_jobs();
+
+-- 7d Â· job_recurrences (the plan behind recurring visits) ---------------------
+
+create or replace function public.audit_job_recurrences()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+begin
+  if tg_op = 'INSERT' then
+    perform public.audit_log(new.user_id, 'plan_created', 'plan', new.id,
+      null, new.customer_id,
+      null,
+      jsonb_build_object('freq', new.freq, 'interval_unit', new.interval_unit,
+                         'interval_count', new.interval_count,
+                         'start_date', new.start_date, 'end_date', new.end_date));
+    return null;
+  end if;
+
+  if tg_op = 'DELETE' then
+    perform public.audit_log(old.user_id, 'plan_removed', 'plan', old.id,
+      null, old.customer_id,
+      jsonb_build_object('freq', old.freq, 'interval_unit', old.interval_unit,
+                         'interval_count', old.interval_count,
+                         'start_date', old.start_date, 'end_date', old.end_date),
+      null);
+    return null;
+  end if;
+
+  if (new.freq is distinct from old.freq
+      or new.interval_unit is distinct from old.interval_unit
+      or new.interval_count is distinct from old.interval_count
+      or new.end_date is distinct from old.end_date
+      or new.end_count is distinct from old.end_count) then
+    -- Null-valued keys are kept on purpose: "end_date: null" IS the before-
+    -- state of giving a season an end.
+    perform public.audit_log(new.user_id, 'plan_changed', 'plan', new.id,
+      null, new.customer_id,
+      jsonb_build_object('freq', old.freq, 'interval_unit', old.interval_unit,
+                         'interval_count', old.interval_count,
+                         'end_date', old.end_date, 'end_count', old.end_count),
+      jsonb_build_object('freq', new.freq, 'interval_unit', new.interval_unit,
+                         'interval_count', new.interval_count,
+                         'end_date', new.end_date, 'end_count', new.end_count));
+  end if;
+
+  return null;
+end;
+$function$;
+
+create trigger trg_audit_job_recurrences_insert
+  after insert on public.job_recurrences
+  for each row execute function public.audit_job_recurrences();
+create trigger trg_audit_job_recurrences_update
+  after update of freq, interval_unit, interval_count, end_date, end_count on public.job_recurrences
+  for each row execute function public.audit_job_recurrences();
+create trigger trg_audit_job_recurrences_delete
+  after delete on public.job_recurrences
+  for each row execute function public.audit_job_recurrences();
+
+-- 7e Â· job_work_sessions (time on site â€” attaches to the visit) ---------------
+
+create or replace function public.audit_work_sessions()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+declare
+  v_job record;
+begin
+  -- 'carried' sessions are bookkeeping (a legacy total carried forward by the
+  -- migration trigger), not an act anyone performed today. Not an event.
+  if tg_op = 'INSERT' and new.source = 'carried' then
+    return null;
+  end if;
+
+  select j.title, j.customer_id into v_job
+    from public.jobs j where j.id = coalesce(new.job_id, old.job_id);
+
+  if tg_op = 'INSERT' then
+    perform public.audit_log(new.user_id, 'work_recorded', 'visit', new.job_id,
+      v_job.title, v_job.customer_id,
+      null,
+      jsonb_build_object('worked_on', new.worked_on, 'minutes', new.minutes,
+                         'workers', new.workers, 'entry', new.source),
+      jsonb_build_object('session_id', new.id));
+    return null;
+  end if;
+
+  if tg_op = 'DELETE' then
+    perform public.audit_log(old.user_id, 'work_removed', 'visit', old.job_id,
+      v_job.title, v_job.customer_id,
+      jsonb_build_object('worked_on', old.worked_on, 'minutes', old.minutes,
+                         'workers', old.workers),
+      null,
+      jsonb_build_object('session_id', old.id));
+    return null;
+  end if;
+
+  if (new.minutes is distinct from old.minutes
+      or new.workers is distinct from old.workers
+      or new.worked_on is distinct from old.worked_on) then
+    perform public.audit_log(new.user_id, 'work_edited', 'visit', new.job_id,
+      v_job.title, v_job.customer_id,
+      jsonb_build_object('worked_on', old.worked_on, 'minutes', old.minutes,
+                         'workers', old.workers),
+      jsonb_build_object('worked_on', new.worked_on, 'minutes', new.minutes,
+                         'workers', new.workers),
+      jsonb_build_object('session_id', new.id));
+  end if;
+
+  return null;
+end;
+$function$;
+
+create trigger trg_audit_work_sessions_insert
+  after insert on public.job_work_sessions
+  for each row execute function public.audit_work_sessions();
+create trigger trg_audit_work_sessions_update
+  after update of minutes, workers, worked_on on public.job_work_sessions
+  for each row execute function public.audit_work_sessions();
+create trigger trg_audit_work_sessions_delete
+  after delete on public.job_work_sessions
+  for each row execute function public.audit_work_sessions();
+
+-- 7f Â· invoices ---------------------------------------------------------------
+
+create or replace function public.audit_invoices()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+declare
+  v_action text;
+begin
+  if tg_op = 'INSERT' then
+    perform public.audit_log(new.user_id, 'invoice_created', 'invoice', new.id,
+      new.invoice_number, new.customer_id,
+      null,
+      jsonb_build_object('status', new.status, 'amount', new.amount));
+    return null;
+  end if;
+
+  if tg_op = 'DELETE' then
+    perform public.audit_log(old.user_id, 'invoice_deleted', 'invoice', old.id,
+      old.invoice_number, old.customer_id,
+      jsonb_build_object('status', old.status, 'amount', old.amount,
+                         'amount_paid', old.amount_paid),
+      null);
+    return null;
+  end if;
+
+  if new.status is distinct from old.status then
+    v_action := case
+      when new.status = 'paid'      then 'invoice_paid'
+      when new.status = 'partial'   then 'invoice_partially_paid'
+      when new.status = 'cancelled' then 'invoice_cancelled'
+      when old.status = 'cancelled' then 'invoice_reactivated'
+      when old.status = 'draft'     then 'invoice_issued'
+      else 'invoice_status_changed'
+    end;
+    perform public.audit_log(new.user_id, v_action, 'invoice', new.id,
+      new.invoice_number, new.customer_id,
+      jsonb_build_object('status', old.status),
+      jsonb_build_object('status', new.status, 'amount', new.amount,
+                         'amount_paid', new.amount_paid));
+  end if;
+
+  if (new.amount is distinct from old.amount
+      or new.discount_value is distinct from old.discount_value) then
+    perform public.audit_log(new.user_id, 'invoice_edited', 'invoice', new.id,
+      new.invoice_number, new.customer_id,
+      jsonb_build_object('amount', old.amount, 'discount_value', old.discount_value),
+      jsonb_build_object('amount', new.amount, 'discount_value', new.discount_value));
+  end if;
+
+  return null;
+end;
+$function$;
+
+create trigger trg_audit_invoices_insert
+  after insert on public.invoices
+  for each row execute function public.audit_invoices();
+create trigger trg_audit_invoices_update
+  after update of status, amount, discount_value on public.invoices
+  for each row execute function public.audit_invoices();
+create trigger trg_audit_invoices_delete
+  after delete on public.invoices
+  for each row execute function public.audit_invoices();
+
+-- 7g Â· payments (the ledger rows â€” descriptive only, never a second truth) ----
+
+create or replace function public.audit_payments()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+declare
+  v_action text;
+begin
+  if tg_op = 'INSERT' then
+    v_action := case
+      when new.provider = 'refund' or new.amount < 0 then 'refund_recorded'
+      when new.kind = 'credit' then 'credit_recorded'
+      else 'payment_recorded'
+    end;
+    perform public.audit_log(new.user_id, v_action, 'payment', new.id,
+      null, new.customer_id,
+      null,
+      jsonb_build_object('amount', new.amount, 'kind', new.kind,
+                         'method', new.method, 'provider', new.provider,
+                         'status', new.status),
+      case when new.invoice_id is not null
+           then jsonb_build_object('invoice_id', new.invoice_id)
+           else null end);
+    return null;
+  end if;
+
+  if tg_op = 'DELETE' then
+    perform public.audit_log(old.user_id, 'payment_removed', 'payment', old.id,
+      null, old.customer_id,
+      jsonb_build_object('amount', old.amount, 'kind', old.kind,
+                         'method', old.method, 'provider', old.provider),
+      null,
+      case when old.invoice_id is not null
+           then jsonb_build_object('invoice_id', old.invoice_id)
+           else null end);
+    return null;
+  end if;
+
+  if new.status is distinct from old.status then
+    perform public.audit_log(new.user_id, 'payment_status_changed', 'payment', new.id,
+      null, new.customer_id,
+      jsonb_build_object('status', old.status),
+      jsonb_build_object('status', new.status, 'amount', new.amount));
+  end if;
+
+  return null;
+end;
+$function$;
+
+create trigger trg_audit_payments_insert
+  after insert on public.payments
+  for each row execute function public.audit_payments();
+create trigger trg_audit_payments_update
+  after update of status on public.payments
+  for each row execute function public.audit_payments();
+create trigger trg_audit_payments_delete
+  after delete on public.payments
+  for each row execute function public.audit_payments();
+
+-- 7h Â· technicians (worker accountability; wages stay in wage_history) --------
+
+create or replace function public.audit_technicians()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+declare
+  v_old_crew text;
+  v_new_crew text;
+begin
+  if tg_op = 'INSERT' then
+    perform public.audit_log(new.user_id, 'worker_added', 'worker', new.id,
+      new.name, null, null,
+      jsonb_build_object('role', new.role, 'is_active', new.is_active));
+    return null;
+  end if;
+
+  if tg_op = 'DELETE' then
+    perform public.audit_log(old.user_id, 'worker_removed', 'worker', old.id,
+      old.name, null,
+      jsonb_build_object('role', old.role, 'is_active', old.is_active),
+      null);
+    return null;
+  end if;
+
+  if new.is_active is distinct from old.is_active then
+    perform public.audit_log(new.user_id,
+      case when new.is_active then 'worker_access_enabled' else 'worker_access_disabled' end,
+      'worker', new.id, new.name, null,
+      jsonb_build_object('is_active', old.is_active),
+      jsonb_build_object('is_active', new.is_active));
+  end if;
+
+  if new.archived_at is distinct from old.archived_at then
+    perform public.audit_log(new.user_id,
+      case when new.archived_at is not null then 'worker_archived' else 'worker_restored' end,
+      'worker', new.id, new.name, null, null, null);
+  end if;
+
+  if new.crew_id is distinct from old.crew_id then
+    select c.name into v_old_crew from public.crews c where c.id = old.crew_id;
+    select c.name into v_new_crew from public.crews c where c.id = new.crew_id;
+    perform public.audit_log(new.user_id, 'worker_crew_changed', 'worker', new.id,
+      new.name, null,
+      jsonb_build_object('crew', v_old_crew),
+      jsonb_build_object('crew', v_new_crew));
+  end if;
+
+  if new.auth_user_id is distinct from old.auth_user_id then
+    perform public.audit_log(new.user_id,
+      case when new.auth_user_id is not null then 'worker_account_linked' else 'worker_account_unlinked' end,
+      'worker', new.id, new.name, null, null, null);
+  end if;
+
+  return null;
+end;
+$function$;
+
+create trigger trg_audit_technicians_insert
+  after insert on public.technicians
+  for each row execute function public.audit_technicians();
+create trigger trg_audit_technicians_update
+  after update of is_active, archived_at, crew_id, auth_user_id on public.technicians
+  for each row execute function public.audit_technicians();
+create trigger trg_audit_technicians_delete
+  after delete on public.technicians
+  for each row execute function public.audit_technicians();
+
+-- 7i Â· customers (record lifecycle + contact identity; consent stays in
+--      consent_changes â€” one engine per responsibility) -----------------------
+
+create or replace function public.audit_customers()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+declare
+  v_before jsonb := '{}'::jsonb;
+  v_after jsonb := '{}'::jsonb;
+begin
+  if tg_op = 'INSERT' then
+    perform public.audit_log(new.user_id, 'customer_added', 'customer', new.id,
+      new.name, new.id, null,
+      case when new.acquisition_source is not null
+           then jsonb_build_object('source', new.acquisition_source)
+           else null end);
+    return null;
+  end if;
+
+  if tg_op = 'DELETE' then
+    perform public.audit_log(old.user_id, 'customer_deleted', 'customer', old.id,
+      old.name, old.id,
+      jsonb_build_object('name', old.name), null);
+    return null;
+  end if;
+
+  if new.archived_at is distinct from old.archived_at then
+    perform public.audit_log(new.user_id,
+      case when new.archived_at is not null then 'customer_archived' else 'customer_restored' end,
+      'customer', new.id, new.name, new.id, null, null);
+  end if;
+
+  -- Contact identity: only the keys that actually changed, both sides.
+  if new.name is distinct from old.name then
+    v_before := v_before || jsonb_build_object('name', old.name);
+    v_after  := v_after  || jsonb_build_object('name', new.name);
+  end if;
+  if new.email is distinct from old.email then
+    v_before := v_before || jsonb_build_object('email', old.email);
+    v_after  := v_after  || jsonb_build_object('email', new.email);
+  end if;
+  if new.phone is distinct from old.phone then
+    v_before := v_before || jsonb_build_object('phone', old.phone);
+    v_after  := v_after  || jsonb_build_object('phone', new.phone);
+  end if;
+  if v_after <> '{}'::jsonb then
+    perform public.audit_log(new.user_id, 'customer_contact_updated', 'customer',
+      new.id, new.name, new.id, v_before, v_after);
+  end if;
+
+  return null;
+end;
+$function$;
+
+create trigger trg_audit_customers_insert
+  after insert on public.customers
+  for each row execute function public.audit_customers();
+create trigger trg_audit_customers_update
+  after update of archived_at, name, email, phone on public.customers
+  for each row execute function public.audit_customers();
+create trigger trg_audit_customers_delete
+  after delete on public.customers
+  for each row execute function public.audit_customers();
+
+-- 7j Â· service_requests (a customer asking for something IS business history) --
+
+create or replace function public.audit_service_requests()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+begin
+  if tg_op = 'INSERT' then
+    perform public.audit_log(new.user_id, 'request_received', 'request', new.id,
+      new.kind, new.customer_id,
+      null,
+      jsonb_build_object('kind', new.kind, 'from_portal', new.from_portal)
+        || case when new.preferred_date is not null
+             then jsonb_build_object('preferred_date', new.preferred_date)
+             else '{}'::jsonb end);
+    return null;
+  end if;
+
+  if old.resolved_at is null and new.resolved_at is not null then
+    perform public.audit_log(new.user_id, 'request_resolved', 'request', new.id,
+      new.kind, new.customer_id, null, null);
+  end if;
+
+  return null;
+end;
+$function$;
+
+create trigger trg_audit_service_requests_insert
+  after insert on public.service_requests
+  for each row execute function public.audit_service_requests();
+create trigger trg_audit_service_requests_update
+  after update of resolved_at on public.service_requests
+  for each row execute function public.audit_service_requests();
+
+-- â”€â”€ 8 Â· function grants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- Supabase's ALTER DEFAULT PRIVILEGES hands EXECUTE on every new function to
+-- anon/authenticated/service_role at CREATE time; `revoke ... from public`
+-- alone leaves those standing. Revoke by role name, then grant back only what
+-- must be callable. NOTHING here is client-callable: the triggers reach these
+-- as definer code, which is the point.
+
+revoke all on function public.audit_events_immutable() from public, anon, authenticated, service_role;
+revoke all on function public.audit_actor_context(uuid, uuid) from public, anon, authenticated, service_role;
+revoke all on function public.audit_log(uuid, text, text, uuid, text, uuid, jsonb, jsonb, jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.audit_quotes() from public, anon, authenticated, service_role;
+revoke all on function public.audit_change_orders() from public, anon, authenticated, service_role;
+revoke all on function public.audit_jobs() from public, anon, authenticated, service_role;
+revoke all on function public.audit_job_recurrences() from public, anon, authenticated, service_role;
+revoke all on function public.audit_work_sessions() from public, anon, authenticated, service_role;
+revoke all on function public.audit_invoices() from public, anon, authenticated, service_role;
+revoke all on function public.audit_payments() from public, anon, authenticated, service_role;
+revoke all on function public.audit_technicians() from public, anon, authenticated, service_role;
+revoke all on function public.audit_customers() from public, anon, authenticated, service_role;
+revoke all on function public.audit_service_requests() from public, anon, authenticated, service_role;
+
+-- â”€â”€ 9 Â· the migration proves itself (tenant-boundary house rule) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+do $$
+begin
+  if has_table_privilege('anon', 'public.audit_events', 'select') then
+    raise exception 'audit_events must not be readable by anon';
+  end if;
+  if has_table_privilege('authenticated', 'public.audit_events', 'insert')
+     or has_table_privilege('authenticated', 'public.audit_events', 'update')
+     or has_table_privilege('authenticated', 'public.audit_events', 'delete') then
+    raise exception 'audit_events must not be writable by authenticated';
+  end if;
+  if has_function_privilege('authenticated', 'public.audit_log(uuid, text, text, uuid, text, uuid, jsonb, jsonb, jsonb)', 'execute')
+     or has_function_privilege('anon', 'public.audit_log(uuid, text, text, uuid, text, uuid, jsonb, jsonb, jsonb)', 'execute') then
+    raise exception 'audit_log must not be client-callable';
+  end if;
+  if not exists (
+    select 1 from pg_trigger t join pg_class c on t.tgrelid = c.oid
+    where c.relname = 'audit_events' and t.tgname = 'audit_events_no_mutate'
+  ) then
+    raise exception 'audit_events immutability trigger is missing';
+  end if;
+end $$;
