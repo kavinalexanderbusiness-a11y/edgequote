@@ -192,6 +192,31 @@ section('5. Every worker door goes through the canonical layer')
       'identity is resolveWorker’s answer, not each door’s')
   }
 
+  // ── Storage: the bucket stays owner-keyed, and a worker cannot enumerate it ─
+  // ⛔ NO CREW STORAGE POLICY, on purpose. A storage policy is evaluated per
+  // OBJECT, so it would have to re-derive "is this worker assigned to that
+  // visit" by parsing a job id out of the object's path — a copy of the
+  // assignment check written in a different language against a string split.
+  // Crew reads go through /api/crew/media, which asks the canonical question and
+  // THEN signs a short-lived URL for a specific object.
+  {
+    const sql = allSql()
+    const storagePolicies = [...sql.matchAll(/create policy "([^"]+)" on storage\."objects"[\s\S]{0,400?}?;/g)]
+      .map(m => m[0])
+    const crewish = storagePolicies.filter(p =>
+      /crew_employer\(\)|crew_technician_id\(\)|crew_crew_id\(\)|current_app_role\(\)/.test(p))
+    check('⛔ no storage policy grants access by crew identity',
+      crewish.length === 0,
+      crewish.join('\n').slice(0, 300))
+    check('the crew-media bucket is still keyed to the OWNER’s uid',
+      /bucket_id = 'crew-media'[\s\S]{0,160}foldername\(name\)\)\[1\] = \(auth\.uid\(\)\)::text/.test(sql))
+    // The client names a VISIT, never a file: there is no media-id parameter to
+    // paste a stolen id into.
+    const mediaSrc = strip(SRC('app/api/crew/media/route.ts'))
+    check('⛔ the media door takes no media id, path or bucket key from the client',
+      !/searchParams\.get\('(mediaId|path|storagePath|key|object)'\)/.test(mediaSrc))
+  }
+
   // ⛔ Authorisation must not become a client-side concern.
   const clientImporters: string[] = []
   const walk = (dir: string) => {

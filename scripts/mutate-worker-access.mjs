@@ -82,8 +82,8 @@ const MUTATIONS = [
     name: 'a failed lookup falls through instead of refusing',
     why: 'a dead database would open every door instead of closing them',
     file: LIB,
-    from: "  if (error) return { ok: false, denial: 'lookup-failed' }\n  const row = data",
-    to: "  const row = data",
+    from: "  // A failed read is not an absent worker. Say so, and refuse.\n  if (error) return { ok: false, denial: 'lookup-failed' }",
+    to: "  // [mutated] failed read no longer refuses",
   },
   {
     name: 'not-assigned answers 403 instead of 404',
@@ -118,8 +118,18 @@ const MUTATIONS = [
     name: 'the media door stops authorising',
     why: 'reading work instructions would need only a job id',
     file: MEDIA,
-    from: '  const auth = await authorizeWorkerVisit(admin, user.id, jobId)',
+    // The POST door specifically — GET has an identically-spelled call.
+    from: "  // ⭐ THE canonical door — active worker, this worker's tenant, then crew OR\n  // by-name assignment. One call, the same answer every other worker door gives.\n  const auth = await authorizeWorkerVisit(admin, user.id, jobId)",
     to: '  const auth = { ok: true, worker: t, visit: { jobId, employerId: t.employerId } } as any',
+  },
+  {
+    name: 'a crew STORAGE policy is added to the private bucket',
+    why: 'per-object policies re-derive assignment by parsing a path — a fifth copy, and the one that lets a worker enumerate objects',
+    file: MIGRATION,
+    from: '-- ── 1. crew_job_forms — reading this visit’s checklists ──────────────────────',
+    to: `create policy "crew-media: crew reads" on storage."objects" as permissive for select to public
+  using ((bucket_id = 'crew-media'::text) AND (public.crew_employer() is not null));
+-- ── 1. crew_job_forms — reading this visit’s checklists ──────────────────────`,
   },
   {
     name: 'the photos door stops authorising',
