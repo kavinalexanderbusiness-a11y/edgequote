@@ -9,7 +9,7 @@
 -- This file is the ONE starting point for a database. Applying it to an empty
 -- Postgres 17 database produces the production schema contract:
 --   110 tables · 131 functions · 93 triggers · 359 policies
---   581 constraints · 276 standalone indexes · 7 storage buckets
+--   582 constraints · 276 standalone indexes · 7 storage buckets
 --
 -- IT DOES NOT RESTORE DATA. Not one row. Rebuilding a working production system
 -- is: this file, THEN a backup restore, THEN storage objects, THEN env config.
@@ -5325,9 +5325,13 @@ begin
   where i.id = p_invoice_id;
   if not found then return; end if;
 
+  -- ⭐ p.user_id = v_inv.user_id — a payment row belonging to another business can
+  -- never contribute to this invoice's paid total.
   select coalesce(sum(p.amount), 0) into v_paid
   from public.payments p
-  where p.invoice_id = p_invoice_id and p.kind = 'payment' and p.status = 'paid';
+  where p.invoice_id = p_invoice_id
+    and p.user_id = v_inv.user_id
+    and p.kind = 'payment' and p.status = 'paid';
 
   v_gst := coalesce(v_inv.gst_percent, 0);
   v_total := round(v_inv.amount * (1 + v_gst / 100), 2);
@@ -6394,7 +6398,7 @@ alter table public."webhook_endpoints" add constraint "webhook_endpoints_pkey" P
 alter table public."website_leads" add constraint "website_leads_pkey" PRIMARY KEY (id);
 alter table public."worker_availability" add constraint "worker_availability_pkey" PRIMARY KEY (id);
 
--- unique (45)
+-- unique (46)
 alter table public."api_keys" add constraint "api_keys_key_hash_key" UNIQUE (key_hash);
 alter table public."beta_invites" add constraint "beta_invites_token_hash_key" UNIQUE (token_hash);
 alter table public."business_settings" add constraint "business_settings_user_id_key" UNIQUE (user_id);
@@ -6409,6 +6413,7 @@ alter table public."dispatch_notes" add constraint "dispatch_notes_day_crew_uniq
 alter table public."form_templates" add constraint "form_templates_id_user_key" UNIQUE (id, user_id);
 alter table public."holidays" add constraint "holidays_one_per_day" UNIQUE (user_id, date);
 alter table public."inbound_webhooks" add constraint "inbound_webhooks_token_key" UNIQUE (token);
+alter table public."invoices" add constraint "invoices_user_id_id_key" UNIQUE (user_id, id);
 alter table public."job_form_responses" add constraint "job_form_responses_field_uniq" UNIQUE (form_id, field_id);
 alter table public."job_form_responses" add constraint "job_form_responses_id_user_key" UNIQUE (id, user_id);
 alter table public."job_forms" add constraint "job_forms_id_user_key" UNIQUE (id, user_id);
@@ -6659,7 +6664,7 @@ alter table public."crm_campaign_log" add constraint "crm_campaign_log_user_id_f
 alter table public."crm_campaign_presets" add constraint "crm_campaign_presets_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."crm_campaigns" add constraint "crm_campaigns_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."customer_imports" add constraint "customer_imports_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."customer_portal_tokens" add constraint "customer_portal_tokens_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
+alter table public."customer_portal_tokens" add constraint "customer_portal_tokens_customer_same_owner" FOREIGN KEY (user_id, customer_id) REFERENCES customers(user_id, id) ON DELETE CASCADE;
 alter table public."customer_portal_tokens" add constraint "customer_portal_tokens_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."customers" add constraint "customers_referred_by_customer_id_fkey" FOREIGN KEY (referred_by_customer_id) REFERENCES customers(id) ON DELETE SET NULL;
 alter table public."customers" add constraint "customers_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
@@ -6769,8 +6774,8 @@ alter table public."pay_run_lines" add constraint "pay_run_lines_user_id_fkey" F
 alter table public."pay_runs" add constraint "pay_runs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."payment_methods" add constraint "payment_methods_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
 alter table public."payment_methods" add constraint "payment_methods_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."payments" add constraint "payments_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
-alter table public."payments" add constraint "payments_invoice_id_fkey" FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE SET NULL;
+alter table public."payments" add constraint "payments_customer_tenant_fkey" FOREIGN KEY (user_id, customer_id) REFERENCES customers(user_id, id) ON DELETE SET NULL (customer_id);
+alter table public."payments" add constraint "payments_invoice_tenant_fkey" FOREIGN KEY (user_id, invoice_id) REFERENCES invoices(user_id, id) ON DELETE SET NULL (invoice_id);
 alter table public."payments" add constraint "payments_quote_tenant_fkey" FOREIGN KEY (user_id, quote_id) REFERENCES quotes(user_id, id) ON DELETE SET NULL (quote_id);
 alter table public."payments" add constraint "payments_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."platform_capabilities" add constraint "platform_capabilities_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
@@ -9786,14 +9791,14 @@ alter table public."webhook_deliveries" replica identity full;
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 11 · STORAGE
--- 7 buckets and 21 storage policies.
+-- 7 buckets and 20 storage policies.
 -- public=false is a security decision, not a default: crew-media is private because
 -- job-photos being public is what made a private bucket necessary in the first place.
 -- Buckets are created empty — the FILES in them are a separate restore.
 -- ══════════════════════════════════════════════════════════════════════════
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types, avif_autodetection)
-values ('booking-uploads', 'booking-uploads', true, null, null, false)
+values ('booking-uploads', 'booking-uploads', true, 15728640, array['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif']::text[], false)
 on conflict (id) do update set public = excluded.public, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types, avif_autodetection)
 values ('branding', 'branding', true, null, null, false)
@@ -9814,9 +9819,6 @@ insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_typ
 values ('lead-uploads', 'lead-uploads', true, null, null, false)
 on conflict (id) do update set public = excluded.public, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
 
-drop policy if exists "booking-uploads: read own" on storage."objects";
-create policy "booking-uploads: read own" on storage."objects" as permissive for select to authenticated
-  using ((bucket_id = 'booking-uploads'::text));
 drop policy if exists "booking_uploads_public_insert" on storage."objects";
 create policy "booking_uploads_public_insert" on storage."objects" as permissive for insert to anon, authenticated
   with check ((bucket_id = 'booking-uploads'::text));

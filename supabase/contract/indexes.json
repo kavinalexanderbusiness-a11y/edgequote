@@ -847,6 +847,12 @@
  },
  {
   "tbl": "invoices",
+  "indexdef": "CREATE UNIQUE INDEX invoices_user_id_id_key ON public.invoices USING btree (user_id, id)",
+  "indexname": "invoices_user_id_id_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "invoices",
   "indexdef": "CREATE INDEX invoices_user_id_idx ON public.invoices USING btree (user_id)",
   "indexname": "invoices_user_id_idx",
   "backs_constraint": false
