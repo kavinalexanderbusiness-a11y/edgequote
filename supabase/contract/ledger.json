@@ -929,5 +929,159 @@
   "sql_md5": "a080916bb8660150fcf2259d76d15c68",
   "version": "20260814060713",
   "stmt_count": 1
+ },
+ {
+  "name": "baseline_consolidation_2026_08_14b",
+  "sql_len": 828,
+  "sql_md5": "5db7bdc452778bb6bcc71fdcf322dbf9",
+  "version": "20260814060714",
+  "stmt_count": 1
+ },
+ {
+  "name": "customer_preferred_channel",
+  "sql_len": 665,
+  "sql_md5": "8339fae07db9c6fe2c5a9124da84ce6c",
+  "version": "20260814074454",
+  "stmt_count": 1
+ },
+ {
+  "name": "quote_addons_v1_schema",
+  "sql_len": 8170,
+  "sql_md5": "ed4adba31ea5eec07853afb3c912e5c3",
+  "version": "20260814074818",
+  "stmt_count": 1
+ },
+ {
+  "name": "quote_addons_v1_choice_core",
+  "sql_len": 8318,
+  "sql_md5": "6f7e055e15544d78b180649b02e838c7",
+  "version": "20260814074915",
+  "stmt_count": 1
+ },
+ {
+  "name": "quote_addons_v1_portal_projection",
+  "sql_len": 1598,
+  "sql_md5": "b1fecf4deb1f1574720737b6237b2da9",
+  "version": "20260814074926",
+  "stmt_count": 1
+ },
+ {
+  "name": "temp_mutation_test_addons_freeze_disabled",
+  "sql_len": 1196,
+  "sql_md5": "603640b1c5f1d6bfc58af4f0378d4065",
+  "version": "20260814083236",
+  "stmt_count": 1
+ },
+ {
+  "name": "quote_addons_v1_restore_write_guard_after_mutation_test",
+  "sql_len": 1938,
+  "sql_md5": "3c378468977687082f952cabe3b7afdb",
+  "version": "20260814083315",
+  "stmt_count": 1
+ },
+ {
+  "name": "temp_mutation_test_addons_rls_freeze_disabled",
+  "sql_len": 742,
+  "sql_md5": "456db973c4f6b33f8807bb3432c443da",
+  "version": "20260814083328",
+  "stmt_count": 1
+ },
+ {
+  "name": "quote_addons_v1_restore_rls_after_mutation_test",
+  "sql_len": 1389,
+  "sql_md5": "3eaea5db587fdf819ad7582ef63ef4ba",
+  "version": "20260814083359",
+  "stmt_count": 1
+ },
+ {
+  "name": "temp_mutation_test_addons_core_sums_every_option",
+  "sql_len": 2569,
+  "sql_md5": "e47da81c8b1ba4e3d29f3923708ac414",
+  "version": "20260814083415",
+  "stmt_count": 1
+ },
+ {
+  "name": "quote_addons_v1_restore_choice_core_after_mutation_test",
+  "sql_len": 3754,
+  "sql_md5": "09226a176de95c3e2c61805c8efe9c05",
+  "version": "20260814083449",
+  "stmt_count": 1
+ },
+ {
+  "name": "temp_mutation_test_addons_single_column_fk",
+  "sql_len": 403,
+  "sql_md5": "ba273aec4d2083a5d57ac4d956a94cdb",
+  "version": "20260814083456",
+  "stmt_count": 1
+ },
+ {
+  "name": "quote_addons_v1_restore_composite_fk_after_mutation_test",
+  "sql_len": 468,
+  "sql_md5": "60e6248b2d4e5cb10bdfc1261afdd07f",
+  "version": "20260814083542",
+  "stmt_count": 1
+ },
+ {
+  "name": "worker_availability_time_off",
+  "sql_len": 13949,
+  "sql_md5": "8b76d5907bdce193c99bbe93d2e3d4d9",
+  "version": "20260815080000",
+  "stmt_count": 1
+ },
+ {
+  "name": "job_forms_v1",
+  "sql_len": 56289,
+  "sql_md5": "ee82282896147da50370de7507a3ddc0",
+  "version": "20260815120000",
+  "stmt_count": 1
+ },
+ {
+  "name": "job_forms_attach_rpc",
+  "sql_len": 1762,
+  "sql_md5": "cbd5ffb1dbdfae8cbd7832f96d2085aa",
+  "version": "20260815124500",
+  "stmt_count": 1
+ },
+ {
+  "name": "job_forms_fix_photo_projection",
+  "sql_len": 2466,
+  "sql_md5": "2da861608587b31bfeb29d33ec8ee83f",
+  "version": "20260815130000",
+  "stmt_count": 1
+ },
+ {
+  "name": "tenant_weld_portal_payments_storage",
+  "sql_len": 7091,
+  "sql_md5": "f55ba548c55c5817a901a4ed4b3a7989",
+  "version": "20260816020000",
+  "stmt_count": 1
+ },
+ {
+  "name": "crews_team_assignments_v1",
+  "sql_len": 32700,
+  "sql_md5": "eb539baabcb941c8211fb4671a0dd9b4",
+  "version": "20260816043000",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_tenant_scoped_lookups",
+  "sql_len": 26137,
+  "sql_md5": "8f29192b4f04363389e321a16c3a60bd",
+  "version": "20260816090000",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_change_order_tenant_scope",
+  "sql_len": 1911,
+  "sql_md5": "0ba4b5f2863eda148e05fdb3dbe4d92d",
+  "version": "20260816093000",
+  "stmt_count": 1
+ },
+ {
+  "name": "crew_day_restore_checklist",
+  "sql_len": 4734,
+  "sql_md5": "349dbcb3ca8ebfb01aab6d5e6783c84f",
+  "version": "20260816095000",
+  "stmt_count": 1
  }
 ]

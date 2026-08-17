@@ -1866,6 +1866,14 @@
     "notnull": true,
     "identity": "",
     "generated": ""
+   },
+   {
+    "name": "lead_technician_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
    }
   ],
   "relname": "crews",
@@ -2626,6 +2634,14 @@
     "notnull": false,
     "identity": "",
     "generated": "s"
+   },
+   {
+    "name": "preferred_channel",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
    }
   ],
   "relname": "customers",
@@ -3720,6 +3736,182 @@
   "force_rls": false
  },
  {
+  "acl": "{postgres=arwdDxtm/postgres,authenticated=arwd/postgres,service_role=arwdDxtm/postgres}",
+  "rls": true,
+  "cols": [
+   {
+    "name": "id",
+    "type": "uuid",
+    "default": "gen_random_uuid()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "user_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "template_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "position",
+    "type": "integer",
+    "default": "0",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "field_type",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "label",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "help_text",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "required",
+    "type": "boolean",
+    "default": "false",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "options",
+    "type": "jsonb",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "unit",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "photo_kind",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   }
+  ],
+  "relname": "form_template_fields",
+  "force_rls": false
+ },
+ {
+  "acl": "{postgres=arwdDxtm/postgres,authenticated=arwd/postgres,service_role=arwdDxtm/postgres}",
+  "rls": true,
+  "cols": [
+   {
+    "name": "id",
+    "type": "uuid",
+    "default": "gen_random_uuid()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "user_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "name",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "description",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "archived_at",
+    "type": "timestamp with time zone",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   }
+  ],
+  "relname": "form_templates",
+  "force_rls": false
+ },
+ {
   "acl": "{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
   "rls": true,
   "cols": [
@@ -4288,6 +4480,302 @@
   "force_rls": false
  },
  {
+  "acl": "{postgres=arwdDxtm/postgres,authenticated=ard/postgres,service_role=arwdDxtm/postgres}",
+  "rls": true,
+  "cols": [
+   {
+    "name": "response_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "photo_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "user_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   }
+  ],
+  "relname": "job_form_response_photos",
+  "force_rls": false
+ },
+ {
+  "acl": "{postgres=arwdDxtm/postgres,authenticated=arwd/postgres,service_role=arwdDxtm/postgres}",
+  "rls": true,
+  "cols": [
+   {
+    "name": "id",
+    "type": "uuid",
+    "default": "gen_random_uuid()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "user_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "form_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "field_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "value_text",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "value_number",
+    "type": "numeric",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "value_bool",
+    "type": "boolean",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "value_date",
+    "type": "date",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "value_time",
+    "type": "time without time zone",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "value_choice",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "answered_by",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "answered_role",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "answered_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "corrected_at",
+    "type": "timestamp with time zone",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "corrected_by",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "correction_reason",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   }
+  ],
+  "relname": "job_form_responses",
+  "force_rls": false
+ },
+ {
+  "acl": "{postgres=arwdDxtm/postgres,authenticated=arwd/postgres,service_role=arwdDxtm/postgres}",
+  "rls": true,
+  "cols": [
+   {
+    "name": "id",
+    "type": "uuid",
+    "default": "gen_random_uuid()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "user_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "job_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "template_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "template_name",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "fields",
+    "type": "jsonb",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "source",
+    "type": "text",
+    "default": "'manual'::text",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "waived_at",
+    "type": "timestamp with time zone",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "waived_by",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "waive_reason",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   }
+  ],
+  "relname": "job_forms",
+  "force_rls": false
+ },
+ {
   "acl": "{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
   "rls": true,
   "cols": [
@@ -4650,6 +5138,14 @@
     "notnull": false,
     "identity": "",
     "generated": ""
+   },
+   {
+    "name": "form_template_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
    }
   ],
   "relname": "job_recurrences",
@@ -4998,6 +5494,14 @@
    {
     "name": "completion_issue",
     "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "technician_id",
+    "type": "uuid",
     "default": null,
     "notnull": false,
     "identity": "",
@@ -8370,6 +8874,22 @@
     "notnull": false,
     "identity": "",
     "generated": ""
+   },
+   {
+    "name": "status",
+    "type": "text",
+    "default": "'approved'::text",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "decided_at",
+    "type": "timestamp with time zone",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
    }
   ],
   "relname": "pto_entries",
@@ -8800,7 +9320,111 @@
   "force_rls": false
  },
  {
-  "acl": "{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
+  "acl": "{postgres=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
+  "rls": true,
+  "cols": [
+   {
+    "name": "id",
+    "type": "uuid",
+    "default": "extensions.uuid_generate_v4()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "quote_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "user_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "name",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "description",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "price",
+    "type": "numeric(10,2)",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "sort_order",
+    "type": "integer",
+    "default": "0",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "is_selected",
+    "type": "boolean",
+    "default": "false",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "selected_via",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "selected_at",
+    "type": "timestamp with time zone",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   }
+  ],
+  "relname": "quote_addons",
+  "force_rls": false
+ },
+ {
+  "acl": "{postgres=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
   "rls": true,
   "cols": [
    {
@@ -9454,7 +10078,7 @@
    {
     "name": "total",
     "type": "numeric(10,2)",
-    "default": "(initial_price + COALESCE(travel_fee, (0)::numeric))",
+    "default": "((initial_price + COALESCE(travel_fee, (0)::numeric)) + COALESCE(addons_total, (0)::numeric))",
     "notnull": false,
     "identity": "",
     "generated": "s"
@@ -9568,6 +10192,14 @@
     "type": "uuid",
     "default": null,
     "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "addons_total",
+    "type": "numeric(10,2)",
+    "default": "0",
+    "notnull": true,
     "identity": "",
     "generated": ""
    }
@@ -10674,6 +11306,14 @@
     "notnull": false,
     "identity": "",
     "generated": ""
+   },
+   {
+    "name": "form_template_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
    }
   ],
   "relname": "service_templates",
@@ -11077,6 +11717,54 @@
    }
   ],
   "relname": "suppliers",
+  "force_rls": false
+ },
+ {
+  "acl": "{postgres=arwdDxtm/postgres,service_role=arwdDxtm/postgres,authenticated=r/postgres}",
+  "rls": true,
+  "cols": [
+   {
+    "name": "id",
+    "type": "uuid",
+    "default": "gen_random_uuid()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "user_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "technician_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "crew_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "changed_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   }
+  ],
+  "relname": "technician_crew_history",
   "force_rls": false
  },
  {
@@ -12181,6 +12869,86 @@
    }
   ],
   "relname": "website_leads",
+  "force_rls": false
+ },
+ {
+  "acl": "{postgres=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
+  "rls": true,
+  "cols": [
+   {
+    "name": "id",
+    "type": "uuid",
+    "default": "gen_random_uuid()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "user_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "technician_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "weekday",
+    "type": "smallint",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "available",
+    "type": "boolean",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "start_time",
+    "type": "time without time zone",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "end_time",
+    "type": "time without time zone",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   }
+  ],
+  "relname": "worker_availability",
   "force_rls": false
  }
 ]

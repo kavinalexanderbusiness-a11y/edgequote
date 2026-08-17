@@ -2,8 +2,10 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Crew, Technician } from '@/types'
+import { Crew, Technician, WorkerAvailability } from '@/types'
 import { archiveTechnician } from '@/lib/crews'
+import { loadWorkerAvailability, saveWorkerDay } from '@/lib/workerAvailabilityData'
+import { WeeklyAvailabilityEditor } from '@/components/workforce/WeeklyAvailabilityEditor'
 import { STANDING_LABEL, employeeStanding } from '@/lib/workforceTeam'
 import type { CrewAccessRow } from '@/lib/crewInvite'
 import { Modal } from '@/components/ui/Modal'
@@ -70,15 +72,30 @@ export function EmployeeEditor({
   const [draft, setDraft] = useState<Draft>(() => draftFrom(employee))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Their standard week (Session 67). Loaded per person when the dialog opens;
+  // an unreadable week leaves the editor showing "no pattern recorded", which
+  // is the honest state — the banner in it says availability is assumed.
+  const [availabilityRows, setAvailabilityRows] = useState<WorkerAvailability[]>([])
 
   // Re-seed when the dialog opens on a different person — and ONLY then. Keying
   // on the id (not the object) means a background refetch cannot overwrite what
   // the owner is halfway through typing, which is this codebase's recurring bug.
   const key = employee?.id ?? 'new'
   useEffect(() => {
-    if (open) { setDraft(draftFrom(employee)); setError(null) }
+    if (open) { setDraft(draftFrom(employee)); setError(null); setAvailabilityRows([]) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, key])
+
+  useEffect(() => {
+    if (!open || !employee) return
+    let alive = true
+    ;(async () => {
+      const res = await loadWorkerAvailability(supabase, userId, { technicianId: employee.id })
+      if (alive && res.outcome === 'ok') setAvailabilityRows(res.rows)
+    })()
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, key, userId])
 
   const isNew = !employee
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft(d => ({ ...d, [k]: v }))
@@ -222,7 +239,41 @@ export function EmployeeEditor({
           </div>
         </section>
 
-        {/* 5 — the app. Only once they exist: there is no row to attach a login
+        {/* 5 — their standard week. Only once they exist: the rows key off the
+            technician id, so there is nothing to attach a week to until the
+            first save (same reason as app access below). */}
+        <section className="border-t border-border pt-4 space-y-2">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Working days</p>
+          {isNew ? (
+            <p className="text-[11px] leading-relaxed text-ink-faint">
+              Add them first, then set which days they work. Until you do, the schedule assumes
+              they’re available any day — and says so wherever it counts on them.
+            </p>
+          ) : (
+            <>
+              <p className="text-[11px] leading-relaxed text-ink-faint">
+                Their standard week. Day planning counts on this — a day nobody is available for
+                is flagged before it’s worked, not on the morning.
+              </p>
+              <WeeklyAvailabilityEditor
+                rows={availabilityRows}
+                onSave={async (weekday, available, start, end) => {
+                  const res = await saveWorkerDay(supabase, {
+                    userId, technicianId: employee!.id, weekday, available, start, end,
+                  })
+                  if (!res.ok) return false
+                  // Re-read rather than patching local state: the row we get
+                  // back is what the database actually stored.
+                  const load = await loadWorkerAvailability(supabase, userId, { technicianId: employee!.id })
+                  if (load.outcome === 'ok') setAvailabilityRows(load.rows)
+                  return true
+                }}
+              />
+            </>
+          )}
+        </section>
+
+        {/* 6 — the app. Only once they exist: there is no row to attach a login
             to until the first save, and saying so beats a button that fails. */}
         <section className="border-t border-border pt-4">
           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">EdgeQuote app</p>

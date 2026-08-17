@@ -201,6 +201,32 @@ export const SCOPED_NOTE_FIELDS: readonly ScopedNoteField[] = [
     enforcedBy: 'The whole table is crew-audience: reachable only through /api/crew/media, which proves crew assignment, and the owner\'s own RLS. No portal projection selects it.',
   },
 
+  // ── Job checklists (Job Forms V1, Session 69) ──────────────────────────────
+  // A form's LABELS are work instructions and its ANSWERS are the crew's/
+  // owner's working record — the same audience as jobs.notes, and for the same
+  // reason: "confirm the gate was locked" can name the gate. wholeTable on
+  // both: no customer-facing column exists anywhere in them, so the strongest
+  // check applies — the table names must never appear in a portal projection,
+  // a PDF, or a public API. (Customer-visible checklist RESULTS, if they ever
+  // ship, are a deliberate new portal_get_* projection naming its columns —
+  // never these tables leaking through get_portal_data.)
+  {
+    table: 'job_forms',
+    column: 'fields',
+    audience: 'crew',
+    wholeTable: true,
+    purpose: 'The checklist a visit carries — its frozen field labels, helper text and requirements.',
+    enforcedBy: 'Owner RLS + the crew_job_forms DEFINER RPC (re-proves employer + crew). No portal projection selects it.',
+  },
+  {
+    table: 'job_form_responses',
+    column: 'value_text',
+    audience: 'crew',
+    wholeTable: true,
+    purpose: 'What the crew (or the office) recorded against the checklist — readings, notes, confirmations.',
+    enforcedBy: 'Owner RLS + the crew_save_form_response DEFINER RPC. No portal projection selects it.',
+  },
+
   // ── The visit conversation (Crew Communications V1) ────────────────────────
   // ⭐ THE OTHER HALF OF A DISTINCTION THIS REGISTRY DID NOT YET HAVE A WORD FOR.
   // Everything above is a NOTE: a standing fact about the work, edited in place,

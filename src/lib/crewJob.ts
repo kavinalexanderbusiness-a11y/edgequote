@@ -48,6 +48,10 @@ export interface CrewWriteResult {
   /** The row version AFTER the write, so an immediate undo carries a live guard
    *  instead of the version it just replaced (which would match nothing). */
   nextUpdatedAt?: string
+  /** Set when completing was refused by the checklist gate: the required items
+   *  still open, for the screen to show as a list ("Before completing: …")
+   *  rather than a toast-sized apology. */
+  checklist?: { form: string; label: string; field_id: string }[]
 }
 
 /** The complete intended state of the four lifecycle fields. The RPC writes all
@@ -153,6 +157,11 @@ export async function crewCompleteVisit(supabase: SupabaseClient, stop: CrewStop
     })
     const d = await res.json().catch(() => ({}))
     if (res.status === 409) return { ok: false, error: 'Couldn’t finish it — this visit changed. Refresh and try again.' }
+    if (res.status === 422 && Array.isArray(d.checklist)) {
+      // Not an error in the visit — the required checklist isn't done. The
+      // screen shows the list beside the checklist itself, not a toast.
+      return { ok: false, checklist: d.checklist, error: 'Before completing, finish the required checklist items.' }
+    }
     if (!res.ok || !d.ok) return { ok: false, error: d.error || 'That didn’t save. Try again.' }
     return { ok: true, nextUpdatedAt: d.updatedAt }
   } catch {

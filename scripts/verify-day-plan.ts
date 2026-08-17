@@ -39,7 +39,7 @@
 //  12  the surfaces hold: manual order keeps the road distances; the panel
 //      shows no money
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   planDay, travelBasisLabel, travelBasisDetail, travelFigureLabel, travelIsEstimated,
@@ -57,6 +57,13 @@ const eq = (n: string, a: unknown, b: unknown) =>
   check(n, Object.is(a, b), `expected ${String(b)}, got ${String(a)}`)
 const H = (t: string) => console.log(`\n${t}`)
 const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8')
+// The baseline is located BY SHAPE, never by name — its version changes on
+// every schema resync, and a hardcoded filename broke this guard the first
+// time one landed (2026-08-15).
+const BASELINE_SQL = (() => {
+  const names = readdirSync(join(process.cwd(), 'supabase', 'migrations')).filter(f => /_baseline\.sql$/.test(f))
+  return names.length === 1 ? read(`supabase/migrations/${names[0]}`) : ''
+})()
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 // A four-stop route day. 60 min on site each; legs of 5 km. Solo unless stated.
@@ -419,16 +426,28 @@ H('11. What the CREW sees is derived from the RPC\'s own ordering')
     crewOrderStatus([j('1'), j('2', { status: 'cancelled' })]).totalStops, 1)
 }
 {
-  // The mirror must match the SQL it mirrors.
-  const sql = read('supabase/migrations/20260814060714_baseline.sql')
-  const fn = sql.slice(sql.indexOf('FUNCTION public.crew_day'))
+  // The mirror must match the SQL it mirrors (baseline located by shape above).
+  check('exactly one baseline to mirror against', BASELINE_SQL.length > 0)
+  const fn = BASELINE_SQL.slice(BASELINE_SQL.indexOf('FUNCTION public.crew_day'))
   check('crew_day still sorts by route_rank, start_key, created_at',
     /order by x\.route_rank,\s*x\.start_key,\s*x\.created_at/.test(fn))
   check(`…coalescing an absent position to ${UNORDERED_CREW_RANK}`,
     fn.includes(`coalesce(j.route_order, ${UNORDERED_CREW_RANK})`))
   check(`…and an absent start time to ${NO_START_TIME_KEY}`,
     fn.includes(`coalesce(j.start_time::text, '${NO_START_TIME_KEY}')`))
-  check('…and still returns only this crew\'s stops', /and j\.crew_id = v_crew/.test(fn))
+  // Session 65 replaced the direct `j.crew_id = v_crew` test with an assignment
+  // model where a stop belongs to a CREW or to a PERSON. The scoping property is
+  // unchanged — a worker still sees only their employer's stops, and only the ones
+  // assigned to their crew or to them — but it is now expressed through
+  // crew_assignment_covers(). Both halves are asserted, because dropping either
+  // one is what would actually widen the result:
+  //   · the employer predicate is the tenant boundary
+  //   · the covers() predicate is the assignment boundary
+  check('…and still scopes stops to the employer it resolved',
+    /where j\.user_id = v_employer/.test(fn))
+  check('…and still returns only stops assigned to this crew or this worker',
+    /public\.crew_assignment_covers\(\s*j\.crew_id,\s*j\.technician_id,\s*v_crew,\s*v_tech\s*\)/.test(fn),
+    'crew_day must constrain by assignment, not merely by employer')
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -639,7 +658,7 @@ H('16. Refresh persistence and tenant isolation')
   check('…and a saved sequence is what the board reads back on load',
     /active\.some\(j => j\.route_order != null\)/.test(opsSrc))
   check('…while a date move clears it in the DATABASE, not in app code',
-    /trg_jobs_clear_route_order/.test(read('supabase/migrations/20260814060714_baseline.sql')))
+    /trg_jobs_clear_route_order/.test(BASELINE_SQL))
 }
 {
   // TENANCY. The plan engine sees only rows it is handed; the loader that feeds
@@ -655,12 +674,11 @@ H('16. Refresh persistence and tenant isolation')
   })
   check('the plan engine performs no read of its own', !/from\(|rpc\(/.test(planSrc))
   // The crew's own day is scoped by the RPC, not by the client.
-  const sql2 = read('supabase/migrations/20260814060714_baseline.sql')
-  const fn2 = sql2.slice(sql2.indexOf('FUNCTION public.crew_day'))
+  const fn2 = BASELINE_SQL.slice(BASELINE_SQL.indexOf('FUNCTION public.crew_day'))
   check('crew_day scopes to the employer it resolved, not to a parameter',
     /where j\.user_id = v_employer/.test(fn2))
   check('…and crew_day is not executable by anon',
-    /revoke all on function public\."crew_day"\(p_date date\) from public, anon/.test(sql2))
+    /revoke all on function public\."crew_day"\(p_date date\) from public, anon/.test(BASELINE_SQL))
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

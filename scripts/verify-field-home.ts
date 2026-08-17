@@ -508,8 +508,14 @@ console.log('\n── 8. The three database facts the brief stands on ───�
     const body = SQL.slice(SQL.toLowerCase().indexOf('create or replace function public.crew_day'))
     // ASSIGNED WORKER / UNASSIGNED WORK. A visit with no crew_id reaches nobody's
     // phone, however the day is ordered.
-    check('crew_day returns only stops assigned to the caller\'s crew',
-      /j\.crew_id\s*=\s*v_crew/.test(body),
+    // Session 65 moved this from a direct `j.crew_id = v_crew` test to an
+    // assignment model — a stop belongs to a CREW or to a PERSON — expressed as
+    // crew_assignment_covers(j.crew_id, j.technician_id, v_crew, v_tech), whose
+    // body is `coalesce(j_crew = v_crew, false) or coalesce(j_technician = v_tech, false)`.
+    // The property this check exists for is unchanged: a visit assigned to NEITHER
+    // still coalesces to false on both halves and so reaches nobody's phone.
+    check('crew_day returns only stops assigned to the caller\'s crew or to them',
+      /crew_assignment_covers\(\s*j\.crew_id,\s*j\.technician_id,\s*v_crew,\s*v_tech\s*\)/.test(body),
       'without this an unassigned job would appear on a crew phone')
     // TENANT ISOLATION. The employer is derived server-side from the session.
     check('crew_day is scoped to the caller\'s employer',
@@ -604,6 +610,34 @@ console.log('\n── 10. The field home surface ──────────�
   check("the worker's day is on the offline-shell allowlist", /'\/crew'/.test(shells), shells)
   check('the server-rendered crew week is NOT cached', !/crew\/schedule/.test(shells), shells)
   check('a redirected response is never cached as a shell', /!res\.redirected/.test(SW))
+}
+{
+  // ⭐⭐ THREE THINGS S65 MADE SEPARABLE, and the surface must not merge them:
+  //   crew MEMBERSHIP        → day.teammates (who shares the crew)
+  //   planned ASSIGNMENT     → crew_assignment_covers: the crew's, or a person's
+  //   actual PARTICIPATION   → not claimed here at all
+  // The failure this pins: a worker on Crew A whose whole day is assigned to
+  // them individually being told they are "with Sarah, Mike" — a roster fact
+  // rendered as a fact about today's work.
+  const TODAY = read('src/components/crew/CrewToday.tsx')
+  check('the direct-vs-crew distinction comes from the SERVER, never inferred',
+    /s\.personal === true/.test(TODAY) && !/technician_id/.test(TODAY),
+    'the phone must read crew_day\'s `personal`, never re-derive assignment')
+  check('an all-direct day does not name teammates as today\'s company',
+    /!allPersonal/.test(TODAY) && /allPersonal && <span>· today’s stops are assigned to you/.test(TODAY),
+    'membership is not participation — the teammate list is a claim about the crew, not the day')
+  check('an empty day makes no assignment claim at all',
+    /active\.length > 0 && active\.every\(s => s\.personal === true\)/.test(TODAY),
+    'with no stops there is nothing to say about who they belong to')
+}
+{
+  // S69's checklist summary and S67's availability reach this screen through
+  // crew_day and lib/dayFit respectively. This surface must carry them, not
+  // re-implement or drop them.
+  const TODAY = read('src/components/crew/CrewToday.tsx')
+  check('the S69 checklist summary still reaches the card',
+    /CrewStopChecklist/.test(TODAY) && /gateBlocked/.test(TODAY),
+    'the completion gate\'s required-item list must survive this lane')
 }
 {
   // NO MONEY ON A WORKER'S PHONE. crew_day already selects none (section 8);

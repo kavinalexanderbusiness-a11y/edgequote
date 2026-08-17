@@ -21,9 +21,11 @@ import {
   generateOccurrences, recurrenceLabel, recurringCustomerLabel,
   jobsInScope, shiftDate, dayDelta, buildServicePlans, visitsBeyondEnd, planSeriesChange, recurrenceToUi, mayRemoveRecurrence,
   partitionSeriesVisits, planRecurrenceRemoval, reseedRepeatUi,
+  scopeImpacts, OPEN_ENDED_HORIZON,
 } from '../src/lib/recurrence'
 import { HISTORY_TABLES } from '../src/lib/seriesHistory'
 import { DEFAULT_SEASONS, DEFAULT_LAWN_SEASON, DEFAULT_SNOW_SEASON, seasonEndDateFor } from '../src/lib/seasons'
+import { addDays, format, parseISO } from 'date-fns'
 import type { Job, JobRecurrence } from '../src/types'
 
 let pass = 0
@@ -155,7 +157,7 @@ check('active plan sorts before paused (its two future visits vs none)',
 check('the active plan is fully summarised', plans[0], {
   recurrenceId: 'r1', propertyId: 'p1', serviceName: 'Weekly Mowing', cadenceLabel: 'Weekly',
   weekday: 'Wednesdays', windowLabel: 'Apr 8 → Jun 30', remaining: 2, nextVisitDate: '2026-04-22',
-  paused: false, initialPrice: 120, recurringPrice: 60,
+  status: 'active', paused: false, initialPrice: 120, recurringPrice: 60,
 })
 check('the paused plan reports no future work and no next visit',
   { remaining: plans[1].remaining, next: plans[1].nextVisitDate, paused: plans[1].paused },
@@ -488,6 +490,117 @@ check('…so is the bulk detach, which the FK would otherwise do silently',
   /!==\s*detachIds\.length/.test(pageSrc), true)
 check('…and dropping the rule itself is not assumed either',
   /!recGone \|\| recGone\.length === 0/.test(pageSrc), true)
+H('17. PLAN STATUS — four situations that used to be one word')
+// `paused` was a single boolean over a delivered package, an out-of-season
+// series, an exhausted horizon and a deliberately-cleared schedule. Every
+// surface rendered them identically ("Paused · schedule it again to resume"),
+// and the portal told the customer "No visits booked" for all four — including
+// the one where the truth is "your plan is complete". Each must now say WHY,
+// and dormancy must come from signals/lifecycle rather than a second rule.
+const PLAN_TODAY = '2026-08-13' // in lawn season, out of snow season
+const planOf = (r: JobRecurrence, js: Job[]) => buildServicePlans([r], js, DEFAULT_SEASONS, PLAN_TODAY)[0]
+
+const endedPlan = planOf(
+  rec({ id: 'e', start_date: '2026-05-06', end_date: '2026-07-08' }),
+  ['2026-05-06', '2026-06-10', '2026-07-08'].map((d, i) =>
+    job({ id: 'e' + i, recurrence_id: 'e', scheduled_date: d, status: 'completed', service_type: 'Weekly Mowing' })))
+check('end date passed → ended (not "paused")', endedPlan.status, 'ended')
+
+const dormantPlan = planOf(
+  rec({ id: 'd', start_date: '2026-01-07' }),
+  ['2026-01-07', '2026-03-04'].map((d, i) =>
+    job({ id: 'd' + i, recurrence_id: 'd', scheduled_date: d, status: 'completed', service_type: 'Snow Removal' })))
+check('snow series in August → dormant, via the lifecycle detector', dormantPlan.status, 'dormant')
+
+const ranDryPlan = planOf(
+  rec({ id: 'x', start_date: '2026-02-11' }), // open-ended: no end_date, no end_count
+  ['2026-07-29', '2026-08-12'].map((d, i) =>
+    job({ id: 'x' + i, recurrence_id: 'x', scheduled_date: d, status: 'completed', service_type: 'Weekly Cleaning' })))
+check('open-ended series with nothing left → ran_dry', ranDryPlan.status, 'ran_dry')
+
+const cancelledPlan = planOf(
+  rec({ id: 'c', start_date: '2026-06-03' }),
+  [job({ id: 'c0', recurrence_id: 'c', scheduled_date: '2026-08-05', status: 'completed', service_type: 'Weekly Cleaning' }),
+   job({ id: 'c1', recurrence_id: 'c', scheduled_date: '2026-08-19', status: 'cancelled', service_type: 'Weekly Cleaning' })])
+check('upcoming visits cancelled → cancelled_ahead', cancelledPlan.status, 'cancelled_ahead')
+
+const activePlan = planOf(
+  rec({ id: 'a', start_date: '2026-06-03' }),
+  [job({ id: 'a0', recurrence_id: 'a', scheduled_date: '2026-08-05', status: 'completed', service_type: 'Weekly Cleaning' }),
+   job({ id: 'a1', recurrence_id: 'a', scheduled_date: '2026-08-19', status: 'scheduled', service_type: 'Weekly Cleaning' })])
+check('a future visit booked → active', activePlan.status, 'active')
+
+// A count-limited package that delivered every visit is ended, not ran_dry —
+// the rule, not the empty calendar, is what says so.
+const countDone = planOf(
+  rec({ id: 'n', start_date: '2026-06-03', end_count: 2 }),
+  ['2026-06-03', '2026-06-10'].map((d, i) =>
+    job({ id: 'n' + i, recurrence_id: 'n', scheduled_date: d, status: 'completed', service_type: 'Weekly Cleaning' })))
+check('all N of an end_count package delivered → ended', countDone.status, 'ended')
+
+// The alias every un-migrated caller still reads must stay exactly "not active".
+check('paused is the alias of "not active" — for all five statuses',
+  [activePlan, endedPlan, dormantPlan, cancelledPlan, ranDryPlan].map(p => p.paused === (p.status !== 'active')),
+  [true, true, true, true, true])
+check('an active plan is never paused', activePlan.paused, false)
+
+// ═══════════════════════════════════════════════════════════════════════════
+H('18. SCOPE IMPACT — what the chooser must say before it is obeyed')
+// "All visits" was a bare label on a mutation that hard-deletes completed work.
+// The counts come from jobsInScope — THE predicate the mutation runs — so a
+// label can never promise a different reach than the write.
+const season: Job[] = []
+for (let i = 0; i < 23; i++) {
+  const d = format(addDays(parseISO('2026-05-06'), i * 7), 'yyyy-MM-dd')
+  season.push(job({ id: `s${i}`, recurrence_id: 'r1', scheduled_date: d, status: d < PLAN_TODAY ? 'completed' : 'scheduled' }))
+}
+const seasonAnchor = season.find(j => j.scheduled_date >= PLAN_TODAY)!
+const impacts = scopeImpacts(seasonAnchor, season)
+const byScope = (s: string) => impacts.find(i => i.scope === s)!
+check('15 completed + 8 booked is the fixture we reason about',
+  { done: season.filter(j => j.status === 'completed').length, booked: season.filter(j => j.status === 'scheduled').length },
+  { done: 15, booked: 8 })
+check('this → one visit, no history touched',
+  { label: byScope('this').label, total: byScope('this').total, note: byScope('this').historyNote },
+  { label: 'This visit only', total: 1, note: null })
+check('future → names the number of later visits, and touches no history',
+  { label: byScope('future').label, total: byScope('future').total, note: byScope('future').historyNote },
+  { label: 'This and 7 later visits', total: 8, note: null })
+check('all → names the total AND the completed work it destroys',
+  { label: byScope('all').label, total: byScope('all').total, note: byScope('all').historyNote },
+  { label: 'All 23 visits', total: 23, note: 'includes 15 completed' })
+// The counts must track jobsInScope exactly — this is the whole safety property.
+check('every impact total equals jobsInScope for that scope',
+  impacts.map(i => i.total === jobsInScope(seasonAnchor, season, i.scope).length), [true, true, true])
+// Deleting a single completed visit is still destroying history — the anchor counts.
+const doneAnchor = season[0]
+check('a completed anchor reports its own history under "this"',
+  scopeImpacts(doneAnchor, season).find(i => i.scope === 'this')!.historyNote, 'includes 1 completed')
+// In-progress work is history too, and is named separately from completed.
+const withLive = [
+  job({ id: 'L1', recurrence_id: 'r2', scheduled_date: '2026-08-05', status: 'completed' }),
+  job({ id: 'L2', recurrence_id: 'r2', scheduled_date: '2026-08-13', status: 'in_progress' }),
+  job({ id: 'L3', recurrence_id: 'r2', scheduled_date: '2026-08-20', status: 'scheduled' }),
+]
+check('completed AND in-progress are both named',
+  scopeImpacts(withLive[0], withLive).find(i => i.scope === 'all')!.historyNote,
+  'includes 1 completed and 1 in progress')
+// A one-time job has no series: every scope is itself, and "all" must not claim more.
+check('a non-recurring job reports one visit under every scope',
+  scopeImpacts(job({ id: 'solo', recurrence_id: null, scheduled_date: '2026-08-20' }), season).map(i => i.total),
+  [1, 1, 1])
+// A series with no later visits must not offer "This and 0 later visits".
+const lastOne = [job({ id: 'z', recurrence_id: 'r3', scheduled_date: '2026-08-20', status: 'scheduled' })]
+check('no later visits → the future option says so plainly',
+  scopeImpacts(lastOne[0], lastOne).find(i => i.scope === 'future')!.label, 'This visit — none later')
+
+// ═══════════════════════════════════════════════════════════════════════════
+H('19. THE OPEN-ENDED HORIZON IS A NUMBER THE FORM MUST SAY')
+// "no end date (kept rolling on your calendar)" promised a top-up that does not
+// exist: the series materialises this many visits ONCE and then goes quiet.
+check('the horizon constant is exported for the copy to read', OPEN_ENDED_HORIZON, 26)
+check('an open-ended series generates exactly the horizon, and no more',
+  generateOccurrences('2026-04-15', 'week', 1, null, null).length, OPEN_ENDED_HORIZON)
 
 console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)
 if (fail > 0) process.exit(1)

@@ -8,9 +8,11 @@ import { Select } from '@/components/ui/Select'
 import { PropertySelect } from '@/components/ui/PropertySelect'
 import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
-import { Customer, Property, JobFormValues, JobStatus, RecurUnit } from '@/types'
+import { Customer, Property, JobFormValues, JobStatus, RecurUnit, Crew, Technician } from '@/types'
+import { AssigneeSelect } from '@/components/schedule/AssigneeSelect'
+import { assigneeOf, assigneeColumns } from '@/lib/crewAssignment'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { recurrenceLabel, recurrenceToUi, reseedRepeatUi, type RepeatPreset, type EndMode } from '@/lib/recurrence'
+import { recurrenceLabel, recurrenceToUi, reseedRepeatUi, OPEN_ENDED_HORIZON, type RepeatPreset, type EndMode } from '@/lib/recurrence'
 import { latestSavedRecommendation, savedPriceFor, recommendationIsStale, CadenceKey } from '@/lib/pricing'
 import { servicePricingKind } from '@/lib/servicePricing'
 import {
@@ -65,6 +67,10 @@ export interface SuggestionMeta {
 
 interface JobFormProps {
   customers: Customer[]
+  /** Who work can be assigned to. Omit both and the form shows no "Assigned to"
+   *  control and leaves assignment exactly as it found it. */
+  crews?: Crew[]
+  technicians?: Technician[]
   defaultValues?: Partial<JobFormValues>
   excludeJobId?: string
   // Existing series for the job being edited, so the Repeat controls pre-fill.
@@ -129,7 +135,7 @@ function presetToInterval(preset: RepeatPreset, customUnit: RecurUnit, customCou
 }
 
 
-export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, seriesStartDate, allowAddAnother, suggestedPrice, warnFor, onSubmit, onCancel, onDirtyChange, isEdit }: JobFormProps) {
+export function JobForm({ customers, crews, technicians, defaultValues, excludeJobId, initialRecurrence, seriesStartDate, allowAddAnother, suggestedPrice, warnFor, onSubmit, onCancel, onDirtyChange, isEdit }: JobFormProps) {
   const supabase = createClient()
   const [properties, setProperties] = useState<Property[]>([])
   const addAnotherRef = useRef(false)
@@ -169,6 +175,8 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         notes: '',
         actual_minutes: 0,
         price: 0,
+        crew_id: null,
+        technician_id: null,
         ...defaultValues,
       },
     })
@@ -541,7 +549,9 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     endMode === 'season' && seasonEndDate ? `ends at season end (${formatDate(seasonEndDate)})`
     : endMode === 'after' ? `ends after ${Math.max(1, endCount)} visit${endCount !== 1 ? 's' : ''}`
     : endMode === 'on' && endDate ? `until ${endDate}`
-    : 'no end date (kept rolling on your calendar)'
+    // Nothing tops a series up, so "no end date" is a fixed horizon, not a
+    // rolling one. Says the number the engine will actually create.
+    : `no end date — ${OPEN_ENDED_HORIZON} visits scheduled ahead`
 
   return (
     <form
@@ -836,6 +846,31 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           hint="How many people are on site at once. Duration stays the time on site — two people for an hour is one hour, not two."
           {...register('crew_size', { min: { value: 1, message: 'Min 1' } })} />
 
+        {/* WHO is coming — a different question from how MANY (above), and the
+            one that decides whose phone this visit lands on. Only rendered when
+            the caller supplied the roster; a form without it saves assignment
+            unchanged rather than silently unassigning. */}
+        {(crews?.length || technicians?.length) ? (
+          <Controller name="crew_id" control={control}
+            render={({ field: crewField }) => (
+              <Controller name="technician_id" control={control}
+                render={({ field: techField }) => (
+                  <AssigneeSelect
+                    crews={crews ?? []}
+                    technicians={technicians ?? []}
+                    value={assigneeOf({ crew_id: crewField.value ?? null, technician_id: techField.value ?? null })}
+                    onChange={next => {
+                      // Both columns move together — that is what keeps one
+                      // visit from carrying two answers.
+                      const cols = assigneeColumns(next)
+                      crewField.onChange(cols.crew_id)
+                      techField.onChange(cols.technician_id)
+                    }}
+                  />
+                )} />
+            )} />
+        ) : null}
+
         {/* What this kind of work has actually taken. Built on the SAME learning
             engine the estimate-vs-actual comparison above uses and the SAME
             duration rule Day Suggestions fits a candidate with, so the card, the
@@ -956,8 +991,18 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
                     ...(serviceSeason ? [{ value: 'season', label: 'Season end (recommended)' }] : []),
                     { value: 'on', label: 'Specific date' },
                     { value: 'after', label: 'Number of visits' },
-                    { value: 'never', label: 'Never ends' },
+                    { value: 'never', label: 'No end date' },
                   ]} />
+                {/* "Never ends" promised something no engine delivers: there is no
+                    top-up, so the series is exactly this many visits long. */}
+                {endMode === 'never' && (
+                  <div className="rounded-xl border border-border bg-bg-tertiary px-3 py-2 flex items-center gap-2">
+                    <CalendarRange className="w-4 h-4 text-ink-muted shrink-0" />
+                    <p className="text-xs text-ink-muted">
+                      {OPEN_ENDED_HORIZON} visits are scheduled ahead. Add more when they run low.
+                    </p>
+                  </div>
+                )}
                 {endMode === 'season' && (
                   <div className="rounded-xl border border-accent/20 bg-accent/5 px-3 py-2 flex items-center gap-2">
                     <CalendarRange className="w-4 h-4 text-accent-text shrink-0" />

@@ -50,6 +50,26 @@ export const CREW_JOIN = '/crew/join'
  *  no valid token, the page does nothing except say the link has expired. */
 export const CREW_WELCOME = '/crew/welcome'
 
+/**
+ * THE landing destination for a role, as data.
+ *
+ * Three surfaces used to hardcode `/dashboard` after a successful sign-in — the
+ * login form, the root page, and the end of a password reset — and leaned on the
+ * middleware to bounce a worker from there to /crew. It does bounce them, so
+ * nobody was stranded; what they got was a round trip through the owner's URL,
+ * which on a slow phone is a flash of the wrong product before the right one.
+ * The brief asks for a worker to land in worker mode, not to arrive there second.
+ *
+ * `none` still resolves to the owner root: an account with no role may be a
+ * brand-new OWNER mid-signup, and /dashboard is what runs the first-run /setup
+ * flow. Sending them to /crew instead would strand a real owner. A worker in
+ * that state is redirected on to /crew/join by routeFor, which is the pre-existing
+ * behaviour and the one place that decision belongs.
+ */
+export function landingFor(role: AppRole): string {
+  return role === 'crew' ? CREW_ROOT : OWNER_ROOT
+}
+
 export function isOwnerPath(pathname: string): boolean {
   return pathname === OWNER_ROOT || pathname.startsWith(OWNER_ROOT + '/')
 }
@@ -139,8 +159,22 @@ export interface CrewStop {
   /** 🔒 INTERNAL — for the office. Shown to the worker who wrote it; never to a
    *  customer (it is not in get_portal_data's payload at all). */
   completion_issue: string | null
+  /** True when this visit was assigned to YOU by name rather than to your crew.
+   *  Both kinds appear on the same board — a worker's day is one list — but the
+   *  card says which, so "mine alone" and "ours" are never confused. */
+  personal?: boolean
   customer: { name: string; phone: string | null } | null
   property: { address: string | null; lat: number | null; lng: number | null } | null
+  /** Counts-only checklist summary (public.job_form_summary's shape): enough
+   *  for "3 of 7 · 2 required open" on the card without shipping a single
+   *  field. The full form loads only when the worker opens it
+   *  (crew_job_forms) — the same load-on-tap contract as reference media.
+   *  null = this visit carries no checklist at all. Absent on payloads from
+   *  before the forms feature — treat undefined as null. */
+  checklist?: {
+    forms: number; items: number; done: number
+    required: number; required_done: number; waived: boolean
+  } | null
 }
 
 export interface CrewDay {

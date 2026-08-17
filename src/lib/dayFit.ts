@@ -44,6 +44,7 @@
 
 import { DEFAULT_CAPACITY_HOURS, DEFAULT_JOB_MIN, estimateDayLoad } from '@/lib/route'
 import type { ServiceVariance } from '@/lib/estimateVsActual'
+import { patternUnavailableOn, type AvailabilityPatternRow } from '@/lib/workerAvailability'
 
 // Same per-stop drive/setup allowance estimateDayLoad charges. Named here for
 // the candidate's own stop; the existing day's stops are charged by
@@ -411,24 +412,61 @@ export interface TechForAvailability {
   is_active: boolean
   ended_on?: string | null
   archived_at?: string | null
+  crew_id?: string | null
 }
 
 /**
- * How many people can work a given date: active technicians not booked off.
+ * How many people can work a given date: active technicians not booked off,
+ * and — since Session 67 — not ruled out by their own weekly pattern.
  * A business with NO technician rows is the solo owner — 1, not 0. (What is NOT
  * modelled, stated honestly: whether the owner also works alongside a hired
  * crew. There is no column that says so; guessing would double-count.)
+ *
+ * `ptoDates` must already be filtered to APPROVED time off — a request nobody
+ * has decided is not an absence, and lib/dayFitLoad filters at the read.
+ *
+ * `opts.patterns` is optional and additive: absent, this is exactly the
+ * pre-Session-67 count. Present, a worker who HAS a recorded week is not
+ * counted on a weekday their week excludes. A worker with no pattern rows is
+ * still counted — no recorded week means availability is ASSUMED, and the
+ * surfaces label that assumption (lib/workerAvailability owns the vocabulary).
+ *
+ * ⭐ The fourth parameter is an OPTIONS OBJECT rather than a bare array on
+ * purpose: this is the one place the product answers "how many people can work
+ * this date", so every future narrowing of that question belongs INSIDE this
+ * function as another key — never as a second counter, and never as a fight
+ * over a positional slot.
+ *
+ * `opts.crewId` is that narrowing, arriving as promised (Session 65): the same
+ * rules asked of one crew's members. Approved leave and the weekly pattern
+ * apply identically; only the population changes. ⭐ The solo-owner fallback
+ * deliberately does NOT apply to a crew: "this business employs nobody" means
+ * the owner works, but "this crew has nobody on it" means nobody, and rounding
+ * that up to 1 is how a board promises staffing that does not exist.
  */
+export interface WorkersAvailableOpts {
+  /** Weekly patterns for the whole business (lib/workerAvailability). */
+  patterns?: AvailabilityPatternRow[]
+  /** Count only the members of this crew. Omit for the whole business. */
+  crewId?: string
+}
+
 export function workersAvailableOn(
   date: string,
   technicians: TechForAvailability[],
   ptoDates: { technician_id: string; date: string }[],
+  opts?: WorkersAvailableOpts,
 ): number {
   const roster = technicians.filter(t =>
     t.is_active && !t.archived_at && (!t.ended_on || t.ended_on >= date))
-  if (roster.length === 0) return 1
   const off = new Set(ptoDates.filter(p => p.date.slice(0, 10) === date).map(p => p.technician_id))
-  return Math.max(0, roster.filter(t => !off.has(t.id)).length)
+  const patternOff = opts?.patterns?.length ? patternUnavailableOn(date, opts.patterns) : null
+  const free = (t: TechForAvailability) => !off.has(t.id) && !patternOff?.has(t.id)
+  if (opts?.crewId != null) {
+    return Math.max(0, roster.filter(t => t.crew_id === opts.crewId && free(t)).length)
+  }
+  if (roster.length === 0) return 1
+  return Math.max(0, roster.filter(free).length)
 }
 
 // ── The one sentence a suggestion shows ──────────────────────────────────────

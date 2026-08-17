@@ -71,6 +71,7 @@ import {
   minutesToTime12, type SpeedModel,
 } from '@/lib/route'
 import { dayCommitment, FIT_BUFFER_MIN, type DayFitInput, type DayCommitment } from '@/lib/dayFit'
+import { canWork, type WorkerDayDetail } from '@/lib/workerAvailability'
 
 // The allowance the ETA chain already applies to a stop it cannot locate — the
 // same constant, not a matching one, so the minutes charged and the minutes
@@ -144,6 +145,9 @@ export type WarningSeverity = 'blocking' | 'warning' | 'caveat'
 export type DayPlanWarningKind =
   | 'day_blocked'            // capacity is an explicit 0 — nothing can be worked
   | 'crew_short'             // a visit needs more people than are available
+  | 'crew_understaffed'      // a crew with work here has people off/unavailable
+  | 'worker_unavailable'     // a named worker on a working crew cannot work today
+  | 'availability_assumed'   // nobody has a recorded week — availability is a guess
   | 'labour_over'            // person-minutes booked exceed the people available
   | 'runs_past_capacity'     // the route finishes after the day's hours end
   | 'no_room_left'           // fits, but with less than the buffer to spare
@@ -179,6 +183,14 @@ export interface DayPlanStopInput {
   serviceType?: string | null
   /** jobs.status — 'cancelled' stops are dropped, as everywhere else. */
   status?: string | null
+  /** jobs.crew_id — which crew is expected to work it, when a crew is. */
+  crewId?: string | null
+  /** jobs.technician_id — set when the visit belongs to ONE named person
+   *  instead of a crew (Session 65; the two are mutually exclusive in the
+   *  database). Staffing is judged per crew for crew work and per person for
+   *  personal work, because a crew's spare member cannot cover a visit that was
+   *  given to somebody by name. */
+  technicianId?: string | null
   /** Route distance from the PREVIOUS point (base, or the stop before), or null
    *  when this stop has no coordinates. From lib/route's ordered output. */
   legKm?: number | null
@@ -215,6 +227,23 @@ export interface DayPlanInput {
   locatedCoords?: { lat: number; lng: number }[]
   /** False when there is no base address, so no route could be ordered. */
   hasBase: boolean
+  /**
+   * Per-worker states for this date (lib/workerAvailability.workerDayStates,
+   * threaded by lib/dayFitLoad.staffingByDate). Null/absent = the roster could
+   * not be read, or this surface does not have it — either way NO staffing
+   * claim is made, exactly as `workers: null` makes no labour claim.
+   *
+   * ⛔ This never CHANGES an assignment. A visit stays on the crew the owner
+   * put it on; what it can do is say the crew is short and let the owner
+   * decide. Silently moving work is how a plan stops matching the field.
+   */
+  staffing?: WorkerDayDetail[] | null
+  /** Crew id → name, so a warning can say "Crew A" instead of a uuid. */
+  crewNames?: Record<string, string>
+  /** False when NO worker has a recorded weekly pattern, so every "available"
+   *  in `staffing` is an assumption. Undefined = don't raise the point (the
+   *  caller has not established it either way). */
+  availabilityRecorded?: boolean
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────
@@ -441,6 +470,84 @@ export function planDay(input: DayPlanInput): DayPlan {
       kind: 'crew_short', severity: 'blocking',
       message: `A visit here asks for ${day.maxCrewSize} people and only ${short} available.`,
     })
+  }
+
+  // ── Staffing: who, by name, cannot work a day their crew is booked on ─────
+  // The labour pool above says HOW MANY. This says WHO — because "2 assigned,
+  // 1 available" is the sentence an owner can act on, and because a shortfall
+  // inside one crew can hide inside a business-wide total that still balances.
+  //
+  // ⛔ Nothing here reassigns anything. Warn, name, and let the owner decide.
+  const staffing = input.staffing
+  if (staffing && active.length > 0) {
+    const crewsWithWork = new Set(active.map(s => s.crewId).filter((c): c is string => !!c))
+    const nameOf = (id: string) => input.crewNames?.[id] ?? 'this crew'
+
+    for (const crewId of crewsWithWork) {
+      const members = staffing.filter(w => w.crewId === crewId)
+      if (members.length === 0) continue
+      const ready = members.filter(canWork)
+      if (ready.length === members.length) continue
+
+      const off = members.filter(w => w.state === 'off')
+      const unavailable = members.filter(w => w.state === 'unavailable')
+      const because = [
+        off.length ? `${off.length} booked off` : '',
+        unavailable.length ? `${unavailable.length} not working this day` : '',
+      ].filter(Boolean).join(', ')
+      push({
+        kind: 'crew_understaffed',
+        // Nobody at all is a blocking fact; a thinner crew is a judgment call.
+        severity: ready.length === 0 ? 'blocking' : 'warning',
+        count: ready.length,
+        message: ready.length === 0
+          ? `${nameOf(crewId)} has work booked here and nobody available — ${because}.`
+          : `${nameOf(crewId)} has ${plural(members.length, 'worker')} assigned but only ${ready.length} available — ${because}.`,
+      })
+
+      // Name them. A count tells the owner there is a problem; a name tells
+      // them which call to make.
+      for (const w of [...off, ...unavailable]) {
+        if (!w.name) continue
+        push({
+          kind: 'worker_unavailable', severity: 'warning',
+          message: w.state === 'off'
+            ? `${w.name} is on ${nameOf(crewId)}, which works this day, but is booked off${w.offHours != null ? ` (${w.offHours} h)` : ''}.`
+            : `${w.name} is on ${nameOf(crewId)}, which works this day, but does not normally work this weekday.`,
+        })
+      }
+    }
+
+    // ── Work given to ONE person by name (Session 65) ────────────────────────
+    // A crew being short is a crew problem; a personally-assigned visit is a
+    // problem the moment THAT person cannot work, however free their crewmates
+    // are. Judged per person for exactly that reason.
+    const personalIds = new Set(active.map(s => s.technicianId).filter((t): t is string => !!t))
+    for (const technicianId of personalIds) {
+      const worker = staffing.find(w => w.technicianId === technicianId)
+      if (!worker || canWork(worker)) continue
+      const who = worker.name ?? 'The person this is assigned to'
+      const n = active.filter(s => s.technicianId === technicianId).length
+      push({
+        kind: 'worker_unavailable',
+        // Nobody else is expected, so this one blocks rather than warns.
+        severity: 'blocking',
+        count: n,
+        message: worker.state === 'off'
+          ? `${who} has ${plural(n, 'visit')} assigned personally but is booked off${worker.offHours != null ? ` (${worker.offHours} h)` : ''}.`
+          : `${who} has ${plural(n, 'visit')} assigned personally but does not normally work this weekday.`,
+      })
+    }
+
+    // Every "available" here rests on nobody having said otherwise. Say so
+    // once, quietly, rather than letting the day imply a schedule exists.
+    if (input.availabilityRecorded === false && staffing.some(w => w.state === 'assumed')) {
+      push({
+        kind: 'availability_assumed', severity: 'caveat',
+        count: staffing.filter(w => w.state === 'assumed').length,
+        message: 'No one has a weekly schedule set, so everyone is assumed available — set working days to plan against real availability.',
+      })
+    }
   }
 
   if (day.laborUsedMin != null && day.laborCapMin != null && day.laborUsedMin > day.laborCapMin) {

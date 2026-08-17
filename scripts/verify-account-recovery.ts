@@ -169,8 +169,19 @@ check('unavailable and dead are different outcomes',
 const reset = read(RESET_FORM)
 check('the reset page distinguishes all three outcomes on screen',
   /'unavailable'/.test(reset) && /'dead'/.test(reset) && /'ready'/.test(reset))
+// ⚠️ COMMENTS STRIPPED FIRST. This asserts what the SCREEN says, and it used to
+// scan raw text — so a file that DOCUMENTS "deliberately NOT 'this link has
+// expired'" was reported as the violation, and any comment merely using the word
+// "unavailable" within 600 characters of it failed a correct file. The cure
+// reading as the disease is a trap this repo has hit repeatedly; the fix is to
+// assert over rendered copy, not prose. CRLF-safe: `.` does not match `\r`.
+const rendered = reset.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[^\n]*?\/\/[^\n]*$/gm, '')
 check('the unavailable state does not claim the link expired',
-  !/unavailable[\s\S]{0,600}(expired|invalid)/i.test(reset.split("outcome.kind === 'dead'")[0] ?? ''))
+  !/unavailable[\s\S]{0,600}(expired|invalid)/i.test(rendered.split("outcome.kind === 'dead'")[0] ?? ''))
+// Mechanism control: the strip must not have eaten the branch this check reads.
+check('the unavailable branch survives comment-stripping (scan is not vacuous)',
+  /'unavailable'/.test(rendered.split("outcome.kind === 'dead'")[0] ?? ''),
+  'if stripping removed the branch, the check above passes on anything')
 check('a pre-existing session is not accepted as proof',
   /readRecoveryFragment/.test(reset) && !/getSession\(\)/.test(reset),
   'this is the recovery door — being signed in already proves nothing about reading the email')

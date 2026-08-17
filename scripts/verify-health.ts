@@ -117,5 +117,31 @@ check('no email/SMS configured does NOT degrade (optional, not declared)',
   statusFor(PROD), 'ok')
 
 // ═══════════════════════════════════════════════════════════════════════════
+H('4. THE LINK ORIGIN — the deploy must report the origin it stamps into links')
+
+// 2026-08-15: the production domain moved to app.edgehq.ca but Vercel's
+// NEXT_PUBLIC_APP_URL still held the old host — so every crew-invite and
+// password-reset email carried a link that 404'd, and nothing observable said
+// so. The env var cannot be asserted from here; what CAN be pinned is that
+// /api/health reports it, so one curl against a deploy answers "which origin do
+// generated links use?" instead of a worker's screenshot being the detector.
+// Reported twice on purpose: the CLEANED origin is what links actually carry,
+// and the RAW value is what catches a corruption you cannot see — a UTF-8 BOM
+// pasted in by a shell was invisible in the dashboard and broke every link.
+check('health reports the origin links are built on (cleaned)',
+  /app_url:\s*appOrigin\(\)/.test(health), true)
+check('health also reports the raw configured value',
+  /app_url_raw:\s*process\.env\.NEXT_PUBLIC_APP_URL/.test(health), true)
+
+// …and the case cleaning CANNOT rescue. A BOM is repaired, so it is not an
+// outage; a value that is not a URL at all (a host with no scheme, a typo)
+// leaves every emailed link, Stripe return URL and signature-checked webhook
+// URL built on sand, and that must not sit inside a body that says "ok".
+check('a configured-but-unusable app origin degrades the deploy',
+  /appOriginUnusable/.test(health) && /const\s+degraded\s*=[^\n]*appOriginUnusable/.test(health), true)
+check('…and the deploy says which variable is at fault',
+  /app_url_warning/.test(health), true)
+
+// ═══════════════════════════════════════════════════════════════════════════
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:health — ${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

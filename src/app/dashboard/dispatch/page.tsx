@@ -10,10 +10,14 @@ import { useFlipList } from '@/hooks/useFlipList'
 import { Job, Crew, Technician, DispatchNote, TechnicianStatus, TECHNICIAN_STATUS_LABELS, JOB_STATUS_LABELS, JobStatus } from '@/types'
 import {
   partitionByCrew, laneSequence, laneWorkMinutes, laneLoad, crewCapacityMinutes, crewDayStart,
-  balanceDay, BalancePlan, UNASSIGNED_ID, CrewLaneData,
-  loadCrews, loadTechnicians, loadDispatchNotes, saveDispatchNote, setTechnicianStatus, assignJobCrew,
+  balanceDay, BalancePlan, UNASSIGNED_ID, CrewLaneData, laneLabel, personLaneId, technicianOfLane,
+  loadCrews, loadTechnicians, loadDispatchNotes, saveDispatchNote, setTechnicianStatus, assignJob,
   TECH_STATUS_META, TECH_STATUSES,
 } from '@/lib/crews'
+import {
+  Assignee, UNASSIGNED, assigneeOf, assigneeColumns, assignmentOptions, sameAssignee,
+  ASSIGNMENT_GROUP_LABELS,
+} from '@/lib/crewAssignment'
 import {
   RouteStop, OrderedRouteStop, sequenceRoute, optimizeRoute, geocodeMissingStops,
   computeDayEtas, DayEtas, timeToMinutes, minutesToTime12, roundTripMapsUrl, directionsUrl,
@@ -27,6 +31,7 @@ import {
   DispatchSheet, SheetLane, sheetCsvRows, SHEET_CSV_COLUMNS, openPrintSheet,
 } from '@/lib/dispatchOps'
 import { startVisit, completeVisit, revertVisit } from '@/lib/jobStatus'
+import { checklistBlockMessage } from '@/lib/jobForms'
 import { formatDuration, formatWorked, workdayMinutes } from '@/lib/workDuration'
 import { resolveAutomations, Automations } from '@/lib/comms/automations'
 import { usePageCommands, PageCommand } from '@/components/command/pageCommands'
@@ -72,6 +77,7 @@ import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { Modal } from '@/components/ui/Modal'
 import { CompletionSheet } from '@/components/completion/CompletionSheet'
 import { JobPhotos } from '@/components/photos/JobPhotos'
+import { JobFormsPanel } from '@/components/forms/JobFormsPanel'
 import { saveCompletionRecord } from '@/lib/completion'
 import { BulkActionBar, BulkAction, SelectCheckbox, SelectAllToggle } from '@/components/ui/BulkActions'
 import { toast as notify } from '@/lib/toast'
@@ -112,11 +118,25 @@ function jobStop(j: Job): RouteStop {
   }
 }
 
+// A lane id IS an assignment — the unassigned lane, one person's lane, or a
+// crew — and these two turn it back and forth. Every drop target on this board
+// (drag, arrow keys, a balance move) names a lane; every write names an
+// assignee, so the translation lives in one place rather than at each edge.
+function assigneeOfLane(laneId: string): Assignee {
+  if (laneId === UNASSIGNED_ID) return UNASSIGNED
+  const technicianId = technicianOfLane(laneId)
+  return technicianId ? { kind: 'person', technicianId } : { kind: 'crew', crewId: laneId }
+}
+const laneIdOfAssignee = (a: Assignee): string =>
+  a.kind === 'crew' ? a.crewId : a.kind === 'person' ? personLaneId(a.technicianId) : UNASSIGNED_ID
+
 // Keyboard-move state: one visit "grabbed" off the board, arrows steer it.
 interface KbGrab {
   jobId: string
   homeLaneId: string
-  homeCrewId: string | null
+  /** Where it came FROM, both columns — putting it back on a person is a
+   *  restore a crew_id snapshot could not express. */
+  homeAssignee: Assignee
   homeOrder: string[]
 }
 
@@ -264,8 +284,30 @@ export default function DispatchPage() {
   }, [loading, jobs, date, supabase])
 
   // ── Lanes + per-lane routes (pure derivations of the shared engines) ──
-  const lanes = useMemo(() => partitionByCrew(jobs, crews), [jobs, crews])
+  const lanes = useMemo(() => partitionByCrew(jobs, crews, technicians), [jobs, crews, technicians])
   const activeCrewCount = crews.filter(c => c.is_active).length
+
+  // A visit's home lane, in ONE place: its crew's lane, else the person's own
+  // lane, else Unassigned. It must mirror partitionByCrew's key exactly — a
+  // second spelling of this rule is how a visit assigned to one person ends up
+  // filed under "nobody" on one surface and under their name on another.
+  const laneIdOf = useCallback((j: Job): string =>
+    j.crew_id && crews.some(c => c.id === j.crew_id && c.is_active) ? j.crew_id
+      : j.technician_id && technicians.some(t => t.id === j.technician_id) ? personLaneId(j.technician_id)
+      : UNASSIGNED_ID, [crews, technicians])
+
+  // What to call a lane in a sentence — read from the lanes themselves, so no
+  // surface can invent a second name for one.
+  const laneNameOf = useCallback((laneId: string): string => {
+    const lane = lanes.find(l => l.laneId === laneId)
+    return lane ? laneLabel(lane) : 'Unassigned'
+  }, [lanes])
+
+  // Who an assignment names, for the "→ X" toasts.
+  const assigneeName = useCallback((a: Assignee): string =>
+    a.kind === 'crew' ? crews.find(c => c.id === a.crewId)?.name ?? 'that crew'
+      : a.kind === 'person' ? technicians.find(t => t.id === a.technicianId)?.name ?? 'that person'
+      : 'Unassigned', [crews, technicians])
 
   const laneRoutes = useMemo(() => {
     const out: Record<string, LaneRoute> = {}
@@ -298,7 +340,9 @@ export default function DispatchPage() {
   laneRoutesRef.current = laneRoutes
 
   const activeJobs = useMemo(() => jobs.filter(j => j.status !== 'cancelled'), [jobs])
-  const assignedCount = activeJobs.filter(j => j.crew_id && crews.some(c => c.id === j.crew_id && c.is_active)).length
+  // Assigned = it has a crew OR a person. Counting crews only reported work
+  // handed to somebody by name as nobody's.
+  const assignedCount = activeJobs.filter(j => laneIdOf(j) !== UNASSIGNED_ID).length
   const isToday = date === todayISO()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const nowMin = useMemo(() => isToday ? new Date().getHours() * 60 + new Date().getMinutes() : undefined, [isToday, nowTick])
@@ -321,7 +365,7 @@ export default function DispatchPage() {
     const etaByJob = new Map((route?.etas.stops ?? []).map(s => [s.jobId, s.arrival]))
     return {
       id: lane.laneId,
-      name: lane.crew?.name ?? 'Unassigned',
+      name: laneLabel(lane),
       hex: lane.palette.hex,
       stops: (route?.ordered ?? [])
         .filter(s => s.lat != null && s.lng != null)
@@ -334,9 +378,14 @@ export default function DispatchPage() {
     const out: Record<string, { techs: Technician[]; vehicles: AssignableEquipment[]; note: DispatchNote | null }> = {}
     for (const lane of lanes) {
       out[lane.laneId] = {
-        techs: technicians.filter(t => t.is_active && (lane.crew ? t.crew_id === lane.crew.id : t.crew_id === null)),
+        // A person's lane has a roster of exactly one — them. Vehicles and the
+        // dispatch note stay crew-only facts: equipment is assigned to a crew,
+        // and dispatch_notes.crew_id can never hold a person lane's id.
+        techs: lane.technician
+          ? [lane.technician]
+          : technicians.filter(t => t.is_active && (lane.crew ? t.crew_id === lane.crew.id : t.crew_id === null)),
         vehicles: equipment.filter(e => (lane.crew ? e.crew_id === lane.crew.id : false)),
-        note: notes.find(n => n.crew_id === lane.laneId) ?? null,
+        note: lane.crew ? notes.find(n => n.crew_id === lane.laneId) ?? null : null,
       }
     }
     return out
@@ -363,10 +412,15 @@ export default function DispatchPage() {
   const laneInputs: ConflictLaneInput[] = useMemo(() => lanes.map(lane => {
     const route = laneRoutes[lane.laneId]
     const etaByJob = new Map((route?.etas.stops ?? []).map(s => [s.jobId, s.arrivalMin]))
-    const laneTechs = technicians.filter(t => t.is_active && (lane.crew ? t.crew_id === lane.crew.id : false))
+    // A person's lane is run by that one person. Without this the roster check
+    // below would read "nobody on the crew" for a lane whose whole point is
+    // that somebody was named.
+    const laneTechs = lane.technician
+      ? [lane.technician]
+      : technicians.filter(t => t.is_active && (lane.crew ? t.crew_id === lane.crew.id : false))
     return {
       laneId: lane.laneId,
-      laneName: lane.crew?.name ?? 'Unassigned',
+      laneName: laneLabel(lane),
       isUnassigned: lane.laneId === UNASSIGNED_ID,
       startMin: route?.etas.startMin ?? 0,
       finishMin: route?.etas.finishMin ?? 0,
@@ -382,6 +436,12 @@ export default function DispatchPage() {
       })),
       availableTechs: laneTechs.filter(t => t.status !== 'off').length,
       rosteredTechs: laneTechs.length,
+      isPerson: !!lane.technician,
+      // Somebody on a crew that is ALSO working today already has their workday
+      // counted in that crew's lane. Their personal lane's work still counts;
+      // a second day of capacity for one person would not.
+      capacityCountedElsewhere: !!lane.technician?.crew_id &&
+        lanes.some(l => l.crew?.id === lane.technician?.crew_id && l.jobs.some(j => j.status !== 'cancelled')),
     }
   }), [lanes, laneRoutes, technicians])
 
@@ -421,9 +481,9 @@ export default function DispatchPage() {
           kind: 'running_behind',
           severity: p.behindMin >= 30 ? 'error' : 'warn',
           laneId: lane.laneId,
-          laneName: lane.crew?.name ?? 'Unassigned',
+          laneName: laneLabel(lane),
           jobId: p.nextJobId ?? undefined,
-          message: `${lane.crew?.name ?? 'This crew'} is ~${p.behindMin}m behind their own ETAs — check in before the promises downstream slip.`,
+          message: `${laneLabel(lane)} is ~${p.behindMin}m behind their own ETAs — check in before the promises downstream slip.`,
         })
       }
     }
@@ -432,14 +492,15 @@ export default function DispatchPage() {
 
   const panelConflicts = useMemo(() => [...conflicts, ...behindConflicts], [conflicts, behindConflicts])
 
-  // Per-crew spare minutes for the Move-to menu — the SAME laneLoad the capacity
+  // Per-CREW spare minutes for the Move-to menu — the SAME laneLoad the capacity
   // meters draw, re-read (never recomputed) so the menu and the meter can't
   // disagree. Reassigning used to be a blind pick from a name list; which crew
-  // had room lived in meters scattered across the other cards.
+  // had room lived in meters scattered across the other cards. Keyed by crew id
+  // only: room comes from a crew's capacity row, and a person hasn't got one.
   const crewSpareMin = useMemo(() => {
     const out: Record<string, number> = {}
     for (const lane of lanes) {
-      if (lane.laneId === UNASSIGNED_ID) continue
+      if (!lane.crew) continue
       const r = laneRoutes[lane.laneId]
       if (r) out[lane.laneId] = laneLoad(r.workMin, r.capacityMin).spareMin
     }
@@ -458,8 +519,11 @@ export default function DispatchPage() {
     if (filter.technicianId) {
       const t = technicians.find(x => x.id === filter.technicianId)
       if (!t) return false
+      // Someone's day can sit in two lanes: their crew's, and their own for
+      // visits assigned to them by name. Filtering to one of the two would hide
+      // half of what they are actually expected to do today.
       const home = t.crew_id ?? UNASSIGNED_ID
-      if (home !== lane.laneId) return false
+      if (lane.laneId !== home && lane.laneId !== personLaneId(t.id)) return false
     }
     if (filter.vehicleId) {
       const v = equipment.find(x => x.id === filter.vehicleId)
@@ -493,33 +557,35 @@ export default function DispatchPage() {
     })
   }, [supabase, fetchAll])
 
-  // Move one visit to a crew (null = unassign). `beforeJobId` places it at a
-  // specific slot in the target lane (undefined = end, the legacy behaviour).
-  // `silent` suppresses ONLY the success toast+undo — for the Escape put-back,
-  // which is itself a cancellation: announcing "→ Green crew · Undo" for undoing
-  // reads as a new move that now wants undoing in turn. Errors always toast, and
-  // every real move (drag, arrows, menu) stays loud with its undo.
-  const moveJob = useCallback(async (jobId: string, toCrewId: string | null, beforeJobId?: string | null, opts?: { silent?: boolean }) => {
+  // Move one visit to a crew, to one person, or to nobody. `beforeJobId` places
+  // it at a specific slot in the target lane (undefined = end, the legacy
+  // behaviour). `silent` suppresses ONLY the success toast+undo — for the Escape
+  // put-back, which is itself a cancellation: announcing "→ Green crew · Undo"
+  // for undoing reads as a new move that now wants undoing in turn. Errors always
+  // toast, and every real move (drag, arrows, menu) stays loud with its undo.
+  const moveJob = useCallback(async (jobId: string, to: Assignee, beforeJobId?: string | null, opts?: { silent?: boolean }) => {
     const job = jobs.find(j => j.id === jobId)
-    if (!job || (job.crew_id ?? null) === toCrewId) return
-    const prev = { crew_id: job.crew_id ?? null, route_order: job.route_order ?? null }
-    setJobs(cur => cur.map(j => j.id === jobId ? { ...j, crew_id: toCrewId, route_order: null } : j))
-    const err = await assignJobCrew(supabase, jobId, toCrewId)
+    if (!job || sameAssignee(assigneeOf(job), to)) return
+    // BOTH columns, in the snapshot as in the write: a visit that was one
+    // person's must be restorable to them, and crew_id alone would put it back
+    // as nobody's.
+    const prev = { crew_id: job.crew_id ?? null, technician_id: job.technician_id ?? null, route_order: job.route_order ?? null }
+    setJobs(cur => cur.map(j => j.id === jobId ? { ...j, ...assigneeColumns(to), route_order: null } : j))
+    const err = await assignJob(supabase, jobId, to)
     if (err) {
       setJobs(cur => cur.map(j => j.id === jobId ? { ...j, ...prev } : j))
       notify.error('Could not move the job: ' + err)
       return
     }
     if (beforeJobId !== undefined) {
-      const targetLane = toCrewId ?? UNASSIGNED_ID
+      const targetLane = laneIdOfAssignee(to)
       const rest = (laneRoutesRef.current[targetLane]?.seq ?? []).map(j => j.id).filter(id => id !== jobId)
       const at = beforeJobId ? rest.indexOf(beforeJobId) : -1
       const next = at >= 0 ? [...rest.slice(0, at), jobId, ...rest.slice(at)] : [...rest, jobId]
       applyLaneOrder(next)
     }
     if (opts?.silent) return
-    const toName = toCrewId ? crews.find(c => c.id === toCrewId)?.name ?? 'crew' : 'Unassigned'
-    notify(`${job.customers?.name || job.title} → ${toName}`, {
+    notify(`${job.customers?.name || job.title} → ${assigneeName(to)}`, {
       // Branch on the write: a failed put-back that stays silent leaves the job
       // on the wrong crew while the owner walks away believing it's home. (Same
       // contract verify:undo-contract enforces — these `undo:` option callbacks
@@ -530,7 +596,7 @@ export default function DispatchPage() {
         fetchAll()
       },
     })
-  }, [jobs, crews, supabase, fetchAll, applyLaneOrder])
+  }, [jobs, supabase, fetchAll, applyLaneOrder, assigneeName])
 
   // Reorder within a lane: place the dragged visit before `anchorId` (null = end).
   const reorderWithinLane = useCallback((laneId: string, jobId: string, anchorId: string | null) => {
@@ -600,30 +666,42 @@ export default function DispatchPage() {
     }
   }, [settings.base, supabase, applyLaneOrder])
 
+  // What Balance is allowed to see. Balancing is a CREW capacity tool: person
+  // lanes never enter it, and a visit given to somebody by name never leaves —
+  // that assignment is a deliberate choice by the owner, not slack to even out.
+  // (The database keeps personal assignments off crew lanes, so the job filter
+  // only bites on Unassigned, where a visit whose person left the roster lands.)
+  const balanceLanes = useCallback(() => lanes
+    .filter(lane => !lane.technician)
+    .map(lane => ({
+      laneId: lane.laneId,
+      jobs: lane.jobs.filter(j => !j.technician_id),
+      capacityMin: laneRoutes[lane.laneId]?.capacityMin ?? 0,
+    })), [lanes, laneRoutes])
+
   const openBalance = useCallback(() => {
-    setBalancePlan(balanceDay(lanes.map(l => ({
-      laneId: l.laneId, jobs: l.jobs, capacityMin: laneRoutes[l.laneId]?.capacityMin ?? 0,
-    }))))
-  }, [lanes, laneRoutes])
+    setBalancePlan(balanceDay(balanceLanes()))
+  }, [balanceLanes])
 
   const applyBalance = useCallback(async () => {
     if (!balancePlan || balancePlan.moves.length === 0) { setBalancePlan(null); return }
     setApplyingBalance(true)
     const snapshot = balancePlan.moves.map(m => {
       const j = jobs.find(x => x.id === m.jobId)
-      return { id: m.jobId, crew_id: j?.crew_id ?? null, route_order: j?.route_order ?? null }
+      return { id: m.jobId, crew_id: j?.crew_id ?? null, technician_id: j?.technician_id ?? null, route_order: j?.route_order ?? null }
     })
-    const results = await Promise.all(balancePlan.moves.map(m =>
-      supabase.from('jobs').update({ crew_id: m.toLaneId === UNASSIGNED_ID ? null : m.toLaneId, route_order: null }).eq('id', m.jobId),
-    ))
+    // THE assignment writer rather than a hand-rolled update: it writes both
+    // columns, so a balanced move can never leave a second answer behind.
+    const errs = (await Promise.all(balancePlan.moves.map(m =>
+      assignJob(supabase, m.jobId, assigneeOfLane(m.toLaneId)),
+    ))).filter(Boolean)
     setApplyingBalance(false)
     setBalancePlan(null)
-    const failed = results.find(r => r.error)
-    if (failed?.error) { notify.error('Some moves failed: ' + failed.error.message); fetchAll(); return }
+    if (errs.length > 0) { notify.error('Some moves failed: ' + errs[0]); fetchAll(); return }
     fetchAll()
     notify(`Balanced — ${balancePlan.moves.length} visit${balancePlan.moves.length !== 1 ? 's' : ''} moved.`, {
       undo: async () => {
-        const rs = await Promise.all(snapshot.map(s => supabase.from('jobs').update({ crew_id: s.crew_id, route_order: s.route_order }).eq('id', s.id)))
+        const rs = await Promise.all(snapshot.map(s => supabase.from('jobs').update({ crew_id: s.crew_id, technician_id: s.technician_id, route_order: s.route_order }).eq('id', s.id)))
         const bad = rs.filter(r => r.error).length
         if (bad) notify.error(`${bad} visit${bad !== 1 ? 's' : ''} could not be put back — check the board.`)
         fetchAll()
@@ -632,42 +710,38 @@ export default function DispatchPage() {
   }, [balancePlan, jobs, supabase, fetchAll])
 
   // ── Bulk actions (act on the current selection, then say what happened) ──
-  const bulkAssign = useCallback(async (toCrewId: string | null) => {
-    const targets = bulk.selectedItems.filter(j => (j.crew_id ?? null) !== toCrewId)
+  const bulkAssign = useCallback(async (to: Assignee) => {
+    const targets = bulk.selectedItems.filter(j => !sameAssignee(assigneeOf(j), to))
     if (targets.length === 0) { setAssignPickOpen(false); bulk.clear(); return }
-    setBulkBusy(toCrewId === null ? 'unassign' : 'assign')
-    const snapshot = targets.map(j => ({ id: j.id, crew_id: j.crew_id ?? null, route_order: j.route_order ?? null }))
-    setJobs(cur => cur.map(j => targets.some(t => t.id === j.id) ? { ...j, crew_id: toCrewId, route_order: null } : j))
-    const errs = (await Promise.all(targets.map(t => assignJobCrew(supabase, t.id, toCrewId)))).filter(Boolean)
+    setBulkBusy(to.kind === 'unassigned' ? 'unassign' : 'assign')
+    const snapshot = targets.map(j => ({ id: j.id, crew_id: j.crew_id ?? null, technician_id: j.technician_id ?? null, route_order: j.route_order ?? null }))
+    setJobs(cur => cur.map(j => targets.some(t => t.id === j.id) ? { ...j, ...assigneeColumns(to), route_order: null } : j))
+    const errs = (await Promise.all(targets.map(t => assignJob(supabase, t.id, to)))).filter(Boolean)
     setBulkBusy(null)
     setAssignPickOpen(false)
     bulk.clear()
     if (errs.length > 0) { notify.error(`${errs.length} move${errs.length !== 1 ? 's' : ''} failed: ` + errs[0]); fetchAll(); return }
-    const toName = toCrewId ? crews.find(c => c.id === toCrewId)?.name ?? 'crew' : 'Unassigned'
-    notify(`${targets.length} visit${targets.length !== 1 ? 's' : ''} → ${toName}`, {
+    notify(`${targets.length} visit${targets.length !== 1 ? 's' : ''} → ${assigneeName(to)}`, {
       undo: async () => {
-        const rs = await Promise.all(snapshot.map(s => supabase.from('jobs').update({ crew_id: s.crew_id, route_order: s.route_order }).eq('id', s.id)))
+        const rs = await Promise.all(snapshot.map(s => supabase.from('jobs').update({ crew_id: s.crew_id, technician_id: s.technician_id, route_order: s.route_order }).eq('id', s.id)))
         const bad = rs.filter(r => r.error).length
         if (bad) notify.error(`${bad} visit${bad !== 1 ? 's' : ''} could not be put back — check the board.`)
         fetchAll()
       },
     })
-  }, [bulk, crews, supabase, fetchAll])
+  }, [bulk, supabase, fetchAll, assigneeName])
 
   const bulkOptimize = useCallback(async () => {
     // "Optimize selected" = re-run each touched lane through the ONE optimizer.
     // A lane's ETAs interlock, so ordering a subset in isolation would lie.
-    const laneIds = [...new Set(bulk.selectedItems.map(j => {
-      const cid = j.crew_id ?? null
-      return cid && crews.some(c => c.id === cid && c.is_active) ? cid : UNASSIGNED_ID
-    }))].filter(id => (laneRoutesRef.current[id]?.seq.filter(j => j.status === 'scheduled').length ?? 0) >= 2)
+    const laneIds = [...new Set(bulk.selectedItems.map(laneIdOf))]
+      .filter(id => (laneRoutesRef.current[id]?.seq.filter(j => j.status === 'scheduled').length ?? 0) >= 2)
     if (laneIds.length === 0) { notify('Nothing to optimize — the selected lanes have fewer than 2 open stops.'); return }
     setBulkBusy('optimize')
     for (const id of laneIds) await bestOrderLane(id, { quiet: true })
     setBulkBusy(null)
-    const names = laneIds.map(id => id === UNASSIGNED_ID ? 'Unassigned' : crews.find(c => c.id === id)?.name ?? 'crew')
-    notify.success(`Best order applied to ${names.join(', ')}.`)
-  }, [bulk.selectedItems, crews, bestOrderLane])
+    notify.success(`Best order applied to ${laneIds.map(laneNameOf).join(', ')}.`)
+  }, [bulk.selectedItems, bestOrderLane, laneIdOf, laneNameOf])
 
   const reschedulable = useMemo(() => bulk.selectedItems.filter(j => j.status === 'scheduled'), [bulk.selectedItems])
 
@@ -721,11 +795,15 @@ export default function DispatchPage() {
       if (included.length === 0) return null
       const stats = laneStats(route.etas.startMin, route.etas.finishMin, route.workMin, route.capacityMin)
       return {
-        name: lane.crew?.name ?? 'Unassigned',
+        name: laneLabel(lane),
         hex: lane.palette.hex,
-        techs: technicians.filter(t => t.is_active && (lane.crew ? t.crew_id === lane.crew.id : t.crew_id === null)).map(t => t.name),
+        // A person's sheet is headed by the one name on it; the crew note and
+        // the vehicles stay crew facts (see laneAux).
+        techs: lane.technician
+          ? [lane.technician.name]
+          : technicians.filter(t => t.is_active && (lane.crew ? t.crew_id === lane.crew.id : t.crew_id === null)).map(t => t.name),
         vehicles: equipment.filter(e => lane.crew ? e.crew_id === lane.crew.id : false).map(e => e.name),
-        note: notes.find(n => n.crew_id === lane.laneId)?.body ?? null,
+        note: lane.crew ? notes.find(n => n.crew_id === lane.laneId)?.body ?? null : null,
         startLabel: minutesToTime12(route.etas.startMin),
         finishLabel: route.seq.length > 0 ? route.etas.finish : null,
         driveMin: stats.driveMin,
@@ -886,7 +964,9 @@ export default function DispatchPage() {
           if (target === d.fromLane) {
             reorderWithinLane(target, d.jobId, anchor)
           } else {
-            moveJob(d.jobId, target === UNASSIGNED_ID ? null : target, anchor)
+            // The lane you dropped on IS the assignment — a crew, a person, or
+            // nobody.
+            moveJob(d.jobId, assigneeOfLane(target), anchor)
           }
         }
       }
@@ -914,8 +994,8 @@ export default function DispatchPage() {
     const title = job.customers?.name || job.title
     if (!grabbed && (e.key === 'Enter' || e.key === ' ')) {
       e.preventDefault()
-      setKbGrab({ jobId: job.id, homeLaneId: laneId, homeCrewId: job.crew_id ?? null, homeOrder: (laneRoutes[laneId]?.seq ?? []).map(j => j.id) })
-      setAnnounce(`${title} grabbed. Up and down reorder it, left and right change crews, Enter drops it, Escape puts it back.`)
+      setKbGrab({ jobId: job.id, homeLaneId: laneId, homeAssignee: assigneeOf(job), homeOrder: (laneRoutes[laneId]?.seq ?? []).map(j => j.id) })
+      setAnnounce(`${title} grabbed. Up and down reorder it, left and right move it between crews and people, Enter drops it, Escape puts it back.`)
       return
     }
     if (!grabbed) return
@@ -928,8 +1008,8 @@ export default function DispatchPage() {
       const idx = visibleLanes.findIndex(l => l.laneId === laneId)
       const next = visibleLanes[idx + (e.key === 'ArrowLeft' ? -1 : 1)]
       if (!next) return
-      moveJob(job.id, next.laneId === UNASSIGNED_ID ? null : next.laneId, null)
-      setAnnounce(`${title} moved to ${next.crew?.name ?? 'Unassigned'}.`)
+      moveJob(job.id, assigneeOfLane(next.laneId), null)
+      setAnnounce(`${title} moved to ${laneLabel(next)}.`)
       refocusGrip(job.id)
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault()
@@ -943,7 +1023,7 @@ export default function DispatchPage() {
       ;(async () => {
         // silent: the put-back IS the cancellation — a "→ crew · Undo" toast for
         // it would offer to undo an undo. The aria announcement carries the news.
-        if ((job.crew_id ?? null) !== g.homeCrewId) await moveJob(job.id, g.homeCrewId, null, { silent: true })
+        if (!sameAssignee(assigneeOf(job), g.homeAssignee)) await moveJob(job.id, g.homeAssignee, null, { silent: true })
         applyLaneOrder(g.homeOrder)
         setAnnounce(`${title} put back.`)
         refocusGrip(job.id)
@@ -973,10 +1053,9 @@ export default function DispatchPage() {
   const mapSelectStop = useCallback((jobId: string) => {
     const j = jobs.find(x => x.id === jobId)
     if (!j) return
-    const laneId = j.crew_id && crews.some(c => c.id === j.crew_id && c.is_active) ? j.crew_id : UNASSIGNED_ID
     setView('board')
-    jumpTo(laneId, jobId)
-  }, [jobs, crews, jumpTo])
+    jumpTo(laneIdOf(j), jobId)
+  }, [jobs, laneIdOf, jumpTo])
 
   // If the grabbed visit leaves the day (realtime, another session, a filter on
   // a deleted job), release the keyboard grab instead of steering a phantom.
@@ -1044,17 +1123,17 @@ export default function DispatchPage() {
     return () => document.removeEventListener('keydown', onKey)
   }, [])
 
-  // Would dropping the dragged visit here overbook the receiving crew? Same
+  // Would dropping the dragged visit here overbook whoever receives it? Same
   // numbers as the capacity meter — the ring just says it before the drop.
   const dropWouldOverload = useMemo(() => {
     if (!dragging || !overLane || overLane === UNASSIGNED_ID) return false
     const j = jobs.find(x => x.id === dragging.jobId)
-    const fromLane = j?.crew_id && crews.some(c => c.id === j.crew_id && c.is_active) ? j.crew_id : UNASSIGNED_ID
+    const fromLane = j ? laneIdOf(j) : UNASSIGNED_ID
     if (fromLane === overLane) return false
     const r = laneRoutes[overLane]
     if (!r || r.capacityMin <= 0) return false
     return r.workMin + dragging.durMin > r.capacityMin
-  }, [dragging, overLane, jobs, crews, laneRoutes])
+  }, [dragging, overLane, jobs, laneIdOf, laneRoutes])
 
   // Stable handlers so the memo()'d lane cards only re-render on real changes.
   const setTechStatusStable = useCallback(async (t: Technician, status: TechnicianStatus) => {
@@ -1108,7 +1187,15 @@ export default function DispatchPage() {
     setJobBusy(job.id, true)
     const res = await completeVisit(supabase, job, { notify: automations.job_complete })
     setJobBusy(job.id, false)
-    if (!res.ok) { notify.error('Could not complete the visit: ' + res.error); return }
+    if (!res.ok) {
+      // The completion gate's refusal is instructions, not an error message —
+      // show the checklist sentence, and where to finish it.
+      const gate = checklistBlockMessage(res.error)
+      notify.error(gate
+        ? `${job.customers?.name || job.title} — ${gate} (open its Record sheet to fill the checklist)`
+        : 'Could not complete the visit: ' + res.error)
+      return
+    }
     setJobs(cur => cur.map(j => j.id === job.id ? { ...j, ...res.patch } : j))
     if (res.outcome === 'ran') fetchAll()
     const invoiceCreated = res.invoice?.created === true
@@ -1166,11 +1253,11 @@ export default function DispatchPage() {
   // Overloaded lane → the FIRST move the balance planner would make out of it.
   const overloadMoves = useMemo(() => {
     if (!conflicts.some(c => c.kind === 'overloaded')) return {} as Record<string, BalancePlan['moves'][number]>
-    const plan = balanceDay(lanes.map(l => ({ laneId: l.laneId, jobs: l.jobs, capacityMin: laneRoutes[l.laneId]?.capacityMin ?? 0 })))
+    const plan = balanceDay(balanceLanes())
     const byLane: Record<string, BalancePlan['moves'][number]> = {}
     for (const m of plan.moves) if (!byLane[m.fromLaneId]) byLane[m.fromLaneId] = m
     return byLane
-  }, [conflicts, lanes, laneRoutes])
+  }, [conflicts, balanceLanes])
 
   // Late promise → the timed visits swapped into promise order within their
   // current slots, accepted only if the ETA chain says it actually helps.
@@ -1195,8 +1282,10 @@ export default function DispatchPage() {
       case 'overloaded': {
         const m = overloadMoves[c.laneId]
         if (m) {
-          const toName = m.toLaneId === UNASSIGNED_ID ? 'Unassigned' : crews.find(x => x.id === m.toLaneId)?.name ?? 'crew'
-          return { label: `Move ${m.title} → ${toName}`, run: () => moveJob(m.jobId, m.toLaneId === UNASSIGNED_ID ? null : m.toLaneId) }
+          return {
+            label: `Move ${m.title} → ${laneNameOf(m.toLaneId)}`,
+            run: () => moveJob(m.jobId, assigneeOfLane(m.toLaneId)),
+          }
         }
         return { label: 'Balance day', run: openBalance }
       }
@@ -1224,7 +1313,7 @@ export default function DispatchPage() {
       default:
         return null
     }
-  }, [openBalance, bestOrderLane, settings.base, overloadMoves, promiseFixes, crews, moveJob, applyLaneOrder])
+  }, [openBalance, bestOrderLane, settings.base, overloadMoves, promiseFixes, laneNameOf, moveJob, applyLaneOrder])
 
   // ── Per-crew sheet actions (same buildSheet, scoped to one lane) ──
   const printLane = useCallback((laneId: string) => {
@@ -1247,9 +1336,6 @@ export default function DispatchPage() {
   }, [buildSheet])
 
   // ── Activity feed (derived from timestamps the day already carries) ──
-  const laneIdOf = useCallback((j: Job) =>
-    j.crew_id && crews.some(c => c.id === j.crew_id && c.is_active) ? j.crew_id : UNASSIGNED_ID, [crews])
-
   const feed: ActivityItem[] = useMemo(() => buildActivityFeed(
     jobs.map(j => ({
       id: j.id, title: j.title, customerName: j.customers?.name ?? null, laneId: laneIdOf(j),
@@ -1321,9 +1407,12 @@ export default function DispatchPage() {
   const dispatchWorkdayMin = workdayMinutes(settings.dailyHours)
   const dayNote = notes.find(n => n.crew_id === null)
 
+  // Work can go to a crew OR to one person, so the door stays open when there
+  // are no crews yet but there are people to hand it to.
+  const canAssign = activeCrewCount > 0 || technicians.some(t => t.is_active && !t.archived_at)
   const bulkActions: BulkAction[] = [
-    { key: 'assign', label: 'Assign to crew…', icon: Users, onClick: () => setAssignPickOpen(true), tone: 'primary', hidden: activeCrewCount === 0 },
-    { key: 'unassign', label: 'Unassign', icon: UserMinus, onClick: () => bulkAssign(null), hidden: activeCrewCount === 0 || !bulk.selectedItems.some(j => j.crew_id) },
+    { key: 'assign', label: 'Assign to…', icon: Users, onClick: () => setAssignPickOpen(true), tone: 'primary', hidden: !canAssign },
+    { key: 'unassign', label: 'Unassign', icon: UserMinus, onClick: () => bulkAssign(UNASSIGNED), hidden: !bulk.selectedItems.some(j => j.crew_id || j.technician_id) },
     { key: 'complete', label: 'Mark done', icon: CheckCircle2, onClick: bulkComplete, hidden: !bulk.selectedItems.some(j => j.status === 'scheduled' || j.status === 'in_progress') },
     { key: 'optimize', label: 'Optimize routes', icon: Wand2, onClick: bulkOptimize, disabled: !settings.base },
     { key: 'reschedule', label: 'Reschedule…', icon: CalendarDays, onClick: () => setReschedOpen(true), disabled: reschedulable.length === 0 },
@@ -1439,8 +1528,11 @@ export default function DispatchPage() {
           sub={kpis.done > 0 || kpis.running > 0
             ? `${kpis.done} done${kpis.running > 0 ? ` · ${kpis.running} running` : ''}`
             : kpis.total > 0 ? 'none started yet' : undefined} />
-        <StatTile label="Assigned" value={activeCrewCount ? `${assignedCount}/${activeJobs.length}` : '—'}
-          sub={activeCrewCount ? (assignedCount < activeJobs.length ? 'Balance can place the rest' : 'Everything has a crew') : 'Create crews to assign work'} />
+        <StatTile label="Assigned" value={activeCrewCount > 0 || assignedCount > 0 ? `${assignedCount}/${activeJobs.length}` : '—'}
+          sub={activeCrewCount === 0 && assignedCount === 0 ? 'Create crews to assign work'
+            : assignedCount === activeJobs.length ? 'Everything has a crew or a person'
+            : activeCrewCount > 0 ? 'Balance can place the rest'
+            : `${activeJobs.length - assignedCount} still to hand out`} />
         <StatTile label="Day finish" value={latestFinish != null ? minutesToTime12(latestFinish) : '—'}
           sub={kpis.behindLanes > 0 ? `${kpis.behindLanes} crew${kpis.behindLanes !== 1 ? 's' : ''} running behind` : latestFinish != null ? 'latest crew, est.' : undefined} />
         <StatTile label="Day used" value={kpis.utilizationPct != null ? `${kpis.utilizationPct}%` : '—'}
@@ -1524,7 +1616,7 @@ export default function DispatchPage() {
                     onClick={() => document.getElementById(`dispatch-lane-${lane.laneId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
                     className="shrink-0 inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1.5 text-[11px] font-medium text-ink-muted active:scale-[0.97] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                     <span className={cn('w-1.5 h-1.5 rounded-full', lane.palette.dot)} aria-hidden />
-                    {lane.crew?.name ?? 'Unassigned'}
+                    {laneLabel(lane)}
                     <span className="text-ink-faint tabular-nums">{laneRoutes[lane.laneId]?.seq.length ?? 0}</span>
                     {badge && <AlertTriangle className={cn('w-3 h-3', badge.severity === 'error' ? 'text-red-400' : badge.severity === 'warn' ? 'text-amber-400' : 'text-sky-400')} aria-label={`${badge.count} conflicts`} />}
                   </button>
@@ -1549,6 +1641,7 @@ export default function DispatchPage() {
                 vehicles={laneAux[lane.laneId]?.vehicles ?? []}
                 note={laneAux[lane.laneId]?.note ?? null}
                 crews={crews}
+                roster={technicians}
                 crewSpare={crewSpareMin}
                 workdayMin={dispatchWorkdayMin}
                 nowMin={nowMin}
@@ -1607,7 +1700,9 @@ export default function DispatchPage() {
           dropWouldOverload ? 'border-red-400/60' : 'border-accent/40',
         )}>
           {dragging?.title}
-          {dropWouldOverload && <span className="block text-[10px] font-medium text-red-400">would overbook this crew</span>}
+          {/* "their day", not "this crew" — the lane under the pointer can be
+              one person's. */}
+          {dropWouldOverload && <span className="block text-[10px] font-medium text-red-400">would overbook their day</span>}
         </div>
       </div>
 
@@ -1693,7 +1788,7 @@ export default function DispatchPage() {
             {([
               ['Day', [['[', 'Previous day'], [']', 'Next day'], ['T', 'Today']]],
               ['View', [['B', 'Board'], ['M', 'Map'], ['P', 'Print day sheet'], ['?', 'This help']]],
-              ['Visits', [['J / K', 'Walk down / up the stops'], ['X', 'Select the focused stop'], ['S', 'Start / complete the focused stop'], ['Enter', 'Grab / drop the focused visit'], ['↑ ↓', 'Reorder a grabbed visit'], ['← →', 'Move a grabbed visit between crews'], ['Esc', 'Put a grabbed visit back · cancel a drag · clear selection'], ['Shift+click', 'Select a range']]],
+              ['Visits', [['J / K', 'Walk down / up the stops'], ['X', 'Select the focused stop'], ['S', 'Start / complete the focused stop'], ['Enter', 'Grab / drop the focused visit'], ['↑ ↓', 'Reorder a grabbed visit'], ['← →', 'Move a grabbed visit between crews and people'], ['Esc', 'Put a grabbed visit back · cancel a drag · clear selection'], ['Shift+click', 'Select a range']]],
             ] as [string, [string, string][]][]).map(([group, keys]) => (
               <div key={group}>
                 <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-1.5">{group}</p>
@@ -1722,25 +1817,44 @@ export default function DispatchPage() {
         />
       )}
 
-      {/* Bulk: crew picker */}
+      {/* Bulk: who runs these visits. The ONE chooser builds the list, so the
+          board can only offer what the assignment model allows — a crew, or one
+          person — and each row says what picking it means. Jane appearing under
+          Individuals while also being ON a crew is not a duplicate: they are
+          different answers. */}
       {assignPickOpen && (
         <Modal open onClose={() => setAssignPickOpen(false)} title={`Assign ${bulk.count} visit${bulk.count !== 1 ? 's' : ''}`} icon={Users} size="sm">
           <div className="space-y-1.5">
-            {lanes.filter(l => l.crew?.is_active).map(lane => {
-              const route = laneRoutes[lane.laneId]
-              const load = laneLoad(route?.workMin ?? 0, route?.capacityMin ?? 0)
-              return (
-                <button key={lane.laneId} type="button" onClick={() => bulkAssign(lane.laneId)} disabled={bulkBusy != null}
-                  className="w-full flex items-center gap-2.5 rounded-lg border border-border bg-surface px-3 py-2.5 text-left text-sm hover:border-border-strong hover:bg-bg-tertiary transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                  <span className={cn('w-2 h-2 rounded-full shrink-0', lane.palette.dot)} aria-hidden />
-                  <span className="font-semibold text-ink truncate">{lane.crew!.name}</span>
-                  <span className={cn('ml-auto text-[11px] tabular-nums shrink-0',
-                    load.state === 'overloaded' ? 'text-red-400' : load.state === 'full' ? 'text-amber-400' : 'text-ink-faint')}>
-                    {Math.round((route?.workMin ?? 0) / 60 * 10) / 10}h booked{load.state === 'overloaded' ? ' · over' : ''}
-                  </span>
-                </button>
-              )
-            })}
+            {assignmentOptions({ crews, technicians })
+              // Unassigning is its own button on the bulk bar — listing it here
+              // among the destinations reads like somewhere to send work.
+              .filter(o => o.group !== 'none')
+              .map((o, i, all) => {
+                const laneId = laneIdOfAssignee(o.assignee)
+                const lane = lanes.find(l => l.laneId === laneId)
+                const route = laneRoutes[laneId]
+                const load = route ? laneLoad(route.workMin, route.capacityMin) : null
+                const heading = i === 0 || all[i - 1].group !== o.group ? ASSIGNMENT_GROUP_LABELS[o.group] : null
+                return (
+                  <div key={o.value}>
+                    {heading && (
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint px-1 pt-1.5 pb-1">{heading}</p>
+                    )}
+                    <button type="button" onClick={() => bulkAssign(o.assignee)} disabled={bulkBusy != null || o.disabled}
+                      className="w-full flex items-center gap-2.5 rounded-lg border border-border bg-surface px-3 py-2.5 text-left text-sm hover:border-border-strong hover:bg-bg-tertiary transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                      <span className={cn('w-2 h-2 rounded-full shrink-0', lane?.palette.dot ?? 'bg-ink-faint')} aria-hidden />
+                      <span className="min-w-0">
+                        <span className="block font-semibold text-ink truncate">{o.label}</span>
+                        {o.hint && <span className="block text-[11px] text-ink-faint leading-snug line-clamp-2">{o.hint}</span>}
+                      </span>
+                      <span className={cn('ml-auto text-[11px] tabular-nums shrink-0',
+                        load?.state === 'overloaded' ? 'text-red-400' : load?.state === 'full' ? 'text-amber-400' : 'text-ink-faint')}>
+                        {Math.round((route?.workMin ?? 0) / 60 * 10) / 10}h booked{load?.state === 'overloaded' ? ' · over' : ''}
+                      </span>
+                    </button>
+                  </div>
+                )
+              })}
           </div>
         </Modal>
       )}
@@ -1784,12 +1898,21 @@ export default function DispatchPage() {
             onSave={record => saveCompletionRecord(supabase, job, record)}
             onSaved={fetchAll}
             photos={
-              <JobPhotos
-                propertyId={job.property_id ?? null}
-                jobId={job.id}
-                customerId={job.customer_id ?? null}
-                variant="visit"
-              />
+              <>
+                <JobPhotos
+                  propertyId={job.property_id ?? null}
+                  jobId={job.id}
+                  customerId={job.customer_id ?? null}
+                  variant="visit"
+                />
+                {/* The visit's checklist rides the same sheet — the record of
+                    what was required sits beside the record of what was done.
+                    The panel owns its own loads/writes; the sheet stays the
+                    two-field editor it always was. */}
+                <div className="mt-3 pt-3 border-t border-border">
+                  <JobFormsPanel job={job} onChanged={fetchAll} />
+                </div>
+              </>
             }
           />
         )
@@ -1802,7 +1925,7 @@ export default function DispatchPage() {
 // memo()'d: with the drag ghost off React state, a pointer drag re-renders a
 // lane only when its own drop target changes — never per pointer move.
 const CrewLaneCard = memo(function CrewLaneCard({
-  lane, route, technicians, vehicles, note, crews, crewSpare, nowMin, base, index, conflictBadge, savingsKm, statusVisible,
+  lane, route, technicians, vehicles, note, crews, roster, crewSpare, nowMin, base, index, conflictBadge, savingsKm, statusVisible,
   isDropTarget, dropOverload, dropAnchor, dragging, kbGrabbedId, flashJobId, selectedSet, onToggleSelect,
   onDragHandleDown, onGripKeyDown, onNudge, onMoveTo, onBestOrder, optimizing, onSetTechStatus, onSaveNote,
   statusBusy, onQuickStart, onQuickComplete, onRecord, onPrintLane, onCopyItinerary, workdayMin,
@@ -1813,12 +1936,16 @@ const CrewLaneCard = memo(function CrewLaneCard({
   workdayMin: number
   lane: CrewLaneData
   route: LaneRoute | undefined
+  /** Who is on THIS lane — a crew's members, or the one person whose lane it is. */
   technicians: Technician[]
   vehicles: AssignableEquipment[]
   note: DispatchNote | null
   crews: Crew[]
+  /** The whole roster — the Move-to menu offers individuals as well as crews. */
+  roster: Technician[]
   /** crew id → spare minutes today (laneLoad.spareMin) — the Move-to menu's
-   *  room labels. Other lanes' loads are otherwise invisible from this card. */
+   *  room labels. Other lanes' loads are otherwise invisible from this card.
+   *  Crews only: room comes from a capacity row and a person hasn't got one. */
   crewSpare: Record<string, number>
   nowMin?: number
   base: Coord | null
@@ -1837,7 +1964,7 @@ const CrewLaneCard = memo(function CrewLaneCard({
   onDragHandleDown: (e: React.PointerEvent, job: Job, laneId: string) => void
   onGripKeyDown: (e: React.KeyboardEvent, job: Job, laneId: string) => void
   onNudge: (laneId: string, jobId: string, dir: -1 | 1) => void
-  onMoveTo: (jobId: string, crewId: string | null) => void
+  onMoveTo: (jobId: string, to: Assignee) => void
   onBestOrder: (laneId: string) => void
   optimizing: boolean
   onSetTechStatus: (t: Technician, s: TechnicianStatus) => void
@@ -1865,6 +1992,11 @@ const CrewLaneCard = memo(function CrewLaneCard({
   // O(1) stop-number lookups — indexOf per row was quadratic on big days.
   const orderIdx = new Map(seq.map((j, i) => [j.id, i]))
   const isUnassigned = lane.laneId === UNASSIGNED_ID
+  // Notes and vehicles belong to a CREW; a person's lane has neither, so the
+  // note editor would be a box whose every save fails (dispatch_notes.crew_id
+  // cannot hold a person lane's id).
+  const isCrewLane = lane.crew != null
+  const laneName = laneLabel(lane)
   const cancelledCount = lane.jobs.filter(j => j.status === 'cancelled').length
   // Reorders glide instead of teleporting (FLIP; inert under reduced motion).
   const flipRef = useFlipList<HTMLDivElement>(visibleSeq.map(j => j.id).join(','))
@@ -1883,6 +2015,19 @@ const CrewLaneCard = memo(function CrewLaneCard({
   const sinceMin = (iso: string | null | undefined): number | null =>
     iso ? Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000)) : null
   const fmtSince = (m: number) => (m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`)
+  // The room a CREW destination carries in the Move-to menu: the job's minutes
+  // against that crew's spare, from the same laneLoad the capacity meters draw.
+  // "Move to Green — 2.1h free" is an informed reassignment; a bare name list
+  // made the owner open other cards to find out. Takes a crew because only a
+  // crew HAS spare — a person has no capacity row, and quoting the business
+  // default as "their spare" would invent a limit nobody set.
+  const crewRoom = (c: Crew): string => {
+    const spare = crewSpare[c.id]
+    return spare == null ? ''
+      : spare < 0 ? ` — over by ${Math.abs(spare)}m`
+      : spare >= 60 ? ` — ${Math.round(spare / 60 * 10) / 10}h free`
+      : ` — ${spare}m free`
+  }
 
   const timelineStops: TimelineStop[] = seq.map(j => ({
     jobId: j.id,
@@ -1902,7 +2047,7 @@ const CrewLaneCard = memo(function CrewLaneCard({
     <section
       id={`dispatch-lane-${lane.laneId}`}
       data-lane={lane.laneId}
-      aria-label={`${lane.crew?.name ?? 'Unassigned'} lane`}
+      aria-label={`${laneName} lane`}
       className={cn(
         'rounded-card border bg-bg-secondary p-4 space-y-3 animate-rise transition-shadow scroll-mt-14',
         index < 6 && `stagger-${index + 1}`,
@@ -1915,7 +2060,7 @@ const CrewLaneCard = memo(function CrewLaneCard({
       {/* Lane header */}
       <div className="flex items-center gap-2 min-w-0">
         <span className={cn('w-2.5 h-2.5 rounded-full shrink-0', lane.palette.dot)} aria-hidden />
-        <h2 className="text-sm font-bold tracking-tight text-ink truncate">{lane.crew?.name ?? 'Unassigned'}</h2>
+        <h2 className="text-sm font-bold tracking-tight text-ink truncate">{laneName}</h2>
         {hasRunning && (
           <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse shrink-0" title="On a job right now" aria-label="On a job right now" />
         )}
@@ -1954,7 +2099,7 @@ const CrewLaneCard = memo(function CrewLaneCard({
           reliably below the fold. Read-only here, from the SAVED body only
           (never NoteBox's in-flight draft — that would tangle with its awaited-
           save contract); the editor at the bottom stays the one writer. */}
-      {!isUnassigned && note?.body?.trim() && (
+      {isCrewLane && note?.body?.trim() && (
         <p className="text-[11px] text-amber-300/90 flex items-start gap-1.5 min-w-0" title={note.body.trim()}>
           <StickyNote className="w-3 h-3 shrink-0 mt-0.5" aria-hidden />
           <span className="line-clamp-2 whitespace-pre-wrap break-words">{note.body.trim()}</span>
@@ -2047,7 +2192,12 @@ const CrewLaneCard = memo(function CrewLaneCard({
         <>
           {isDropTarget && dropAnchor === null && dropLine}
           <InlineEmpty icon={Radio} className="py-5">
-            {seq.length > 0 ? `All ${seq.length} hidden by filters.` : isUnassigned ? 'Nothing unassigned — drop a visit here to pull it off a crew.' : 'No visits — drag one in, or Balance the day.'}
+            {seq.length > 0 ? `All ${seq.length} hidden by filters.`
+              : isUnassigned ? 'Nothing unassigned — drop a visit here to pull it off a crew.'
+              // Balance only ever fills CREW lanes, so offering it here would
+              // point at a button that will never put work on this person.
+              : isCrewLane ? 'No visits — drag one in, or Balance the day.'
+              : 'No visits — drag one in.'}
           </InlineEmpty>
         </>
       ) : (
@@ -2062,6 +2212,14 @@ const CrewLaneCard = memo(function CrewLaneCard({
             const isNext = progress?.nextJobId === job.id && job.status !== 'completed'
             const legKm = showLegs ? legKmByJob.get(job.id) ?? null : null
             const legMin = legKm != null ? legMinutes(legKm) : null
+            // Where this visit could go instead, from THE chooser: a crew, one
+            // person, or nobody — each with the line that says what picking it
+            // means, and disabled where the crew is deactivated or the person is
+            // off the roster. Unassign sorts last so it can't be misclicked
+            // between two destinations.
+            const current = assigneeOf(job)
+            const destinations = assignmentOptions({ crews, technicians: roster, current })
+              .filter(o => !sameAssignee(o.assignee, current))
             const menuItems: MenuItem[] = [
               ...(job.status === 'scheduled' ? [{
                 key: 'done', label: 'Mark done (skip check-in)', icon: CheckCircle2, onSelect: () => onQuickComplete(job),
@@ -2074,21 +2232,21 @@ const CrewLaneCard = memo(function CrewLaneCard({
                 icon: NotebookPen,
                 onSelect: () => onRecord(job),
               } as MenuItem,
-              // Each destination carries its room: the job's own minutes against
-              // the crew's spare, from the same laneLoad the capacity meters
-              // draw. "Move to Green — 2.1h free" is an informed reassignment;
-              // a bare name list made the owner open other cards to find out.
-              ...crews.filter(c => c.is_active && c.id !== job.crew_id).map((c): MenuItem => {
-                const spare = crewSpare[c.id]
-                const room = spare == null ? ''
-                  : spare < 0 ? ` — over by ${Math.abs(spare)}m`
-                  : spare >= 60 ? ` — ${Math.round(spare / 60 * 10) / 10}h free`
-                  : ` — ${spare}m free`
-                return {
-                  key: c.id, label: `Move to ${c.name}${room}`, icon: Users, onSelect: () => onMoveTo(job.id, c.id),
-                }
-              }),
-              ...(job.crew_id ? [{ key: 'unassign', label: 'Unassign', icon: UserMinus, onSelect: () => onMoveTo(job.id, null) } as MenuItem] : []),
+              // Crew destinations carry their room (crewRoom); a person carries
+              // the chooser's own line about what picking them means.
+              ...[...destinations.filter(o => o.group !== 'none'), ...destinations.filter(o => o.group === 'none')]
+                .map((o): MenuItem => {
+                  const a = o.assignee
+                  const crew = a.kind === 'crew' ? crews.find(c => c.id === a.crewId) : undefined
+                  return {
+                    key: o.value,
+                    label: a.kind === 'unassigned' ? 'Unassign' : `Move to ${o.label}${crew ? crewRoom(crew) : ''}`,
+                    description: o.hint ?? undefined,
+                    icon: a.kind === 'unassigned' ? UserMinus : a.kind === 'person' ? HardHat : Users,
+                    disabled: o.disabled,
+                    onSelect: () => onMoveTo(job.id, a),
+                  }
+                }),
               ...(job.properties?.address || (job.properties?.lat != null) ? [{
                 key: 'directions', label: 'Directions', icon: Navigation,
                 onSelect: () => window.open(directionsUrl({ lat: job.properties?.lat ?? null, lng: job.properties?.lng ?? null, address: job.properties?.address }, base), '_blank'),
@@ -2126,7 +2284,7 @@ const CrewLaneCard = memo(function CrewLaneCard({
                     className={cn('shrink-0 cursor-grab active:cursor-grabbing touch-none rounded p-0.5 -m-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                       grabbed ? 'text-accent' : 'text-ink-faint hover:text-ink')}
                     title="Drag to move — or press Enter, then use the arrows"
-                    aria-label={`Move ${job.customers?.name || job.title}. Press Enter to grab, then arrows to reorder or change crews.`}
+                    aria-label={`Move ${job.customers?.name || job.title}. Press Enter to grab, then arrows to reorder it or move it between crews and people.`}
                   >
                     <GripVertical className="w-4 h-4" />
                   </button>
@@ -2224,7 +2382,10 @@ const CrewLaneCard = memo(function CrewLaneCard({
                     </button>
                   </div>
                   {menuItems.length > 0 && (
-                    <Menu width={220} align="end" ariaLabel="Visit actions" items={menuItems}>
+                    // Wider than the other menus on purpose: each destination
+                    // now carries the line that says what picking it means, and
+                    // a clamped hint is a hint nobody reads.
+                    <Menu width={280} align="end" ariaLabel="Visit actions" items={menuItems}>
                       {({ toggle, triggerProps }) => (
                         <button type="button" onClick={toggle} {...triggerProps} aria-label="Visit actions"
                           className="shrink-0 text-ink-faint hover:text-ink rounded px-1.5 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><MoreHorizontal className="w-4 h-4" /></button>
@@ -2258,7 +2419,7 @@ const CrewLaneCard = memo(function CrewLaneCard({
         <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-border">
           <Button variant="ghost" size="sm" onClick={() => onBestOrder(lane.laneId)} loading={optimizing}
             disabled={seq.filter(j => j.status === 'scheduled').length < 2 || !base}
-            title={base ? 'Reorder this crew’s stops into the best route' : 'Set a base address in Settings first'}>
+            title={base ? `Reorder ${laneName}’s stops into the best route` : 'Set a base address in Settings first'}>
             <Wand2 className="w-3.5 h-3.5" /> Best order
           </Button>
           {savingsKm > 0 && !optimizing && (
@@ -2280,14 +2441,14 @@ const CrewLaneCard = memo(function CrewLaneCard({
           {seq.length > 0 && (
             <>
               <button type="button" onClick={() => onCopyItinerary(lane.laneId)}
-                title="Copy this crew's itinerary as text — paste it into a message"
-                aria-label={`Copy ${lane.crew?.name ?? 'crew'} itinerary`}
+                title={`Copy ${laneName}’s itinerary as text — paste it into a message`}
+                aria-label={`Copy ${laneName} itinerary`}
                 className="inline-flex items-center text-ink-faint hover:text-ink px-1.5 py-1 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                 <Copy className="w-3.5 h-3.5" />
               </button>
               <button type="button" onClick={() => onPrintLane(lane.laneId)}
-                title="Print this crew's sheet only"
-                aria-label={`Print ${lane.crew?.name ?? 'crew'} sheet`}
+                title={`Print ${laneName}’s sheet only`}
+                aria-label={`Print ${laneName} sheet`}
                 className="inline-flex items-center text-ink-faint hover:text-ink px-1.5 py-1 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                 <Printer className="w-3.5 h-3.5" />
               </button>
@@ -2298,8 +2459,10 @@ const CrewLaneCard = memo(function CrewLaneCard({
           )}
         </div>
       )}
-      {!isUnassigned && (
-        <NoteBox compact icon={StickyNote} placeholder={`Note for ${lane.crew?.name ?? 'this crew'}…`}
+      {/* Crew lanes only — see isCrewLane. A person's instructions belong on the
+          visit itself, which every one of their stops already shows. */}
+      {isCrewLane && (
+        <NoteBox compact icon={StickyNote} placeholder={`Note for ${laneName}…`}
           value={note?.body ?? ''} updatedAt={note?.updated_at ?? null} onSave={body => onSaveNote(lane.laneId, body)} />
       )}
     </section>
@@ -2435,7 +2598,10 @@ function BalanceModal({ plan, lanes, applying, onApply, onClose }: {
   onApply: () => void
   onClose: () => void
 }) {
-  const laneName = (id: string) => lanes.find(l => l.laneId === id)?.crew?.name ?? 'Unassigned'
+  const laneName = (id: string) => {
+    const lane = lanes.find(l => l.laneId === id)
+    return lane ? laneLabel(lane) : 'Unassigned'
+  }
   const laneDot = (id: string) => lanes.find(l => l.laneId === id)?.palette.dot ?? 'bg-ink-faint'
   const fmtH = (min: number) => `${Math.round(min / 60 * 10) / 10}h`
   return (

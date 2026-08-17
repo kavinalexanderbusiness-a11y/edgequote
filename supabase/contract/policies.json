@@ -883,6 +883,86 @@
   "cmd": "DELETE",
   "qual": "(auth.uid() = user_id)",
   "roles": "{public}",
+  "tablename": "form_template_fields",
+  "permissive": "PERMISSIVE",
+  "policyname": "form_template_fields: delete own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "INSERT",
+  "qual": null,
+  "roles": "{public}",
+  "tablename": "form_template_fields",
+  "permissive": "PERMISSIVE",
+  "policyname": "form_template_fields: insert own",
+  "schemaname": "public",
+  "with_check": "(auth.uid() = user_id)"
+ },
+ {
+  "cmd": "SELECT",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "form_template_fields",
+  "permissive": "PERMISSIVE",
+  "policyname": "form_template_fields: select own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "UPDATE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "form_template_fields",
+  "permissive": "PERMISSIVE",
+  "policyname": "form_template_fields: update own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "DELETE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "form_templates",
+  "permissive": "PERMISSIVE",
+  "policyname": "form_templates: delete own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "INSERT",
+  "qual": null,
+  "roles": "{public}",
+  "tablename": "form_templates",
+  "permissive": "PERMISSIVE",
+  "policyname": "form_templates: insert own",
+  "schemaname": "public",
+  "with_check": "(auth.uid() = user_id)"
+ },
+ {
+  "cmd": "SELECT",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "form_templates",
+  "permissive": "PERMISSIVE",
+  "policyname": "form_templates: select own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "UPDATE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "form_templates",
+  "permissive": "PERMISSIVE",
+  "policyname": "form_templates: update own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "DELETE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
   "tablename": "holidays",
   "permissive": "PERMISSIVE",
   "policyname": "holidays_delete",
@@ -1036,6 +1116,116 @@
   "tablename": "invoices",
   "permissive": "PERMISSIVE",
   "policyname": "invoices: update own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "DELETE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "job_form_response_photos",
+  "permissive": "PERMISSIVE",
+  "policyname": "job_form_response_photos: delete own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "INSERT",
+  "qual": null,
+  "roles": "{public}",
+  "tablename": "job_form_response_photos",
+  "permissive": "PERMISSIVE",
+  "policyname": "job_form_response_photos: insert own",
+  "schemaname": "public",
+  "with_check": "(auth.uid() = user_id)"
+ },
+ {
+  "cmd": "SELECT",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "job_form_response_photos",
+  "permissive": "PERMISSIVE",
+  "policyname": "job_form_response_photos: select own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "DELETE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "job_form_responses",
+  "permissive": "PERMISSIVE",
+  "policyname": "job_form_responses: delete own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "INSERT",
+  "qual": null,
+  "roles": "{public}",
+  "tablename": "job_form_responses",
+  "permissive": "PERMISSIVE",
+  "policyname": "job_form_responses: insert own",
+  "schemaname": "public",
+  "with_check": "(auth.uid() = user_id)"
+ },
+ {
+  "cmd": "SELECT",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "job_form_responses",
+  "permissive": "PERMISSIVE",
+  "policyname": "job_form_responses: select own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "UPDATE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "job_form_responses",
+  "permissive": "PERMISSIVE",
+  "policyname": "job_form_responses: update own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "DELETE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "job_forms",
+  "permissive": "PERMISSIVE",
+  "policyname": "job_forms: delete own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "INSERT",
+  "qual": null,
+  "roles": "{public}",
+  "tablename": "job_forms",
+  "permissive": "PERMISSIVE",
+  "policyname": "job_forms: insert own",
+  "schemaname": "public",
+  "with_check": "(auth.uid() = user_id)"
+ },
+ {
+  "cmd": "SELECT",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "job_forms",
+  "permissive": "PERMISSIVE",
+  "policyname": "job_forms: select own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "UPDATE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "job_forms",
+  "permissive": "PERMISSIVE",
+  "policyname": "job_forms: update own",
   "schemaname": "public",
   "with_check": null
  },
@@ -2271,6 +2461,46 @@
  },
  {
   "cmd": "DELETE",
+  "qual": "((auth.uid() = user_id) AND (EXISTS ( SELECT 1\n   FROM quotes q\n  WHERE ((q.id = quote_addons.quote_id) AND (q.user_id = auth.uid()) AND (q.status = ANY (ARRAY['draft'::text, 'sent'::text]))))))",
+  "roles": "{public}",
+  "tablename": "quote_addons",
+  "permissive": "PERMISSIVE",
+  "policyname": "quote_addons: delete own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "INSERT",
+  "qual": null,
+  "roles": "{public}",
+  "tablename": "quote_addons",
+  "permissive": "PERMISSIVE",
+  "policyname": "quote_addons: insert own",
+  "schemaname": "public",
+  "with_check": "((auth.uid() = user_id) AND (EXISTS ( SELECT 1\n   FROM quotes q\n  WHERE ((q.id = quote_addons.quote_id) AND (q.user_id = auth.uid()) AND (q.status = ANY (ARRAY['draft'::text, 'sent'::text]))))))"
+ },
+ {
+  "cmd": "SELECT",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "quote_addons",
+  "permissive": "PERMISSIVE",
+  "policyname": "quote_addons: select own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "UPDATE",
+  "qual": "((auth.uid() = user_id) AND (EXISTS ( SELECT 1\n   FROM quotes q\n  WHERE ((q.id = quote_addons.quote_id) AND (q.user_id = auth.uid()) AND (q.status = ANY (ARRAY['draft'::text, 'sent'::text]))))))",
+  "roles": "{public}",
+  "tablename": "quote_addons",
+  "permissive": "PERMISSIVE",
+  "policyname": "quote_addons: update own",
+  "schemaname": "public",
+  "with_check": "(auth.uid() = user_id)"
+ },
+ {
+  "cmd": "DELETE",
   "qual": "(auth.uid() = user_id)",
   "roles": "{public}",
   "tablename": "quote_options",
@@ -3020,6 +3250,16 @@
   "with_check": null
  },
  {
+  "cmd": "SELECT",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "technician_crew_history",
+  "permissive": "PERMISSIVE",
+  "policyname": "technician_crew_history: select own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
   "cmd": "DELETE",
   "qual": "(auth.uid() = user_id)",
   "roles": "{public}",
@@ -3320,14 +3560,44 @@
   "with_check": null
  },
  {
-  "cmd": "SELECT",
-  "qual": "(bucket_id = 'booking-uploads'::text)",
-  "roles": "{authenticated}",
-  "tablename": "objects",
+  "cmd": "DELETE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "worker_availability",
   "permissive": "PERMISSIVE",
-  "policyname": "booking-uploads: read own",
-  "schemaname": "storage",
+  "policyname": "worker_availability: delete own",
+  "schemaname": "public",
   "with_check": null
+ },
+ {
+  "cmd": "INSERT",
+  "qual": null,
+  "roles": "{public}",
+  "tablename": "worker_availability",
+  "permissive": "PERMISSIVE",
+  "policyname": "worker_availability: insert own",
+  "schemaname": "public",
+  "with_check": "(auth.uid() = user_id)"
+ },
+ {
+  "cmd": "SELECT",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "worker_availability",
+  "permissive": "PERMISSIVE",
+  "policyname": "worker_availability: select own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "UPDATE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "worker_availability",
+  "permissive": "PERMISSIVE",
+  "policyname": "worker_availability: update own",
+  "schemaname": "public",
+  "with_check": "(auth.uid() = user_id)"
  },
  {
   "cmd": "INSERT",

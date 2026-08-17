@@ -304,6 +304,10 @@ export interface Job {
   // Which crew runs this visit (RUN-2026-07-15-dispatch-crews). null = unassigned —
   // the single-crew status quo. Orthogonal to crew_size, which stays headcount.
   crew_id?: string | null
+  // The OTHER half of the one assignment truth: this visit is one named person's.
+  // A visit carries a crew or a person, never both (jobs_one_assignee enforces it
+  // in the database). Read them through lib/crewAssignment, never separately.
+  technician_id?: string | null
   // `email` joined the pick for change orders: whether an approval ask can be
   // DELIVERED at all is "phone or email", and a phone-only test would have hidden
   // the Send button from every email-only customer.
@@ -364,6 +368,23 @@ export interface Crew {
   capacity_minutes: number | null // explicit daily capacity; null = derive from window
   is_active: boolean
   sort_order: number
+  /** Optional crew lead — a MEMBER wearing a hat, not a rank. The database keeps
+   *  the pointer honest: it must be an active member of this crew, and it clears
+   *  itself the moment they leave the crew or the roster. Never a pay grade. */
+  lead_technician_id?: string | null
+}
+
+/** One append-only fact: as of `changed_at`, this person's crew became `crew_id`
+ *  (null = no crew). Written only by a database trigger — no client role may
+ *  insert, update or delete one. It exists so that moving somebody between crews
+ *  today cannot restate which crew they belonged to when last week's work
+ *  happened. See lib/crewAssignment.crewIdAsOf. */
+export interface CrewMembershipChange {
+  id: string
+  user_id: string
+  technician_id: string
+  crew_id: string | null
+  changed_at: string
 }
 
 export type TechnicianStatus = 'available' | 'en_route' | 'on_job' | 'break' | 'off'
@@ -482,6 +503,40 @@ export interface PtoEntry {
   /** Set when this row was generated from the holiday calendar. */
   holiday_id: string | null
   notes: string | null
+  /** Session 67. 'approved' = counts against planning availability — and the
+   *  default, because an owner BOOKING time off is the approval. 'requested' =
+   *  a worker asked and nobody has decided; it changes no plan. 'declined' =
+   *  kept as a record, never subtracts anyone, never blocks a later booking. */
+  status: PtoStatus
+  decided_at: string | null
+}
+
+export type PtoStatus = 'requested' | 'approved' | 'declined'
+
+export const PTO_STATUS_LABELS: Record<PtoStatus, string> = {
+  requested: 'Requested',
+  approved: 'Approved',
+  declined: 'Declined',
+}
+
+// ── A worker's standard week ─────────────────────────────────────────────────
+// Session 67. NO ROWS for a worker means their availability is ASSUMED, not
+// that they never work — surfaces must label the assumption. A worker who HAS
+// rows works only the weekdays holding an `available` one. Dated exceptions are
+// PtoEntry rows, never edits here: changing someone's standard Monday next
+// month must not rewrite the Mondays already worked.
+export interface WorkerAvailability {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  technician_id: string
+  /** 0 = Sunday … 6 = Saturday. */
+  weekday: number
+  available: boolean
+  /** 'HH:mm[:ss]'. Both set when available, both null when not. */
+  start_time: string | null
+  end_time: string | null
 }
 
 /** THE holiday calendar for the business. Payroll reads it; nothing guesses it. */
@@ -603,6 +658,11 @@ export interface JobFormValues {
   notes: string
   actual_minutes: number
   price: number
+  /** Who is coming — the two assignment columns, written together and never
+   *  independently (see lib/crewAssignment). Optional so existing callers that
+   *  do not offer the chooser keep working; absent means "leave as it is". */
+  crew_id?: string | null
+  technician_id?: string | null
 }
 
 export const JOB_STATUS_LABELS: Record<JobStatus, string> = {
@@ -1211,6 +1271,12 @@ export interface Quote {
   issued_date: string | null
   property_id: string | null
   user_id: string
+  // The online-booking capture (submit_booking writes it; null everywhere else).
+  // Non-null on a DRAFT is what makes that draft a LEAD (lib/leadResponse door 3)
+  // rather than owner work-in-progress — which is why the priority queue's
+  // quote_drafts row excludes it. Shape is the booking payload; nothing here
+  // reads inside it, so it stays unknown.
+  lead_meta?: unknown
   customers?: Pick<Customer, 'id' | 'name' | 'email' | 'phone'>
 }
 
@@ -1685,6 +1751,10 @@ export interface ServiceTemplate {
   // then require behavioural cadence evidence (lib/serviceRecurrence). Never
   // inferred from the service's name.
   recurrence: 'one_time' | 'recurring_ok' | 'usually_recurring' | null
+  // Default checklist (Job Forms V1, Session 69): visits created for this
+  // service carry it. Resolved lazily at attach time — changing it never
+  // rewrites a form already minted on a visit. null = no checklist.
+  form_template_id: string | null
 }
 
 export interface ServiceTemplateFormValues {
@@ -1705,6 +1775,8 @@ export interface ServiceTemplateFormValues {
   // '' = not set (maps to null on submit) — same blank-vs-zero discipline as
   // the cost fields above.
   recurrence: string
+  // '' = no default checklist (maps to null on submit).
+  form_template_id: string
 }
 
 // ── Service bundles ──────────────────────────────────────────────────────────
