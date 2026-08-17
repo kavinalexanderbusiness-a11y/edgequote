@@ -118,18 +118,30 @@ const MUTATIONS = [
     name: 'the media door stops authorising',
     why: 'reading work instructions would need only a job id',
     file: MEDIA,
-    // The POST door specifically — GET has an identically-spelled call.
-    from: "  // ⭐ THE canonical door — active worker, this worker's tenant, then crew OR\n  // by-name assignment. One call, the same answer every other worker door gives.\n  const auth = await authorizeWorkerVisit(admin, user.id, jobId)",
-    to: '  const auth = { ok: true, worker: t, visit: { jobId, employerId: t.employerId } } as any',
+    // ⚠️ ASCII-only, and made unique to the POST door by the trailing
+    // `const t = auth.worker` (GET has an identically spelled authorise call).
+    // Anchors that quote prose break on a curly apostrophe or an em dash and
+    // then silently do nothing.
+    from: `  const auth = await authorizeWorkerVisit(admin, user.id, jobId)
+  if (!auth.ok) {
+    return NextResponse.json(
+      { error: WORKER_DENIAL_MESSAGE[auth.denial] },
+      { status: WORKER_DENIAL_STATUS[auth.denial] },
+    )
+  }
+  const t = auth.worker`,
+    to: `  const auth = { ok: true, visit: { jobId, employerId: null } } as any
+  const t = { technicianId: null, employerId: null, crewId: null } as any`,
   },
   {
     name: 'a crew STORAGE policy is added to the private bucket',
     why: 'per-object policies re-derive assignment by parsing a path — a fifth copy, and the one that lets a worker enumerate objects',
     file: MIGRATION,
-    from: '-- ── 1. crew_job_forms — reading this visit’s checklists ──────────────────────',
+    // ASCII-only anchor for the same reason as above.
+    from: 'CREATE OR REPLACE FUNCTION public.crew_job_forms(p_job_id uuid)',
     to: `create policy "crew-media: crew reads" on storage."objects" as permissive for select to public
   using ((bucket_id = 'crew-media'::text) AND (public.crew_employer() is not null));
--- ── 1. crew_job_forms — reading this visit’s checklists ──────────────────────`,
+CREATE OR REPLACE FUNCTION public.crew_job_forms(p_job_id uuid)`,
   },
   {
     name: 'the photos door stops authorising',
@@ -178,7 +190,13 @@ const survivors = []
 
 for (const m of MUTATIONS) {
   const original = readFileSync(m.file, 'utf8')
-  const occurrences = original.split(m.from).length - 1
+  // ⚠️⚠️ CRLF. Files that predate this lane are checked out with \r\n; files it
+  // added are \n. A multi-line anchor written with \n therefore matches in one
+  // and silently misses in the other — reported as "anchor not found" on a rule
+  // that is in fact enforced. Match against a normalised copy, mutate that, and
+  // restore the byte-exact original afterwards.
+  const source = original.replace(/\r\n/g, '\n')
+  const occurrences = source.split(m.from).length - 1
   if (occurrences === 0) {
     console.error(`  ! SKIPPED (anchor not found): ${m.name}\n      in ${m.file}`)
     survivors.push(`${m.name} — anchor missing, mutation never applied`)
@@ -197,7 +215,7 @@ for (const m of MUTATIONS) {
     survived++
     continue
   }
-  writeFileSync(m.file, original.replace(m.from, m.to))
+  writeFileSync(m.file, source.replace(m.from, m.to))
   let result
   try {
     result = run()

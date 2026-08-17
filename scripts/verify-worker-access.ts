@@ -201,8 +201,13 @@ section('5. Every worker door goes through the canonical layer')
   // THEN signs a short-lived URL for a specific object.
   {
     const sql = allSql()
-    const storagePolicies = [...sql.matchAll(/create policy "([^"]+)" on storage\."objects"[\s\S]{0,400?}?;/g)]
-      .map(m => m[0])
+    // ⚠️ Written first as one regex with a `{0,400?}` quantifier — which is not
+    // the lazy bound it looks like, so it matched nothing and the check passed
+    // no matter what was added. Statement-splitting is duller and actually works.
+    const storagePolicies = sql.split(';')
+      .filter(s => /create policy/i.test(s) && /on storage\."objects"/.test(s))
+    check('the storage policies are actually being read (control)',
+      storagePolicies.length > 0, 'found none — the extraction is broken again')
     const crewish = storagePolicies.filter(p =>
       /crew_employer\(\)|crew_technician_id\(\)|crew_crew_id\(\)|current_app_role\(\)/.test(p))
     check('⛔ no storage policy grants access by crew identity',
