@@ -29,6 +29,7 @@ import type { CrewDay, CrewStop } from '@/lib/crewAccess'
 //   added                → drive somewhere new
 //   time                 → be there at a different hour
 //   moved                → do them in a different sequence
+//   crew                 → the people you're working with changed
 //   instruction          → the standing fact about the site changed (jobs.notes)
 //   day_note / crew_note → the office wrote to the whole day
 //   message              → somebody said something and is waiting on a reply
@@ -62,7 +63,7 @@ import type { CrewDay, CrewStop } from '@/lib/crewAccess'
 //    common ids only — a stop moved when it changed places relative to the
 //    stops the worker already knew about, which is the claim being made.
 //
-// Pure — no React, no Supabase, no storage — so scripts/verify-crew-brief.ts
+// Pure — no React, no Supabase, no storage — so scripts/verify-field-home.ts
 // pins every rule above by running it.
 
 // ── The order's basis ────────────────────────────────────────────────────────
@@ -147,6 +148,17 @@ export interface CrewDaySnapshot {
   stops: Record<string, CrewStopMark>
   dayNote: number
   crewNote: number
+  /** Which crew this worker was on. OPTIONAL — a baseline saved by a build that
+   *  did not record it makes NO crew claims (absent ≠ "no crew"), the same
+   *  missing-baseline rule the whole module runs on. Not a version bump: v2
+   *  would discard every phone's baseline for a field it can simply skip. */
+  crewId?: string | null
+  /** Teammate ids, SORTED — identity, not display. A renamed teammate is not a
+   *  crew change; a different set of people is. */
+  mateIds?: string[]
+  /** Teammate names in display order, kept so the sentence about a crew change
+   *  can name who the worker is with NOW without re-reading the day. */
+  mateNames?: string[]
   savedAt: number
 }
 
@@ -182,6 +194,9 @@ export function crewDaySnapshot(
     stops,
     dayNote: textMark(day.day_note),
     crewNote: textMark(day.crew_note),
+    crewId: day.crew?.id ?? null,
+    mateIds: day.teammates.map(t => t.id).sort(),
+    mateNames: day.teammates.map(t => t.name),
     savedAt: now,
   }
 }
@@ -189,7 +204,7 @@ export function crewDaySnapshot(
 // ── The changes ──────────────────────────────────────────────────────────────
 
 export type CrewChangeKind =
-  | 'removed' | 'cancelled' | 'added' | 'time' | 'moved'
+  | 'removed' | 'cancelled' | 'added' | 'time' | 'moved' | 'crew'
   | 'instruction' | 'day_note' | 'crew_note' | 'message'
 
 export interface CrewChange {
@@ -209,8 +224,8 @@ export interface CrewChange {
  * with the thing that would waste a trip.
  */
 const SEVERITY: Record<CrewChangeKind, number> = {
-  removed: 0, cancelled: 1, added: 2, time: 3, moved: 4,
-  instruction: 5, crew_note: 6, day_note: 7, message: 8,
+  removed: 0, cancelled: 1, added: 2, time: 3, moved: 4, crew: 5,
+  instruction: 6, crew_note: 7, day_note: 8, message: 9,
 }
 
 /** More than this many individual reorders and the list says so once instead. */
@@ -309,6 +324,23 @@ export function diffCrewDay(
       kind: 'moved', jobId: null, label: 'Your stop order changed',
       detail: next.order.length > 0 ? `${next.stops[next.order[0]].label} is first` : undefined,
     })
+  }
+
+  // ── Who the worker is with ─────────────────────────────────────────────────
+  // A baseline that never recorded the crew makes no crew claims (the fields
+  // arrived after v1 snapshots were already in the wild; absent ≠ "no crew").
+  // Identity is the SET of teammate ids — a renamed teammate is not a change a
+  // worker acts on; a different set of people, or a different crew, is.
+  if (prev.mateIds !== undefined && prev.crewId !== undefined) {
+    const was = prev.mateIds.join(',')
+    const now = (next.mateIds ?? []).join(',')
+    if (was !== now || prev.crewId !== (next.crewId ?? null)) {
+      const names = next.mateNames ?? []
+      out.push({
+        kind: 'crew', jobId: null, label: 'Your crew changed',
+        detail: names.length > 0 ? `now with ${names.join(', ')}` : 'working solo today',
+      })
+    }
   }
 
   // ── Day-wide writing ───────────────────────────────────────────────────────

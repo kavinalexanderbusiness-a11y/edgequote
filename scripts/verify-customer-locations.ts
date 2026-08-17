@@ -127,7 +127,11 @@ check('the sibling read is tenant- and customer-scoped and excludes itself',
 console.log('\nThe seams S94 builds on (regression tripwires):')
 
 check('JobForm still surfaces the property picker up front for 2+ addresses',
-  JOB_FORM.includes('(adv || properties.length > 1) && ('),
+  // S81 recomposed the form (compact edit layout): the create flow keeps the
+  // same rule via the extracted propertyField block, and the EDIT flow is
+  // stronger still — location is part of the common path and always shows.
+  JOB_FORM.includes('(adv || properties.length > 1) && propertyField')
+  && JOB_FORM.includes('{isEdit && propertyField}'),
   'the hidden-auto-select bug this rule fixed sends crews to the wrong house')
 
 check('JobForm still auto-selects the single property silently',
