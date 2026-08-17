@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { toast } from '@/lib/toast'
 import { confirm } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
-import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, AddonTemplate, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
+import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, AddonTemplate, Crew, Technician, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
 import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, sequenceRoute, roundTripMapsUrl, MAX_MAPS_WAYPOINTS, directionsUrl, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
 import { planDay, type DayPlanStopInput } from '@/lib/dayPlan'
@@ -647,6 +647,7 @@ export function DayOpsPanel({
         serviceType: j.service_type,
         status: j.status,
         crewId: j.crew_id ?? null,
+        technicianId: j.technician_id ?? null,
         // Session 47: hours already banked against a carried-over visit, so
         // tomorrow plans the remainder rather than the whole estimate again.
         workedMinutes: j.actual_minutes,
@@ -675,6 +676,11 @@ export function DayOpsPanel({
     crewNames,
     availabilityRecorded,
   })
+  // ⛔ "Can the people this day was assigned to actually staff it?" is answered
+  // by ONE engine — lib/dayPlan's staffing warnings (Session 67), fed by
+  // staffingOnDay above. Session 65 briefly grew a second answer here; it was
+  // removed rather than merged, because two engines warning about one day is
+  // exactly how a board starts contradicting itself.
   // Every arrival on this screen comes from that ONE walk.
   const etas = plan.stopCount > 0
     ? { startMin: plan.startMin, finishMin: plan.finishMin, finish: plan.finish, stops: plan.stops }

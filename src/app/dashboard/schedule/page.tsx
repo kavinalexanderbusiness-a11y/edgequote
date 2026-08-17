@@ -28,7 +28,8 @@ import { JobForm, Recurrence, SuggestionMeta } from '@/components/schedule/JobFo
 import { ScopeDialog } from '@/components/schedule/ScopeDialog'
 import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel, visitsBeyondEnd, planSeriesChange, planRecurrenceRemoval, partitionSeriesVisits, scopeImpacts, type SeriesVisitLite } from '@/lib/recurrence'
 import { loadVisitEncumbrances } from '@/lib/seriesHistory'
-import type { JobRecurrence } from '@/types'
+import type { JobRecurrence, Crew, Technician } from '@/types'
+import { loadCrews, loadTechnicians } from '@/lib/crews'
 import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts, uncompleteJob } from '@/lib/invoicing'
 import { queueOrRun, isNetworkError } from '@/lib/offline/outbox'
 // THE completion stamp. Every door on this page that moves a visit to
@@ -235,6 +236,12 @@ export default function SchedulePage() {
   // null while loading, or when the read was unavailable — which lib/dayPlan
   // reports as a caveat rather than as a fully-staffed day.
   const [dayFitCtx, setDayFitCtx] = useState<DayFitContext | null>(null)
+  // Who work can be assigned to, and whether that list is trustworthy. null-ish
+  // state is deliberate: `rosterKnown` false means the assignment checks stay
+  // quiet rather than reporting an unstaffed day.
+  const [crews, setCrews] = useState<Crew[]>([])
+  const [technicians, setTechnicians] = useState<Technician[]>([])
+  const [rosterKnown, setRosterKnown] = useState(false)
   // Defaults come from the resolver, not a hand-copied literal — otherwise every
   // new automation has to be remembered here too (and this is loaded from
   // settings a moment later anyway).
@@ -343,6 +350,11 @@ export default function SchedulePage() {
 
   // The roster + learning context for the day board. One load for the horizon;
   // a failure leaves it null, which the plan reports honestly.
+  //
+  // Crews and named people ride along because the board now answers a second
+  // question — whether the people this day was ASSIGNED to can staff it — and
+  // that needs their names, not just a headcount. A failed read leaves both
+  // empty, and the staffing check then claims nothing.
   useEffect(() => {
     let alive = true
     ;(async () => {
@@ -350,6 +362,16 @@ export default function SchedulePage() {
       if (!user) return
       const res = await loadDayFitContext(supabase, user.id, { fromISO: localToday() })
       if (alive && res.outcome === 'ok') setDayFitCtx(res.ctx)
+      try {
+        const [cs, ts] = await Promise.all([
+          loadCrews(supabase, user.id),
+          loadTechnicians(supabase, user.id),
+        ])
+        if (alive) { setCrews(cs); setTechnicians(ts); setRosterKnown(true) }
+      } catch {
+        // Same contract as everywhere else: couldn't ask ≠ nobody works here.
+        if (alive) setRosterKnown(false)
+      }
     })()
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1181,6 +1203,10 @@ export default function SchedulePage() {
       end_time: values.end_time || null,
       duration_minutes: values.duration_minutes ? Number(values.duration_minutes) : null,
       crew_size: Number(values.crew_size) || 1,
+      // Who is coming. Both columns always, so the pair can never disagree —
+      // the database refuses a row carrying a crew AND a person.
+      crew_id: values.crew_id ?? null,
+      technician_id: values.technician_id ?? null,
       status: values.status,
       notes: values.notes || null,
       price: Number(values.price) > 0 ? Number(values.price) : null,
@@ -2952,6 +2978,8 @@ export default function SchedulePage() {
             <JobForm
               key={editing?.id ?? `new-${formSeq}`}
               customers={customers}
+              crews={crews}
+              technicians={technicians}
               excludeJobId={editing?.id}
               allowAddAnother={!editing && !quoteCtx && !customerPrefill}
               initialRecurrence={editing?.recurrence_id && recurrences[editing.recurrence_id]
@@ -2972,6 +3000,8 @@ export default function SchedulePage() {
                 notes: editing.notes || '',
                 actual_minutes: editing.actual_minutes || 0,
                 price: editing.price ?? 0,
+                crew_id: editing.crew_id ?? null,
+                technician_id: editing.technician_id ?? null,
               } : (quotePrefill ?? customerPrefill ?? { scheduled_date: formDate })}
               suggestedPrice={editing?.quote_id
                 ? quoteVisitAmount(

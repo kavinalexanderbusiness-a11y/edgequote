@@ -82,7 +82,9 @@ export function DayPlanPanel({ plan, crew, onSendOrderToCrew, sendingOrder, acti
         <p className="px-3 pb-2.5 text-xs text-ink-faint">Working out the route…</p>
       ) : (
         <>
-          {/* 1 — what would stop this day happening */}
+          {/* 1 — what would stop this day happening. Staffing warnings arrive in
+              plan.warnings from lib/dayPlan alongside the capacity ones, so this
+              list stays the ONE place a day's blocking problems are rendered. */}
           {alerts.length > 0 && (
             <div className="px-3 pb-2.5 space-y-1.5">
               {alerts.map(w => (
