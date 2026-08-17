@@ -9,12 +9,19 @@
 -- real statements. `verify:migrations` will ADVISE that it is in flight — that
 -- advisory is correct and is the reconciliation gate.
 --
--- ⚠️ VERSION: 20260815140000, chosen to sort AFTER the regenerated baseline
--- 20260815130001 (itself derived from the newest ledger entry 20260815130000,
--- job_forms_fix_photo_projection). It was originally 20260815000000, which sorted
--- BEFORE that baseline once S69 landed and would therefore have been applied
--- against tables that did not exist yet. Re-check this ordering after every
--- rebase onto main: a regenerated baseline moves the floor.
+-- ⚠️⚠️ VERSION: 20260816030000, chosen to sort AFTER the current baseline
+-- 20260816020001 (derived from the newest ledger entry 20260816020000,
+-- tenant_weld_portal_payments_storage).
+--
+-- This prefix has now moved TWICE for the same reason, and will move again:
+--   20260815000000 → sorted before S69's baseline 20260815130001
+--   20260815140000 → sorted before S75's baseline 20260816020001
+-- Every landing regenerates the baseline from the live catalogue, and the new
+-- baseline's version is (newest ledger entry + 1). A migration sitting in the
+-- apply path with a LOWER prefix would be applied BEFORE the tables it
+-- references exist — it fails from zero, and `verify:migrations` says the
+-- baseline no longer sorts first. ⭐ RE-CHECK THIS AFTER EVERY REBASE ONTO MAIN,
+-- and bump it above whatever baseline is present. It is not a one-time decision.
 --
 -- When it is applied, the 14-digit prefix MUST match the version production
 -- actually records in supabase_migrations.schema_migrations, then supabase/
