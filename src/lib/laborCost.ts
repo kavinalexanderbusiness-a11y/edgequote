@@ -35,9 +35,10 @@
 // engines can never disagree about which shifts count.
 
 import { format, startOfDay } from 'date-fns'
-import type { Crew, Technician, TimeEntry } from '@/types'
+import type { Crew, Technician, TimeEntry, CrewMembershipChange } from '@/types'
 import { entryCost, entryMinutes, isOpen } from '@/lib/timeTracking'
 import { FORMER_EMPLOYEE_NAME } from '@/lib/workforceTeam'
+import { crewIdAsOf, type MembershipBasis } from '@/lib/crewAssignment'
 
 const round2 = (n: number) => Math.round(n * 100) / 100
 
@@ -57,6 +58,31 @@ export interface LaborContext {
   customerNames: Map<string, string>
   technicians: Map<string, Technician>
   crewNames: Map<string, string>
+  /** The append-only membership log. Absent = no log available, and every crew
+   *  answer falls back to today's roster with `crewBasis` saying so. */
+  crewHistory?: CrewMembershipChange[]
+}
+
+// ⭐⭐ WHICH CREW A SHIFT BELONGS TO — the question this used to get wrong.
+//
+// It read the technician's crew_id, which is a LIVE field: moving somebody to
+// another crew on Monday silently re-attributed every hour they had ever worked.
+// A settled period would report different crew costs the second time it was run,
+// with nothing in the data to show why.
+//
+// The clock still says WHO worked and for how long — that never moves. The
+// membership log says which crew they were on AT THAT MOMENT, and that is what
+// buckets the shift. Shifts older than the log have no recorded answer; they
+// fall back to today's crew, and the basis is returned rather than assumed so a
+// surface can disclose it. ⛔ Never let 'current_roster' pass for 'recorded'.
+function crewOfShift(
+  e: TimeEntry, ctx: LaborContext,
+): { crewId: string | null; basis: MembershipBasis } {
+  if (ctx.crewHistory && ctx.crewHistory.length > 0) {
+    const asOf = crewIdAsOf(ctx.crewHistory, e.technician_id, e.clock_in)
+    if (asOf.known) return { crewId: asOf.crewId, basis: 'recorded' }
+  }
+  return { crewId: ctx.technicians.get(e.technician_id)?.crew_id ?? null, basis: 'current_roster' }
 }
 
 export function buildLaborContext(args: {
@@ -64,13 +90,27 @@ export function buildLaborContext(args: {
   customers: { id: string; name: string }[]
   technicians: Technician[]
   crews: Crew[]
+  /** Optional, and worth passing wherever crew money is reported: without it
+   *  every shift is bucketed by the roster as it stands TODAY. */
+  crewHistory?: CrewMembershipChange[]
 }): LaborContext {
   return {
     jobs: new Map(args.jobs.map(j => [j.id, j])),
     customerNames: new Map(args.customers.map(c => [c.id, c.name])),
     technicians: new Map(args.technicians.map(t => [t.id, t])),
     crewNames: new Map(args.crews.map(c => [c.id, c.name])),
+    crewHistory: args.crewHistory,
   }
+}
+
+/**
+ * How a set of shifts was bucketed into crews: 'recorded' when every one had a
+ * membership on file, 'current_roster' when any fell back to today's roster.
+ * A surface reporting crew money should say which — see describeMembershipBasis.
+ */
+export function crewAttributionBasis(entries: TimeEntry[], ctx: LaborContext): MembershipBasis {
+  return costable(entries).every(e => crewOfShift(e, ctx).basis === 'recorded')
+    ? 'recorded' : 'current_roster'
 }
 
 /** Only closed shifts have a cost — see header. */
@@ -188,12 +228,13 @@ export function laborByMonth(entries: TimeEntry[]): LaborBucket[] {
 }
 
 // ── By crew ──────────────────────────────────────────────────────────────────
-// A shift belongs to the crew its TECHNICIAN is on. Someone not on a crew is
-// reported as such rather than silently dropped from the totals.
+// A shift belongs to the crew its technician was on WHEN THEY WORKED IT
+// (crewOfShift). Someone on no crew is reported as such rather than silently
+// dropped from the totals.
 export function laborByCrew(entries: TimeEntry[], ctx: LaborContext): LaborBucket[] {
   const map = new Map<string, Acc>()
   for (const e of costable(entries)) {
-    const crewId = ctx.technicians.get(e.technician_id)?.crew_id ?? null
+    const crewId = crewOfShift(e, ctx).crewId
     const key = crewId ?? UNASSIGNED_KEY
     const a = map.get(key) ?? emptyAcc()
     a.minutes += entryMinutes(e)
@@ -239,6 +280,10 @@ export function technicianUtilization(entries: TimeEntry[], ctx: LaborContext): 
   return Array.from(map.entries())
     .map(([technicianId, a]) => {
       const t = ctx.technicians.get(technicianId)
+      // Deliberately TODAY's crew: this row is about the PERSON ("who is this,
+      // how booked are they"), so their current crew is the right label. Crew
+      // MONEY buckets use crewOfShift, because those must not move when a
+      // roster does.
       const crewId = t?.crew_id ?? null
       return {
         technicianId,
@@ -270,6 +315,9 @@ export function technicianUtilization(entries: TimeEntry[], ctx: LaborContext): 
 //
 // NOTE this uses the technician's crew, not jobs.crew_id: the assignment is the
 // plan, the clock is what happened. Cost follows the clock, so revenue must too.
+// And "the technician's crew" means the one they were on AT THE TIME (see
+// crewOfShift) — reading it live is what let a roster change rewrite a settled
+// period's crew P&L.
 export interface CrewProfit {
   crewId: string
   name: string
@@ -297,7 +345,7 @@ export function crewProfitability(entries: TimeEntry[], ctx: LaborContext): Crew
   const map = new Map<string, CrewAcc>()
 
   for (const e of costable(entries)) {
-    const crewId = ctx.technicians.get(e.technician_id)?.crew_id ?? null
+    const crewId = crewOfShift(e, ctx).crewId
     const key = crewId ?? UNASSIGNED_KEY
     const a = map.get(key) ?? { minutes: 0, cost: 0, revenue: 0, jobs: new Set(), techs: new Set() }
     const m = entryMinutes(e)

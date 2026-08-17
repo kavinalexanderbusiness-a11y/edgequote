@@ -43,6 +43,16 @@
   "cmd": "SELECT",
   "qual": "(auth.uid() = user_id)",
   "roles": "{public}",
+  "tablename": "audit_events",
+  "permissive": "PERMISSIVE",
+  "policyname": "audit_events: select own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "SELECT",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
   "tablename": "automation_runs",
   "permissive": "PERMISSIVE",
   "policyname": "own runs read",
@@ -2887,7 +2897,7 @@
   "permissive": "PERMISSIVE",
   "policyname": "schedule_items: update own",
   "schemaname": "public",
-  "with_check": null
+  "with_check": "(auth.uid() = user_id)"
  },
  {
   "cmd": "DELETE",

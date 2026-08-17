@@ -76,6 +76,10 @@
  "seq_acls": [
   {
    "acl": "{postgres=rwU/postgres,anon=rwU/postgres,authenticated=rwU/postgres,service_role=rwU/postgres}",
+   "name": "audit_events_seq_seq"
+  },
+  {
+   "acl": "{postgres=rwU/postgres,anon=rwU/postgres,authenticated=rwU/postgres,service_role=rwU/postgres}",
    "name": "property_measurement_events_seq_seq"
   },
   {
@@ -121,7 +125,7 @@
   }
  ],
  "pg_version": "PostgreSQL 17.6 on aarch64-unknown-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit",
- "captured_at": "2026-08-17 03:13:33.445027+00",
+ "captured_at": "2026-08-17 03:48:45.052153+00",
  "default_acls": [
   {
    "acl": "{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
@@ -268,7 +272,7 @@
    "objtype": "S"
   }
  ],
- "latest_migration": "20260816095000",
+ "latest_migration": "20260816110000",
  "publication_tables": [
   "public.content_pieces",
   "public.conversations",
