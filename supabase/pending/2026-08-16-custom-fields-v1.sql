@@ -4,24 +4,31 @@
 -- column for: a gate code on a service location, a permit number on a visit, a
 -- referral partner on a customer. This is the ONE canonical place that lives.
 --
--- ⚠️ NOT YET APPLIED TO PRODUCTION (2026-08-15). This file is committed so the
--- fresh-rebuild proof can apply it from zero, and so review happens against the
--- real statements. `verify:migrations` will ADVISE that it is in flight — that
--- advisory is correct and is the reconciliation gate.
+-- ⚠️ NOT YET APPLIED TO PRODUCTION. It lives in `supabase/pending/` — the same
+-- place S68's audit trail and S69's waive-audit wait — and therefore has NO
+-- 14-digit version prefix and is NOT in the apply path.
 --
--- ⚠️⚠️ VERSION: 20260816030000, chosen to sort AFTER the current baseline
--- 20260816020001 (derived from the newest ledger entry 20260816020000,
--- tenant_weld_portal_payments_storage).
+-- ⭐⭐ WHY THERE IS NO VERSION NUMBER ON THIS FILE, AND WHY THAT IS THE POINT.
+-- A version was chosen three times and was wrong all three times:
+--   20260815000000 → sank below S69's regenerated baseline 20260815130001
+--   20260815140000 → sank below S75's regenerated baseline 20260816020001
+--   20260816030000 → COLLIDED with S68's reserved audit_trail_v1
+-- Every landing regenerates the baseline from the live catalogue at (newest
+-- ledger version + 1), so any number picked while unapplied is stale the moment
+-- somebody else lands — and a file sitting in the apply path BELOW the baseline
+-- is applied before the tables it references exist. Naming a version early buys
+-- nothing and has to be redone every time. `supabase/pending/` is where a
+-- migration waits precisely so that the number is chosen ONCE, at apply time.
 --
--- This prefix has now moved TWICE for the same reason, and will move again:
---   20260815000000 → sorted before S69's baseline 20260815130001
---   20260815140000 → sorted before S75's baseline 20260816020001
--- Every landing regenerates the baseline from the live catalogue, and the new
--- baseline's version is (newest ledger entry + 1). A migration sitting in the
--- apply path with a LOWER prefix would be applied BEFORE the tables it
--- references exist — it fails from zero, and `verify:migrations` says the
--- baseline no longer sorts first. ⭐ RE-CHECK THIS AFTER EVERY REBASE ONTO MAIN,
--- and bump it above whatever baseline is present. It is not a one-time decision.
+-- ⭐ APPLY-TIME PROCEDURE (do not skip step 4):
+--   1. Take the version production actually records in
+--      supabase_migrations.schema_migrations when this is applied.
+--   2. `npm run schema:contract && npm run schema:baseline` — the regenerated
+--      baseline now CONTAINS these two tables.
+--   3. `npm run verify:rebuild` → faithful.
+--   4. ⛔ DELETE THIS FILE. Once the baseline carries the schema, a pending copy
+--      is a second definition of the same tables, and the next reader cannot tell
+--      which one is true. `verify:custom-fields` fails while both exist.
 --
 -- When it is applied, the 14-digit prefix MUST match the version production
 -- actually records in supabase_migrations.schema_migrations, then supabase/
