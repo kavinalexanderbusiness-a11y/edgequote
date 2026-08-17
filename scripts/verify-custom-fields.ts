@@ -34,7 +34,7 @@ import {
   parseOptions, reconcileOptions, slugify, uniqueKey, validateDefinition, valueWritePayload,
 } from '../src/lib/customFields'
 import { EXPORT_ENTITIES, DENIED_COLUMNS } from '../src/lib/export/manifest'
-import { readdirSync } from 'node:fs'
+import { readdirSync, existsSync } from 'node:fs'
 import { splitStatements, loadPGlite, substitutePlatformStatements } from './lib/pg-sql'
 import type { CustomFieldDefinition, CustomFieldValue } from '../src/types'
 
@@ -50,10 +50,36 @@ const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8')
 // The apply path, in the order production ran it. Same primitives verify:rebuild
 // and verify:audit-trail use — scripts/lib/pg-sql.ts is the one splitter.
 const MIGRATIONS_DIR = join('supabase', 'migrations')
-const migrationFiles = () => readdirSync(MIGRATIONS_DIR).filter(f => f.endsWith('.sql')).sort()
+// ⭐ THE SCHEMA LIVES IN EXACTLY ONE PLACE — a versioned migration in the apply
+// path while it waits to be applied, or the regenerated baseline afterwards.
+// Never both: two definitions of the same tables leave the next reader unable to
+// tell which one production actually has.
+//
+// ⛔⛔ AND NEVER IN supabase/archive/. `supabase/pending/` was renamed to
+// `supabase/archive/ledger/` on main, so a rebase SUGGESTS relocating this file
+// there — it did, on 2026-08-17. archive/ is not applied by anything, so taking
+// that suggestion means the migration silently never runs and this guard is the
+// only thing that would notice.
+const ARCHIVE_DIR = join('supabase', 'archive')
+const baselineFile = migrationFiles().find(f => /baseline/.test(f)) || ''
+const baseline = baselineFile ? read(join(MIGRATIONS_DIR, baselineFile)) : ''
+const DEFINES = /create table if not exists public."?custom_field_definitions"?/i
+const baselineHasSchema = DEFINES.test(baseline)
+const applyPathCustom = migrationFiles()
+  .filter(f => !/baseline/.test(f))
+  .filter(f => DEFINES.test(read(join(MIGRATIONS_DIR, f))))
+const archivedCustom = (() => {
+  const walk = (dir: string): string[] => !existsSync(dir) ? [] : readdirSync(dir, { withFileTypes: true })
+    .flatMap(e => e.isDirectory() ? walk(join(dir, e.name)) : (e.name.endsWith('.sql') ? [join(dir, e.name)] : []))
+  return walk(ARCHIVE_DIR).filter(f => DEFINES.test(read(f)))
+})()
 
-const MIGRATION_FILE = migrationFiles().find(f => /custom_fields/.test(f)) || ''
-const migration = MIGRATION_FILE ? read(join(MIGRATIONS_DIR, MIGRATION_FILE)) : ''
+const MIGRATION_FILE = baselineHasSchema
+  ? baselineFile
+  : (applyPathCustom[0] ? join(MIGRATIONS_DIR, applyPathCustom[0]) : '')
+const migration = baselineHasSchema
+  ? baseline
+  : (applyPathCustom[0] ? read(join(MIGRATIONS_DIR, applyPathCustom[0])) : '')
 
 // A definition/value pair for the pure tests, shaped exactly like a database row.
 const def = (over: Partial<CustomFieldDefinition> = {}): CustomFieldDefinition => ({
@@ -74,8 +100,21 @@ async function main() {
 // statements of one rule drift, so the drift is what is tested — not the rule.
 console.log('\n═══ 1. the engine agrees with the schema ═══')
 
-check('a custom-fields migration exists in the apply path', !!MIGRATION_FILE,
-  'no supabase/migrations/*custom_fields*.sql — §1 and §4 have nothing to check')
+check('the custom-fields schema exists, in the apply path or the baseline', !!MIGRATION_FILE,
+  'found neither a supabase/migrations/*custom_fields*.sql nor the tables in the baseline')
+check('…and in exactly ONE of them, never both', !(baselineHasSchema && applyPathCustom.length),
+  baselineHasSchema && applyPathCustom.length
+    ? `defined BOTH in ${baselineFile} and in ${applyPathCustom.join(', ')}. Production has applied ` +
+      'it and the baseline was regenerated, so DELETE the standalone migration.'
+    : '')
+check('the schema is NOT parked in supabase/archive/', archivedCustom.length === 0,
+  `${archivedCustom.join(', ')} — archive/ is not the apply path, so a migration left there ` +
+  'never runs. pending/ was renamed to archive/ledger/ on main and a rebase suggests this move; ' +
+  'it must be supabase/migrations/<14-digit>_name.sql instead.')
+check('its version sorts above every migration already on main',
+  baselineHasSchema || applyPathCustom.every(f => migrationFiles().filter(m => !DEFINES.test(read(join(MIGRATIONS_DIR, m)))).every(m => f > m)),
+  `${applyPathCustom.join(', ')} does not sort last — a migration below the baseline is applied ` +
+  'before the tables it references exist, and one below a sibling can break its assumptions.')
 
 if (migration) {
   const typeCheck = /custom_field_definitions_field_type_check\s*\n?\s*check \(field_type in \(([^)]*)\)\)/.exec(migration)
@@ -127,7 +166,6 @@ if (migration) {
 // The two projections that answer for the other two audiences must not have
 // learned these tables exist. This is the check that would have caught a
 // well-meant "just add it to the portal payload".
-const baseline = read(join(MIGRATIONS_DIR, migrationFiles().find(f => /baseline/.test(f)) || ''))
 const portalFn = /CREATE OR REPLACE FUNCTION public\.get_portal_data[\s\S]*?\n\$function\$;/.exec(baseline)?.[0] || ''
 const crewFn = /CREATE OR REPLACE FUNCTION public\.crew_day[\s\S]*?\n\$function\$;/.exec(baseline)?.[0] || ''
 check('get_portal_data does not read custom fields', !!portalFn && !/custom_field/.test(portalFn),
@@ -250,6 +288,10 @@ const db = await (async () => {
   const pg = await loaded.PGlite.create({
     extensions: Object.fromEntries(Object.entries(loaded.contribs).filter(([, v]) => v)),
   })
+  // Prelude, then the apply path, then this feature's pending file — which is the
+  // exact sequence production will run when it is applied. Once the baseline
+  // carries the schema, `pendingCustom` is empty and the baseline supplies it, so
+  // this same guard keeps working unchanged after convergence.
   const files: [string, string][] = [
     ['platform prelude', read(join('scripts', 'schema', 'platform-prelude.sql'))],
     ...migrationFiles().map(f => [f, read(join(MIGRATIONS_DIR, f))] as [string, string]),

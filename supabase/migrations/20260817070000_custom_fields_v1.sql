@@ -4,28 +4,31 @@
 -- column for: a gate code on a service location, a permit number on a visit, a
 -- referral partner on a customer. This is the ONE canonical place that lives.
 --
--- ⚠️ NOT YET APPLIED TO PRODUCTION (2026-08-15). This file is committed so the
--- fresh-rebuild proof can apply it from zero, and so review happens against the
--- real statements. `verify:migrations` will ADVISE that it is in flight — that
--- advisory is correct and is the reconciliation gate.
+-- ⚠️ NOT YET APPLIED TO PRODUCTION. It sits in the apply path so the from-zero
+-- rebuild proof applies it, and verify:migrations will ADVISE that it is in
+-- flight — that advisory is correct and is the reconciliation gate.
 --
--- ⚠️⚠️ VERSION: 20260816030000, chosen to sort AFTER the current baseline
--- 20260816020001 (derived from the newest ledger entry 20260816020000,
--- tenant_weld_portal_payments_storage).
+-- ⚠️⚠️ VERSION: 20260817070000, above the current production floor. main carries
+-- baseline 20260816110001 plus 20260816213000_estimate_appointments and
+-- 20260817060000_worker_access_v1 (the ledger max). This prefix has now been
+-- chosen four times and was wrong three:
+--   20260815000000 → sank below S69 regenerated baseline 20260815130001
+--   20260815140000 → sank below S75 regenerated baseline 20260816020001
+--   20260816030000 → COLLIDED with S68 reserved audit_trail_v1
+-- Every landing regenerates the baseline at (newest ledger version + 1), so a
+-- number picked while unapplied is a guess about what other lanes do next.
+-- ⭐ RE-CHECK AND BUMP AFTER EVERY REBASE ONTO MAIN. It is never settled while
+-- this migration is unlanded.
 --
--- This prefix has now moved TWICE for the same reason, and will move again:
---   20260815000000 → sorted before S69's baseline 20260815130001
---   20260815140000 → sorted before S75's baseline 20260816020001
--- Every landing regenerates the baseline from the live catalogue, and the new
--- baseline's version is (newest ledger entry + 1). A migration sitting in the
--- apply path with a LOWER prefix would be applied BEFORE the tables it
--- references exist — it fails from zero, and `verify:migrations` says the
--- baseline no longer sorts first. ⭐ RE-CHECK THIS AFTER EVERY REBASE ONTO MAIN,
--- and bump it above whatever baseline is present. It is not a one-time decision.
+-- ⛔⛔ DO NOT LET GIT RELOCATE THIS FILE. supabase/pending/ was renamed to
+-- supabase/archive/ledger/ on main, so a rebase SUGGESTS moving this there — it
+-- did, on 2026-08-17. archive/ is NOT the apply path, so accepting that
+-- suggestion means the migration silently never runs. This belongs in
+-- supabase/migrations/<14-digit>_name.sql and nowhere else.
 --
--- When it is applied, the 14-digit prefix MUST match the version production
--- actually records in supabase_migrations.schema_migrations, then supabase/
--- contract/ recaptured via `npm run schema:contract && npm run schema:baseline`.
+-- ⭐ AT APPLY TIME: take the version production actually records, rename to
+-- match, run schema:contract then schema:baseline so the regenerated baseline
+-- carries these tables, then verify:rebuild must be faithful.
 --
 -- ══════════════════════════════════════════════════════════════════════════════
 -- ⭐⭐ AUDIENCE: THESE VALUES ARE INTERNAL. FULL STOP.
