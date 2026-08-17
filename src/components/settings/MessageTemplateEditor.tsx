@@ -17,6 +17,7 @@ const TYPES: MsgType[] = [
   'confirm', 'reminder', 'eta', 'on_my_way', 'running_late', 'arrived', 'early_arrival',
   'rescheduled', 'rain_delay', 'job_complete', 'thanks', 'review_request', 'quote', 'invoice',
   'estimate_reminder', 'payment_reminder', 'estimate_followup',
+  'estimate_appt_scheduled', 'estimate_appt_on_my_way', 'estimate_appt_rescheduled',
 ]
 
 // One plain-English line per template: when it fires / what it's for — so the owner
@@ -41,6 +42,9 @@ const TEMPLATE_DESC: Partial<Record<MsgType, string>> = {
   estimate_reminder: 'Reminds them of an upcoming estimate appointment.',
   payment_reminder: 'A gentle nudge about an outstanding invoice.',
   estimate_followup: 'Follows up on a quote you already sent.',
+  estimate_appt_scheduled: 'Confirms a booked estimate visit — the visit, not the work.',
+  estimate_appt_on_my_way: 'Tells them you’re on your way to take a look and price it.',
+  estimate_appt_rescheduled: 'Confirms a new date for an estimate visit.',
 }
 
 export function MessageTemplateEditor() {

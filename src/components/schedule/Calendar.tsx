@@ -220,22 +220,46 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
   // Per-day workload, computed ONCE per jobs/capacity change via the shared
   // estimateDayLoad engine — so the bar here and the load pill on the open day
   // can never quote different numbers for the same date.
-  const loadByDate = useMemo(() => {
-    if (!capacityForDate) return null
-    const m: Record<string, EstimatedDayLoad> = {}
-    for (const date in jobsByDate) {
-      if (!jobsByDate[date].some(j => j.status !== 'cancelled')) continue
-      m[date] = estimateDayLoad(jobsByDate[date], capacityForDate(date))
-    }
-    return m
-  }, [jobsByDate, capacityForDate])
-
   const itemsByDate = useMemo(() => {
     const m: Record<string, ScheduleItem[]> = {}
     for (const it of (scheduleItems || [])) (m[it.scheduled_date] ||= []).push(it)
     for (const k in m) m[k].sort((a, b) => (a.start_time || a.due_at || '').localeCompare(b.start_time || b.due_at || ''))
     return m
   }, [scheduleItems])
+
+  // Items that OCCUPY the day rather than merely fall due on it — an estimate
+  // visit or an appointment is somewhere you have to be, a task or a reminder is
+  // not. ITEM_META's `duration` field is already that distinction, so the load
+  // bar reads it rather than re-listing the types here.
+  const timedItemsByDate = useMemo(() => {
+    const m: Record<string, { duration_minutes?: number | null; status?: string | null }[]> = {}
+    for (const it of (scheduleItems || [])) {
+      if (!ITEM_META[it.type]?.fields.duration) continue
+      ;(m[it.scheduled_date] ||= []).push({ duration_minutes: it.duration_minutes, status: it.status })
+    }
+    return m
+  }, [scheduleItems])
+
+  // Per-day workload, computed ONCE per jobs/capacity change via the shared
+  // estimateDayLoad engine — so the bar here and the load pill on the open day
+  // can never quote different numbers for the same date.
+  //
+  // ⭐ Estimate visits are counted. They consume the same hours a job does — the
+  // owner is standing in somebody's back garden either way — so a day with three
+  // estimates on it is not an empty day. What they must NOT reach is revenue,
+  // productivity or completion, and none of those are computed here or anywhere
+  // else from schedule_items: every one of them reads `jobs`.
+  const loadByDate = useMemo(() => {
+    if (!capacityForDate) return null
+    const m: Record<string, EstimatedDayLoad> = {}
+    const dates = new Set([...Object.keys(jobsByDate), ...Object.keys(timedItemsByDate)])
+    for (const date of dates) {
+      const visits = [...(jobsByDate[date] || []), ...(timedItemsByDate[date] || [])]
+      if (!visits.some(v => v.status !== 'cancelled')) continue
+      m[date] = estimateDayLoad(visits, capacityForDate(date))
+    }
+    return m
+  }, [jobsByDate, timedItemsByDate, capacityForDate])
   const dayItemsFor = (day: Date) => itemsByDate[format(day, 'yyyy-MM-dd')] || []
 
   // ── P1: true pointer drag-and-drop across days (jobs AND items share it) ───────

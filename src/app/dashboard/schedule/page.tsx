@@ -22,6 +22,14 @@ import { newClientMessageId } from '@/lib/comms/idempotency'
 import { CompleteConfirm } from '@/components/schedule/CompleteConfirm'
 import { Calendar, CalendarView } from '@/components/schedule/Calendar'
 import { DayOpsPanel, QuoteLite, QuickPatch } from '@/components/schedule/DayOpsPanel'
+// Estimate visits (Session 79) — scheduled calls to LOOK at work and price it.
+// They share the calendar with jobs and nothing else: they are rows in
+// schedule_items, so no engine on this page that reads `jobs` can see them.
+import { EstimateDayBoard } from '@/components/schedule/EstimateDayBoard'
+import { EstimateAppointmentDialog } from '@/components/schedule/EstimateAppointmentDialog'
+import { useEstimateAppointments } from '@/hooks/useEstimateAppointments'
+import type { EstimateAppointment } from '@/lib/estimateAppointments'
+import type { ScheduleItem } from '@/lib/scheduleItems'
 import { Coord, geocodeAddress } from '@/lib/geo'
 import { JobForm, Recurrence, SuggestionMeta } from '@/components/schedule/JobForm'
 import { ScopeDialog } from '@/components/schedule/ScopeDialog'
@@ -96,7 +104,7 @@ import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repe
 import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
 import { RainDelayCenter } from '@/components/schedule/RainDelayCenter'
 import { WeatherStrip } from '@/components/weather/WeatherStrip'
-import { CalendarClock } from 'lucide-react'
+import { CalendarClock, Ruler } from 'lucide-react'
 import { analyzeSchedule, optimizeSchedule, planRainDelay, MOVE_REASON_LABEL } from '@/lib/optimizer'
 import type { PlannedMove, OptimizeScope, OptimizeMode, OptJob, ScheduleSuggestion, CadenceVisit, CadenceRecs } from '@/lib/optimizer'
 import { evaluateScheduleMove } from '@/lib/scheduleWarnings'
@@ -159,6 +167,11 @@ export default function SchedulePage() {
   const focusRec = searchParams.get('focus')
   const jobParam = searchParams.get('job')
   const dayParam = searchParams.get('d')
+  // `?estimate=new` opens the estimate dialog prefilled from wherever the owner
+  // came from (a customer, a property, a draft quote). One door on this page
+  // rather than the same dialog mounted on four others, so the scheduling rules
+  // cannot drift apart per surface.
+  const estimateParam = searchParams.get('estimate')
 
   const [jobs, setJobs] = useState<Job[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
@@ -2769,6 +2782,40 @@ export default function SchedulePage() {
   const dayISO = format(cursor, 'yyyy-MM-dd')
   const dayJobs = useMemo(() => jobs.filter(j => j.scheduled_date === dayISO), [jobs, dayISO])
 
+  // ── Estimate visits ─────────────────────────────────────────────────────────
+  // Loaded unbounded (the table holds one row per estimate visit, not per
+  // recurring occurrence, so there is no jobs-sized volume here) and filtered per
+  // day / per month in the render. The hook is the only writer.
+  const estimates = useEstimateAppointments()
+  const [estimateDialog, setEstimateDialog] = useState<{ date: string; existing: EstimateAppointment | null } | null>(null)
+  const dayEstimates = useMemo(
+    () => estimates.items.filter(i => i.scheduled_date === dayISO),
+    [estimates.items, dayISO])
+
+  // Open the dialog once, when arrived at with ?estimate=new. Guarded by a ref
+  // rather than the param so that closing the dialog does not immediately
+  // reopen it on the next render.
+  const estimateDeepLinkUsed = useRef(false)
+  useEffect(() => {
+    if (estimateParam !== 'new' || estimateDeepLinkUsed.current) return
+    estimateDeepLinkUsed.current = true
+    setEstimateDialog({ date: dayISO, existing: null })
+  }, [estimateParam, dayISO])
+
+  const setEstimateStatus = useCallback(async (item: EstimateAppointment, to: ScheduleItem['status']) => {
+    const err = await estimates.setStatus(item.id, to)
+    if (err) { toast.error(err); return }
+    // The wording is the contract. "Visit done" and never "job complete" — the
+    // customer's work has not been performed, and this is the surface where the
+    // old $0-job workaround used to say otherwise.
+    toast.success(
+      to === 'completed' ? 'Estimate visit marked done — write the quote when you’re ready.'
+      : to === 'cancelled' ? 'Estimate visit cancelled.'
+      : to === 'no_show' ? 'Marked as a no-show.'
+      : 'Estimate visit is back on the schedule.',
+    )
+  }, [estimates])
+
   const pendingVerb = pendingAction?.type === 'delete' ? 'Delete'
     : pendingAction?.type === 'move' ? 'Move'
     : pendingAction?.type === 'price' ? 'Update price for' : 'Save changes to'
@@ -2830,6 +2877,12 @@ export default function SchedulePage() {
             </Button>
             <Button variant="secondary" onClick={() => launchOptimizer()} title="Optimize your schedule — pick scope and goal">
               <Rocket className="w-4 h-4" /> Optimize
+            </Button>
+            {/* Its OWN door, never folded into "Add job". These create different
+                things — one is work, one is a visit to price work — and merging
+                creation doors by label is how the $0-job workaround started. */}
+            <Button variant="secondary" onClick={() => setEstimateDialog({ date: dayISO, existing: null })} title="Schedule an estimate visit — no job, no $0 quote">
+              <Ruler className="w-4 h-4" /> Add estimate
             </Button>
             <Button onClick={() => openNewJob(cursor)}>
               <Plus className="w-4 h-4" /> Add job
@@ -2980,6 +3033,28 @@ export default function SchedulePage() {
         </div>
       )}
 
+      {/* Schedule / edit an estimate visit. Its own dialog, not JobForm: JobForm
+          collects price, recurrence and service — every one of which is a claim
+          an estimate visit must not be able to make. */}
+      <EstimateAppointmentDialog
+        open={estimateDialog !== null}
+        onClose={() => setEstimateDialog(null)}
+        customers={customers}
+        crews={crews}
+        technicians={technicians}
+        existing={estimateDialog?.existing ?? null}
+        defaultDateISO={estimateDialog?.date}
+        defaultCustomerId={customerParam}
+        defaultPropertyId={propertyParam}
+        quoteId={quoteId}
+        onSave={async (input) => {
+          if (estimateDialog?.existing) return estimates.update(estimateDialog.existing.id, input)
+          const { error } = await estimates.create(input)
+          if (!error) toast.success('Estimate visit scheduled.')
+          return error
+        }}
+      />
+
       {/* Edit/New job — modal overlay so Open always brings the correct job into view */}
       {(showForm || editing) && (
         <div className="fixed inset-0 z-overlay overflow-y-auto bg-black/50" onClick={requestCloseForm}>
@@ -3114,6 +3189,16 @@ export default function SchedulePage() {
           onResetCapacity={() => resetDayCapacity(dayISO)}
           onToggleDisable={() => toggleDisableDay(dayISO)}
         />
+        {/* Above the work board, in the same language: the owner reads one day —
+            what I'm quoting, and what I'm doing. Renders nothing when there are
+            no estimate visits, so a normal day is unchanged. */}
+        <EstimateDayBoard
+          items={dayEstimates}
+          error={estimates.error}
+          onEdit={(item) => setEstimateDialog({ date: item.scheduled_date, existing: item })}
+          onSetStatus={setEstimateStatus}
+          onAdd={() => setEstimateDialog({ date: dayISO, existing: null })}
+        />
         <DayOpsPanel
           date={dayISO}
           dateLabel={format(cursor, 'EEEE, MMMM d, yyyy')}
@@ -3175,6 +3260,15 @@ export default function SchedulePage() {
           selectedDays={selectedDays}
           onToggleDaySelect={toggleDaySelect}
           capacityForDate={optBaseOpts.capacityForDate}
+          // The prop Calendar has always accepted and nothing ever passed —
+          // which is exactly why the table sat empty. Estimates now sit beside
+          // the work in month and week view, in their own colour.
+          scheduleItems={estimates.items}
+          onSelectItem={(item) => setEstimateDialog({ date: item.scheduled_date, existing: item as EstimateAppointment })}
+          onMoveItem={async (item, iso) => {
+            const err = await estimates.update(item.id, { scheduled_date: iso })
+            if (err) toast.error(err)
+          }}
         />
       )}
 
