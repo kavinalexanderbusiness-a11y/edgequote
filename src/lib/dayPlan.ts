@@ -183,9 +183,14 @@ export interface DayPlanStopInput {
   serviceType?: string | null
   /** jobs.status — 'cancelled' stops are dropped, as everywhere else. */
   status?: string | null
-  /** jobs.crew_id — which crew is expected to work it. A visit is assigned to a
-   *  CREW, never to an individual, so staffing is judged per crew (Session 67). */
+  /** jobs.crew_id — which crew is expected to work it, when a crew is. */
   crewId?: string | null
+  /** jobs.technician_id — set when the visit belongs to ONE named person
+   *  instead of a crew (Session 65; the two are mutually exclusive in the
+   *  database). Staffing is judged per crew for crew work and per person for
+   *  personal work, because a crew's spare member cannot cover a visit that was
+   *  given to somebody by name. */
+  technicianId?: string | null
   /** Route distance from the PREVIOUS point (base, or the stop before), or null
    *  when this stop has no coordinates. From lib/route's ordered output. */
   legKm?: number | null
@@ -511,6 +516,27 @@ export function planDay(input: DayPlanInput): DayPlan {
             : `${w.name} is on ${nameOf(crewId)}, which works this day, but does not normally work this weekday.`,
         })
       }
+    }
+
+    // ── Work given to ONE person by name (Session 65) ────────────────────────
+    // A crew being short is a crew problem; a personally-assigned visit is a
+    // problem the moment THAT person cannot work, however free their crewmates
+    // are. Judged per person for exactly that reason.
+    const personalIds = new Set(active.map(s => s.technicianId).filter((t): t is string => !!t))
+    for (const technicianId of personalIds) {
+      const worker = staffing.find(w => w.technicianId === technicianId)
+      if (!worker || canWork(worker)) continue
+      const who = worker.name ?? 'The person this is assigned to'
+      const n = active.filter(s => s.technicianId === technicianId).length
+      push({
+        kind: 'worker_unavailable',
+        // Nobody else is expected, so this one blocks rather than warns.
+        severity: 'blocking',
+        count: n,
+        message: worker.state === 'off'
+          ? `${who} has ${plural(n, 'visit')} assigned personally but is booked off${worker.offHours != null ? ` (${worker.offHours} h)` : ''}.`
+          : `${who} has ${plural(n, 'visit')} assigned personally but does not normally work this weekday.`,
+      })
     }
 
     // Every "available" here rests on nobody having said otherwise. Say so
