@@ -223,6 +223,9 @@ H('4. Crew authorization is untouched (SQL, apply path)')
 // ─────────────────────────────────────────────────────────────────────────────
 H('5. The callback grants nothing it should not')
 {
+  check('the callback reads the user through lib/authState, not off the exchange payload',
+    /readUser\(supabase\)/.test(cCALLBACK) && /auth\.kind === 'unavailable'/.test(cCALLBACK),
+    'the three-answer read is what stops a blip straight after a good exchange reading as "nobody"')
   check('the callback asks current_app_role() — the database, not the browser',
     /rpc\('current_app_role'\)/.test(cCALLBACK))
   check('the callback asks can_provision_business() rather than inferring it',

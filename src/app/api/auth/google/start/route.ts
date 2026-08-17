@@ -68,7 +68,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     auth: { flowType: 'pkce' },
     cookies: {
       getAll: () => req.cookies.getAll(),
-      setAll: toSet => { jar.push(...toSet) },
+      setAll: (toSet: { name: string; value: string; options?: Record<string, unknown> }[]) => {
+        jar.push(...toSet)
+      },
     },
   })
 

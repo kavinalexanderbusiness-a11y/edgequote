@@ -3,6 +3,7 @@ import { createServerClient } from '@supabase/ssr'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { appOrigin } from '@/lib/appOrigin'
 import { landingFor, OWNER_ROOT, type AppRole } from '@/lib/crewAccess'
+import { readUser } from '@/lib/authState'
 import { bindBetaInviteToGoogleUser } from '@/lib/googleAuthServer'
 import {
   AUTH_ERROR_PARAM, OAUTH_INVITE_COOKIE,
@@ -76,7 +77,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     auth: { flowType: 'pkce' },
     cookies: {
       getAll: () => req.cookies.getAll(),
-      setAll: toSet => { jar.push(...toSet) },
+      setAll: (toSet: { name: string; value: string; options?: Record<string, unknown> }[]) => {
+        jar.push(...toSet)
+      },
     },
   })
 
@@ -86,9 +89,18 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // or copied `code` therefore has nothing to exchange with. No special-casing
   // is needed for replay or forgery — they arrive here as the same ordinary
   // error, and are told the same uninformative thing.
-  const { data: exchanged, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
-  const user = exchanged?.user ?? exchanged?.session?.user ?? null
-  if (exchangeError || !user) return fail('exchange')
+  const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
+  if (exchangeError) return fail('exchange')
+
+  // Who the session belongs to, read through lib/authState rather than off the
+  // exchange payload — the same three-answer primitive every other gate in the
+  // app uses. It matters here for the same reason it matters there: a dropped
+  // connection immediately after a successful exchange must read as "could not
+  // ask" and keep the session, not as "nobody" and throw the person away.
+  const auth = await readUser(supabase)
+  if (auth.kind === 'unavailable') return fail('unavailable')
+  if (auth.kind === 'signed-out') return fail('exchange')
+  const user = auth.user
 
   // Sign this session out and send them back with an explanation. LOCAL scope,
   // always: this person may legitimately be signed in elsewhere, and a failed

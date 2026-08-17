@@ -94,14 +94,20 @@ export function safeReturnPath(raw: string | null | undefined): string | null {
   // Must be a rooted path. This also rejects 'javascript:', 'data:' and any
   // absolute URL in one move, since none of them begins with '/'.
   if (!v.startsWith('/')) return null
-  // Protocol-relative, in both spellings the URL parser accepts.
-  if (v.startsWith('//') || v.startsWith('/\\')) return null
-  // Control characters and whitespace are stripped by some parsers BEFORE the
-  // authority is read, so '/%09/evil.tld' and a literal tab both have to go.
-  // Decoding first is what makes the percent-encoded spelling visible here.
+  // Everything below is decided on the DECODED value, and there is deliberately
+  // no pre-decode copy of these checks. Decoding only ever rewrites %XX escapes,
+  // so a raw '//evil.tld' is still '//evil.tld' afterwards, which made a second
+  // check before this point DEAD CODE. Mutation testing is what proved it:
+  // removing that line changed no outcome for any of the sixteen hostile shapes
+  // the guard drives. Same lesson lib/appOrigin records about its BOM replace —
+  // a line that looks load-bearing is exactly the kind that gets trusted.
   let decoded = v
   try { decoded = decodeURIComponent(v) } catch { return null }
+  // Control characters, tab, newline and space: the bytes some parsers strip
+  // BEFORE reading the authority, which is what makes '/%09/evil.tld' work.
   if (/[\u0000-\u0020\u007f]/.test(decoded)) return null
+  // Protocol-relative, in both spellings the URL parser accepts. THE check that
+  // stops '//evil.tld' and its encoded spelling '/%2f/evil.tld' alike.
   if (decoded.startsWith('//') || decoded.startsWith('/\\')) return null
   return v
 }
