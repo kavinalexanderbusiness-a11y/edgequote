@@ -15,7 +15,7 @@
 //
 // Usage:  node scripts/mutate-worker-access.mjs
 
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 import { join } from 'node:path'
 
@@ -23,7 +23,13 @@ const LIB = join('src', 'lib', 'workerAccess.ts')
 const COMPLETE = join('src', 'app', 'api', 'crew', 'complete', 'route.ts')
 const MEDIA = join('src', 'app', 'api', 'crew', 'media', 'route.ts')
 const PHOTOS = join('src', 'app', 'api', 'crew', 'photos', 'route.ts')
-const MIGRATION = join('supabase', 'migrations', '20260817060000_worker_access_v1.sql')
+// ⚠️ RESOLVED, NOT HARD-CODED. This lane's migration was applied to production
+// and then archived, and the regenerated baseline absorbed its function bodies —
+// so the SQL under test is whatever baseline currently sits in the apply path,
+// and its filename changes every time the baseline is regenerated. Naming the
+// old file would make these two mutations quietly unrunnable.
+const MIGRATION = join('supabase', 'migrations',
+  readdirSync(join('supabase', 'migrations')).find(f => f.endsWith('_baseline.sql')))
 
 /** Each mutation: what rule it attacks, the file, and the edit. */
 const MUTATIONS = [

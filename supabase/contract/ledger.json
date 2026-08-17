@@ -1104,5 +1104,12 @@
   "sql_md5": "d7a95058e0b892c862a767c822440d3f",
   "version": "20260816110000",
   "stmt_count": 1
+ },
+ {
+  "name": "worker_access_v1",
+  "sql_len": 9381,
+  "sql_md5": "9e93597bba2abc24702b02079fb23d1a",
+  "version": "20260817060000",
+  "stmt_count": 1
  }
 ]

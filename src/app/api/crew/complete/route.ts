@@ -83,6 +83,10 @@ export async function POST(req: NextRequest) {
   if (!jobId || !action || !baseUpdatedAt) return NextResponse.json({ error: 'bad request' }, { status: 400 })
 
   const admin = createAdminClient()
+  // No service key configured → this door cannot verify anything, so it stays
+  // shut. (authorizeWorkerVisit would refuse too; asking here keeps the refusal
+  // in this route's own words and lets the engines below see a non-null client.)
+  if (!admin) return NextResponse.json({ error: 'Completing visits isn’t available right now.' }, { status: 503 })
 
   // ⭐ THE canonical door (lib/workerAccess): active worker + this worker's
   // tenant + the S65 assignment predicate, in that order. It replaced a
@@ -102,7 +106,7 @@ export async function POST(req: NextRequest) {
   // The full row the billing engines need. Re-read (not echoed from the
   // authorisation, which carries identity only) and scoped by the SAME employer
   // id, with cancelled work excluded — a called-off visit is not completable.
-  const { data: jobRow, error: jobErr } = await admin!.from('jobs')
+  const { data: jobRow, error: jobErr } = await admin.from('jobs')
     .select('*')
     .eq('id', jobId).eq('user_id', ownerId)
     .neq('status', 'cancelled')
