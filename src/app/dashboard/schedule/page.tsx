@@ -12,7 +12,14 @@ import {
   ChangeOrder, listChangeOrders, createChangeOrder, sendChangeOrder, cancelChangeOrder,
   recordOwnerDecision, changeOrderSendRequest,
 } from '@/lib/changeOrders'
-import { changeOrderMessageBody } from '@/lib/comms/templates'
+import { changeOrderMessageBody, renderMessage, toDisplayBody, fromDisplayBody, type MsgType } from '@/lib/comms/templates'
+// The day board's action doors + the completion-message plan (Session 80).
+// The plan predicts the job-complete text with THE reach predicate so the
+// dialog never promises a send that consent or a missing grant would block.
+import { completionMessagePlan, type CompletionCaps } from '@/lib/dayActions'
+import { tenantCapabilities } from '@/lib/capabilities'
+import { newClientMessageId } from '@/lib/comms/idempotency'
+import { CompleteConfirm } from '@/components/schedule/CompleteConfirm'
 import { Calendar, CalendarView } from '@/components/schedule/Calendar'
 import { DayOpsPanel, QuoteLite, QuickPatch } from '@/components/schedule/DayOpsPanel'
 import { Coord, geocodeAddress } from '@/lib/geo'
@@ -47,6 +54,11 @@ interface FieldSettings {
   base_lat: number | null; base_lng: number | null; base_address: string | null
   preferred_work_days: number[] | null; work_start_time: string | null
   daily_capacity_hours: number | null; automations: unknown
+  // Session 80: the completion dialog composes the job-complete text with the
+  // SAME engine + owner overrides the composer uses, and the Review door needs
+  // the link — cached so both stay honest in a driveway with no signal.
+  company_name?: string | null; review_url?: string | null
+  message_templates?: Partial<Record<MsgType, string>> | null
 }
 
 interface FieldBundle {
@@ -226,6 +238,18 @@ export default function SchedulePage() {
   // new automation has to be remembered here too (and this is loaded from
   // settings a moment later anyway).
   const [automations, setAutomations] = useState<Automations>(() => resolveAutomations(null))
+  // What the completion dialog + Review door need from settings: the owner's
+  // template overrides, business name and review link — loaded with the same
+  // settings read, cached in the field bundle.
+  const [msgCtx, setMsgCtx] = useState<{ company: string; reviewUrl: string; templates: Partial<Record<MsgType, string>> | null }>({ company: '', reviewUrl: '', templates: null })
+  // Tenant platform grants (lib/capabilities), read once per session for the
+  // completion-message plan. null = not read yet → the plan predicts the
+  // attempt and lets the route's authoritative read decide.
+  const [caps, setCaps] = useState<CompletionCaps | null>(null)
+  // The completion dialog: which visit is waiting on the message decision.
+  // Present ONLY when the plan says a message would actually go out.
+  const [completeAsk, setCompleteAsk] = useState<{ job: Job; channels: ('sms' | 'email')[]; contactKnown: boolean; text: string; defaultText: string } | null>(null)
+  const [completeBusy, setCompleteBusy] = useState(false)
   const [showOptimize, setShowOptimize] = useState(false)
   const [showRainCenter, setShowRainCenter] = useState(false)
   // The day the Weather hub should open on (e.g. a known rain day). null → its own
@@ -621,7 +645,7 @@ export default function SchedulePage() {
     for (let from = 0; ; from += PAGE_ROWS) {
       const { data, error } = await supabase
         .from('jobs')
-        .select('*, customers(id, name, phone, email, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)')
+        .select('*, customers(id, name, phone, email, preferred_days, avoid_days, pref_time_start, pref_time_end, sms_opt_in, email_opt_in, message_prefs, reviewed_at, review_requested_at, review_declined_at), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)')
         .eq('user_id', userId)
         .order('scheduled_date')
         .order('id')
@@ -645,7 +669,7 @@ export default function SchedulePage() {
       supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — can't schedule an archived customer without restoring
       supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
       supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
-      supabase.from('business_settings').select('base_lat, base_lng, base_address, preferred_work_days, work_start_time, daily_capacity_hours, automations, business_type').eq('user_id', user!.id).maybeSingle(),
+      supabase.from('business_settings').select('base_lat, base_lng, base_address, preferred_work_days, work_start_time, daily_capacity_hours, automations, business_type, company_name, review_url, message_templates').eq('user_id', user!.id).maybeSingle(),
       supabase.from('invoices').select('job_id').eq('user_id', user!.id).not('job_id', 'is', null),
       supabase.from('schedule_health_ignored').select('issue_key').eq('user_id', user!.id),
       supabase.from('day_statuses').select(DAY_STATUS_SELECT).eq('user_id', user!.id),
@@ -733,13 +757,14 @@ export default function SchedulePage() {
     }
 
     // Base coordinate for route optimization (geocode the address once if needed).
-    const s = sRes.data as { base_lat: number | null; base_lng: number | null; base_address: string | null; preferred_work_days: number[] | null; work_start_time: string | null; daily_capacity_hours: number | null; automations: unknown; business_type: string | null } | null
+    const s = sRes.data as (FieldSettings & { business_type: string | null }) | null
     // Add-on quick-chips come from the trade pack (UI defaults only — same
     // contract as the campaign preset menu). A pack with no list falls back to
     // the neutral chips; a failed read resolves to the neutral pack too.
     const packForChips = tradePack(s?.business_type)
     setAddonTemplates(packForChips.addons.length ? packForChips.addons : NEUTRAL_PACK.addons)
     setAutomations(resolveAutomations(s?.automations))
+    setMsgCtx({ company: s?.company_name || '', reviewUrl: s?.review_url || '', templates: s?.message_templates || null })
     setPreferredWorkDays(s?.preferred_work_days?.length ? s.preferred_work_days : [5, 6, 0])
     setWorkStartTime(s?.work_start_time || '08:00')
     setCapacityHours(s?.daily_capacity_hours && s.daily_capacity_hours > 0 ? s.daily_capacity_hours : 8)
@@ -781,6 +806,7 @@ export default function SchedulePage() {
       const s = b.settings
       if (s) {
         setAutomations(resolveAutomations(s.automations))
+        setMsgCtx({ company: s.company_name || '', reviewUrl: s.review_url || '', templates: s.message_templates || null })
         setPreferredWorkDays(s.preferred_work_days?.length ? s.preferred_work_days : [5, 6, 0])
         setWorkStartTime(s.work_start_time || '08:00')
         setCapacityHours(s.daily_capacity_hours && s.daily_capacity_hours > 0 ? s.daily_capacity_hours : 8)
@@ -790,6 +816,20 @@ export default function SchedulePage() {
     }
     fetchJobs()
   }, [fetchJobs])
+
+  // The tenant's platform grants, once per session — feeds the completion-
+  // message plan so the dialog doesn't promise an SMS on a channel this
+  // business has no grant for. tenantCapabilities never throws (it fails
+  // closed), so a failed read here reads as "no grants" and the dialog simply
+  // doesn't show — the route's own authoritative read still governs the send.
+  useEffect(() => {
+    if (!uid) return
+    let alive = true
+    tenantCapabilities(supabase, uid).then(c => {
+      if (alive) setCaps({ outboundSms: c.outboundSms, outboundEmail: c.outboundEmail })
+    })
+    return () => { alive = false }
+  }, [supabase, uid])
 
   // ── Day Status: live sync + optimistic set/clear (source of truth = day_statuses) ──
   // A failed REFRESH must not erase a good map. This runs on every realtime
@@ -1840,14 +1880,43 @@ export default function SchedulePage() {
   // ✓ Check out: stamps completion, derives actual_minutes from check-in →
   // check-out (the ONE timing value every engine reads), drafts the invoice.
   // Also the calendar's one-tap Done (works without a check-in — no actual then).
+  //
+  // Session 80: JOB STATE CHANGED and CUSTOMER MESSAGE SENT are separate
+  // decisions now. When the configured automation would actually reach someone
+  // (lib/dayActions.completionMessagePlan — THE reach predicate + the tenant
+  // grants), the dialog shows the exact text FIRST and the owner chooses
+  // "Complete & send" or "Complete without sending". When nothing would go out
+  // (automation off, no customer, opted out, no grant) completion behaves
+  // exactly as before — no dialog for a message that was never going to exist,
+  // and the route still records its honest skip rows.
   async function completeJob(job: Job) {
+    const plan = completionMessagePlan(
+      { kind: 'visit', status: job.status, customer: job.customers ?? null },
+      { automationOn: !!automations.job_complete, caps },
+    )
+    if (plan.wouldSend && job.customer_id) {
+      // The SAME engine + owner overrides the composers use, so the preview is
+      // exactly what the route would send (the route re-renders identically).
+      const text = toDisplayBody(renderMessage('job_complete', msgCtx.templates, {
+        firstName: job.customers?.name || 'there',
+        businessName: msgCtx.company,
+        address: job.properties?.address,
+      }).sms)
+      setCompleteAsk({ job, channels: plan.channels, contactKnown: plan.contactKnown, text, defaultText: text })
+      return
+    }
+    await performComplete(job, !!(automations.job_complete && job.customer_id))
+  }
+
+  // The completion itself — state change + invoice draft (+ the message when
+  // the dialog said yes). `notify` is the DECISION now, not a re-derivation.
+  async function performComplete(job: Job, notify: boolean, bodyOverride?: string) {
     const prev = { status: job.status, completed_at: job.completed_at, actual_minutes: job.actual_minutes }
     // THE completion stamp (lib/jobStatus) — status + completed_at + accumulated
     // actual_minutes. Shared with the quick-edit dropdown, the job form and the
     // dispatch board so "completed" can't mean four slightly different rows.
     const patch = completionPatch(job)
     const completed = { ...job, ...patch }
-    const notify = !!(automations.job_complete && job.customer_id)
 
     // Completing is patch + draft invoice + courtesy text. Offline, all three
     // queue together as ONE op (kind 'job.complete') so reconnecting can never
@@ -1855,7 +1924,7 @@ export default function SchedulePage() {
     let outcome: 'ran' | 'queued'
     try {
       outcome = await queueOrRun(
-        { kind: 'job.complete', payload: { id: job.id, patch, job: completed, notify, baseUpdatedAt: job.updated_at }, label: `Complete ${job.title || 'job'}` },
+        { kind: 'job.complete', payload: { id: job.id, patch, job: completed, notify, bodyOverride, baseUpdatedAt: job.updated_at }, label: `Complete ${job.title || 'job'}` },
         async () => {
           const { error } = await supabase.from('jobs').update(patch).eq('id', job.id)
           if (error) throw new Error(error.message)
@@ -1867,9 +1936,17 @@ export default function SchedulePage() {
           // is never billed, with no trace pointing at it. ('exists' stays quiet: an invoice
           // does exist, so nothing is misclaimed.)
           else if (res.reason === 'error') setBanner('Job completed, but the draft invoice could not be created — invoice it manually from the job.')
-          // Automated job-complete message (opt-in + dedupe are enforced by the route).
+          // The job-complete message (opt-in + dedupe are enforced by the route;
+          // clientMessageId guards a retry against a double text).
           if (notify) {
-            fetch('/api/comms/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customerId: job.customer_id, template: 'job_complete', jobId: job.id, dedupe: true }) }).catch(() => {})
+            fetch('/api/comms/send', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                customerId: job.customer_id, template: 'job_complete', jobId: job.id, dedupe: true,
+                clientMessageId: newClientMessageId(),
+                ...(bodyOverride ? { bodyOverride } : {}),
+              }),
+            }).catch(() => {})
           }
         },
       )
@@ -2997,6 +3074,7 @@ export default function SchedulePage() {
           onRainDelay={() => rainDelayDay(dayISO)}
           onAddJob={() => openNewJob(cursor)}
           onQuickSave={quickSaveJob}
+          reviewUrl={msgCtx.reviewUrl}
         />
         </>
       ) : (
@@ -3018,6 +3096,32 @@ export default function SchedulePage() {
           capacityForDate={optBaseOpts.capacityForDate}
         />
       )}
+
+      {/* The completion message, shown BEFORE it goes out (Session 80). Cancel
+          (X/Escape/backdrop) completes nothing — the visit stays as it was. */}
+      <CompleteConfirm
+        open={!!completeAsk}
+        customerName={completeAsk?.job.customers?.name || 'the customer'}
+        channels={completeAsk?.channels ?? []}
+        contactKnown={completeAsk?.contactKnown ?? true}
+        text={completeAsk?.text ?? ''}
+        onText={t => setCompleteAsk(a => (a ? { ...a, text: t } : a))}
+        busy={completeBusy}
+        onConfirm={async send => {
+          if (!completeAsk || completeBusy) return
+          setCompleteBusy(true)
+          try {
+            // Only an EDITED text rides as bodyOverride — an untouched preview
+            // lets the route render from the owner's template as it always has.
+            const edited = completeAsk.text.trim() !== completeAsk.defaultText.trim()
+            await performComplete(completeAsk.job, send, send && edited ? fromDisplayBody(completeAsk.text) : undefined)
+            setCompleteAsk(null)
+          } finally {
+            setCompleteBusy(false)
+          }
+        }}
+        onCancel={() => { if (!completeBusy) setCompleteAsk(null) }}
+      />
 
       {pendingAction && (
         <ScopeDialog

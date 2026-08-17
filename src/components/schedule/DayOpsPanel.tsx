@@ -13,7 +13,12 @@ import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/t
 import { buildRoadDistance, type RoadDist, type RoadSeconds, type RoadHas } from '@/lib/distance'
 import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
 import { addonsTotal } from '@/lib/jobPricing'
-import { formatCurrency, cn, localTodayISO } from '@/lib/utils'
+import { formatCurrency, formatDate, cn, localTodayISO } from '@/lib/utils'
+// THE action doors for a day-board record (Session 80) — which customer-facing
+// affordances make sense here. The card renders what the module answers; the
+// rules live there, beside the estimate-appointment boundary they protect.
+import { dayDoors } from '@/lib/dayActions'
+import type { MsgType } from '@/lib/comms/templates'
 import { orderDayStops, crewOrderStatus } from '@/lib/fieldStops'
 import { DayPlanPanel } from '@/components/schedule/DayPlanPanel'
 import { scrollBehavior } from '@/lib/motion'
@@ -30,12 +35,13 @@ import { authorizedValue, type ChangeOrder } from '@/lib/changeOrders'
 import { JobMessages } from '@/components/schedule/JobMessages'
 import { VisitConversation } from '@/components/schedule/VisitConversation'
 import { loadOwnerUnread } from '@/lib/crewMessages'
+import { newClientMessageId } from '@/lib/comms/idempotency'
 import { SendMessageDialog, type MessageRecipient } from '@/components/comms/SendMessageDialog'
 import {
   DollarSign, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
   Plus, Pencil, Move, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send, Receipt,
   ChevronUp, ChevronDown, Wand2, MoreHorizontal, CalendarDays, StickyNote, MessagesSquare, PauseCircle,
-  FileSignature, ClipboardCheck,
+  FileSignature, ClipboardCheck, Phone, User as UserIcon, Star,
 } from 'lucide-react'
 import StopForTodaySheet from '@/components/jobs/StopForTodaySheet'
 import type { StopForTodayInput } from '@/lib/workSession'
@@ -121,6 +127,10 @@ interface Props {
   // answer is how two surfaces start disagreeing about whether there is a
   // message waiting. One pair of queries for the whole day, shared.
   onChatUnread?: (counts: Record<string, number>) => void
+  // The business's public review link (business_settings.review_url) — the
+  // Review door's prerequisite. Passed down rather than fetched so the card and
+  // the settings screen can never disagree about whether a link exists.
+  reviewUrl?: string | null
 }
 
 export interface QuickPatch {
@@ -138,7 +148,7 @@ export function DayOpsPanel({
   workersOnDay, staffingOnDay, crewNames, availabilityRecorded, learnedDurationFor, onRainDelay, onAddJob, onQuickSave,
   addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons, addonTemplates,
   changeOrdersByJobId, onCreateChangeOrder, onSendChangeOrder, onCancelChangeOrder, onOwnerChangeDecision, onRemindChangeOrder,
-  onStopOrder, onChatUnread,
+  onStopOrder, onChatUnread, reviewUrl,
 }: Props) {
   const supabase = createClient()
   // Guards Start/Complete against a double-tap (which would double-stamp the job
@@ -169,6 +179,9 @@ export function DayOpsPanel({
   const [changesId, setChangesId] = useState<string | null>(null)
   // Which job's one-tap messaging panel is open. ⚠️ This one texts the CUSTOMER.
   const [messageId, setMessageId] = useState<string | null>(null)
+  // Which action the message panel opens on (the Review door pre-selects
+  // review_request; a plain Message tap opens neutral).
+  const [messageInitial, setMessageInitial] = useState<MsgType | undefined>(undefined)
   // Which job's CREW conversation is open — the internal one, which no customer
   // surface can read. Deliberately a separate panel from `messageId` above: the
   // two have opposite audiences and merging them is how a gate code ends up in
@@ -213,6 +226,8 @@ export function DayOpsPanel({
         body: JSON.stringify({
           customerId: job.customer_id, template: 'on_my_way', jobId: job.id,
           channels: ['sms', 'email'],
+          // One id per tap — a retry can't promise the same arrival twice.
+          clientMessageId: newClientMessageId(),
           vars: { eta: ONE_TAP_ETA_MIN, address: job.properties?.address ?? undefined },
         }),
       })
@@ -248,7 +263,10 @@ export function DayOpsPanel({
   const togglePhoto = (job: Job) => { const was = photoId === job.id; closePanels(); if (!was) setPhotoId(job.id) }
   const toggleAddons = (job: Job) => { const was = addonsId === job.id; closePanels(); if (!was) setAddonsId(job.id) }
   const toggleChanges = (job: Job) => { const was = changesId === job.id; closePanels(); if (!was) setChangesId(job.id) }
-  const toggleMessage = (job: Job) => { const was = messageId === job.id; closePanels(); if (!was) setMessageId(job.id) }
+  const toggleMessage = (job: Job) => { const was = messageId === job.id; closePanels(); setMessageInitial(undefined); if (!was) setMessageId(job.id) }
+  // The Review door: the SAME message panel, landed on the review-request
+  // action — one composer, not a second review pipeline.
+  const openReviewAsk = (job: Job) => { closePanels(); setMessageInitial('review_request'); setMessageId(job.id) }
   const toggleMove = (job: Job) => { const was = moveId === job.id; closePanels(); if (!was) setMoveId(job.id) }
   const openStop = (job: Job) => { closePanels(); setStopping(job) }
 
@@ -971,6 +989,11 @@ export function DayOpsPanel({
               const ownerExtras = addons.filter(a => !a.change_order_id)
               const qVal = quoteValueFor(job)
               const idx = sortedJobs.findIndex(j => j.id === job.id)
+              // Which customer doors are open on THIS record (lib/dayActions).
+              // A `jobs` row is a VISIT; when a second record kind (estimate
+              // appointments) ever renders here, its `kind` closes Complete by
+              // construction rather than by another inline condition.
+              const doors = dayDoors({ kind: 'visit', status: job.status, customer: job.customers ?? null }, reviewUrl)
               return (
                 <div key={job.id}
                   id={`stop-${job.id}`}
@@ -1213,18 +1236,51 @@ export function DayOpsPanel({
                             className="tap-target h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border border-current/30 text-xs font-medium flex items-center justify-center gap-1 hover:bg-black/10">
                             <Receipt className="w-3.5 h-3.5" /> Invoice
                           </a>
+                          {/* Ask for the review while the finished visit is still the
+                              context. The door ladder (lib/dayActions) shows exactly one
+                              of: the ask, the "already asked" fact, or nothing — asking
+                              twice, or after a decline, is how goodwill gets spent. The
+                              no-url state still opens the composer, whose hint says
+                              where the link goes. */}
+                          {(doors.review.state === 'ready' || doors.review.state === 'no-url') && (
+                            <ActionBtn onClick={() => openReviewAsk(job)} icon={Star} label="Request review" />
+                          )}
+                          {doors.review.state === 'already-requested' && (
+                            <span
+                              title="A review request already went out — by you, the day-after automation or a campaign. One neutral ask per customer."
+                              className="h-10 sm:h-8 px-2.5 rounded-lg border border-border text-[10px] font-semibold text-ink-faint flex items-center gap-1">
+                              <Star className="w-3 h-3" /> Review asked{doors.review.requestedAt ? ` ${formatDate(doors.review.requestedAt)}` : ''}
+                            </span>
+                          )}
                           {/* "Edit job" (main's wording — it matches the overflow
                               item and the quick panel's footer) driving the
                               togglePhoto helper (this commit's point: closePanels()
                               first, so two inline panels can never stack). */}
                           <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Edit job" />
-                          <ActionBtn onClick={() => togglePhoto(job)} icon={Camera} label="Photos" />
+                          <ActionBtn className="hidden sm:inline-flex" onClick={() => togglePhoto(job)} icon={Camera} label="Photos" />
+                          {doors.canMessage && (
+                            <ActionBtn className="hidden sm:inline-flex" onClick={() => toggleMessage(job)} icon={MessageSquare} label="Message" />
+                          )}
+                          {(doors.canMessage || doors.canCall || doors.canOpenCustomer) && (
+                            <Menu align="end" width={280} items={[
+                              { key: 'p-photos', className: 'sm:hidden', label: 'Photos', description: 'Before & after for this visit', icon: Camera, onSelect: () => togglePhoto(job) },
+                              ...(doors.canMessage ? [{ key: 'p-message', className: 'sm:hidden', label: 'Message', description: 'Text this customer', icon: MessageSquare, onSelect: () => toggleMessage(job) }] : []),
+                              ...(doors.canCall ? [{ key: 'call', label: 'Call customer', description: job.customers?.phone?.trim(), icon: Phone, onSelect: () => { window.location.href = `tel:${job.customers?.phone?.trim()}` } }] : []),
+                              ...(doors.canOpenCustomer ? [{ key: 'customer', label: 'Open customer', description: 'Profile, history & consent', icon: UserIcon, onSelect: () => { window.location.href = `/dashboard/customers/${job.customer_id}` } }] : []),
+                            ]}>
+                              {({ toggle, triggerProps }) => (
+                                <Button size="sm" variant="ghost" onClick={toggle} aria-label="More actions" title="More actions" {...triggerProps}>
+                                  <MoreHorizontal className="w-4 h-4" />
+                                </Button>
+                              )}
+                            </Menu>
+                          )}
                         </div>
                       ) : (
                       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
                         {/* Stage primary. on_my_way_at stamps when the text sends, so the
                             primary advances On my way → Start on its own. */}
-                        {job.status === 'scheduled' && !job.on_my_way_at && (
+                        {doors.canOnMyWay && !job.on_my_way_at && (
                           <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : `On my way · ${ONE_TAP_ETA_MIN}m`}
                             title={`Texts ${job.customers?.name || 'the customer'} that you'll arrive in about ${ONE_TAP_ETA_MIN} minutes. Use Message to send a different ETA.`} tone="primary" />
                         )}
@@ -1248,7 +1304,7 @@ export function DayOpsPanel({
                           <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onResume(job) } finally { setActing(null) } }} icon={Play} label="Resume" tone="primary"
                             title="Start the clock again on this job. The time already recorded is kept." />
                         )}
-                        {job.status === 'in_progress' && (
+                        {job.status === 'in_progress' && doors.canComplete && (
                           <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onMarkDone(job) } finally { setActing(null) } }} icon={CheckCircle2} label="Complete" tone="complete" />
                         )}
                         <a
@@ -1258,14 +1314,16 @@ export function DayOpsPanel({
                         >
                           <Navigation className="w-3.5 h-3.5" /> Route to
                         </a>
-                        <ActionBtn className="hidden sm:inline-flex" onClick={() => toggleMessage(job)} icon={MessageSquare} label="Message" />
-                        {job.status === 'scheduled' && job.on_my_way_at && (
+                        {doors.canMessage && (
+                          <ActionBtn className="hidden sm:inline-flex" onClick={() => toggleMessage(job)} icon={MessageSquare} label="Message" />
+                        )}
+                        {doors.canOnMyWay && job.on_my_way_at && (
                           <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : `On my way · ${ONE_TAP_ETA_MIN}m`}
                             title={`Texts ${job.customers?.name || 'the customer'} that you'll arrive in about ${ONE_TAP_ETA_MIN} minutes. Use Message to send a different ETA.`} />
                         )}
                         {/* Complete a scheduled visit without a check-in (no time tracked);
                             completeJob handles the missing started_at and offers Undo. */}
-                        {job.status === 'scheduled' && (
+                        {job.status === 'scheduled' && doors.canComplete && (
                           <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onMarkDone(job) } finally { setActing(null) } }} icon={CheckCircle2} label="Complete" />
                         )}
                         {/* The toggle helpers (this commit) call closePanels() before
@@ -1322,12 +1380,18 @@ export function DayOpsPanel({
                           // The phone twins of the three buttons above. They
                           // exist ONLY below sm, so no width ever shows the same
                           // action twice.
-                          { key: 'p-message', className: 'sm:hidden', label: 'Message', description: 'Text this customer', icon: MessageSquare, onSelect: () => toggleMessage(job) },
+                          ...(doors.canMessage ? [{ key: 'p-message', className: 'sm:hidden', label: 'Message', description: 'Text this customer', icon: MessageSquare, onSelect: () => toggleMessage(job) }] : []),
                           { key: 'p-photos', className: 'sm:hidden', label: 'Photos', description: 'Before & after for this visit', icon: Camera, onSelect: () => togglePhoto(job) },
                           { key: 'p-checklist', className: 'sm:hidden', label: 'Checklist', description: 'What must be done and shown before completing', icon: ClipboardCheck, onSelect: () => toggleChecklist(job) },
                           ...(chatUnread[job.id] ? [] : [{ key: 'p-chat', className: 'sm:hidden', label: 'Crew chat', description: 'The crew conversation for this visit', icon: MessagesSquare, onSelect: () => toggleChat(job) }]),
                           { key: 'p-services', className: 'sm:hidden', label: ownerExtras.length ? `Services (${ownerExtras.length})` : 'Services', description: 'Extra work billed with this visit', icon: PlusCircle, onSelect: () => toggleAddons(job) },
                           ...(av.pendingCount ? [] : [{ key: 'p-changes', className: 'sm:hidden', label: changes.length ? `Changes (${changes.length})` : 'Add change', description: 'New scope the customer has to approve first', icon: FileSignature, onSelect: () => toggleChanges(job) }]),
+                          // Customer doors (Session 80): reach the person, not the
+                          // visit. `tel:` is the phone's own dialer; Open customer
+                          // is the profile with history + consent. Both compact —
+                          // the field bar only carries them for the NEXT stop.
+                          ...(doors.canCall ? [{ key: 'call', label: 'Call customer', description: job.customers?.phone?.trim(), icon: Phone, onSelect: () => { window.location.href = `tel:${job.customers?.phone?.trim()}` } }] : []),
+                          ...(doors.canOpenCustomer ? [{ key: 'customer', label: 'Open customer', description: 'Profile, history & consent', icon: UserIcon, onSelect: () => { window.location.href = `/dashboard/customers/${job.customer_id}` } }] : []),
                           { key: 'quick', label: 'Quick edit', description: 'Time, crew, status & notes — this visit', icon: SlidersHorizontal, onSelect: () => { quickId === job.id ? setQuickId(null) : openQuick(job) } },
                           { key: 'edit', label: 'Edit job', description: 'Property, title & the recurring schedule', icon: Pencil, onSelect: () => onOpenJob(job) },
                           // Stop for today is a first-class button on the card
@@ -1382,7 +1446,8 @@ export function DayOpsPanel({
                         <div className="mt-2 rounded-lg border border-border bg-bg-secondary p-2.5" onClick={e => e.stopPropagation()}>
                           <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1"><MessageSquare className="w-3 h-3" /> Message customer</p>
                           <JobMessages jobId={job.id} customerId={job.customer_id} customerName={job.customers?.name || job.title}
-                            visitDate={job.scheduled_date} timeWindow={windowByJob[job.id]} address={job.properties?.address ?? undefined} />
+                            visitDate={job.scheduled_date} timeWindow={windowByJob[job.id]} address={job.properties?.address ?? undefined}
+                            initialAction={messageInitial} />
                         </div>
                       )}
 

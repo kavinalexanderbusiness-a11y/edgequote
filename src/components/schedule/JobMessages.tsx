@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { MsgType, renderMessage, toDisplayBody, fromDisplayBody } from '@/lib/comms/templates'
+import { newClientMessageId } from '@/lib/comms/idempotency'
 import { summarizeSendOutcome as summarize, type SendOutcome as Outcome } from '@/lib/comms/sendOutcome'
 import { SmsCost } from '@/components/comms/SmsCost'
 import { localTodayISO, cn } from '@/lib/utils'
@@ -25,6 +26,10 @@ interface Props {
   visitDate?: string   // yyyy-MM-dd — the job's scheduled date
   timeWindow?: string  // e.g. "8:15–10:15 AM"
   address?: string
+  // Open the panel landed on this action (the day board's Review door). The
+  // panel mounts fresh per open, so this is applied once, after the owner's
+  // templates load — the preview must be composed with their overrides.
+  initialAction?: MsgType
 }
 
 // The scheduler quick actions, in field order. needsEta = uses the minutes input;
@@ -42,7 +47,7 @@ const ACTIONS: { type: MsgType; label: string; icon: typeof Navigation; tone?: s
   { type: 'rain_delay', label: 'Weather delay', icon: CloudRain, reschedule: 'weather', tone: 'text-sky-300 border-sky-400/30 bg-sky-400/10 hover:bg-sky-400/20' },
 ]
 
-export function JobMessages({ jobId, customerId, customerName, visitDate, timeWindow, address }: Props) {
+export function JobMessages({ jobId, customerId, customerName, visitDate, timeWindow, address, initialAction }: Props) {
   const supabase = useMemo(() => createClient(), [])
   const [custom, setCustom] = useState<Partial<Record<MsgType, string>> | null>(null)
   // Empty until settings load: `company` is passed straight to renderMessage as
@@ -52,7 +57,11 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
   // someone else's business.
   const [company, setCompany] = useState('')
   const [reviewUrl, setReviewUrl] = useState('')
-  const [reviewed, setReviewed] = useState(false)  // customer already left a review → hide review request
+  // The review lifecycle facts (lib/crm/reviews columns). Reviewed or declined
+  // hides the ask — both are answers; asking past them is noise. A prior
+  // REQUEST keeps the chip but the composer says when it was asked, so a
+  // second ask is a deliberate choice and never an accident.
+  const [review, setReview] = useState<{ reviewedAt: string | null; requestedAt: string | null; declinedAt: string | null }>({ reviewedAt: null, requestedAt: null, declinedAt: null })
 
   const [active, setActive] = useState<MsgType | null>(null)
   const [eta, setEta] = useState('15')
@@ -72,15 +81,25 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
       if (!uid) return
       const [bizRes, custRes] = await Promise.all([
         supabase.from('business_settings').select('company_name, review_url, message_templates').eq('user_id', uid).maybeSingle(),
-        customerId ? supabase.from('customers').select('reviewed_at').eq('id', customerId).maybeSingle() : Promise.resolve({ data: null }),
+        customerId ? supabase.from('customers').select('reviewed_at, review_requested_at, review_declined_at').eq('id', customerId).maybeSingle() : Promise.resolve({ data: null }),
       ])
       const d = bizRes.data as { company_name: string | null; review_url: string | null; message_templates: Partial<Record<MsgType, string>> | null } | null
       if (d?.company_name) setCompany(d.company_name)
       setReviewUrl(d?.review_url || '')
       setCustom(d?.message_templates || {})
-      setReviewed(!!(custRes.data as { reviewed_at: string | null } | null)?.reviewed_at)
+      const cr = custRes.data as { reviewed_at: string | null; review_requested_at: string | null; review_declined_at: string | null } | null
+      setReview({ reviewedAt: cr?.reviewed_at ?? null, requestedAt: cr?.review_requested_at ?? null, declinedAt: cr?.review_declined_at ?? null })
     })()
   }, [supabase, customerId])
+
+  // The day board's Review door lands the panel on the review ask — applied
+  // once the owner's templates are in, so the editable preview is composed
+  // with their overrides rather than the defaults. `active === null` keeps a
+  // choice the owner already made.
+  useEffect(() => {
+    if (initialAction && custom !== null && active === null) open(initialAction)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialAction, custom])
 
   const fmtDate = (iso: string) => { try { return format(parseISO(iso + 'T00:00:00'), 'EEE, MMM d') } catch { return iso } }
 
@@ -132,6 +151,9 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customerId, template: active, jobId, channels, bodyOverride: fromDisplayBody(text),
+          // One id per tap: a retry or a second tap in-flight loses the atomic
+          // claim server-side instead of texting the customer twice.
+          clientMessageId: newClientMessageId(),
           vars: { eta, dateLabel, timeWindow, oldDateLabel: fmtDate(oldDate), address },
         }),
       })
@@ -155,10 +177,12 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
 
   return (
     <div className="space-y-2.5">
-      {/* Action buttons — hide Review request once the customer has reviewed, and
-          Send ETA when there's no window to send. */}
+      {/* Action buttons — hide Review request once the customer has reviewed OR
+          declined (both are answers), and Send ETA when there's no window to
+          send. A prior REQUEST keeps the chip: re-asking is legitimate, but the
+          composer names the earlier ask so it's deliberate. */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-        {ACTIONS.filter(a => (a.type !== 'review_request' || !reviewed) && (a.type !== 'eta' || canSendEta)).map(a => (
+        {ACTIONS.filter(a => (a.type !== 'review_request' || !(review.reviewedAt || review.declinedAt)) && (a.type !== 'eta' || canSendEta)).map(a => (
           <button key={a.type} type="button" onClick={() => open(a.type)} disabled={busy}
             className={cn('h-9 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50',
               active === a.type ? 'border-accent bg-accent/15 text-accent-text ring-1 ring-accent/40'
@@ -216,7 +240,15 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
             className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 resize-none" />
           {ch.sms ? <SmsCost text={text} className="mt-0.5" /> : <p className="text-[10px] text-ink-faint">{text.length} characters · edit freely before sending</p>}
           {active === 'review_request' && !reviewUrl && (
-            <p className="text-[10px] text-amber-400">Add your Google review link in Settings → Message templates so it&apos;s inserted automatically.</p>
+            <p className="text-[10px] text-amber-400">Add your public review link in Settings → Message templates so it&apos;s inserted automatically.</p>
+          )}
+          {/* Duplicate-ask honesty: the automation, a campaign or you may have
+              already asked — one neutral request per customer is the rule, so a
+              second one is flagged, not silently repeated. */}
+          {active === 'review_request' && review.requestedAt && (
+            <p className="text-[10px] text-amber-400">
+              A review request already went out {format(parseISO(review.requestedAt), 'MMM d')}. Sending another is up to you — twice is usually once too many.
+            </p>
           )}
 
           {/* Channels + send */}
