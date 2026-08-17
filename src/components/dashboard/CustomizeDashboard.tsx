@@ -70,7 +70,11 @@ export function CustomizeDashboard({ initial }: { initial: DashboardLayout }) {
 
   return (
     <>
-      <Button variant="secondary" size="sm" onClick={openSheet} aria-label="Customize dashboard" title="Customize dashboard">
+      {/* tap-target: below sm the label hides and the sm Button's 44px promise
+          rests on a text line box that is no longer there — a bare icon leaves
+          the box 40px tall (the phone proof measured exactly this). The shell's
+          opt-in class restores the floor only where a thumb acts. */}
+      <Button variant="secondary" size="sm" onClick={openSheet} aria-label="Customize dashboard" title="Customize dashboard" className="tap-target">
         <SlidersHorizontal className="w-3.5 h-3.5" />
         <span className="hidden sm:inline">Customize</span>
       </Button>
