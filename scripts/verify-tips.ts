@@ -374,8 +374,11 @@ H('6. SERVER DERIVATION — the browser may ask, it may never decide')
   check('  …with the charge the engine derived, not a client figure',
     /chargeCents\s*=\s*Math\.round\(charge\.amount\s*\*\s*100\)/.test(pay),
     'the tip ceiling is proportional to the SERVER-derived charge')
+  // Anchored on the `if (` itself. A looser match stayed green when the branch
+  // was neutered to `if (false && tip.rejected)`, because the words were all
+  // still there — the mutation harness caught that.
   check('  …and a rejected tip is a 400, not a charge',
-    /tip\.rejected[\s\S]{0,220}status:\s*400/.test(pay),
+    /\n\s*if \(tip\.rejected\) \{[\s\S]{0,240}status:\s*400/.test(pay),
     'a refused tip must fail the request; charging a different amount is an overcharge')
 }
 
@@ -403,9 +406,12 @@ H('7. THE STRIPE SESSION — a second line item, and metadata we control')
   check('the session function re-validates the tip it was handed',
     /Number\.isSafeInteger\(opts\.tipCents\)/.test(cfg),
     'defence in depth: a non-integer reaching Stripe is a 400 at best, a wrong charge at worst')
-  check('the 30-minute session expiry is unchanged',
-    /expires_at'?,\s*String\(Math\.floor\(Date\.now\(\) \/ 1000\) \+ 30 \* 60\)\)/.test(cfg),
-    'a stale session is a second real charge; tips must not have extended its life')
+  // BOTH sessions, counted. Asserting "at least one" left the invoice session
+  // free to grow a 24-hour expiry while the quote-deposit session kept the check
+  // green — an abandoned tab that stays payable overnight is a second real
+  // charge. (Found by mutate-tips.)
+  eq('the 30-minute expiry is unchanged on BOTH checkout sessions',
+    (cfg.match(/expires_at',\s*String\(Math\.floor\(Date\.now\(\) \/ 1000\) \+ 30 \* 60\)\)/g) || []).length, 2)
   check("no Stripe 'customer chooses price' / pay-what-you-want mode",
     !/custom_unit_amount|pay_what_you_want/i.test(cfg),
     'Stripe documents restrictions combining a customer-chosen price with other line items — the tip is chosen BEFORE checkout')
@@ -459,6 +465,12 @@ H('8. THE SPLIT — arithmetic that cannot create or lose a cent')
   check('  …only when there is a tip',
     /if \(tipCents > 0\) \{[\s\S]{0,600}kind:\s*'tip'/.test(wh),
     'an untipped payment must write exactly one row, as it always did')
+  // The tip leg needs its OWN key in the unique namespace. Without this the two
+  // legs share `s.id`, the second upsert conflicts, and one of them silently
+  // never lands — a green guard over a lost tip. (Found by mutate-tips.)
+  check('  …under its own idempotency key, never the payment row’s',
+    /kind:\s*'tip'[\s\S]{0,300}stripe_session_id:\s*tipSessionKey\(s\.id\)/.test(wh),
+    "both legs on `s.id` means the second upsert conflicts and one leg is lost")
   check('the webhook never writes invoice status directly',
     !/from\('invoices'\)\.update\(\{[^}]*status/.test(wh),
     'the recompute trigger owns status; the webhook only stamps payment_method')
@@ -598,8 +610,10 @@ H('10. REFUNDS — tip-first, cumulative, and it cannot reopen a settled invoice
   check('  …never from the Stripe charge payload',
     !/ch\.metadata/.test(wh),
     'whether a charge mirrors PaymentIntent metadata is API-version-sensitive on an unpinned account')
+  // Anchored on the `if (`. The words alone stayed green when the branch was
+  // neutered, because the same identifiers appear in its console.error.
   check('  …and a failed apportionment READ is a 500, not a guess',
-    /(priorErr \|\| tipErr)[\s\S]{0,260}status:\s*500/.test(wh),
+    /\n\s*if \(priorErr \|\| tipErr\) \{[\s\S]{0,300}status:\s*500/.test(wh),
     'a read we cannot complete would make the apportionment guess, and a guess here writes money')
   check('the owner notification names the tip portion of a refund',
     /of that came off the tip/.test(wh),
@@ -750,7 +764,11 @@ H('13. WHAT THE OWNER AND THE CUSTOMER SEE')
     'a text keyboard for a money amount on a phone is a mis-typed tip')
   check('  …and is not type="number"', !/type="number"/.test(sel),
     'type=number silently accepts 1e5 and reports "" for invalid — we could not tell cleared from nonsense')
-  check('the tip chips clear the 44px touch target', /tap-target-y/.test(sel),
+  // Counted, not merely present: the chips and the custom money field each need
+  // it, and asserting "somewhere in the file" let the chips shrink while the
+  // input kept the check green. (Found by mutate-tips.)
+  check('the tip chips AND the custom field both clear the 44px touch target',
+    (sel.match(/tap-target-y/g) || []).length >= 2,
     'a mis-tap here is a mis-tap on somebody\'s money')
   check('the chips never exceed two columns on a phone',
     /grid-cols-1 min-\[400px\]:grid-cols-2/.test(sel),
