@@ -8,6 +8,8 @@
     "verify": "tsx scripts/verify-all.ts",
     "verify:beta-signup": "tsx scripts/verify-beta-signup.ts",
     "verify:app-origin": "tsx scripts/verify-app-origin.ts",
+    "verify:tenant-weld": "tsx scripts/verify-tenant-weld.ts",
+    "verify:operator-cli": "tsx scripts/verify-operator-cli.ts",
     "verify:automations": "tsx scripts/verify-automations.ts",
     "verify:capabilities": "tsx scripts/verify-capabilities.ts",
     "verify:comms-governor": "tsx scripts/verify-comms-governor.ts",
@@ -158,6 +160,7 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.5",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
