@@ -119,17 +119,20 @@ check('audit_events has a select policy and NO insert/update/delete policy',
 // -- 2b. grants: revoke names PUBLIC first, then each role ------------------
 // ⚠️ `revoke ... from anon` alone leaves the PUBLIC grant (`=X/postgres`) standing
 //    and has_*_privilege stays TRUE. This repo has been bitten twice.
-const tableRevoke = /revoke all on table public\.audit_events from ([^;]+);/i.exec(auditBody)
+// `"?` throughout: the hand-written migration says audit_events, the generated
+// baseline says "audit_events" — the guard must read both homes (change-orders
+// lesson: post-convergence assertions are pg_dump-shaped).
+const tableRevoke = /revoke all on table public\."?audit_events"? from ([^;]+);/i.exec(auditBody)
 check('the table revoke names public, anon, authenticated and service_role',
   !!tableRevoke && ['public', 'anon', 'authenticated', 'service_role']
     .every(r => new RegExp(`\\b${r}\\b`).test(tableRevoke[1])),
   tableRevoke ? `revoke list is: ${tableRevoke[1].trim()}` : 'no table revoke found')
 check('anon is granted nothing on audit_events',
-  !/grant [^;]*on table public\.audit_events to [^;]*\banon\b/i.test(auditBody))
+  !/grant [^;]*on table public\."?audit_events"? to [^;]*\banon\b/i.test(auditBody))
 check('authenticated may SELECT but never INSERT/UPDATE/DELETE',
-  /grant select on table public\.audit_events to authenticated;/i.test(auditBody) &&
-  !/grant [^;]*\b(insert|update|delete)\b[^;]*on table public\.audit_events to authenticated/i.test(auditBody))
-const fnRevokes = auditBody.match(/revoke all on function public\.audit_\w+\([^)]*\) from ([^;]+);/gi) ?? []
+  /grant select on table public\."?audit_events"? to authenticated;/i.test(auditBody) &&
+  !/grant [^;]*\b(insert|update|delete)\b[^;]*on table public\."?audit_events"? to authenticated/i.test(auditBody))
+const fnRevokes = auditBody.match(/revoke all on function public\."?audit_\w+"?\([^)]*\) from ([^;]+);/gi) ?? []
 check(`every audit function revokes EXECUTE by role name (${fnRevokes.length} found)`,
   fnRevokes.length >= 13 && fnRevokes.every(r => /\bpublic\b/.test(r) && /\banon\b/.test(r) &&
     /\bauthenticated\b/.test(r) && /\bservice_role\b/.test(r)),
@@ -139,11 +142,23 @@ check('audit_log is not granted back to any client role',
   'a client-callable audit_log would let anyone forge an event')
 
 // -- 2c. the migration proves its own grants --------------------------------
-check('the migration asserts its own privileges with has_*_privilege',
-  /has_table_privilege\('anon'/.test(auditBody) &&
-  /has_function_privilege\('authenticated'/.test(auditBody) &&
-  /raise exception/.test(auditBody),
-  'house rule: a migration proves itself rather than hoping')
+// The self-proof is a do-block, which is migration-time code, not a schema
+// object — the generated baseline does not carry it. Once the baseline is the
+// schema's home, the proof lives in the ARCHIVED text production actually ran.
+const provingSql = baselineHasTable
+  ? (() => {
+      const dir = join('supabase', 'archive', 'ledger')
+      const f = (existsSync(dir) ? readdirSync(dir) : []).find(n => /_audit_trail_v1\.sql$/.test(n))
+      return f ? APP(join(dir, f)) : ''
+    })()
+  : auditBody
+check('the migration production ran asserts its own privileges with has_*_privilege',
+  /has_table_privilege\('anon'/.test(provingSql) &&
+  /has_function_privilege\('authenticated'/.test(provingSql) &&
+  /raise exception/.test(provingSql),
+  baselineHasTable
+    ? 'the applied migration must be archived under supabase/archive/ledger/ with its self-proof intact'
+    : 'house rule: a migration proves itself rather than hoping')
 
 // -- 2d. no whole-row dumps -------------------------------------------------
 check('no trigger dumps a whole row into the audit JSON',
@@ -169,16 +184,19 @@ const captureFns = auditFnBodies
   .map(b => ({ name: (/function public\.(\w+)/i.exec(b) ?? [])[1] ?? '?', body: b }))
   .filter(f => f.name !== 'audit_events_immutable')
 // Two shapes of change guard, both correct: a value that moved (IS DISTINCT FROM)
-// or a stamp that appeared (null → not null, e.g. resolved_at).
-const CHANGE_GUARD = /is distinct from|is null and new\.\w+ is not null/i
+// or a stamp that appeared (null → not null, e.g. resolved_at) — in either
+// operand order (audit_job_forms writes `new.x is not null and old.x is null`).
+const CHANGE_GUARD = /is distinct from|is null and new\.\w+ is not null|is not null and old\.\w+ is null/i
 const unguarded = captureFns.filter(f => !CHANGE_GUARD.test(f.body))
 check(`every capture function guards its branches against a no-op (${captureFns.length} functions)`,
   captureFns.length >= 10 && unguarded.length === 0,
   unguarded.map(f => f.name).join(', ') || 'without it a no-op update mints a false event')
 
 // -- 2f. actor resolution is in the database, not the client ---------------
+// Hand-written shape OR the pg_get_constraintdef rendering of the same rule.
 check('actor_type is constrained to the four kinds',
-  /check \(actor_type in \('owner', 'worker', 'customer', 'system'\)\)/i.test(auditBody))
+  /check \(actor_type in \('owner', 'worker', 'customer', 'system'\)\)/i.test(auditBody) ||
+  /actor_type = any \(array\['owner'::text, 'worker'::text, 'customer'::text, 'system'::text\]\)/i.test(auditBody))
 check('actor resolution reads auth.uid() rather than a parameter',
   /function public\.audit_actor_context\([\s\S]*?auth\.uid\(\)/i.test(auditBody),
   'a client-supplied actor is a forged actor')
@@ -201,12 +219,19 @@ check('txid_current() is captured so one write folds into one act',
 
 // -- 2h. one engine per responsibility -------------------------------------
 // These already have their own audit tables. A second copy in audit_events would
-// be a second answer to a settled question.
+// be a second answer to a settled question. Scope: the AUDIT FUNCTIONS only —
+// when the baseline is the home, the rest of the schema legitimately mentions
+// wages and consent (wage_history's own trigger, the consent RPCs), and scanning
+// the whole file would indict them for existing.
+const auditScope = (auditBody.match(
+  /create or replace function public\."?audit_\w+"?\([^)]*\)[\s\S]*?\$function\$[\s\S]*?\$function\$/gi) ?? []).join('\n')
+check('the audit-function scope was actually extracted', auditScope.length > 0,
+  'an empty scope would pass the absence checks below vacuously')
 for (const [what, pattern] of [
   ['wages (wage_history owns it)', /hourly_wage/i],
   ['consent (consent_changes owns it)', /sms_opt_in|email_opt_in/i],
 ] as const) {
-  check(`the audit triggers do not duplicate ${what}`, !pattern.test(auditBody),
+  check(`the audit triggers do not duplicate ${what}`, !pattern.test(auditScope),
     'one engine per responsibility — extend the existing table instead')
 }
 

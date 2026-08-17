@@ -121,7 +121,10 @@ export function MessageTemplateEditor() {
           </div>
         ) : (
           <>
-            <Input label="Google review link" placeholder="https://g.page/r/…/review" value={reviewUrl} onChange={e => setReviewUrl(e.target.value)} hint="Used by the {{review_link}} variable in the review request." />
+            {/* Universal on purpose: Google today, but any public review page —
+                Facebook, Yelp, an industry directory — works the same way. One
+                neutral link; no happy/unhappy routing. */}
+            <Input label="Public review link" placeholder="https://g.page/r/…/review (Google, Facebook, Yelp…)" value={reviewUrl} onChange={e => setReviewUrl(e.target.value)} hint="Where review requests send customers — the {{review_link}} variable." />
 
             <div className="rounded-lg border border-border bg-bg-tertiary px-3 py-2.5">
               <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2">Variables you can use — they fill in automatically for each customer</p>
