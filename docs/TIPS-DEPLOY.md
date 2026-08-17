@@ -335,14 +335,39 @@ answer.
 ## 7 · Verification
 
 ```bash
-npm run verify:tips          # 241 assertions — the money boundaries
+npm run verify:tips          # 248 assertions — the money boundaries
 node scripts/mutate-tips.mjs # 36 mutations, all must be caught (needs a clean tree)
 npm run verify               # every guard + the file↔script parity contract
 npm run typecheck && npm run lint && npm run build
 ```
 
 `scripts/mutate-tips.mjs` is **not** a `verify:` entry — it edits source files and
-reverts with `git checkout --`, so it refuses to run on a dirty tree.
+reverts with `git checkout --`, so it refuses to run on a dirty tree. It is worth
+running: it found **six** holes that the assertion suite alone did not, every one
+a guard matching words rather than structure.
+
+### Mobile — measured, not asserted
+
+The tip selector was measured in real headless Chrome against the real compiled
+CSS, under emulated touch (`pointer: coarse` confirmed — headless only flips it
+via **touch** emulation, never viewport width):
+
+| viewport | rows | chip w × h | text clipped | sideways overflow |
+|---|---|---|---|---|
+| 320 | 3 | 123 × 44 | none | none |
+| 375 | 3 | 151 × 44 | none | none |
+| 390 | 3 | 158 × 44 | none | none |
+| 430 | 3 | 178 × 44 | none | none |
+
+The custom money field is 44px tall with `inputMode="decimal"` and `type="text"`
+(never `type="number"`, which silently accepts `1e5` and reports `""` for an
+invalid value, so "cleared" and "nonsense" become indistinguishable).
+
+This measured the component directly, through a throwaway harness page that was
+**not committed**. It does **not** prove the portal integration: that needs a live
+token and a database this worktree has no credentials for, and a static mock
+claiming to be the shipped screen is exactly how a picker once got "proved"
+against four services while production had twenty-three.
 
 ### Stripe test-mode end-to-end — NOT YET RUN
 
