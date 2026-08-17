@@ -27,6 +27,7 @@ import { bootCrewDb } from './lib/crew-db'
 import {
   workerCoversVisit, assignedVisitFilter, workerMayTransition, isWorkerVisitStatus,
   WORKER_VISIT_STATUSES, WORKER_DENIAL_STATUS, WORKER_DENIAL_MESSAGE, isUuid,
+  resolveWorker, authorizeWorkerVisit,
 } from '../src/lib/workerAccess'
 
 let pass = 0, fail = 0
@@ -174,8 +175,13 @@ section('5. Every worker door goes through the canonical layer')
     const src = strip(SRC(r))
     check(`${r} imports lib/workerAccess`,
       /from '@\/lib\/workerAccess'/.test(src))
-    check(`${r} authorises through it`,
-      /authorizeWorkerVisit\(|resolveWorker\(/.test(src))
+    // ⚠️ Specifically the VISIT door, not "any export of the module". Accepting
+    // resolveWorker here let a mutation that stubbed out authorizeWorkerVisit
+    // survive, because the file still called resolveWorker elsewhere.
+    check(`${r} authorises the named visit through authorizeWorkerVisit`,
+      /await authorizeWorkerVisit\(/.test(src))
+    check(`${r} does not fake an authorisation result`,
+      !/const auth\s*=\s*\{/.test(src), 'an object literal is not an authorisation')
     // ⭐ THE REGRESSION THIS GUARD EXISTS FOR: the pre-S66 shape, which asked
     // only about the crew and refused a crewless worker at the door.
     check(`${r} keeps NO rival crew-only gate`,
@@ -204,7 +210,107 @@ section('5. Every worker door goes through the canonical layer')
     clientImporters.length === 0, clientImporters.join(', '))
 }
 
-// ── 6. The database: the same question, and the attacks ─────────────────────
+// ── 6. The layer itself: which predicates actually reach the database ───────
+// ⭐⭐ WHY THIS SECTION EXISTS. Sections 1–5 test the pure predicate and the
+// source text; section 7 tests the SQL doors. None of them notices if
+// `authorizeWorkerVisit` simply STOPS SENDING a filter — the tenant predicate,
+// the is_active switch, the archived exclusion — because those live in a query
+// builder, not in a pure function. Mutation testing proved it: deleting
+// `.eq('user_id', worker.employerId)` left every other check green. So this
+// section runs the real functions against a recording client and asserts on the
+// filters that were actually sent, plus the fail-closed paths.
+section('6. The authorisation layer sends the predicates it claims to')
+{
+  type Filter = { op: string; col: string; val: unknown }
+  const makeClient = (results: Record<string, { data: unknown; error: unknown }>) => {
+    const seen: Record<string, Filter[]> = {}
+    let table = ''
+    const builder: any = {
+      select: () => builder,
+      eq: (col: string, val: unknown) => { seen[table].push({ op: 'eq', col, val }); return builder },
+      is: (col: string, val: unknown) => { seen[table].push({ op: 'is', col, val }); return builder },
+      neq: (col: string, val: unknown) => { seen[table].push({ op: 'neq', col, val }); return builder },
+      maybeSingle: async () => results[table] ?? { data: null, error: null },
+    }
+    const client: any = {
+      from: (t: string) => { table = t; seen[t] ||= []; return builder },
+    }
+    return { client, seen }
+  }
+  const has = (fs: Filter[] | undefined, op: string, col: string, val?: unknown) =>
+    !!fs?.some(f => f.op === op && f.col === col && (val === undefined || f.val === val))
+
+  const TECH = { id: 't1', user_id: 'ownerA', crew_id: 'c1' }
+
+  // — the identity resolver —
+  {
+    const { client, seen } = makeClient({ technicians: { data: TECH, error: null } })
+    const r = await resolveWorker(client, 'uid-1')
+    check('resolveWorker returns the roster identity', r.ok && r.worker.employerId === 'ownerA')
+    check('… filtered by this session’s auth_user_id', has(seen.technicians, 'eq', 'auth_user_id', 'uid-1'))
+    check('⭐ … and by is_active = true (the DISABLE switch)',
+      has(seen.technicians, 'eq', 'is_active', true),
+      'without this a switched-off worker keeps working')
+    check('⭐ … and by archived_at is null',
+      has(seen.technicians, 'is', 'archived_at', null))
+  }
+  {
+    const { client } = makeClient({ technicians: { data: null, error: { message: 'boom' } } })
+    const r = await resolveWorker(client, 'uid-1')
+    check('⭐ a FAILED roster read refuses (never falls through)',
+      !r.ok && r.denial === 'lookup-failed')
+  }
+  {
+    const { client } = makeClient({ technicians: { data: null, error: null } })
+    const r = await resolveWorker(client, 'uid-1')
+    check('an unlinked account is not a worker', !r.ok && r.denial === 'not-a-worker')
+  }
+  check('no session refuses before any query',
+    !(await resolveWorker(makeClient({}).client, null)).ok)
+  check('no service role refuses (503 path)',
+    !(await resolveWorker(null, 'uid-1')).ok)
+
+  // — the visit door —
+  {
+    const { client, seen } = makeClient({
+      technicians: { data: TECH, error: null },
+      jobs: { data: { id: 'j1', user_id: 'ownerA', crew_id: 'c1', technician_id: null }, error: null },
+    })
+    const a = await authorizeWorkerVisit(client, 'uid-1', '00000000-0000-0000-0000-0000000000f1')
+    check('an assigned visit authorises', a.ok)
+    check('⭐⭐ … and the TENANT predicate was actually sent',
+      has(seen.jobs, 'eq', 'user_id', 'ownerA'),
+      'without it a job id from another business resolves')
+    check('… scoped to the requested id', has(seen.jobs, 'eq', 'id'))
+  }
+  {
+    // The visit exists in this tenant but belongs to another crew and another
+    // person: the door must refuse on COVERAGE, not on the tenant.
+    const { client } = makeClient({
+      technicians: { data: TECH, error: null },
+      jobs: { data: { id: 'j2', user_id: 'ownerA', crew_id: 'c2', technician_id: 't9' }, error: null },
+    })
+    const a = await authorizeWorkerVisit(client, 'uid-1', '00000000-0000-0000-0000-0000000000f2')
+    check('⭐⭐ a same-tenant visit this worker is NOT assigned to is refused',
+      !a.ok && a.denial === 'not-assigned',
+      'this is the check that stops one worker reading another’s work')
+  }
+  {
+    const { client } = makeClient({
+      technicians: { data: TECH, error: null },
+      jobs: { data: null, error: { message: 'boom' } },
+    })
+    const a = await authorizeWorkerVisit(client, 'uid-1', '00000000-0000-0000-0000-0000000000f3')
+    check('⭐ a FAILED visit read refuses', !a.ok && a.denial === 'lookup-failed')
+  }
+  {
+    const { client } = makeClient({ technicians: { data: TECH, error: null } })
+    const a = await authorizeWorkerVisit(client, 'uid-1', 'not-a-uuid')
+    check('a malformed id never reaches the visit query', !a.ok && a.denial === 'not-assigned')
+  }
+}
+
+// ── 7. The database: the same question, and the attacks ─────────────────────
 section('6. The database enforces it (PGlite)')
 const booted = await bootCrewDb()
 if ('skipped' in booted) {
@@ -283,6 +389,23 @@ if ('skipped' in booted) {
     mine.rows[0].f !== null)
   const notMine = await db.query(`select public.crew_job_forms('${jobA}') as f`)
   check('… and still not somebody else’s', notMine.rows[0].f === null)
+
+  // ⭐⭐ ensure_job_forms is called DIRECTLY here, not through crew_job_forms.
+  // crew_job_forms returns early for an unassigned worker, so testing only
+  // through it leaves ensure_job_forms' own crew branch unchecked — a mutation
+  // that made it mint for ANY worker at the employer survived exactly that way.
+  // Minting is a WRITE: an unassigned worker must materialise nothing.
+  const beforeMint = await db.query(
+    `select count(*) as n from public.job_forms where job_id = '${jobA}'`)
+  await db.asUser(uidPeter)   // Peter is assigned by name to a DIFFERENT visit
+  await db.query(`select * from public.ensure_job_forms('${jobA}')`)
+  const afterMint = await db.query(
+    `select count(*) as n from public.job_forms where job_id = '${jobA}'`)
+  check('⭐⭐ an UNASSIGNED worker mints nothing (ensure_job_forms, called direct)',
+    Number(afterMint.rows[0].n) === Number(beforeMint.rows[0].n),
+    `before=${beforeMint.rows[0].n} after=${afterMint.rows[0].n}`)
+  const peerRows = await db.query(`select * from public.ensure_job_forms('${jobA}')`)
+  check('⭐ … and is told nothing about that visit’s forms', peerRows.rows.length === 0)
 
   // ── the write boundary ───────────────────────────────────────────────────
   await db.asUser(uidJane)
