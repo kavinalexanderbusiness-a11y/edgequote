@@ -1866,6 +1866,14 @@
     "notnull": true,
     "identity": "",
     "generated": ""
+   },
+   {
+    "name": "lead_technician_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
    }
   ],
   "relname": "crews",
@@ -5486,6 +5494,14 @@
    {
     "name": "completion_issue",
     "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "technician_id",
+    "type": "uuid",
     "default": null,
     "notnull": false,
     "identity": "",
@@ -11701,6 +11717,54 @@
    }
   ],
   "relname": "suppliers",
+  "force_rls": false
+ },
+ {
+  "acl": "{postgres=arwdDxtm/postgres,service_role=arwdDxtm/postgres,authenticated=r/postgres}",
+  "rls": true,
+  "cols": [
+   {
+    "name": "id",
+    "type": "uuid",
+    "default": "gen_random_uuid()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "user_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "technician_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "crew_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "changed_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   }
+  ],
+  "relname": "technician_crew_history",
   "force_rls": false
  },
  {

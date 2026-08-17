@@ -325,6 +325,12 @@
  },
  {
   "tbl": "crews",
+  "indexdef": "CREATE UNIQUE INDEX crews_id_user_key ON public.crews USING btree (id, user_id)",
+  "indexname": "crews_id_user_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "crews",
   "indexdef": "CREATE UNIQUE INDEX crews_pkey ON public.crews USING btree (id)",
   "indexname": "crews_pkey",
   "backs_constraint": true
@@ -1119,6 +1125,12 @@
   "tbl": "jobs",
   "indexdef": "CREATE INDEX jobs_scheduled_date_idx ON public.jobs USING btree (scheduled_date)",
   "indexname": "jobs_scheduled_date_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "jobs",
+  "indexdef": "CREATE INDEX jobs_technician_id_idx ON public.jobs USING btree (technician_id)",
+  "indexname": "jobs_technician_id_idx",
   "backs_constraint": false
  },
  {
@@ -2379,6 +2391,24 @@
   "tbl": "suppliers",
   "indexdef": "CREATE INDEX suppliers_user_idx ON public.suppliers USING btree (user_id, name)",
   "indexname": "suppliers_user_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "technician_crew_history",
+  "indexdef": "CREATE UNIQUE INDEX technician_crew_history_pkey ON public.technician_crew_history USING btree (id)",
+  "indexname": "technician_crew_history_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "technician_crew_history",
+  "indexdef": "CREATE INDEX technician_crew_history_tech_idx ON public.technician_crew_history USING btree (technician_id, changed_at DESC)",
+  "indexname": "technician_crew_history_tech_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "technician_crew_history",
+  "indexdef": "CREATE INDEX technician_crew_history_user_idx ON public.technician_crew_history USING btree (user_id, changed_at DESC)",
+  "indexname": "technician_crew_history_user_idx",
   "backs_constraint": false
  },
  {

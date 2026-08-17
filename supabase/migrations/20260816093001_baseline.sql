@@ -8,8 +8,8 @@
 --
 -- This file is the ONE starting point for a database. Applying it to an empty
 -- Postgres 17 database produces the production schema contract:
---   110 tables · 131 functions · 93 triggers · 359 policies
---   582 constraints · 276 standalone indexes · 7 storage buckets
+--   111 tables · 137 functions · 98 triggers · 360 policies
+--   590 constraints · 279 standalone indexes · 7 storage buckets
 --
 -- IT DOES NOT RESTORE DATA. Not one row. Rebuilding a working production system
 -- is: this file, THEN a backup restore, THEN storage objects, THEN env config.
@@ -295,7 +295,8 @@ create table if not exists public."crews" (
   "day_end" time without time zone,
   "capacity_minutes" integer,
   "is_active" boolean default true not null,
-  "sort_order" integer default 0 not null
+  "sort_order" integer default 0 not null,
+  "lead_technician_id" uuid
 );
 create table if not exists public."crm_campaign_log" (
   "id" uuid default extensions.uuid_generate_v4() not null,
@@ -781,7 +782,8 @@ create table if not exists public."jobs" (
   "route_order" integer,
   "crew_id" uuid,
   "completion_summary" text,
-  "completion_issue" text
+  "completion_issue" text,
+  "technician_id" uuid
 );
 create table if not exists public."labor_observations" (
   "id" uuid default extensions.uuid_generate_v4() not null,
@@ -1612,6 +1614,13 @@ create table if not exists public."suppliers" (
   "notes" text,
   "archived_at" timestamp with time zone
 );
+create table if not exists public."technician_crew_history" (
+  "id" uuid default gen_random_uuid() not null,
+  "user_id" uuid not null,
+  "technician_id" uuid not null,
+  "crew_id" uuid,
+  "changed_at" timestamp with time zone default now() not null
+);
 create table if not exists public."technicians" (
   "id" uuid default extensions.uuid_generate_v4() not null,
   "created_at" timestamp with time zone default now() not null,
@@ -1777,7 +1786,7 @@ create table if not exists public."worker_availability" (
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 3 · FUNCTIONS
--- 131 application functions, verbatim from pg_get_functiondef.
+-- 137 application functions, verbatim from pg_get_functiondef.
 -- Emitted BEFORE constraints: a CHECK constraint can call one, and the dependency
 -- is resolved when the constraint is added.
 -- SECURITY DEFINER + `set search_path` is not decoration here: these functions are
@@ -1942,7 +1951,7 @@ begin
     select coalesce(max((regexp_match(quote_number,'([0-9]+)$'))[1]::int),0)+1 into v_num from public.quotes where user_id=v_user and quote_number like 'EPS-'||extract(year from now())::text||'-%';
     v_qnum := 'EPS-'||extract(year from now())::text||'-'||lpad(v_num::text,4,'0');
     -- ADR-002: price_source='template_rate' and NO config version, because that is the
-    -- truth — this price came from service_templates.default_rate and the pricing
+    -- truth â this price came from service_templates.default_rate and the pricing
     -- config never touched it. resolveQuoteProvenance() reads this as
     -- 'not_engine_priced' and says so, instead of implying a rate card it never used.
     insert into public.quotes (user_id, quote_number, customer_id, customer_name, address, service_type, initial_price, status, measured_sqft, property_id, sent_at, price_source)
@@ -1951,8 +1960,8 @@ begin
 
   insert into public.service_requests (user_id, customer_id, message)
     values (v_user, v_customer, case when v_mode='booked'
-      then 'New online booking — '||left(v_name,80)||' · '||coalesce(v_service,'service')||' on '||to_char(v_date,'Mon DD')||coalesce(' · '||v_address,'')
-      else 'New quote request — '||left(v_name,80)||coalesce(' · '||v_service,'')||coalesce(' · '||v_address,'') end);
+      then 'New online booking â '||left(v_name,80)||' Â· '||coalesce(v_service,'service')||' on '||to_char(v_date,'Mon DD')||coalesce(' Â· '||v_address,'')
+      else 'New quote request â '||left(v_name,80)||coalesce(' Â· '||v_service,'')||coalesce(' Â· '||v_address,'') end);
 
   return json_build_object('ok',true,'mode',v_mode,'returning',v_returning,'customer_id',v_customer,'job_id',v_job,'quote_id',v_quote,'quote_number',v_qnum);
 end; $function$;
@@ -2146,7 +2155,7 @@ declare
   v_crew  integer;
   v_day   date;
 begin
-  -- 'carried' is the row this function itself writes — without this it recurses.
+  -- 'carried' is the row this function itself writes â without this it recurses.
   if new.source = 'carried' then
     return new;
   end if;
@@ -2318,6 +2327,24 @@ AS $function$
   returning d.*;
 $function$;
 
+CREATE OR REPLACE FUNCTION public.clear_crew_lead_on_departure()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+begin
+  update public.crews c
+     set lead_technician_id = null
+   where c.user_id = new.user_id
+     and c.lead_technician_id = new.id
+     and (c.id is distinct from new.crew_id
+          or not new.is_active
+          or new.archived_at is not null);
+  return new;
+end
+$function$;
+
 CREATE OR REPLACE FUNCTION public.clear_route_order_on_move()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -2387,10 +2414,10 @@ begin
     raise exception 'only a platform operator can issue beta invites' using errcode = '42501';
   end if;
   if p_token_hash is null or p_token_hash !~ '^[0-9a-f]{64}$' then
-    raise exception 'token_hash must be sha256 hex — never send the raw token' using errcode = '22023';
+    raise exception 'token_hash must be sha256 hex â never send the raw token' using errcode = '22023';
   end if;
   if p_label is null or btrim(p_label) = '' then
-    raise exception 'label is required — an invite must say who it is for' using errcode = '22023';
+    raise exception 'label is required â an invite must say who it is for' using errcode = '22023';
   end if;
 
   v_exp := now() + make_interval(days => greatest(1, least(90, coalesce(p_days, 14))));
@@ -2426,6 +2453,15 @@ AS $function$
   left join auth.users u on u.id = t.auth_user_id
   where t.user_id = auth.uid()
     and exists (select 1 from public.business_settings b where b.user_id = auth.uid())
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crew_assignment_covers(j_crew uuid, j_technician uuid, v_crew uuid, v_tech uuid)
+ RETURNS boolean
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+  select coalesce(j_crew = v_crew, false)
+      or coalesce(j_technician = v_tech, false)
 $function$;
 
 CREATE OR REPLACE FUNCTION public.crew_cancel_time_off(p_id uuid)
@@ -2528,7 +2564,7 @@ begin
             'notes', j.notes,
             'completion_summary', j.completion_summary,
             'completion_issue', j.completion_issue,
-            'checklist', public.job_form_summary(j.id, j.user_id),
+            'personal', (j.technician_id is not null and j.technician_id = v_tech),
             'customer', case when cu.id is null then null else
               jsonb_build_object('name', cu.name, 'phone', cu.phone) end,
             'property', case when p.id is null then null else
@@ -2541,7 +2577,7 @@ begin
         left join public.customers cu on cu.id = j.customer_id
         left join public.properties p on p.id = j.property_id
         where j.user_id = v_employer
-          and j.crew_id = v_crew
+          and public.crew_assignment_covers(j.crew_id, j.technician_id, v_crew, v_tech)
           and j.scheduled_date = p_date
       ) x
     ), '[]'::jsonb)
@@ -2616,12 +2652,12 @@ begin
   if row(new.user_id, new.customer_id, new.property_id, new.quote_id, new.recurrence_id,
          new.title, new.service_type, new.scheduled_date, new.start_time, new.end_time,
          new.duration_minutes, new.crew_size, new.price, new.notes, new.crew_id,
-         new.route_order, new.is_initial_visit)
+         new.technician_id, new.route_order, new.is_initial_visit)
      is distinct from
      row(old.user_id, old.customer_id, old.property_id, old.quote_id, old.recurrence_id,
          old.title, old.service_type, old.scheduled_date, old.start_time, old.end_time,
          old.duration_minutes, old.crew_size, old.price, old.notes, old.crew_id,
-         old.route_order, old.is_initial_visit)
+         old.technician_id, old.route_order, old.is_initial_visit)
   then
     raise exception 'crew may only change a visit''s status and its timestamps'
       using errcode = '42501';
@@ -2705,12 +2741,13 @@ AS $function$
 declare
   v_employer uuid := public.crew_employer();
   v_crew     uuid := public.crew_crew_id();
+  v_tech     uuid := public.crew_technician_id();
   v_uid      uuid := auth.uid();
   v_job      record;
   v_msgs     jsonb;
   v_high     timestamptz;
 begin
-  if v_employer is null or v_crew is null then
+  if v_employer is null or v_tech is null then
     return null;
   end if;
 
@@ -2718,7 +2755,8 @@ begin
     into v_job
     from public.jobs j
     left join public.customers c on c.id = j.customer_id
-   where j.id = p_job_id and j.user_id = v_employer and j.crew_id = v_crew;
+   where j.id = p_job_id and j.user_id = v_employer
+     and public.crew_assignment_covers(j.crew_id, j.technician_id, v_crew, v_tech);
 
   if not found then
     return jsonb_build_object('ok', false, 'reason', 'not_found');
@@ -2819,9 +2857,10 @@ AS $function$
 declare
   v_employer uuid := public.crew_employer();
   v_crew     uuid := public.crew_crew_id();
+  v_tech     uuid := public.crew_technician_id();
   v_uid      uuid := auth.uid();
 begin
-  if v_employer is null or v_crew is null then
+  if v_employer is null or v_tech is null then
     return null;
   end if;
 
@@ -2853,7 +2892,7 @@ begin
         left join public.crew_message_reads r on r.job_id = j.id and r.reader_id = v_uid
        where m.user_id = v_employer
          and j.user_id = v_employer
-         and j.crew_id = v_crew
+         and public.crew_assignment_covers(j.crew_id, j.technician_id, v_crew, v_tech)
          and m.created_at > now() - interval '30 days'
        group by j.id, j.title, c.name, j.scheduled_date, j.status
     ) t
@@ -2891,7 +2930,7 @@ begin
   values (
     new.user_id,
     'crew_message',
-    new.author_name || ' — ' || coalesce(nullif(btrim(v_job.customer_name), ''), v_job.title, 'a visit'),
+    new.author_name || ' â ' || coalesce(nullif(btrim(v_job.customer_name), ''), v_job.title, 'a visit'),
     left(new.body, 140),
     v_job.customer_id,
     'job',
@@ -2920,13 +2959,13 @@ begin
   end if;
 
   if new.scheduled_date is distinct from old.scheduled_date then
-    v_body := 'Schedule changed — '
+    v_body := 'Schedule changed â '
            || to_char(old.scheduled_date, 'Dy Mon FMDD')
-           || ' → ' || to_char(new.scheduled_date, 'Dy Mon FMDD');
+           || ' â ' || to_char(new.scheduled_date, 'Dy Mon FMDD');
   else
-    v_body := 'Start time changed — '
+    v_body := 'Start time changed â '
            || coalesce(to_char(date '2000-01-01' + old.start_time, 'FMHH12:MI AM'), 'no set time')
-           || ' → ' || coalesce(to_char(date '2000-01-01' + new.start_time, 'FMHH12:MI AM'), 'no set time');
+           || ' â ' || coalesce(to_char(date '2000-01-01' + new.start_time, 'FMHH12:MI AM'), 'no set time');
   end if;
 
   insert into public.crew_messages (user_id, job_id, body, author_kind, author_name, event_type)
@@ -2979,12 +3018,13 @@ AS $function$
 declare
   v_employer uuid := public.crew_employer();
   v_crew     uuid := public.crew_crew_id();
+  v_tech     uuid := public.crew_technician_id();
   v_uid      uuid := auth.uid();
   v_job      uuid;
   v_body     text := btrim(coalesce(p_body, ''));
   v_row      public.crew_messages%rowtype;
 begin
-  if v_employer is null or v_crew is null then
+  if v_employer is null or v_tech is null then
     return null;
   end if;
   if v_body = '' then
@@ -2996,7 +3036,8 @@ begin
 
   select j.id into v_job
     from public.jobs j
-   where j.id = p_job_id and j.user_id = v_employer and j.crew_id = v_crew;
+   where j.id = p_job_id and j.user_id = v_employer
+     and public.crew_assignment_covers(j.crew_id, j.technician_id, v_crew, v_tech);
   if v_job is null then
     return jsonb_build_object('ok', false, 'reason', 'not_found');
   end if;
@@ -3047,7 +3088,7 @@ begin
     raise exception 'not signed in' using errcode = '42501';
   end if;
   if exists (select 1 from public.business_settings b where b.user_id = auth.uid()) then
-    raise exception 'this account owns a business — it cannot also join one as crew' using errcode = '42501';
+    raise exception 'this account owns a business â it cannot also join one as crew' using errcode = '42501';
   end if;
   if exists (select 1 from public.technicians t where t.auth_user_id = auth.uid()) then
     raise exception 'this account is already linked to an employee' using errcode = '42501';
@@ -3060,7 +3101,7 @@ begin
     raise exception 'that code is not valid' using errcode = '42501';
   end if;
   if v_tech.invite_expires_at is null or v_tech.invite_expires_at < now() then
-    raise exception 'that code has expired — ask for a new one' using errcode = '42501';
+    raise exception 'that code has expired â ask for a new one' using errcode = '42501';
   end if;
   if v_tech.archived_at is not null or not v_tech.is_active then
     raise exception 'that code is not valid' using errcode = '42501';
@@ -3217,13 +3258,14 @@ AS $function$
 declare
   v_employer uuid := public.crew_employer();
   v_crew     uuid := public.crew_crew_id();
+  v_tech     uuid := public.crew_technician_id();
   v_summary  text := nullif(btrim(coalesce(p_summary, '')), '');
   v_issue    text := nullif(btrim(coalesce(p_issue, '')), '');
   v_prev     text;
   v_job      record;
 begin
-  if v_employer is null or v_crew is null then
-    raise exception 'you are not on an active crew' using errcode = '42501';
+  if v_employer is null or v_tech is null then
+    raise exception 'you are not on the active roster' using errcode = '42501';
   end if;
 
   v_summary := left(v_summary, 500);
@@ -3231,7 +3273,8 @@ begin
 
   select j.completion_issue into v_prev
     from public.jobs j
-   where j.id = p_job_id and j.user_id = v_employer and j.crew_id = v_crew
+   where j.id = p_job_id and j.user_id = v_employer
+     and public.crew_assignment_covers(j.crew_id, j.technician_id, v_crew, v_tech)
      and j.status <> 'cancelled';
 
   update public.jobs j
@@ -3239,7 +3282,7 @@ begin
          completion_issue   = v_issue
    where j.id = p_job_id
      and j.user_id = v_employer
-     and j.crew_id = v_crew
+     and public.crew_assignment_covers(j.crew_id, j.technician_id, v_crew, v_tech)
      and j.status <> 'cancelled'
   returning j.id, j.title, j.customer_id into v_job;
 
@@ -3307,10 +3350,11 @@ AS $function$
 declare
   v_employer uuid := public.crew_employer();
   v_crew     uuid := public.crew_crew_id();
+  v_tech     uuid := public.crew_technician_id();
   v_updated  timestamptz;
 begin
-  if v_employer is null or v_crew is null then
-    raise exception 'you are not on an active crew' using errcode = '42501';
+  if v_employer is null or v_tech is null then
+    raise exception 'you are not on the active roster' using errcode = '42501';
   end if;
   -- The field lifecycle, and only it. 'cancelled' is a business decision: a
   -- worker who cannot finish leaves the visit open for the office.
@@ -3329,7 +3373,7 @@ begin
          actual_minutes = p_actual_minutes
    where j.id = p_job_id
      and j.user_id = v_employer
-     and j.crew_id = v_crew
+     and public.crew_assignment_covers(j.crew_id, j.technician_id, v_crew, v_tech)
      and j.updated_at = p_base_updated_at
   returning j.updated_at into v_updated;
 
@@ -3359,6 +3403,7 @@ AS $function$
 declare
   v_employer uuid := public.crew_employer();
   v_crew     uuid := public.crew_crew_id();
+  v_tech     uuid := public.crew_technician_id();
 begin
   if v_employer is null then
     return null;
@@ -3375,13 +3420,55 @@ begin
              j.scheduled_date as day
       from public.jobs j
       where j.user_id = v_employer
-        and j.crew_id = v_crew
+        and public.crew_assignment_covers(j.crew_id, j.technician_id, v_crew, v_tech)
         and j.status <> 'cancelled'
         and j.scheduled_date >= p_from
         and j.scheduled_date < p_from + greatest(1, least(31, p_days))
       group by j.scheduled_date
     ) g
   ), '[]'::jsonb);
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crews_block_delete_with_history()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+begin
+  if exists (select 1 from public.jobs j where j.crew_id = old.id)
+     or exists (select 1 from public.technician_crew_history h where h.crew_id = old.id)
+  then
+    raise exception 'this crew has history â deactivate it instead of deleting'
+      using errcode = '23514';
+  end if;
+  return old;
+end
+$function$;
+
+CREATE OR REPLACE FUNCTION public.crews_lead_is_member()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+begin
+  if new.lead_technician_id is null then
+    return new;
+  end if;
+  if not exists (
+    select 1 from public.technicians t
+    where t.id = new.lead_technician_id
+      and t.user_id = new.user_id
+      and t.crew_id = new.id
+      and t.is_active
+      and t.archived_at is null
+  ) then
+    raise exception 'the crew lead must be an active member of this crew'
+      using errcode = '23514';
+  end if;
+  return new;
 end
 $function$;
 
@@ -3506,8 +3593,8 @@ begin
 
   -- TENANT GUARD (2026-08-10): a signed-in caller may only record a version for
   -- THEMSELVES. auth.uid() is null under service_role/trigger contexts, which
-  -- stay unaffected. Without this, EXECUTE alone let any authenticated account —
-  -- including a crew member with zero table access — write into another
+  -- stay unaffected. Without this, EXECUTE alone let any authenticated account â
+  -- including a crew member with zero table access â write into another
   -- business's pricing history (reproduced: owner versions 3 -> 4).
   if auth.uid() is not null and p_user is distinct from auth.uid() then
     return null;
@@ -3698,13 +3785,13 @@ begin
   if v_customer is null then return null; end if;
   select json_build_object(
     -- review_declined_at: the customer's own "No thanks", so it survives the session.
-    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in, reviewed_at, review_declined_at, autopay_enabled from public.customers where id = v_customer) c),
+    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in, reviewed_at, review_declined_at, autopay_enabled from public.customers where id = v_customer and user_id = v_user) c),
     -- service_seasons: buildServicePlans needs the owner's REAL season window.
     -- gst_number: CRA requires the supplier's registration number on a $30+ invoice
     -- for the customer to claim an ITC. Null when not registered; the PDFs print it
     -- only when gst_percent > 0 AND it is set.
     'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, review_url, coalesce(gst_percent,0) as gst_percent, gst_number, etransfer_email, service_seasons from public.business_settings where user_id = v_user) b),
-    -- The owner's OWN catalogue — what this business actually sells. Drives the
+    -- The owner's OWN catalogue â what this business actually sells. Drives the
     -- portal's "Request a service" tab, so it lists pool visits for a pool company
     -- and window cleaning for a window cleaner. Active only, in the owner's order.
     'services', coalesce((select json_agg(s order by s.sort_order, s.name) from (
@@ -3712,19 +3799,19 @@ begin
       from public.service_templates
       where user_id = v_user and is_active
     ) s), '[]'::json),
-    -- UNCHANGED — the primary property. Kept because Home/PropertyTab/PDF fallbacks
+    -- UNCHANGED â the primary property. Kept because Home/PropertyTab/PDF fallbacks
     -- read it today; 'properties' below is the addition, not a replacement.
-    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
-    -- NEW — EVERY property this customer owns. `id` is the join key the quotes and
+    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer and user_id = v_user order by is_primary desc nulls last, created_at asc limit 1) p),
+    -- NEW â EVERY property this customer owns. `id` is the join key the quotes and
     -- invoices projections below now carry; without it a card cannot name its own
     -- address or area, and 'property' above can only ever answer for the primary.
     -- Same ordering as the singular so properties[0] === property.
     'properties', coalesce((select json_agg(p order by p.is_primary desc nulls last, p.created_at asc) from (
       select id, address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, is_primary, created_at
-      from public.properties where customer_id = v_customer
+      from public.properties where customer_id = v_customer and user_id = v_user
     ) p), '[]'::json),
     -- property_id (NEW): which property this quote is actually for. NULL on legacy
-    -- rows (4 of 62 at time of writing) — the client falls back to qt.address text
+    -- rows (4 of 62 at time of writing) â the client falls back to qt.address text
     -- and suppresses any area claim rather than borrowing the primary's.
     'quotes', coalesce((select json_agg(q order by q.created_at desc) from (
       select qt.id, qt.quote_number, qt.service_type, qt.address, qt.property_id, qt.total, qt.initial_price, qt.subtotal,
@@ -3732,11 +3819,11 @@ begin
              qt.issued_date, qt.crew_size, qt.hours, qt.travel_fee, qt.valid_until,
              qt.selected_option_id,
              -- accepted_price: what the customer CONSENTED to (selected option +
-             -- travel, snapshotted at approval) — the scheduling deposit derives
+             -- travel, snapshotted at approval) â the scheduling deposit derives
              -- from this, never from a live total an edit could move.
              -- deposit_type/deposit_value: the scheduling-deposit rule.
              -- preferred_*: the customer's own scheduling REQUEST (a preference,
-             -- never a booking) — shown back so a reload keeps what they told us.
+             -- never a booking) â shown back so a reload keeps what they told us.
              qt.accepted_price, qt.deposit_type, qt.deposit_value,
              qt.preferred_date, qt.preferred_date_2, qt.preferred_timing, qt.preferred_note,
              coalesce((select json_agg(o order by o.sort_order) from (
@@ -3752,41 +3839,41 @@ begin
                       qs.discount_type, qs.discount_value, qs.notes, qs.sort_order
                from public.quote_services qs where qs.quote_id = qt.id
              ) s), '[]'::json) as services
-      from public.quotes qt where qt.customer_id = v_customer and qt.status <> 'draft') q), '[]'::json),
+      from public.quotes qt where qt.customer_id = v_customer and qt.user_id = v_user and qt.status <> 'draft') q), '[]'::json),
     -- property_id (NEW): same reason. NULL is the honest answer for a combined
-    -- invoice spanning properties — do not infer one.
-    -- ⛔ `and status <> 'draft'` IS A PRIVACY PREDICATE, NOT A FILTER PREFERENCE.
+    -- invoice spanning properties â do not infer one.
+    -- â `and status <> 'draft'` IS A PRIVACY PREDICATE, NOT A FILTER PREFERENCE.
     -- A draft is the owner's unfinished, unsent bill. Without this clause it was
-    -- serialized into the customer's payload and read straight out of devtools —
+    -- serialized into the customer's payload and read straight out of devtools â
     -- the portal only declined to RENDER it. Same predicate the quotes select
     -- above has always carried. Deleting it re-opens a confirmed data exposure.
     -- deposit_amount / deposit_requested_at: the deposit surface reads these.
-    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, amount_paid, status, issued_date, due_date, notes, address, property_id, line_items, job_id, created_at, discount_type, discount_value, deposit_amount, deposit_requested_at from public.invoices where customer_id = v_customer and status <> 'draft') i), '[]'::json),
+    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, amount_paid, status, issued_date, due_date, notes, address, property_id, line_items, job_id, created_at, discount_type, discount_value, deposit_amount, deposit_requested_at from public.invoices where customer_id = v_customer and user_id = v_user and status <> 'draft') i), '[]'::json),
     -- quote_id: which booking a pre-invoice deposit secures. The portal derives
     -- "deposit received" from these rows (signed cash sum), never from a flag.
-    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, kind, invoice_id, quote_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
+    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, kind, invoice_id, quote_id, created_at from public.payments where customer_id = v_customer and user_id = v_user and status = 'paid') pm), '[]'::json),
     -- property_id, quote_id, price, is_initial_visit: buildServicePlans groups by
     -- property and uses jobVisitValue to separate initial from recurring price.
     --
-    -- ⛔⛔ THE INTERNAL ACCESS NOTE IS NOT IN THIS PROJECTION, AND MUST NEVER BE
-    -- PUT BACK. jobs.notes is written for whoever DOES the work — the job form
+    -- ââ THE INTERNAL ACCESS NOTE IS NOT IN THIS PROJECTION, AND MUST NEVER BE
+    -- PUT BACK. jobs.notes is written for whoever DOES the work â the job form
     -- calls it "notes for whoever does the work", crew_day ships it to the
     -- worker's phone as "the access note (gate code, where to park)". It was
     -- selected here and rendered verbatim in the customer's visit history: 49 of
     -- 78 completed production visits carried one, including "dog removal, keep
-    -- gate closed". Removing it here kills the leak AT THE SOURCE — a portal
+    -- gate closed". Removing it here kills the leak AT THE SOURCE â a portal
     -- component cannot render what was never serialized.
-    -- ⛔ jobs.completion_issue is internal for the same reason and likewise absent.
-    -- ⭐ jobs.completion_summary is the CUSTOMER-VISIBLE field, written for the
+    -- â jobs.completion_issue is internal for the same reason and likewise absent.
+    -- â­ jobs.completion_summary is the CUSTOMER-VISIBLE field, written for the
     -- person who paid: it replaces the access note as the words on a finished
     -- visit. `verify:completion` fails the build if either internal field
     -- reappears in this line.
-    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, property_id, quote_id, price, is_initial_visit, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, completion_summary from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
+    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, property_id, quote_id, price, is_initial_visit, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, completion_summary from public.jobs where customer_id = v_customer and user_id = v_user and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
     -- start_date, end_count: the series' own window and count limit.
-    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, start_date, end_date, end_count from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
-    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json),
-    'change_orders', coalesce((select json_agg(co order by co.created_at desc) from (select id, co_number, job_id, quote_id, description, amount, status, decided_via, created_at, sent_at, approved_at, declined_at from public.change_orders where customer_id = v_customer and status <> 'draft') co), '[]'::json),
-    'payment_method', (select to_json(pm) from (select brand, last4, exp_month, exp_year from public.payment_methods where customer_id = v_customer and is_default order by created_at desc limit 1) pm)
+    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, start_date, end_date, end_count from public.job_recurrences where customer_id = v_customer and user_id = v_user) r), '[]'::json),
+    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer and user_id = v_user) p), '[]'::json),
+    'change_orders', coalesce((select json_agg(co order by co.created_at desc) from (select id, co_number, job_id, quote_id, description, amount, status, decided_via, created_at, sent_at, approved_at, declined_at from public.change_orders where customer_id = v_customer and user_id = v_user and status <> 'draft') co), '[]'::json),
+    'payment_method', (select to_json(pm) from (select brand, last4, exp_month, exp_year from public.payment_methods where customer_id = v_customer and user_id = v_user and is_default order by created_at desc limit 1) pm)
   ) into result;
   return result;
 end; $function$;
@@ -3803,7 +3890,7 @@ begin
   -- INSERT was a one-statement promotion from crew to owner (reproduced: role
   -- flipped 'crew' -> 'owner'), which then unlocked the owner-only invite route.
   -- crew_redeem_invite already refuses the reverse direction ("this account owns
-  -- a business — it cannot also join one as crew"); this is the missing mirror.
+  -- a business â it cannot also join one as crew"); this is the missing mirror.
   if exists (select 1 from public.technicians t where t.auth_user_id = new.user_id) then
     raise exception 'this account is linked to an employee record and cannot own a business'
       using errcode = '42501';
@@ -3820,7 +3907,7 @@ begin
   -- Only relevant when lawn_sqft actually changes (cheap: skips every other update).
   if new.lawn_sqft is not distinct from old.lawn_sqft then return new; end if;
   -- Once the typed ledger has a lawn row, its value is the ONLY legitimate
-  -- lawn_sqft — which is exactly what the mirror writes. Anything else is a
+  -- lawn_sqft â which is exactly what the mirror writes. Anything else is a
   -- legacy direct write trying to diverge from the sensor of record.
   select value into v_lawn from public.property_measurements
     where property_id = new.id and kind = 'lawn';
@@ -4280,7 +4367,7 @@ begin
   if new.status = 'completed' and old.status is distinct from 'completed' then
     v_missing := public.job_form_missing_items(new.id, new.user_id);
     if jsonb_array_length(v_missing) > 0 then
-      select string_agg(m ->> 'label', ' � ') into v_labels
+      select string_agg(m ->> 'label', ' ï¿½ ') into v_labels
       from (select m from jsonb_array_elements(v_missing) m limit 4) s;
       raise exception 'CHECKLIST_INCOMPLETE Before completing: %', v_labels
         using hint = 'Finish the required checklist items, or waive the checklist with a reason.';
@@ -4323,6 +4410,32 @@ CREATE OR REPLACE FUNCTION public.job_session_minutes(p_job_id uuid)
  SET search_path TO 'public', 'pg_temp'
 AS $function$
   select sum(minutes)::integer from public.job_work_sessions where job_id = p_job_id;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.jobs_assignment_guard()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+begin
+  if new.crew_id is not null
+     and (tg_op = 'INSERT' or new.crew_id is distinct from old.crew_id)
+     and exists (select 1 from public.crews c where c.id = new.crew_id and not c.is_active) then
+    raise exception 'that crew is deactivated â reactivate it or choose another'
+      using errcode = '23514';
+  end if;
+  if new.technician_id is not null
+     and (tg_op = 'INSERT' or new.technician_id is distinct from old.technician_id)
+     and exists (
+       select 1 from public.technicians t
+       where t.id = new.technician_id and (not t.is_active or t.archived_at is not null)
+     ) then
+    raise exception 'that person is not on the active roster'
+      using errcode = '23514';
+  end if;
+  return new;
+end
 $function$;
 
 CREATE OR REPLACE FUNCTION public.list_beta_invites()
@@ -4479,7 +4592,7 @@ begin
     insert into public.notifications (user_id, type, title, body, customer_id, entity_type, entity_id, amount, href)
     values (new.user_id, 'invoice_paid',
       coalesce(nullif(new.customer_name,''), 'A customer') || ' paid an invoice',
-      'Invoice ' || coalesce(new.invoice_number, '') || ' · $' || trim(to_char(coalesce(new.amount,0), 'FM999990D00')) || ' received',
+      'Invoice ' || coalesce(new.invoice_number, '') || ' Â· $' || trim(to_char(coalesce(new.amount,0), 'FM999990D00')) || ' received',
       new.customer_id, 'invoice', new.id, new.amount, '/dashboard/invoices');
   end if;
   return new;
@@ -4496,7 +4609,7 @@ begin
     insert into public.notifications (user_id, type, title, body, customer_id, entity_type, entity_id, amount, href)
     values (new.user_id, 'quote_accepted',
       coalesce(nullif(new.customer_name,''), 'A customer') || ' accepted a quote',
-      'Quote ' || coalesce(new.quote_number, '') || ' · $' || trim(to_char(coalesce(new.total,0), 'FM999990D00')),
+      'Quote ' || coalesce(new.quote_number, '') || ' Â· $' || trim(to_char(coalesce(new.total,0), 'FM999990D00')),
       new.customer_id, 'quote', new.id, new.total, '/dashboard/quotes/' || new.id);
   end if;
   return new;
@@ -4513,7 +4626,7 @@ begin
     insert into public.notifications (user_id, type, title, body, customer_id, entity_type, entity_id, href)
     values (new.user_id, 'review_received',
       coalesce(nullif(new.name, ''), 'A customer') || ' left a review',
-      'Thanks to your follow-up — tap to view their profile',
+      'Thanks to your follow-up â tap to view their profile',
       new.id, 'customer', new.id, '/dashboard/customers/' || new.id);
   end if;
   return new;
@@ -4566,20 +4679,20 @@ CREATE OR REPLACE FUNCTION public.portal_accept_quote(p_token text, p_quote_id u
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-declare v_customer uuid;
+declare v_customer uuid; v_user uuid;
 begin
-  select customer_id into v_customer from public.customer_portal_tokens
+  select customer_id, user_id into v_customer, v_user from public.customer_portal_tokens
    where token = p_token and not revoked;
   if v_customer is null then return false; end if;
 
   -- This door proves the quote is this token's customer's and still out for
   -- approval. Which OPTION and which EXTRAS belong to the quote is the core's
-  -- question — a token proves WHICH CUSTOMER, never WHICH ROW.
-  -- ⛔ 'sent' only: a draft is the owner's unfinished document and is never
+  -- question â a token proves WHICH CUSTOMER, never WHICH ROW.
+  -- â 'sent' only: a draft is the owner's unfinished document and is never
   -- shown to a customer, so it can never be approved from here.
   if not exists (
     select 1 from public.quotes
-     where id = p_quote_id and customer_id = v_customer and status = 'sent'
+     where id = p_quote_id and customer_id = v_customer and user_id = v_user and status = 'sent'
   ) then
     return false;
   end if;
@@ -4611,7 +4724,7 @@ begin
 
   select nullif(btrim(phone), ''), nullif(btrim(email), '')
     into v_cur_phone, v_cur_email
-    from public.customers where id = v_customer;
+    from public.customers where id = v_customer and user_id = v_user;
 
   v_phone := nullif(btrim(coalesce(p_phone, '')), '');
   v_email := lower(nullif(btrim(coalesce(p_email, '')), ''));
@@ -4662,20 +4775,20 @@ begin
      set phone = coalesce(v_phone, phone),
          email = coalesce(v_email, email),
          updated_at = now()
-   where id = v_customer;
+   where id = v_customer and user_id = v_user;
 
   if v_phone is not null then v_added := array_append(v_added, 'phone'); end if;
   if v_email is not null then v_added := array_append(v_added, 'email'); end if;
 
   select nullif(btrim(phone), '') is not null, nullif(btrim(email), '') is not null
     into v_has_phone, v_has_email
-    from public.customers where id = v_customer;
+    from public.customers where id = v_customer and user_id = v_user;
 
-  v_note := 'Customer added their own contact details from the portal — '
+  v_note := 'Customer added their own contact details from the portal â '
          || array_to_string(array_remove(array[
               case when v_phone is not null then 'Phone: ' || v_phone end,
               case when v_email is not null then 'Email: ' || v_email end
-            ], null), ' · ');
+            ], null), ' Â· ');
   insert into public.service_requests (user_id, customer_id, message, status)
   values (v_user, v_customer, left(v_note, 1000), 'handled');
 
@@ -4699,7 +4812,7 @@ begin
     from public.customer_portal_tokens where token = p_token and not revoked;
   if v_customer is null then return null; end if;
   select to_json(c) into result from (
-    select id, user_id, name, email, stripe_customer_id from public.customers where id = v_customer
+    select id, user_id, name, email, stripe_customer_id from public.customers where id = v_customer and user_id = v_user
   ) c;
   return result;
 end; $function$;
@@ -4710,13 +4823,13 @@ CREATE OR REPLACE FUNCTION public.portal_decline_review(p_token text)
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-declare v_customer uuid;
+declare v_customer uuid; v_user uuid;
 begin
-  select customer_id into v_customer from public.customer_portal_tokens where token = p_token and not revoked;
+  select customer_id, user_id into v_customer, v_user from public.customer_portal_tokens where token = p_token and not revoked;
   if v_customer is null then return false; end if;
   update public.customers
     set review_declined_at = coalesce(review_declined_at, now())
-    where id = v_customer;
+    where id = v_customer and user_id = v_user;
   return true;
 end; $function$;
 
@@ -4759,13 +4872,13 @@ CREATE OR REPLACE FUNCTION public.portal_invoice_for_payment(p_token text, p_inv
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-declare v_customer uuid; result json;
+declare v_customer uuid; v_user uuid; result json;
 begin
-  select customer_id into v_customer from public.customer_portal_tokens where token = p_token and not revoked;
+  select customer_id, user_id into v_customer, v_user from public.customer_portal_tokens where token = p_token and not revoked;
   if v_customer is null then return null; end if;
   select to_json(i) into result from (
     select id, invoice_number, service_type, amount, amount_paid, status, customer_id, user_id
-    from public.invoices where id = p_invoice_id and customer_id = v_customer and status in ('unpaid','sent','partial')
+    from public.invoices where id = p_invoice_id and customer_id = v_customer and user_id = v_user and status in ('unpaid','sent','partial')
   ) i;
   return result;
 end; $function$;
@@ -4794,14 +4907,14 @@ CREATE OR REPLACE FUNCTION public.portal_mark_reviewed(p_token text)
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-declare v_customer uuid;
+declare v_customer uuid; v_user uuid;
 begin
-  select customer_id into v_customer from public.customer_portal_tokens where token = p_token and not revoked;
+  select customer_id, user_id into v_customer, v_user from public.customer_portal_tokens where token = p_token and not revoked;
   if v_customer is null then return false; end if;
   update public.customers
     set reviewed_at   = coalesce(reviewed_at, now()),
         review_source = coalesce(review_source, 'Google')
-    where id = v_customer;
+    where id = v_customer and user_id = v_user;
   return true;
 end; $function$;
 
@@ -4811,14 +4924,14 @@ CREATE OR REPLACE FUNCTION public.portal_remove_card(p_token text)
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-declare v_customer uuid; v_pms json;
+declare v_customer uuid; v_user uuid; v_pms json;
 begin
-  select customer_id into v_customer from public.customer_portal_tokens where token = p_token and not revoked;
+  select customer_id, user_id into v_customer, v_user from public.customer_portal_tokens where token = p_token and not revoked;
   if v_customer is null then return null; end if;
   select coalesce(json_agg(stripe_payment_method_id), '[]'::json) into v_pms
-    from public.payment_methods where customer_id = v_customer;
-  delete from public.payment_methods where customer_id = v_customer;
-  update public.customers set autopay_enabled = false where id = v_customer;
+    from public.payment_methods where customer_id = v_customer and user_id = v_user;
+  delete from public.payment_methods where customer_id = v_customer and user_id = v_user;
+  update public.customers set autopay_enabled = false where id = v_customer and user_id = v_user;
   return v_pms;
 end; $function$;
 
@@ -4852,12 +4965,12 @@ CREATE OR REPLACE FUNCTION public.portal_respond_change_order(p_token text, p_ch
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-declare v_customer uuid; v_status text; v_number text; v_amount numeric;
+declare v_customer uuid; v_user uuid; v_status text; v_number text; v_amount numeric;
 begin
   if p_decision not in ('approve', 'decline') then
     return json_build_object('ok', false, 'reason', 'bad_decision');
   end if;
-  select customer_id into v_customer
+  select customer_id, user_id into v_customer, v_user
     from public.customer_portal_tokens where token = p_token and not revoked;
   if v_customer is null then
     return json_build_object('ok', false, 'reason', 'no_access');
@@ -4869,6 +4982,7 @@ begin
          decline_reason = case when p_decision = 'decline' then nullif(btrim(coalesce(p_reason, '')), '') else null end
    where id = p_change_order_id
      and customer_id = v_customer
+     and user_id = v_user
      and status = 'pending'
   returning status, co_number, amount into v_status, v_number, v_amount;
 
@@ -4912,15 +5026,15 @@ CREATE OR REPLACE FUNCTION public.portal_set_autopay(p_token text, p_enabled boo
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-declare v_customer uuid; v_has_card boolean;
+declare v_customer uuid; v_user uuid; v_has_card boolean;
 begin
-  select customer_id into v_customer from public.customer_portal_tokens where token = p_token and not revoked;
+  select customer_id, user_id into v_customer, v_user from public.customer_portal_tokens where token = p_token and not revoked;
   if v_customer is null then return false; end if;
   if p_enabled then
-    select exists(select 1 from public.payment_methods where customer_id = v_customer) into v_has_card;
+    select exists(select 1 from public.payment_methods where customer_id = v_customer and user_id = v_user) into v_has_card;
     if not v_has_card then return false; end if;   -- can't enable AutoPay with no card
   end if;
-  update public.customers set autopay_enabled = p_enabled where id = v_customer;
+  update public.customers set autopay_enabled = p_enabled where id = v_customer and user_id = v_user;
   return true;
 end; $function$;
 
@@ -4935,12 +5049,12 @@ begin
   select customer_id, user_id into v_customer, v_user
     from public.customer_portal_tokens where token = p_token and not revoked;
   if v_customer is null then return false; end if;
-  select sms_opt_in, email_opt_in into v_old_sms, v_old_email from public.customers where id = v_customer;
+  select sms_opt_in, email_opt_in into v_old_sms, v_old_email from public.customers where id = v_customer and user_id = v_user;
   update public.customers
      set sms_opt_in = p_sms_opt_in,
          email_opt_in = p_email_opt_in,
          message_prefs = coalesce(p_prefs, message_prefs)
-   where id = v_customer;
+   where id = v_customer and user_id = v_user;
   if v_old_sms is distinct from p_sms_opt_in then
     insert into public.consent_changes (user_id, customer_id, channel, old_value, new_value, source, changed_by)
     values (v_user, v_customer, 'sms', v_old_sms, p_sms_opt_in, 'portal', 'customer (portal)');
@@ -4958,10 +5072,9 @@ CREATE OR REPLACE FUNCTION public.portal_set_scheduling_preference(p_token text,
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-declare v_customer uuid;
+declare v_customer uuid; v_user uuid;
 begin
-  select customer_id into v_customer
-    from public.customer_portal_tokens where token = p_token and not revoked;
+  select customer_id, user_id into v_customer, v_user from public.customer_portal_tokens where token = p_token and not revoked;
   if v_customer is null then return false; end if;
 
   if p_timing is not null and p_timing not in ('morning','afternoon') then return false; end if;
@@ -4976,7 +5089,7 @@ begin
          preferred_timing = p_timing,
          preferred_note   = nullif(btrim(coalesce(p_note, '')), '')
    where id = p_quote_id
-     and customer_id = v_customer
+     and customer_id = v_customer and user_id = v_user
      and status = 'accepted';
   return found;
 end $function$;
@@ -5009,16 +5122,16 @@ begin
 
   -- Media is REFUSED, never silently dropped. A legitimate client can only ever
   -- produce paths it just uploaded, so a malformed one means the call was
-  -- tampered with — and quietly discarding a photo the customer attached would
+  -- tampered with â and quietly discarding a photo the customer attached would
   -- be the portal lying about what it sent.
   v_photos := coalesce(p_photos, '{}'::text[]);
   if not public.portal_request_photos_ok(v_photos) then return false; end if;
 
   if (select count(*) from public.service_requests
-       where customer_id = v_customer and created_at > now() - interval '1 hour') >= 20
+       where customer_id = v_customer and user_id = v_user and created_at > now() - interval '1 hour') >= 20
   then return false; end if;
 
-  -- Same ask, same day preference, same visit ⇒ same key. Paired with the partial
+  -- Same ask, same day preference, same visit â same key. Paired with the partial
   -- unique index, a resubmission while the first is still open is a no-op that
   -- still reports success: the request IS on file, which is what the customer
   -- asked to be true.
@@ -5146,11 +5259,11 @@ begin
   -- CASCADE. Refusing here would make an APPROVED quote impossible to delete.
   if v_status is null then return coalesce(new, old); end if;
 
-  -- ⭐⭐ THE FREEZE. 'draft'/'sent' = not yet decided. Any other status means a
+  -- â­â­ THE FREEZE. 'draft'/'sent' = not yet decided. Any other status means a
   -- real person approved an exact set of extras at an exact price, and that set
   -- IS the record. Additional scope after approval is a CHANGE ORDER.
   if v_status not in ('draft', 'sent') then
-    raise exception 'This quote has been decided — its optional extras are part of the record now. Additional work goes on a change order.'
+    raise exception 'This quote has been decided â its optional extras are part of the record now. Additional work goes on a change order.'
       using errcode = 'check_violation';
   end if;
 
@@ -5238,7 +5351,7 @@ begin
      set status = 'accepted',
          selected_option_id = coalesce(p_option_id, selected_option_id),
          initial_price = v_base,
-         -- ⭐ Computed EXPLICITLY, never coalesce(accepted_price, total): `total`
+         -- â­ Computed EXPLICITLY, never coalesce(accepted_price, total): `total`
          -- is GENERATED over initial_price/addons_total and every SET expression
          -- reads the OLD row, so it would snapshot the pre-choice price.
          accepted_price = v_base + v_travel + v_addons,
@@ -5325,7 +5438,7 @@ begin
   where i.id = p_invoice_id;
   if not found then return; end if;
 
-  -- ⭐ p.user_id = v_inv.user_id — a payment row belonging to another business can
+  -- â­ p.user_id = v_inv.user_id â a payment row belonging to another business can
   -- never contribute to this invoice's paid total.
   select coalesce(sum(p.amount), 0) into v_paid
   from public.payments p
@@ -5428,6 +5541,21 @@ begin
       case when coalesce(p_auto, 0) > 0 then round(((p_accepted - p_auto) / p_auto * 100)::numeric, 1) else null end);
   return true;
 end $function$;
+
+CREATE OR REPLACE FUNCTION public.record_technician_crew_history()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+begin
+  if tg_op = 'INSERT' or old.crew_id is distinct from new.crew_id then
+    insert into public.technician_crew_history (user_id, technician_id, crew_id)
+    values (new.user_id, new.id, new.crew_id);
+  end if;
+  return new;
+end
+$function$;
 
 CREATE OR REPLACE FUNCTION public.resolve_intake_customer(p_user uuid, p_name text, p_email text, p_phone text, p_address text, p_city text, p_province text, p_postal text, p_source text, p_notes text DEFAULT NULL::text)
  RETURNS uuid
@@ -5889,7 +6017,7 @@ begin
       c.id             as id,
       c.created_at     as created_at,
       coalesce(nullif(c.name, ''), 'Unnamed customer') as label,
-      nullif(concat_ws(' · ', nullif(c.address, ''), nullif(c.city, ''), nullif(c.phone, '')), '') as sub,
+      nullif(concat_ws(' Â· ', nullif(c.address, ''), nullif(c.city, ''), nullif(c.phone, '')), '') as sub,
       case
         when v_email is not null and lower(coalesce(c.email, '')) = v_email then 10
         when v_digits <> '' and coalesce(c.phone_digits, '') = v_digits then 10
@@ -5919,7 +6047,7 @@ begin
     select
       'property', p.id, p.created_at,
       coalesce(nullif(p.address, ''), 'Property'),
-      nullif(concat_ws(' · ', nullif(p.neighborhood, ''), nullif(p.city, '')), ''),
+      nullif(concat_ws(' Â· ', nullif(p.neighborhood, ''), nullif(p.city, '')), ''),
       case
         when p.address ilike v_pre  then 20
         when p.address ilike v_like then 30
@@ -5936,7 +6064,7 @@ begin
     select
       'quote', q.id, q.created_at,
       coalesce(nullif(q.quote_number, ''), 'Quote'),
-      nullif(concat_ws(' · ', nullif(q.customer_name, ''), nullif(q.service_type, '')), ''),
+      nullif(concat_ws(' Â· ', nullif(q.customer_name, ''), nullif(q.service_type, '')), ''),
       case
         when v_ident <> '' and lower(regexp_replace(coalesce(q.quote_number, ''), '[^A-Za-z0-9]', '', 'g')) = v_ident then 0
         when v_bare is not null
@@ -5964,7 +6092,7 @@ begin
     select
       'invoice', i.id, i.created_at,
       coalesce(nullif(i.invoice_number, ''), 'Invoice'),
-      nullif(concat_ws(' · ', nullif(i.customer_name, ''), nullif(i.service_type, '')), ''),
+      nullif(concat_ws(' Â· ', nullif(i.customer_name, ''), nullif(i.service_type, '')), ''),
       case
         when v_ident <> '' and lower(regexp_replace(coalesce(i.invoice_number, ''), '[^A-Za-z0-9]', '', 'g')) = v_ident then 0
         when v_bare is not null
@@ -5996,7 +6124,7 @@ begin
     select
       'job', j.id, j.created_at,
       coalesce(nullif(j.title, ''), nullif(j.service_type, ''), 'Visit'),
-      nullif(concat_ws(' · ', to_char(j.scheduled_date, 'Mon FMDD'), nullif(j.service_type, '')), ''),
+      nullif(concat_ws(' Â· ', to_char(j.scheduled_date, 'Mon FMDD'), nullif(j.service_type, '')), ''),
       case
         when j.title ilike v_pre  then 20
         when j.title ilike v_like then 30
@@ -6104,9 +6232,9 @@ begin
     returning id into v_quote;
 
   insert into public.service_requests (user_id, customer_id, message)
-    values (v_user, v_customer, 'New online booking (review) — ' || left(p_name, 80) || ' · ' || coalesce(p_address, '') || ' · ' || coalesce(p_cadence, 'one-time')
-      || ' · via ' || v_source || case when v_photo_count > 0 then ' · ' || v_photo_count || ' photo(s)' else '' end
-      || case when nullif(trim(p_referral_code), '') is not null then ' · ref:' || p_referral_code else '' end || ' · draft ' || v_qnum);
+    values (v_user, v_customer, 'New online booking (review) â ' || left(p_name, 80) || ' Â· ' || coalesce(p_address, '') || ' Â· ' || coalesce(p_cadence, 'one-time')
+      || ' Â· via ' || v_source || case when v_photo_count > 0 then ' Â· ' || v_photo_count || ' photo(s)' else '' end
+      || case when nullif(trim(p_referral_code), '') is not null then ' Â· ref:' || p_referral_code else '' end || ' Â· draft ' || v_qnum);
 
   return json_build_object('quote_number', v_qnum, 'customer_id', v_customer, 'quote_id', v_quote);
 end; $function$;
@@ -6195,13 +6323,13 @@ begin
   ) returning id into v_lead;
 
   v_summary := 'New ' || v_source || ' lead'
-    || case when v_services is not null then ' — ' || v_services else '' end
-    || case when v_address is not null then ' · ' || v_address else '' end
-    || case when v_budget is not null then ' · Budget: ' || v_budget else '' end
-    || case when v_schedule is not null then ' · Prefers ' || v_schedule else '' end
-    || case when v_contact is not null then ' · via ' || v_contact else '' end
-    || case when v_sqft is not null then ' · ' || v_sqft || ' ft² lawn' else '' end
-    || case when v_est is not null then ' · est. $' || v_est else '' end;
+    || case when v_services is not null then ' â ' || v_services else '' end
+    || case when v_address is not null then ' Â· ' || v_address else '' end
+    || case when v_budget is not null then ' Â· Budget: ' || v_budget else '' end
+    || case when v_schedule is not null then ' Â· Prefers ' || v_schedule else '' end
+    || case when v_contact is not null then ' Â· via ' || v_contact else '' end
+    || case when v_sqft is not null then ' Â· ' || v_sqft || ' ftÂ² lawn' else '' end
+    || case when v_est is not null then ' Â· est. $' || v_est else '' end;
   insert into public.service_requests (user_id, customer_id, message, status)
     values (v_user, v_customer, v_summary, 'new');
 
@@ -6286,7 +6414,7 @@ end $function$;
 -- tenant attaching a child row to another tenant's parent. Do not "simplify".
 -- ══════════════════════════════════════════════════════════════════════════
 
--- primary keys (110)
+-- primary keys (111)
 alter table public."api_keys" add constraint "api_keys_pkey" PRIMARY KEY (id);
 alter table public."automation_runs" add constraint "automation_runs_pkey" PRIMARY KEY (id);
 alter table public."automation_signals" add constraint "automation_signals_pkey" PRIMARY KEY (id);
@@ -6387,6 +6515,7 @@ alter table public."service_units" add constraint "service_units_pkey" PRIMARY K
 alter table public."social_connections" add constraint "social_connections_pkey" PRIMARY KEY (id);
 alter table public."suggestion_dismissals" add constraint "suggestion_dismissals_pkey" PRIMARY KEY (id);
 alter table public."suppliers" add constraint "suppliers_pkey" PRIMARY KEY (id);
+alter table public."technician_crew_history" add constraint "technician_crew_history_pkey" PRIMARY KEY (id);
 alter table public."technicians" add constraint "technicians_pkey" PRIMARY KEY (id);
 alter table public."time_entries" add constraint "time_entries_pkey" PRIMARY KEY (id);
 alter table public."travel_fee_tiers" add constraint "travel_fee_tiers_pkey" PRIMARY KEY (id);
@@ -6398,13 +6527,14 @@ alter table public."webhook_endpoints" add constraint "webhook_endpoints_pkey" P
 alter table public."website_leads" add constraint "website_leads_pkey" PRIMARY KEY (id);
 alter table public."worker_availability" add constraint "worker_availability_pkey" PRIMARY KEY (id);
 
--- unique (46)
+-- unique (47)
 alter table public."api_keys" add constraint "api_keys_key_hash_key" UNIQUE (key_hash);
 alter table public."beta_invites" add constraint "beta_invites_token_hash_key" UNIQUE (token_hash);
 alter table public."business_settings" add constraint "business_settings_user_id_key" UNIQUE (user_id);
 alter table public."change_orders" add constraint "change_orders_id_user_key" UNIQUE (id, user_id);
 alter table public."conversations" add constraint "conversations_user_id_customer_id_key" UNIQUE (user_id, customer_id);
 alter table public."crew_media" add constraint "crew_media_storage_path_key" UNIQUE (storage_path);
+alter table public."crews" add constraint "crews_id_user_key" UNIQUE (id, user_id);
 alter table public."crm_campaign_log" add constraint "crm_campaign_log_campaign_id_customer_id_period_key_key" UNIQUE (campaign_id, customer_id, period_key);
 alter table public."crm_campaign_presets" add constraint "crm_campaign_presets_user_id_name_key" UNIQUE (user_id, name);
 alter table public."customers" add constraint "customers_user_id_id_key" UNIQUE (user_id, id);
@@ -6446,7 +6576,7 @@ alter table public."suggestion_dismissals" add constraint "suggestion_dismissals
 alter table public."technicians" add constraint "technicians_id_user_key" UNIQUE (id, user_id);
 alter table public."worker_availability" add constraint "worker_availability_one_per_weekday" UNIQUE (technician_id, weekday);
 
--- check (177)
+-- check (178)
 alter table public."automation_runs" add constraint "automation_runs_decision_check" CHECK ((decision = ANY (ARRAY['fired'::text, 'suppressed'::text])));
 alter table public."automation_runs" add constraint "automation_runs_suppressed_reason_check" CHECK ((suppressed_reason = ANY (ARRAY['mode_off'::text, 'mode_suggest'::text, 'quiet_hours'::text, 'frequency_cap'::text, 'no_consent'::text, 'deduped'::text, 'signal_absent'::text])));
 alter table public."beta_invites" add constraint "beta_invites_token_hash_is_sha256" CHECK ((token_hash ~ '^[0-9a-f]{64}$'::text));
@@ -6530,6 +6660,7 @@ alter table public."job_work_sessions" add constraint "job_work_sessions_minutes
 alter table public."job_work_sessions" add constraint "job_work_sessions_note_check" CHECK (((note IS NULL) OR (char_length(note) <= 280)));
 alter table public."job_work_sessions" add constraint "job_work_sessions_source_check" CHECK ((source = ANY (ARRAY['clock'::text, 'manual'::text, 'carried'::text])));
 alter table public."job_work_sessions" add constraint "job_work_sessions_workers_check" CHECK (((workers >= 1) AND (workers <= 50)));
+alter table public."jobs" add constraint "jobs_one_assignee" CHECK (((crew_id IS NULL) OR (technician_id IS NULL)));
 alter table public."jobs" add constraint "jobs_status_check" CHECK ((status = ANY (ARRAY['scheduled'::text, 'in_progress'::text, 'completed'::text, 'cancelled'::text])));
 alter table public."liabilities" add constraint "liabilities_current_balance_check" CHECK ((current_balance >= (0)::numeric));
 alter table public."liabilities" add constraint "liabilities_interest_rate_check" CHECK ((interest_rate >= (0)::numeric));
@@ -6625,7 +6756,7 @@ alter table public."webhook_endpoints" add constraint "webhook_endpoints_source_
 alter table public."worker_availability" add constraint "worker_availability_weekday_range" CHECK (((weekday >= 0) AND (weekday <= 6)));
 alter table public."worker_availability" add constraint "worker_availability_window" CHECK (((available AND (start_time IS NOT NULL) AND (end_time IS NOT NULL) AND (end_time > start_time)) OR ((NOT available) AND (start_time IS NULL) AND (end_time IS NULL))));
 
--- foreign keys (249)
+-- foreign keys (254)
 alter table public."api_keys" add constraint "api_keys_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."automation_runs" add constraint "automation_runs_signal_id_fkey" FOREIGN KEY (signal_id) REFERENCES automation_signals(id) ON DELETE SET NULL;
 alter table public."automation_runs" add constraint "automation_runs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
@@ -6656,6 +6787,7 @@ alter table public."crew_message_reads" add constraint "crew_message_reads_user_
 alter table public."crew_messages" add constraint "crew_messages_author_technician_id_fkey" FOREIGN KEY (author_technician_id) REFERENCES technicians(id) ON DELETE SET NULL;
 alter table public."crew_messages" add constraint "crew_messages_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE;
 alter table public."crew_messages" add constraint "crew_messages_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."crews" add constraint "crews_lead_same_owner" FOREIGN KEY (lead_technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (lead_technician_id);
 alter table public."crews" add constraint "crews_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."crm_campaign_log" add constraint "crm_campaign_log_campaign_id_fkey" FOREIGN KEY (campaign_id) REFERENCES crm_campaigns(id) ON DELETE CASCADE;
 alter table public."crm_campaign_log" add constraint "crm_campaign_log_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
@@ -6670,9 +6802,9 @@ alter table public."customers" add constraint "customers_referred_by_customer_id
 alter table public."customers" add constraint "customers_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."data_exports" add constraint "data_exports_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."day_statuses" add constraint "day_statuses_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."dispatch_notes" add constraint "dispatch_notes_crew_id_fkey" FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE CASCADE;
+alter table public."dispatch_notes" add constraint "dispatch_notes_crew_same_owner" FOREIGN KEY (crew_id, user_id) REFERENCES crews(id, user_id) ON DELETE CASCADE;
 alter table public."dispatch_notes" add constraint "dispatch_notes_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."equipment" add constraint "equipment_crew_id_fkey" FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL;
+alter table public."equipment" add constraint "equipment_crew_same_owner" FOREIGN KEY (crew_id, user_id) REFERENCES crews(id, user_id) ON DELETE SET NULL (crew_id);
 alter table public."equipment" add constraint "equipment_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."equipment_docs" add constraint "equipment_docs_equipment_id_fkey" FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE CASCADE;
 alter table public."equipment_docs" add constraint "equipment_docs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
@@ -6726,11 +6858,12 @@ alter table public."job_recurrences" add constraint "job_recurrences_form_templa
 alter table public."job_recurrences" add constraint "job_recurrences_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."job_work_sessions" add constraint "job_work_sessions_job_same_owner" FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE CASCADE;
 alter table public."job_work_sessions" add constraint "job_work_sessions_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."jobs" add constraint "jobs_crew_id_fkey" FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL;
+alter table public."jobs" add constraint "jobs_crew_same_owner" FOREIGN KEY (crew_id, user_id) REFERENCES crews(id, user_id) ON DELETE SET NULL (crew_id);
 alter table public."jobs" add constraint "jobs_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
 alter table public."jobs" add constraint "jobs_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
 alter table public."jobs" add constraint "jobs_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
 alter table public."jobs" add constraint "jobs_recurrence_id_fkey" FOREIGN KEY (recurrence_id) REFERENCES job_recurrences(id) ON DELETE SET NULL;
+alter table public."jobs" add constraint "jobs_technician_same_owner" FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (technician_id);
 alter table public."jobs" add constraint "jobs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."labor_observations" add constraint "labor_observations_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
 alter table public."labor_observations" add constraint "labor_observations_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
@@ -6854,8 +6987,11 @@ alter table public."service_templates" add constraint "service_templates_user_id
 alter table public."service_units" add constraint "service_units_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."social_connections" add constraint "social_connections_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."suppliers" add constraint "suppliers_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."technician_crew_history" add constraint "technician_crew_history_crew_same_owner" FOREIGN KEY (crew_id, user_id) REFERENCES crews(id, user_id);
+alter table public."technician_crew_history" add constraint "technician_crew_history_technician_same_owner" FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE CASCADE;
+alter table public."technician_crew_history" add constraint "technician_crew_history_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."technicians" add constraint "technicians_auth_user_id_fkey" FOREIGN KEY (auth_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-alter table public."technicians" add constraint "technicians_crew_id_fkey" FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL;
+alter table public."technicians" add constraint "technicians_crew_same_owner" FOREIGN KEY (crew_id, user_id) REFERENCES crews(id, user_id) ON DELETE SET NULL (crew_id);
 alter table public."technicians" add constraint "technicians_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."time_entries" add constraint "time_entries_job_same_owner" FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE SET NULL (job_id);
 alter table public."time_entries" add constraint "time_entries_technician_same_owner" FOREIGN KEY (technician_id, user_id) REFERENCES technicians(id, user_id) ON DELETE SET NULL (technician_id);
@@ -6879,7 +7015,7 @@ alter table public."worker_availability" add constraint "worker_availability_use
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 5 · TRIGGERS
--- 93 triggers, including the two DEFERRABLE constraint triggers that
+-- 98 triggers, including the two DEFERRABLE constraint triggers that
 -- enforce quote-option/quote-service shape at commit time.
 -- ══════════════════════════════════════════════════════════════════════════
 
@@ -6901,6 +7037,10 @@ drop trigger if exists "crew_message_identity" on public."crew_messages";
 CREATE TRIGGER crew_message_identity BEFORE INSERT ON public.crew_messages FOR EACH ROW EXECUTE FUNCTION crew_message_identity();
 drop trigger if exists "crew_message_notify" on public."crew_messages";
 CREATE TRIGGER crew_message_notify AFTER INSERT ON public.crew_messages FOR EACH ROW EXECUTE FUNCTION crew_message_notify();
+drop trigger if exists "crews_block_delete_with_history" on public."crews";
+CREATE TRIGGER crews_block_delete_with_history BEFORE DELETE ON public.crews FOR EACH ROW EXECUTE FUNCTION crews_block_delete_with_history();
+drop trigger if exists "crews_lead_is_member" on public."crews";
+CREATE TRIGGER crews_lead_is_member BEFORE INSERT OR UPDATE OF lead_technician_id ON public.crews FOR EACH ROW EXECUTE FUNCTION crews_lead_is_member();
 drop trigger if exists "crews_updated_at" on public."crews";
 CREATE TRIGGER crews_updated_at BEFORE UPDATE ON public.crews FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
 drop trigger if exists "trg_crm_campaign_presets_updated" on public."crm_campaign_presets";
@@ -6969,6 +7109,8 @@ drop trigger if exists "crew_job_field_guard" on public."jobs";
 CREATE TRIGGER crew_job_field_guard BEFORE UPDATE ON public.jobs FOR EACH ROW EXECUTE FUNCTION crew_job_field_guard();
 drop trigger if exists "crew_message_schedule_event" on public."jobs";
 CREATE TRIGGER crew_message_schedule_event AFTER UPDATE ON public.jobs FOR EACH ROW EXECUTE FUNCTION crew_message_schedule_event();
+drop trigger if exists "jobs_assignment_guard" on public."jobs";
+CREATE TRIGGER jobs_assignment_guard BEFORE INSERT OR UPDATE OF crew_id, technician_id ON public.jobs FOR EACH ROW EXECUTE FUNCTION jobs_assignment_guard();
 drop trigger if exists "jobs_updated_at" on public."jobs";
 CREATE TRIGGER jobs_updated_at BEFORE UPDATE ON public.jobs FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
 drop trigger if exists "trg_capture_labor" on public."jobs";
@@ -7055,6 +7197,10 @@ drop trigger if exists "trg_social_connections_updated" on public."social_connec
 CREATE TRIGGER trg_social_connections_updated BEFORE UPDATE ON public.social_connections FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 drop trigger if exists "technicians_auth_link_guard" on public."technicians";
 CREATE TRIGGER technicians_auth_link_guard BEFORE INSERT OR UPDATE ON public.technicians FOR EACH ROW EXECUTE FUNCTION guard_technician_auth_link();
+drop trigger if exists "technicians_clear_crew_lead" on public."technicians";
+CREATE TRIGGER technicians_clear_crew_lead AFTER UPDATE OF crew_id, is_active, archived_at ON public.technicians FOR EACH ROW EXECUTE FUNCTION clear_crew_lead_on_departure();
+drop trigger if exists "technicians_crew_history" on public."technicians";
+CREATE TRIGGER technicians_crew_history AFTER INSERT OR UPDATE OF crew_id ON public.technicians FOR EACH ROW EXECUTE FUNCTION record_technician_crew_history();
 drop trigger if exists "technicians_log_wage_change" on public."technicians";
 CREATE TRIGGER technicians_log_wage_change AFTER INSERT OR UPDATE OF hourly_wage ON public.technicians FOR EACH ROW EXECUTE FUNCTION log_wage_change();
 drop trigger if exists "technicians_updated_at" on public."technicians";
@@ -7072,7 +7218,7 @@ CREATE TRIGGER worker_availability_updated_at BEFORE UPDATE ON public.worker_ava
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 6 · INDEXES
--- 276 standalone indexes. Constraint-backing indexes are omitted on purpose —
+-- 279 standalone indexes. Constraint-backing indexes are omitted on purpose —
 -- section 4 already created them; declaring both would fail or duplicate.
 -- The partial UNIQUE indexes are correctness, not speed: they are what stops a
 -- second open shift per technician and a duplicate invoice number.
@@ -7196,6 +7342,7 @@ create index if not exists jobs_property_id_idx ON public.jobs USING btree (prop
 create index if not exists jobs_quote_id_idx ON public.jobs USING btree (quote_id);
 create index if not exists jobs_recurrence_idx ON public.jobs USING btree (recurrence_id);
 create index if not exists jobs_scheduled_date_idx ON public.jobs USING btree (scheduled_date);
+create index if not exists jobs_technician_id_idx ON public.jobs USING btree (technician_id);
 create index if not exists jobs_user_id_idx ON public.jobs USING btree (user_id);
 create index if not exists labor_observations_job_id_idx ON public.labor_observations USING btree (job_id);
 create index if not exists labor_observations_prop_idx ON public.labor_observations USING btree (user_id, property_id);
@@ -7331,6 +7478,8 @@ create unique index if not exists social_connections_unique_idx ON public.social
 create index if not exists social_connections_user_idx ON public.social_connections USING btree (user_id, platform);
 create index if not exists idx_suggestion_dismissals_user ON public.suggestion_dismissals USING btree (user_id);
 create index if not exists suppliers_user_idx ON public.suppliers USING btree (user_id, name);
+create index if not exists technician_crew_history_tech_idx ON public.technician_crew_history USING btree (technician_id, changed_at DESC);
+create index if not exists technician_crew_history_user_idx ON public.technician_crew_history USING btree (user_id, changed_at DESC);
 create index if not exists technicians_active_idx ON public.technicians USING btree (user_id) WHERE (archived_at IS NULL);
 create unique index if not exists technicians_auth_user_id_key ON public.technicians USING btree (auth_user_id) WHERE (auth_user_id IS NOT NULL);
 create index if not exists technicians_crew_idx ON public.technicians USING btree (crew_id);
@@ -7357,7 +7506,7 @@ create index if not exists worker_availability_user_idx ON public.worker_availab
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 7 · ROW LEVEL SECURITY
--- RLS enabled on all 110 tables, then 359 policies.
+-- RLS enabled on all 111 tables, then 360 policies.
 -- Every table carries RLS. The tenant boundary audit found the holes were always
 -- RLS being OFF, never a policy being wrong — so enabling is emitted for every
 -- table unconditionally, before any policy.
@@ -7463,6 +7612,7 @@ alter table public."service_units" enable row level security;
 alter table public."social_connections" enable row level security;
 alter table public."suggestion_dismissals" enable row level security;
 alter table public."suppliers" enable row level security;
+alter table public."technician_crew_history" enable row level security;
 alter table public."technicians" enable row level security;
 alter table public."time_entries" enable row level security;
 alter table public."travel_fee_tiers" enable row level security;
@@ -8477,6 +8627,9 @@ create policy "suppliers: select own" on public."suppliers" as permissive for se
 drop policy if exists "suppliers: update own" on public."suppliers";
 create policy "suppliers: update own" on public."suppliers" as permissive for update to public
   using ((auth.uid() = user_id));
+drop policy if exists "technician_crew_history: select own" on public."technician_crew_history";
+create policy "technician_crew_history: select own" on public."technician_crew_history" as permissive for select to public
+  using ((auth.uid() = user_id));
 drop policy if exists "technicians: delete own" on public."technicians";
 create policy "technicians: delete own" on public."technicians" as permissive for delete to public
   using ((auth.uid() = user_id));
@@ -8982,6 +9135,9 @@ revoke all on table public."suppliers" from public, anon, authenticated, service
 grant ALL on table public."suppliers" to anon;
 grant ALL on table public."suppliers" to authenticated;
 grant ALL on table public."suppliers" to service_role;
+revoke all on table public."technician_crew_history" from public, anon, authenticated, service_role;
+grant ALL on table public."technician_crew_history" to service_role;
+grant SELECT on table public."technician_crew_history" to authenticated;
 revoke all on table public."technicians" from public, anon, authenticated, service_role;
 grant ALL on table public."technicians" to anon;
 grant ALL on table public."technicians" to authenticated;
@@ -9080,6 +9236,8 @@ grant execute on function public."claim_beta_invite"() to authenticated;
 grant execute on function public."claim_beta_invite"() to service_role;
 revoke all on function public."claim_webhook_deliveries"(p_limit integer, p_user uuid) from public, anon, authenticated, service_role;
 grant execute on function public."claim_webhook_deliveries"(p_limit integer, p_user uuid) to service_role;
+revoke all on function public."clear_crew_lead_on_departure"() from public, anon, authenticated, service_role;
+grant execute on function public."clear_crew_lead_on_departure"() to service_role;
 revoke all on function public."clear_route_order_on_move"() from public, anon, authenticated, service_role;
 grant execute on function public."clear_route_order_on_move"() to public;
 grant execute on function public."clear_route_order_on_move"() to anon;
@@ -9096,6 +9254,8 @@ grant execute on function public."create_beta_invite"(p_token_hash text, p_label
 revoke all on function public."crew_access_states"() from public, anon, authenticated, service_role;
 grant execute on function public."crew_access_states"() to authenticated;
 grant execute on function public."crew_access_states"() to service_role;
+revoke all on function public."crew_assignment_covers"(j_crew uuid, j_technician uuid, v_crew uuid, v_tech uuid) from public, anon, authenticated, service_role;
+grant execute on function public."crew_assignment_covers"(j_crew uuid, j_technician uuid, v_crew uuid, v_tech uuid) to service_role;
 revoke all on function public."crew_cancel_time_off"(p_id uuid) from public, anon, authenticated, service_role;
 grant execute on function public."crew_cancel_time_off"(p_id uuid) to authenticated;
 grant execute on function public."crew_cancel_time_off"(p_id uuid) to service_role;
@@ -9164,6 +9324,10 @@ grant execute on function public."crew_technician_id"() to service_role;
 revoke all on function public."crew_upcoming"(p_from date, p_days integer) from public, anon, authenticated, service_role;
 grant execute on function public."crew_upcoming"(p_from date, p_days integer) to authenticated;
 grant execute on function public."crew_upcoming"(p_from date, p_days integer) to service_role;
+revoke all on function public."crews_block_delete_with_history"() from public, anon, authenticated, service_role;
+grant execute on function public."crews_block_delete_with_history"() to service_role;
+revoke all on function public."crews_lead_is_member"() from public, anon, authenticated, service_role;
+grant execute on function public."crews_lead_is_member"() to service_role;
 revoke all on function public."crm_stamp_review_requested"() from public, anon, authenticated, service_role;
 grant execute on function public."crm_stamp_review_requested"() to service_role;
 revoke all on function public."crm_sync_referral"() from public, anon, authenticated, service_role;
@@ -9252,6 +9416,8 @@ grant execute on function public."job_session_minutes"(p_job_id uuid) to public;
 grant execute on function public."job_session_minutes"(p_job_id uuid) to anon;
 grant execute on function public."job_session_minutes"(p_job_id uuid) to authenticated;
 grant execute on function public."job_session_minutes"(p_job_id uuid) to service_role;
+revoke all on function public."jobs_assignment_guard"() from public, anon, authenticated, service_role;
+grant execute on function public."jobs_assignment_guard"() to service_role;
 revoke all on function public."list_beta_invites"() from public, anon, authenticated, service_role;
 grant execute on function public."list_beta_invites"() to authenticated;
 grant execute on function public."list_beta_invites"() to service_role;
@@ -9410,6 +9576,8 @@ revoke all on function public."record_booking_measurement"(p_token text, p_quote
 grant execute on function public."record_booking_measurement"(p_token text, p_quote_id uuid, p_lat double precision, p_lng double precision, p_neighborhood text, p_auto numeric, p_accepted numeric, p_building numeric, p_confidence text) to service_role;
 grant execute on function public."record_booking_measurement"(p_token text, p_quote_id uuid, p_lat double precision, p_lng double precision, p_neighborhood text, p_auto numeric, p_accepted numeric, p_building numeric, p_confidence text) to anon;
 grant execute on function public."record_booking_measurement"(p_token text, p_quote_id uuid, p_lat double precision, p_lng double precision, p_neighborhood text, p_auto numeric, p_accepted numeric, p_building numeric, p_confidence text) to authenticated;
+revoke all on function public."record_technician_crew_history"() from public, anon, authenticated, service_role;
+grant execute on function public."record_technician_crew_history"() to service_role;
 revoke all on function public."resolve_intake_customer"(p_user uuid, p_name text, p_email text, p_phone text, p_address text, p_city text, p_province text, p_postal text, p_source text, p_notes text) from public, anon, authenticated, service_role;
 grant execute on function public."resolve_intake_customer"(p_user uuid, p_name text, p_email text, p_phone text, p_address text, p_city text, p_province text, p_postal text, p_source text, p_notes text) to service_role;
 revoke all on function public."resolve_intake_property"(p_user uuid, p_customer uuid, p_address text, p_city text, p_province text, p_postal text, p_lat double precision, p_lng double precision, p_sqft numeric, p_polygon jsonb, p_place_id text, p_maps_url text, p_travel_km numeric, p_travel_fee numeric) from public, anon, authenticated, service_role;
@@ -9473,39 +9641,40 @@ grant execute on function public."vision_supersede_prior_active"() to service_ro
 -- figure is derived rather than stored. They ship with the schema deliberately.
 -- ══════════════════════════════════════════════════════════════════════════
 
-comment on table public."beta_invites" is 'One-time beta signup invites. Raw tokens are never stored — sha256 hex only. Service-role and DEFINER access only: RLS is on with zero policies.';
+comment on table public."beta_invites" is 'One-time beta signup invites. Raw tokens are never stored â sha256 hex only. Service-role and DEFINER access only: RLS is on with zero policies.';
 comment on table public."change_orders" is 'Scope + price agreed AFTER the original approval. Owns the AUTHORIZATION only - approval mints a job_line_items row (change_order_id), which is the money. The originating quote is never rewritten.';
-comment on table public."crew_media" is 'CREW AUDIENCE. Reference photos/video the office sends TO the field — what a worker needs BEFORE and DURING the work. Never customer-facing: no portal projection selects it. Not proof of work — that is job_photos + jobs.completion_summary.';
-comment on table public."crew_message_reads" is 'High-water mark per (visit, reader). Unread is derived from it — deliberately NOT one row per message per user.';
-comment on table public."crew_messages" is 'CREW AUDIENCE (the business + the crew assigned to this visit). The conversation attached to one visit. Never customer-facing: no portal projection, no PDF, no public API selects it. Not a note — jobs.notes is the standing instruction; this is what was said and when.';
+comment on table public."crew_media" is 'CREW AUDIENCE. Reference photos/video the office sends TO the field â what a worker needs BEFORE and DURING the work. Never customer-facing: no portal projection selects it. Not proof of work â that is job_photos + jobs.completion_summary.';
+comment on table public."crew_message_reads" is 'High-water mark per (visit, reader). Unread is derived from it â deliberately NOT one row per message per user.';
+comment on table public."crew_messages" is 'CREW AUDIENCE (the business + the crew assigned to this visit). The conversation attached to one visit. Never customer-facing: no portal projection, no PDF, no public API selects it. Not a note â jobs.notes is the standing instruction; this is what was said and when.';
 comment on table public."dispatch_notes" is 'One note per (date, crew); crew NULL = the day-level note. Upsert on the unique constraint.';
-comment on table public."follow_ups" is 'Owner follow-up commitments: WHO (customer_id, mandatory) / WHEN (due_on, a local date) / WHY (reason) / open|done. NOT public.schedule_items (empty, unread, calendar-shaped) and NOT lib/followup.ts (the derived quote chaser). Never messages the customer — this is an owner reminder only.';
+comment on table public."follow_ups" is 'Owner follow-up commitments: WHO (customer_id, mandatory) / WHEN (due_on, a local date) / WHY (reason) / open|done. NOT public.schedule_items (empty, unread, calendar-shaped) and NOT lib/followup.ts (the derived quote chaser). Never messages the customer â this is an owner reminder only.';
 comment on table public."form_template_fields" is 'The fields of a form template. Editing them affects FUTURE instances only - job_forms carries a frozen snapshot.';
 comment on table public."form_templates" is 'Reusable checklist/form definitions (Job Forms V1). Owner+crew audience - no portal projection may select these tables. Archive (archived_at), never hard-delete: job_forms.template_id RESTRICTs deletion once instances exist.';
 comment on table public."job_form_response_photos" is 'Links a photo-field response to canonical job_photos rows OF THE SAME VISIT (trigger-enforced). No second upload path exists.';
 comment on table public."job_form_responses" is 'Answers, one row per (form, field). answered_by/answered_role/answered_at record who actually wrote it - never inferred. Frozen with the visit: post-completion changes require correction_reason (owner only).';
 comment on table public."job_forms" is 'A form instance attached to ONE visit (a jobs row). fields = frozen snapshot at attach time, immutable by trigger. waived_* = the owner''s recorded completion-gate override (the audit-trail seam).';
 comment on table public."job_work_sessions" is 'One stretch of work on one job on one day. jobs.actual_minutes is the sum of these (enforced by trigger). minutes = elapsed on site; labour_minutes = minutes x workers.';
-comment on table public."password_reset_requests" is 'Abuse ledger for the public password-reset endpoint. email_key = sha256(lower(trim(email))) — never the address. No user_id/email/token/IP by design.';
+comment on table public."password_reset_requests" is 'Abuse ledger for the public password-reset endpoint. email_key = sha256(lower(trim(email))) â never the address. No user_id/email/token/IP by design.';
 comment on table public."platform_capabilities" is 'Platform-managed grants for SHARED deployment infrastructure (Stripe account, Twilio number, Resend identity). Missing row = no grants. App code reads only; rows are written by the platform operator in SQL.';
 comment on table public."platform_operators" is 'Who may issue beta invites. NOT a role system: one row today (the founding account). No client access of any kind.';
-comment on table public."portal_access_requests" is 'Abuse ledger for the public portal-link endpoint. email_key = sha256(lower(trim(email))) — never the address. No customer_id/user_id/token by design.';
-comment on table public."property_measurement_events" is 'Append-only history for property_measurements, written by trigger. No UPDATE/DELETE policy — history cannot be rewritten. Distinct from `measurements` (the lawn auto-vs-accepted accuracy log that trains neighbourhood ratios).';
-comment on table public."property_measurements" is 'THE typed measurement ledger (Measurement Engine V2). One row per (property, kind). Unit follows kind by CHECK. Legacy properties.lawn_sqft/fence_length/mulch_area/rock_area are DERIVED from here by trigger for existing pricing/portal readers — drop them once Quote V2 reads this table.';
-comment on table public."purchase_order_items" is 'PO lines. qty_received is intentionally absent — it is derived from part_movements linked by purchase_order_item_id, so stock and receipts cannot drift apart.';
+comment on table public."portal_access_requests" is 'Abuse ledger for the public portal-link endpoint. email_key = sha256(lower(trim(email))) â never the address. No customer_id/user_id/token by design.';
+comment on table public."property_measurement_events" is 'Append-only history for property_measurements, written by trigger. No UPDATE/DELETE policy â history cannot be rewritten. Distinct from `measurements` (the lawn auto-vs-accepted accuracy log that trains neighbourhood ratios).';
+comment on table public."property_measurements" is 'THE typed measurement ledger (Measurement Engine V2). One row per (property, kind). Unit follows kind by CHECK. Legacy properties.lawn_sqft/fence_length/mulch_area/rock_area are DERIVED from here by trigger for existing pricing/portal readers â drop them once Quote V2 reads this table.';
+comment on table public."purchase_order_items" is 'PO lines. qty_received is intentionally absent â it is derived from part_movements linked by purchase_order_item_id, so stock and receipts cannot drift apart.';
 comment on table public."quote_options" is 'Mutually exclusive alternatives for one quote (Budget/Recommended/Premium). NOT additive: quotes.initial_price always equals ONE option price - the recommended one before the customer chooses, the selected one after. Cannot coexist with quote_services rows.';
 comment on table public."report_schedules" is 'Scheduled report cadences per owner. last_period_to is the idempotency key: the cron sends a closed period exactly once, however often it runs.';
+comment on table public."technician_crew_history" is 'Append-only crew membership log, written only by trigger. Answers "which crew was this person on AT that time" so past attribution cannot be rewritten by moving someone today. Rows are never updated or deleted by any client role.';
 comment on table public."time_entries" is 'THE paid-time ledger. One row per shift. minutes_worked is DB-derived; hourly_rate is snapshotted at clock-in so wage changes never rewrite history. Open shift = clock_out IS NULL (at most one per technician, enforced by index).';
-comment on table public."verify_fixture_tenants" is 'Tenants whose data is created by scripts/verify-*.ts. Marker only — grants nothing, relaxes nothing. Guards read it through is_verify_fixture_tenant() and refuse to write when it answers false. Writable only by migration/service_role.';
+comment on table public."verify_fixture_tenants" is 'Tenants whose data is created by scripts/verify-*.ts. Marker only â grants nothing, relaxes nothing. Guards read it through is_verify_fixture_tenant() and refuse to write when it answers false. Writable only by migration/service_role.';
 comment on table public."worker_availability" is 'A worker''s standard week, one row per weekday (0=Sun.6=Sat). No rows for a worker = availability is ASSUMED, and surfaces must say so. A worker with rows is available only on weekdays holding an available=true row. Dated exceptions live in pto_entries.';
 
 comment on column public."beta_invites"."redeemed_by" is 'Set by claim_beta_invite once the email is verified. This is what can_provision_business() reads.';
 comment on column public."beta_invites"."reserved_by" is 'The auth account created against this invite. SET NULL on user delete frees the invite for a fresh signup.';
 comment on column public."business_settings"."analytics_layout" is 'Analytics workspace layout: { "order": [widgetId], "hidden": [widgetId] }. Unknown ids ignored; missing ids append in default order.';
-comment on column public."business_settings"."business_type" is 'Trade/vertical key (registry: src/lib/trades). Selects seed data and default copy ONLY — engines never branch on it. Unknown key = neutral pack.';
+comment on column public."business_settings"."business_type" is 'Trade/vertical key (registry: src/lib/trades). Selects seed data and default copy ONLY â engines never branch on it. Unknown key = neutral pack.';
 comment on column public."business_settings"."enabled_modules" is 'Feature-module keys visible in navigation (registry: src/lib/modules.ts). NULL = all modules. Core modules (dashboard) are always shown regardless.';
-comment on column public."business_settings"."gst_number" is 'GST/HST registration number (e.g. 123456789RT0001). Printed on invoices/receipts when gst_percent > 0 — CRA requires it for the customer to claim an ITC on $30+. Null = not registered.';
-comment on column public."business_settings"."module_meta" is 'Per-module install state { key: { v: installedVersion, at: ISO } } — drives the Modules update badges (registry: src/lib/modules.ts). NULL = treat everything as current.';
+comment on column public."business_settings"."gst_number" is 'GST/HST registration number (e.g. 123456789RT0001). Printed on invoices/receipts when gst_percent > 0 â CRA requires it for the customer to claim an ITC on $30+. Null = not registered.';
+comment on column public."business_settings"."module_meta" is 'Per-module install state { key: { v: installedVersion, at: ISO } } â drives the Modules update badges (registry: src/lib/modules.ts). NULL = treat everything as current.';
 comment on column public."business_settings"."opening_balance_date" is 'The date opening_bank_balance was true. Cash movements before it are ignored.';
 comment on column public."business_settings"."opening_bank_balance" is 'Bank balance as at opening_balance_date. Cash = this + every movement since.';
 comment on column public."business_settings"."opening_equity" is 'Owner capital already in the business at the opening date. NULL = unknown (never plugged).';
@@ -9514,28 +9683,29 @@ comment on column public."business_settings"."ot_multiplier" is 'Pay multiplier 
 comment on column public."business_settings"."ot_weekly_hours" is 'Hours in a WORK WEEK after which OT applies. NULL = no weekly rule. Alberta 44, BC/ON 40/44.';
 comment on column public."business_settings"."pay_period" is 'weekly | biweekly | semimonthly | monthly. Drives the payroll summary window.';
 comment on column public."business_settings"."pay_period_anchor" is 'Any start date of a known period. Biweekly needs it to know WHICH two weeks; NULL falls back to the first pay_week_starts_on of 1970 (deterministic).';
-comment on column public."business_settings"."pay_week_starts_on" is '0=Sun..6=Sat. The OT WORK WEEK boundary — legally load-bearing, so it is explicit rather than assumed. Defaults to 1 (Mon) to match the existing timesheet week.';
+comment on column public."business_settings"."pay_week_starts_on" is '0=Sun..6=Sat. The OT WORK WEEK boundary â legally load-bearing, so it is explicit rather than assumed. Defaults to 1 (Mon) to match the existing timesheet week.';
 comment on column public."change_orders"."decided_via" is 'portal = the customer decided it themselves; owner = the owner recorded a decision taken elsewhere. Never inferred - no surface may imply a customer tapped approve when they did not.';
 comment on column public."crew_media"."message_id" is 'NULL = office reference material for the visit (the original meaning). Set = an attachment on that crew_messages row. Deleting the message takes its attachments with it.';
 comment on column public."crew_messages"."event_type" is 'NULL = a person spoke. Non-null = a system event (schedule_changed). Do not dump every mutation here: a system event may only join a conversation that already exists.';
-comment on column public."crew_messages"."user_id" is 'The BUSINESS that owns the visit — the tenant boundary. Never the crew author''s own uid.';
+comment on column public."crew_messages"."user_id" is 'The BUSINESS that owns the visit â the tenant boundary. Never the crew author''s own uid.';
 comment on column public."crews"."capacity_minutes" is 'Explicit daily capacity override; NULL = derive from day window / business default.';
-comment on column public."crews"."color" is 'Palette key (lib/crews CREW_PALETTE) — board chips + map pin hues, not a hex.';
+comment on column public."crews"."color" is 'Palette key (lib/crews CREW_PALETTE) â board chips + map pin hues, not a hex.';
 comment on column public."crews"."day_start" is 'Crew-specific day start; NULL = business work_start_time.';
+comment on column public."crews"."lead_technician_id" is 'Optional crew lead. Must be an active member of this crew (crews_lead_is_member); cleared automatically when they leave the crew or the roster.';
 comment on column public."crm_campaigns"."archived_at" is 'Soft delete. A hard DELETE cascades crm_campaign_log (the audit trail AND the dedupe ledger), so an undo would re-send to everyone. The cron and the manager both filter archived_at is null.';
-comment on column public."crm_campaigns"."subject" is 'Owner-written email subject. Blank → the message template''s built-in subject.';
+comment on column public."crm_campaigns"."subject" is 'Owner-written email subject. Blank â the message template''s built-in subject.';
 comment on column public."customers"."notes" is 'INTERNAL ONLY. What the office knows about this customer. Absent from get_portal_data''s customer projection, which names its columns.';
-comment on column public."customers"."phone_digits" is 'Digits-only form of phone, for search only. Generated — never write to it. Display and dial from `phone`, which keeps the owner''s own formatting.';
-comment on column public."customers"."preferred_channel" is 'How the customer prefers to be contacted: sms | email | phone | NULL (no preference). A PREFERENCE, never consent — it orders the channels consent already allows and can never grant one. ''phone'' is an instruction to the owner; the send pipeline never places calls.';
+comment on column public."customers"."phone_digits" is 'Digits-only form of phone, for search only. Generated â never write to it. Display and dial from `phone`, which keeps the owner''s own formatting.';
+comment on column public."customers"."preferred_channel" is 'How the customer prefers to be contacted: sms | email | phone | NULL (no preference). A PREFERENCE, never consent â it orders the channels consent already allows and can never grant one. ''phone'' is an instruction to the owner; the send pipeline never places calls.';
 comment on column public."equipment"."crew_id" is 'Crew this vehicle/equipment is assigned to for dispatch. NULL = unassigned pool.';
 comment on column public."expense_categories"."kind" is 'operating = a real business cost (P&L). owner_draw = a distribution of profit, NOT a cost: excluded from the P&L, still cash out in cash flow, and a reduction of equity on the balance sheet.';
 comment on column public."expenses"."bill_date" is 'When the cost was INCURRED (accrual date). Always set.';
 comment on column public."expenses"."is_capital" is 'This cash bought an ASSET, not an operating cost. Excluded from P&L cost; still real cash out in cash flow; the asset itself lives in fixed_assets.';
 comment on column public."expenses"."spent_at" is 'When the CASH LEFT. NULL = unpaid = accounts payable. Cash-basis reports filter on this.';
-comment on column public."fixed_assets"."expense_id" is 'The expense row this asset was bought with, when there is one. Traceability only — the P&L uses expenses.is_capital, not this link.';
+comment on column public."fixed_assets"."expense_id" is 'The expense row this asset was bought with, when there is one. Traceability only â the P&L uses expenses.is_capital, not this link.';
 comment on column public."follow_ups"."completed_at" is 'Set iff status = ''done'', enforced by follow_ups_completion_consistent. Completing retains the row; history is never deleted.';
-comment on column public."follow_ups"."due_on" is 'A DATE, compared as a string against the owner''s LOCAL today. Never a timestamp — "Friday" must not become Thursday for a traveller.';
-comment on column public."invoices"."deposit_amount" is 'GST-inclusive amount requested up front. A deposit is a PARTIAL PAYMENT of this invoice, not a separate invoice. Percentage is derived, never stored — see lib/payments/deposit.ts.';
+comment on column public."follow_ups"."due_on" is 'A DATE, compared as a string against the owner''s LOCAL today. Never a timestamp â "Friday" must not become Thursday for a traveller.';
+comment on column public."invoices"."deposit_amount" is 'GST-inclusive amount requested up front. A deposit is a PARTIAL PAYMENT of this invoice, not a separate invoice. Percentage is derived, never stored â see lib/payments/deposit.ts.';
 comment on column public."invoices"."deposit_requested_at" is 'When the deposit request was successfully SENT to the customer. NULL = requested but not sent.';
 comment on column public."invoices"."internal_notes" is 'Private to the owner: never rendered on any PDF or shown in the portal. Home for system provenance (auto-draft origin) and the AutoPay hold flag, so customer-facing `notes` stays the customer''s and editing it cannot break hold detection.';
 comment on column public."invoices"."last_reminded_at" is 'When the automatic payment reminder last went out. Null = never reminded; the due date is the anchor instead.';
@@ -9546,57 +9716,58 @@ comment on column public."job_line_items"."change_order_id" is 'Set only by chan
 comment on column public."job_recurrences"."form_template_id" is 'Default checklist for this recurring series'' visits; wins over the service template''s default. Each visit mints its own independent instance.';
 comment on column public."jobs"."completion_issue" is 'INTERNAL ONLY. What the field found that needs attention (leaking sprinkler head, wants a hedge quote). MUST NOT be selected by get_portal_data or reach any customer surface.';
 comment on column public."jobs"."completion_summary" is 'CUSTOMER-VISIBLE. What was done, written for the person who paid for it. Selected by get_portal_data and rendered verbatim in the portal visit history. Never put internal remarks here.';
-comment on column public."jobs"."crew_id" is 'Which crew runs this visit. NULL = unassigned (single-crew default). Orthogonal to crew_size (headcount).';
-comment on column public."jobs"."notes" is 'INTERNAL ONLY. The access/instruction note for whoever does the work (gate code, where to park). Shipped to the crew by crew_day. Removed from get_portal_data 2026-08-11 — it was being rendered to customers. Customer-facing words go in completion_summary.';
+comment on column public."jobs"."crew_id" is 'Which crew runs this visit; members resolve from technicians.crew_id at read time. Mutually exclusive with technician_id (jobs_one_assignee). NULL = no crew. Orthogonal to crew_size (headcount).';
+comment on column public."jobs"."notes" is 'INTERNAL ONLY. The access/instruction note for whoever does the work (gate code, where to park). Shipped to the crew by crew_day. Removed from get_portal_data 2026-08-11 â it was being rendered to customers. Customer-facing words go in completion_summary.';
+comment on column public."jobs"."technician_id" is 'Direct personal assignment: exactly this person runs the visit. Mutually exclusive with crew_id (jobs_one_assignee). NULL + NULL crew_id = unassigned.';
 comment on column public."part_movements"."purchase_order_item_id" is 'Receipt link. A kind=restock movement carrying this IS the receipt of that PO line; received qty is sum(qty) over these rows (lib/purchasing.receivedQty), never a stored column. CASCADE: deleting the line reverses the stock.';
-comment on column public."parts"."supplier_id" is 'Vendor entity. Nullable. The legacy parts.supplier text is kept as a fallback and is NOT backfilled — resolve display via lib/suppliers.supplierLabel.';
-comment on column public."payments"."quote_id" is 'The quote/booking a PRE-INVOICE deposit secures (both legs of the recordDeposit pair carry it). Null on ordinary invoice payments. The scheduling gate sums signed cash rows (isCashRow) by this — a Stripe refund writes a negative row with the same quote_id, so readiness derives honestly.';
+comment on column public."parts"."supplier_id" is 'Vendor entity. Nullable. The legacy parts.supplier text is kept as a fallback and is NOT backfilled â resolve display via lib/suppliers.supplierLabel.';
+comment on column public."payments"."quote_id" is 'The quote/booking a PRE-INVOICE deposit secures (both legs of the recordDeposit pair carry it). Null on ordinary invoice payments. The scheduling gate sums signed cash rows (isCashRow) by this â a Stripe refund writes a negative row with the same quote_id, so readiness derives honestly.';
 comment on column public."properties"."internal_notes" is 'Private to the owner and crew: never returned by get_portal_data and never rendered in the customer portal. Home for access and site facts about the PLACE (gate side, dog, shut-off/controller location, parking). Customer-facing property notes stay in `notes`; private notes about the PERSON stay in customers.notes.';
-comment on column public."property_measurement_events"."seq" is 'Monotonic tiebreaker. ORDER BY seq — created_at can tie at microsecond resolution.';
+comment on column public."property_measurement_events"."seq" is 'Monotonic tiebreaker. ORDER BY seq â created_at can tie at microsecond resolution.';
 comment on column public."pto_entries"."status" is 'requested = a worker asked and the owner has not decided; approved = counts against planning availability (every pre-existing row: the owner booked it); declined = kept as a record, never subtracts availability and never blocks a later booking.';
-comment on column public."quote_services"."kind" is 'What this line IS: service (labour you perform) or material (goods you supply). A material line is an ESTIMATE ON THE QUOTE — quantity x unit_price, same arithmetic, same discount engine. It never reserves, allocates or deducts stock, and carries no cost: see RUN-2026-07-16-quote-materials.sql.';
-comment on column public."quote_services"."service_type" is 'The line''s display name. For kind=service, the service performed; for kind=material, the material supplied ("Mulch"). Historical name — not a claim that the line is a service.';
+comment on column public."quote_services"."kind" is 'What this line IS: service (labour you perform) or material (goods you supply). A material line is an ESTIMATE ON THE QUOTE â quantity x unit_price, same arithmetic, same discount engine. It never reserves, allocates or deducts stock, and carries no cost: see RUN-2026-07-16-quote-materials.sql.';
+comment on column public."quote_services"."service_type" is 'The line''s display name. For kind=service, the service performed; for kind=material, the material supplied ("Mulch"). Historical name â not a claim that the line is a service.';
 comment on column public."quotes"."accepted_price" is 'SNAPSHOT of what the customer agreed to pay, captured at acceptance. Deliberately a copy, not a reference to total: editing a quote afterwards must never rewrite what was agreed. NULL = accepted before this column existed, or accepted by a path that does not know. Never guess it.';
-comment on column public."quotes"."deposit_override_at" is 'Owner explicitly scheduled without the required deposit collected (the confirm dialog''s stamp). The deposit remains owed — this records the decision, it does not waive the money.';
-comment on column public."quotes"."deposit_type" is 'Scheduling-deposit rule: ''percent'' (deposit_value = % of the accepted price) or ''fixed'' (deposit_value = dollars). NULL = no deposit required — the quote behaves exactly as before this feature existed. The dollar figure for percent is DERIVED at read time (lib/payments/depositGate), never stored.';
-comment on column public."quotes"."internal_notes" is 'INTERNAL ONLY. The owner''s private margin on this quote — price floor, who to call before changing scope, why it was priced this way. MUST NOT be selected by get_portal_data or rendered by any PDF. Its customer-facing counterpart is quotes.notes.';
-comment on column public."quotes"."notes" is 'CUSTOMER-VISIBLE. The scope note the customer reads — printed in QuotePDF''s Notes box and selected by get_portal_data. Never put a gate code or a price floor here; that is quotes.internal_notes.';
-comment on column public."quotes"."preferred_date" is 'The customer''s preferred work date — a REQUEST, never a booking. A real visit exists only when the owner schedules one. Written only by portal_set_scheduling_preference while the quote is accepted.';
+comment on column public."quotes"."deposit_override_at" is 'Owner explicitly scheduled without the required deposit collected (the confirm dialog''s stamp). The deposit remains owed â this records the decision, it does not waive the money.';
+comment on column public."quotes"."deposit_type" is 'Scheduling-deposit rule: ''percent'' (deposit_value = % of the accepted price) or ''fixed'' (deposit_value = dollars). NULL = no deposit required â the quote behaves exactly as before this feature existed. The dollar figure for percent is DERIVED at read time (lib/payments/depositGate), never stored.';
+comment on column public."quotes"."internal_notes" is 'INTERNAL ONLY. The owner''s private margin on this quote â price floor, who to call before changing scope, why it was priced this way. MUST NOT be selected by get_portal_data or rendered by any PDF. Its customer-facing counterpart is quotes.notes.';
+comment on column public."quotes"."notes" is 'CUSTOMER-VISIBLE. The scope note the customer reads â printed in QuotePDF''s Notes box and selected by get_portal_data. Never put a gate code or a price floor here; that is quotes.internal_notes.';
+comment on column public."quotes"."preferred_date" is 'The customer''s preferred work date â a REQUEST, never a booking. A real visit exists only when the owner schedules one. Written only by portal_set_scheduling_preference while the quote is accepted.';
 comment on column public."quotes"."renewal_of_recurrence_id" is 'The service plan this quote renews. Set once, points backwards; the renewed plan is a NEW job_recurrences row and the old one is never modified. lib/renewals requires this link plus status=accepted before any visits are created.';
-comment on column public."quotes"."selected_cadence" is 'Which cadence was actually bought (one_time|weekly|biweekly|monthly). NULL = nobody said — do NOT infer it from whichever price column is populated; that is the bug this column exists to kill.';
+comment on column public."quotes"."selected_cadence" is 'Which cadence was actually bought (one_time|weekly|biweekly|monthly). NULL = nobody said â do NOT infer it from whichever price column is populated; that is the bug this column exists to kill.';
 comment on column public."quotes"."selected_option_id" is 'The option the customer approved. Composite FK guarantees it belongs to THIS quote; ON DELETE RESTRICT keeps the approved alternative on the record permanently.';
-comment on column public."quotes"."total" is 'GENERATED = initial_price + travel_fee. NULL when the quote has no price — deliberately NOT 0, because an unpriced quote is not a free one. It must never fall back to hours*crew_size*rate again: that fabricated a price the pricing engine never produced, and two customers were billed on it (see RUN-2026-07-16e).';
-comment on column public."quotes"."valid_until" is 'Calendar date this quote stops being valid. Null = never expires (incl. every quote sent before expiry existed). ''expired'' is derived for display by lib/quoteStatus — it is never stored in quotes.status.';
+comment on column public."quotes"."total" is 'GENERATED = initial_price + travel_fee. NULL when the quote has no price â deliberately NOT 0, because an unpriced quote is not a free one. It must never fall back to hours*crew_size*rate again: that fabricated a price the pricing engine never produced, and two customers were billed on it (see RUN-2026-07-16e).';
+comment on column public."quotes"."valid_until" is 'Calendar date this quote stops being valid. Null = never expires (incl. every quote sent before expiry existed). ''expired'' is derived for display by lib/quoteStatus â it is never stored in quotes.status.';
 comment on column public."report_schedules"."last_period_to" is 'The `to` date of the last period SENT. Keyed on the period, not the clock, so retries and missed runs cannot double-send or drift.';
 comment on column public."report_schedules"."recipient" is 'NULL = defer to business_settings.email_primary (a pointer cannot go stale).';
 comment on column public."service_requests"."dedup_key" is 'Set by portal_submit_request. With service_requests_open_dedup_idx it makes a repeated submission of the same ask a no-op while the first is still open.';
-comment on column public."service_requests"."from_portal" is 'True only for rows created by portal_submit_request (incl. its portal_request_service wrapper) — a customer acting in their own portal. Website leads, online bookings and system notes stay false.';
+comment on column public."service_requests"."from_portal" is 'True only for rows created by portal_submit_request (incl. its portal_request_service wrapper) â a customer acting in their own portal. Website leads, online bookings and system notes stay false.';
 comment on column public."service_requests"."photos" is 'booking-uploads STORAGE PATHS (never URLs) the customer attached. The bucket is named in application code at render time; see portal_request_photos_ok for the enforced shape.';
 comment on column public."service_templates"."form_template_id" is 'Default checklist for work created from this service. Resolved at attach time (lazily) - changing it never rewrites an already-minted job form.';
-comment on column public."service_templates"."is_favorite" is 'Owner shortlist — surfaced first in the quote builder picker.';
+comment on column public."service_templates"."is_favorite" is 'Owner shortlist â surfaced first in the quote builder picker.';
 comment on column public."service_templates"."material_cost" is 'Material cost per unit. NULL = not set; never treat as 0.';
 comment on column public."service_templates"."recurrence" is 'Recurrence eligibility: one_time = never suggest recurring; recurring_ok = recurrence suggestions allowed; usually_recurring = this service is normally a recurring plan. NULL = owner has not said (suggestions then require behavioural cadence evidence).';
 comment on column public."service_templates"."unit_cost" is 'What delivering one unit costs (labour/subcontract). NULL = not set; never treat as 0.';
-comment on column public."technicians"."archived_at" is 'Soft-archive: set when the technician leaves the roster (hidden everywhere, record preserved). NULL = active. Removing a technician must archive, never delete — their time_entries/wage_history/pto_entries are statutory records.';
+comment on column public."technicians"."archived_at" is 'Soft-archive: set when the technician leaves the roster (hidden everywhere, record preserved). NULL = active. Removing a technician must archive, never delete â their time_entries/wage_history/pto_entries are statutory records.';
 comment on column public."technicians"."auth_user_id" is 'The Supabase auth user this employee signs in as. NULL = records-only (no app access). Unique across the whole project: one login is one employee of one business.';
-comment on column public."technicians"."hourly_wage" is 'Default pay rate for the NEXT clock-in. Historical cost lives on time_entries.hourly_rate (snapshot) — changing this never rewrites past shifts.';
+comment on column public."technicians"."hourly_wage" is 'Default pay rate for the NEXT clock-in. Historical cost lives on time_entries.hourly_rate (snapshot) â changing this never rewrites past shifts.';
 comment on column public."technicians"."invite_code" is 'One-time join code the owner hands out. Cleared the moment it is redeemed.';
 comment on column public."technicians"."invite_sent_at" is 'When the owner last generated a setup link for this employee. Cleared on revoke. Paired with auth.users.last_sign_in_at (via crew_access_states) to tell "invited" from "active".';
 comment on column public."technicians"."pto_annual_hours" is 'Annual PTO allowance in hours. NULL = no allowance configured -> usage is tracked but no balance is claimed (never guess someone''s entitlement).';
 comment on column public."technicians"."status" is 'Live dispatch status, owner-flipped from the board (no field login yet).';
-comment on column public."wage_history"."created_at" is 'clock_timestamp() (real wall clock), NOT now() — now() is transaction start and ties every row written in one transaction.';
+comment on column public."wage_history"."created_at" is 'clock_timestamp() (real wall clock), NOT now() â now() is transaction start and ties every row written in one transaction.';
 comment on column public."wage_history"."seq" is 'Monotonic tiebreaker. ORDER BY seq for a provably total audit order; created_at can tie at microsecond resolution.';
 
-comment on function public."crew_employer"() is 'The owner user_id this signed-in employee works for, or NULL. NULL for anon, for owners, and for anyone deactivated/archived — every crew RLS predicate fails closed on it.';
-comment on function public."crew_set_completion_record"(p_job_id uuid, p_summary text, p_issue text) is 'Crew Mode: record what was done (customer-visible) and what needs attention (internal) on an assigned, non-cancelled visit. Typed parameters only — writes exactly two columns and no lifecycle field. Re-checks employer + crew because DEFINER runs past RLS.';
-comment on function public."find_portal_access_customers"(p_email text) is 'Portal-link recovery lookup. Normalises both sides (lower+trim). NOT executable by anon/authenticated — service-role only, or the public anon key becomes a customer-existence oracle.';
-comment on function public."is_verify_fixture_tenant"() is 'True when the CALLER is a verification fixture tenant. Answers only about auth.uid(); takes no arguments so it cannot be used to enumerate or probe. Consulted by scripts/ only — no trigger, policy or application path reads it.';
+comment on function public."crew_employer"() is 'The owner user_id this signed-in employee works for, or NULL. NULL for anon, for owners, and for anyone deactivated/archived â every crew RLS predicate fails closed on it.';
+comment on function public."crew_set_completion_record"(p_job_id uuid, p_summary text, p_issue text) is 'Crew Mode: record what was done (customer-visible) and what needs attention (internal) on an assigned, non-cancelled visit. Typed parameters only â writes exactly two columns and no lifecycle field. Re-checks employer + crew because DEFINER runs past RLS.';
+comment on function public."find_portal_access_customers"(p_email text) is 'Portal-link recovery lookup. Normalises both sides (lower+trim). NOT executable by anon/authenticated â service-role only, or the public anon key becomes a customer-existence oracle.';
+comment on function public."is_verify_fixture_tenant"() is 'True when the CALLER is a verification fixture tenant. Answers only about auth.uid(); takes no arguments so it cannot be used to enumerate or probe. Consulted by scripts/ only â no trigger, policy or application path reads it.';
 comment on function public."job_session_minutes"(p_job_id uuid) is 'Sum of a job''s work-session minutes. NULL when it has none (unknown, not zero).';
 comment on function public."portal_add_contact"(p_token text, p_phone text, p_email text) is 'Portal self-service: fill a MISSING customer phone/email from a valid portal token. Fills only - never overwrites a populated field (an email change is an identity change). Never touches sms_opt_in/email_opt_in/message_prefs. Refuses a value another customer of the same owner already holds. Returns the row state read back after the write.';
 comment on function public."portal_request_photos_ok"(p text[]) is 'Validator for service_requests.photos: at most 6 elements, each a booking-uploads path of the shape portal/<uuid>/<uuid>.<ext>. Used by a CHECK constraint, so it holds no matter which door writes.';
-comment on function public."portal_set_scheduling_preference"(p_token text, p_quote_id uuid, p_date date, p_date_2 date, p_timing text, p_note text) is 'THE writer of a customer''s scheduling preference. Token proves the customer; quote must be theirs and ''accepted''. A preference is a request — it never creates, moves, or implies a visit. All-null clears it.';
-comment on function public."schema_contract"() is 'Full catalogue snapshot for npm run schema:contract. SERVICE_ROLE ONLY — it returns every RLS predicate and SECURITY DEFINER body, i.e. the product''s authorization logic. Use schema_fingerprint() (hashes only) for anything that merely needs to detect change.';
-comment on function public."schema_fingerprint"() is 'Counts + md5 per schema section, for npm run verify:schema. Returns NO names and NO data — only shape hashes, so it is safe to expose to any signed-in caller. The instrument that makes repo-vs-production drift visible; before it existed, 30 migrations reached production with no repo file and nothing reported it.';
+comment on function public."portal_set_scheduling_preference"(p_token text, p_quote_id uuid, p_date date, p_date_2 date, p_timing text, p_note text) is 'THE writer of a customer''s scheduling preference. Token proves the customer; quote must be theirs and ''accepted''. A preference is a request â it never creates, moves, or implies a visit. All-null clears it.';
+comment on function public."schema_contract"() is 'Full catalogue snapshot for npm run schema:contract. SERVICE_ROLE ONLY â it returns every RLS predicate and SECURITY DEFINER body, i.e. the product''s authorization logic. Use schema_fingerprint() (hashes only) for anything that merely needs to detect change.';
+comment on function public."schema_fingerprint"() is 'Counts + md5 per schema section, for npm run verify:schema. Returns NO names and NO data â only shape hashes, so it is safe to expose to any signed-in caller. The instrument that makes repo-vs-production drift visible; before it existed, 30 migrations reached production with no repo file and nothing reported it.';
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 10 · REALTIME
