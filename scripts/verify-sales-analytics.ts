@@ -344,8 +344,21 @@ check('the engine never invents an accepted_at',
 check('the cohort note tells the owner what a date filter here MEANS',
   R.cohortNote.includes('created in this period') && /never guessed|not.*guess/i.test(R.cohortNote),
   R.cohortNote)
-check('movement is ordered by a REAL timestamp, never updated_at',
+check('movement is ordered newest-first',
   R.movement.every((m, idx) => idx === 0 || R.movement[idx - 1].at >= m.at))
+// ⚠️ Ordering must follow the LAST REAL MOVEMENT, not the creation date. A quote
+// raised in January and chased yesterday is today's news; ordering by created_at
+// buries it under every newer quote nobody has touched. The fixture is built so
+// the two anchors DISAGREE — otherwise the rule could be deleted and stay green.
+{
+  const stale = Q({ id: 'old-but-chased', status: 'sent', total: 100,
+    created_at: day('2026-07-02'), sent_at: day('2026-07-02'),
+    last_followed_up_at: '2026-08-16T11:00:00.000Z', customer_id: 'c-google' })
+  const m = computeSalesAnalytics({ ...INPUT, quotes: [...quotes, stale] }).movement
+  eq('a quote chased today leads movement, however old it is', m[0].quoteId, 'old-but-chased')
+  check('…and it is ranked by the follow-up, not the creation date',
+    m[0].at === '2026-08-16T11:00:00.000Z', m[0].at)
+}
 check('a quote with no sent_at does not retro-fill the sent rung',
   R.funnel.hasUnstampedSends === false)
 const unstamped = computeSalesAnalytics({
@@ -541,12 +554,32 @@ check('the loader pages every read (PostgREST truncates at 1000, silently)',
   !/\.select\(/.test(loaderSrc.replace(/pageAll[\s\S]*?\n\n/g, '')) || loaderSrc.includes('pageAll'))
 check('id filters are CHUNKED (a huge in.() fails the whole request)',
   loaderSrc.includes('ID_CHUNK') && loaderSrc.includes('chunk('))
-check('a failed read returns NULL, never a zeroed board',
-  /if \([a-zA-Z.]*error[\s\S]{0,120}\) return null/.test(loaderSrc))
-check('the period bounds the scan (only quotes are read by date)',
-  loaderSrc.includes("gte('created_at', fromTs)") && loaderSrc.includes("lt('created_at', toTsExclusive)"))
-check('the upper bound is EXCLUSIVE of the next day, so the last day is included',
-  loaderSrc.includes('86_400_000') && loaderSrc.includes('toTsExclusive'))
+// ⚠️ EVERY read result must be error-guarded, asserted BY NAME. A regex looking
+// for "some `if (x.error) return null` exists" stays green when one specific
+// guard is removed, because its nine siblings still match — the same
+// pass-by-accident shape as a file-wide tenancy count.
+for (const res of [
+  'qRes', 'jRes', 'invByQuote', 'invByJob', 'coRes',
+  'custPeriodRes', 'payByInvoice', 'payByQuote', 'custRes',
+]) {
+  check(`\`${res}\` is error-guarded (a failed read is NULL, never a zeroed board)`,
+    new RegExp(`${res}\\.error`).test(loaderSrc),
+    `nothing tests ${res}.error — that read can fail silently and report $0`)
+}
+
+// ⚠️ Asserted INSIDE the quotes block, not file-wide. The customers read carries
+// the same two date filters, so a file-wide `includes` stays green when the
+// cohort scan itself loses its bound — which is the read that decides the whole
+// report's contents.
+const quoteBlock = readBlocks.find(b => b.table === 'quotes')
+check('the cohort scan is bounded at BOTH ends, in its own read',
+  !!quoteBlock &&
+  quoteBlock.body.includes("gte('created_at', fromTs)") &&
+  quoteBlock.body.includes("lt('created_at', toTsExclusive)"),
+  quoteBlock ? quoteBlock.body.slice(0, 200) : 'no quotes read found')
+check('the upper bound is the START OF THE NEXT DAY, so the last day is included',
+  loaderSrc.includes('86_400_000') && loaderSrc.includes('toTsExclusive'),
+  'lte(to) on a timestamptz drops everything quoted during the final day')
 
 // ═════════════════════════════════════════════════════════════════════════════
 H('12 · Tips are NOT integrated (the work has not landed)')
