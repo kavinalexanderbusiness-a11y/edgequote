@@ -637,6 +637,12 @@ export interface JobFormValues {
   notes: string
   actual_minutes: number
   price: number
+  // Which crew runs this visit ('' = unassigned). Mirrors jobs.crew_id — the
+  // ONLY assignment model on main (crews are identities; crew_size stays the
+  // headcount). The save applies it ONLY when it changed this session, so a
+  // scope-wide edit can never silently overwrite the dispatch board's
+  // per-visit crew assignments.
+  crew_id: string
 }
 
 export const JOB_STATUS_LABELS: Record<JobStatus, string> = {

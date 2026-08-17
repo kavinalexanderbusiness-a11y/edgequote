@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { toast } from '@/lib/toast'
 import { confirm } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
-import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, AddonTemplate, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
+import { Crew, Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, AddonTemplate, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
 import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, sequenceRoute, roundTripMapsUrl, MAX_MAPS_WAYPOINTS, directionsUrl, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
 import { planDay, type DayPlanStopInput } from '@/lib/dayPlan'
@@ -39,6 +39,11 @@ import {
 } from 'lucide-react'
 import StopForTodaySheet from '@/components/jobs/StopForTodaySheet'
 import type { StopForTodayInput } from '@/lib/workSession'
+import { VisitQuickEdit, type QuickPatch } from '@/components/schedule/VisitQuickEdit'
+
+// The quick-edit patch contract now lives with the sheet that produces it; the
+// page keeps importing it from here.
+export type { QuickPatch } from '@/components/schedule/VisitQuickEdit'
 
 export interface QuoteLite {
   id: string
@@ -85,6 +90,9 @@ interface Props {
   staffingOnDay?: WorkerDayDetail[] | null
   /** Crew id → name, for naming a crew in a staffing warning. */
   crewNames?: Record<string, string>
+  /** The crew roster, for the quick-edit sheet's Assignee control. Empty =
+   *  the business has no crews and the control simply never renders. */
+  crews?: Crew[]
   /** False when nobody has a recorded weekly pattern — availability is assumed. */
   availabilityRecorded?: boolean
   learnedDurationFor?: (serviceType: string | null | undefined) => number | null
@@ -123,19 +131,11 @@ interface Props {
   onChatUnread?: (counts: Record<string, number>) => void
 }
 
-export interface QuickPatch {
-  start_time: string | null
-  crew_size: number
-  duration_minutes: number | null
-  status: JobStatus
-  notes: string | null
-  price: number | null
-}
 
 export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
   onOpenJob, onStartJob, onMarkDone, onMove, onStopForToday, onResume, onSetPrice, workStartTime, capacityHours,
-  workersOnDay, staffingOnDay, crewNames, availabilityRecorded, learnedDurationFor, onRainDelay, onAddJob, onQuickSave,
+  workersOnDay, staffingOnDay, crewNames, crews, availabilityRecorded, learnedDurationFor, onRainDelay, onAddJob, onQuickSave,
   addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons, addonTemplates,
   changeOrdersByJobId, onCreateChangeOrder, onSendChangeOrder, onCancelChangeOrder, onOwnerChangeDecision, onRemindChangeOrder,
   onStopOrder, onChatUnread,
@@ -144,15 +144,15 @@ export function DayOpsPanel({
   // Guards Start/Complete against a double-tap (which would double-stamp the job
   // and double-create its draft invoice) while the request is in flight.
   const [acting, setActing] = useState<string | null>(null)
-  const [quickId, setQuickId] = useState<string | null>(null)
+  // The visit whose quick-edit sheet is open (VisitQuickEdit — the fast door
+  // for service/date/time/duration/assignee/status/note on one visit).
+  const [quickJob, setQuickJob] = useState<Job | null>(null)
   const [moveId, setMoveId] = useState<string | null>(null)
   // Which visit's "Stop for today" sheet is open. A sheet rather than the old
   // inline date picker because stopping is now three answers, not one, and the
   // most important of them ("when are you back?") has a legitimate "not yet".
   const [stopping, setStopping] = useState<Job | null>(null)
   const [stopBusy, setStopBusy] = useState(false)
-  const [qv, setQv] = useState<{ start_time: string; crew_size: number; duration_minutes: number; status: JobStatus; notes: string; price: number }>({ start_time: '', crew_size: 1, duration_minutes: 0, status: 'scheduled', notes: '', price: 0 })
-  const [savingQuick, setSavingQuick] = useState(false)
   // First-class price: a dedicated, price-only inline editor on every card.
   const [priceId, setPriceId] = useState<string | null>(null)
   const [priceVal, setPriceVal] = useState('')
@@ -239,7 +239,7 @@ export function DayOpsPanel({
   // ONE closer, called by every opener, is the source of truth. Toggle helpers
   // keep the tap-again-to-close behaviour the buttons already had.
   function closePanels() {
-    setPriceId(null); setQuickId(null); setMoveId(null)
+    setPriceId(null); setQuickJob(null); setMoveId(null)
     setPhotoId(null); setAddonsId(null); setMessageId(null)
     setChatId(null); setChangesId(null); setChecklistId(null)
   }
@@ -287,28 +287,7 @@ export function DayOpsPanel({
 
   function openQuick(job: Job) {
     closePanels()
-    setQuickId(job.id)
-    setQv({
-      start_time: job.start_time || '',
-      crew_size: job.crew_size,
-      duration_minutes: job.duration_minutes || 0,
-      status: job.status,
-      notes: job.notes || '',
-      price: Number(job.price) || 0,
-    })
-  }
-  async function saveQuick(job: Job) {
-    setSavingQuick(true)
-    await onQuickSave(job, {
-      start_time: qv.start_time || null,
-      crew_size: Number(qv.crew_size) || 1,
-      duration_minutes: qv.duration_minutes ? Number(qv.duration_minutes) : null,
-      status: qv.status,
-      notes: qv.notes || null,
-      price: qv.price ? Number(qv.price) : null,
-    })
-    setSavingQuick(false)
-    setQuickId(null)
+    setQuickJob(job)
   }
   const [route, setRoute] = useState<{ ordered: OrderedRouteStop[]; totalKm: number; mapsUrl: string | null; usedGoogle: boolean; usedRoad: boolean } | null>(null)
   // The day's road data, HELD rather than consumed inside the routing effect.
@@ -1328,7 +1307,7 @@ export function DayOpsPanel({
                           ...(chatUnread[job.id] ? [] : [{ key: 'p-chat', className: 'sm:hidden', label: 'Crew chat', description: 'The crew conversation for this visit', icon: MessagesSquare, onSelect: () => toggleChat(job) }]),
                           { key: 'p-services', className: 'sm:hidden', label: ownerExtras.length ? `Services (${ownerExtras.length})` : 'Services', description: 'Extra work billed with this visit', icon: PlusCircle, onSelect: () => toggleAddons(job) },
                           ...(av.pendingCount ? [] : [{ key: 'p-changes', className: 'sm:hidden', label: changes.length ? `Changes (${changes.length})` : 'Add change', description: 'New scope the customer has to approve first', icon: FileSignature, onSelect: () => toggleChanges(job) }]),
-                          { key: 'quick', label: 'Quick edit', description: 'Time, crew, status & notes — this visit', icon: SlidersHorizontal, onSelect: () => { quickId === job.id ? setQuickId(null) : openQuick(job) } },
+                          { key: 'quick', label: 'Quick edit', description: 'Service, date, time, crew & notes — this visit', icon: SlidersHorizontal, onSelect: () => openQuick(job) },
                           { key: 'edit', label: 'Edit job', description: 'Property, title & the recurring schedule', icon: Pencil, onSelect: () => onOpenJob(job) },
                           // Stop for today is a first-class button on the card
                           // above, not a menu item — it is one of the three
@@ -1441,42 +1420,11 @@ export function DayOpsPanel({
                         </div>
                       )}
 
-                      {/* Inline quick edit — small changes without the full form */}
-                      {quickId === job.id && (
-                        <div className="mt-2 rounded-lg border border-border bg-bg-secondary p-2.5 space-y-2" onClick={e => e.stopPropagation()}>
-                          <div className="grid grid-cols-3 gap-2">
-                            <label className="text-[10px] uppercase tracking-wide text-ink-faint">Time
-                              <input type="time" value={qv.start_time} onChange={e => setQv(v => ({ ...v, start_time: e.target.value }))}
-                                className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
-                            </label>
-                            <label className="text-[10px] uppercase tracking-wide text-ink-faint">Crew
-                              <input type="number" min="1" value={qv.crew_size} onChange={e => setQv(v => ({ ...v, crew_size: Number(e.target.value) || 1 }))}
-                                className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
-                            </label>
-                            <label className="text-[10px] uppercase tracking-wide text-ink-faint">Mins
-                              <input type="number" min="0" step="5" value={qv.duration_minutes} onChange={e => setQv(v => ({ ...v, duration_minutes: Number(e.target.value) || 0 }))}
-                                className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
-                            </label>
-                          </div>
-                          <label className="text-[10px] uppercase tracking-wide text-ink-faint block">Status
-                            <select value={qv.status} onChange={e => setQv(v => ({ ...v, status: e.target.value as JobStatus }))}
-                              className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20">
-                              {(['scheduled', 'in_progress', 'completed', 'cancelled'] as JobStatus[]).map(s => (
-                                <option key={s} value={s} className="bg-bg-secondary">{JOB_STATUS_LABELS[s]}</option>
-                              ))}
-                            </select>
-                          </label>
-                          <label className="text-[10px] uppercase tracking-wide text-ink-faint block">Notes
-                            <textarea value={qv.notes} onChange={e => setQv(v => ({ ...v, notes: e.target.value }))} placeholder="Gate code, access, crew notes…" rows={2}
-                              className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
-                          </label>
-                          <div className="flex items-center gap-2">
-                            <Button size="sm" onClick={() => saveQuick(job)} loading={savingQuick}>Save</Button>
-                            <Button size="sm" variant="ghost" onClick={() => setQuickId(null)}>Cancel</Button>
-                            <span className="text-[10px] text-ink-faint ml-auto">This visit only · use Edit job for more</span>
-                          </div>
-                        </div>
-                      )}
+                      {/* Quick edit lives in VisitQuickEdit (the sheet mounted
+                          once below) — the old hand-styled inline panel was a
+                          second implementation of fields the shared primitives
+                          already own, and it couldn't hold the date/assignee/
+                          service controls the fast path needs. */}
                     </div>
                   </div>
                 </div>
@@ -1500,6 +1448,17 @@ export function DayOpsPanel({
             try { await onStopForToday(stopping, input) } finally { setStopBusy(false); setStopping(null) }
           }} />
       )}
+
+      {/* The one quick-edit sheet for this board — field saves go through the
+          page's quickSaveJob engine; a date change routes through the page's
+          move engine (warnings, recurring scope, undo), never a bare patch. */}
+      <VisitQuickEdit
+        job={quickJob}
+        crews={crews ?? []}
+        onClose={() => setQuickJob(null)}
+        onSave={onQuickSave}
+        onMove={onMove}
+      />
     </div>
   )
 }
