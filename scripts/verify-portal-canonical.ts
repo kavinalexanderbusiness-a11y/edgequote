@@ -128,9 +128,20 @@ const sqlOnly = src.split(/\r?\n/).filter(l => !l.trim().startsWith('--')).join(
 const invoiceSelect = sqlOnly.match(/'invoices',[\s\S]*?from public\.invoices[^)]*\)/)?.[0] ?? ''
 const quoteSelect = sqlOnly.match(/from public\.quotes qt[^)]*\)/)?.[0] ?? ''
 
+// Asserted as three INDEPENDENT properties of the invoices select, not as one
+// fixed spelling. The predicates were previously required to be adjacent, which
+// meant adding the tenant predicate between them read as "the draft filter is
+// gone" — a guard failing on the position of a clause rather than on the property
+// it protects. Each is still required; none may be dropped.
+check('invoices are filtered server-side: scoped to the token\'s customer',
+  /from public\.invoices\s+where[\s\S]*?customer_id\s*=\s*v_customer/.test(invoiceSelect),
+  'the INVOICES select no longer scopes to v_customer')
 check('invoices are filtered server-side: draft never leaves the DB',
-  /from public\.invoices\s+where\s+customer_id\s*=\s*v_customer\s+and\s+status\s*<>\s*'draft'/.test(invoiceSelect),
+  /status\s*<>\s*'draft'/.test(invoiceSelect),
   'the privacy predicate is missing from the INVOICES select')
+check('invoices are filtered server-side: scoped to the token\'s TENANT',
+  /user_id\s*=\s*v_user/.test(invoiceSelect),
+  'the INVOICES select must prove the tenant as well as the customer (S75 B1)')
 check('quotes keep their own draft filter', /qt\.status\s*<>\s*'draft'/.test(quoteSelect))
 for (const field of ['deposit_amount', 'deposit_requested_at']) {
   check(`invoice projection still carries ${field}`, invoiceSelect.includes(field))

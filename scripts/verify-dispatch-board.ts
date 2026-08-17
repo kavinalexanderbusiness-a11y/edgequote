@@ -127,8 +127,11 @@ console.log('\nEvery write the board makes reports its outcome:')
   check('Best order re-checks lane membership after its awaits',
     /nowInLane/.test(PAGE) && /\.filter\(id => nowInLane\.has\(id\)\)/.test(PAGE),
     'the pre-await snapshot can contain a job moved to another crew mid-optimize; applyLaneOrder\'s per-id writes carry no lane guard, so the stale write would stamp a foreign lane\'s route_order')
+  // The put-back target became an Assignee when a visit gained the option of
+  // belonging to one person (Session 65). The rule it protects is unchanged:
+  // cancelling a keyboard grab restores where the visit WAS, without a toast.
   check('the Escape put-back is silent',
-    /moveJob\(job\.id, g\.homeCrewId, null, \{ silent: true \}\)/.test(PAGE),
+    /moveJob\(job\.id, g\.homeAssignee, null, \{ silent: true \}\)/.test(PAGE),
     'a cancellation must not toast "→ crew · Undo" — that is an undo offering to undo itself')
   const silentUses = (PAGE.match(/\{ silent: true \}/g) || []).length
   check('…and silent is used ONLY there',
