@@ -458,7 +458,7 @@ export async function loadCompletionReport(
   if (jobError || !jobRow) {
     return { report: null, error: 'Could not load this visit — refresh and try again.' }
   }
-  const row = jobRow as Record<string, unknown>
+  const row = jobRow as unknown as Record<string, unknown>
   const job: ReportJob = {
     id: row.id as string,
     title: row.title as string,
@@ -492,7 +492,7 @@ export async function loadCompletionReport(
   let responses: JobFormResponse[] | null = null
   let photoLinks: ResponsePhotoLink[] | null = null
   if (!formsRes.error) {
-    forms = ((formsRes.data ?? []) as Record<string, unknown>[]).map(r => ({
+    forms = ((formsRes.data ?? []) as unknown as Record<string, unknown>[]).map(r => ({
       id: r.id as string,
       job_id: r.job_id as string,
       template_id: r.template_id as string,
