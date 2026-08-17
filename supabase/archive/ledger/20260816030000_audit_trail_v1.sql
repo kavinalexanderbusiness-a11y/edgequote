@@ -1,7 +1,22 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- AUDIT TRAIL + ACCOUNTABILITY V1 — pending migration (Session 68)
+-- ARCHIVED MIGRATION — HISTORY ONLY. DO NOT RE-RUN.
 --
--- ⚠️ LIFECYCLE OF THIS FILE — read before touching:
+--   version : 20260816030000
+--   name    : audit_trail_v1
+--
+-- Applied to production 2026-08-16 via the management API (Session 68) and
+-- recorded in supabase_migrations.schema_migrations. The SQL below is the
+-- text production executed.
+--
+-- Its effects are already folded into supabase/migrations/*_baseline.sql. This
+-- copy exists so "why is this column here?" is answerable, and for nothing else.
+-- Re-running one replaces a live object with an older body — silently, no error.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+-- AUDIT TRAIL + ACCOUNTABILITY V1 â€” pending migration (Session 68)
+--
+-- âš ï¸ LIFECYCLE OF THIS FILE â€” read before touching:
 --   This file is NOT in the apply path (supabase/migrations/) and NOT archive.
 --   It is the audit-trail schema, waiting for production. The intended flow is
 --   the same one change-orders used:
@@ -9,20 +24,20 @@
 --        (MCP assigns the version; name it audit_trail_v1),
 --     2. npm run schema:contract && npm run schema:baseline
 --        (the objects fold into the regenerated baseline),
---     3. DELETE this file in the same commit — once the baseline carries
+--     3. DELETE this file in the same commit â€” once the baseline carries
 --        audit_events, a second copy here is the retired-CANONICAL-file
 --        mistake again.
---   verify:audit-trail §1 pins exactly that lifecycle: it fails if this file
+--   verify:audit-trail Â§1 pins exactly that lifecycle: it fails if this file
 --   and the baseline both define audit_events, and if neither does.
 --   Until step 1 runs, the app's History surfaces report "couldn't load"
---   honestly (the table does not exist yet) — they never invent an empty
+--   honestly (the table does not exist yet) â€” they never invent an empty
 --   history. The offline half of verify:audit-trail applies this file on top
 --   of the baseline in PGlite and proves every behaviour below from zero.
 --
 -- WHAT THIS IS:
 --   One canonical record of meaningful business mutations: WHO changed WHAT,
 --   WHEN, from WHERE, what it was BEFORE and what it BECAME. It is evidence,
---   not analytics. Nothing here is a second source of financial truth — every
+--   not analytics. Nothing here is a second source of financial truth â€” every
 --   row DESCRIBES a canonical write that the existing quote/invoice/payment/
 --   ledger engines performed; money is still read from those engines.
 --
@@ -31,25 +46,25 @@
 --   server seam; the rest arrive through portal RPCs (anon + token), crew RPCs,
 --   service-role webhooks and crons, and other DB triggers (a jobs update banks
 --   a work session; a payment insert flips an invoice). Triggers are the only
---   choke point all of those share — the same reasoning capture_integration_event
+--   choke point all of those share â€” the same reasoning capture_integration_event
 --   already wrote down. Triggers also give atomicity for free: the event commits
 --   and rolls back WITH the write it describes, so a failed mutation can never
 --   leave a "success" event behind.
 --
 -- ACTOR ATTRIBUTION (never client-supplied, never inferred loosely):
---   owner    — auth.uid() equals the row's tenant (user_id IS the owner uid)
---   worker   — auth.uid() linked via technicians.auth_user_id (attribution
+--   owner    â€” auth.uid() equals the row's tenant (user_id IS the owner uid)
+--   worker   â€” auth.uid() linked via technicians.auth_user_id (attribution
 --              deliberately does NOT require is_active: a just-deactivated
 --              tech's in-flight write is still that tech's act)
---   customer — no JWT, PostgREST anon role: the portal/booking surfaces are
+--   customer â€” no JWT, PostgREST anon role: the portal/booking surfaces are
 --              the only anonymous writers (a token proves WHICH TENANT;
---              portal RPCs re-scope to WHICH ROW — public-edge rules)
---   system   — service_role, or no PostgREST claims at all (direct SQL,
+--              portal RPCs re-scope to WHICH ROW â€” public-edge rules)
+--   system   â€” service_role, or no PostgREST claims at all (direct SQL,
 --              triggers running under maintenance, MCP)
 --   change_orders.decided_via stays the provenance of the DECISION itself;
 --   the audit event records who performed the WRITE. An owner recording a
 --   customer's phone approval is actor=owner with decided_via='owner' in the
---   after-state — exactly the "owner recorded customer decision" phrasing.
+--   after-state â€” exactly the "owner recorded customer decision" phrasing.
 --
 -- DEDUP / "one write, one act" (customer-timeline's hard-won rule):
 --   Every event carries txid_current(). Two events with one txid were caused
@@ -58,16 +73,16 @@
 --   the store never guesses by timestamp proximity.
 --
 -- WHAT IS DELIBERATELY NOT AUDITED HERE (one engine per responsibility):
---   wages            → wage_history already is that audit (trigger-written)
---   consent          → consent_changes already is (with its own actor column)
---   comms sends      → notification_log / messages own their record; we never
+--   wages            â†’ wage_history already is that audit (trigger-written)
+--   consent          â†’ consent_changes already is (with its own actor column)
+--   comms sends      â†’ notification_log / messages own their record; we never
 --                      log message CONTENTS into the general audit trail
---   measurements     → property_measurement_events (trigger-written, seq'd)
---   route_order      → daily ops churn, not evidence
---   UI noise         → nothing here fires on reads, opens, tabs, scrolls
--- ═══════════════════════════════════════════════════════════════════════════
+--   measurements     â†’ property_measurement_events (trigger-written, seq'd)
+--   route_order      â†’ daily ops churn, not evidence
+--   UI noise         â†’ nothing here fires on reads, opens, tabs, scrolls
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
--- ── 1 · the table ────────────────────────────────────────────────────────────
+-- â”€â”€ 1 Â· the table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 create table if not exists public.audit_events (
   "id"           uuid default gen_random_uuid() not null,
@@ -100,9 +115,9 @@ create table if not exists public.audit_events (
     check (source in ('dashboard', 'crew', 'portal', 'service', 'db')),
   constraint audit_events_action_check check (char_length(action) between 1 and 64),
   constraint audit_events_entity_type_check check (char_length(entity_type) between 1 and 32),
-  -- ⚠️ NO "before or after must be present" constraint, on purpose: plenty of real
+  -- âš ï¸ NO "before or after must be present" constraint, on purpose: plenty of real
   -- events carry neither. "Mike stopped for the day", "the request was resolved",
-  -- "the worker was archived" are complete facts on their own — the action IS the
+  -- "the worker was archived" are complete facts on their own â€” the action IS the
   -- content. Requiring a value pair would force empty JSON in to satisfy a rule.
   --
   -- The only FK is the tenant. There is deliberately none to customers/jobs/quotes:
@@ -113,23 +128,23 @@ create table if not exists public.audit_events (
 );
 
 comment on table public.audit_events is
-  'Canonical audit trail: one row per meaningful business mutation, written ONLY by DB triggers/definer functions in the same transaction as the write it describes. Append-only: no client insert path, and audit_events_no_mutate refuses UPDATE/DELETE for every role. Money figures inside before/after are descriptive snapshots — the ledger engines remain the financial truth.';
+  'Canonical audit trail: one row per meaningful business mutation, written ONLY by DB triggers/definer functions in the same transaction as the write it describes. Append-only: no client insert path, and audit_events_no_mutate refuses UPDATE/DELETE for every role. Money figures inside before/after are descriptive snapshots â€” the ledger engines remain the financial truth.';
 comment on column public.audit_events.occurred_at is
-  'clock_timestamp() (real wall clock), NOT now() — now() is transaction start and ties every row written in one transaction.';
+  'clock_timestamp() (real wall clock), NOT now() â€” now() is transaction start and ties every row written in one transaction.';
 comment on column public.audit_events.seq is
   'Monotonic tiebreaker. ORDER BY seq for a provably total audit order; occurred_at can tie at microsecond resolution.';
 comment on column public.audit_events.txid is
   'txid_current() at write time. Events sharing a txid were caused by ONE write; the UI folds them (the customer-timeline dedup contract, made structural).';
 comment on column public.audit_events.actor_type is
-  'owner | worker | customer | system — resolved in-database by audit_actor_context(), never supplied by a client. Do not lie about actor identity: a customer decision recorded by the owner is actor=owner (the write) with the decision provenance in after/meta.';
+  'owner | worker | customer | system â€” resolved in-database by audit_actor_context(), never supplied by a client. Do not lie about actor identity: a customer decision recorded by the owner is actor=owner (the write) with the decision provenance in after/meta.';
 comment on column public.audit_events.actor_label is
   'Display snapshot at write time (technician name, customer name). Survives renames and deletions; never re-resolved.';
 comment on column public.audit_events.entity_label is
   'Display reference snapshot (quote_number, invoice_number, job title). Survives the entity''s deletion.';
 comment on column public.audit_events.before is
-  'Meaningful changed values only — never a whole-row dump. Null-valued keys are kept deliberately: "end_date: null" IS the before-state of setting one.';
+  'Meaningful changed values only â€” never a whole-row dump. Null-valued keys are kept deliberately: "end_date: null" IS the before-state of setting one.';
 
--- ── 2 · indexes (keyset pagination + the three filter shapes) ────────────────
+-- â”€â”€ 2 Â· indexes (keyset pagination + the three filter shapes) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 create index if not exists audit_events_tenant_seq
   on public.audit_events (user_id, seq desc);
@@ -141,13 +156,13 @@ create index if not exists audit_events_customer
 create index if not exists audit_events_actor
   on public.audit_events (user_id, actor_type, seq desc);
 
--- ── 3 · immutability (pricing_config_versions precedent, both locks) ─────────
--- Lock 1: RLS has a select-own policy and NOTHING else — no insert/update/
+-- â”€â”€ 3 Â· immutability (pricing_config_versions precedent, both locks) â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- Lock 1: RLS has a select-own policy and NOTHING else â€” no insert/update/
 --         delete policy exists for any client role.
 -- Lock 2: a BEFORE UPDATE OR DELETE trigger raises for EVERY role, including
 --         service_role. Maintenance (retention, GDPR erasure) is a deliberate
 --         superuser act: ALTER TABLE ... DISABLE TRIGGER audit_events_no_mutate,
---         do the maintenance, re-enable — impossible to do by accident from
+--         do the maintenance, re-enable â€” impossible to do by accident from
 --         any application path.
 
 create or replace function public.audit_events_immutable()
@@ -165,9 +180,9 @@ create trigger audit_events_no_mutate
   before delete or update on public.audit_events
   for each row execute function public.audit_events_immutable();
 
--- ── 4 · RLS + grants ─────────────────────────────────────────────────────────
+-- â”€â”€ 4 Â· RLS + grants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 -- Owner-only reads. A crew session is `authenticated` but its uid never equals
--- a tenant's user_id, so workers read nothing — business-wide audit access is
+-- a tenant's user_id, so workers read nothing â€” business-wide audit access is
 -- an owner surface. Customers (anon) have no grant at all. Nobody but
 -- service_role can INSERT over the API, and even service_role cannot UPDATE or
 -- DELETE (the trigger refuses).
@@ -183,11 +198,11 @@ revoke all on table public.audit_events from public, anon, authenticated, servic
 grant select on table public.audit_events to authenticated;
 grant select, insert on table public.audit_events to service_role;
 
--- ── 5 · actor resolution ─────────────────────────────────────────────────────
+-- â”€â”€ 5 Â· actor resolution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 -- The one place "who did this" is decided. SECURITY DEFINER so the technician/
 -- customer lookups work from any calling context; STABLE; search_path pinned.
 -- Client code can neither call it usefully nor influence it: the app.audit_context
--- override GUC is settable only by in-database code and service connections —
+-- override GUC is settable only by in-database code and service connections â€”
 -- PostgREST exposes no set_config surface to clients.
 
 create or replace function public.audit_actor_context(p_tenant uuid, p_customer uuid)
@@ -205,7 +220,7 @@ declare
   v_tech record;
 begin
   -- Trusted override: transaction-local GUC set by in-DB code (or a service
-  -- connection) that knows better than inference — e.g. a future RPC recording
+  -- connection) that knows better than inference â€” e.g. a future RPC recording
   -- "owner recorded customer decision". Honored only when it parses and names
   -- a legal actor_type; garbage falls through to inference.
   begin
@@ -225,7 +240,7 @@ begin
   end if;
 
   if v_uid is not null then
-    -- The tenant key IS the owner's auth uid — equality is the ownership test.
+    -- The tenant key IS the owner's auth uid â€” equality is the ownership test.
     if v_uid = p_tenant then
       return query select 'owner'::text, v_uid, null::text, 'dashboard'::text;
       return;
@@ -273,10 +288,10 @@ begin
 end;
 $function$;
 
--- ── 6 · the one writer ───────────────────────────────────────────────────────
+-- â”€â”€ 6 Â· the one writer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 -- Every audit row passes through here. SECURITY DEFINER (owned by postgres, the
 -- table owner) so the insert clears RLS without any client-facing INSERT path
--- existing. EXECUTE is revoked from every client role below — only other
+-- existing. EXECUTE is revoked from every client role below â€” only other
 -- definer code (the triggers) can reach it.
 
 create or replace function public.audit_log(
@@ -310,15 +325,15 @@ begin
 end;
 $function$;
 
--- ── 7 · per-table capture triggers ───────────────────────────────────────────
--- Each function curates MEANINGFUL columns — never a whole-row dump — and
+-- â”€â”€ 7 Â· per-table capture triggers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- Each function curates MEANINGFUL columns â€” never a whole-row dump â€” and
 -- guards every branch with IS DISTINCT FROM, because `update ... set x = x`
 -- fires an UPDATE OF x trigger without changing anything, and a no-op is not
 -- an act. All AFTER ROW (same transaction: rollback removes the event) except
 -- jobs BEFORE DELETE, which must count its children before the cascade takes
 -- them (recording what was affected BEFORE destruction).
 
--- 7a · quotes ----------------------------------------------------------------
+-- 7a Â· quotes ----------------------------------------------------------------
 
 create or replace function public.audit_quotes()
 returns trigger
@@ -365,8 +380,8 @@ begin
            else '{}'::jsonb end);
   end if;
 
-  -- Price edits. `total` is GENERATED from initial_price + travel_fee — the
-  -- one money path — so before/after quote the generated figure, not the parts.
+  -- Price edits. `total` is GENERATED from initial_price + travel_fee â€” the
+  -- one money path â€” so before/after quote the generated figure, not the parts.
   if (new.initial_price is distinct from old.initial_price
       or new.travel_fee is distinct from old.travel_fee) then
     perform public.audit_log(new.user_id, 'quote_price_changed', 'quote', new.id,
@@ -389,7 +404,7 @@ create trigger trg_audit_quotes_delete
   after delete on public.quotes
   for each row execute function public.audit_quotes();
 
--- 7b · change orders ---------------------------------------------------------
+-- 7b Â· change orders ---------------------------------------------------------
 
 create or replace function public.audit_change_orders()
 returns trigger
@@ -444,7 +459,7 @@ create trigger trg_audit_change_orders_update
   after update of status on public.change_orders
   for each row execute function public.audit_change_orders();
 
--- 7c · jobs (a jobs row IS a visit — vocabulary: act-on-one says "visit") -----
+-- 7c Â· jobs (a jobs row IS a visit â€” vocabulary: act-on-one says "visit") -----
 
 create or replace function public.audit_jobs()
 returns trigger
@@ -476,7 +491,7 @@ begin
   if tg_op = 'DELETE' then
     -- BEFORE DELETE: count what the cascade is about to take (work sessions,
     -- billable lines, photos) while they still exist. Deleting a visit is the
-    -- destructive act this trail exists for — record the world before it.
+    -- destructive act this trail exists for â€” record the world before it.
     select count(*) into v_sessions from public.job_work_sessions s where s.job_id = old.id;
     select count(*) into v_lines    from public.job_line_items   l where l.job_id = old.id;
     select count(*) into v_photos   from public.job_photos       p where p.job_id = old.id;
@@ -491,7 +506,7 @@ begin
     return old;
   end if;
 
-  -- Reschedule: the date/time pair, before → after.
+  -- Reschedule: the date/time pair, before â†’ after.
   if (new.scheduled_date is distinct from old.scheduled_date
       or new.start_time is distinct from old.start_time) then
     perform public.audit_log(new.user_id, 'visit_rescheduled', 'visit', new.id,
@@ -516,7 +531,7 @@ begin
   elsif new.started_at is distinct from old.started_at then
     -- Same status, clock changed: `in_progress` + started_at NULL is the
     -- established stopped-for-the-day state (work-sessions contract, no new
-    -- status). Started → cleared = paused; cleared → started = resumed.
+    -- status). Started â†’ cleared = paused; cleared â†’ started = resumed.
     if old.started_at is not null and new.started_at is null then
       perform public.audit_log(new.user_id, 'work_paused', 'visit', new.id,
         new.title, new.customer_id, null, null);
@@ -556,7 +571,7 @@ create trigger trg_audit_jobs_delete
   before delete on public.jobs
   for each row execute function public.audit_jobs();
 
--- 7d · job_recurrences (the plan behind recurring visits) ---------------------
+-- 7d Â· job_recurrences (the plan behind recurring visits) ---------------------
 
 create or replace function public.audit_job_recurrences()
 returns trigger
@@ -616,7 +631,7 @@ create trigger trg_audit_job_recurrences_delete
   after delete on public.job_recurrences
   for each row execute function public.audit_job_recurrences();
 
--- 7e · job_work_sessions (time on site — attaches to the visit) ---------------
+-- 7e Â· job_work_sessions (time on site â€” attaches to the visit) ---------------
 
 create or replace function public.audit_work_sessions()
 returns trigger
@@ -682,7 +697,7 @@ create trigger trg_audit_work_sessions_delete
   after delete on public.job_work_sessions
   for each row execute function public.audit_work_sessions();
 
--- 7f · invoices ---------------------------------------------------------------
+-- 7f Â· invoices ---------------------------------------------------------------
 
 create or replace function public.audit_invoices()
 returns trigger
@@ -748,7 +763,7 @@ create trigger trg_audit_invoices_delete
   after delete on public.invoices
   for each row execute function public.audit_invoices();
 
--- 7g · payments (the ledger rows — descriptive only, never a second truth) ----
+-- 7g Â· payments (the ledger rows â€” descriptive only, never a second truth) ----
 
 create or replace function public.audit_payments()
 returns trigger
@@ -810,7 +825,7 @@ create trigger trg_audit_payments_delete
   after delete on public.payments
   for each row execute function public.audit_payments();
 
--- 7h · technicians (worker accountability; wages stay in wage_history) --------
+-- 7h Â· technicians (worker accountability; wages stay in wage_history) --------
 
 create or replace function public.audit_technicians()
 returns trigger
@@ -880,8 +895,8 @@ create trigger trg_audit_technicians_delete
   after delete on public.technicians
   for each row execute function public.audit_technicians();
 
--- 7i · customers (record lifecycle + contact identity; consent stays in
---      consent_changes — one engine per responsibility) -----------------------
+-- 7i Â· customers (record lifecycle + contact identity; consent stays in
+--      consent_changes â€” one engine per responsibility) -----------------------
 
 create or replace function public.audit_customers()
 returns trigger
@@ -947,7 +962,7 @@ create trigger trg_audit_customers_delete
   after delete on public.customers
   for each row execute function public.audit_customers();
 
--- 7j · service_requests (a customer asking for something IS business history) --
+-- 7j Â· service_requests (a customer asking for something IS business history) --
 
 create or replace function public.audit_service_requests()
 returns trigger
@@ -983,7 +998,7 @@ create trigger trg_audit_service_requests_update
   after update of resolved_at on public.service_requests
   for each row execute function public.audit_service_requests();
 
--- ── 8 · function grants ──────────────────────────────────────────────────────
+-- â”€â”€ 8 Â· function grants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 -- Supabase's ALTER DEFAULT PRIVILEGES hands EXECUTE on every new function to
 -- anon/authenticated/service_role at CREATE time; `revoke ... from public`
 -- alone leaves those standing. Revoke by role name, then grant back only what
@@ -1004,7 +1019,7 @@ revoke all on function public.audit_technicians() from public, anon, authenticat
 revoke all on function public.audit_customers() from public, anon, authenticated, service_role;
 revoke all on function public.audit_service_requests() from public, anon, authenticated, service_role;
 
--- ── 9 · the migration proves itself (tenant-boundary house rule) ─────────────
+-- â”€â”€ 9 Â· the migration proves itself (tenant-boundary house rule) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 do $$
 begin
