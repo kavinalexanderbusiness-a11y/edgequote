@@ -184,7 +184,7 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
         {ACTIONS.filter(a => (a.type !== 'review_request' || !(review.reviewedAt || review.declinedAt)) && (a.type !== 'eta' || canSendEta)).map(a => (
           <button key={a.type} type="button" onClick={() => open(a.type)} disabled={busy}
-            className={cn('h-9 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50',
+            className={cn('tap-target-y h-9 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50',
               active === a.type ? 'border-accent bg-accent/15 text-accent-text ring-1 ring-accent/40'
                 : a.tone || 'border-border text-ink-muted hover:text-ink hover:bg-black/10')}>
             <a.icon className="w-3.5 h-3.5" /> {a.label}
