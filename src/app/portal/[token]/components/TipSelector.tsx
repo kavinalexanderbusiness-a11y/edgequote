@@ -135,9 +135,15 @@ export function TipSelector({
         Entirely optional, and it goes to the business on top of your invoice — your invoice total doesn’t change.
       </p>
 
-      {/* ONE column at 375, two from 400px up. Never more: four chips across a
-          phone is four 80px targets, which is a mis-tap on somebody's money. */}
-      <div className="grid grid-cols-1 min-[400px]:grid-cols-2 gap-2" role="radiogroup" aria-label="Add a tip">
+      {/* TWO columns at every width, never more. Measured in real Chrome at
+          320 / 375 / 390 / 430: chips come out 123 / 151 / 158 / 178px wide and
+          44px tall, with no text clipping and no sideways overflow at any of
+          them. One column was the first attempt (the quote-options precedent),
+          but those are rich option cards carrying scope text; these are five
+          short chips, and stacking them cost five rows instead of three —
+          ~130px that pushed the Pay button off a 375px screen for no gain.
+          Three columns is the line: it would put "20% $100.00" in ~100px. */}
+      <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Add a tip">
         {/* No tip is FIRST and identical in weight to every other choice. */}
         {chip('none', 'No tip', null, choice.kind === 'none', () => onChoice({ kind: 'none' }))}
         {presets.map(p => chip(

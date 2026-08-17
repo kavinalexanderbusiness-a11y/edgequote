@@ -807,9 +807,12 @@ H('13. WHAT THE OWNER AND THE CUSTOMER SEE')
   check('the tip chips AND the custom field both clear the 44px touch target',
     (sel.match(/tap-target-y/g) || []).length >= 2,
     'a mis-tap here is a mis-tap on somebody\'s money')
-  check('the chips never exceed two columns on a phone',
-    /grid-cols-1 min-\[400px\]:grid-cols-2/.test(sel),
-    'four chips across a 375px phone is four 80px targets')
+  // Two columns, at every width, with no responsive escape hatch. Measured in
+  // real Chrome at 320/375/390/430: 123/151/158/178px wide, 44px tall, nothing
+  // clipped, nothing overflowing. Three would put "20% $100.00" in ~100px.
+  check('the chips are exactly two columns, at every width',
+    /grid grid-cols-2 gap-2/.test(sel) && !/grid-cols-[34]/.test(sel),
+    'four chips across a 375px phone is four 80px targets — a mis-tap on somebody’s money')
   check('the breakdown shows invoice / tip / total separately',
     /Invoice payment[\s\S]{0,400}Tip[\s\S]{0,400}Total charged/.test(sel),
     'the customer must see that the invoice figure did not move')
