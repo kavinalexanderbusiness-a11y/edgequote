@@ -248,7 +248,7 @@ for (const w of WIDTHS) {
   check(`${w}: the sheet carries the fast-path fields`, !!sheetShape && need.every(n => sheetShape.labels.some(l => l.startsWith(n))),
     JSON.stringify(sheetShape?.labels))
   check(`${w}: assignee control matches the crew roster`,
-    !!sheetShape && (activeCrews.length > 0) === sheetShape.labels.some(l => l.startsWith('Assigned crew')))
+    !!sheetShape && (activeCrews.length > 0) === sheetShape.labels.some(l => l.startsWith('Assigned to')))
   check(`${w}: Save is disabled while nothing changed`, sheetShape?.saveDisabled === true)
   check(`${w}: the sheet fits the viewport and Save is reachable`, !!sheetShape && sheetShape.fits && sheetShape.saveVisible)
 
