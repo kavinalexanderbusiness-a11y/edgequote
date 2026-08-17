@@ -8,8 +8,8 @@
 --
 -- This file is the ONE starting point for a database. Applying it to an empty
 -- Postgres 17 database produces the production schema contract:
---   112 tables · 151 functions · 128 triggers · 361 policies
---   596 constraints · 283 standalone indexes · 7 storage buckets
+--   112 tables · 151 functions · 129 triggers · 361 policies
+--   603 constraints · 284 standalone indexes · 7 storage buckets
 --
 -- IT DOES NOT RESTORE DATA. Not one row. Rebuilding a working production system
 -- is: this file, THEN a backup restore, THEN storage objects, THEN env config.
@@ -1500,7 +1500,12 @@ create table if not exists public."schedule_items" (
   "status" text default 'scheduled'::text not null,
   "converted_quote_id" uuid,
   "completed_at" timestamp with time zone,
-  "reminded_at" timestamp with time zone
+  "reminded_at" timestamp with time zone,
+  "crew_id" uuid,
+  "technician_id" uuid,
+  "customer_note" text,
+  "cancel_reason" text,
+  "updated_at" timestamp with time zone default now() not null
 );
 create table if not exists public."scheduled_messages" (
   "id" uuid default extensions.uuid_generate_v4() not null,
@@ -6106,16 +6111,21 @@ CREATE OR REPLACE FUNCTION public.recompute_equipment_service()
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-declare v_eq uuid;
+declare v_eq uuid; v_owner uuid;
 begin
   v_eq := coalesce(new.equipment_id, old.equipment_id);
+  select user_id into v_owner from public.equipment where id = v_eq;
+  if v_owner is null then return null; end if;
   update public.equipment e
      set last_service_at = s.service_date, last_service_hours = s.hours, updated_at = now()
     from (select service_date, hours from public.equipment_service
-           where equipment_id = v_eq order by service_date desc, created_at desc limit 1) s
-   where e.id = v_eq;
-  if not exists (select 1 from public.equipment_service where equipment_id = v_eq) then
-    update public.equipment set last_service_at = null, last_service_hours = null, updated_at = now() where id = v_eq;
+           where equipment_id = v_eq and user_id = v_owner
+           order by service_date desc, created_at desc limit 1) s
+   where e.id = v_eq and e.user_id = v_owner;
+  if not exists (select 1 from public.equipment_service
+                  where equipment_id = v_eq and user_id = v_owner) then
+    update public.equipment set last_service_at = null, last_service_hours = null, updated_at = now()
+     where id = v_eq and user_id = v_owner;
   end if;
   return null;
 end $function$;
@@ -6193,13 +6203,18 @@ CREATE OR REPLACE FUNCTION public.recompute_part_stock()
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-declare v_part uuid;
+declare v_part uuid; v_owner uuid;
 begin
   v_part := coalesce(new.part_id, old.part_id);
+  -- The part's OWN tenant, never the writer's: a row that should not exist must
+  -- not get a vote in whose total it changes.
+  select user_id into v_owner from public.parts where id = v_part;
+  if v_owner is null then return null; end if;
   update public.parts p
-     set qty_on_hand = coalesce((select sum(qty) from public.part_movements where part_id = v_part), 0),
+     set qty_on_hand = coalesce((select sum(qty) from public.part_movements
+                                  where part_id = v_part and user_id = v_owner), 0),
          updated_at  = now()
-   where p.id = v_part;
+   where p.id = v_part and p.user_id = v_owner;
   return null;
 end $function$;
 
@@ -7241,7 +7256,7 @@ alter table public."webhook_endpoints" add constraint "webhook_endpoints_pkey" P
 alter table public."website_leads" add constraint "website_leads_pkey" PRIMARY KEY (id);
 alter table public."worker_availability" add constraint "worker_availability_pkey" PRIMARY KEY (id);
 
--- unique (47)
+-- unique (49)
 alter table public."api_keys" add constraint "api_keys_key_hash_key" UNIQUE (key_hash);
 alter table public."beta_invites" add constraint "beta_invites_token_hash_key" UNIQUE (token_hash);
 alter table public."business_settings" add constraint "business_settings_user_id_key" UNIQUE (user_id);
@@ -7254,6 +7269,7 @@ alter table public."crm_campaign_presets" add constraint "crm_campaign_presets_u
 alter table public."customers" add constraint "customers_user_id_id_key" UNIQUE (user_id, id);
 alter table public."day_statuses" add constraint "day_statuses_user_id_date_key" UNIQUE (user_id, date);
 alter table public."dispatch_notes" add constraint "dispatch_notes_day_crew_unique" UNIQUE NULLS NOT DISTINCT (user_id, date, crew_id);
+alter table public."equipment" add constraint "equipment_user_id_id_key" UNIQUE (user_id, id);
 alter table public."form_templates" add constraint "form_templates_id_user_key" UNIQUE (id, user_id);
 alter table public."holidays" add constraint "holidays_one_per_day" UNIQUE (user_id, date);
 alter table public."inbound_webhooks" add constraint "inbound_webhooks_token_key" UNIQUE (token);
@@ -7267,6 +7283,7 @@ alter table public."job_recurrences" add constraint "job_recurrences_user_id_id_
 alter table public."jobs" add constraint "jobs_id_user_key" UNIQUE (id, user_id);
 alter table public."labor_observations" add constraint "labor_observations_user_id_job_id_key" UNIQUE (user_id, job_id);
 alter table public."marketing_assets" add constraint "marketing_assets_user_id_job_id_key" UNIQUE (user_id, job_id);
+alter table public."parts" add constraint "parts_user_id_id_key" UNIQUE (user_id, id);
 alter table public."pay_run_lines" add constraint "pay_run_lines_one_per_tech" UNIQUE (pay_run_id, technician_id);
 alter table public."pay_runs" add constraint "pay_runs_one_per_period" UNIQUE (user_id, period_start, period_end);
 alter table public."payment_methods" add constraint "payment_methods_stripe_payment_method_id_key" UNIQUE (stripe_payment_method_id);
@@ -7290,7 +7307,7 @@ alter table public."suggestion_dismissals" add constraint "suggestion_dismissals
 alter table public."technicians" add constraint "technicians_id_user_key" UNIQUE (id, user_id);
 alter table public."worker_availability" add constraint "worker_availability_one_per_weekday" UNIQUE (technician_id, weekday);
 
--- check (182)
+-- check (185)
 alter table public."audit_events" add constraint "audit_events_action_check" CHECK (((char_length(action) >= 1) AND (char_length(action) <= 64)));
 alter table public."audit_events" add constraint "audit_events_actor_type_check" CHECK ((actor_type = ANY (ARRAY['owner'::text, 'worker'::text, 'customer'::text, 'system'::text])));
 alter table public."audit_events" add constraint "audit_events_entity_type_check" CHECK (((char_length(entity_type) >= 1) AND (char_length(entity_type) <= 32)));
@@ -7446,6 +7463,9 @@ alter table public."quotes" add constraint "quotes_status_check" CHECK ((status 
 alter table public."quotes" add constraint "quotes_value_grade_valid" CHECK (((value_grade IS NULL) OR (value_grade = ANY (ARRAY['A+'::text, 'A'::text, 'B'::text, 'C'::text, 'D'::text, 'F'::text]))));
 alter table public."referrals" add constraint "referrals_status_check" CHECK ((status = ANY (ARRAY['invited'::text, 'joined'::text, 'rewarded'::text, 'declined'::text])));
 alter table public."report_schedules" add constraint "report_schedules_kind_check" CHECK ((kind = ANY (ARRAY['daily'::text, 'weekly'::text, 'monthly'::text, 'yearly'::text])));
+alter table public."schedule_items" add constraint "schedule_items_one_assignee_check" CHECK (((crew_id IS NULL) OR (technician_id IS NULL)));
+alter table public."schedule_items" add constraint "schedule_items_status_check" CHECK ((status = ANY (ARRAY['scheduled'::text, 'completed'::text, 'cancelled'::text, 'no_show'::text])));
+alter table public."schedule_items" add constraint "schedule_items_type_check" CHECK ((type = ANY (ARRAY['estimate'::text, 'callback'::text, 'appointment'::text, 'task'::text, 'reminder'::text])));
 alter table public."service_bundle_items" add constraint "service_bundle_items_kind_check" CHECK ((kind = ANY (ARRAY['service'::text, 'material'::text])));
 alter table public."service_bundle_items" add constraint "service_bundle_items_minutes_not_negative" CHECK (((est_minutes IS NULL) OR (est_minutes >= 0)));
 alter table public."service_bundle_items" add constraint "service_bundle_items_name_not_blank" CHECK ((btrim(name) <> ''::text));
@@ -7474,7 +7494,7 @@ alter table public."webhook_endpoints" add constraint "webhook_endpoints_source_
 alter table public."worker_availability" add constraint "worker_availability_weekday_range" CHECK (((weekday >= 0) AND (weekday <= 6)));
 alter table public."worker_availability" add constraint "worker_availability_window" CHECK (((available AND (start_time IS NOT NULL) AND (end_time IS NOT NULL) AND (end_time > start_time)) OR ((NOT available) AND (start_time IS NULL) AND (end_time IS NULL))));
 
--- foreign keys (255)
+-- foreign keys (257)
 alter table public."api_keys" add constraint "api_keys_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."audit_events" add constraint "audit_events_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."automation_runs" add constraint "automation_runs_signal_id_fkey" FOREIGN KEY (signal_id) REFERENCES automation_signals(id) ON DELETE SET NULL;
@@ -7527,7 +7547,7 @@ alter table public."equipment" add constraint "equipment_crew_same_owner" FOREIG
 alter table public."equipment" add constraint "equipment_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."equipment_docs" add constraint "equipment_docs_equipment_id_fkey" FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE CASCADE;
 alter table public."equipment_docs" add constraint "equipment_docs_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table public."equipment_service" add constraint "equipment_service_equipment_id_fkey" FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE CASCADE;
+alter table public."equipment_service" add constraint "equipment_service_equipment_tenant_fkey" FOREIGN KEY (user_id, equipment_id) REFERENCES equipment(user_id, id) ON DELETE CASCADE;
 alter table public."equipment_service" add constraint "equipment_service_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."expense_categories" add constraint "expense_categories_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."expenses" add constraint "expenses_category_id_fkey" FOREIGN KEY (category_id) REFERENCES expense_categories(id) ON DELETE SET NULL;
@@ -7615,7 +7635,7 @@ alter table public."notification_log" add constraint "notification_log_user_id_f
 alter table public."notifications" add constraint "notifications_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
 alter table public."notifications" add constraint "notifications_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."part_movements" add constraint "part_movements_equipment_service_id_fkey" FOREIGN KEY (equipment_service_id) REFERENCES equipment_service(id) ON DELETE CASCADE;
-alter table public."part_movements" add constraint "part_movements_part_id_fkey" FOREIGN KEY (part_id) REFERENCES parts(id) ON DELETE CASCADE;
+alter table public."part_movements" add constraint "part_movements_part_tenant_fkey" FOREIGN KEY (user_id, part_id) REFERENCES parts(user_id, id) ON DELETE CASCADE;
 alter table public."part_movements" add constraint "part_movements_purchase_order_item_id_fkey" FOREIGN KEY (purchase_order_item_id) REFERENCES purchase_order_items(id) ON DELETE CASCADE;
 alter table public."part_movements" add constraint "part_movements_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."parts" add constraint "parts_supplier_id_fkey" FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL;
@@ -7686,8 +7706,10 @@ alter table public."revenue_recommendations" add constraint "revenue_recommendat
 alter table public."road_distance_cache" add constraint "road_distance_cache_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."schedule_health_ignored" add constraint "schedule_health_ignored_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."schedule_items" add constraint "schedule_items_converted_quote_id_fkey" FOREIGN KEY (converted_quote_id) REFERENCES quotes(id) ON DELETE SET NULL;
+alter table public."schedule_items" add constraint "schedule_items_crew_id_fkey" FOREIGN KEY (crew_id) REFERENCES crews(id) ON DELETE SET NULL;
 alter table public."schedule_items" add constraint "schedule_items_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
 alter table public."schedule_items" add constraint "schedule_items_property_id_fkey" FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE SET NULL;
+alter table public."schedule_items" add constraint "schedule_items_technician_id_fkey" FOREIGN KEY (technician_id) REFERENCES technicians(id) ON DELETE SET NULL;
 alter table public."schedule_items" add constraint "schedule_items_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."scheduled_messages" add constraint "scheduled_messages_customer_id_fkey" FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE;
 alter table public."scheduled_messages" add constraint "scheduled_messages_job_id_fkey" FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
@@ -7734,7 +7756,7 @@ alter table public."worker_availability" add constraint "worker_availability_use
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 5 · TRIGGERS
--- 128 triggers, including the two DEFERRABLE constraint triggers that
+-- 129 triggers, including the two DEFERRABLE constraint triggers that
 -- enforce quote-option/quote-service shape at commit time.
 -- ══════════════════════════════════════════════════════════════════════════
 
@@ -7954,6 +7976,8 @@ drop trigger if exists "trg_referrals_updated" on public."referrals";
 CREATE TRIGGER trg_referrals_updated BEFORE UPDATE ON public.referrals FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 drop trigger if exists "trg_report_schedules_updated_at" on public."report_schedules";
 CREATE TRIGGER trg_report_schedules_updated_at BEFORE UPDATE ON public.report_schedules FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "trg_schedule_items_updated" on public."schedule_items";
+CREATE TRIGGER trg_schedule_items_updated BEFORE UPDATE ON public.schedule_items FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 drop trigger if exists "service_bundles_updated_at" on public."service_bundles";
 CREATE TRIGGER service_bundles_updated_at BEFORE UPDATE ON public.service_bundles FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
 drop trigger if exists "trg_audit_service_requests_insert" on public."service_requests";
@@ -7997,7 +8021,7 @@ CREATE TRIGGER worker_availability_updated_at BEFORE UPDATE ON public.worker_ava
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 6 · INDEXES
--- 283 standalone indexes. Constraint-backing indexes are omitted on purpose —
+-- 284 standalone indexes. Constraint-backing indexes are omitted on purpose —
 -- section 4 already created them; declaring both would fail or duplicate.
 -- The partial UNIQUE indexes are correctness, not speed: they are what stops a
 -- second open shift per technician and a duplicate invoice number.
@@ -8241,6 +8265,7 @@ create index if not exists revenue_recommendations_user_idx ON public.revenue_re
 create index if not exists road_distance_cache_lookup_idx ON public.road_distance_cache USING btree (user_id, from_key, to_key);
 create index if not exists schedule_health_ignored_user_idx ON public.schedule_health_ignored USING btree (user_id);
 create index if not exists schedule_items_due_idx ON public.schedule_items USING btree (user_id, status, due_at);
+create index if not exists schedule_items_estimates_idx ON public.schedule_items USING btree (user_id, scheduled_date) WHERE (type = 'estimate'::text);
 create index if not exists schedule_items_user_date_idx ON public.schedule_items USING btree (user_id, scheduled_date);
 create index if not exists scheduled_messages_due_idx ON public.scheduled_messages USING btree (status, send_at);
 create index if not exists scheduled_messages_user_idx ON public.scheduled_messages USING btree (user_id, send_at DESC);
@@ -9301,7 +9326,8 @@ create policy "schedule_items: select own" on public."schedule_items" as permiss
   using ((auth.uid() = user_id));
 drop policy if exists "schedule_items: update own" on public."schedule_items";
 create policy "schedule_items: update own" on public."schedule_items" as permissive for update to public
-  using ((auth.uid() = user_id));
+  using ((auth.uid() = user_id))
+  with check ((auth.uid() = user_id));
 drop policy if exists "scheduled_messages_delete_own" on public."scheduled_messages";
 create policy "scheduled_messages_delete_own" on public."scheduled_messages" as permissive for delete to public
   using ((auth.uid() = user_id));
@@ -9886,7 +9912,6 @@ grant ALL on table public."schedule_health_ignored" to anon;
 grant ALL on table public."schedule_health_ignored" to authenticated;
 grant ALL on table public."schedule_health_ignored" to service_role;
 revoke all on table public."schedule_items" from public, anon, authenticated, service_role;
-grant ALL on table public."schedule_items" to anon;
 grant ALL on table public."schedule_items" to authenticated;
 grant ALL on table public."schedule_items" to service_role;
 revoke all on table public."scheduled_messages" from public, anon, authenticated, service_role;
@@ -10473,6 +10498,7 @@ comment on table public."property_measurements" is 'THE typed measurement ledger
 comment on table public."purchase_order_items" is 'PO lines. qty_received is intentionally absent â it is derived from part_movements linked by purchase_order_item_id, so stock and receipts cannot drift apart.';
 comment on table public."quote_options" is 'Mutually exclusive alternatives for one quote (Budget/Recommended/Premium). NOT additive: quotes.initial_price always equals ONE option price - the recommended one before the customer chooses, the selected one after. Cannot coexist with quote_services rows.';
 comment on table public."report_schedules" is 'Scheduled report cadences per owner. last_period_to is the idempotency key: the cron sends a closed period exactly once, however often it runs.';
+comment on table public."schedule_items" is 'Non-job calendar entries: estimate / callback / appointment / task / reminder. A row here is NEVER work â labour, revenue, invoicing, recurrence, work sessions, proof-of-work and review eligibility all read public.jobs, so completing an estimate appointment cannot reach any of them. type=''estimate'' is the scheduled visit that produces a quote (Session 79); converted_quote_id is the quote it is about, whether that quote existed first or was written afterwards.';
 comment on table public."technician_crew_history" is 'Append-only crew membership log, written only by trigger. Answers "which crew was this person on AT that time" so past attribution cannot be rewritten by moving someone today. Rows are never updated or deleted by any client role.';
 comment on table public."time_entries" is 'THE paid-time ledger. One row per shift. minutes_worked is DB-derived; hourly_rate is snapshotted at clock-in so wage changes never rewrite history. Open shift = clock_out IS NULL (at most one per technician, enforced by index).';
 comment on table public."verify_fixture_tenants" is 'Tenants whose data is created by scripts/verify-*.ts. Marker only â grants nothing, relaxes nothing. Guards read it through is_verify_fixture_tenant() and refuse to write when it answers false. Writable only by migration/service_role.';
@@ -10557,6 +10583,9 @@ comment on column public."quotes"."total" is 'GENERATED = initial_price + travel
 comment on column public."quotes"."valid_until" is 'Calendar date this quote stops being valid. Null = never expires (incl. every quote sent before expiry existed). ''expired'' is derived for display by lib/quoteStatus â it is never stored in quotes.status.';
 comment on column public."report_schedules"."last_period_to" is 'The `to` date of the last period SENT. Keyed on the period, not the clock, so retries and missed runs cannot double-send or drift.';
 comment on column public."report_schedules"."recipient" is 'NULL = defer to business_settings.email_primary (a pointer cannot go stale).';
+comment on column public."schedule_items"."converted_quote_id" is 'The quote this visit is about. Set when the owner writes the quote from the visit, or when an existing draft quote is given an appointment. One link, both directions.';
+comment on column public."schedule_items"."customer_note" is 'Optional customer-facing note for the appointment. The audience is the COLUMN, never a visibility flag.';
+comment on column public."schedule_items"."notes" is 'INTERNAL only â never rendered to a customer. Customer-facing wording lives in customer_note.';
 comment on column public."service_requests"."dedup_key" is 'Set by portal_submit_request. With service_requests_open_dedup_idx it makes a repeated submission of the same ask a no-op while the first is still open.';
 comment on column public."service_requests"."from_portal" is 'True only for rows created by portal_submit_request (incl. its portal_request_service wrapper) â a customer acting in their own portal. Website leads, online bookings and system notes stay false.';
 comment on column public."service_requests"."photos" is 'booking-uploads STORAGE PATHS (never URLs) the customer attached. The bucket is named in application code at render time; see portal_request_photos_ok for the enforced shape.';

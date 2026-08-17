@@ -995,7 +995,7 @@
  },
  {
   "acl": "{postgres=X/postgres,service_role=X/postgres}",
-  "def": "CREATE OR REPLACE FUNCTION public.recompute_equipment_service()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\r\ndeclare v_eq uuid;\r\nbegin\r\n  v_eq := coalesce(new.equipment_id, old.equipment_id);\r\n  update public.equipment e\r\n     set last_service_at = s.service_date, last_service_hours = s.hours, updated_at = now()\r\n    from (select service_date, hours from public.equipment_service\r\n           where equipment_id = v_eq order by service_date desc, created_at desc limit 1) s\r\n   where e.id = v_eq;\r\n  if not exists (select 1 from public.equipment_service where equipment_id = v_eq) then\r\n    update public.equipment set last_service_at = null, last_service_hours = null, updated_at = now() where id = v_eq;\r\n  end if;\r\n  return null;\r\nend $function$\n",
+  "def": "CREATE OR REPLACE FUNCTION public.recompute_equipment_service()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\ndeclare v_eq uuid; v_owner uuid;\nbegin\n  v_eq := coalesce(new.equipment_id, old.equipment_id);\n  select user_id into v_owner from public.equipment where id = v_eq;\n  if v_owner is null then return null; end if;\n  update public.equipment e\n     set last_service_at = s.service_date, last_service_hours = s.hours, updated_at = now()\n    from (select service_date, hours from public.equipment_service\n           where equipment_id = v_eq and user_id = v_owner\n           order by service_date desc, created_at desc limit 1) s\n   where e.id = v_eq and e.user_id = v_owner;\n  if not exists (select 1 from public.equipment_service\n                  where equipment_id = v_eq and user_id = v_owner) then\n    update public.equipment set last_service_at = null, last_service_hours = null, updated_at = now()\n     where id = v_eq and user_id = v_owner;\n  end if;\n  return null;\nend $function$\n",
   "args": "",
   "owner": "postgres",
   "proname": "recompute_equipment_service"
@@ -1023,7 +1023,7 @@
  },
  {
   "acl": "{postgres=X/postgres,service_role=X/postgres}",
-  "def": "CREATE OR REPLACE FUNCTION public.recompute_part_stock()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\r\ndeclare v_part uuid;\r\nbegin\r\n  v_part := coalesce(new.part_id, old.part_id);\r\n  update public.parts p\r\n     set qty_on_hand = coalesce((select sum(qty) from public.part_movements where part_id = v_part), 0),\r\n         updated_at  = now()\r\n   where p.id = v_part;\r\n  return null;\r\nend $function$\n",
+  "def": "CREATE OR REPLACE FUNCTION public.recompute_part_stock()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\ndeclare v_part uuid; v_owner uuid;\nbegin\n  v_part := coalesce(new.part_id, old.part_id);\n  -- The part's OWN tenant, never the writer's: a row that should not exist must\n  -- not get a vote in whose total it changes.\n  select user_id into v_owner from public.parts where id = v_part;\n  if v_owner is null then return null; end if;\n  update public.parts p\n     set qty_on_hand = coalesce((select sum(qty) from public.part_movements\n                                  where part_id = v_part and user_id = v_owner), 0),\n         updated_at  = now()\n   where p.id = v_part and p.user_id = v_owner;\n  return null;\nend $function$\n",
   "args": "",
   "owner": "postgres",
   "proname": "recompute_part_stock"

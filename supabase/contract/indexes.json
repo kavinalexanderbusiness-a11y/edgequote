@@ -583,6 +583,12 @@
  },
  {
   "tbl": "equipment",
+  "indexdef": "CREATE UNIQUE INDEX equipment_user_id_id_key ON public.equipment USING btree (user_id, id)",
+  "indexname": "equipment_user_id_id_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "equipment",
   "indexdef": "CREATE INDEX equipment_user_idx ON public.equipment USING btree (user_id, status)",
   "indexname": "equipment_user_idx",
   "backs_constraint": false
@@ -1477,6 +1483,12 @@
  },
  {
   "tbl": "parts",
+  "indexdef": "CREATE UNIQUE INDEX parts_user_id_id_key ON public.parts USING btree (user_id, id)",
+  "indexname": "parts_user_id_id_key",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "parts",
   "indexdef": "CREATE INDEX parts_user_idx ON public.parts USING btree (user_id, category)",
   "indexname": "parts_user_idx",
   "backs_constraint": false
@@ -2223,6 +2235,12 @@
   "tbl": "schedule_items",
   "indexdef": "CREATE INDEX schedule_items_due_idx ON public.schedule_items USING btree (user_id, status, due_at)",
   "indexname": "schedule_items_due_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "schedule_items",
+  "indexdef": "CREATE INDEX schedule_items_estimates_idx ON public.schedule_items USING btree (user_id, scheduled_date) WHERE (type = 'estimate'::text)",
+  "indexname": "schedule_items_estimates_idx",
   "backs_constraint": false
  },
  {

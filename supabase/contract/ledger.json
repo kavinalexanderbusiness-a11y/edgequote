@@ -1097,5 +1097,12 @@
   "sql_md5": "349dbcb3ca8ebfb01aab6d5e6783c84f",
   "version": "20260816095000",
   "stmt_count": 1
+ },
+ {
+  "name": "tenant_weld_inventory_equipment",
+  "sql_len": 4317,
+  "sql_md5": "d7a95058e0b892c862a767c822440d3f",
+  "version": "20260816110000",
+  "stmt_count": 1
  }
 ]
