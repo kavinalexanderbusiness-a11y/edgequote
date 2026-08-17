@@ -5,11 +5,26 @@ Stripe Checkout. The tip rides inside **one** Stripe charge with the invoice
 payment and is recorded as a **separate ledger row**, so the invoice's total,
 amount paid, balance and status read exactly as they would have with no tip.
 
-**The app half is committed and safe to deploy on its own.** Until the migration
-is applied, `tips_enabled` does not exist, `tipConfig()` reads it as `undefined`,
-and every business gets `TIPS_OFF` — no tip section renders anywhere, and no
-existing behaviour changes. That is the intended pre-migration state, not a
-broken one.
+**The app half is committed and safe to deploy on its own, in either order.**
+Until the migration is applied the three `business_settings` tip columns do not
+exist, so both routes that read them degrade to `TIPS_OFF`: no tip section
+renders anywhere and no existing behaviour changes.
+
+That order-independence is deliberate and cost one design decision. PostgREST
+fails the **whole** select on a column it does not know, so folding the tip
+columns into `/api/portal/pay`'s existing `gst_percent` read would have made
+every payment attempt 502 in the window between deploy and migration — the Pay
+button dead for a feature nobody had switched on. The tip config is therefore a
+**separate** read, and its failure refuses only when a tip was actually
+requested:
+
+- no tip requested → an unreadable tip config changes nothing; proceed exactly
+  as today;
+- a tip requested → we cannot confirm the customer was allowed to give it, or
+  what the ceiling was, so refuse (502) rather than charge an unverified
+  gratuity.
+
+`verify:tips` §11 pins both halves.
 
 ---
 
@@ -84,13 +99,33 @@ npm run verify:schema        # production and the repo agree
 Then move `20260816120000_tips_gratuity_v1.sql` into `supabase/archive/ledger/`
 and commit.
 
-> ⚠️ **`verify:rebuild` is red between merge and apply, by design.** It diffs
-> `baseline + later migrations` against `supabase/contract/*.json` (production's
-> snapshot). A migration in the apply path that production has not run is exactly
-> the drift it exists to report. It currently **SKIPS** rather than fails —
-> `@electric-sql/pglite` is not a dependency of this repo — so neither CI nor
-> `npm run verify` will show it. Install PGlite locally if you want the proof:
-> `npm i -D @electric-sql/pglite && npm run verify:rebuild`.
+### It has been proven to apply — and to do nothing else
+
+`npm run verify:rebuild` was run against an empty PGlite Postgres with the
+baseline + this migration. It applies cleanly from zero, and the **entire** diff
+against production's contract is the six objects this migration declares:
+
+```
+columns      UNEXPECTED 3:  business_settings.tips_enabled       boolean NN
+                            business_settings.tip_presets        integer[] NN
+                            business_settings.tip_custom_enabled boolean NN
+constraints  UNEXPECTED 1:  business_settings_tip_presets_check
+constraint definitions:     payments_kind_check
+               prod: ('payment','credit','refund')
+               got : ('payment','credit','refund','tip')
+indexes      UNEXPECTED 2:  payments_tip_intent_idx, payments_tip_user_paid_at_idx
+```
+
+Everything else was byte-identical: **131 functions, all function bodies, every
+EXECUTE grant, every table grant, RLS on every table, 359 policies and their
+predicates, 93 triggers, 7 buckets, 20 storage policies.** `get_portal_data` and
+`search_records` still execute against the rebuilt database.
+
+> ⚠️ **So `verify:rebuild` is RED between merge and apply, by design** — that
+> drift *is* the report that production has not run this yet. It goes green after
+> step 4 below. Note `@electric-sql/pglite` is now a devDependency (S75 added it
+> for `verify:tenant-weld`, which hard-fails without it rather than skipping), so
+> `npm run verify` **will** show this. Do not merge and walk away.
 
 ---
 

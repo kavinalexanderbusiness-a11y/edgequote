@@ -641,6 +641,24 @@ H('11. CAPABILITY + SETTINGS — a tip cannot outlive the payment rail')
   check('the portal only learns about tips when payments are enabled',
     /tips:\s*enabled\s*\?\s*tips\s*:\s*TIPS_OFF/.test(status),
     'a tip offer must fail closed with the capability that carries it')
+
+  // ── The deploy is order-independent ──────────────────────────────────────
+  // The three tip columns arrive in a migration, and PostgREST fails the WHOLE
+  // select on a column it does not know. Folded into the GST read, this route
+  // would 502 on EVERY payment attempt between the code deploying and the
+  // migration being applied — the Pay button dead for a feature nobody had
+  // switched on. Separate reads keep the pre-migration behaviour identical to
+  // today's.
+  check('the tip columns are read SEPARATELY from the GST/deposit reads',
+    /select\('gst_percent'\)/.test(pay)
+    && /select\('tips_enabled, tip_presets, tip_custom_enabled'\)/.test(pay),
+    'one select over both means an unapplied migration takes the whole charge door down')
+  check('  …and an unreadable tip config only refuses when a tip was ASKED for',
+    /if \(tipErr\) \{\s*\n\s*if \(body\.tipCents\) \{/.test(pay),
+    'an untipped payment must not care that the tip columns are unreadable; a tipped one must never be charged unverified')
+  check('the status route degrades to TIPS_OFF rather than throwing',
+    /if \(error\) return TIPS_OFF/.test(status),
+    'the portal must render no tip section pre-migration, not an error')
   check('  …and the owner is resolved from the portal TOKEN server-side',
     /from\('customer_portal_tokens'\)[\s\S]{0,200}\.eq\('token',\s*portalToken\)/.test(status),
     'the client must never be able to name which tenant it is asking about')

@@ -1,11 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient as createServerClient } from '@/lib/supabase/server'
-import { createClient as createServiceClient } from '@supabase/supabase-js'
+import { createClient as createServiceClient, type SupabaseClient } from '@supabase/supabase-js'
 import { stripeEnabled, webhookConfigured } from '@/lib/stripe/config'
 import { tenantCapabilities } from '@/lib/capabilities'
 import { tipConfig, TIPS_OFF, type TipConfig, type TipSettings } from '@/lib/payments/tips'
 
 export const dynamic = 'force-dynamic'
+
+/**
+ * The owner's tip configuration, or TIPS_OFF.
+ *
+ * One reader for both callers, and it NEVER throws or propagates an error. The
+ * three columns arrive in a migration, and PostgREST fails the whole select on a
+ * column it does not know — so between this code deploying and that migration
+ * being applied, this read errors. TIPS_OFF is the right answer in that window
+ * (no business has enabled tips yet), and it is the right answer for a transient
+ * failure too: not offering a tip is never wrong, only quieter. The charge door
+ * re-derives all of this independently and is what actually enforces it.
+ */
+async function readTipConfig(sb: SupabaseClient, ownerId: string): Promise<TipConfig> {
+  const { data, error } = await sb.from('business_settings')
+    .select('tips_enabled, tip_presets, tip_custom_enabled').eq('user_id', ownerId).maybeSingle()
+  if (error) return TIPS_OFF
+  return tipConfig(data as TipSettings | null)
+}
 
 // ── THE payments-availability read, now tenant-aware ─────────────────────────
 // `enabled` used to answer "does the DEPLOYMENT hold a Stripe key?" — the wrong
@@ -55,11 +73,11 @@ export async function GET(req: NextRequest) {
       const ownerId = (tok as { user_id: string } | null)?.user_id ?? null
       if (ownerId) {
         allowed = (await tenantCapabilities(admin, ownerId)).onlinePayments
-        if (allowed) {
-          const { data: bs } = await admin.from('business_settings')
-            .select('tips_enabled, tip_presets, tip_custom_enabled').eq('user_id', ownerId).maybeSingle()
-          tips = tipConfig(bs as TipSettings | null)
-        }
+        // A failed/impossible read leaves `tips` at TIPS_OFF — which is also the
+        // answer before the migration is applied, since PostgREST errors on
+        // columns it does not know. No tip section renders, and nothing else on
+        // this route changes. That is what makes the deploy order-independent.
+        if (allowed) tips = await readTipConfig(admin, ownerId)
       }
     }
   } else {
@@ -67,11 +85,7 @@ export async function GET(req: NextRequest) {
     const { data: { user } } = await supabase.auth.getUser()
     if (user) {
       allowed = (await tenantCapabilities(supabase, user.id)).onlinePayments
-      if (allowed) {
-        const { data: bs } = await supabase.from('business_settings')
-          .select('tips_enabled, tip_presets, tip_custom_enabled').eq('user_id', user.id).maybeSingle()
-        tips = tipConfig(bs as TipSettings | null)
-      }
+      if (allowed) tips = await readTipConfig(supabase, user.id)
     }
   }
 

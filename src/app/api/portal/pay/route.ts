@@ -71,21 +71,38 @@ export async function POST(req: NextRequest) {
     if (!(await tenantCapabilities(admin, invoice.user_id)).onlinePayments) {
       return NextResponse.json({ error: CAPABILITY_MESSAGE.payments }, { status: 503 })
     }
-    // ONE settings read for both the tax rate and the tip configuration. Same
-    // refusal contract as the deposit read above: a settings read we cannot
-    // complete is a session we must not build. Answering "couldn't read the
-    // settings" as "no tips" would silently drop a gratuity the customer chose
-    // and was shown; answering it as "tips allowed" would charge one the owner
-    // may never have enabled. Neither is a guess worth making — refuse (502) and
-    // let them tap again.
-    const { data: bs, error: bsErr } = await admin.from('business_settings')
-      .select('gst_percent, tips_enabled, tip_presets, tip_custom_enabled')
-      .eq('user_id', invoice.user_id).maybeSingle()
-    if (bsErr) return NextResponse.json({ error: 'We couldn’t start the payment — please try again in a moment.' }, { status: 502 })
     if (!Number.isFinite(gst)) {
+      const { data: bs, error: bsErr } = await admin.from('business_settings').select('gst_percent').eq('user_id', invoice.user_id).maybeSingle()
+      if (bsErr) return NextResponse.json({ error: 'We couldn’t start the payment — please try again in a moment.' }, { status: 502 })
       gst = Number((bs as { gst_percent?: number | null } | null)?.gst_percent) || 0
     }
-    tips = tipConfig(bs as TipSettings | null)
+    // ── The tip configuration, read SEPARATELY and on purpose ────────────────
+    // Not folded into the GST select above, because these three columns arrive
+    // in a migration and PostgREST fails the WHOLE select on a column it does
+    // not know. Merged, this route would 502 on every payment attempt in the
+    // window between the code deploying and the migration being applied — the
+    // Pay button dead for a feature nobody had switched on yet. Separate, the
+    // deploy is order-independent: pre-migration this read errors, `tips` stays
+    // TIPS_OFF, and the route behaves exactly as it does today.
+    //
+    // The refusal contract is therefore conditional on INTENT, not on the read:
+    //   • no tip requested → an unreadable tip config changes nothing. Proceed.
+    //   • a tip requested  → we cannot confirm the customer was allowed to give
+    //     it, or what the ceiling was. Refuse (502) rather than charge an
+    //     unverified gratuity. `resolveTipCents` reaches the same conclusion
+    //     from TIPS_OFF, but it would report it as "tips are disabled" — which
+    //     is a claim about the owner's settings we have not actually read.
+    const { data: tipRow, error: tipErr } = await admin.from('business_settings')
+      .select('tips_enabled, tip_presets, tip_custom_enabled')
+      .eq('user_id', invoice.user_id).maybeSingle()
+    if (tipErr) {
+      if (body.tipCents) {
+        console.error('[portal/pay] could not read the tip configuration:', tipErr.message)
+        return NextResponse.json({ error: 'We couldn’t start the payment — please try again in a moment.' }, { status: 502 })
+      }
+    } else {
+      tips = tipConfig(tipRow as TipSettings | null)
+    }
     const { data: dep, error: depErr } = await admin.from('invoices')
       .select('deposit_amount, deposit_requested_at').eq('id', invoice.id).eq('user_id', invoice.user_id).maybeSingle()
     if (depErr) return NextResponse.json({ error: 'We couldn’t start the payment — please try again in a moment.' }, { status: 502 })
