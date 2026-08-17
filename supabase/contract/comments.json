@@ -141,6 +141,10 @@
    "comment": "Scheduled report cadences per owner. last_period_to is the idempotency key: the cron sends a closed period exactly once, however often it runs."
   },
   {
+   "tbl": "technician_crew_history",
+   "comment": "Append-only crew membership log, written only by trigger. Answers \"which crew was this person on AT that time\" so past attribution cannot be rewritten by moving someone today. Rows are never updated or deleted by any client role."
+  },
+  {
    "tbl": "time_entries",
    "comment": "THE paid-time ledger. One row per shift. minutes_worked is DB-derived; hourly_rate is snapshotted at clock-in so wage changes never rewrite history. Open shift = clock_out IS NULL (at most one per technician, enforced by index)."
   },
@@ -270,6 +274,11 @@
    "comment": "Crew-specific day start; NULL = business work_start_time."
   },
   {
+   "col": "lead_technician_id",
+   "tbl": "crews",
+   "comment": "Optional crew lead. Must be an active member of this crew (crews_lead_is_member); cleared automatically when they leave the crew or the roster."
+  },
+  {
    "col": "archived_at",
    "tbl": "crm_campaigns",
    "comment": "Soft delete. A hard DELETE cascades crm_campaign_log (the audit trail AND the dedupe ledger), so an undo would re-send to everyone. The cron and the manager both filter archived_at is null."
@@ -392,12 +401,17 @@
   {
    "col": "crew_id",
    "tbl": "jobs",
-   "comment": "Which crew runs this visit. NULL = unassigned (single-crew default). Orthogonal to crew_size (headcount)."
+   "comment": "Which crew runs this visit; members resolve from technicians.crew_id at read time. Mutually exclusive with technician_id (jobs_one_assignee). NULL = no crew. Orthogonal to crew_size (headcount)."
   },
   {
    "col": "notes",
    "tbl": "jobs",
    "comment": "INTERNAL ONLY. The access/instruction note for whoever does the work (gate code, where to park). Shipped to the crew by crew_day. Removed from get_portal_data 2026-08-11 — it was being rendered to customers. Customer-facing words go in completion_summary."
+  },
+  {
+   "col": "technician_id",
+   "tbl": "jobs",
+   "comment": "Direct personal assignment: exactly this person runs the visit. Mutually exclusive with crew_id (jobs_one_assignee). NULL + NULL crew_id = unassigned."
   },
   {
    "col": "purchase_order_item_id",
