@@ -135,6 +135,7 @@
     "verify:day-fit": "tsx scripts/verify-day-fit.ts",
     "verify:day-plan": "tsx scripts/verify-day-plan.ts",
     "verify:dashboard-v2": "tsx scripts/verify-dashboard-v2.ts",
+    "verify:day-actions": "tsx scripts/verify-day-actions.ts",
     "verify:availability": "tsx scripts/verify-availability.ts",
     "verify:work-sessions": "tsx scripts/verify-work-sessions.ts",
     "verify:account-recovery": "tsx scripts/verify-account-recovery.ts",

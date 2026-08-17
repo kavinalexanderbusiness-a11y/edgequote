@@ -40,6 +40,13 @@ export type MsgType =
   | 'introduction'
   // Free-form one-off message (the shared Send Message dialog's blank slate).
   | 'custom'
+  // An owner's reply inside an existing conversation (/api/messages/send).
+  // Registered because the governor treats any UNKNOWN template as commercial
+  // (fail-toward-governance), which was silently blocking owners' own inbox
+  // replies outside 08:00–21:00 as if they were marketing. A reply is a
+  // conversation: msgCategory files it as null, exactly like 'custom'. The
+  // body always arrives as an override; the default below is never shown.
+  | 'reply'
 
 export const MSG_LABELS: Record<MsgType, string> = {
   on_my_way: 'On my way',
@@ -72,6 +79,7 @@ export const MSG_LABELS: Record<MsgType, string> = {
   review_chase: 'Review chase (campaign)',
   introduction: 'Introduction / new number',
   custom: 'Custom message',
+  reply: 'Reply',
 }
 
 // The variables a template may reference, with a short hint for the editor.
@@ -83,7 +91,7 @@ export const MSG_VARIABLES: { key: string; hint: string }[] = [
   { key: 'date', hint: 'the visit / new date' },
   { key: 'old_date', hint: 'the original date (reschedule / rain delay)' },
   { key: 'address', hint: 'the property address' },
-  { key: 'review_link', hint: 'your Google review link' },
+  { key: 'review_link', hint: 'your public review link (Google, Facebook…)' },
   { key: 'portal_link', hint: 'their private portal link' },
   { key: 'quote_link', hint: 'link to the quote (portal)' },
   { key: 'invoice_link', hint: 'link to the invoice (portal)' },
@@ -332,6 +340,10 @@ Thank you for being a valued customer!
   custom: `Hi {{first_name}},
 
 `,
+
+  // Never rendered: a reply's body is always the owner's typed text
+  // (bodyOverride). Registered for the governor/category maps, not for copy.
+  reply: '',
 }
 
 const SUBJECTS: Record<MsgType, string> = {
@@ -350,6 +362,7 @@ const SUBJECTS: Record<MsgType, string> = {
   review_chase: 'Would you leave us a review?',
   introduction: 'Our new number — please save it',
   custom: '', // falsy → renderMessage falls back to "A message from {business}"
+  reply: '',  // same fallback — a reply email is titled by the business, not a template
 }
 
 export interface MsgVars {
@@ -627,6 +640,10 @@ export function msgCategory(t: MsgType): MsgCategory | null {
       return 'marketing'
     case 'birthday': case 'anniversary': case 'seasonal_offer': return 'seasonal'
     case 'custom': return null // owner-composed one-offs are always deliverable
+    // A reply is the owner answering a conversation the customer is already in —
+    // the same class as 'custom'. Filing it under any category would let a
+    // preference or the commercial governor block an owner's own answer.
+    case 'reply': return null
     // Transactional: it confirms a request the customer just made of us, so it isn't a
     // marketing category they can be opted out of. Channel opt-in still gates the SMS.
     case 'booking_received': return null
