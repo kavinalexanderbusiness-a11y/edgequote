@@ -412,6 +412,7 @@ export interface TechForAvailability {
   is_active: boolean
   ended_on?: string | null
   archived_at?: string | null
+  crew_id?: string | null
 }
 
 /**
@@ -434,12 +435,20 @@ export interface TechForAvailability {
  * purpose: this is the one place the product answers "how many people can work
  * this date", so every future narrowing of that question belongs INSIDE this
  * function as another key — never as a second counter, and never as a fight
- * over a positional slot. (Session 65's crew-scoped variant, `{ crewId }`,
- * lands here as exactly that: one more key on this object.)
+ * over a positional slot.
+ *
+ * `opts.crewId` is that narrowing, arriving as promised (Session 65): the same
+ * rules asked of one crew's members. Approved leave and the weekly pattern
+ * apply identically; only the population changes. ⭐ The solo-owner fallback
+ * deliberately does NOT apply to a crew: "this business employs nobody" means
+ * the owner works, but "this crew has nobody on it" means nobody, and rounding
+ * that up to 1 is how a board promises staffing that does not exist.
  */
 export interface WorkersAvailableOpts {
   /** Weekly patterns for the whole business (lib/workerAvailability). */
   patterns?: AvailabilityPatternRow[]
+  /** Count only the members of this crew. Omit for the whole business. */
+  crewId?: string
 }
 
 export function workersAvailableOn(
@@ -450,10 +459,14 @@ export function workersAvailableOn(
 ): number {
   const roster = technicians.filter(t =>
     t.is_active && !t.archived_at && (!t.ended_on || t.ended_on >= date))
-  if (roster.length === 0) return 1
   const off = new Set(ptoDates.filter(p => p.date.slice(0, 10) === date).map(p => p.technician_id))
   const patternOff = opts?.patterns?.length ? patternUnavailableOn(date, opts.patterns) : null
-  return Math.max(0, roster.filter(t => !off.has(t.id) && !patternOff?.has(t.id)).length)
+  const free = (t: TechForAvailability) => !off.has(t.id) && !patternOff?.has(t.id)
+  if (opts?.crewId != null) {
+    return Math.max(0, roster.filter(t => t.crew_id === opts.crewId && free(t)).length)
+  }
+  if (roster.length === 0) return 1
+  return Math.max(0, roster.filter(free).length)
 }
 
 // ── The one sentence a suggestion shows ──────────────────────────────────────

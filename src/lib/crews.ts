@@ -11,9 +11,10 @@
 // Pure data + tiny supabase helpers — NO React import (mirrors lib/dayStatus).
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { Crew, Technician, TechnicianStatus, DispatchNote, Job } from '@/types'
+import { Crew, Technician, TechnicianStatus, DispatchNote, Job, CrewMembershipChange } from '@/types'
 import { DEFAULT_JOB_MIN } from '@/lib/route'
 import { DayStatusRow, dayStartTime } from '@/lib/dayStatus'
+import { assigneeColumns, UNASSIGNED, type Assignee } from '@/lib/crewAssignment'
 
 // ── Crew palette ─────────────────────────────────────────────────────────────
 // Distinct HUES (not the 6 semantic tones — those mean status/alarm). Hex is
@@ -74,27 +75,57 @@ export const TECH_STATUSES = (Object.keys(TECH_STATUS_META) as TechnicianStatus[
 export const UNASSIGNED_ID = 'unassigned'
 
 export interface CrewLaneData {
-  laneId: string          // crew id, or UNASSIGNED_ID
-  crew: Crew | null       // null = the unassigned lane
+  laneId: string              // crew id, `person:<technicianId>`, or UNASSIGNED_ID
+  crew: Crew | null           // null = a person lane or the unassigned lane
+  technician: Technician | null // set only on a person lane
   palette: CrewPaletteEntry
-  jobs: Job[]             // this lane's jobs for the day (all statuses)
+  jobs: Job[]                 // this lane's jobs for the day (all statuses)
 }
 
-// Active crews first (sort_order), unassigned lane always LAST — and always
-// present so a job dragged off a crew has somewhere visible to land.
-export function partitionByCrew(jobs: Job[], crews: Crew[]): CrewLaneData[] {
+/** A person lane's id. Prefixed so it can never collide with a crew's uuid. */
+export const personLaneId = (technicianId: string) => `person:${technicianId}`
+export const technicianOfLane = (laneId: string) =>
+  laneId.startsWith('person:') ? laneId.slice(7) : null
+
+/** THE lane's name, in one place — `lane.crew?.name ?? 'Unassigned'` was the
+ *  shape that would have printed a person's lane as "Unassigned". */
+export function laneLabel(lane: CrewLaneData): string {
+  return lane.crew?.name ?? lane.technician?.name ?? 'Unassigned'
+}
+
+// Active crews first (sort_order), then a lane per person who is personally
+// assigned work that day, and the unassigned lane always LAST — always present
+// so a job dragged off a crew has somewhere visible to land.
+//
+// ⭐ A personally-assigned visit gets its OWN lane rather than falling into
+// Unassigned: it IS assigned, and a board that files it under "nobody" is the
+// same lie as a crew screen that never shows it.
+export function partitionByCrew(jobs: Job[], crews: Crew[], technicians: Technician[] = []): CrewLaneData[] {
   const active = crews.filter(c => c.is_active).sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name))
   const byLane = new Map<string, Job[]>()
   for (const j of jobs) {
-    const key = j.crew_id && active.some(c => c.id === j.crew_id) ? j.crew_id : UNASSIGNED_ID
+    const key = j.crew_id && active.some(c => c.id === j.crew_id) ? j.crew_id
+      : j.technician_id && technicians.some(t => t.id === j.technician_id) ? personLaneId(j.technician_id)
+      : UNASSIGNED_ID
     const list = byLane.get(key) ?? []
     list.push(j)
     byLane.set(key, list)
   }
   const lanes: CrewLaneData[] = active.map((c, i) => ({
-    laneId: c.id, crew: c, palette: crewPalette(c.color, i), jobs: byLane.get(c.id) ?? [],
+    laneId: c.id, crew: c, technician: null, palette: crewPalette(c.color, i), jobs: byLane.get(c.id) ?? [],
   }))
-  lanes.push({ laneId: UNASSIGNED_ID, crew: null, palette: UNASSIGNED_LANE, jobs: byLane.get(UNASSIGNED_ID) ?? [] })
+  // Only people who actually hold work get a lane — one lane per employee would
+  // turn a ten-person business into a board nobody can read.
+  const withWork = technicians
+    .filter(t => byLane.has(personLaneId(t.id)))
+    .sort((a, b) => a.name.localeCompare(b.name))
+  for (const t of withWork) {
+    lanes.push({
+      laneId: personLaneId(t.id), crew: null, technician: t,
+      palette: UNASSIGNED_LANE, jobs: byLane.get(personLaneId(t.id)) ?? [],
+    })
+  }
+  lanes.push({ laneId: UNASSIGNED_ID, crew: null, technician: null, palette: UNASSIGNED_LANE, jobs: byLane.get(UNASSIGNED_ID) ?? [] })
   return lanes
 }
 
@@ -239,7 +270,7 @@ export function balanceDay(
 }
 
 // ── Supabase helpers (shared by the board + anything else that needs crews) ──
-export const CREW_SELECT = 'id, created_at, updated_at, user_id, name, color, day_start, day_end, capacity_minutes, is_active, sort_order'
+export const CREW_SELECT = 'id, created_at, updated_at, user_id, name, color, day_start, day_end, capacity_minutes, is_active, sort_order, lead_technician_id'
 // Explicit list, so it MUST be extended when the Technician type grows — a
 // missing column here reads as undefined at runtime while TypeScript still
 // believes the field exists (e.g. every wage silently becoming "not set").
@@ -351,11 +382,109 @@ export async function setTechnicianStatus(
   return error?.message ?? null
 }
 
-// Assign a visit to a crew (null = unassign). route_order is cleared so the job
-// lands at the end of its new lane and never inherits a foreign sequence slot.
+// ── THE assignment writer ────────────────────────────────────────────────────
+// One door for "who is coming", so a visit can never end up holding two answers.
+// It always writes BOTH columns (lib/crewAssignment.assigneeColumns): picking a
+// person clears the crew, picking a crew clears the person. route_order is
+// cleared too — a visit landing in a new lane must not inherit a foreign
+// sequence slot.
+export async function assignJob(
+  supabase: SupabaseClient, jobId: string, assignee: Assignee,
+): Promise<string | null> {
+  const { error } = await supabase.from('jobs')
+    .update({ ...assigneeColumns(assignee), route_order: null })
+    .eq('id', jobId)
+  return error?.message ?? null
+}
+
+// Crew-only assignment, kept as the board's vocabulary (lanes ARE crews).
+// Delegates to the one writer rather than owning a second update.
 export async function assignJobCrew(
   supabase: SupabaseClient, jobId: string, crewId: string | null,
 ): Promise<string | null> {
-  const { error } = await supabase.from('jobs').update({ crew_id: crewId, route_order: null }).eq('id', jobId)
+  return assignJob(supabase, jobId, crewId ? { kind: 'crew', crewId } : UNASSIGNED)
+}
+
+// ── Crew management ──────────────────────────────────────────────────────────
+// Create · rename · set the lead · deactivate. Deleting is deliberately absent
+// from the happy path: a crew that has ever run work is history, and the
+// database refuses to delete it (crews_block_delete_with_history). `deleteCrew`
+// stays for the never-used crew someone made by mistake, and reports the
+// refusal in the owner's words instead of a constraint name.
+
+export async function createCrew(
+  supabase: SupabaseClient, userId: string, name: string, existing: Crew[],
+): Promise<{ crew: Crew | null; error: string | null }> {
+  const clean = name.trim()
+  if (!clean) return { crew: null, error: 'A crew needs a name.' }
+  const { data, error } = await supabase.from('crews').insert({
+    user_id: userId,
+    name: clean,
+    color: nextCrewColor(existing),
+    sort_order: existing.length,
+  }).select(CREW_SELECT).single()
+  return { crew: (data as Crew | null) ?? null, error: error?.message ?? null }
+}
+
+export async function renameCrew(
+  supabase: SupabaseClient, crewId: string, name: string,
+): Promise<string | null> {
+  const clean = name.trim()
+  if (!clean) return 'A crew needs a name.'
+  const { error } = await supabase.from('crews').update({ name: clean }).eq('id', crewId)
   return error?.message ?? null
+}
+
+// Deactivating is the ARCHIVE. Work already assigned keeps pointing here — that
+// is the history — but the crew takes no new visits (jobs_assignment_guard) and
+// drops out of every chooser.
+export async function setCrewActive(
+  supabase: SupabaseClient, crewId: string, isActive: boolean,
+): Promise<string | null> {
+  const { error } = await supabase.from('crews').update({ is_active: isActive }).eq('id', crewId)
+  return error?.message ?? null
+}
+
+export async function setCrewLead(
+  supabase: SupabaseClient, crewId: string, technicianId: string | null,
+): Promise<string | null> {
+  const { error } = await supabase.from('crews').update({ lead_technician_id: technicianId }).eq('id', crewId)
+  return error?.message ?? null
+}
+
+export async function deleteCrew(supabase: SupabaseClient, crewId: string): Promise<string | null> {
+  const { error } = await supabase.from('crews').delete().eq('id', crewId)
+  if (!error) return null
+  // 23514 is the history guard. Say what to do instead, not what broke.
+  return /history/i.test(error.message)
+    ? 'This crew has run work, so it can’t be deleted. Deactivate it instead — its past visits stay intact.'
+    : error.message
+}
+
+// ── Membership ───────────────────────────────────────────────────────────────
+// A worker belongs to at most ONE crew (technicians.crew_id). Moving or removing
+// somebody changes what happens NEXT: the database appends a row to
+// technician_crew_history, so past visits, work sessions, messages and photos
+// keep the membership they were performed under. Nothing historical is rewritten
+// and nothing is deleted.
+export async function setTechnicianCrew(
+  supabase: SupabaseClient, technicianId: string, crewId: string | null,
+): Promise<string | null> {
+  const { error } = await supabase.from('technicians').update({ crew_id: crewId }).eq('id', technicianId)
+  return error?.message ?? null
+}
+
+// The append-only membership log. Read-only by construction: the table grants
+// SELECT and nothing else, and every row is written by a trigger.
+export async function loadCrewHistory(
+  supabase: SupabaseClient, userId: string,
+): Promise<CrewMembershipChange[]> {
+  const { data, error } = await supabase.from('technician_crew_history')
+    .select('id, user_id, technician_id, crew_id, changed_at')
+    .eq('user_id', userId)
+    .order('changed_at')
+  // Same reader contract as loadCrews: a failed read is not an empty history —
+  // and an empty history is what would make every past visit look unattributed.
+  if (error) throw new Error(error.message)
+  return (data as CrewMembershipChange[] | null) ?? []
 }

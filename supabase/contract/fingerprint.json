@@ -1,54 +1,54 @@
 {
   "_comment": "Production's schema shape at capture time, from public.schema_fingerprint(). `npm run verify:schema` compares live production against this. Regenerate with `npm run schema:contract` — never hand-edit a hash to make the guard pass, because the hash is the only thing standing between a silent production change and a rebuild that quietly omits it.",
-  "captured_at": "2026-08-16 08:11:45.936149+00",
+  "captured_at": "2026-08-17 03:48:45.052153+00",
   "captured_from": "production, PostgreSQL 17.6 on aarch64-unknown-linux-gnu",
   "baseline": "supabase/migrations/*_baseline.sql",
-  "overall": "9dcd51f652061139ca8e1df7d9c960c9",
-  "latest_migration": "20260816020000",
+  "overall": "6cf159960327715da58b00e55627db91",
+  "latest_migration": "20260816110000",
   "sections": {
     "tables": {
-      "n": 110,
-      "md5": "34cd21eb42debd9dfb2699a0ecb9405c"
+      "n": 112,
+      "md5": "7a2d53c5e7172376be3143521fd1290b"
     },
     "columns": {
-      "n": 1501,
-      "md5": "ddb0ca943c10c2d62ed2d0c5da82536f"
+      "n": 1530,
+      "md5": "f06e5f57d596a42aead8be5e41f28b9e"
     },
     "indexes": {
-      "n": 432,
-      "md5": "0b0681843b76b35a9d165e74449fc4ab"
+      "n": 445,
+      "md5": "cc3846e1f001f8d3c5994373e0dda978"
     },
     "storage": {
       "n": 7,
       "md5": "3a45362a76bb7999122dc3775aac9bc4"
     },
     "policies": {
-      "n": 359,
-      "md5": "1ff6cfdced86771b0dd99413da8a6bc3"
+      "n": 361,
+      "md5": "57ac6faf640bd3dd31da5fbe3cec24e2"
     },
     "realtime": {
       "n": 30,
       "md5": "5a6d776ae7e2fa3e987fc954943499d8"
     },
     "triggers": {
-      "n": 93,
-      "md5": "b9082aa9e9629566291e5e40711133e9"
+      "n": 129,
+      "md5": "4ab895187f217f9ec0f3971f5eeff940"
     },
     "fn_grants": {
-      "n": 131,
-      "md5": "99cd7077dc959a880853b495b01462ca"
+      "n": 151,
+      "md5": "d323edfc6dbad8eb99eb9c9d9a1f88e2"
     },
     "functions": {
-      "n": 131,
-      "md5": "7dd4eb1049c7d9c3ba256d9e3abbc921"
+      "n": 151,
+      "md5": "785c290d99ec0783926f5cd9e382aa85"
     },
     "constraints": {
-      "n": 584,
-      "md5": "89a2fd1d43e3da4d7ae377f193298b37"
+      "n": 605,
+      "md5": "eb31a0f24d3942206938125d9789f130"
     },
     "table_grants": {
-      "n": 110,
-      "md5": "800cadaffa593368a8f14ab37bc2cf4c"
+      "n": 112,
+      "md5": "a1068125c1b0100095e8046be9ba08de"
     }
   }
 }
