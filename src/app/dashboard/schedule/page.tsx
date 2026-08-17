@@ -2922,6 +2922,8 @@ export default function SchedulePage() {
         open={estimateDialog !== null}
         onClose={() => setEstimateDialog(null)}
         customers={customers}
+        crews={crews}
+        technicians={technicians}
         existing={estimateDialog?.existing ?? null}
         defaultDateISO={estimateDialog?.date}
         defaultCustomerId={customerParam}

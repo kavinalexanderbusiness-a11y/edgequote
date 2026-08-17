@@ -21,13 +21,13 @@ import { CustomerPicker } from '@/components/ui/CustomerPicker'
 import { PropertySelect } from '@/components/ui/PropertySelect'
 import { Ruler, ChevronDown } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
-import type { Customer, Property } from '@/types'
+import { AssigneeSelect } from '@/components/schedule/AssigneeSelect'
+import { assigneeColumns, assigneeOf } from '@/lib/crewAssignment'
+import type { Crew, Customer, Property, Technician } from '@/types'
 import {
   DEFAULT_ESTIMATE_MIN, newEstimateDraft, validateEstimate,
   type EstimateAppointment, type EstimateInput,
 } from '@/lib/estimateAppointments'
-
-interface Assignee { id: string; name: string }
 
 interface Props {
   open: boolean
@@ -36,8 +36,8 @@ interface Props {
   onSave: (input: EstimateInput) => Promise<string | null>
   customers: Customer[]
   /** Crews and people the visit can be given to. Solo owners pass neither. */
-  crews?: Assignee[]
-  technicians?: Assignee[]
+  crews?: Crew[]
+  technicians?: Technician[]
   /** Editing an existing appointment; omit to create. */
   existing?: EstimateAppointment | null
   /** Seeds for the create case — the surface the owner came from. */
@@ -224,23 +224,16 @@ export function EstimateAppointmentDialog({
         {showMore && (
           <div className="space-y-3 pt-1">
             {(crews.length > 0 || technicians.length > 0) && (
-              <Select
-                label="Who's going"
-                // A crew XOR a person — the same rule the database enforces, so the
-                // form cannot offer a combination the row would refuse.
-                value={form.crew_id ? `crew:${form.crew_id}` : form.technician_id ? `tech:${form.technician_id}` : ''}
-                onChange={e => {
-                  const v = e.target.value
-                  set({
-                    crew_id: v.startsWith('crew:') ? v.slice(5) : null,
-                    technician_id: v.startsWith('tech:') ? v.slice(5) : null,
-                  })
-                }}
-                placeholder="Me / unassigned"
-                options={[
-                  ...crews.map(c => ({ value: `crew:${c.id}`, label: `${c.name} (crew)` })),
-                  ...technicians.map(t => ({ value: `tech:${t.id}`, label: t.name })),
-                ]}
+              // THE assignee control (Session 65), never a second one. "Who is
+              // going" must mean the same thing on a job form, the day board and
+              // here, and assigneeColumns keeps the crew-XOR-person encoding in
+              // one place instead of re-spelled per surface.
+              <AssigneeSelect
+                label="Who’s going"
+                crews={crews}
+                technicians={technicians}
+                value={assigneeOf(form)}
+                onChange={next => set(assigneeColumns(next))}
               />
             )}
 
