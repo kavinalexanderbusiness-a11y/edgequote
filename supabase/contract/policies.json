@@ -3250,6 +3250,16 @@
   "with_check": null
  },
  {
+  "cmd": "SELECT",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "technician_crew_history",
+  "permissive": "PERMISSIVE",
+  "policyname": "technician_crew_history: select own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
   "cmd": "DELETE",
   "qual": "(auth.uid() = user_id)",
   "roles": "{public}",
