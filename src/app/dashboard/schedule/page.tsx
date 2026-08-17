@@ -29,6 +29,7 @@ import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel,
 import { loadVisitEncumbrances } from '@/lib/seriesHistory'
 import type { JobRecurrence, Crew, Technician } from '@/types'
 import { loadCrews, loadTechnicians } from '@/lib/crews'
+import { assigneeOf, sameAssignee } from '@/lib/crewAssignment'
 import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts, uncompleteJob } from '@/lib/invoicing'
 import { queueOrRun, isNetworkError } from '@/lib/offline/outbox'
 // THE completion stamp. Every door on this page that moves a visit to
@@ -1193,6 +1194,16 @@ export default function SchedulePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showForm, editing])
 
+  // A dirty editor also survives an accidental tab close — same protection the
+  // settings page carries. The ref is read at event time, so this registers
+  // once per open rather than on every keystroke.
+  useEffect(() => {
+    if (!showForm && !editing) return
+    const onBeforeUnload = (e: BeforeUnloadEvent) => { if (formDirty.current) e.preventDefault() }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [showForm, editing])
+
   async function handleAdd(values: JobFormValues, recurrence: Recurrence, meta?: SuggestionMeta, opts?: { addAnother?: boolean }) {
     const { data: { user } } = await supabase.auth.getUser()
     // ── The scheduling guard (the ?quote= door) ───────────────────────────────
@@ -1362,6 +1373,22 @@ export default function SchedulePage() {
       notes: values.notes || null,
       price: Number(values.price) > 0 ? Number(values.price) : null,
     }
+    // Assignment joins the patch ONLY when it changed this session — silence is
+    // not consent. The fixed set above is safe to overwrite on every save
+    // because the form seeds each of those fields from the loaded anchor row;
+    // assignment is set per-visit on the dispatch board, so a scope-wide save
+    // blasting the ANCHOR's assignee onto every sibling would silently undo
+    // dispatch's lane assignments. When it does apply, BOTH columns move
+    // together (lib/crewAssignment — jobs_one_assignee refuses half a write)
+    // with the same route_order reset as lib/crews.assignJob: a visit landing
+    // in a new lane must not inherit a foreign sequence slot.
+    const crewChanged = !sameAssignee(
+      assigneeOf({ crew_id: values.crew_id ?? null, technician_id: values.technician_id ?? null }),
+      assigneeOf(job),
+    )
+    const crewPatch = crewChanged
+      ? { crew_id: values.crew_id ?? null, technician_id: values.technician_id ?? null, route_order: null }
+      : {}
     // Status and actual time belong ONLY to the edited visit, never its siblings.
     // The third door onto COMPLETING (Complete button, quick-edit dropdown, this
     // form) — and the one that used to write the status with no completed_at at
@@ -1389,6 +1416,7 @@ export default function SchedulePage() {
     const delta = dayDelta(job.scheduled_date, values.scheduled_date)
     const results = await Promise.all(targets.map(t => supabase.from('jobs').update({
       ...fields,
+      ...crewPatch,
       ...(t.id === job.id ? perVisit : {}),
       scheduled_date: scope === 'this' ? values.scheduled_date : shiftDate(t.scheduled_date, delta),
     }).eq('id', t.id)))
@@ -2040,14 +2068,35 @@ export default function SchedulePage() {
   // completing the job → 'job.complete' (patch + draft invoice); a plain edit →
   // 'job.update', carrying a price change through to an existing draft.
   async function quickSaveJob(job: Job, patch: QuickPatch) {
+    // ── The partial-patch contract (see QuickPatch): apply ONLY the keys the
+    // quick editor actually sent. The sheet renders a SUBSET of the row, so a
+    // fixed field list here would turn every column it doesn't render into a
+    // silent null on save — the exact bulk-save trap the full form avoids by
+    // seeding every patched field from the loaded row. Price is deliberately
+    // not a key: the board's Price door (setJobPrice) is the audited path
+    // (job_price_changes + draft-invoice re-sync), and a quick save must not
+    // be a second, unaudited way to move money.
+    const base: Record<string, unknown> = {}
+    if ('start_time' in patch) base.start_time = patch.start_time ?? null
+    if ('crew_size' in patch) base.crew_size = patch.crew_size ?? 1
+    if ('duration_minutes' in patch) base.duration_minutes = patch.duration_minutes ?? null
+    if ('status' in patch) base.status = patch.status
+    if ('notes' in patch) base.notes = patch.notes ?? null
+    if ('service_type' in patch) base.service_type = patch.service_type ?? null
+    // Reassignment: BOTH columns move together (lib/crewAssignment — the sheet
+    // always sends the pair, and jobs_one_assignee refuses half a write) with
+    // the same route_order reset as lib/crews.assignJob — the visit leaves its
+    // old lane's hand-set route position. ONE semantic, however many doors.
+    if ('crew_id' in patch || 'technician_id' in patch) {
+      base.crew_id = patch.crew_id ?? null
+      base.technician_id = patch.technician_id ?? null
+      base.route_order = null
+    }
+    if (Object.keys(base).length === 0) return
+
     const completing = patch.status === 'completed' && job.status !== 'completed'
     const fields = {
-      start_time: patch.start_time,
-      crew_size: patch.crew_size,
-      duration_minutes: patch.duration_minutes,
-      status: patch.status,
-      notes: patch.notes,
-      price: patch.price,
+      ...base,
       // Moving the dropdown to Done is the SAME transition as tapping Complete,
       // so it has to write the same row. It used to write the status alone: no
       // completed_at, no time on site. The visit then never appeared as a
@@ -2060,7 +2109,6 @@ export default function SchedulePage() {
     // to scheduled/in-progress. Same money consequence as the undo toast, so it
     // takes the same path rather than a plain patch that would strand the invoice.
     const uncompleting = job.status === 'completed' && !!patch.status && patch.status !== 'completed'
-    const repriced = Number(patch.price) !== Number(job.price)
     const completed = { ...job, ...fields }
 
     // Un-completing carries an invoice with it, so it goes through the one engine
@@ -2075,27 +2123,20 @@ export default function SchedulePage() {
       outcome = await queueOrRun(
         completing
           ? { kind: 'job.complete', payload: { id: job.id, patch: fields, job: completed, notify: false, baseUpdatedAt: job.updated_at }, label: `Complete ${job.title || 'job'}` }
-          : { kind: 'job.update', payload: { id: job.id, patch: fields, syncPrice: repriced, baseUpdatedAt: job.updated_at }, label: `Edit ${job.title || 'job'}` },
+          : { kind: 'job.update', payload: { id: job.id, patch: fields, syncPrice: false, baseUpdatedAt: job.updated_at }, label: `Edit ${job.title || 'job'}` },
         async () => {
           const { error } = await supabase.from('jobs').update(fields).eq('id', job.id)
           if (error) throw new Error(error.message)
           if (completing) {
             // `completed` (job + this edit), not the pre-edit row: the offline
-            // replay already drafts from it, and a quick-edit that sets the price
-            // AND completes in one save would otherwise draft yesterday's amount
-            // and rely on the re-price below to correct it.
+            // replay already drafts from it, so both doors bill the same amount.
             const res = await createDraftInvoiceForCompletedJob(supabase, completed)
             if (res.created) draftInvoiceToast(res.invoiceNumber, `Saved — draft invoice ${res.invoiceNumber} created.`)
             else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
-            // The quick-edit dropdown completes a job through the same transition as the Complete
+            // The quick-edit sheet completes a job through the same transition as the Complete
             // button, which DOES report this (completeJob below). Without it a failed draft leaves
             // the visit out of the un-invoiced queue and it is never billed, with no trace.
             else if (res.reason === 'error') setBanner('Job completed, but the draft invoice could not be created — invoice it manually from the job.')
-          }
-          // If the inline edit changed the price, keep its draft invoice in sync.
-          if (repriced) {
-            const { failed } = await syncDraftInvoiceAmounts(supabase, [job.id])
-            if (failed > 0) setBanner('Saved, but its draft invoice still shows the old amount — open the invoice to re-price it.')
           }
         },
       )
@@ -3011,6 +3052,10 @@ export default function SchedulePage() {
                 crew_id: editing.crew_id ?? null,
                 technician_id: editing.technician_id ?? null,
               } : (quotePrefill ?? customerPrefill ?? { scheduled_date: formDate })}
+              quoteLinked={!!editing?.quote_id}
+              // ?panel=time|cost lands on anchors inside the editor's More
+              // options section — open it so the scroll has somewhere to go.
+              initialMoreOpen={!!readJobPanel(panelParam)}
               suggestedPrice={editing?.quote_id
                 ? quoteVisitAmount(
                     quotesById[editing.quote_id] as unknown as Record<string, unknown>,
@@ -3103,6 +3148,8 @@ export default function SchedulePage() {
           workersOnDay={workersOnOpenDay}
           staffingOnDay={staffingOnOpenDay}
           crewNames={dayFitCtx?.crewNames}
+          crews={crews}
+          technicians={technicians}
           availabilityRecorded={dayFitCtx?.availabilityRecorded}
           learnedDurationFor={dayFitCtx?.learnedFor}
           onRainDelay={() => rainDelayDay(dayISO)}

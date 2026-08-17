@@ -183,7 +183,10 @@ check('a successful save closes WITHOUT asking',
   'the row is already written by then — confirming would be nonsense')
 check('the form reports its own dirtiness',
   /onDirtyChange=\{d => \{ formDirty\.current = d \}\}/.test(schedule)
-  && /onDirtyChange\?\.\(isDirty\)/.test(read('src/components/schedule/JobForm.tsx')),
+  // S81: the report widened to include the non-RHF Repeat/Ends controls
+  // (recDirty) — isDirty alone could not see them, so a touched Repeat was
+  // discardable in silence. Both dirt sources, one report.
+  && /onDirtyChange\?\.\(isDirty \|\| recDirty\)/.test(read('src/components/schedule/JobForm.tsx')),
   'only the form knows; the page must not guess from its props')
 
 // The other two create forms protect typing a different way — autosave. Pinned
