@@ -72,6 +72,7 @@ import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { Modal } from '@/components/ui/Modal'
 import { CompletionSheet } from '@/components/completion/CompletionSheet'
+import { CompletionReportSheet } from '@/components/completion/CompletionReportSheet'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { JobFormsPanel } from '@/components/forms/JobFormsPanel'
 import { saveCompletionRecord } from '@/lib/completion'
@@ -140,6 +141,10 @@ export default function DispatchPage() {
   // sheet must read whatever the last fetch put in `jobs`, or a crew note
   // written while this board sat open would be saved over.
   const [recordingId, setRecordingId] = useState<string | null>(null)
+  // Which completed visit's customer-facing report preview is open. Read-only:
+  // the report is composed from canonical evidence (lib/completionReport) and
+  // never stored — durable save/share parks on the S74 document system.
+  const [reportJobId, setReportJobId] = useState<string | null>(null)
   // `?roster=1` opens the roster straight away. Every "add your people" empty
   // state across Workforce/Payroll/Timesheet links here — previously they told
   // the owner to "add people under Crews & roster on the dispatch board" and left
@@ -1808,11 +1813,28 @@ export default function DispatchPage() {
                 <div className="mt-3 pt-3 border-t border-border">
                   <JobFormsPanel job={job} onChanged={fetchAll} />
                 </div>
+                {/* The customer-facing view of everything recorded above. Only a
+                    finished visit has a completion report to preview. */}
+                {job.status === 'completed' && (
+                  <div className="mt-3 pt-3 border-t border-border">
+                    <button
+                      type="button"
+                      onClick={() => setReportJobId(job.id)}
+                      className="text-sm font-medium text-accent hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 tap-target-y"
+                    >
+                      Preview completion report…
+                    </button>
+                  </div>
+                )}
               </>
             }
           />
         )
       })()}
+
+      {reportJobId && (
+        <CompletionReportSheet jobId={reportJobId} onClose={() => setReportJobId(null)} />
+      )}
     </div>
   )
 }
