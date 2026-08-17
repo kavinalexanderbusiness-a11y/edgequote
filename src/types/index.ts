@@ -1,4 +1,5 @@
 import { type Tone, toneSoft } from '@/lib/tone'
+import type { MessagePrefs } from '@/lib/comms/templates'
 
 export type QuoteStatus =
   | 'draft' | 'sent' | 'accepted' | 'scheduled' | 'completed' | 'paid' | 'declined'
@@ -31,6 +32,10 @@ export interface Customer {
   // Communication consent — gates all SMS/email sends (default off).
   sms_opt_in: boolean
   email_opt_in: boolean
+  // Per-CATEGORY consent (portal self-serve; lib/comms/templates.prefAllows).
+  // Optional because most reads don't select it; reach.ts treats absent as
+  // "no category opt-outs recorded".
+  message_prefs?: MessagePrefs | null
   // ── CRM automation ──
   // Review lifecycle on top of reviewed_at (status DERIVED in lib/crm/reviews):
   //   declined → review_declined_at · reviewed → reviewed_at · requested →
@@ -311,7 +316,12 @@ export interface Job {
   // `email` joined the pick for change orders: whether an approval ask can be
   // DELIVERED at all is "phone or email", and a phone-only test would have hidden
   // the Send button from every email-only customer.
-  customers?: Pick<Customer, 'id' | 'name' | 'phone' | 'email' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'>
+  // Consent + review-lifecycle columns joined for the day board (Session 80):
+  // the completion dialog predicts the job-complete text with THE reach
+  // predicate instead of promising a send that consent would block, and the
+  // Review door needs requested/reviewed/declined to avoid a duplicate ask.
+  customers?: Pick<Customer, 'id' | 'name' | 'phone' | 'email' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'
+    | 'sms_opt_in' | 'email_opt_in' | 'message_prefs' | 'reviewed_at' | 'review_requested_at' | 'review_declined_at'>
   properties?: Pick<Property, 'id' | 'address' | 'lat' | 'lng' | 'neighborhood' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'>
 }
 
@@ -1644,9 +1654,13 @@ export interface BusinessSettings {
   pay_week_starts_on: number
   // Uploaded-logo display scale in percent (100 = default size).
   logo_scale: number | null
-  // DEAD — the old home-dashboard shell's layout. That shell was removed in
-  // 019c24c and nothing reads this; the stored ids name deleted components.
-  // Left in place (dropping a column is a separate, explicit decision).
+  // REVIVED — the owner dashboard's band layout (lib/dashboard/layout), the
+  // same {order, hidden} shape it always held. Dead between 019c24c (the old
+  // home-dashboard shell it served was removed) and Session 97, which made the
+  // explicit call to reuse it rather than add a twin column: same purpose,
+  // same shape, no migration. Values the OLD shell stored name deleted card
+  // ids; normalizeDashboardLayout drops unknown ids, so a legacy row resolves
+  // to the default composition. Read/write ONLY through lib/dashboard/layout.
   // The analytics workspace uses `analytics_layout` below, NOT this.
   dashboard_cards: { order: string[]; hidden: string[] } | null
   // Analytics workspace layout: widget order + hidden set for

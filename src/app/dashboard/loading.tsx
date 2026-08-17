@@ -25,10 +25,28 @@ export default function DashboardLoading() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-6">
         <div className="flex-1 min-w-0">
           <Skeleton className="h-7 w-44" />
-          <Skeleton className="h-4 w-72 mt-2" />
+          <Skeleton className="h-4 w-48 mt-2" />
         </div>
-        <Skeleton className="h-10 w-32 shrink-0 rounded-xl" />
+        {/* Customize + New quote — two controls now. */}
+        <div className="flex items-center gap-2 shrink-0">
+          <Skeleton className="h-10 w-10 sm:w-28 rounded-xl" />
+          <Skeleton className="h-10 w-32 rounded-xl" />
+        </div>
       </div>
+
+      {/* The briefing strip — a row of fact chips. Three placeholders cover the
+          common case; the row wraps, so more chips landing only ever grows this
+          band the way real content grows it. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Skeleton className="h-8 w-32 rounded-full" />
+        <Skeleton className="h-8 w-40 rounded-full" />
+        <Skeleton className="h-8 w-36 rounded-full" />
+      </div>
+
+      {/* From here down this mirrors the DEFAULT band order. A customised
+          dashboard repaints in its own order when the data lands — the skeleton
+          is a picture of loading, not a promise about arrangement, and the
+          layout preference lives server-side where this boundary can't read it. */}
 
       {/* Money band — mirrors MoneyBand's real geometry (2×2 on phones,
           4-across from sm, p-3 on phones) so nothing shifts when the numbers

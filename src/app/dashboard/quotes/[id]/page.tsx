@@ -1076,6 +1076,22 @@ export default function QuoteDetailPage() {
               <FileDown className="w-3.5 h-3.5" /> Open PDF
             </Button>
           )}
+          {/* The other direction of the estimate/quote link: a quote the owner
+              has started but cannot finish without seeing the property. Offered
+              while the quote is still unanswered — once it is won or lost, the
+              visit that would have priced it is beside the point. */}
+          {(quote.status === 'draft' || quote.status === 'sent') && (
+            <Button
+              variant="secondary" size="sm"
+              onClick={() => router.push(
+                `/dashboard/schedule?estimate=new&quote=${quote.id}`
+                + (quote.customer_id ? `&customer=${quote.customer_id}` : '')
+                + (quote.property_id ? `&property=${quote.property_id}` : ''))}
+              title="Book a visit to see the property before pricing this"
+            >
+              <CalendarClock className="w-3.5 h-3.5" /> Book estimate visit
+            </Button>
+          )}
           <QuoteStatusControl
             key={quote.status}
             quoteId={quote.id}

@@ -191,6 +191,11 @@ export function CrewToday() {
   const { active, cancelled } = partitionCrewStops(day?.stops ?? [])
   const next = nextCrewStop(active)
   const done = active.filter(s => s.status === 'completed').length
+  // Every stop today was assigned to this person individually (S65 direct
+  // assignment), rather than to the crew they belong to. Derived from the
+  // SERVER's `personal` flag — the phone never infers assignment from
+  // membership. `false` on an empty day: with no work there is no claim to make.
+  const allPersonal = active.length > 0 && active.every(s => s.personal === true)
 
   // ── What changed since this worker last acknowledged ───────────────────────
   // The baseline is held in state rather than recomputed per load ON PURPOSE:
@@ -343,21 +348,47 @@ export function CrewToday() {
           {new Date(today + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}
         </p>
         <h1 className="text-xl font-bold tracking-tight text-ink">
-          {active.length === 0 ? 'Nothing booked today' : `${active.length - done} of ${active.length} to go`}
+          {active.length === 0 ? 'Nothing booked today'
+            : done === active.length ? `All ${active.length} done`
+            : `${active.length - done} of ${active.length} to go`}
         </h1>
         {/* Who you are with today. A worker on no crew is a real and ordinary
             state now that work can be assigned to a person directly — saying
             nothing would leave them wondering whether the app had failed. */}
+        {/* ⭐⭐ MEMBERSHIP IS NOT PARTICIPATION. `teammates` is who shares the
+            CREW (S65 membership); `personal` is who the VISIT was assigned to.
+            A worker on Crew A whose every stop today is assigned to them
+            individually is not working "with Sarah and Mike" — naming them
+            would be the header stating a roster fact as a fact about today.
+            So the teammate list is claimed only when some of today's work is
+            actually the crew's. Mixed days keep it, because the per-stop
+            "Yours" badge already says which stops are which. */}
         <p className="mt-0.5 text-xs text-ink-muted flex items-center gap-1.5 flex-wrap">
           {day.crew?.name && <span className="font-medium text-ink">{day.crew.name}</span>}
-          {day.crew?.name && day.teammates.length > 0 && (
+          {day.crew?.name && day.teammates.length > 0 && !allPersonal && (
             <span className="inline-flex items-center gap-1">
               <Users className="w-3.5 h-3.5" aria-hidden /> with {day.teammates.map(t => t.name).join(', ')}
             </span>
           )}
-          {day.teammates.length === 0 && day.crew?.name && <span>· on your own today</span>}
+          {day.crew?.name && allPersonal && <span>· today’s stops are assigned to you</span>}
+          {day.teammates.length === 0 && day.crew?.name && !allPersonal && <span>· on your own today</span>}
           {!day.crew?.name && active.length > 0 && <span>Assigned to you</span>}
         </p>
+        {/* The first thing a worker signs in to learn, answered before any
+            scrolling: where am I going first? Restates the highlighted card and
+            the thumb bar by DESIGN — this is the eye's landing point, those are
+            the finger's — and all three read the same `next` from the same
+            partition, so they cannot disagree. */}
+        {next && (
+          <p className="mt-1 text-xs text-ink-muted truncate">
+            <span className="font-semibold text-ink">
+              {next.status === 'in_progress' && next.started_at ? 'Now' : done === 0 ? 'First up' : 'Next'}
+              {': '}
+            </span>
+            {next.customer?.name || next.title}
+            {timeLabel(next.start_time) ? ` · ${timeLabel(next.start_time)}` : ''}
+          </p>
+        )}
       </header>
 
       {/* A refresh that couldn't reach the server: the day below is still the

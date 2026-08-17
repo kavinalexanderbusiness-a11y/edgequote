@@ -166,6 +166,17 @@ async function main() {
         check(`the View-inbox door is a real target (${m.footerH}px)`, m.footerH != null && m.footerH >= 44,
           'the preview’s one extra door must clear 44px like everything else')
       }
+      if (scenario === 'dashboard-strip') {
+        // Session 97's geometry: the briefing chips (busy + degraded variants),
+        // the unavailable chip's honest copy, and the updates preview's door.
+        const chips = await evaluate("document.querySelectorAll('nav[aria-label=\"Today at a glance\"] a').length")
+        check(`the briefing chips rendered (${chips})`, chips >= 6,
+          'a blank page passes every layout check ever written')
+        const unavailable = await evaluate("/Schedule check unavailable/.test(document.body.textContent || '')")
+        check('the failed source says so in words', unavailable === true)
+        check('the updates preview has its door', m.footerH != null && m.footerH >= 44,
+          'the View-all-updates door must clear 44px like everything else')
+      }
     }
   }
 
