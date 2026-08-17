@@ -31,8 +31,10 @@ const MUTATIONS = [
     name: 'TENANT predicate removed from the visit lookup',
     why: 'without it a job id from another business resolves',
     file: LIB,
-    from: "    .eq('user_id', worker.employerId)",
-    to: "    // .eq('user_id', worker.employerId)  [mutated]",
+    // Anchored on the comment above it, because the bare call also appears in
+    // assignedVisitFilter's docstring example.
+    from: "    // The tenant predicate. From the roster row, never from the request.\n    .eq('user_id', worker.employerId)",
+    to: "    // [mutated] tenant predicate removed",
   },
   {
     name: 'ASSIGNMENT predicate removed from the door',
@@ -166,9 +168,22 @@ const survivors = []
 
 for (const m of MUTATIONS) {
   const original = readFileSync(m.file, 'utf8')
-  if (!original.includes(m.from)) {
+  const occurrences = original.split(m.from).length - 1
+  if (occurrences === 0) {
     console.error(`  ! SKIPPED (anchor not found): ${m.name}\n      in ${m.file}`)
     survivors.push(`${m.name} — anchor missing, mutation never applied`)
+    survived++
+    continue
+  }
+  // ⚠️⚠️ AN AMBIGUOUS ANCHOR IS A SILENT NO-OP. String.replace takes the FIRST
+  // match, and a doc comment that quotes the code it documents matches too — so
+  // the "mutation" edits a comment, the guard stays green, and the survivor is
+  // blamed on the guard rather than on this file. That happened: the tenant
+  // predicate's anchor also appeared in the example inside assignedVisitFilter's
+  // docstring. Anchors must be unique, and this refuses to pretend otherwise.
+  if (occurrences > 1) {
+    console.error(`  ! AMBIGUOUS ANCHOR (${occurrences}×): ${m.name}\n      in ${m.file} — narrow it`)
+    survivors.push(`${m.name} — anchor matched ${occurrences} places, mutation unreliable`)
     survived++
     continue
   }

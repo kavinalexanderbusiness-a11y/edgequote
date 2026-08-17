@@ -395,17 +395,42 @@ if ('skipped' in booted) {
   // through it leaves ensure_job_forms' own crew branch unchecked — a mutation
   // that made it mint for ANY worker at the employer survived exactly that way.
   // Minting is a WRITE: an unassigned worker must materialise nothing.
-  const beforeMint = await db.query(
-    `select count(*) as n from public.job_forms where job_id = '${jobA}'`)
+  //
+  // ⚠️⚠️ AND IT NEEDS SOMETHING TO MINT. Written without the fixture below, the
+  // "mints nothing" assertion passed against a job with no default template —
+  // proving only that nothing was mintable. The POSITIVE control at the end is
+  // what makes the negative mean anything.
+  const ftId = '00000000-0000-0000-0000-0000000000aa'
+  const stId = '00000000-0000-0000-0000-0000000000ab'
+  // ⭐ As the OWNER. Setting service_type while still acting as a worker is
+  // refused by crew_job_field_guard — correctly, since that is the trigger that
+  // stops a worker editing anything but a visit's status. The fixture is
+  // office-side setup, so it runs as the office.
+  await db.asUser(ownerA)
+  await db.exec(`insert into public.form_templates (id, user_id, name) values
+    ('${ftId}', '${ownerA}', 'Site checklist')`)
+  await db.exec(`insert into public.service_templates (id, user_id, name, form_template_id) values
+    ('${stId}', '${ownerA}', 'Mowing', '${ftId}')`)
+  await db.exec(`update public.jobs set service_type = 'Mowing' where id in ('${jobA}', '${jobPeter}')`)
+
+  const formCount = async (job: string) =>
+    Number((await db.query(`select count(*) as n from public.job_forms where job_id = '${job}'`)).rows[0].n)
+
+  const beforeMint = await formCount(jobA)
   await db.asUser(uidPeter)   // Peter is assigned by name to a DIFFERENT visit
-  await db.query(`select * from public.ensure_job_forms('${jobA}')`)
-  const afterMint = await db.query(
-    `select count(*) as n from public.job_forms where job_id = '${jobA}'`)
-  check('⭐⭐ an UNASSIGNED worker mints nothing (ensure_job_forms, called direct)',
-    Number(afterMint.rows[0].n) === Number(beforeMint.rows[0].n),
-    `before=${beforeMint.rows[0].n} after=${afterMint.rows[0].n}`)
   const peerRows = await db.query(`select * from public.ensure_job_forms('${jobA}')`)
+  check('⭐⭐ an UNASSIGNED worker mints nothing (ensure_job_forms, called direct)',
+    (await formCount(jobA)) === beforeMint,
+    `before=${beforeMint} after=${await formCount(jobA)}`)
   check('⭐ … and is told nothing about that visit’s forms', peerRows.rows.length === 0)
+
+  // ⭐ POSITIVE CONTROL — the assigned worker DOES mint. Without this the check
+  // above is satisfied by a job that could never have had a form at all.
+  await db.asUser(uidJane)
+  await db.query(`select * from public.ensure_job_forms('${jobA}')`)
+  check('⭐ positive control: the ASSIGNED worker does mint the checklist',
+    (await formCount(jobA)) === beforeMint + 1,
+    `before=${beforeMint} after=${await formCount(jobA)} — if this fails the negative above proves nothing`)
 
   // ── the write boundary ───────────────────────────────────────────────────
   await db.asUser(uidJane)
