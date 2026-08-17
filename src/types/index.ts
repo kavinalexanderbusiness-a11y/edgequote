@@ -1618,9 +1618,13 @@ export interface BusinessSettings {
   pay_week_starts_on: number
   // Uploaded-logo display scale in percent (100 = default size).
   logo_scale: number | null
-  // DEAD — the old home-dashboard shell's layout. That shell was removed in
-  // 019c24c and nothing reads this; the stored ids name deleted components.
-  // Left in place (dropping a column is a separate, explicit decision).
+  // REVIVED — the owner dashboard's band layout (lib/dashboard/layout), the
+  // same {order, hidden} shape it always held. Dead between 019c24c (the old
+  // home-dashboard shell it served was removed) and Session 97, which made the
+  // explicit call to reuse it rather than add a twin column: same purpose,
+  // same shape, no migration. Values the OLD shell stored name deleted card
+  // ids; normalizeDashboardLayout drops unknown ids, so a legacy row resolves
+  // to the default composition. Read/write ONLY through lib/dashboard/layout.
   // The analytics workspace uses `analytics_layout` below, NOT this.
   dashboard_cards: { order: string[]; hidden: string[] } | null
   // Analytics workspace layout: widget order + hidden set for
