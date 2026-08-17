@@ -3398,14 +3398,12 @@ AS $function$
 declare
   v_employer uuid := public.crew_employer();
   v_crew uuid := public.crew_crew_id();
-  v_tech uuid := public.crew_technician_id();
   v_job public.jobs;
   v_out jsonb;
 begin
-  if v_employer is null or v_tech is null then return null; end if;
+  if v_employer is null or v_crew is null then return null; end if;
   select * into v_job from public.jobs
-  where id = p_job_id and user_id = v_employer
-    and public.crew_assignment_covers(crew_id, technician_id, v_crew, v_tech);
+  where id = p_job_id and user_id = v_employer and crew_id = v_crew;
   if not found then return null; end if;
 
   perform public.ensure_job_forms(p_job_id);
@@ -3920,19 +3918,17 @@ AS $function$
 declare
   v_employer uuid := public.crew_employer();
   v_crew uuid := public.crew_crew_id();
-  v_tech uuid := public.crew_technician_id();
   v_form public.job_forms;
   v_job public.jobs;
   v_empty boolean;
 begin
-  if v_employer is null or v_tech is null then
+  if v_employer is null or v_crew is null then
     return jsonb_build_object('ok', false, 'reason', 'not_yours');
   end if;
   select * into v_form from public.job_forms where id = p_form_id and user_id = v_employer;
   if not found then return jsonb_build_object('ok', false, 'reason', 'not_yours'); end if;
   select * into v_job from public.jobs
-  where id = v_form.job_id and user_id = v_employer
-    and public.crew_assignment_covers(crew_id, technician_id, v_crew, v_tech);
+  where id = v_form.job_id and user_id = v_employer and crew_id = v_crew;
   if not found then return jsonb_build_object('ok', false, 'reason', 'not_yours'); end if;
   if v_job.status = 'cancelled' then
     return jsonb_build_object('ok', false, 'reason', 'cancelled');
@@ -4270,7 +4266,6 @@ declare
   v_uid uuid := auth.uid();
   v_employer uuid;
   v_crew uuid;
-  v_tech uuid;
   v_default record;
 begin
   select * into v_job from public.jobs where id = p_job_id;
@@ -4279,10 +4274,8 @@ begin
   if v_uid is not null and v_uid <> v_job.user_id then
     v_employer := public.crew_employer();
     v_crew := public.crew_crew_id();
-    v_tech := public.crew_technician_id();
     if v_employer is null or v_employer <> v_job.user_id
-       or v_tech is null
-       or not public.crew_assignment_covers(v_job.crew_id, v_job.technician_id, v_crew, v_tech) then
+       or v_crew is null or v_job.crew_id is distinct from v_crew then
       return; -- not yours: say nothing, mint nothing
     end if;
   end if;

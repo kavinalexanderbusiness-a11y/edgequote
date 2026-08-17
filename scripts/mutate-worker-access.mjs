@@ -23,13 +23,19 @@ const LIB = join('src', 'lib', 'workerAccess.ts')
 const COMPLETE = join('src', 'app', 'api', 'crew', 'complete', 'route.ts')
 const MEDIA = join('src', 'app', 'api', 'crew', 'media', 'route.ts')
 const PHOTOS = join('src', 'app', 'api', 'crew', 'photos', 'route.ts')
-// ⚠️ RESOLVED, NOT HARD-CODED. This lane's migration was applied to production
-// and then archived, and the regenerated baseline absorbed its function bodies —
-// so the SQL under test is whatever baseline currently sits in the apply path,
-// and its filename changes every time the baseline is regenerated. Naming the
-// old file would make these two mutations quietly unrunnable.
-const MIGRATION = join('supabase', 'migrations',
-  readdirSync(join('supabase', 'migrations')).find(f => f.endsWith('_baseline.sql')))
+// ⚠️⚠️ RESOLVED BY CONTENT, NOT BY NAME. The SQL under test moves: while this
+// lane is unmerged it lives in its own migration; once a later baseline
+// regeneration absorbs it, it lives in the baseline instead — under a filename
+// that changes every regeneration. Both arrangements happened during this
+// session, and each time a name-based lookup turned two real mutations into a
+// silent "anchor not found". So: find the file in the apply path that actually
+// defines the door being attacked.
+const MIGRATIONS_DIR = join('supabase', 'migrations')
+const MIGRATION = join(MIGRATIONS_DIR,
+  readdirSync(MIGRATIONS_DIR).filter(f => f.endsWith('.sql')).sort().reverse().find(f => {
+    const s = readFileSync(join(MIGRATIONS_DIR, f), 'utf8')
+    return s.includes('FUNCTION public.crew_job_forms') && s.includes('crew_assignment_covers')
+  }))
 
 /** Each mutation: what rule it attacks, the file, and the edit. */
 const MUTATIONS = [
