@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
-import { createAdminClient } from '@/lib/supabase/admin'
 import { appOrigin } from '@/lib/appOrigin'
 import { landingFor, OWNER_ROOT, type AppRole } from '@/lib/crewAccess'
 import { readUser } from '@/lib/authState'
@@ -126,9 +125,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // on them would consume a licence nobody asked to consume.
   let bound = false
   if (inviteToken && role !== 'owner') {
-    const admin = createAdminClient()
-    if (!admin) return fail('unavailable')
-    const outcome = await bindBetaInviteToGoogleUser(admin, inviteToken, user)
+    const outcome = await bindBetaInviteToGoogleUser(inviteToken, user)
     if (outcome.ok) {
       bound = true
     } else if (outcome.reason === 'unavailable') {

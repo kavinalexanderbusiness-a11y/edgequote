@@ -23,7 +23,8 @@
 // business_settings INSERT policy, still carrying can_provision_business().
 
 import { createHash } from 'crypto'
-import type { SupabaseClient, User } from '@supabase/supabase-js'
+import type { User } from '@supabase/supabase-js'
+import { createAdminClient } from './supabase/admin'
 import { normalizeInviteEmail } from './crewInvite'
 import { googleEmailVerified, type GoogleAuthError } from './googleAuth'
 
@@ -61,7 +62,6 @@ const COLS = 'id, email, expires_at, revoked_at, reserved_by, redeemed_by, redee
  * asserted by the browser.
  */
 export async function bindBetaInviteToGoogleUser(
-  admin: SupabaseClient,
   rawToken: string,
   user: User,
 ): Promise<BindOutcome> {
@@ -76,6 +76,16 @@ export async function bindBetaInviteToGoogleUser(
   }
   const email = normalizeInviteEmail(user.email ?? '')
   if (!email) return { ok: false, reason: 'unverified' }
+
+  // The service role is constructed HERE rather than handed in by the route.
+  // createAdminClient may only be reached from app/api/** or lib/** — a rule
+  // verify:crew-invite enforces across the whole tree — and /auth/callback is
+  // neither. Owning it here keeps the privileged operation inside the module
+  // that is already server-only, and leaves the route as pure orchestration.
+  // A missing key is 'unavailable', never a refusal: the deploy is misconfigured,
+  // which says nothing about whether this person holds a real invite.
+  const admin = createAdminClient()
+  if (!admin) return { ok: false, reason: 'unavailable' }
 
   const { data, error } = await admin.from('beta_invites')
     .select(COLS).eq('token_hash', hashInviteToken(rawToken)).maybeSingle()

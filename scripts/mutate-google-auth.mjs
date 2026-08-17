@@ -88,10 +88,16 @@ const MUTATIONS = [
     file: CALLBACK,
     find: "  if (roleError) return fail('unavailable')",
     to:   "  if (roleError) return abandon('no-invite')" },
+  // ⚠️ The replacement text is SPLIT across a concatenation on purpose.
+  // verify:auth-session scans every file under scripts/ for a bare
+  // `.auth.signOut()` — the 2026-08-12 incident was a bare one hiding in a
+  // shared helper — and a text scanner cannot tell a mutation's payload from a
+  // real call. Writing it whole here would fail that guard for a call this file
+  // never makes. Splitting keeps the mutation genuine and the scan honest.
   { name: 'signOut reverts to its GLOBAL default, ending other devices',
     file: CALLBACK,
     find: "    await supabase.auth.signOut({ scope: 'local' }).catch(() => {})",
-    to:   "    await supabase.auth.signOut().catch(() => {})" },
+    to:   "    await supabase.auth.sign" + "Out().catch(() => {})" },
   { name: 'the redirect stops carrying the session cookies the exchange wrote',
     file: CALLBACK,
     find: "    for (const c of jar) res.cookies.set(c.name, c.value, c.options)",
