@@ -993,9 +993,15 @@ comment on function public.portal_sign_document(text, uuid, uuid, text, text) is
 -- for workers: a worker asks about a VISIT they are on, and gets the documents
 -- shared to that visit. Customer/site/equipment documents are unreachable here.
 --
--- ⭐ SEAM FOR SESSION 65: `j.crew_id = v_crew` is main's current assignment
--- truth. When S65 lands its assignment model (crew_assignment_covers), THIS
--- predicate is the only line in the documents domain that changes.
+-- ⭐ ASSIGNMENT IS CREW **OR** PERSON, and the answer comes from Session 65's
+-- canonical crew_assignment_covers(j.crew_id, j.technician_id, v_crew, v_tech) —
+-- never a hand-rolled crew_id comparison. An earlier draft of this file checked
+-- only `j.crew_id = v_crew`, which silently refused every worker assigned to a
+-- visit as an INDIVIDUAL rather than as part of a crew.
+--
+-- ⚠️ The null guard is on the TECHNICIAN, not the crew, for the same reason: a
+-- worker can legitimately have no crew_id at all, and guarding on v_crew would
+-- refuse them their own paperwork. This mirrors crew_job_messages exactly.
 create or replace function public.crew_job_documents(p_job_id uuid)
 returns jsonb
 language plpgsql
@@ -1006,16 +1012,18 @@ as $function$
 declare
   v_employer uuid := public.crew_employer();
   v_crew     uuid := public.crew_crew_id();
+  v_tech     uuid := public.crew_technician_id();
   v_job      uuid;
   v_docs     jsonb;
 begin
-  if v_employer is null or v_crew is null then
+  if v_employer is null or v_tech is null then
     return jsonb_build_object('ok', false, 'reason', 'not_authorized');
   end if;
 
   select j.id into v_job
     from public.jobs j
-   where j.id = p_job_id and j.user_id = v_employer and j.crew_id = v_crew;
+   where j.id = p_job_id and j.user_id = v_employer
+     and public.crew_assignment_covers(j.crew_id, j.technician_id, v_crew, v_tech);
   if v_job is null then
     return jsonb_build_object('ok', false, 'reason', 'not_found');
   end if;
@@ -1063,9 +1071,10 @@ as $function$
 declare
   v_employer uuid := public.crew_employer();
   v_crew     uuid := public.crew_crew_id();
+  v_tech     uuid := public.crew_technician_id();
   v_row      record;
 begin
-  if v_employer is null or v_crew is null then
+  if v_employer is null or v_tech is null then
     return jsonb_build_object('ok', false, 'reason', 'not_authorized');
   end if;
 
@@ -1073,7 +1082,8 @@ begin
     into v_row
     from public.documents d
     join public.jobs j
-      on j.id = d.job_id and j.user_id = v_employer and j.crew_id = v_crew
+      on j.id = d.job_id and j.user_id = v_employer
+     and public.crew_assignment_covers(j.crew_id, j.technician_id, v_crew, v_tech)
     join lateral (
       select dv.* from public.document_versions dv
        where dv.document_id = d.id order by dv.version_no desc limit 1
@@ -1110,9 +1120,10 @@ as $function$
 declare
   v_employer uuid := public.crew_employer();
   v_crew     uuid := public.crew_crew_id();
+  v_tech     uuid := public.crew_technician_id();
   v_out      jsonb;
 begin
-  if v_employer is null or v_crew is null then
+  if v_employer is null or v_tech is null then
     return jsonb_build_object('ok', false, 'reason', 'not_authorized');
   end if;
 
@@ -1124,7 +1135,7 @@ begin
         join public.jobs j
           on j.id = d.job_id
          and j.user_id = v_employer
-         and j.crew_id = v_crew
+         and public.crew_assignment_covers(j.crew_id, j.technician_id, v_crew, v_tech)
          and j.scheduled_date = p_date
        where d.user_id = v_employer
          and d.visibility = 'worker'

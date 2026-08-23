@@ -5,7 +5,8 @@
 //
 //   STATIC     — always runs, including on CI. Reads the schema and the app code
 //                and asserts the contract that must never regress.
-//   BEHAVIOUR  — applies the baseline + the pending migration to PGlite and
+//   BEHAVIOUR  — applies the platform prelude and EVERY migration in the apply
+//                path, in version order, to PGlite and
 //                proves the rules FROM ZERO: constraints, triggers, and the two
 //                customer-facing projections. Skips clean when PGlite is absent
 //                (it is an optional dependency — see verify:rebuild).
@@ -23,8 +24,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { baselineSql } from './lib/schema-source'
 import { openFixtureTenant, isSkipped, fixtureResidue } from './lib/verify-fixture'
-
-const PENDING_DIR = join('supabase', 'pending')
+const ARCHIVE = join('supabase', 'archive', 'ledger')
 const MIGRATIONS = join('supabase', 'migrations')
 const PRELUDE = join('scripts', 'schema', 'platform-prelude.sql')
 
@@ -45,27 +45,53 @@ async function main() {
 // ═════════════════════════════════════════════════════════════════════════════
 console.log('\n══ 1 · lifecycle ═══════════════════════════════════════════════════════\n')
 
-const pendingFiles = existsSync(PENDING_DIR)
-  ? readdirSync(PENDING_DIR).filter(f => /documents.*\.sql$/i.test(f))
+const migrationFiles = existsSync(MIGRATIONS)
+  ? readdirSync(MIGRATIONS).filter(f => /_documents_signatures_v1\.sql$/i.test(f)).sort()
   : []
-const pendingSql = pendingFiles.length ? src(join(PENDING_DIR, pendingFiles[0])) : ''
+const migrationSql = migrationFiles.length ? src(join(MIGRATIONS, migrationFiles[0])) : ''
 const base = baselineSql()
 
-const inPending = /create table if not exists public\.documents\b/i.test(pendingSql)
+const inMigration = /create table if not exists public\.documents\b/i.test(migrationSql)
 const inBaseline = /create table if not exists public\."?documents"?\s*\(/i.test(base)
 
-check('the documents schema exists somewhere', inPending || inBaseline,
-  'neither supabase/pending/ nor the baseline defines public.documents')
-// ⭐ The retired-CANONICAL-file mistake, pinned: once production has it and the
-// baseline is regenerated, the pending copy MUST be deleted in the same commit.
-// Two definitions means two answers about what the database runs.
-check('documents is defined in exactly ONE place', inPending !== inBaseline,
-  inPending && inBaseline
-    ? 'BOTH supabase/pending/ and the baseline define public.documents — delete the pending file now that the baseline carries it'
+check('the documents schema exists somewhere', inMigration || inBaseline,
+  'neither supabase/migrations/ nor the baseline defines public.documents')
+// ⭐ THE RETIRED-CANONICAL-FILE MISTAKE, PINNED. Once production has run it and
+// the baseline is regenerated, this migration moves to archive/ledger in the SAME
+// commit. Two live definitions means two answers about what the database runs.
+check('documents is defined in exactly ONE place', inMigration !== inBaseline,
+  inMigration && inBaseline
+    ? 'BOTH the migration and the baseline define public.documents — move the migration to archive/ledger now that the baseline carries it'
     : 'neither defines it')
 
+// ⛔ ARCHIVE IS NOT THE APPLY PATH. This repo moved a whole pending/ directory
+// into archive/ledger/, so git rename detection actively OFFERS to relocate this
+// file there — and nothing in archive is ever executed again. An unapplied
+// migration filed there is silently never applied, which is indistinguishable
+// from success until the first upload fails in production.
+const archivedDocs = existsSync(ARCHIVE)
+  ? readdirSync(ARCHIVE).filter(f => /_documents_signatures_v1\.sql$/i.test(f))
+  : []
+check('the documents migration is NOT sitting unapplied in archive/ledger',
+  !(archivedDocs.length > 0 && inMigration),
+  'a copy is in archive/ledger while the apply path also has one — archive is never executed')
+
+// ⭐ VERSION DISCIPLINE. A reused version is a migration that silently does not
+// run: sessions 65 and 69 both minted 20260815120000 for different bodies.
+if (inMigration) {
+  const mine = migrationFiles[0].slice(0, 14)
+  const others = [
+    ...(existsSync(MIGRATIONS) ? readdirSync(MIGRATIONS) : []),
+    ...(existsSync(ARCHIVE) ? readdirSync(ARCHIVE) : []),
+  ].filter(f => f !== migrationFiles[0]).map(f => f.slice(0, 14)).filter(v => /^\d{14}$/.test(v))
+  check('the migration version is unique across migrations AND archive/ledger',
+    !others.includes(mine), `version ${mine} is already used`)
+  check('the migration version sorts after every existing one',
+    others.every(v => v < mine), `${mine} does not sort last — it would apply out of order`)
+}
+
 // The whole schema under test: whichever file currently owns it.
-const schema = inPending ? pendingSql : base
+const schema = inMigration ? migrationSql : base
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 2 · PRIVATE STORAGE — no public bucket, no anon door
@@ -173,7 +199,7 @@ check('portal_get_documents resolves the customer through the ONE resolver',
 
 // ⛔ The canonical portal RPC must be untouched.
 check('get_portal_data is NOT redefined by this change',
-  !/create or replace function public\.get_portal_data/i.test(pendingSql),
+  !/create or replace function public\.get_portal_data/i.test(migrationSql),
   're-issuing an older get_portal_data has silently rolled the portal back before')
 
 const fileRoute = src(join('src', 'app', 'api', 'portal', 'documents', 'file', 'route.ts'))
@@ -192,10 +218,15 @@ console.log('\n══ 6 · worker ═══════════════�
 
 for (const fn of ['crew_job_documents', 'crew_document_file', 'crew_document_counts']) {
   const body = new RegExp(`create or replace function public\\.${fn}\\b[\\s\\S]*?\\$function\\$;`, 'i').exec(schema)?.[0] ?? ''
-  check(`${fn} proves employer AND crew assignment`,
-    /crew_employer\(\)/.test(body) && /crew_crew_id\(\)/.test(body)
-    && /j\.user_id = v_employer/.test(body) && /j\.crew_id = v_crew/.test(body),
-    'a worker must not reach a visit they are not on')
+  check(`${fn} proves employer AND assignment via the CANONICAL predicate`,
+    /crew_employer\(\)/.test(body) && /crew_technician_id\(\)/.test(body)
+    && /j\.user_id = v_employer/.test(body)
+    && /crew_assignment_covers\(j\.crew_id, j\.technician_id, v_crew, v_tech\)/.test(body),
+    'assignment is crew OR person — a hand-rolled j.crew_id = v_crew silently refuses individually-assigned workers')
+  // ⚠️ Guarding on v_crew would refuse a worker who legitimately has no crew.
+  check(`${fn} guards on the technician, not the crew`,
+    /if v_employer is null or v_tech is null then/.test(body),
+    'a crewless technician must still reach their own visit\'s paperwork')
   check(`${fn} returns only worker-visibility documents`,
     /d\.visibility = 'worker'/.test(body),
     "a customer's copy is not crew-audience material")
@@ -287,7 +318,12 @@ check('the apply-order dependency on the audit trail is enforced, not merely not
   'plpgsql compiles lazily — a comment would not stop a wrong-order apply')
 
 // ⛔ Nothing sensitive may reach the general-purpose event log.
-const auditCalls = schema.match(/perform public\.audit_log\([\s\S]*?\);/gi) ?? []
+// ⚠️ Line comments are stripped FIRST. These calls deliberately say in prose that
+// storage_path is absent, and a guard that cannot tell an explanation from a
+// payload would be unfixable without deleting the very warning that keeps the
+// rule intact — the same trap lib/documents' public-bucket note already sprang.
+const stripSqlComments = (s: string) => s.split('\n').map(l => l.replace(/--.*$/, '')).join('\n')
+const auditCalls = (schema.match(/perform public\.audit_log\([\s\S]*?\);/gi) ?? []).map(stripSqlComments)
 check('every audit call is present and inspectable', auditCalls.length >= 5,
   `found ${auditCalls.length} audit_log calls`)
 check('no audit call carries the signature image or any storage path',
@@ -534,18 +570,12 @@ async function behaviour() {
   for (const f of readdirSync(MIGRATIONS).filter(f => f.endsWith('.sql')).sort()) {
     if (!await applyFile(f, src(join(MIGRATIONS, f)))) return
   }
-  // ⭐ THE REAL APPLY ORDER, PROVEN. Documents calls Session 68's audit_log and
-  // section 0 refuses to apply without it, so the rebuild applies the audit
-  // trail first — exactly as production must. If that dependency were wrong or
-  // circular, this is where it would fail rather than on somebody's first upload.
-  const auditPending = join(PENDING_DIR, '2026-08-15-audit-trail-v1.sql')
-  if (existsSync(auditPending)) {
-    if (!await applyFile('2026-08-15-audit-trail-v1.sql (prerequisite)', src(auditPending))) return
-  } else {
-    console.log('  ⏭  audit trail pending file absent — documents cannot apply without it')
-    return
-  }
-  if (inPending && !await applyFile(pendingFiles[0], pendingSql)) return
+  // ⭐ THE REAL APPLY ORDER, PROVEN. The loop above applies EVERY migration in
+  // version order, which now includes the documents migration itself — so this
+  // rebuild exercises exactly the sequence production runs. Session 68's
+  // audit_log arrives with the baseline; section 0 of the documents migration
+  // refuses to apply without it, so a wrong order fails HERE rather than on
+  // somebody's first upload in production.
 
   // ── fixtures ───────────────────────────────────────────────────────────────
   // Two tenants, because half of what follows is a claim about the boundary
