@@ -8,7 +8,9 @@ import { Select } from '@/components/ui/Select'
 import { PropertySelect } from '@/components/ui/PropertySelect'
 import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
-import { Customer, Property, JobFormValues, JobStatus, RecurUnit } from '@/types'
+import { Customer, Property, JobFormValues, JobStatus, RecurUnit, Crew, Technician } from '@/types'
+import { AssigneeSelect } from '@/components/schedule/AssigneeSelect'
+import { assigneeOf, assigneeColumns } from '@/lib/crewAssignment'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { recurrenceLabel, recurrenceToUi, reseedRepeatUi, OPEN_ENDED_HORIZON, type RepeatPreset, type EndMode } from '@/lib/recurrence'
 import { latestSavedRecommendation, savedPriceFor, recommendationIsStale, CadenceKey } from '@/lib/pricing'
@@ -66,6 +68,10 @@ export interface SuggestionMeta {
 
 interface JobFormProps {
   customers: Customer[]
+  /** Who work can be assigned to. Omit both and the form shows no "Assigned to"
+   *  control and leaves assignment exactly as it found it. */
+  crews?: Crew[]
+  technicians?: Technician[]
   defaultValues?: Partial<JobFormValues>
   excludeJobId?: string
   // Existing series for the job being edited, so the Repeat controls pre-fill.
@@ -76,6 +82,15 @@ interface JobFormProps {
   seriesStartDate?: string
   allowAddAnother?: boolean
   suggestedPrice?: number // quote-derived per-visit price, shown as the price hint
+  /** True when the visit under the editor is linked to a quote. Drives the
+   *  service-change disclosure: renaming the service NEVER re-prices the visit
+   *  (price is the manual override or the quote-derived value — see
+   *  lib/visitValue), and that fact is said out loud instead of assumed. */
+  quoteLinked?: boolean
+  /** Open the "More options" section immediately (edit mode) — the ?panel=time|cost
+   *  deep links land on anchors that live inside it, and a door that opens onto a
+   *  section that then has to be found and expanded has not saved anyone a tap. */
+  initialMoreOpen?: boolean
   // Soft cadence/preference warnings for the chosen date+time (page-supplied, so
   // the timeline + recurrence rules stay in one place). Returns owner-facing notes.
   warnFor?: (input: {
@@ -94,7 +109,9 @@ interface JobFormProps {
    *  owning this modal closes on a backdrop tap, on Escape and on the X; it asks
    *  first when this is true. Reported rather than inferred, because only the
    *  form knows — and unlike QuoteBuilder/CustomerForm there is no autosave here
-   *  to fall back on. */
+   *  to fall back on. Covers BOTH react-hook-form fields AND the recurrence
+   *  controls, which live outside RHF — a touched Repeat used to be discardable
+   *  in silence. */
   onDirtyChange?: (dirty: boolean) => void
   isEdit?: boolean
 }
@@ -130,7 +147,7 @@ function presetToInterval(preset: RepeatPreset, customUnit: RecurUnit, customCou
 }
 
 
-export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, seriesStartDate, allowAddAnother, suggestedPrice, warnFor, onSubmit, onCancel, onDirtyChange, isEdit }: JobFormProps) {
+export function JobForm({ customers, crews, technicians, defaultValues, excludeJobId, initialRecurrence, seriesStartDate, allowAddAnother, suggestedPrice, quoteLinked, initialMoreOpen, warnFor, onSubmit, onCancel, onDirtyChange, isEdit }: JobFormProps) {
   const supabase = createClient()
   const [properties, setProperties] = useState<Property[]>([])
   const addAnotherRef = useRef(false)
@@ -154,7 +171,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   const [propSeries, setPropSeries] = useState<{ id: string; service_type: string | null; unit: string | null; count: number | null }[]>([])
   const [dupAck, setDupAck] = useState(false) // owner chose "create anyway"
 
-  const { register, handleSubmit, watch, setValue, control, formState: { errors, isSubmitting, isDirty } } =
+  const { register, handleSubmit, watch, setValue, control, formState: { errors, isSubmitting, isDirty, dirtyFields } } =
     useForm<JobFormValues>({
       defaultValues: {
         customer_id: '',
@@ -170,14 +187,23 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         notes: '',
         actual_minutes: 0,
         price: 0,
+        crew_id: null,
+        technician_id: null,
         ...defaultValues,
       },
     })
 
+  // The recurrence controls live OUTSIDE react-hook-form, so isDirty alone
+  // cannot see them: an owner who only touched Repeat and then brushed the
+  // backdrop was silently discarded. State (not just the refs below) so the
+  // dirty report and the Unsaved-changes indicator re-render when it flips.
+  const [recDirty, setRecDirty] = useState(false)
+
   // Tell the owner of this modal whether there is anything to lose. react-hook-form's
-  // isDirty is the honest signal: it is false for a freshly-opened form and for one
-  // whose values were only PREFILLED, and true the moment a human types.
-  useEffect(() => { onDirtyChange?.(isDirty) }, [isDirty, onDirtyChange])
+  // isDirty is the honest signal for the fields: false for a freshly-opened form and
+  // for one whose values were only PREFILLED, true the moment a human types.
+  // recDirty covers the Repeat/Ends controls, which RHF cannot see.
+  useEffect(() => { onDirtyChange?.(isDirty || recDirty) }, [isDirty, recDirty, onDirtyChange])
 
   // Quick-add default service is LEARNED, not assumed: the owner's most frequent
   // recent service, else their first service template. A lawn company keeps its
@@ -223,7 +249,11 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   // BUT if a recurrence is pre-filled on a new job (e.g. scheduling a recurring
   // quote), start expanded so the carried cadence is visible and editable.
   const [showMore, setShowMore] = useState(!isEdit && !!initialRecurrence?.unit)
-  const adv = isEdit || showMore
+  // Edit mode: the primary section IS the whole common path (customer, location,
+  // service, date, time window, duration, assignee, status, note). Everything
+  // else waits behind one disclosure. Opens immediately when a ?panel= deep link
+  // is landing on an anchor inside it.
+  const [showMoreEdit, setShowMoreEdit] = useState(!!initialMoreOpen)
 
   const customerId = watch('customer_id')
   const status = watch('status')
@@ -307,6 +337,11 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   // the rule ("only while untouched") is the load-bearing half and belongs where
   // a guard can exercise it.
   const repeatTouched = useRef(false)
+  // ONE way to say "a human touched Repeat/Ends": the intent refs the save
+  // reads (repeatAsserted/endAsserted) and the dirty state the discard guard
+  // reads flip together, so they can never disagree.
+  function markRepeatTouched() { repeatTouched.current = true; setRecDirty(true) }
+  function markEndTouched() { endTouched.current = true; setRecDirty(true) }
   useEffect(() => {
     const next = reseedRepeatUi(initialRecurrence, { repeat: repeatTouched.current, end: endTouched.current })
     if (next.repeat) {
@@ -386,7 +421,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   // default is "Lawn Mowing" gets exactly the old behaviour; every other trade
   // gets theirs.
   function applyCadencePreset(kind: 'weekly' | 'biweekly' | 'monthly') {
-    repeatTouched.current = true
+    markRepeatTouched()
     setPreset(kind === 'weekly' ? 'w1' : kind === 'biweekly' ? 'w2' : 'm1')
     const svc = (watch('service_type') || '').trim() || learnedService || ''
     if (svc) {
@@ -546,141 +581,201 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     // rolling one. Says the number the engine will actually create.
     : `no end date — ${OPEN_ENDED_HORIZON} visits scheduled ahead`
 
-  return (
-    <form
-      onSubmit={handleSubmit((values) => {
-        // Quick-add never types a title — derive it from service + customer.
-        if (!values.title?.trim()) {
-          const cust = customers.find(c => c.id === values.customer_id)?.name
-          values.title = `${values.service_type || 'Job'}${cust ? ` — ${cust}` : ''}`
-        }
-        const addAnother = addAnotherRef.current
-        addAnotherRef.current = false
-        return onSubmit(
-          values,
-          buildRecurrence(),
-          { suggestedDate: null, suggestedNearby: null },
-          { addAnother },
-        )
-      })}
-      className="space-y-4"
-    >
-      <Controller name="customer_id" control={control}
-        render={({ field }) => (
-          <Select label="Customer" autoFocus options={customerOptions} {...field} />
-        )} />
+  // ── Composable blocks ────────────────────────────────────────────────────────
+  // The SAME controls serve two layouts: the quick-add/create flow (unchanged)
+  // and the compact edit flow (common path up front, everything else behind ONE
+  // "More options" disclosure). One definition per control, composed per mode —
+  // never two implementations of the same field.
 
-      <Input label="Service Type" placeholder="Your most common service"
-        {...register('service_type')} />
-
-      <div>
-        <Input label="Price ($/visit)" type="number" step="5" min="0"
-          hint={measuredPrice && measuredPrice > 0
-            ? `Measured property: ${formatCurrency(measuredPrice)} ${cadenceForInterval === 'one_time' ? 'one-time' : cadenceForInterval} recommended.`
-            : suggestedPrice ? `Leave 0 to use the linked quote (${formatCurrency(suggestedPrice)}). Type to override.` : 'Per-visit price — leave 0 if a linked quote sets it.'}
-          {...register('price', { min: 0 })} />
-        {measuredPrice != null && measuredPrice > 0 && (
-          <button type="button" onClick={() => setValue('price', measuredPrice)}
-            className="text-xs text-accent-text hover:underline mt-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-            Use measured price ({formatCurrency(measuredPrice)})
-          </button>
-        )}
-        {savedRec && measuredPrice != null && measuredPrice > 0 && (
-          <p className="text-[11px] text-ink-faint mt-1">
-            Calculated {formatDate(savedRec.date)}
-            {recommendationIsStale(savedRec.date, Date.now()) && <span className="text-amber-400"> · ⚠ may be outdated, consider recalculating</span>}
-          </p>
-        )}
-      </div>
-
-      <Input label="Date" type="date"
-        error={errors.scheduled_date?.message}
-        {...register('scheduled_date', { required: 'Required' })} />
-
-      {/* Duplicate-visit check (unified dedup engine) — one clear question, never blocks */}
-      {dupJob && (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5">
-          <p className="text-xs text-amber-300 flex items-start gap-1.5">
-            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
-            <span>
-              Existing match found — <span className="font-semibold">{dupJob.title}</span>
-              {dupJob.time ? ` at ${dupJob.time}` : ''} is already booked ({dupJob.reason}).
-              Save anyway only if this is deliberately a second visit.
-            </span>
-          </p>
-        </div>
-      )}
-
-      {/* Soft cadence / customer-preference warnings — informational, never blocking */}
-      {scheduleWarnings.length > 0 && (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 space-y-1">
-          {scheduleWarnings.map((w, i) => (
-            <p key={i} className="text-xs text-amber-300 flex items-start gap-1.5">
-              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" /> {w}
-            </p>
-          ))}
-        </div>
-      )}
-
-      {(propCoord || selProp?.address) && (
-        <div className="bg-bg-tertiary border border-border rounded-xl p-4 space-y-3">
-          <div className="flex items-center gap-2 text-xs font-semibold text-ink-muted uppercase tracking-wide">
-            <Sparkles className="w-3.5 h-3.5 text-accent-text" /> Plan this job into your week
-          </div>
-          <WeeklyScheduler
-            coord={propCoord}
-            address={selProp?.address ?? null}
-            excludeJobId={excludeJobId}
-            // NULL when the owner hasn't sized the job — the scheduler resolves
-            // it against learned service history, or says "duration unknown".
-            // (This used to coerce unknown to 45 minutes, which is how an
-            // unsized job got a confident day recommendation.)
-            durationMinutes={Number(watch('duration_minutes')) > 0 ? Number(watch('duration_minutes')) : null}
-            crewSize={Number(watch('crew_size')) > 0 ? Number(watch('crew_size')) : null}
-            serviceType={watch('service_type') || null}
-            targetValue={Number(watch('price')) || suggestedPrice || 0}
-            customerPreferredDays={effectivePrefs.preferredDays}
-            customerAvoidDays={effectivePrefs.avoidDays}
-            onPick={(date) => setValue('scheduled_date', date, { shouldValidate: true })}
-          />
-        </div>
-      )}
-
-      {!isEdit && (
-        <button type="button" onClick={() => setShowMore(v => !v)}
-          className="text-xs font-medium text-accent-text hover:underline">
-          {showMore ? '− Fewer options' : '+ More options (property, time, crew, repeat, notes)'}
-        </button>
-      )}
-
-      {/* WHERE the work happens. Hidden under "+ More options" on a new job, while
-          the loader silently pre-selected the customer's primary — so a customer with
-          two addresses got one chosen for them, out of sight, and the only symptom is
-          a crew at the wrong house. Whenever there's an actual choice to make
-          (2+ addresses) it's shown up front; a one-property customer has nothing to
-          decide, so it stays collapsed exactly as before. */}
-      {(adv || properties.length > 1) && (
-        <Controller name="property_id" control={control}
-          render={({ field }) => (
-            <PropertySelect
-              label={properties.length > 1 ? 'Property *' : 'Property'}
-              properties={properties}
-              value={field.value || ''}
-              onChange={field.onChange}
-              customerId={customerId || null}
-              onCreated={(p: Property) => setProperties(prev => [...prev, p])}
-              hint={properties.length > 1 ? 'This customer has more than one address — pick the one this visit is for.' : undefined}
+  // WHO is coming — a different question from how MANY (crew size), and the
+  // one that decides whose phone this visit lands on. THE chooser is
+  // AssigneeSelect (lib/crewAssignment): crew XOR person, both columns moving
+  // together so a visit can never carry two answers. Only rendered when the
+  // caller supplied the roster; a form without it saves assignment unchanged
+  // rather than silently unassigning.
+  const assigneeField = (crews?.length || technicians?.length) ? (
+    <Controller name="crew_id" control={control}
+      render={({ field: crewField }) => (
+        <Controller name="technician_id" control={control}
+          render={({ field: techField }) => (
+            <AssigneeSelect
+              crews={crews ?? []}
+              technicians={technicians ?? []}
+              value={assigneeOf({ crew_id: crewField.value ?? null, technician_id: techField.value ?? null })}
+              onChange={next => {
+                // Both columns move together — that is what keeps one
+                // visit from carrying two answers.
+                const cols = assigneeColumns(next)
+                crewField.onChange(cols.crew_id)
+                techField.onChange(cols.technician_id)
+              }}
             />
           )} />
+      )} />
+  ) : null
+
+  const priceBlock = (
+    <div>
+      <Input label="Price ($/visit)" type="number" step="5" min="0"
+        hint={measuredPrice && measuredPrice > 0
+          ? `Measured property: ${formatCurrency(measuredPrice)} ${cadenceForInterval === 'one_time' ? 'one-time' : cadenceForInterval} recommended.`
+          : suggestedPrice ? `Leave 0 to use the linked quote (${formatCurrency(suggestedPrice)}). Type to override.` : 'Per-visit price — leave 0 if a linked quote sets it.'}
+        {...register('price', { min: 0 })} />
+      {measuredPrice != null && measuredPrice > 0 && (
+        <button type="button" onClick={() => setValue('price', measuredPrice)}
+          className="text-xs text-accent-text hover:underline mt-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+          Use measured price ({formatCurrency(measuredPrice)})
+        </button>
       )}
+      {savedRec && measuredPrice != null && measuredPrice > 0 && (
+        <p className="text-[11px] text-ink-faint mt-1">
+          Calculated {formatDate(savedRec.date)}
+          {recommendationIsStale(savedRec.date, Date.now()) && <span className="text-amber-400"> · ⚠ may be outdated, consider recalculating</span>}
+        </p>
+      )}
+    </div>
+  )
 
-      {adv && (
-      <div className="space-y-4">
-      <Controller name="status" control={control}
-        render={({ field }) => (
-          <Select label="Status" options={STATUS_OPTIONS} {...field} />
-        )} />
+  const dupWarnBlock = dupJob ? (
+    <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5">
+      <p className="text-xs text-amber-300 flex items-start gap-1.5">
+        <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+        <span>
+          Existing match found — <span className="font-semibold">{dupJob.title}</span>
+          {dupJob.time ? ` at ${dupJob.time}` : ''} is already booked ({dupJob.reason}).
+          Save anyway only if this is deliberately a second visit.
+        </span>
+      </p>
+    </div>
+  ) : null
 
+  const schedWarnBlock = scheduleWarnings.length > 0 ? (
+    <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 space-y-1">
+      {scheduleWarnings.map((w, i) => (
+        <p key={i} className="text-xs text-amber-300 flex items-start gap-1.5">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" /> {w}
+        </p>
+      ))}
+    </div>
+  ) : null
+
+  const weeklyPlannerCard = (propCoord || selProp?.address) ? (
+    <div className="bg-bg-tertiary border border-border rounded-xl p-4 space-y-3">
+      <div className="flex items-center gap-2 text-xs font-semibold text-ink-muted uppercase tracking-wide">
+        <Sparkles className="w-3.5 h-3.5 text-accent-text" /> Plan this job into your week
+      </div>
+      <WeeklyScheduler
+        coord={propCoord}
+        address={selProp?.address ?? null}
+        excludeJobId={excludeJobId}
+        // NULL when the owner hasn't sized the job — the scheduler resolves
+        // it against learned service history, or says "duration unknown".
+        // (This used to coerce unknown to 45 minutes, which is how an
+        // unsized job got a confident day recommendation.)
+        durationMinutes={Number(watch('duration_minutes')) > 0 ? Number(watch('duration_minutes')) : null}
+        crewSize={Number(watch('crew_size')) > 0 ? Number(watch('crew_size')) : null}
+        serviceType={watch('service_type') || null}
+        targetValue={Number(watch('price')) || suggestedPrice || 0}
+        customerPreferredDays={effectivePrefs.preferredDays}
+        customerAvoidDays={effectivePrefs.avoidDays}
+        onPick={(date) => setValue('scheduled_date', date, { shouldValidate: true })}
+      />
+    </div>
+  ) : null
+
+  /* WHERE the work happens. Hidden under "+ More options" on a new job, while
+     the loader silently pre-selected the customer's primary — so a customer with
+     two addresses got one chosen for them, out of sight, and the only symptom is
+     a crew at the wrong house. Whenever there's an actual choice to make
+     (2+ addresses) it's shown up front; a one-property customer has nothing to
+     decide, so it stays collapsed exactly as before. On EDIT the location is
+     part of the common path and always shows. */
+  const propertyField = (
+    <Controller name="property_id" control={control}
+      render={({ field }) => (
+        <PropertySelect
+          label={properties.length > 1 ? 'Property *' : 'Property'}
+          properties={properties}
+          value={field.value || ''}
+          onChange={field.onChange}
+          customerId={customerId || null}
+          onCreated={(p: Property) => setProperties(prev => [...prev, p])}
+          hint={properties.length > 1 ? 'This customer has more than one address — pick the one this visit is for.' : undefined}
+        />
+      )} />
+  )
+
+  const statusField = (
+    <Controller name="status" control={control}
+      render={({ field }) => (
+        <Select label="Status" options={STATUS_OPTIONS} {...field} />
+      )} />
+  )
+
+  const titleField = (
+    <Input label="Job Title" placeholder="Auto-named from service + customer if blank"
+      error={errors.title?.message}
+      {...register('title')} />
+  )
+
+  const durationField = (
+    /* Duration is a VALUE + a UNIT — 45 minutes, 2 hours, 3 workdays — and
+       still one stored integer of minutes. The unit is how it is spoken,
+       not a second fact: see lib/workDuration. Stacked rather than in the
+       old 2-up grid because the control is itself two fields, and three
+       boxes on one line is unusable at 375px. */
+    <Controller name="duration_minutes" control={control}
+      render={({ field }) => (
+        <DurationField
+          label="Duration"
+          workdayMin={workdayMin}
+          value={Number(field.value) > 0 ? Number(field.value) : null}
+          onChange={m => field.onChange(m ?? '')}
+        />
+      )} />
+  )
+
+  const crewSizeField = (
+    <Input label="Crew Size" type="number" min="1"
+      hint="How many people are on site at once. Duration stays the time on site — two people for an hour is one hour, not two."
+      {...register('crew_size', { min: { value: 1, message: 'Min 1' } })} />
+  )
+
+  const smartEstimate = (
+    /* What this kind of work has actually taken. Built on the SAME learning
+       engine the estimate-vs-actual comparison uses and the SAME duration rule
+       Day Suggestions fits a candidate with, so the card, the history and
+       "fits Tuesday" can never quote different numbers.
+
+       It replaces the sqft-per-1000 labour widget on this form, which could
+       not describe the work this session is about: its output was clamped
+       to 240 minutes (a two-day project was unrepresentable), it rendered
+       nothing at all without a lawn measurement, it reported a percentage
+       confidence, and its buckets were keyword tables. That engine still
+       serves the quote builder's pricing help, which is frozen — this form
+       is scheduling, and scheduling asks a different question.
+
+       ⭐ It only ever SUGGESTS. Applying is a button; nothing here writes
+       duration_minutes on its own, so a saved visit's duration is never
+       silently re-estimated when the learner moves. */
+    <SmartEstimateCard
+      load={learningLoad}
+      serviceType={serviceType}
+      excludeJobId={excludeJobId || undefined}
+      value={Number(watch('duration_minutes')) || null}
+      onApply={(min) => setValue('duration_minutes', min, { shouldValidate: true })}
+    />
+  )
+
+  const timeWindowGrid = (
+    <div className="grid grid-cols-2 gap-4">
+      <Input label="Start Time" type="time" {...register('start_time')} />
+      <Input label="End Time" type="time" {...register('end_time')} />
+    </div>
+  )
+
+  const workPanels = (
+    <>
       {/* ⭐ WORK HISTORY — every day this job was worked, and the door to add one
           by hand. Shown for a job that is UNDERWAY as well as one that is
           finished: recording "worked 3h today" is the whole point of the feature
@@ -775,7 +870,11 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           )}
         </div>
       )}
+    </>
+  )
 
+  const notesBlock = (
+    <>
       {/* ⭐ THE AUDIENCE, SAID OUT LOUD. This field goes to the phone of whoever
           works the visit (crew_day ships it as stops[].notes) and to nobody
           else — it was removed from get_portal_data on 2026-08-11 after 49 of
@@ -820,202 +919,285 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           )}
         </div>
       )}
+    </>
+  )
 
-      {/* The same instruction, shown rather than described. Sits directly under
-          the note because "use the east gate" and a photo of the east gate are
-          one thought, not two features. On CREATE there is no visit to attach a
-          file to yet, and the component says so instead of offering a control
-          that would fail. */}
-      <JobReferenceMedia jobId={isEdit ? (excludeJobId || null) : null} />
+  const referenceMedia = (
+    /* The same instruction, shown rather than described. Sits directly under
+       the note because "use the east gate" and a photo of the east gate are
+       one thought, not two features. On CREATE there is no visit to attach a
+       file to yet, and the component says so instead of offering a control
+       that would fail. */
+    <JobReferenceMedia jobId={isEdit ? (excludeJobId || null) : null} />
+  )
 
-      {/* Time & crew — expanded while creating (the smart duration suggestion
-          matters then), a one-line summary when editing. */}
-      <Collapsible title="Time & crew" icon={Clock} defaultOpen={!isEdit}
-        summary={`${formatDuration(Number(watch('duration_minutes')), workdayMin) || 'Not sized'} · ${Number(watch('crew_size')) || 1} crew${watch('start_time') ? ` · ${watch('start_time')}` : ''}`}>
-        <Input label="Job Title" placeholder="Auto-named from service + customer if blank"
-          error={errors.title?.message}
-          {...register('title')} />
+  const repeatSection = (
+    /* Repeat — available for new AND existing jobs; collapses to its cadence
+       summary when editing so it stops dominating the form. */
+    <Collapsible title="Repeat" icon={Repeat} defaultOpen={!isEdit}
+      summary={interval ? `${recurrenceLabel(interval.unit, interval.count)} · ${endSummary}` : 'Does not repeat'}>
+        <div className="space-y-3">
+          {isEdit && (
+            <p className="text-xs text-ink-faint">
+              {initialRecurrence?.unit
+                ? 'This job repeats. Change the cadence, or pick “Does not repeat” to make it one-time — you’ll choose which visits it affects.'
+                : 'Turn this one-time job into a recurring schedule. The current job becomes the first visit.'}
+            </p>
+          )}
 
-        {/* Duration is a VALUE + a UNIT — 45 minutes, 2 hours, 3 workdays — and
-            still one stored integer of minutes. The unit is how it is spoken,
-            not a second fact: see lib/workDuration. Stacked rather than in the
-            old 2-up grid because the control is itself two fields, and three
-            boxes on one line is unusable at 375px. */}
-        <Controller name="duration_minutes" control={control}
-          render={({ field }) => (
-            <DurationField
-              label="Duration"
-              workdayMin={workdayMin}
-              value={Number(field.value) > 0 ? Number(field.value) : null}
-              onChange={m => field.onChange(m ?? '')}
-            />
-          )} />
-        <Input label="Crew Size" type="number" min="1"
-          hint="How many people are on site at once. Duration stays the time on site — two people for an hour is one hour, not two."
-          {...register('crew_size', { min: { value: 1, message: 'Min 1' } })} />
-
-        {/* What this kind of work has actually taken. Built on the SAME learning
-            engine the estimate-vs-actual comparison above uses and the SAME
-            duration rule Day Suggestions fits a candidate with, so the card, the
-            history and "fits Tuesday" can never quote different numbers.
-
-            It replaces the sqft-per-1000 labour widget on this form, which could
-            not describe the work this session is about: its output was clamped
-            to 240 minutes (a two-day project was unrepresentable), it rendered
-            nothing at all without a lawn measurement, it reported a percentage
-            confidence, and its buckets were keyword tables. That engine still
-            serves the quote builder's pricing help, which is frozen — this form
-            is scheduling, and scheduling asks a different question.
-
-            ⭐ It only ever SUGGESTS. Applying is a button; nothing here writes
-            duration_minutes on its own, so a saved visit's duration is never
-            silently re-estimated when the learner moves. */}
-        <SmartEstimateCard
-          load={learningLoad}
-          serviceType={serviceType}
-          excludeJobId={excludeJobId || undefined}
-          value={Number(watch('duration_minutes')) || null}
-          onApply={(min) => setValue('duration_minutes', min, { shouldValidate: true })}
-        />
-
-        <div className="grid grid-cols-2 gap-4">
-          <Input label="Start Time" type="time" {...register('start_time')} />
-          <Input label="End Time" type="time" {...register('end_time')} />
-        </div>
-      </Collapsible>
-
-      {/* Repeat — available for new AND existing jobs; collapses to its cadence
-          summary when editing so it stops dominating the form. */}
-      <Collapsible title="Repeat" icon={Repeat} defaultOpen={!isEdit}
-        summary={interval ? `${recurrenceLabel(interval.unit, interval.count)} · ${endSummary}` : 'Does not repeat'}>
-          <div className="space-y-3">
-            {isEdit && (
-              <p className="text-xs text-ink-faint">
-                {initialRecurrence?.unit
-                  ? 'This job repeats. Change the cadence, or pick “Does not repeat” to make it one-time — you’ll choose which visits it affects.'
-                  : 'Turn this one-time job into a recurring schedule. The current job becomes the first visit.'}
+          {/* Duplicate recurring schedule warning */}
+          {interval && showDuplicateWarning && duplicateSeries && (
+            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 space-y-2">
+              <p className="text-xs font-semibold text-amber-300 flex items-center gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                This property already has a recurring {category === 'snow' ? 'snow' : 'mowing'} schedule
+                {duplicateSeries.unit && <span className="font-normal text-ink-muted"> ({recurrenceLabel(duplicateSeries.unit as RecurUnit, duplicateSeries.count)})</span>}.
               </p>
-            )}
-
-            {/* Duplicate recurring schedule warning */}
-            {interval && showDuplicateWarning && duplicateSeries && (
-              <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 space-y-2">
-                <p className="text-xs font-semibold text-amber-300 flex items-center gap-1.5">
-                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                  This property already has a recurring {category === 'snow' ? 'snow' : 'mowing'} schedule
-                  {duplicateSeries.unit && <span className="font-normal text-ink-muted"> ({recurrenceLabel(duplicateSeries.unit as RecurUnit, duplicateSeries.count)})</span>}.
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <a href={`/dashboard/customers/${customerId}`} target="_blank" rel="noopener noreferrer"
-                    className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                    View existing schedule
-                  </a>
-                  <button type="button" onClick={() => { repeatTouched.current = true; setPreset('none'); setDupAck(true) }}
-                    className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                    Add one-time visit instead
-                  </button>
-                  <button type="button" onClick={() => setDupAck(true)}
-                    className="text-xs font-medium px-2.5 py-1 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                    Create another schedule anyway
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Season chip — what season this service belongs to. An owner-defined
-                season resolves here too (category stays 'year_round' for those, so
-                the old snow?/lawn binary called a Pool Opening a "Lawn service") —
-                its own label wins, falling back to the binary only for the built-ins. */}
-            {serviceSeason && (
-              <p className="text-xs text-ink-muted flex items-center gap-1.5">
-                {category === 'snow' ? <Snowflake className="w-3.5 h-3.5 text-sky-400" />
-                  : category === 'lawn' ? <Sun className="w-3.5 h-3.5 text-amber-400" />
-                  : <CalendarRange className="w-3.5 h-3.5 text-accent-text" />}
-                {serviceSeason.label || (category === 'snow' ? 'Snow' : 'Lawn')} service · season {seasonLabel(serviceSeason)}
-              </p>
-            )}
-
-            {/* One-click lawn-care presets (new jobs only) */}
-            {!isEdit && (
-            <div className="flex flex-wrap gap-2">
-              {([
-                { kind: 'weekly', label: 'Weekly' },
-                { kind: 'biweekly', label: 'Every 2 weeks' },
-                { kind: 'monthly', label: 'Monthly' },
-              ] as const).map(p => (
-                <button key={p.kind} type="button" onClick={() => applyCadencePreset(p.kind)}
-                  className="text-xs font-medium px-3 py-1.5 rounded-lg border border-accent/30 bg-accent/10 text-accent-text hover:bg-accent/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                  {p.label}
+              <div className="flex flex-wrap gap-2">
+                <a href={`/dashboard/customers/${customerId}`} target="_blank" rel="noopener noreferrer"
+                  className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                  View existing schedule
+                </a>
+                <button type="button" onClick={() => { markRepeatTouched(); setPreset('none'); setDupAck(true) }}
+                  className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                  Add one-time visit instead
                 </button>
-              ))}
-            </div>
-            )}
-
-            {/* THE shared Select — same chevron/field tokens as every other dropdown. */}
-            <Select label="Repeats" value={preset}
-              onChange={(e) => { repeatTouched.current = true; setPreset(e.target.value as RepeatPreset) }}
-              options={PRESET_OPTIONS.map(o => ({ value: o.value, label: o.label }))} />
-
-            {preset === 'custom' && (
-              <div className="grid grid-cols-2 gap-4">
-                <Input label="Every" type="number" min="1" value={customCount}
-                  onChange={(e) => { repeatTouched.current = true; setCustomCount(Math.max(1, Number(e.target.value) || 1)) }} />
-                <Select label="Unit" value={customUnit}
-                  onChange={(e) => { repeatTouched.current = true; setCustomUnit(e.target.value as RecurUnit) }}
-                  options={[{ value: 'day', label: 'Days' }, { value: 'week', label: 'Weeks' }, { value: 'month', label: 'Months' }]} />
+                <button type="button" onClick={() => setDupAck(true)}
+                  className="text-xs font-medium px-2.5 py-1 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                  Create another schedule anyway
+                </button>
               </div>
-            )}
+            </div>
+          )}
 
-            {preset !== 'none' && (
-              <>
-                <Select label="Ends" value={endMode}
-                  onChange={(e) => { endTouched.current = true; setEndMode(e.target.value as EndMode) }}
-                  options={[
-                    ...(serviceSeason ? [{ value: 'season', label: 'Season end (recommended)' }] : []),
-                    { value: 'on', label: 'Specific date' },
-                    { value: 'after', label: 'Number of visits' },
-                    { value: 'never', label: 'No end date' },
-                  ]} />
-                {/* "Never ends" promised something no engine delivers: there is no
-                    top-up, so the series is exactly this many visits long. */}
-                {endMode === 'never' && (
-                  <div className="rounded-xl border border-border bg-bg-tertiary px-3 py-2 flex items-center gap-2">
-                    <CalendarRange className="w-4 h-4 text-ink-muted shrink-0" />
-                    <p className="text-xs text-ink-muted">
-                      {OPEN_ENDED_HORIZON} visits are scheduled ahead. Add more when they run low.
-                    </p>
-                  </div>
-                )}
-                {endMode === 'season' && (
-                  <div className="rounded-xl border border-accent/20 bg-accent/5 px-3 py-2 flex items-center gap-2">
-                    <CalendarRange className="w-4 h-4 text-accent-text shrink-0" />
-                    <p className="text-xs text-ink">
-                      Ends at season end{serviceSeason ? ` (${seasonLabel(serviceSeason)})` : ''}
-                      {seasonEndDate ? <span className="text-ink-muted"> · {formatDate(seasonEndDate)}</span> : <span className="text-amber-400"> · set a start date to compute</span>}
-                    </p>
-                  </div>
-                )}
-                {endMode === 'on' && (
-                  <Input label="End date" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
-                )}
-                {endMode === 'after' && (
-                  <Input label="Number of visits" type="number" min="1" value={endCount}
-                    onChange={(e) => setEndCount(Math.max(1, Number(e.target.value) || 1))} />
-                )}
-                {/* Live visit-count estimate — the ONE cadence restatement. */}
-                {visitEstimate != null && visitEstimate > 0 && (
-                  <p className="text-xs font-semibold text-accent-text">
-                    {recurrenceLabel(interval!.unit, interval!.count)} · {scheduledDate ? formatDate(scheduledDate) : '?'} → {effectiveEndDate ? formatDate(effectiveEndDate) : '?'} · ≈ {visitEstimate} visit{visitEstimate !== 1 ? 's' : ''}
-                  </p>
-                )}
-              </>
-            )}
+          {/* Season chip — what season this service belongs to. An owner-defined
+              season resolves here too (category stays 'year_round' for those, so
+              the old snow?/lawn binary called a Pool Opening a "Lawn service") —
+              its own label wins, falling back to the binary only for the built-ins. */}
+          {serviceSeason && (
+            <p className="text-xs text-ink-muted flex items-center gap-1.5">
+              {category === 'snow' ? <Snowflake className="w-3.5 h-3.5 text-sky-400" />
+                : category === 'lawn' ? <Sun className="w-3.5 h-3.5 text-amber-400" />
+                : <CalendarRange className="w-3.5 h-3.5 text-accent-text" />}
+              {serviceSeason.label || (category === 'snow' ? 'Snow' : 'Lawn')} service · season {seasonLabel(serviceSeason)}
+            </p>
+          )}
+
+          {/* One-click lawn-care presets (new jobs only) */}
+          {!isEdit && (
+          <div className="flex flex-wrap gap-2">
+            {([
+              { kind: 'weekly', label: 'Weekly' },
+              { kind: 'biweekly', label: 'Every 2 weeks' },
+              { kind: 'monthly', label: 'Monthly' },
+            ] as const).map(p => (
+              <button key={p.kind} type="button" onClick={() => applyCadencePreset(p.kind)}
+                className="text-xs font-medium px-3 py-1.5 rounded-lg border border-accent/30 bg-accent/10 text-accent-text hover:bg-accent/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                {p.label}
+              </button>
+            ))}
           </div>
-      </Collapsible>
-      </div>
+          )}
+
+          {/* THE shared Select — same chevron/field tokens as every other dropdown. */}
+          <Select label="Repeats" value={preset}
+            onChange={(e) => { markRepeatTouched(); setPreset(e.target.value as RepeatPreset) }}
+            options={PRESET_OPTIONS.map(o => ({ value: o.value, label: o.label }))} />
+
+          {preset === 'custom' && (
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Every" type="number" min="1" value={customCount}
+                onChange={(e) => { markRepeatTouched(); setCustomCount(Math.max(1, Number(e.target.value) || 1)) }} />
+              <Select label="Unit" value={customUnit}
+                onChange={(e) => { markRepeatTouched(); setCustomUnit(e.target.value as RecurUnit) }}
+                options={[{ value: 'day', label: 'Days' }, { value: 'week', label: 'Weeks' }, { value: 'month', label: 'Months' }]} />
+            </div>
+          )}
+
+          {preset !== 'none' && (
+            <>
+              <Select label="Ends" value={endMode}
+                onChange={(e) => { markEndTouched(); setEndMode(e.target.value as EndMode) }}
+                options={[
+                  ...(serviceSeason ? [{ value: 'season', label: 'Season end (recommended)' }] : []),
+                  { value: 'on', label: 'Specific date' },
+                  { value: 'after', label: 'Number of visits' },
+                  { value: 'never', label: 'No end date' },
+                ]} />
+              {/* "Never ends" promised something no engine delivers: there is no
+                  top-up, so the series is exactly this many visits long. */}
+              {endMode === 'never' && (
+                <div className="rounded-xl border border-border bg-bg-tertiary px-3 py-2 flex items-center gap-2">
+                  <CalendarRange className="w-4 h-4 text-ink-muted shrink-0" />
+                  <p className="text-xs text-ink-muted">
+                    {OPEN_ENDED_HORIZON} visits are scheduled ahead. Add more when they run low.
+                  </p>
+                </div>
+              )}
+              {endMode === 'season' && (
+                <div className="rounded-xl border border-accent/20 bg-accent/5 px-3 py-2 flex items-center gap-2">
+                  <CalendarRange className="w-4 h-4 text-accent-text shrink-0" />
+                  <p className="text-xs text-ink">
+                    Ends at season end{serviceSeason ? ` (${seasonLabel(serviceSeason)})` : ''}
+                    {seasonEndDate ? <span className="text-ink-muted"> · {formatDate(seasonEndDate)}</span> : <span className="text-amber-400"> · set a start date to compute</span>}
+                  </p>
+                </div>
+              )}
+              {endMode === 'on' && (
+                <Input label="End date" type="date" value={endDate} onChange={(e) => { setRecDirty(true); setEndDate(e.target.value) }} />
+              )}
+              {endMode === 'after' && (
+                <Input label="Number of visits" type="number" min="1" value={endCount}
+                  onChange={(e) => { setRecDirty(true); setEndCount(Math.max(1, Number(e.target.value) || 1)) }} />
+              )}
+              {/* Live visit-count estimate — the ONE cadence restatement. */}
+              {visitEstimate != null && visitEstimate > 0 && (
+                <p className="text-xs font-semibold text-accent-text">
+                  {recurrenceLabel(interval!.unit, interval!.count)} · {scheduledDate ? formatDate(scheduledDate) : '?'} → {effectiveEndDate ? formatDate(effectiveEndDate) : '?'} · ≈ {visitEstimate} visit{visitEstimate !== 1 ? 's' : ''}
+                </p>
+              )}
+            </>
+          )}
+        </div>
+    </Collapsible>
+  )
+
+  // The quick-add/create flow's ONE disclosure state (unchanged behaviour).
+  const adv = showMore
+
+  return (
+    <form
+      onSubmit={handleSubmit((values) => {
+        // Quick-add never types a title — derive it from service + customer.
+        if (!values.title?.trim()) {
+          const cust = customers.find(c => c.id === values.customer_id)?.name
+          values.title = `${values.service_type || 'Job'}${cust ? ` — ${cust}` : ''}`
+        }
+        const addAnother = addAnotherRef.current
+        addAnotherRef.current = false
+        return onSubmit(
+          values,
+          buildRecurrence(),
+          { suggestedDate: null, suggestedNearby: null },
+          { addAnother },
+        )
+      })}
+      className="space-y-4"
+    >
+      <Controller name="customer_id" control={control}
+        render={({ field }) => (
+          <Select label="Customer" autoFocus options={customerOptions} {...field} />
+        )} />
+
+      {/* Location is part of the common path when EDITING — moving a visit to the
+          customer's other address should not require opening anything. */}
+      {isEdit && propertyField}
+
+      <Input label="Service Type" placeholder="Your most common service"
+        {...register('service_type')} />
+
+      {/* ── Financial truth, said where the edit happens ──────────────────────
+          Renaming the service NEVER re-prices the visit: the price is either the
+          manual override or the value derived from the linked quote
+          (lib/visitValue), and neither follows the service name. Without this
+          line the owner reasonably assumes "new service = new price" — and the
+          silence would let a mislabelled amount reach an invoice. */}
+      {isEdit && quoteLinked && dirtyFields.service_type && (
+        <p className="text-xs text-sky-300 -mt-2.5 flex items-start gap-1.5">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+          <span>The linked quote still sets the price{suggestedPrice ? ` (${formatCurrency(suggestedPrice)}/visit)` : ''} — changing the service changes the label, never the amount. Use the Price field under More options to re-price.</span>
+        </p>
       )}
 
-      {/* Sticky save — reachable one-handed without scrolling past the form. */}
+      {/* Create keeps price in the fast path (quick-add is customer/service/
+          price/date); editing moves it behind More options — price edits are
+          rare, financially coupled, and have their own doors on the day board. */}
+      {!isEdit && priceBlock}
+
+      <Input label="Date" type="date"
+        error={errors.scheduled_date?.message}
+        {...register('scheduled_date', { required: 'Required' })} />
+
+      {/* Duplicate-visit check (unified dedup engine) — one clear question, never blocks */}
+      {dupWarnBlock}
+
+      {/* Soft cadence / customer-preference warnings — informational, never blocking */}
+      {schedWarnBlock}
+
+      {isEdit ? (
+        <>
+          {/* ── The compact common path: time window, duration, assignee, status,
+                 note. Everything an owner changes constantly, no disclosure in
+                 the way, no card borders around single fields. */}
+          {timeWindowGrid}
+          {durationField}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {assigneeField}
+            {statusField}
+          </div>
+          {notesBlock}
+
+          <button type="button" onClick={() => setShowMoreEdit(v => !v)}
+            aria-expanded={showMoreEdit}
+            className="text-xs font-medium text-accent-text hover:underline">
+            {showMoreEdit ? '− Fewer options' : '+ More options (price, title, crew size, repeat, work history, photos)'}
+          </button>
+
+          {showMoreEdit && (
+            <div className="space-y-4 animate-fade">
+              {titleField}
+              {priceBlock}
+              {crewSizeField}
+              {smartEstimate}
+              {weeklyPlannerCard}
+              {workPanels}
+              {referenceMedia}
+              {repeatSection}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          {weeklyPlannerCard}
+
+          <button type="button" onClick={() => setShowMore(v => !v)}
+            className="text-xs font-medium text-accent-text hover:underline">
+            {showMore ? '− Fewer options' : '+ More options (property, time, crew, repeat, notes)'}
+          </button>
+
+          {(adv || properties.length > 1) && propertyField}
+
+          {adv && (
+          <div className="space-y-4">
+          {statusField}
+
+          {workPanels}
+
+          {notesBlock}
+
+          {referenceMedia}
+
+          {/* Time & crew — expanded while creating (the smart duration suggestion
+              matters then). */}
+          <Collapsible title="Time & crew" icon={Clock} defaultOpen
+            summary={`${formatDuration(Number(watch('duration_minutes')), workdayMin) || 'Not sized'} · ${Number(watch('crew_size')) || 1} crew${watch('start_time') ? ` · ${watch('start_time')}` : ''}`}>
+            {titleField}
+            {durationField}
+            {crewSizeField}
+            {assigneeField}
+            {smartEstimate}
+            {timeWindowGrid}
+          </Collapsible>
+
+          {repeatSection}
+          </div>
+          )}
+        </>
+      )}
+
+      {/* Sticky save — reachable one-handed without scrolling past the form.
+          The save state is SAID, not implied: while anything differs from the
+          loaded row the bar says so; nothing is written until Update is tapped. */}
       <div className="sticky bottom-0 -mx-1 px-1 pt-2 pb-1 bg-bg-secondary/95 backdrop-blur border-t border-border flex items-center gap-2 flex-wrap">
         <Button type="submit" loading={isSubmitting} onClick={() => { addAnotherRef.current = false }}>
           {isEdit ? 'Update job' : 'Add job'}
@@ -1026,6 +1208,12 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           </Button>
         )}
         <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
+        {isEdit && (isDirty || recDirty) && !isSubmitting && (
+          <span role="status" className="ml-auto text-xs text-amber-400 flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block" aria-hidden="true" />
+            Unsaved changes
+          </span>
+        )}
       </div>
     </form>
   )

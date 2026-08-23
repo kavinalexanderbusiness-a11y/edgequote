@@ -23,6 +23,17 @@ export type MsgType =
   | 'eta' | 'rain_delay' | 'rescheduled' | 'early_arrival' | 'confirm'
   // Follow-up / reminder templates.
   | 'estimate_reminder' | 'payment_reminder' | 'estimate_followup'
+  // ── Estimate APPOINTMENT messages (Session 79) ────────────────────────────
+  // A scheduled visit to look at work and price it. These are their own types
+  // and not reuses of confirm / on_my_way / rescheduled for one reason: every
+  // one of those says or implies that the booked SERVICE is about to happen.
+  // "We're on our way to get you looking great" arriving before anyone has been
+  // quoted — let alone agreed a price — is a promise the business has not made.
+  // Nothing here may ever imply work was performed; there is deliberately no
+  // estimate-appointment analogue of job_complete, because the customer's work
+  // is not complete and telling them so is the exact failure this feature exists
+  // to end.
+  | 'estimate_appt_scheduled' | 'estimate_appt_on_my_way' | 'estimate_appt_rescheduled'
   // Payment receipt — auto-sent after a successful (AutoPay) payment.
   | 'receipt'
   // Booking confirmation — auto-sent to the CUSTOMER the moment they book online.
@@ -40,6 +51,13 @@ export type MsgType =
   | 'introduction'
   // Free-form one-off message (the shared Send Message dialog's blank slate).
   | 'custom'
+  // An owner's reply inside an existing conversation (/api/messages/send).
+  // Registered because the governor treats any UNKNOWN template as commercial
+  // (fail-toward-governance), which was silently blocking owners' own inbox
+  // replies outside 08:00–21:00 as if they were marketing. A reply is a
+  // conversation: msgCategory files it as null, exactly like 'custom'. The
+  // body always arrives as an override; the default below is never shown.
+  | 'reply'
 
 export const MSG_LABELS: Record<MsgType, string> = {
   on_my_way: 'On my way',
@@ -61,6 +79,9 @@ export const MSG_LABELS: Record<MsgType, string> = {
   estimate_reminder: 'Estimate reminder',
   payment_reminder: 'Payment reminder',
   estimate_followup: 'Estimate follow-up',
+  estimate_appt_scheduled: 'Estimate visit booked',
+  estimate_appt_on_my_way: 'On my way (estimate visit)',
+  estimate_appt_rescheduled: 'Estimate visit moved',
   receipt: 'Payment receipt',
   booking_received: 'Booking confirmation',
   birthday: 'Birthday greeting',
@@ -72,6 +93,7 @@ export const MSG_LABELS: Record<MsgType, string> = {
   review_chase: 'Review chase (campaign)',
   introduction: 'Introduction / new number',
   custom: 'Custom message',
+  reply: 'Reply',
 }
 
 // The variables a template may reference, with a short hint for the editor.
@@ -83,7 +105,7 @@ export const MSG_VARIABLES: { key: string; hint: string }[] = [
   { key: 'date', hint: 'the visit / new date' },
   { key: 'old_date', hint: 'the original date (reschedule / rain delay)' },
   { key: 'address', hint: 'the property address' },
-  { key: 'review_link', hint: 'your Google review link' },
+  { key: 'review_link', hint: 'your public review link (Google, Facebook…)' },
   { key: 'portal_link', hint: 'their private portal link' },
   { key: 'quote_link', hint: 'link to the quote (portal)' },
   { key: 'invoice_link', hint: 'link to the invoice (portal)' },
@@ -229,6 +251,30 @@ This is a reminder from {{business_name}} about your upcoming estimate on **{{da
 
 We look forward to meeting with you. If you need to reschedule, simply reply to this message.`,
 
+  // ── Estimate APPOINTMENT wording (Session 79) ──────────────────────────────
+  // Every line below is written to survive the question "could this be read as
+  // 'the work is done' or 'the work is agreed'?" — because the $0-job workaround
+  // these replace sent customers exactly that, for a visit that had not been
+  // quoted yet. So: no "service", no "finished", no "thanks for your business",
+  // and no price. The visit is to LOOK and to PRICE, and the words say so.
+  //
+  // estimate_appt_scheduled is the booking confirmation and estimate_reminder
+  // (above) is the day-before nudge — the same two-moment split that `confirm`
+  // and `reminder` already draw for work visits.
+  estimate_appt_scheduled: `Hi {{first_name}}, your estimate with {{business_name}} is booked for **{{date}}**.
+
+We'll take a look, answer any questions, and send you a written quote afterwards — there's nothing to pay for the visit.
+
+Need to change the time? Just reply.`,
+
+  estimate_appt_on_my_way: `Hi {{first_name}}, {{business_name}} here — I'm on my way to take a look and should arrive in about **{{eta}} minutes**.
+
+See you shortly!`,
+
+  estimate_appt_rescheduled: `Hi {{first_name}}, your estimate with {{business_name}} has moved to **{{date}}**.
+
+If that doesn't suit, just reply and we'll find another time.`,
+
   // {{amount}} is what is ACTUALLY collectable right now: its only sender
   // (api/cron/invoice-reminders) fills it from depositChargeAmount(), never a raw
   // invoice total. It already computed that figure — this template simply never
@@ -332,6 +378,10 @@ Thank you for being a valued customer!
   custom: `Hi {{first_name}},
 
 `,
+
+  // Never rendered: a reply's body is always the owner's typed text
+  // (bodyOverride). Registered for the governor/category maps, not for copy.
+  reply: '',
 }
 
 const SUBJECTS: Record<MsgType, string> = {
@@ -343,6 +393,10 @@ const SUBJECTS: Record<MsgType, string> = {
   eta: 'Your upcoming service', rain_delay: 'Weather reschedule', rescheduled: 'Your service has been rescheduled',
   early_arrival: 'We can come earlier today', confirm: 'Confirming your service',
   estimate_reminder: 'Your upcoming estimate', payment_reminder: 'Invoice reminder', estimate_followup: 'Following up on your quote',
+  // "Estimate", never "service" — nothing has been agreed or performed yet.
+  estimate_appt_scheduled: 'Your estimate is booked',
+  estimate_appt_on_my_way: 'On my way for your estimate',
+  estimate_appt_rescheduled: 'Your estimate visit has moved',
   receipt: 'Payment received — thank you',
   booking_received: 'We’ve got your request',
   birthday: 'Happy birthday!', anniversary: 'Thank you', win_back: 'We’d love to see you again', marketing: 'A quick hello',
@@ -350,6 +404,7 @@ const SUBJECTS: Record<MsgType, string> = {
   review_chase: 'Would you leave us a review?',
   introduction: 'Our new number — please save it',
   custom: '', // falsy → renderMessage falls back to "A message from {business}"
+  reply: '',  // same fallback — a reply email is titled by the business, not a template
 }
 
 export interface MsgVars {
@@ -627,6 +682,10 @@ export function msgCategory(t: MsgType): MsgCategory | null {
       return 'marketing'
     case 'birthday': case 'anniversary': case 'seasonal_offer': return 'seasonal'
     case 'custom': return null // owner-composed one-offs are always deliverable
+    // A reply is the owner answering a conversation the customer is already in —
+    // the same class as 'custom'. Filing it under any category would let a
+    // preference or the commercial governor block an owner's own answer.
+    case 'reply': return null
     // Transactional: it confirms a request the customer just made of us, so it isn't a
     // marketing category they can be opted out of. Channel opt-in still gates the SMS.
     case 'booking_received': return null
@@ -635,6 +694,17 @@ export function msgCategory(t: MsgType): MsgCategory | null {
     case 'on_my_way': case 'running_late': case 'arrived': case 'job_complete':
     case 'thanks': case 'review_request': case 'reminder': case 'eta':
     case 'rain_delay': case 'rescheduled': case 'early_arrival': case 'confirm':
+      return 'reminders'
+    // Estimate APPOINTMENT timing — 'reminders' ("Appointment & service
+    // updates"), not 'estimates'. The distinction the categories draw is
+    // solicitation vs. logistics, and these are logistics: the customer agreed
+    // to this visit and is expecting somebody at their door. Filing them under
+    // 'estimates' would let a customer who muted quote-chasing also mute "I'm on
+    // my way", and they would sit at home waiting for a van that had been
+    // cancelled. The quote that FOLLOWS the visit is a different message, and it
+    // stays under 'estimates' where the opt-out can properly reach it.
+    case 'estimate_appt_scheduled': case 'estimate_appt_on_my_way':
+    case 'estimate_appt_rescheduled':
       return 'reminders'
   }
 }

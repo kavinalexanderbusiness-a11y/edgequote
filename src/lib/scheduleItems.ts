@@ -8,7 +8,10 @@
 import { Ruler, Phone, CalendarClock, ListChecks, AlarmClock } from 'lucide-react'
 
 export type ScheduleItemType = 'estimate' | 'callback' | 'appointment' | 'task' | 'reminder'
-export type ScheduleItemStatus = 'scheduled' | 'completed' | 'cancelled'
+// `no_show` (Session 79) is deliberately NOT folded into `cancelled`: a customer
+// who cancels saved the trip, one who no-shows cost it. Both statuses are
+// terminal and neither is a completion — see lib/estimateAppointments.
+export type ScheduleItemStatus = 'scheduled' | 'completed' | 'cancelled' | 'no_show'
 
 export interface ScheduleItem {
   id: string
@@ -19,12 +22,22 @@ export interface ScheduleItem {
   scheduled_date: string          // yyyy-MM-dd
   start_time: string | null       // HH:mm[:ss]
   duration_minutes: number | null
+  /** INTERNAL. Never rendered to a customer — customer_note is the other audience. */
   notes: string | null
+  /** Optional customer-facing wording for the appointment. The audience is the COLUMN. */
+  customer_note: string | null
+  /** Why a cancelled / no_show item did not happen. */
+  cancel_reason: string | null
   phone: string | null
   due_at: string | null           // ISO — tasks / reminders
   status: ScheduleItemStatus
   converted_quote_id: string | null
   completed_at: string | null
+  updated_at: string | null
+  // Who is going — mirrors jobs.crew_id / jobs.technician_id. A crew XOR a
+  // person XOR nobody; the DB constraint, not the form, is what enforces it.
+  crew_id: string | null
+  technician_id: string | null
   // Joined for display + routing (read-only).
   customers?: { id: string; name: string; phone: string | null } | null
   properties?: { id: string; address: string | null; lat: number | null; lng: number | null } | null
@@ -75,7 +88,7 @@ export const SCHEDULE_ITEM_TYPES = Object.keys(ITEM_META) as ScheduleItemType[]
 
 // Columns to select (with the joins display + routing need).
 export const ITEM_SELECT =
-  'id, type, title, customer_id, property_id, scheduled_date, start_time, duration_minutes, notes, phone, due_at, status, converted_quote_id, completed_at, customers(id, name, phone), properties(id, address, lat, lng)'
+  'id, type, title, customer_id, property_id, scheduled_date, start_time, duration_minutes, notes, customer_note, cancel_reason, phone, due_at, status, converted_quote_id, completed_at, updated_at, crew_id, technician_id, customers(id, name, phone), properties(id, address, lat, lng)'
 
 export function isRoutable(item: ScheduleItem): boolean {
   return ITEM_META[item.type].routable

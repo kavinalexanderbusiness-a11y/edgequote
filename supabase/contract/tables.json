@@ -104,6 +104,150 @@
   "force_rls": false
  },
  {
+  "acl": "{postgres=arwdDxtm/postgres,authenticated=r/postgres,service_role=ar/postgres}",
+  "rls": true,
+  "cols": [
+   {
+    "name": "id",
+    "type": "uuid",
+    "default": "gen_random_uuid()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "occurred_at",
+    "type": "timestamp with time zone",
+    "default": "clock_timestamp()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "seq",
+    "type": "bigint",
+    "default": null,
+    "notnull": true,
+    "identity": "d",
+    "generated": ""
+   },
+   {
+    "name": "txid",
+    "type": "bigint",
+    "default": "txid_current()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "user_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "actor_type",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "actor_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "actor_label",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "action",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "entity_type",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "entity_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "entity_label",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "customer_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "source",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "before",
+    "type": "jsonb",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "after",
+    "type": "jsonb",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "meta",
+    "type": "jsonb",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   }
+  ],
+  "relname": "audit_events",
+  "force_rls": false
+ },
+ {
   "acl": "{postgres=arwdDxtm/postgres,anon=rDxtm/postgres,authenticated=rDxtm/postgres,service_role=arwdDxtm/postgres}",
   "rls": true,
   "cols": [
@@ -1864,6 +2008,14 @@
     "type": "integer",
     "default": "0",
     "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "lead_technician_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
     "identity": "",
     "generated": ""
    }
@@ -5486,6 +5638,14 @@
    {
     "name": "completion_issue",
     "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "technician_id",
+    "type": "uuid",
     "default": null,
     "notnull": false,
     "identity": "",
@@ -10584,7 +10744,7 @@
   "force_rls": false
  },
  {
-  "acl": "{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
+  "acl": "{postgres=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
   "rls": true,
   "cols": [
    {
@@ -10720,6 +10880,46 @@
     "type": "timestamp with time zone",
     "default": null,
     "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "crew_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "technician_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "customer_note",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "cancel_reason",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
     "identity": "",
     "generated": ""
    }
@@ -11701,6 +11901,54 @@
    }
   ],
   "relname": "suppliers",
+  "force_rls": false
+ },
+ {
+  "acl": "{postgres=arwdDxtm/postgres,service_role=arwdDxtm/postgres,authenticated=r/postgres}",
+  "rls": true,
+  "cols": [
+   {
+    "name": "id",
+    "type": "uuid",
+    "default": "gen_random_uuid()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "user_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "technician_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "crew_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "changed_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   }
+  ],
+  "relname": "technician_crew_history",
   "force_rls": false
  },
  {

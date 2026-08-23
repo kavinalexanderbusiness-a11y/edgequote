@@ -163,6 +163,16 @@ export interface ConflictLaneInput {
   stops: ConflictStopInput[]
   availableTechs: number     // active techs on the crew not marked 'off'
   rosteredTechs: number      // active techs on the crew, any status
+  /** True when this lane is ONE named person rather than a crew. The counts
+   *  above mean the same thing either way; only the sentence changes, because
+   *  "everyone on the crew is marked off" is the wrong noun for one person. */
+  isPerson?: boolean
+  /** ⭐ True when this lane's capacity is ALREADY counted by another lane in the
+   *  same day — a person who is on a crew that is also working today. Their own
+   *  lane is a real timeline and its busy minutes count, but adding a second
+   *  workday of CAPACITY for one person would inflate the day's denominator and
+   *  make an overloaded day read as comfortable. */
+  capacityCountedElsewhere?: boolean
 }
 
 // A visit is "late" once the ETA slips this far past the promised time.
@@ -216,15 +226,18 @@ export function detectDayConflicts(
       }
 
       // Roster — work with nobody to do it is a dispatch problem, not a data quirk.
+      const stops = `${n} stop${n !== 1 ? 's' : ''}`
       if (lane.rosteredTechs === 0) {
         out.push({
           kind: 'no_roster', severity: 'warn', laneId: lane.laneId, laneName: lane.laneName,
-          message: `${lane.laneName} has ${n} stop${n !== 1 ? 's' : ''} but no technicians on the crew.`,
+          message: `${lane.laneName} has ${stops} but nobody on the crew.`,
         })
       } else if (lane.availableTechs === 0) {
         out.push({
           kind: 'no_roster', severity: 'warn', laneId: lane.laneId, laneName: lane.laneName,
-          message: `${lane.laneName} has ${n} stop${n !== 1 ? 's' : ''} but everyone on the crew is marked off.`,
+          message: lane.isPerson
+            ? `${lane.laneName} has ${stops} but is marked off today.`
+            : `${lane.laneName} has ${stops} but everyone on the crew is marked off.`,
         })
       }
     }
@@ -301,7 +314,8 @@ export function dayKpis(lanes: ConflictLaneInput[], nowMin?: number): DayKpis {
     if (!lane.isUnassigned) {
       const stats = laneStats(lane.startMin, lane.finishMin, lane.workMin, lane.capacityMin)
       busySum += stats.busyMin
-      capSum += lane.capacityMin
+      // One person cannot supply two workdays — see capacityCountedElsewhere.
+      capSum += lane.capacityCountedElsewhere ? 0 : lane.capacityMin
       driveSum += stats.driveMin
       if (nowMin != null && laneProgress(nowMin, lane.stops).behindMin >= 10) behind++
     }

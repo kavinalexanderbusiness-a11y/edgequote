@@ -435,7 +435,19 @@ H('11. What the CREW sees is derived from the RPC\'s own ordering')
     fn.includes(`coalesce(j.route_order, ${UNORDERED_CREW_RANK})`))
   check(`…and an absent start time to ${NO_START_TIME_KEY}`,
     fn.includes(`coalesce(j.start_time::text, '${NO_START_TIME_KEY}')`))
-  check('…and still returns only this crew\'s stops', /and j\.crew_id = v_crew/.test(fn))
+  // Session 65 replaced the direct `j.crew_id = v_crew` test with an assignment
+  // model where a stop belongs to a CREW or to a PERSON. The scoping property is
+  // unchanged — a worker still sees only their employer's stops, and only the ones
+  // assigned to their crew or to them — but it is now expressed through
+  // crew_assignment_covers(). Both halves are asserted, because dropping either
+  // one is what would actually widen the result:
+  //   · the employer predicate is the tenant boundary
+  //   · the covers() predicate is the assignment boundary
+  check('…and still scopes stops to the employer it resolved',
+    /where j\.user_id = v_employer/.test(fn))
+  check('…and still returns only stops assigned to this crew or this worker',
+    /public\.crew_assignment_covers\(\s*j\.crew_id,\s*j\.technician_id,\s*v_crew,\s*v_tech\s*\)/.test(fn),
+    'crew_day must constrain by assignment, not merely by employer')
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

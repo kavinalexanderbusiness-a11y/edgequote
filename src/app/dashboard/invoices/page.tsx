@@ -60,7 +60,18 @@ export default function InvoicesPage() {
   // 'deposit' is not a stored status — it is the "I asked for money up front and it
   // hasn't landed" view, which was previously unreachable: those invoices sit in
   // Unpaid/Sent/Partial alongside everything else with nothing to tell them apart.
-  const [filter, setFilter] = useState<'' | InvoiceDisplayStatus | 'deposit'>('')
+  //
+  // `?f=` deep-links a filter (the dashboard briefing's overdue chip; same param
+  // name the messages page uses). Read once at mount — the same idiom as ?pay=
+  // below — and validated against the pills' OWN vocabulary, so an unknown value
+  // lands on All instead of an invisible filter no pill can express or clear.
+  const [filter, setFilter] = useState<'' | InvoiceDisplayStatus | 'deposit'>(() => {
+    if (typeof window === 'undefined') return ''
+    const f = new URLSearchParams(window.location.search).get('f')
+    if (!f) return ''
+    const valid: string[] = [...FILTERS.map(x => x.value), 'deposit']
+    return valid.includes(f) ? f as InvoiceDisplayStatus | 'deposit' : ''
+  })
   const [query, setQuery] = useState('')
   // ── Focus IS the detail surface ────────────────────────────────────────────
   // `?invoice=INV-0042` / `?job=<id>` already narrowed the page to one invoice
