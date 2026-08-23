@@ -1,10 +1,10 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { loadGoogleMaps } from '@/lib/googleMaps'
+import { loadGoogleMaps, onMapsUnavailable, describeMapsError, type MapsUnavailable } from '@/lib/googleMaps'
+import { MapUnavailable } from '@/components/maps/MapUnavailable'
 import { Grade, GRADE_COLORS } from '@/lib/profitability'
 import { Coord } from '@/lib/geo'
-import { Banner } from '@/components/ui/Banner'
 
 export interface RouteMapStop { lat: number; lng: number; order: number; title: string }
 
@@ -19,7 +19,11 @@ export function RouteMap({
   const gmap = useRef<any>(null)
   const overlays = useRef<any[]>([])
   const [ready, setReady] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
+  const [unavailable, setUnavailable] = useState<MapsUnavailable | null>(null)
+
+  // Google reports an auth refusal AFTER a successful-looking load — subscribe,
+  // don't await; fires immediately if the refusal already happened this page load.
+  useEffect(() => onMapsUnavailable(setUnavailable), [])
 
   useEffect(() => {
     let cancelled = false
@@ -35,7 +39,7 @@ export function RouteMap({
           streetViewControl: false, fullscreenControl: true, mapTypeControl: false,
         })
         setReady(true)
-      } catch (e) { if (!cancelled) setErr(e instanceof Error ? e.message : 'Map failed to load') }
+      } catch (e) { if (!cancelled) setUnavailable(describeMapsError(e)) }
     }
     init()
     return () => {
@@ -82,8 +86,8 @@ export function RouteMap({
     if (stops.length || base) gmap.current.fitBounds(bounds, 56)
   }, [ready, stops, grade, base])
 
-  if (err) {
-    return <Banner tone="warn">{err}</Banner>
+  if (unavailable) {
+    return <MapUnavailable unavailable={unavailable} audience="owner" />
   }
   return (
     <div className="relative rounded-card overflow-hidden border border-border">

@@ -1,9 +1,9 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { loadGoogleMaps } from '@/lib/googleMaps'
+import { loadGoogleMaps, onMapsUnavailable, describeMapsError, type MapsUnavailable } from '@/lib/googleMaps'
+import { MapUnavailable } from '@/components/maps/MapUnavailable'
 import { Coord } from '@/lib/geo'
-import { Banner } from '@/components/ui/Banner'
 
 // One mapping system: this is a third VIEW on the shared Google Maps loader
 // (like ProfitMap = portfolio heatmap, RouteMap = one route). It renders the
@@ -52,7 +52,11 @@ export function SaturationMap({
   const info = useRef<any>(null)
   const didFit = useRef(false) // fit bounds once — layer toggles must not reset the user's zoom
   const [ready, setReady] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
+  const [unavailable, setUnavailable] = useState<MapsUnavailable | null>(null)
+
+  // Google reports an auth refusal AFTER a successful-looking load — subscribe,
+  // don't await; fires immediately if the refusal already happened this page load.
+  useEffect(() => onMapsUnavailable(setUnavailable), [])
 
   useEffect(() => {
     let cancelled = false
@@ -69,7 +73,7 @@ export function SaturationMap({
         })
         info.current = new g.maps.InfoWindow()
         setReady(true)
-      } catch (e) { if (!cancelled) setErr(e instanceof Error ? e.message : 'Map failed to load') }
+      } catch (e) { if (!cancelled) setUnavailable(describeMapsError(e)) }
     }
     init()
     return () => {
@@ -144,8 +148,8 @@ export function SaturationMap({
     if (any && !didFit.current) { gmap.current.fitBounds(bounds, 48); didFit.current = true }
   }, [ready, points, hoods, layers, base])
 
-  if (err) {
-    return <Banner tone="warn">{err}</Banner>
+  if (unavailable) {
+    return <MapUnavailable unavailable={unavailable} audience="owner" />
   }
   return (
     <div className="relative rounded-card overflow-hidden border border-border">
