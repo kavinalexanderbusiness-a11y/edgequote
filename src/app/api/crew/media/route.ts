@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { resolveAppRole } from '@/lib/crewAccess'
+import {
+  assignedVisitFilter, authorizeWorkerVisit, resolveWorker,
+  WORKER_DENIAL_MESSAGE, WORKER_DENIAL_STATUS,
+} from '@/lib/workerAccess'
 import {
   CREW_MEDIA_ACCEPT, CREW_MEDIA_BUCKET, CREW_MEDIA_MAX_BYTES, kindOf, sizeLabel, type CrewMedia,
 } from '@/lib/crewMedia'
@@ -73,10 +76,8 @@ export async function GET(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Sign in first.' }, { status: 401 })
 
-  const role = await resolveAppRole(supabase)
-  if (role !== 'crew') {
-    return NextResponse.json({ error: 'Only crew members read work instructions here.' }, { status: 403 })
-  }
+  // ⛔ No separate role check. The canonical resolver below asks the stronger
+  // question — an ACTIVE roster row for this session — and answers it once.
 
   const jobId = req.nextUrl.searchParams.get('jobId') || ''
   const date = req.nextUrl.searchParams.get('date') || ''
@@ -96,15 +97,19 @@ export async function GET(req: NextRequest) {
   // shut. Never fall back to a weaker check. (The invite/photo routes' contract.)
   if (!admin) return NextResponse.json({ error: 'Work instructions aren’t available right now.' }, { status: 503 })
 
-  // 3 — who is this worker, per the roster switches. Fails closed on any error:
-  // "couldn't check" must never be treated as "checked out fine".
-  const { data: tech, error: techErr } = await admin.from('technicians')
-    .select('id, user_id, crew_id')
-    .eq('auth_user_id', user.id).eq('is_active', true).is('archived_at', null)
-    .maybeSingle()
-  if (techErr) return NextResponse.json({ error: 'Couldn’t verify your crew access — try again.' }, { status: 502 })
-  const t = tech as { id: string; user_id: string; crew_id: string | null } | null
-  if (!t || !t.crew_id) return NextResponse.json({ error: 'Your account is no longer active on a crew.' }, { status: 403 })
+  // 3 — ⭐ who is this worker, per the roster switches, through THE canonical
+  // resolver (lib/workerAccess). Fails closed on any error: "couldn't check" is
+  // never "checked out fine". ⭐ A crewless worker is NO LONGER refused here —
+  // being assigned by name is a complete assignment, and turning them away at
+  // step 3 was what hid their own work instructions from them.
+  const resolved = await resolveWorker(admin, user.id)
+  if (!resolved.ok) {
+    return NextResponse.json(
+      { error: WORKER_DENIAL_MESSAGE[resolved.denial] },
+      { status: WORKER_DENIAL_STATUS[resolved.denial] },
+    )
+  }
+  const t = resolved.worker
 
   // ── The day summary: how much is attached to each of TODAY's stops ─────────
   // Scoped by the same employer + crew the stop list itself is scoped by, so a
@@ -116,13 +121,27 @@ export async function GET(req: NextRequest) {
     // the filter, a photo somebody sent in the conversation would inflate it,
     // and a worker would open the instructions looking for a file that the
     // instructions do not contain.
+    //
+    // ⭐ TWO STEPS, ON PURPOSE. The assignment predicate is an OR across two
+    // columns, and expressing that against an EMBEDDED table is both awkward and
+    // easy to get subtly wrong. So: resolve THIS worker's visits for the day
+    // first (tenant predicate + assignedVisitFilter — the same canonical
+    // predicate), then count only within those ids. A visit that failed the
+    // first query cannot be counted by the second.
+    const { data: dayJobs, error: dayJobErr } = await admin.from('jobs')
+      .select('id')
+      .eq('user_id', t.employerId)
+      .eq('scheduled_date', date)
+      .or(assignedVisitFilter(t))
+    if (dayJobErr) return NextResponse.json({ error: 'Couldn’t check for work instructions.' }, { status: 502 })
+    const myJobIds = ((dayJobs || []) as { id: string }[]).map(r => r.id)
+    if (myJobIds.length === 0) return NextResponse.json({ ok: true, counts: {} })
+
     const { data: dayRows, error: dayErr } = await admin.from('crew_media')
-      .select('job_id, kind, jobs!inner(id, user_id, crew_id, scheduled_date)')
+      .select('job_id, kind')
       .is('message_id', null)
-      .eq('user_id', t.user_id)
-      .eq('jobs.user_id', t.user_id)
-      .eq('jobs.crew_id', t.crew_id)
-      .eq('jobs.scheduled_date', date)
+      .eq('user_id', t.employerId)
+      .in('job_id', myJobIds)
     if (dayErr) return NextResponse.json({ error: 'Couldn’t check for work instructions.' }, { status: 502 })
 
     const counts: Record<string, { photos: number; videos: number }> = {}
@@ -143,13 +162,14 @@ export async function GET(req: NextRequest) {
   // must get the same honest empty state as any other stop, not an error that
   // looks like a permissions failure. Reading instructions changes nothing;
   // WRITING to a cancelled visit is what the other doors refuse.
-  const { data: job, error: jobErr } = await admin.from('jobs')
-    .select('id, user_id')
-    .eq('id', jobId).eq('user_id', t.user_id).eq('crew_id', t.crew_id)
-    .maybeSingle()
-  if (jobErr) return NextResponse.json({ error: 'Couldn’t check that visit — try again.' }, { status: 502 })
-  const j = job as { id: string; user_id: string } | null
-  if (!j) return NextResponse.json({ error: 'That visit isn’t on your board.' }, { status: 404 })
+  const auth = await authorizeWorkerVisit(admin, user.id, jobId)
+  if (!auth.ok) {
+    return NextResponse.json(
+      { error: WORKER_DENIAL_MESSAGE[auth.denial] },
+      { status: WORKER_DENIAL_STATUS[auth.denial] },
+    )
+  }
+  const j = { id: auth.visit.jobId, user_id: auth.visit.employerId }
 
   // The catalogue, scoped by BOTH the visit and its owner. job_id alone would be
   // enough given the check above; carrying user_id too means a future bug that
@@ -237,10 +257,7 @@ export async function POST(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Sign in first.' }, { status: 401 })
 
-  const role = await resolveAppRole(supabase)
-  if (role !== 'crew') {
-    return NextResponse.json({ error: 'Only crew members attach files here.' }, { status: 403 })
-  }
+  // ⛔ No separate role check — the canonical door below is the stronger one.
 
   const form = await req.formData().catch(() => null)
   if (!form) return NextResponse.json({ error: 'bad request' }, { status: 400 })
@@ -266,21 +283,17 @@ export async function POST(req: NextRequest) {
   const admin = createAdminClient()
   if (!admin) return NextResponse.json({ error: 'Attachments aren’t available right now.' }, { status: 503 })
 
-  const { data: tech, error: techErr } = await admin.from('technicians')
-    .select('id, user_id, crew_id')
-    .eq('auth_user_id', user.id).eq('is_active', true).is('archived_at', null)
-    .maybeSingle()
-  if (techErr) return NextResponse.json({ error: 'Couldn’t verify your crew access — try again.' }, { status: 502 })
-  const t = tech as { id: string; user_id: string; crew_id: string | null } | null
-  if (!t || !t.crew_id) return NextResponse.json({ error: 'Your account is no longer active on a crew.' }, { status: 403 })
-
-  const { data: job, error: jobErr } = await admin.from('jobs')
-    .select('id, user_id')
-    .eq('id', jobId).eq('user_id', t.user_id).eq('crew_id', t.crew_id)
-    .maybeSingle()
-  if (jobErr) return NextResponse.json({ error: 'Couldn’t check that visit — try again.' }, { status: 502 })
-  const j = job as { id: string; user_id: string } | null
-  if (!j) return NextResponse.json({ error: 'That visit isn’t on your board.' }, { status: 404 })
+  // ⭐ THE canonical door — active worker, this worker's tenant, then crew OR
+  // by-name assignment. One call, the same answer every other worker door gives.
+  const auth = await authorizeWorkerVisit(admin, user.id, jobId)
+  if (!auth.ok) {
+    return NextResponse.json(
+      { error: WORKER_DENIAL_MESSAGE[auth.denial] },
+      { status: WORKER_DENIAL_STATUS[auth.denial] },
+    )
+  }
+  const t = auth.worker
+  const j = { id: auth.visit.jobId, user_id: auth.visit.employerId }
 
   // The message, proven to be on THAT visit and in THAT business. Both columns
   // carried, so a future bug that widened one still cannot cross the other.
