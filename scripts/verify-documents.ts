@@ -270,13 +270,36 @@ check('a replayed sign call answers already_signed',
 check('the signature image is stored by path, never inline',
   /"signature_path" text/i.test(schema) && !/signature_data|signature_base64|signature_png/i.test(schema))
 
-// ⭐ The audit seam, deliberately empty for now (Session 68 has not landed).
-check('no speculative call to an unlanded audit interface',
-  !/audit_log\s*\(/i.test(schema),
-  'a guess at an unpublished interface is worse than an honest gap')
-check('the audit deferral is written down where the next session will find it',
-  /AFTER SESSION 68 LANDS/i.test(schema),
-  'the reconciliation instruction must live with the schema it applies to')
+// ── the audit seam: Session 68's engine, not a second one ───────────────────
+check('document events go through the canonical audit_log()',
+  /perform public\.audit_log\(/i.test(schema),
+  'documents must call Session 68\'s interface, not describe its own history')
+check('this file defines NO audit table or audit_log of its own',
+  !/create table[^;]*audit_events/i.test(schema)
+  && !/create or replace function public\.audit_log\b/i.test(schema),
+  'a second audit engine is exactly what one-engine-per-responsibility forbids')
+// ⭐ Lazy plpgsql compilation means a missing audit_log only explodes on the
+// FIRST UPLOAD, in production. The precondition turns that into an apply-time
+// refusal.
+check('the apply-order dependency on the audit trail is enforced, not merely noted',
+  /to_regprocedure\('public\.audit_log\(uuid,text,text,uuid,text,uuid,jsonb,jsonb,jsonb\)'\) is null/i.test(schema)
+  && /raise exception[\s\S]{0,200}audit-trail-v1\.sql/i.test(schema),
+  'plpgsql compiles lazily — a comment would not stop a wrong-order apply')
+
+// ⛔ Nothing sensitive may reach the general-purpose event log.
+const auditCalls = schema.match(/perform public\.audit_log\([\s\S]*?\);/gi) ?? []
+check('every audit call is present and inspectable', auditCalls.length >= 5,
+  `found ${auditCalls.length} audit_log calls`)
+check('no audit call carries the signature image or any storage path',
+  !auditCalls.some(c => /signature_path|storage_path|base64|signature_data/i.test(c)),
+  'the drawn mark is biometric-adjacent and stays behind the private-bucket door')
+check('no audit call duplicates signature truth',
+  !auditCalls.some(c => /new\.signer_name|new\.statement/i.test(c)),
+  'document_signatures is authoritative — audit DESCRIBES the mutation')
+for (const action of ['document_uploaded', 'document_shared', 'document_signed',
+                      'document_archived', 'document_version_replaced']) {
+  check(`audit records ${action}`, new RegExp(`'${action}'`).test(schema))
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 8 · VERSION / FREEZE
@@ -411,6 +434,19 @@ async function behaviour() {
     try { await db.exec(sql); return '' } catch (e: any) { return String(e?.message ?? 'error') }
   }
 
+  /**
+   * ⭐ REFUSED FOR THE RIGHT REASON. `refuses()` alone passes on ANY error — so a
+   * typo'd column name, a missing fixture or a syntax slip would render as "the
+   * constraint bit", and the guard would be green while proving nothing. Every
+   * refusal below therefore also names the rule that must have done the refusing.
+   */
+  const refusedBy = async (name: string, sql: string, expected: RegExp, detail?: string) => {
+    const msg = await refuses(sql)
+    if (!msg) { check(name, false, detail ?? 'the statement SUCCEEDED — the rule did not bite'); return }
+    check(name, expected.test(msg),
+      `refused, but for the wrong reason — expected ${expected}, got: ${msg.slice(0, 180)}`)
+  }
+
   // ── apply: prelude → baseline → the pending change ────────────────────────
   const split = (sql: string): string[] => {
     const out: string[] = []
@@ -468,9 +504,21 @@ async function behaviour() {
     }
     const statements = split(prepared)
     let n = 0
+    // Progress, because applying the baseline is ~10 minutes of WASM Postgres and
+    // a log line that only appears on COMPLETION is indistinguishable from a hang.
+    // (It cost this session two false "it's stuck" diagnoses before the real
+    // cause — nine orphaned runs competing for the CPU — turned up.)
+    const t0 = Date.now()
+    const step = Math.max(250, Math.floor(statements.length / 8))
     try {
-      for (const s of statements) { await db.exec(s + ';'); n++ }
-      console.log(`  ✓ applied ${label} (${statements.length} statements)`)
+      for (const s of statements) {
+        await db.exec(s + ';')
+        n++
+        if (n % step === 0) {
+          console.log(`     … ${label}: ${n}/${statements.length} (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
+        }
+      }
+      console.log(`  ✓ applied ${label} (${statements.length} statements, ${((Date.now() - t0) / 1000).toFixed(0)}s)`)
       return true
     } catch (e: any) {
       fail++
@@ -485,6 +533,17 @@ async function behaviour() {
   if (!await applyFile('platform prelude', src(PRELUDE))) return
   for (const f of readdirSync(MIGRATIONS).filter(f => f.endsWith('.sql')).sort()) {
     if (!await applyFile(f, src(join(MIGRATIONS, f)))) return
+  }
+  // ⭐ THE REAL APPLY ORDER, PROVEN. Documents calls Session 68's audit_log and
+  // section 0 refuses to apply without it, so the rebuild applies the audit
+  // trail first — exactly as production must. If that dependency were wrong or
+  // circular, this is where it would fail rather than on somebody's first upload.
+  const auditPending = join(PENDING_DIR, '2026-08-15-audit-trail-v1.sql')
+  if (existsSync(auditPending)) {
+    if (!await applyFile('2026-08-15-audit-trail-v1.sql (prerequisite)', src(auditPending))) return
+  } else {
+    console.log('  ⏭  audit trail pending file absent — documents cannot apply without it')
+    return
   }
   if (inPending && !await applyFile(pendingFiles[0], pendingSql)) return
 
@@ -520,19 +579,23 @@ async function behaviour() {
   console.log('  ✓ fixtures: two tenants, three customers, one visit')
 
   // ── entity link ────────────────────────────────────────────────────────────
-  check('BEHAVIOUR · a document with no entity is refused',
-    !!await refuses(`insert into public.documents (user_id, name) values ('${A}', 'Orphan')`))
-  check('BEHAVIOUR · a document with two entities is refused',
-    !!await refuses(`insert into public.documents (user_id, name, customer_id, job_id)
-      values ('${A}', 'Two homes', '11111111-1111-1111-1111-111111111111', 'bbbbbbbb-0000-0000-0000-000000000001')`))
+  await refusedBy('BEHAVIOUR · a document with no entity is refused',
+    `insert into public.documents (user_id, name) values ('${A}', 'Orphan')`,
+    /documents_one_entity/i)
+  await refusedBy('BEHAVIOUR · a document with two entities is refused',
+    `insert into public.documents (user_id, name, customer_id, job_id)
+      values ('${A}', 'Two homes', '11111111-1111-1111-1111-111111111111', 'bbbbbbbb-0000-0000-0000-000000000001')`,
+    /documents_one_entity/i)
 
   // ── visibility ─────────────────────────────────────────────────────────────
-  check('BEHAVIOUR · worker visibility on a customer document is refused',
-    !!await refuses(`insert into public.documents (user_id, name, customer_id, visibility)
-      values ('${A}', 'No visit', '11111111-1111-1111-1111-111111111111', 'worker')`))
-  check('BEHAVIOUR · customer visibility on an equipment document is refused',
-    !!await refuses(`insert into public.documents (user_id, name, equipment_id, visibility)
-      values ('${A}', 'Mower manual', 'dddddddd-0000-0000-0000-000000000001', 'customer')`))
+  await refusedBy('BEHAVIOUR · worker visibility on a customer document is refused',
+    `insert into public.documents (user_id, name, customer_id, visibility)
+      values ('${A}', 'No visit', '11111111-1111-1111-1111-111111111111', 'worker')`,
+    /documents_worker_needs_job/i)
+  await refusedBy('BEHAVIOUR · customer visibility on an equipment document is refused',
+    `insert into public.documents (user_id, name, equipment_id, visibility)
+      values ('${A}', 'Mower manual', 'dddddddd-0000-0000-0000-000000000001', 'customer')`,
+    /documents_equipment_not_customer/i)
 
   await exec(`insert into public.documents (id, user_id, name, customer_id, visibility)
     values ('eeee0000-0000-0000-0000-000000000001', '${A}', 'Authorization', '11111111-1111-1111-1111-111111111111', 'customer')`)
@@ -548,16 +611,18 @@ async function behaviour() {
   check('BEHAVIOUR · the database assigned version_no = 1', Number(v1?.version_no) === 1)
   check('BEHAVIOUR · the version inherited the document\'s tenant', v1?.user_id === A)
 
-  check('BEHAVIOUR · a version\'s content pointer cannot be swapped',
-    !!await refuses(`update public.document_versions set storage_path = '${A}/eeee/evil.pdf'
-      where id = 'ffff0000-0000-0000-0000-000000000001'`))
+  await refusedBy('BEHAVIOUR · a version\'s content pointer cannot be swapped',
+    `update public.document_versions set storage_path = '${A}/eeee/evil.pdf'
+      where id = 'ffff0000-0000-0000-0000-000000000001'`,
+    /immutable/i)
 
   // ── signature request ──────────────────────────────────────────────────────
-  check('BEHAVIOUR · a signature cannot be requested from the wrong customer',
-    !!await refuses(`insert into public.document_signature_requests
+  await refusedBy('BEHAVIOUR · a signature cannot be requested from the wrong customer',
+    `insert into public.document_signature_requests
       (document_id, version_id, customer_id, statement, purpose)
       values ('eeee0000-0000-0000-0000-000000000001', 'ffff0000-0000-0000-0000-000000000001',
-              '22222222-2222-2222-2222-222222222222', 'I authorize the described work.', 'work_authorization')`),
+              '22222222-2222-2222-2222-222222222222', 'I authorize the described work.', 'work_authorization')`,
+    /does not belong to customer/i,
     'customer Two must not be asked to sign customer One\'s document')
 
   await exec(`insert into public.document_signature_requests
@@ -628,19 +693,23 @@ async function behaviour() {
     badPath?.ok === false)
 
   // ── what signing froze ─────────────────────────────────────────────────────
-  check('BEHAVIOUR · a signature cannot be edited',
-    !!await refuses(`update public.document_signatures set signer_name = 'Someone Else'
-      where request_id = '99990000-0000-0000-0000-000000000001'`))
-  check('BEHAVIOUR · a signature cannot be deleted',
-    !!await refuses(`delete from public.document_signatures
-      where request_id = '99990000-0000-0000-0000-000000000001'`))
-  check('BEHAVIOUR · the signed version cannot be deleted',
-    !!await refuses(`delete from public.document_versions
-      where id = 'ffff0000-0000-0000-0000-000000000001'`))
-  check('BEHAVIOUR · a signed document cannot be re-attached to another record',
-    !!await refuses(`update public.documents
+  await refusedBy('BEHAVIOUR · a signature cannot be edited',
+    `update public.document_signatures set signer_name = 'Someone Else'
+      where request_id = '99990000-0000-0000-0000-000000000001'`,
+    /append-only/i)
+  await refusedBy('BEHAVIOUR · a signature cannot be deleted',
+    `delete from public.document_signatures
+      where request_id = '99990000-0000-0000-0000-000000000001'`,
+    /append-only/i)
+  await refusedBy('BEHAVIOUR · the signed version cannot be deleted',
+    `delete from public.document_versions
+      where id = 'ffff0000-0000-0000-0000-000000000001'`,
+    /has been signed and cannot be deleted/i)
+  await refusedBy('BEHAVIOUR · a signed document cannot be re-attached to another record',
+    `update public.documents
       set customer_id = '22222222-2222-2222-2222-222222222222'
-      where id = 'eeee0000-0000-0000-0000-000000000001'`))
+      where id = 'eeee0000-0000-0000-0000-000000000001'`,
+    /cannot be re-attached/i)
 
   // A NEW version is still allowed — that is the whole point of versioning.
   const v2 = await refuses(`insert into public.document_versions (document_id, storage_path, file_name)
@@ -653,6 +722,26 @@ async function behaviour() {
     `select public.portal_signature_target('tok-one', 'eeee0000-0000-0000-0000-000000000001') as j`)).rows[0] as any).j
   check('BEHAVIOUR · a superseded request stops being signable', staleTarget == null,
     'nobody may be recorded as agreeing to a file they never saw')
+
+  // ── audit, through Session 68's engine ─────────────────────────────────────
+  const events = (await db.query(`select action, entity_type, entity_id, after
+    from public.audit_events where entity_type = 'document' order by seq`)).rows as any[]
+  const actions = events.map(e => e.action)
+  check('BEHAVIOUR · the upload was audited', actions.includes('document_uploaded'))
+  check('BEHAVIOUR · the signature was audited', actions.includes('document_signed'))
+  check('BEHAVIOUR · audit events are written by the CANONICAL engine',
+    events.length > 0 && events.every(e => e.entity_type === 'document'),
+    'these rows are in audit_events — no second audit table exists')
+
+  // ⛔ The whole point of the payload rules: prove the mark never got in.
+  const auditJson = JSON.stringify(events)
+  check('BEHAVIOUR · no signature image or storage path reached the audit trail',
+    !auditJson.includes('signatures/') && !auditJson.includes('.png')
+    && !auditJson.includes('signature_path') && !auditJson.includes(`${A}/eeee`),
+    'a private path or a drawn mark in a general-purpose event log is a leak')
+  check('BEHAVIOUR · audit did not duplicate signature truth',
+    !auditJson.includes('Alex Homeowner') && !auditJson.includes('I authorize the described work'),
+    'document_signatures is authoritative — audit only describes the mutation')
 
   // ── asking again ───────────────────────────────────────────────────────────
   // ⭐ THE REGRESSION THIS EXISTS FOR. The whole point of versioning is that a
@@ -670,12 +759,13 @@ async function behaviour() {
     `a fulfilled request must not block asking again — got: ${reRequest.slice(0, 140)}`)
 
   // …but two PENDING requests at once are still refused.
-  const secondOpen = await refuses(`insert into public.document_signature_requests
-    (document_id, version_id, customer_id, statement, purpose)
-    values ('eeee0000-0000-0000-0000-000000000001', '${v2row.id}',
-            '11111111-1111-1111-1111-111111111111',
-            'A second simultaneous ask that must be refused.', 'customer_acknowledgement')`)
-  check('BEHAVIOUR · a second OPEN request is still refused', !!secondOpen,
+  await refusedBy('BEHAVIOUR · a second OPEN request is still refused',
+    `insert into public.document_signature_requests
+      (document_id, version_id, customer_id, statement, purpose)
+      values ('eeee0000-0000-0000-0000-000000000001', '${v2row.id}',
+              '11111111-1111-1111-1111-111111111111',
+              'A second simultaneous ask that must be refused.', 'customer_acknowledgement')`,
+    /already waiting on a signature/i,
     'two pending asks would let one act of consent satisfy both')
 
   // ── archive ────────────────────────────────────────────────────────────────

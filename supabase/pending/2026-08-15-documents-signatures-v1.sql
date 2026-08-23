@@ -49,13 +49,15 @@
 --                         canonical documents on demand. Duplicating them as
 --                         `documents` rows would create a second, staler copy of
 --                         a figure the ledger owns. Deliberately not linked.
---   audit trail         → Session 68 owns it, and it has NOT landed. There is
---                         deliberately NO audit call in this file, not even a
---                         conditional one: a speculative call to a function that
---                         does not exist is a guess about an interface nobody
---                         has published yet. Instead EVERY authoritative fact is
---                         kept inside this domain, where it is the source of
---                         truth rather than a description of one:
+--   audit trail         → Session 68 owns it. Section 12 CALLS its canonical
+--                         public.audit_log(...) and defines no audit table, no
+--                         audit function and no history projection here. Section
+--                         0 makes that a hard, loud apply-order dependency
+--                         rather than a lazy-compilation surprise on the first
+--                         upload.
+--                         ⭐ AUDIT DESCRIBES; THIS DOMAIN IS AUTHORITATIVE. Every
+--                         fact the business must be able to stand behind lives
+--                         here, not in the event log:
 --                           uploaded by      → document_versions.uploaded_by
 --                           uploaded at      → document_versions.uploaded_at
 --                           visibility       → documents.visibility
@@ -65,13 +67,9 @@
 --                           version signed   → document_signatures.version_id
 --                           statement agreed → document_signatures.statement
 --                           archive state    → documents.archived_at
---                         ⭐ AFTER SESSION 68 LANDS: add document uploaded /
---                         shared / signed / visibility changed / archived /
---                         version-replaced events through its REAL interface.
---                         Audit will DESCRIBE those mutations; document_signatures
---                         stays authoritative. Never copy signature truth into an
---                         audit row, and never write a signature IMAGE or its
---                         bytes into audit metadata.
+--                         ⛔ Signature truth is never copied into an audit row,
+--                         and a signature IMAGE, its bytes, or any storage path
+--                         never enters audit metadata.
 --
 -- ⛔ NOT A QUALIFIED ELECTRONIC SIGNATURE. This captures an acknowledgement:
 --   a named person, at a known time, agreeing to a stated sentence, against one
@@ -82,6 +80,26 @@
 --   commercial record a service business actually needs: proof that this
 --   customer saw THIS document and agreed to THIS sentence.
 -- ═══════════════════════════════════════════════════════════════════════════
+
+
+-- ── 0 · apply-order precondition ─────────────────────────────────────────────
+-- ⛔ AUDIT TRAIL FIRST. Section 12 writes document events through Session 68's
+-- canonical public.audit_log(...) — the real interface, not a copy of it. That
+-- makes 2026-08-15-audit-trail-v1.sql a hard prerequisite of this file.
+--
+-- ⚠️ WHY THIS BLOCK EXISTS AND A COMMENT WOULD NOT DO: plpgsql compiles LAZILY.
+-- A trigger function referencing audit_log() is created happily against a
+-- database that has never heard of it, and then throws on the FIRST DOCUMENT
+-- UPLOAD — in production, in front of a user, long after the migration reported
+-- success. Failing here instead turns a silent ordering bug into a loud, correct
+-- refusal at apply time.
+do $$
+begin
+  if to_regprocedure('public.audit_log(uuid,text,text,uuid,text,uuid,jsonb,jsonb,jsonb)') is null then
+    raise exception
+      'documents_signatures_v1 requires the audit trail: apply supabase/pending/2026-08-15-audit-trail-v1.sql first (public.audit_log is missing)';
+  end if;
+end $$;
 
 
 -- ── 1 · private storage ──────────────────────────────────────────────────────
@@ -1117,7 +1135,161 @@ end;
 $function$;
 
 
--- ── 12 · function grants ─────────────────────────────────────────────────────
+-- ── 12 · audit ───────────────────────────────────────────────────────────────
+-- ⭐ SESSION 68'S ENGINE, NOT A SECOND ONE. Every event below goes through
+-- public.audit_log(...) — the canonical interface — and this file defines no
+-- audit table, no audit function and no history projection of its own. If the
+-- audit trail changes shape, these triggers change with it, because they are
+-- callers rather than a parallel implementation.
+--
+-- ⭐ AUDIT DESCRIBES; document_signatures REMAINS AUTHORITATIVE. Nothing here is
+-- a second source of truth about a signature. The event says "this document was
+-- signed, against this version, for this purpose"; WHO signed is already the
+-- event's own actor attribution (a portal signer resolves to actor_type
+-- 'customer'), and the full record — signer name, statement, timestamp, source —
+-- lives in document_signatures where it can never be rewritten.
+--
+-- ⛔ THE MARK NEVER ENTERS AUDIT. No signature_path, no image bytes, no base64,
+-- in any before/after/meta payload on any of these triggers. It is
+-- biometric-adjacent personal data and it stays behind the private-bucket door.
+-- ⛔ No storage paths either: a path in a general-purpose event log is a private
+-- location leaking into a surface built for reading, not for holding secrets.
+
+create or replace function public.audit_documents()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+declare
+  v_customer uuid;
+begin
+  if tg_op = 'INSERT' then
+    v_customer := public.document_customer_id(new.customer_id, new.property_id, new.job_id);
+    perform public.audit_log(new.user_id, 'document_uploaded', 'document', new.id,
+      new.name, v_customer,
+      null,
+      jsonb_build_object('category', new.category, 'visibility', new.visibility));
+    return null;
+  end if;
+
+  if tg_op = 'DELETE' then
+    v_customer := public.document_customer_id(old.customer_id, old.property_id, old.job_id);
+    perform public.audit_log(old.user_id, 'document_deleted', 'document', old.id,
+      old.name, v_customer,
+      jsonb_build_object('category', old.category, 'visibility', old.visibility),
+      null);
+    return null;
+  end if;
+
+  v_customer := public.document_customer_id(new.customer_id, new.property_id, new.job_id);
+
+  -- Guarded with IS DISTINCT FROM: `update … set visibility = visibility` fires
+  -- the trigger without changing anything, and a no-op is not an act.
+  if new.visibility is distinct from old.visibility then
+    perform public.audit_log(new.user_id,
+      -- Sharing WITH THE CUSTOMER is the consequential one and gets its own
+      -- verb; every other move is a visibility change.
+      case when new.visibility = 'customer' then 'document_shared'
+           else 'document_visibility_changed' end,
+      'document', new.id, new.name, v_customer,
+      jsonb_build_object('visibility', old.visibility),
+      jsonb_build_object('visibility', new.visibility));
+  end if;
+
+  if new.archived_at is distinct from old.archived_at then
+    perform public.audit_log(new.user_id,
+      case when new.archived_at is null then 'document_restored' else 'document_archived' end,
+      'document', new.id, new.name, v_customer,
+      jsonb_build_object('archived', old.archived_at is not null),
+      jsonb_build_object('archived', new.archived_at is not null));
+  end if;
+
+  return null;
+end;
+$function$;
+
+drop trigger if exists trg_audit_documents on public.documents;
+create trigger trg_audit_documents
+  after insert or update or delete on public.documents
+  for each row execute function public.audit_documents();
+
+create or replace function public.audit_document_versions()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+declare
+  v_doc      record;
+  v_customer uuid;
+  v_signed   boolean;
+begin
+  select d.user_id, d.name, d.customer_id, d.property_id, d.job_id
+    into v_doc from public.documents d where d.id = new.document_id;
+  if not found then return null; end if;
+
+  v_customer := public.document_customer_id(v_doc.customer_id, v_doc.property_id, v_doc.job_id);
+  -- ⭐ Replacing the content of a document somebody already SIGNED is a
+  -- materially different act from adding version 2 of an unsigned draft, and the
+  -- history must not flatten the two into one word.
+  v_signed := exists (
+    select 1 from public.document_signatures s where s.document_id = new.document_id
+  );
+
+  perform public.audit_log(v_doc.user_id,
+    case when v_signed then 'document_version_replaced' else 'document_version_added' end,
+    'document', new.document_id, v_doc.name, v_customer,
+    null,
+    -- file_name is what a human recognises. ⛔ storage_path is deliberately absent.
+    jsonb_build_object('version_no', new.version_no, 'file_name', new.file_name));
+  return null;
+end;
+$function$;
+
+drop trigger if exists trg_audit_document_versions on public.document_versions;
+create trigger trg_audit_document_versions
+  after insert on public.document_versions
+  for each row execute function public.audit_document_versions();
+
+create or replace function public.audit_document_signatures()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+declare
+  v_doc      record;
+  v_customer uuid;
+  v_no       integer;
+begin
+  select d.user_id, d.name, d.customer_id, d.property_id, d.job_id
+    into v_doc from public.documents d where d.id = new.document_id;
+  if not found then return null; end if;
+
+  v_customer := public.document_customer_id(v_doc.customer_id, v_doc.property_id, v_doc.job_id);
+  select v.version_no into v_no from public.document_versions v where v.id = new.version_id;
+
+  -- ⛔ NOT IN THIS PAYLOAD, ON PURPOSE: signature_path (the drawn mark), the
+  -- statement text, and the signer's typed name. The mark is sensitive; the
+  -- other two are document_signatures' own authoritative record, and copying
+  -- them here would create a second, editable-looking version of the one thing
+  -- in this system that must never be rewritten.
+  perform public.audit_log(v_doc.user_id, 'document_signed', 'document', new.document_id,
+    v_doc.name, v_customer,
+    null,
+    jsonb_build_object('purpose', new.purpose, 'version_no', v_no, 'source', new.source));
+  return null;
+end;
+$function$;
+
+drop trigger if exists trg_audit_document_signatures on public.document_signatures;
+create trigger trg_audit_document_signatures
+  after insert on public.document_signatures
+  for each row execute function public.audit_document_signatures();
+
+
+-- ── 13 · function grants ─────────────────────────────────────────────────────
 -- Portal functions are reachable by anon BY DESIGN (the portal has no JWT) and
 -- are safe because each one re-scopes by the token it was handed. Crew functions
 -- require a signed-in crew session: anon has no crew_employer(), so granting it
