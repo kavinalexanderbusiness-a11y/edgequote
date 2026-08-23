@@ -48,17 +48,14 @@ const sameOrigin = (loc, b) => {
 const cookiesOf = r => (typeof r.headers.getSetCookie === 'function' ? r.headers.getSetCookie() : [])
 const GOOD_TOKEN = 'eqb_' + 'a'.repeat(64)
 
-function decodeState(loc) {
-  try {
-    const st = new URL(loc).searchParams.get('state') || ''
-    return JSON.parse(Buffer.from(st.split('.')[1], 'base64url').toString())
-  } catch { return null }
-}
-
 H('1. Is the Google provider actually configured? (live Supabase)')
 {
   const cb = 'https://app.edgehq.ca/auth/callback'
-  const r = await hop(`${SUPA}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(cb)}`)
+  // Probe with the SAME scopes the app sends. A bare probe returns Supabase's
+  // defaults (email+profile) and would wrongly report openid missing.
+  const r = await hop(`${SUPA}/auth/v1/authorize?provider=google`
+    + `&scopes=${encodeURIComponent('openid email profile')}`
+    + `&redirect_to=${encodeURIComponent(cb)}`)
   const loc = r.headers.get('location') || ''
   if (r.status >= 300 && r.status < 400 && /accounts\.google\.com/.test(loc)) {
     ok(`Supabase redirects to Google (HTTP ${r.status})`)
@@ -81,32 +78,54 @@ H('1. Is the Google provider actually configured? (live Supabase)')
     if (g.searchParams.get('access_type') === 'offline') no('access_type=offline is being requested')
     else ok('no offline access requested - Google issues no refresh token')
 
-    // Supabase encodes the eventual destination in `state`. Reading it proves
-    // the allow list ACCEPTED our callback rather than silently falling back.
-    const p = decodeState(loc)
-    if (!p) sk('redirect allow-list read', 'state is not a readable JWT in this Supabase version')
-    else {
-      const blob = JSON.stringify(p)
-      if (blob.includes('/auth/callback')) ok('the redirect allow list ACCEPTED /auth/callback')
-      else no(`Supabase did not carry our callback - state says ${blob.slice(0, 160)}`)
-      if (blob.includes('app.edgehq.ca')) ok('the destination host is app.edgehq.ca')
-      else no('the destination host is not app.edgehq.ca')
-      if (blob.includes('edgepropertyservicesyyc')) no('the RETIRED host appears in the Supabase configuration')
-      else ok('the retired host appears nowhere')
-    }
+    // ⚠️ MEASURED 2026-08-23: this project's `state` is an opaque UUID, not a
+    // JWT, so the destination cannot be read out of it. Supabase instead carries
+    // the eventual destination as a plain `redirect_to` parameter — read that.
+    const rt = decodeURIComponent(g.searchParams.get('redirect_to') || '')
+    if (rt === cb) ok(`our callback is carried to the provider (${rt})`)
+    else no(`redirect_to is ${rt || '(none)'} - expected ${cb}`)
+    if (/edgepropertyservicesyyc/.test(rt)) no('the RETIRED host appears in the OAuth configuration')
+    else ok('the retired host appears nowhere')
   } else {
     no(`provider not configured: HTTP ${r.status}, location ${loc.slice(0, 140)}`)
   }
 }
 
-H('2. Does the allow list refuse a foreign destination?')
+H('2. Where a foreign destination is actually stopped')
 {
-  const r = await hop(`${SUPA}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent('https://evil.tld/steal')}`)
-  const loc = r.headers.get('location') || ''
-  const p = decodeState(loc)
-  const leaked = loc.includes('evil.tld') || (p && JSON.stringify(p).includes('evil.tld'))
-  if (leaked) no('Supabase carried a FOREIGN redirect_to - fix the allow list')
-  else ok('a foreign redirect_to is not carried through')
+  // ⚠️⚠️ MEASURED 2026-08-23, not assumed: Supabase DOES carry a foreign
+  // redirect_to all the way into Google's authorize URL. It does not validate
+  // at this step — the Redirect-URLs allow list is enforced when the provider
+  // RETURNS, and an unlisted destination falls back to Site URL.
+  //
+  // An earlier version of this script asserted "a foreign redirect_to is not
+  // carried through" and PASSED. It was wrong: it only inspected `state`, which
+  // is an opaque UUID on this project. Asserting something false is worse than
+  // asserting nothing, so the behaviour is now reported, and the assertion is
+  // made where it actually belongs.
+  //
+  // What is genuinely ours to guarantee: anyone can hand-craft a Supabase
+  // authorize URL — that is true of every Supabase project and is governed by
+  // the allow list, not by our code — but OUR app must never generate one.
+  const foreign = await hop(`${SUPA}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent('https://evil.tld/steal')}`)
+  const carried = (foreign.headers.get('location') || '').includes('evil.tld')
+  console.log(`  i Supabase ${carried ? 'DOES' : 'does not'} carry a foreign redirect_to to the provider`)
+  console.log('      the Redirect-URLs allow list is the control, enforced on the way back')
+
+  const hostiles = ['//evil.tld', 'https://evil.tld', '/\\evil.tld', '/%09/evil.tld', 'javascript:alert(1)']
+  let leaked = 0
+  for (const h of hostiles) {
+    const r = await hop(`${base}/api/auth/google/start?next=${encodeURIComponent(h)}`)
+    const loc = r.headers.get('location') || ''
+    if (!loc) { leaked++; no(`start route produced no redirect for next=${h}`); continue }
+    let rt = ''
+    try { rt = decodeURIComponent(new URL(loc).searchParams.get('redirect_to') || '') } catch { /* below */ }
+    if (!rt || !sameOrigin(rt, base) || rt.includes('evil.tld')) {
+      leaked++
+      no(`start route emitted redirect_to=${rt || '(none)'} for next=${JSON.stringify(h)}`)
+    }
+  }
+  if (leaked === 0) ok(`no hostile next (${hostiles.length} shapes) moves our redirect_to off our own origin`)
 }
 
 H('3. The start route: what it asks Google for')
