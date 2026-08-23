@@ -1,24 +1,29 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- DOCUMENTS + SIGNATURES V1 — pending migration (Session 74)
+-- DOCUMENTS + SIGNATURES V1 — migration 20260823120000 (Session 74)
 --
 -- ⚠️ LIFECYCLE OF THIS FILE — read before touching:
---   This file is NOT in the apply path (supabase/migrations/) and NOT archive.
---   It is the documents schema, waiting for production. The intended flow is the
---   one change-orders used and Session 68 restated:
---     1. apply this file to production via MCP apply_migration
---        (MCP assigns the version; name it documents_signatures_v1),
---     2. npm run schema:contract && npm run schema:baseline
+--   This file IS the apply path. It sits in supabase/migrations/ because it is
+--   real, versioned, unapplied schema — the shape Session 41's architecture
+--   requires. Once production has run it:
+--     1. npm run schema:contract && npm run schema:baseline
 --        (the objects fold into the regenerated baseline),
---     3. DELETE this file in the same commit — once the baseline carries
---        `documents`, a second copy here is the retired-CANONICAL-file mistake.
---   verify:documents §1 pins exactly that lifecycle: it fails if this file and
---   the baseline both define `documents`, and if neither does.
+--     2. move THIS file into supabase/archive/ledger/ in the same commit.
+--   verify:documents §1 pins exactly that: `documents` must be defined in
+--   EXACTLY ONE of {this migration, the baseline} — never both, never neither.
 --
---   ⭐ Living in pending/ is also why this change has NO migration version yet.
---   Sessions 65 and 69 both minted `20260815120000_*.sql` and now collide; a
---   pending file cannot collide with anything because MCP assigns the version at
---   apply time, against production's real ledger. Reconcile that collision (and
---   this file's eventual version) against the LATEST origin/main before landing.
+--   ⛔ ARCHIVE IS NOT THE APPLY PATH. supabase/archive/ledger/ records what has
+--   ALREADY run; nothing there is ever executed again. An UNAPPLIED migration
+--   filed there is silently never applied — and git rename detection will offer
+--   to put it there, because this repo moved a whole pending/ directory into
+--   archive/ledger/ in an earlier session and the similarity score matches. That
+--   offer must be refused every time.
+--
+--   ⭐ THE VERSION. 20260823120000 sorts after every version this repo has ever
+--   used — the baseline (20260816110001) and the two migrations that follow it
+--   (20260816213000, 20260817060000), plus every reserved version in
+--   archive/ledger. It reuses nothing: sessions 65 and 69 both minted
+--   20260815120000 for different bodies, and a reused version is a migration
+--   that silently does not run.
 --
 -- WHAT THIS IS:
 --   Durable files attached to the records a service business already operates
