@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { confirm as confirmDialog } from '@/lib/confirm'
-import { loadGoogleMaps, addPropertyPin, flashRing, type PropertyPinHandle } from '@/lib/googleMaps'
+import { loadGoogleMaps, addPropertyPin, flashRing, watchMapsAuthFailure, MAPS_FAILED_MESSAGE, type PropertyPinHandle } from '@/lib/googleMaps'
 import { pricingPackage, estimateVisitMinutes, PricingConfig, CadenceKey } from '@/lib/pricing'
 import { Coord } from '@/lib/geo'
 import { ProspectContext, loadProspectContext, gradedProspectPricing } from '@/lib/prospect'
@@ -220,6 +220,13 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
       preview.current.setPath(pts)
     }
   }
+
+  // Google can reject the key AFTER the loader resolved — referrer, billing
+  // and API-disabled errors surface asynchronously inside the Map and only
+  // announce themselves via gm_authFailure. Without this, the modal renders
+  // "Click around the edge…" over Google's own dead-map overlay (shipped to
+  // production exactly that way when the domain moved).
+  useEffect(() => watchMapsAuthFailure(() => { setLoadError(MAPS_FAILED_MESSAGE); setReady(false) }), [])
 
   useEffect(() => {
     let cancelled = false

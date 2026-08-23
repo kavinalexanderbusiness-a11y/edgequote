@@ -214,7 +214,13 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
         })
       } catch { if (!cancelled) setMapErr('Map could not load — enter your approximate lawn size instead.') }
     })()
-    return () => { cancelled = true }
+    // Google can also reject the key AFTER the loader resolved (referrer /
+    // billing / API errors announce themselves only via gm_authFailure). Same
+    // customer-facing fallback: the manual size entry still works.
+    const unwatch = watchMapsAuthFailure(() => {
+      if (!cancelled) setMapErr('Map could not load — enter your approximate lawn size instead.')
+    })
+    return () => { cancelled = true; unwatch() }
   }, [step, parsed, showTracer])
 
   function undo() { pts.current.pop(); redraw(); recompute() }
