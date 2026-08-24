@@ -50,6 +50,8 @@ const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8')
 // The apply path, in the order production ran it. Same primitives verify:rebuild
 // and verify:audit-trail use — scripts/lib/pg-sql.ts is the one splitter.
 const MIGRATIONS_DIR = join('supabase', 'migrations')
+const migrationFiles = (): string[] =>
+  readdirSync(MIGRATIONS_DIR).filter(f => f.endsWith('.sql')).sort()
 // ⭐ THE SCHEMA LIVES IN EXACTLY ONE PLACE — a versioned migration in the apply
 // path while it waits to be applied, or the regenerated baseline afterwards.
 // Never both: two definitions of the same tables leave the next reader unable to
