@@ -1418,6 +1418,11 @@ export interface QuoteFormValues {
   // Carried (not user-edited) when measuring inside the builder, so the in-builder
   // measure path records the same provenance as the standalone Measurement Tool.
   measured_sqft: number
+  // The frozen measurement + pricing rule (Measure & Price V2). Carried, never
+  // user-edited: it is a record of what Measure & Price produced, and an owner
+  // retyping the area by hand deliberately leaves it untouched rather than
+  // rewriting a snapshot that no longer describes what was traced.
+  measurement_snapshot: MeasurementSnapshotV2 | null
   suggested_price: number
   // ADR-002 · derived state, snapshotted onto the quote at write time.
   //

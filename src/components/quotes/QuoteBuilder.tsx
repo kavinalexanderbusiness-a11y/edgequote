@@ -48,7 +48,8 @@ import { evaluatePrice, PriceGuardrail } from '@/lib/priceGuardrails'
 import { PriceGuardrailNote } from '@/components/pricing/PriceGuardrailNote'
 import { findCustomerMatch } from '@/lib/customers'
 import { createClient } from '@/lib/supabase/client'
-import type { MeasurementSnapshot, SavedRecommendation } from '@/types'
+import { loadPricingPlans, plansByTemplate } from '@/lib/servicePlans'
+import type { MeasurementSnapshot, SavedRecommendation, ServicePricingPlanRow } from '@/types'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { PriceIntelligence } from '@/components/pricing/PriceIntelligence'
@@ -149,6 +150,8 @@ export function QuoteBuilder({
         biweekly_price: BLANK,
         monthly_price: BLANK,
         measured_sqft: BLANK,
+        // No snapshot until Measure & Price produces one.
+        measurement_snapshot: null,
         // Not BLANK: never rendered as an input — hidden form data, 0 is its "none".
         suggested_price: 0,
         // ADR-002: null until an engine recommendation is applied. Never a default
@@ -1063,6 +1066,29 @@ export function QuoteBuilder({
     return () => { alive = false }
   }, [])
   const unitOptions = useMemo(() => units.map(u => ({ value: u.code, label: u.label })), [units])
+
+  // ── The ways each service is sold (Measure & Price V2) ─────────────────────
+  // Loaded once for the whole catalogue and handed to the measure modal, so
+  // switching service inside the modal doesn't cost a round trip.
+  //
+  // ⭐ A FAILED READ LEAVES THE MAP EMPTY, AND THAT IS CORRECT. An empty plan list
+  // renders as "pricing not configured" with a Configure link — the honest
+  // outcome. The failure mode this must never have is inventing a price, and it
+  // structurally cannot: prices only ever come from rows that actually arrived.
+  const [pricingPlans, setPricingPlans] = useState<Map<string, ServicePricingPlanRow[]>>(new Map())
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      const sb = createClient()
+      const { data: { user } } = await sb.auth.getUser()
+      if (!user || !alive) return
+      try {
+        const rows = await loadPricingPlans(sb, user.id)
+        if (alive) setPricingPlans(plansByTemplate(rows))
+      } catch { /* see above — empty is an answer, never a fabricated price */ }
+    })()
+    return () => { alive = false }
+  }, [])
 
   // What an EXTRA line may pick from: active services only, plus whichever
   // template this line already points at, so editing an older quote never blanks
@@ -2541,6 +2567,12 @@ export function QuoteBuilder({
           propertyId={defaultPropertyId}
           customerId={activeCustomerId}
           services={activeTemplates.map(t => t.name).filter((n): n is string => !!n)}
+          // The owner's own catalogue row and the ways they sell it. This is what
+          // makes the modal universal — measurement type and prices come from
+          // here, never from the service's name.
+          template={svcTemplate}
+          plans={svcTemplate ? (pricingPlans.get(svcTemplate.id) ?? []) : []}
+          quoteNotes={{ customer: String(notes || ''), internal: String(internalNotes || '') }}
           // Setting the NAME alone left service_template_id stale, so svcTemplate
           // stayed null and pricingKind fell back to matching the name — which is a
           // guess about the trade, not the owner's answer. A "Lawn Mowing" template
@@ -2564,7 +2596,47 @@ export function QuoteBuilder({
             // the one-tap default was the wrong number. The area always applies;
             // the lawn structure only applies to lawn-cadence services.
             setValue('measured_sqft', sel.totalSqft)
-            if (pricingKind !== 'lawn_recurring') { setShowMeasure(false); return }
+
+            // ── Measure & Price V2 ────────────────────────────────────────────
+            // The frozen record travels on every apply that produced one, whatever
+            // priced it. Set BEFORE the lawn early-return: the snapshot is a fact
+            // about what was traced, and the cadence path is not more entitled to
+            // it than the plan path.
+            if (sel.measurement) setValue('measurement_snapshot', sel.measurement)
+
+            // Notes edited in the modal land on the SAME two canonical fields the
+            // Notes panel below registers — no copy/paste, no third store. Only
+            // written when non-empty, so opening the modal and closing it can
+            // never blank a note the owner typed in the builder.
+            if (sel.notes) {
+              if (sel.notes.customer.trim()) setValue('notes', sel.notes.customer, { shouldDirty: true })
+              if (sel.notes.internal.trim()) setValue('internal_notes', sel.notes.internal, { shouldDirty: true })
+            }
+
+            if (pricingKind !== 'lawn_recurring') {
+              // ⭐ REUSING QUOTE OPTIONS. Several configured plans → the customer
+              // chooses, through the engine that already exists for exactly that.
+              // The option NAME is the commercial term ("Monthly"), its price is
+              // the plan's price, and `is_recommended` is the owner's own badge.
+              if (sel.offerPlans?.length) {
+                setValue('has_options', true, { shouldDirty: true })
+                setValue('options', sel.offerPlans.map(p => ({
+                  name: p.label,
+                  description: p.basisText,
+                  price: p.price ?? 0,
+                  is_recommended: p.isRecommended,
+                })), { shouldDirty: true })
+              } else if (sel.plan?.price != null) {
+                // One chosen plan → one price. ⛔ Never written when the plan has
+                // no price: an unconfigured plan must leave the field alone rather
+                // than stamp a 0 the owner would have to notice and undo.
+                setValue('initial_price', sel.plan.price, { shouldDirty: true })
+                setValue('suggested_price', sel.suggested)
+                markApplied()
+              }
+              setShowMeasure(false)
+              return
+            }
 
             // Fill the WHOLE pricing structure in one apply — first visit at the
             // one-time price plus every recurring option, so the customer sees all

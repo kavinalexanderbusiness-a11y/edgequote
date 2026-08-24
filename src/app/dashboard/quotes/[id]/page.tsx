@@ -344,6 +344,9 @@ export default function QuoteDetailPage() {
         rate: finalRate,
         travel_fee: Number(values.travel_fee),
         measured_sqft: Number(values.measured_sqft) || null,
+        // As on create: carried through verbatim, so editing a quote never
+        // reprices its history against today rates.
+        measurement_snapshot: values.measurement_snapshot ?? null,
         suggested_price: Number(values.suggested_price) || null,
         // QL-1: editing quote CONTENT never touches status. QuoteStatusControl is
         // the sole status writer (routes sent→markSentPatch, accepted→markWonPatch),
@@ -767,6 +770,7 @@ export default function QuoteDetailPage() {
         property_id: quote.property_id,
         // Carry measurement provenance so a duplicate keeps its breakdown/analysis.
         measured_sqft: quote.measured_sqft,
+        measurement_snapshot: quote.measurement_snapshot ?? null,
         suggested_price: quote.suggested_price,
         front_lawn_sqft: quote.front_lawn_sqft,
         back_lawn_sqft: quote.back_lawn_sqft,

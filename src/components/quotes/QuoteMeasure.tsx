@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { loadGoogleMaps, addPropertyPin, flashRing, onMapsUnavailable, describeMapsError, type MapsUnavailable, type PropertyPinHandle } from '@/lib/googleMaps'
@@ -13,6 +13,16 @@ import { DecisionSummary } from '@/components/pricing/DecisionSummary'
 import { AutoMeasureBanner } from '@/components/measure/AutoMeasureBanner'
 import { recordMeasurement, neighborhoodOf, AutoMeasureResult } from '@/lib/autoMeasure'
 import type { ServicePricingKind } from '@/lib/servicePricing'
+import type { ServiceTemplate, ServicePricingPlanRow } from '@/types'
+import {
+  measurementTypeFor, unitLabel, formatMeasured, pricePlans, defaultPlan, pricedOnly,
+  formatPlanPrice, unpricedReason, UNPRICED_COPY, buildMeasurementSnapshot,
+  type PricedPlan, type MeasurementSnapshotV2,
+} from '@/lib/measurePricing'
+import { toPricingPlans } from '@/lib/servicePlans'
+import { MAX_QUOTE_OPTIONS, MIN_QUOTE_OPTIONS } from '@/lib/quoteOptions'
+import { AUDIENCE_COPY } from '@/lib/noteScope'
+import { Textarea } from '@/components/ui/Textarea'
 import { DEFAULT_CREW_COST, crewCostPerHour as resolveCrewCost } from '@/lib/economics'
 import { Button } from '@/components/ui/Button'
 import { X, Undo2, Trash2, Plus, Ruler, Loader2 } from 'lucide-react'
@@ -48,6 +58,21 @@ export interface MeasureApplyPayload {
   // is why it lands on the quote row in the same change.
   valueGrade: string | null
   nearbyCount: number
+
+  // ── Measure & Price V2 (Session 107) ───────────────────────────────────────
+  /** The frozen record of what was measured and what priced it. null when the
+   *  owner applied a bare measurement with no plan behind it. */
+  measurement: MeasurementSnapshotV2 | null
+  /** The single commercial offer the owner chose, or null. */
+  plan: PricedPlan | null
+  /** ⭐ Non-null ONLY when the owner pressed "Offer these plans" — the builder
+   *  then writes quote_options rows and lets the CUSTOMER choose. Reusing Quote
+   *  Options rather than inventing a second option-selection engine is the whole
+   *  point; `null` means "one price, chosen by me". */
+  offerPlans: PricedPlan[] | null
+  /** Edited in the modal, applied to the SAME two canonical quote fields the
+   *  builder already owns. null when the owner didn't open the notes section. */
+  notes: { customer: string; internal: string } | null
 }
 
 interface Props {
@@ -67,9 +92,21 @@ interface Props {
   onServiceChange?: (name: string) => void
   onApply: (sel: MeasureApplyPayload) => void
   onClose: () => void
+
+  // ── Measure & Price V2 (Session 107) ───────────────────────────────────────
+  /** The owner's OWN catalogue row for the selected service. This is what makes
+   *  the tool universal: how the service is measured and the ways it is sold come
+   *  from here, never from its name. null = free-text service with no template. */
+  template?: ServiceTemplate | null
+  /** That service's `service_pricing_plans` rows. Empty is a real answer —
+   *  "pricing not configured" — and is rendered as such, never as $0. */
+  plans?: ServicePricingPlanRow[]
+  /** The quote's current notes, so the modal edits the SAME two canonical fields
+   *  rather than becoming a third place notes can live. */
+  quoteNotes?: { customer: string; internal: string }
 }
 
-export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind, propertyId, customerId, services, onServiceChange, onApply, onClose }: Props) {
+export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind, propertyId, customerId, services, onServiceChange, onApply, onClose, template, plans, quoteNotes }: Props) {
   // Does the cadence engine behind this map actually speak for the chosen service?
   // pricingPackage() and gradedProspectPricing() take (sqft, cfg, …) and NO service
   // — they are the residential lawn engine and cannot be anything else. So their
@@ -77,6 +114,19 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
   // trade the map still measures (area is a fact about the property), but the
   // prices are withheld and said so, rather than rendered as this service's price.
   const lawnPricing = pricingKind === 'lawn_recurring'
+
+  // ── Measure & Price V2 ─────────────────────────────────────────────────────
+  // ⭐ THE REPLACEMENT FOR THE GATE ABOVE. `lawnPricing` still decides whether the
+  // CADENCE engine speaks, because that engine really is lawn-only. What it must
+  // no longer decide is whether the owner sees a price at all: that now comes from
+  // the owner's own catalogue row, which knows nothing about grass.
+  //
+  // ⛔ Neither of these reads the service NAME. measurementTypeFor() reads the
+  // template's measured_by (falling back to its pricing display type), and the
+  // plans are rows the owner ticked. A snow contractor and a floor cleaner reach
+  // this same code and get their own numbers.
+  const measurementType = measurementTypeFor(template)
+  const enginePlans = useMemo(() => toPricingPlans(plans), [plans])
   const supabase = createClient()
   const [center, setCenter] = useState<Coord | null>(null)
   const [hoodName, setHoodName] = useState<string | null>(null)
@@ -129,6 +179,33 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
   const [shapes, setShapes] = useState(0)
   // An unfinished trace saved on a previous open — offered as "Resume".
   const [draft, setDraft] = useState<MeasureDraft | null>(null)
+
+  // ── Per-area breakdown ─────────────────────────────────────────────────────
+  // Each closed shape, with its own figure and a label the owner can type. The
+  // label is FREE TEXT and defaults to "Area 1/2/3", never to a trade's
+  // vocabulary: "Driveway" and "Front walkway" are what a snow contractor types,
+  // "Bay 3" is what a warehouse cleaner types, and hardcoding either would be the
+  // lawn-sections mistake (front/back/left/right/boulevard) all over again — that
+  // fixed six-part enum could only ever describe a residential lot.
+  const [areaSqfts, setAreaSqfts] = useState<number[]>([])
+  const [areaLabels, setAreaLabels] = useState<string[]>([])
+  const areaLabelsRef = useRef<string[]>([])
+  areaLabelsRef.current = areaLabels
+  const labelFor = (i: number) => areaLabels[i]?.trim() || `Area ${i + 1}`
+
+  // ── The commercial choice ──────────────────────────────────────────────────
+  // Which plan the owner has landed on, by term. Null until the plans exist and
+  // one is defaulted; never pre-selects a plan that has no price.
+  const [chosenTerm, setChosenTerm] = useState<string | null>(null)
+
+  // ── Notes, edited HERE but living in the quote's own two fields ────────────
+  // ⛔ Not a third notes system. These are quotes.notes and quotes.internal_notes
+  // — the exact pair the Quote Builder already registers — carried in and back
+  // out so the owner can write "steep section near the garage" at the moment they
+  // are looking at the steep section, instead of remembering it two screens later.
+  const [notesOpen, setNotesOpen] = useState(false)
+  const [customerNote, setCustomerNote] = useState(quoteNotes?.customer ?? '')
+  const [internalNote, setInternalNote] = useState(quoteNotes?.internal ?? '')
   // Raw string so '0.5' is typeable — coercing each keystroke with `|| 1` made
   // sub-1 multipliers impossible and could turn '.5' keystrokes into 15×.
   const [overgrowthRaw, setOvergrowthRaw] = useState('1')
@@ -178,13 +255,20 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
   }
 
   function recompute() {
-    let total = 0
-    for (const p of committedPaths.current) total += areaOf(p)
+    // Each closed shape keeps its own figure so the owner can read
+    // "Driveway 1,180 · Front walkway 172" and check the total against the lot,
+    // rather than being handed one number to trust.
+    const per = committedPaths.current.map(p => Math.round(areaOf(p)))
+    let total = per.reduce((s, n) => s + n, 0)
     total += areaOf(currentPath.current)
     // Traced shapes win; otherwise fall back to the auto/accepted override.
     setTotalSqft(total > 0 ? Math.round(total) : Math.round(overrideRef.current || 0))
     setPoints(currentPath.current.length)
     setShapes(committedPaths.current.length)
+    setAreaSqfts(per)
+    // Labels are positional, so trim (undo/clear) rather than leaving a stale
+    // name that would re-attach itself to the NEXT shape traced.
+    setAreaLabels(prev => prev.slice(0, per.length))
   }
 
   function redrawCurrent() {
@@ -372,6 +456,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
     if (preview.current) { preview.current.setMap(null); preview.current = null }
     currentPath.current = []
     setTotalSqft(0); setPoints(0); setShapes(0)
+    setAreaSqfts([]); setAreaLabels([])
     saveDraft() // empty trace → removes the stored draft
   }
 
@@ -441,6 +526,27 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
   const pkg = graded?.pkg
     ?? (totalSqft > 0 ? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName }) : null)
 
+  // ── The owner's own plans, priced against what was just traced ─────────────
+  // ⭐ THE WHOLE FEATURE, in four lines. Every number below comes from a rate the
+  // owner typed into their Price Book times a polygon they drew. Nothing infers a
+  // price from the trade, and `priced` may legitimately be empty — that is an
+  // ANSWER ("pricing not configured"), rendered as a sentence and never as $0.
+  const measuredValue = totalSqft > 0 ? totalSqft : null
+  const plansPriced = useMemo(
+    () => pricePlans(enginePlans, measuredValue, measurementType),
+    [enginePlans, measuredValue, measurementType],
+  )
+  const priced = pricedOnly(plansPriced)
+  const noPriceReason = unpricedReason(template, enginePlans, measuredValue)
+  // Land on the owner's recommended plan, but only among plans that actually
+  // carry a number — defaulting to a priceless row would put an empty price in
+  // front of them with no way to tell why.
+  const chosen = priced.find(p => p.term === chosenTerm) ?? defaultPlan(priced)
+  // Quote Options is the existing engine for "customer picks one", and it refuses
+  // fewer than two. So the second button only exists when there really is a choice.
+  const canOfferOptions = priced.length >= MIN_QUOTE_OPTIONS
+  const offerable = priced.slice(0, MAX_QUOTE_OPTIONS)
+
   // Record auto vs accepted so the estimate self-calibrates (best-effort).
   //
   // propertyId/customerId are forwarded because a measurement is a fact about an
@@ -461,6 +567,58 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
     })()
   }
 
+  /**
+   * The frozen record, built from what is on the map RIGHT NOW.
+   *
+   * Rings are read off the committed paths rather than re-derived later, because
+   * "what did we agree to clear?" is unanswerable six months on without them —
+   * and a rate change next winter must not be able to alter the answer.
+   */
+  function snapshotNow(plan: PricedPlan | null): MeasurementSnapshotV2 | null {
+    if (measurementType === 'none' || totalSqft <= 0) return null
+    const parts = committedPaths.current.map((p, i) => ({
+      label: areaLabelsRef.current[i]?.trim() || null,
+      value: Math.round(areaOf(p)),
+      ring: p.map((ll: any) => ({ lat: ll.lat(), lng: ll.lng() })),
+    }))
+    return buildMeasurementSnapshot({
+      type: measurementType,
+      value: totalSqft,
+      // A single unclosed trace still measures; record it as one unlabelled part
+      // rather than dropping the geometry that produced the number.
+      parts: parts.length ? parts : [{ label: null, value: totalSqft }],
+      measuredAt: new Date().toISOString(),
+      serviceTemplateId: template?.id ?? null,
+      serviceName: template?.name ?? serviceType ?? null,
+      plan,
+    })
+  }
+
+  const notesOut = () => ({ customer: customerNote, internal: internalNote })
+
+  /**
+   * Apply ONE chosen plan. The measurement and the notes always travel; the money
+   * only travels when a plan actually carries a number.
+   */
+  function applyPlan(plan: PricedPlan | null, offer: PricedPlan[] | null) {
+    recordMeasure()
+    clearDraft()
+    onApply({
+      // The cadence engine's fields stay at their neutral values — this path is
+      // not the lawn cadence engine and must not pretend to be. The builder reads
+      // `plan`/`offerPlans` here, not `cadence`.
+      cadence: 'one_time', price: plan?.price ?? 0,
+      oneTime: plan?.price ?? 0, weekly: 0, biweekly: 0, monthly: 0,
+      totalSqft,
+      suggested: (plan?.price ?? 0) + Number(travelFee || 0),
+      valueGrade: null, nearbyCount: nearby,
+      measurement: snapshotNow(offer ? null : plan),
+      plan: offer ? null : plan,
+      offerPlans: offer,
+      notes: notesOut(),
+    })
+  }
+
   function applySelection(sel: CadenceSelection) {
     if (!pkg) return
     recordMeasure()
@@ -479,6 +637,13 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
       // here is the truthful record of "no grade was applied", not a missing value.
       valueGrade: assessment?.score ?? null,
       nearbyCount: nearby,
+      // The cadence engine priced this, not a Price Book plan — so there is no
+      // plan and no offer. The measurement is still recorded (it is a fact about
+      // the property either way), with the cadence price as its frozen figure.
+      measurement: snapshotNow(null),
+      plan: null,
+      offerPlans: null,
+      notes: notesOut(),
     })
   }
 
@@ -509,12 +674,20 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
                   every service — above an engine that takes no service argument, so
                   the same polygon produced byte-identical prices for Lawn Mowing and
                   Pressure Washing. Say what is actually true of the service picked. */}
+              {/* This used to read "Measures area only — this service isn't priced
+                  by lawn cadence", which told a snow contractor that their trade
+                  was the exception. It now says what the OWNER configured: how the
+                  service is measured, and how many ways they sell it. */}
               <span className="text-[11px] text-ink-faint">
                 {!serviceType
                   ? 'Pick a service — pricing depends on it'
-                  : lawnPricing
-                    ? 'Recurring pricing & duration are specific to this service'
-                    : 'Measures area only — this service isn’t priced by lawn cadence'}
+                  : measurementType === 'none'
+                    ? 'Not measured — set a measurement type in the Price Book to price it from the map'
+                    : `Measured by ${measurementType === 'count' ? 'count' : unitLabel(measurementType)}${
+                        enginePlans.length
+                          ? ` · ${enginePlans.length} pricing ${enginePlans.length === 1 ? 'plan' : 'plans'}`
+                          : ' · no pricing configured'
+                      }`}
               </span>
             </div>
           )}
@@ -601,9 +774,13 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
                 <div className="flex items-center justify-between flex-wrap gap-3">
                   <div className="flex items-center gap-2">
                     <Ruler className="w-4 h-4 text-accent-text" />
-                    <span className="text-sm text-ink-muted">Total area:</span>
-                    <span className="text-lg font-bold text-ink tabular-nums">{totalSqft.toLocaleString()} sq ft</span>
-                    {shapes > 0 && <span className="text-xs text-ink-faint">({shapes} + current)</span>}
+                    <span className="text-sm text-ink-muted">{measurementType === 'count' ? 'Total:' : 'Total area:'}</span>
+                    {/* One formatter (lib/measure's) so a length service reads
+                        "86 linear ft" here and everywhere else, not "86 sq ft". */}
+                    <span className="text-lg font-bold text-ink tabular-nums">
+                      {measurementType === 'none' ? `${totalSqft.toLocaleString()} sq ft` : formatMeasured(totalSqft, measurementType)}
+                    </span>
+                    {shapes > 0 && points > 0 && <span className="text-xs text-ink-faint">({shapes} + current)</span>}
                   </div>
                   {/* Same field order + hint as the Measure page — the two surfaces read identically.
                       Lawn only, because this control feeds NOTHING else: `overgrowth` is
@@ -629,17 +806,116 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
                   )}
                 </div>
 
-                {/* No cadence engine for this service → show the measurement, and
-                    say plainly that we have no price for it, instead of rendering
-                    the grass engine's numbers under this service's name. */}
+                {/* ── Each area, named and counted ──────────────────────────────
+                    "Driveway 1,180 · Front walkway 172 · TOTAL 1,352". The names
+                    are free text with an "Area N" default — a snow contractor
+                    types Driveway, a warehouse cleaner types Bay 3, and neither is
+                    a vocabulary this file had to know in advance. */}
+                {areaSqfts.length > 0 && (
+                  <div className="border-t border-border pt-3 space-y-1.5">
+                    {areaSqfts.map((sq, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={areaLabels[i] ?? ''}
+                          placeholder={`Area ${i + 1}`}
+                          aria-label={`Name for area ${i + 1}`}
+                          onChange={e => setAreaLabels(prev => {
+                            const next = [...prev]
+                            while (next.length < areaSqfts.length) next.push('')
+                            next[i] = e.target.value
+                            return next
+                          })}
+                          className="flex-1 min-w-0 h-11 bg-bg border border-border-strong rounded-lg px-2.5 text-base sm:text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
+                        />
+                        <span className="text-sm text-ink tabular-nums shrink-0 w-28 text-right">
+                          {measurementType === 'none' ? `${sq.toLocaleString()} sq ft` : formatMeasured(sq, measurementType)}
+                        </span>
+                      </div>
+                    ))}
+                    {areaSqfts.length > 1 && (
+                      <div className="flex items-center justify-between pt-1.5 border-t border-border">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Total</span>
+                        <span className="text-sm font-bold text-ink tabular-nums w-28 text-right">
+                          {measurementType === 'none' ? `${totalSqft.toLocaleString()} sq ft` : formatMeasured(totalSqft, measurementType)}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ── The owner's own plans, priced from the trace ──────────────
+                    Replaces the block that told every non-lawn trade EdgeQuote had
+                    no engine for them. It had an engine; it just wasn't wired to
+                    anything but grass. */}
                 {!lawnPricing ? (
-                  <div className="border-t border-border pt-3 animate-fade space-y-1">
-                    <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">No pricing recommendation for this service</p>
-                    <p className="text-[11px] text-ink-muted">
-                      {serviceType
-                        ? <>EdgeQuote only has a measurement-based pricing engine for recurring lawn services. <span className="text-ink font-medium">{serviceType}</span> isn’t one, so it won’t guess a price from area — the measurement below will be saved to the quote and you can price it in the builder.</>
-                        : 'Pick a service above. Area alone doesn’t decide a price.'}
+                  <div className="border-t border-border pt-3 animate-fade space-y-2.5">
+                    <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">
+                      Pricing options
                     </p>
+
+                    {priced.length > 0 ? (
+                      <>
+                        <div role="radiogroup" aria-label="Pricing plan" className="space-y-2">
+                          {priced.map(p => {
+                            const active = chosen?.term === p.term
+                            return (
+                              <button
+                                key={p.term}
+                                type="button"
+                                role="radio"
+                                aria-checked={active}
+                                onClick={() => setChosenTerm(p.term)}
+                                className={`w-full min-h-[52px] flex items-center justify-between gap-3 rounded-xl border px-3.5 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+                                  active ? 'border-accent bg-accent/[0.08]' : 'border-border-strong bg-bg hover:border-accent/40'
+                                }`}
+                              >
+                                <span className="min-w-0">
+                                  <span className="flex items-center gap-1.5">
+                                    <span className="text-sm font-semibold text-ink">{p.label}</span>
+                                    {p.isRecommended && (
+                                      <span className="text-[10px] font-bold uppercase tracking-wide text-accent-text bg-accent/15 rounded px-1.5 py-0.5">
+                                        Recommended
+                                      </span>
+                                    )}
+                                  </span>
+                                  {/* Provenance, always beside the number: the owner
+                                      can see it is their own rate times their own trace. */}
+                                  <span className="block text-[11px] text-ink-faint truncate">{p.basisText}</span>
+                                </span>
+                                <span className="text-sm font-bold text-ink tabular-nums shrink-0">
+                                  {formatPlanPrice(p)}
+                                </span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                        {/* ⛔ The distinction the brief calls load-bearing, said out
+                            loud where the owner is choosing. Picking Monthly prices
+                            the work; it does not schedule anything. */}
+                        <p className="text-[11px] text-ink-faint">
+                          This sets how the work is priced and billed. Visits are still scheduled separately.
+                        </p>
+                      </>
+                    ) : (
+                      /* ⭐ UNKNOWN IS NOT ZERO. No plan carries a number, so no
+                         number is shown — a sentence and a way to fix it instead. */
+                      <div className="space-y-2">
+                        <p className="text-[11px] text-ink-muted">
+                          {noPriceReason ? UNPRICED_COPY[noPriceReason] : UNPRICED_COPY.no_plans}
+                        </p>
+                        {(noPriceReason === 'no_plans' || noPriceReason === 'no_rates' || noPriceReason === 'not_measured') && (
+                          <a
+                            href="/dashboard/settings/templates"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center min-h-[44px] px-3 rounded-xl border border-border-strong text-xs font-medium text-ink hover:border-accent/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                          >
+                            Configure pricing
+                          </a>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ) : pkg ? (
                   <div className="border-t border-border pt-3 space-y-3 animate-fade">
@@ -668,7 +944,49 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
                 )}
               </div>
 
-              <div className="flex items-center justify-end gap-2">
+              {/* ── Notes, written where the evidence is ──────────────────────
+                  ⛔ NOT a second notes system. These two textareas are bound to
+                  quotes.notes and quotes.internal_notes — the same canonical pair
+                  the Quote Builder registers, carrying the same AUDIENCE_COPY, so
+                  the promise printed under each field is byte-identical on both
+                  screens. The value is timing: "steep section near the garage" is
+                  obvious while looking at the garage and forgotten two screens later.
+                  Collapsed by default so the measuring path stays fast. */}
+              <div className="rounded-card border border-border">
+                <button
+                  type="button"
+                  onClick={() => setNotesOpen(o => !o)}
+                  aria-expanded={notesOpen}
+                  className="w-full min-h-[44px] flex items-center justify-between px-3.5 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded-card"
+                >
+                  <span className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Notes</span>
+                  <span className="text-[11px] text-ink-faint">
+                    {[customerNote.trim() && 'customer', internalNote.trim() && 'internal'].filter(Boolean).join(' · ') || 'Add'}
+                  </span>
+                </button>
+                {notesOpen && (
+                  <div className="px-3.5 pb-3.5 space-y-3 animate-fade">
+                    <Textarea
+                      label={AUDIENCE_COPY.customer.label}
+                      hint={AUDIENCE_COPY.customer.help}
+                      placeholder="Includes driveway and front walkway"
+                      rows={2}
+                      value={customerNote}
+                      onChange={e => setCustomerNote(e.target.value)}
+                    />
+                    <Textarea
+                      label={AUDIENCE_COPY.internal.label}
+                      hint={AUDIENCE_COPY.internal.help}
+                      placeholder="Steep section near the garage — allow extra time after heavy snowfall"
+                      rows={2}
+                      value={internalNote}
+                      onChange={e => setInternalNote(e.target.value)}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-end gap-2">
                 <Button type="button" variant="ghost" onClick={requestClose}>Cancel</Button>
                 {/* For a non-lawn service this said "Use recommended" and applied a
                     mowing price. There is no recommendation to use — the honest
@@ -676,9 +994,23 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
                     without touching the price. */}
                 {!lawnPricing
                   ? totalSqft > 0 && (
-                    <Button type="button" onClick={() => applySelection({ cadence: 'one_time', price: 0 })}>
-                      Use measurement ({Math.round(totalSqft).toLocaleString()} ft²)
-                    </Button>
+                    <>
+                      {/* ⭐ REUSING QUOTE OPTIONS, not building a second chooser.
+                          Only offered when there are genuinely ≥2 priced plans —
+                          quote_options refuses fewer, because one alternative is
+                          not a choice. Capped at MAX_QUOTE_OPTIONS by the same rule. */}
+                      {canOfferOptions && (
+                        <Button type="button" variant="secondary" className="h-11"
+                          onClick={() => applyPlan(null, offerable)}>
+                          Offer these {offerable.length} plans
+                        </Button>
+                      )}
+                      <Button type="button" className="h-11" onClick={() => applyPlan(chosen ?? null, null)}>
+                        {chosen
+                          ? `Use ${chosen.label} — ${formatPlanPrice(chosen)}`
+                          : `Use measurement (${measurementType === 'none' ? `${Math.round(totalSqft).toLocaleString()} sq ft` : formatMeasured(totalSqft, measurementType)})`}
+                      </Button>
+                    </>
                   )
                   : pkg && (
                     <Button type="button" onClick={() => applySelection({ cadence: pkg.recommended.cadence, price: pkg.recommended.cadence === 'weekly' ? pkg.options[0].price : pkg.recommended.cadence === 'biweekly' ? pkg.options[1].price : pkg.recommended.cadence === 'monthly' ? pkg.options[2].price : pkg.oneTime })}>
