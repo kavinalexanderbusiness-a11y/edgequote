@@ -203,6 +203,19 @@ const FOLLOW_UPS = [
   'due_on', 'reason', 'status', 'source', 'completed_at',
 ]
 
+// `options` is jsonb and exports as its JSON text — the choice list is part of
+// what the field IS, and a dropdown answer is meaningless without it.
+const CUSTOM_FIELD_DEFINITIONS = [
+  'id', 'created_at', 'updated_at', 'entity', 'field_key', 'label', 'field_type',
+  'options', 'help_text', 'sort_order', 'archived_at',
+]
+
+const CUSTOM_FIELD_VALUES = [
+  'id', 'created_at', 'updated_at', 'definition_id', 'entity', 'field_type',
+  'customer_id', 'property_id', 'job_id',
+  'value_text', 'value_number', 'value_boolean', 'value_date',
+]
+
 const PHOTOS = [
   'id', 'created_at', 'job_id', 'property_id', 'customer_id',
   'kind', 'caption', 'taken_at', 'content_hash',
@@ -316,6 +329,28 @@ export const EXPORT_ENTITIES: ExportEntity[] = [
     key: 'photos', file: 'photos.csv', table: 'job_photos', label: 'Photos (details only)',
     note: 'A row per job photo you have taken. THE IMAGE FILES ARE NOT IN THIS ARCHIVE — see README. content_hash identifies the image itself.',
     orderBy: 'id', select: PHOTOS, columns: cols(PHOTOS),
+  },
+  // ── Custom fields ──────────────────────────────────────────────────────────
+  // Two files rather than extra columns on customers.csv / properties.csv /
+  // visits.csv, for the reason the invariant at the top of this file states: every
+  // read here is a FLAT select against ONE table. Folding runtime-defined
+  // attributes into another entity's row would need a join and would make each of
+  // those files' column set depend on the account being exported.
+  //
+  // Together they are self-describing: the definitions file says what each field
+  // IS, and every value names its definition_id plus the id of the record it is
+  // about, so the association survives the round trip without consulting EdgeHQ.
+  {
+    key: 'custom_field_definitions', file: 'custom-fields.csv', table: 'custom_field_definitions',
+    label: 'Custom fields',
+    note: 'The fields you defined yourself. entity says what kind of record each is about; field_key is its stable name; archived_at means it is retired but its answers are kept.',
+    orderBy: 'id', select: CUSTOM_FIELD_DEFINITIONS, columns: cols(CUSTOM_FIELD_DEFINITIONS),
+  },
+  {
+    key: 'custom_field_values', file: 'custom-field-values.csv', table: 'custom_field_values',
+    label: 'Custom field answers',
+    note: 'One row per answer. definition_id points at custom-fields.csv; exactly one of customer_id / property_id / job_id names the record it is about, and exactly one value_ column is filled, chosen by field_type.',
+    orderBy: 'id', select: CUSTOM_FIELD_VALUES, columns: cols(CUSTOM_FIELD_VALUES),
   },
 ]
 

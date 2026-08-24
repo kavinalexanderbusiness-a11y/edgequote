@@ -28,6 +28,7 @@ import DurationField from '@/components/jobs/DurationField'
 import WorkSessionsPanel from '@/components/jobs/WorkSessionsPanel'
 import { formatDuration, workdayMinutes } from '@/lib/workDuration'
 import { JobReferenceMedia } from '@/components/schedule/JobReferenceMedia'
+import { CustomFieldsSection } from '@/components/customFields/CustomFieldsSection'
 import { AUDIENCE_COPY } from '@/lib/noteScope'
 import { loadCompletedVisitLearning, type LearningLoad } from '@/lib/estimateVsActualData'
 
@@ -915,6 +916,15 @@ export function JobForm({ customers, crews, technicians, defaultValues, excludeJ
     <JobReferenceMedia jobId={isEdit ? (excludeJobId || null) : null} />
   )
 
+  /* Whatever this business records per visit — a permit number, a PO. EDIT ONLY:
+     an answer is stored against a visit's id, and on create there is no visit yet
+     to answer about. Same rule as the reference media above.
+     ⚠️ A `jobs` row is one VISIT, so a recurring series' visits each carry their
+     own answer — there is no series-level custom field in V1. */
+  const customFields = isEdit && excludeJobId ? (
+    <CustomFieldsSection entity="job" recordId={excludeJobId} bare className="pt-1" />
+  ) : null
+
   const repeatSection = (
     /* Repeat — available for new AND existing jobs; collapses to its cadence
        summary when editing so it stops dominating the form. */
@@ -1136,6 +1146,7 @@ export function JobForm({ customers, crews, technicians, defaultValues, excludeJ
               {weeklyPlannerCard}
               {workPanels}
               {referenceMedia}
+              {customFields}
               {repeatSection}
             </div>
           )}

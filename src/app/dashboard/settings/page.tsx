@@ -25,6 +25,7 @@ import { PayrollSettings } from '@/components/settings/PayrollSettings'
 import { PushNotificationSettings } from '@/components/settings/PushNotificationSettings'
 import { WebsiteIntegration } from '@/components/settings/WebsiteIntegration'
 import { DataExport } from '@/components/settings/DataExport'
+import { CustomFields } from '@/components/settings/CustomFields'
 import { Tabs, type TabItem } from '@/components/ui/Tabs'
 import { useForm, Controller } from 'react-hook-form'
 import { cn } from '@/lib/utils'
@@ -32,7 +33,7 @@ import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
 import { ServiceSeasons, ServiceSeason, DEFAULT_SEASONS, settingsToSeasons, seasonLabel, LAWN_HINTS, SNOW_HINTS } from '@/lib/seasons'
 import { weekdayLong } from '@/lib/preferences'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
-import { Download, Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin, LayoutGrid, Wallet, X, ArrowRight, LayoutTemplate, ClipboardCheck } from 'lucide-react'
+import { Download, Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin, LayoutGrid, Wallet, X, ArrowRight, LayoutTemplate, ClipboardCheck, SlidersHorizontal } from 'lucide-react'
 
 const SETTINGS_TABS: TabItem[] = [
   { key: 'business', label: 'Business', icon: Building2 },
@@ -43,6 +44,7 @@ const SETTINGS_TABS: TabItem[] = [
   { key: 'booking', label: 'Booking', icon: LinkIcon },
   { key: 'payroll', label: 'Payroll', icon: Wallet },
   { key: 'modules', label: 'Features', icon: LayoutGrid },
+  { key: 'custom-fields', label: 'Custom fields', icon: SlidersHorizontal },
   { key: 'data', label: 'Your data', icon: Download },
 ]
 type SettingsTab = (typeof SETTINGS_TABS)[number]['key']
@@ -823,6 +825,12 @@ export default function SettingsPage() {
       <div className={cn('order-3 space-y-6', tab !== 'modules' && 'hidden')}>
         <SaveContract text="Changes on this tab save the moment you make them." />
         <ModuleManager />
+      </div>
+
+      {/* CUSTOM FIELDS — the owner's own attributes on customers, locations, visits. */}
+      <div className={cn('order-3 space-y-6', tab !== 'custom-fields' && 'hidden')}>
+        <SaveContract text="Changes on this tab save the moment you make them." />
+        <CustomFields />
       </div>
 
       {/* YOUR DATA — export the business's own records. Reads only. */}
