@@ -34,12 +34,21 @@ import { hashInviteToken } from '../src/lib/googleAuthServer'
 import { hashBetaToken } from '../src/lib/betaInviteServer'
 import { normalizeInviteEmail } from '../src/lib/crewInvite'
 import { routeFor, landingFor } from '../src/lib/crewAccess'
+import { appOrigin, cleanOrigin } from '../src/lib/appOrigin'
+import { loadEnvLocal } from './lib/verify-fixture'
+import { endProcess } from './lib/shutdown'
 
 let failures = 0
+let skipped = 0
 const ok = (name: string) => console.log(`  ✓ ${name}`)
 const fail = (name: string, detail = '') => { failures++; console.log(`  ✗ ${name}${detail ? `\n      ${detail}` : ''}`) }
 const check = (name: string, cond: boolean, detail = '') => { cond ? ok(name) : fail(name, detail) }
 const H = (t: string) => console.log(`\n═══ ${t} ═══`)
+// ⚠️ A live half that cannot reach its subject must SKIP, never pass. Reported
+// separately from `failures` so `npm run verify` can tell "proved" from "could
+// not look" — a guard that goes green because the network was down is worse than
+// no guard, and this repo has shipped that mistake before (verify:schema).
+const skip = (name: string, why: string) => { skipped++; console.log(`  … SKIPPED ${name} — ${why}`) }
 
 const ROOT = join(__dirname, '..')
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8')
@@ -66,6 +75,7 @@ const BUTTON = read('src/components/auth/GoogleButton.tsx')
 const LOGIN = read('src/app/login/page.tsx')
 const SIGNUP = read('src/app/signup/page.tsx')
 const MIDDLEWARE = read('src/lib/supabase/middleware.ts')
+const APP_ORIGIN_SRC = read('src/lib/appOrigin.ts')
 const PKG = read('package.json')
 
 const cCALLBACK = strip(CALLBACK)
@@ -449,5 +459,270 @@ H('10. Surfaces, bundle safety and wiring')
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-console.log(`\n${failures === 0 ? '✅ google-auth: all checks passed' : `❌ google-auth: ${failures} check(s) failed`}`)
-process.exit(failures === 0 ? 0 : 1)
+H('11. The production return destination')
+// ⚠️⚠️ THE FAILURE THIS SECTION EXISTS FOR — a real human hit it on 2026-08-23.
+//
+// Sections 1-10 passed, 33/33, while production Google sign-in was broken end to
+// end. An owner clicked "Sign in with Google", authenticated successfully at
+// Google, and landed on:
+//
+//     404: NOT_FOUND      Code: DEPLOYMENT_NOT_FOUND
+//
+// ⭐ NOTHING IN THIS REPOSITORY WAS WRONG. The app sent the correct
+// redirect_to=https://app.edgehq.ca/auth/callback. The SUPABASE PROJECT's URL
+// configuration still named the host that was retired in August:
+//
+//     site_url       = https://app.edgepropertyservicesyyc.ca      ← deployment deleted
+//     uri_allow_list = https://app.edgepropertyservicesyyc.ca/**,http://localhost:3000/**
+//
+// ⭐⭐ THE MECHANISM, and why no amount of source-reading could have caught it.
+// gotrue does NOT validate `redirect_to` when the flow STARTS — it carries any
+// value straight through to the provider, which section 1 already measures. The
+// allow list is enforced when the provider RETURNS, and a redirect_to that fails
+// to match it is not reported as an error: it SILENTLY FALLS BACK TO site_url.
+// A correct app talking to a misconfigured project therefore delivers the person
+// to whatever host site_url names — here, a deployment that no longer exists.
+//
+// ⭐ WHY IT SURVIVED SO LONG UNNOTICED. Every other auth link in this codebase was
+// deliberately built NOT to depend on the allow list: crewInvite.buildSetupUrl,
+// passwordRecovery.buildResetUrl and betaInvite all construct their own URL
+// around a `hashed_token` for exactly that reason, and passwordRecovery even
+// records that site_url was once `http://localhost:3000` in production. They
+// engineered AROUND this field instead of fixing it. signInWithOAuth is the FIRST
+// and ONLY flow that consumes the allow list, so it is the first one this
+// misconfiguration was able to break.
+//
+// The static half pins what this repo controls. The live halves ask the two
+// systems that actually decide, and SKIP rather than pass when they cannot be
+// reached.
+
+/** The production origin of record. Not trusted on its own — cross-checked below
+ *  against NEXT_PUBLIC_APP_URL as the deploy actually reports it. */
+const CANONICAL_ORIGIN = 'https://app.edgehq.ca'
+const CANONICAL_CALLBACK = `${CANONICAL_ORIGIN}${AUTH_CALLBACK_PATH}`
+const CALLBACK_WITH_NEXT = `${CANONICAL_CALLBACK}?next=%2Fdashboard`
+
+/** Hosts that must never be an authentication return destination. Both shapes
+ *  have really shipped: the retired Edge Property Services app, and any
+ *  *.vercel.app deployment — ephemeral previews and deleted production aliases
+ *  alike answer DEPLOYMENT_NOT_FOUND once they are gone. */
+const FORBIDDEN_RETURN: [string, RegExp][] = [
+  ['the retired Edge Property Services host', /edgepropertyservicesyyc/i],
+  ['an ephemeral or deleted *.vercel.app deployment', /\.vercel\.app/i],
+]
+const forbiddenIn = (s: string) => FORBIDDEN_RETURN.filter(([, re]) => re.test(s)).map(([n]) => n)
+
+{
+  check('buildCallbackUrl on the canonical origin is the canonical callback',
+    buildCallbackUrl(CANONICAL_ORIGIN, null) === CANONICAL_CALLBACK,
+    buildCallbackUrl(CANONICAL_ORIGIN, null))
+
+  // ⛔ THE guard against an ephemeral preview hostname becoming the auth return.
+  // VERCEL_URL and VERCEL_BRANCH_URL name a DEPLOYMENT, not the product: they
+  // change on every push and stop resolving the moment it is removed. appOrigin
+  // answers from NEXT_PUBLIC_APP_URL or the request, and must never learn a
+  // third source.
+  check('no auth redirect is ever built from VERCEL_URL or VERCEL_BRANCH_URL',
+    !/VERCEL_URL|VERCEL_BRANCH_URL/.test(cSTART + cCALLBACK + strip(APP_ORIGIN_SRC)),
+    'a deployment hostname is ephemeral; the product origin is not')
+
+  const flowSrc = cSTART + cCALLBACK + cLIB + strip(BUTTON) + strip(LOGIN) + strip(SIGNUP)
+  check('no forbidden return host appears anywhere in the flow',
+    forbiddenIn(flowSrc).length === 0, forbiddenIn(flowSrc).join('; '))
+
+  // ⭐ THE apex-domain question, settled by measurement rather than by guessing.
+  // edgehq.ca is a live alias of the same deployment and serves /login itself, so
+  // a person can legitimately BEGIN the flow there. It must not therefore become
+  // the RETURN origin: appOrigin prefers the configured value over the request,
+  // which canonicalises an apex entry onto app.edgehq.ca by construction. That is
+  // what makes it safe for edgehq.ca to be absent from the Supabase allow list.
+  const savedAppUrl = process.env.NEXT_PUBLIC_APP_URL
+  process.env.NEXT_PUBLIC_APP_URL = CANONICAL_ORIGIN
+  check('a configured origin outranks the request origin',
+    appOrigin('https://edgehq.ca') === CANONICAL_ORIGIN,
+    'entry via the apex must not make the apex the OAuth return')
+  check('an apex-host entry still returns to the canonical callback',
+    buildCallbackUrl(appOrigin('https://edgehq.ca'), null) === CANONICAL_CALLBACK)
+  check('a hostile Host header cannot become the return origin',
+    appOrigin('https://evil.tld') === CANONICAL_ORIGIN,
+    'the configured value must win over anything the request carries')
+  if (savedAppUrl === undefined) delete process.env.NEXT_PUBLIC_APP_URL
+  else process.env.NEXT_PUBLIC_APP_URL = savedAppUrl
+}
+
+// ── gotrue's own matching, reimplemented so the allow list can be TESTED ──────
+// Supabase compiles each allow-list entry with glob.Compile(entry, '.', '/'):
+// `*` stops at a separator, `**` crosses them, `?` is a single non-separator
+// character, and the string matched is the WHOLE redirect URL — query string
+// included. That last detail is why an entry must account for `?next=`.
+//
+// Reimplemented rather than merely described, because the obvious guard — "the
+// canonical callback appears somewhere in the allow list" — would have passed on
+// the broken production config. `https://app.edgepropertyservicesyyc.ca/**`
+// contains no wildcard mistake at all; it simply names the wrong host. Only
+// actually matching the two together catches that, so the matcher is driven over
+// the real before-and-after below and cannot be silently wrong.
+function globToRegExp(pattern: string): RegExp {
+  let out = ''
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i]
+    if (c === '*') {
+      if (pattern[i + 1] === '*') { out += '.*'; i++ } else { out += '[^./]*' }
+    } else if (c === '?') {
+      out += '[^./]'
+    } else {
+      out += c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    }
+  }
+  return new RegExp(`^${out}$`)
+}
+const allows = (entry: string, url: string) => globToRegExp(entry.trim()).test(url)
+
+{
+  check('matcher: a `**` entry covers the bare callback',
+    allows(`${CANONICAL_CALLBACK}**`, CANONICAL_CALLBACK))
+  check('matcher: a `**` entry covers a callback carrying ?next=',
+    allows(`${CANONICAL_CALLBACK}**`, CALLBACK_WITH_NEXT))
+  check('matcher: a bare entry does NOT cover a query string',
+    !allows(CANONICAL_CALLBACK, CALLBACK_WITH_NEXT),
+    'which is why the allow list needs the wildcard form as well')
+  check('matcher: a single `*` does not cross a dot, so it cannot widen a host',
+    !allows('https://app.*.ca/auth/callback', 'https://app.edge.hq.ca/auth/callback'))
+  // ⭐ THE 2026-08-23 outage, expressed as an assertion. This is the pairing that
+  // was live in production: an allow list that does not cover the callback the
+  // app sends, which is precisely what made gotrue fall back to site_url.
+  check('matcher: the RETIRED allow list does NOT cover the canonical callback',
+    !allows('https://app.edgepropertyservicesyyc.ca/**', CANONICAL_CALLBACK),
+    'this pairing IS the DEPLOYMENT_NOT_FOUND a real owner hit')
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The two live systems. Neither is in this repository, and the outage lived in
+// one of them, so a guard that only reads source cannot see this class of break.
+const TIMEOUT_MS = 15_000
+
+async function getJson(url: string, headers: Record<string, string> = {}): Promise<Record<string, unknown> | null> {
+  try {
+    const r = await fetch(url, { headers, signal: AbortSignal.timeout(TIMEOUT_MS) })
+    if (!r.ok) return null
+    return (await r.json()) as Record<string, unknown>
+  } catch { return null }
+}
+
+/** Is a browser sent here going to arrive somewhere real? A deleted Vercel
+ *  deployment answers 404 with `x-vercel-error: DEPLOYMENT_NOT_FOUND`, which is
+ *  the exact page the owner saw, so the header is read explicitly rather than
+ *  inferred from the status alone. */
+async function probeHost(url: string): Promise<{ ok: boolean; detail: string }> {
+  try {
+    const r = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT_MS) })
+    const vercelError = r.headers.get('x-vercel-error')
+    return {
+      ok: r.status < 400 && !vercelError,
+      detail: `HTTP ${r.status}${vercelError ? ` x-vercel-error: ${vercelError}` : ''}`,
+    }
+  } catch (e) {
+    return { ok: false, detail: `unreachable: ${String((e as Error)?.message ?? e)}` }
+  }
+}
+
+/** The project ref out of the Supabase URL, so the guard follows the environment
+ *  it is pointed at instead of carrying a hard-coded project. */
+function projectRef(supabaseUrl: string | undefined): string | null {
+  const m = /^https:\/\/([a-z0-9]+)\.supabase\.co$/i.exec(cleanOrigin(supabaseUrl))
+  return m ? m[1] : null
+}
+
+async function main(): Promise<void> {
+  loadEnvLocal()
+
+  H('12. What the DEPLOY says its origin is')
+  {
+    const health = await getJson(`${CANONICAL_ORIGIN}/api/health`)
+    if (!health) {
+      skip('the deploy’s own origin report', `${CANONICAL_ORIGIN}/api/health could not be read`)
+    } else {
+      const appUrl = String(health.app_url ?? '')
+      check('production reports the canonical origin', appUrl === CANONICAL_ORIGIN, appUrl || '(absent)')
+      // The stored value, not the cleaned one: a BOM or a wrapping quote is
+      // invisible in every dashboard that renders it, and cost a day in August.
+      check('the STORED value needed no sanitising',
+        String(health.app_url_raw ?? '') === CANONICAL_ORIGIN,
+        JSON.stringify(health.app_url_raw))
+      check('the reported origin is not a forbidden return host',
+        forbiddenIn(appUrl).length === 0, forbiddenIn(appUrl).join('; '))
+    }
+  }
+
+  H('13. What SUPABASE will do with our redirect_to')
+  {
+    const ref = projectRef(process.env.NEXT_PUBLIC_SUPABASE_URL)
+    const token = process.env.SUPABASE_ACCESS_TOKEN
+    if (!ref || !token) {
+      // CI runs with NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co and
+      // holds no management token. There is nothing to ask.
+      skip('the live Supabase URL configuration',
+        !token ? 'no SUPABASE_ACCESS_TOKEN (CI holds no management token)' : 'no real Supabase project configured')
+      return
+    }
+    const cfg = await getJson(`https://api.supabase.com/v1/projects/${ref}/config/auth`,
+      { Authorization: `Bearer ${token}` })
+    if (!cfg) {
+      skip('the live Supabase URL configuration', `could not read config/auth for project ${ref}`)
+      return
+    }
+
+    check('Google is still enabled on the project', cfg.external_google_enabled === true)
+
+    // ── Site URL: the SILENT fallback, and therefore the dangerous field ─────
+    const site = cleanOrigin(String(cfg.site_url ?? ''))
+    check('Site URL is the canonical origin', site === CANONICAL_ORIGIN, site || '(absent)')
+    check('Site URL is not a retired or ephemeral deployment host',
+      forbiddenIn(site).length === 0, forbiddenIn(site).join('; '))
+    const probe = await probeHost(site || CANONICAL_ORIGIN)
+    check('the Site URL fallback resolves to a LIVE host',
+      probe.ok, `${site} → ${probe.detail}`)
+
+    // ── The allow list: what gotrue will and will not honour on the way back ──
+    const entries = String(cfg.uri_allow_list ?? '').split(',').map(s => s.trim()).filter(Boolean)
+    check('the allow list is not empty', entries.length > 0)
+    check('the allow list covers the callback the app actually sends',
+      entries.some(e => allows(e, CANONICAL_CALLBACK)),
+      `${CANONICAL_CALLBACK} matched no entry — gotrue would fall back to Site URL. entries: ${entries.join(' ')}`)
+    check('the allow list also covers a callback carrying ?next=',
+      entries.some(e => allows(e, CALLBACK_WITH_NEXT)),
+      `${CALLBACK_WITH_NEXT} matched no entry; a signed-in return to a deep link would fall back to Site URL`)
+
+    const badEntries = entries.filter(e => forbiddenIn(e).length > 0)
+    check('no allow-list entry names a retired or ephemeral deployment host',
+      badEntries.length === 0, badEntries.join(' '))
+
+    // ⛔ An over-broad entry is an open redirect that our own safeReturnPath
+    // cannot defend against, because gotrue decides this one before our code
+    // ever runs. Every shape below is a real bypass an entry like
+    // `https://app.edgehq.ca**` (no slash) or a bare `**` would admit.
+    const HOSTILE = [
+      'https://evil.tld/auth/callback',
+      'https://app.edgehq.ca.evil.tld/auth/callback',
+      'https://edgequote-git-preview-abc123.vercel.app/auth/callback',
+      'http://evil.tld/',
+    ]
+    const admitted = HOSTILE.filter(h => entries.some(e => allows(e, h)))
+    check(`no allow-list entry admits any of ${HOSTILE.length} foreign origins`,
+      admitted.length === 0,
+      admitted.length ? `admitted: ${admitted.join(' ')}` : '')
+  }
+}
+
+main()
+  .catch(e => fail('the live half could not run', String((e as Error)?.message ?? e)))
+  .finally(() => {
+    // ⚠️ endProcess, NOT process.exit. This guard now performs network I/O, and
+    // process.exit() while undici still holds a pooled keep-alive socket aborts
+    // node on Windows with a libuv assertion — AFTER the summary prints, which
+    // inside `npm run verify` killed the runner mid-suite. See scripts/lib/shutdown.
+    console.log(`\n${failures === 0
+      ? '✅ google-auth: all checks passed'
+      : `❌ google-auth: ${failures} check(s) failed`}${skipped ? `  (${skipped} live check group(s) skipped)` : ''}`)
+    void endProcess(failures === 0 ? 0 : 1)
+  })
