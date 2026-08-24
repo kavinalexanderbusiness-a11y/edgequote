@@ -80,23 +80,37 @@ sign-in breaks the same way emailed links did on 2026-08-15.
    Setting the provider up (steps 1-4) is not enough; with these two fields
    wrong, sign-in completes at Google and then dead-ends.
    - *Site URL*: `https://app.edgehq.ca`
-   - *Redirect URLs* — exactly these four:
-     - `https://app.edgehq.ca/auth/callback`
-     - `https://app.edgehq.ca/auth/callback**`
-     - `http://localhost:3000/auth/callback` (local dev only)
-     - `http://localhost:3000/auth/callback**` (local dev only)
+   - *Redirect URLs* — as configured in production:
+     - `https://app.edgehq.ca/**`
+     - `https://edgehq.ca/**`
+     - `http://localhost:3000/**`
 
-   ⭐ **Why the `**` twin of each entry.** gotrue matches the entry against the
-   WHOLE return URL, query string included, and the app appends `?next=…` when
-   the person was heading somewhere specific. A bare entry does not cover
-   `…/auth/callback?next=%2Fdashboard`, so without the wildcard form a deep-link
-   return silently falls back to Site URL. `verify:google-auth` asserts both.
+   ⭐ **A trailing `/**` is required, and a bare origin is not enough.** gotrue
+   matches each entry against the WHOLE return URL — path and query string
+   included. `https://app.edgehq.ca` on its own matches only that exact string,
+   so it does **not** cover `https://app.edgehq.ca/auth/callback`. This is not
+   hypothetical: during the 2026-08-23 repair the entry was first saved without
+   the `/**`, and sign-in stayed broken for exactly that reason until
+   `verify:google-auth` reported which URL matched no entry. `/**` crosses `/`
+   and `?` alike, so one entry per origin covers both the bare callback and the
+   `?next=…` form the app sends for a deep-link return.
 
-   ⛔ **`edgehq.ca` is deliberately NOT on this list.** The apex is a live alias
-   that serves `/login`, so a person can legitimately begin there — but
+   ⛔ **Do not widen these to a bare `**` or a wildcard host.** The allow list is
+   the only thing standing between a hand-crafted `redirect_to` and a foreign
+   origin, and gotrue consults it *before* any EdgeHQ code runs — so
+   `safeReturnPath` cannot defend this boundary. Note in particular that
+   `https://app.edgehq.ca**` (no slash) would admit
+   `https://app.edgehq.ca.evil.tld/…`, because `**` crosses dots too.
+   `verify:google-auth` drives four foreign origins through every entry.
+
+   ℹ️ **`edgehq.ca` is headroom, not a requirement.** The apex is a live alias
+   that serves `/login`, so a person can legitimately begin the flow there — but
    `appOrigin()` prefers the configured `NEXT_PUBLIC_APP_URL` over the request
-   origin, so the return is canonicalised onto `app.edgehq.ca` by construction.
-   Adding the apex would widen the allow list for a URL the app never generates.
+   origin, so an apex entry is canonicalised onto `app.edgehq.ca` before Google
+   is ever contacted (measured; `verify:google-auth` §11 asserts it). The app
+   therefore never generates an apex return URL. The entry costs nothing on our
+   own domain and keeps the flow working if `NEXT_PUBLIC_APP_URL` is ever unset,
+   which is why it is listed rather than removed.
 
 ## 3. Vercel
 
@@ -240,6 +254,13 @@ The live configuration at the time:
 |---|---|
 | Site URL | `https://app.edgepropertyservicesyyc.ca` ← retired, deployment deleted |
 | Redirect URLs | `https://app.edgepropertyservicesyyc.ca/**,http://localhost:3000/**` |
+
+Repaired to Site URL `https://app.edgehq.ca` and the three entries in §2.5.
+⚠️ The repair itself took two attempts: the first save left Site URL untouched
+and wrote `https://app.edgehq.ca` without a trailing `/**`, which matches no
+callback URL — so the flow still dead-ended on the retired host. Both slips were
+invisible in the dashboard and named immediately by `verify:google-auth`, which
+is the whole argument for a guard that reads the live configuration.
 
 The app was blameless: it sent `redirect_to=https://app.edgehq.ca/auth/callback`,
 which is correct. gotrue carried it to Google unvalidated, Google returned to
