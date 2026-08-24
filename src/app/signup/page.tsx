@@ -9,6 +9,7 @@ import { Banner } from '@/components/ui/Banner'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { Zap, MailCheck, ShieldCheck, KeyRound } from 'lucide-react'
 import { BETA_TOKEN_RE, MIN_PASSWORD, type BetaInviteState, type BetaSignupResponse } from '@/lib/betaInvite'
+import { GoogleButton, AuthDivider } from '@/components/auth/GoogleButton'
 
 // ── /signup — the invite-only front door ─────────────────────────────────────
 // Reached only from an invite URL (/signup?invite=eqb_…) handed out by the
@@ -143,6 +144,15 @@ function SignupFlow() {
           <Brand sub="You’ve been invited to the private beta" />
           <div className="bg-surface border border-border-strong rounded-card p-8 shadow-2xl">
             <h2 className="text-base font-semibold text-ink mb-6">Create your account</h2>
+
+            {/* Only reachable in the 'form' phase — that is, once the server has
+                already said this invite is live. The invite token rides along to
+                the start route, which moves it into an httpOnly cookie for the
+                Google round trip; it is re-checked against the row, atomically,
+                at binding time. Nothing here is the authority on it. */}
+            <GoogleButton label="Continue with Google" invite={token} />
+            <AuthDivider />
+
             <form onSubmit={submit} className="space-y-4">
               <Input label="Work email" type="email" placeholder="you@yourbusiness.ca" value={email}
                 onChange={e => setEmail(e.target.value)} required autoComplete="email" />

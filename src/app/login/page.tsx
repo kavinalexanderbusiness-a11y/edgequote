@@ -9,6 +9,10 @@ import { Input } from '@/components/ui/Input'
 import { Banner } from '@/components/ui/Banner'
 import { FORGOT_PATH } from '@/lib/passwordRecovery'
 import { resolveAppRole, landingFor } from '@/lib/crewAccess'
+import { GoogleButton, AuthDivider } from '@/components/auth/GoogleButton'
+import {
+  AUTH_ERROR_PARAM, GOOGLE_AUTH_ERROR_TEXT, readGoogleAuthError, safeReturnPath,
+} from '@/lib/googleAuth'
 import { Zap } from 'lucide-react'
 
 export default function LoginPage() {
@@ -20,9 +24,16 @@ function LoginForm() {
   const router = useRouter()
   // Where the middleware was sending them before it bounced them here. Same-path
   // only — an absolute or protocol-relative value would be an open redirect, and
-  // this parameter is attacker-controllable.
-  const rawNext = useSearchParams().get('next')
-  const next = rawNext && rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : null
+  // this parameter is attacker-controllable. safeReturnPath is THE gate, shared
+  // with the OAuth start route and callback: this was an inline two-clause check
+  // until Google sign-in gave the same rule two more callers, and a security
+  // predicate living in three places is two places to forget to fix.
+  const params = useSearchParams()
+  const next = safeReturnPath(params.get('next'))
+  // How a failed Google round trip comes home. A short stable code, never a
+  // message from the provider — a reflected error string is how a login page
+  // becomes a phishing surface.
+  const authError = readGoogleAuthError(params.get(AUTH_ERROR_PARAM))
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -90,6 +101,20 @@ function LoginForm() {
         {/* Card */}
         <div className="bg-surface border border-border-strong rounded-card p-8 shadow-2xl">
           <h2 className="text-base font-semibold text-ink mb-6">Sign in to your account</h2>
+
+          {/* A failed Google attempt lands ABOVE the controls, because the next
+              thing this person does is choose between trying Google again and
+              falling back to their password — and they cannot choose without
+              first reading why the last attempt did not work. */}
+          {authError && (
+            <div className="mb-5">
+              <Banner tone="danger">{GOOGLE_AUTH_ERROR_TEXT[authError]}</Banner>
+            </div>
+          )}
+
+          <GoogleButton label="Sign in with Google" next={next} />
+          <AuthDivider />
+
           <form onSubmit={handleLogin} className="space-y-4">
             <Input
               label="Email"

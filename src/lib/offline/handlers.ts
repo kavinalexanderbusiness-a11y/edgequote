@@ -158,7 +158,10 @@ export function registerOfflineHandlers(): void {
   // calls. Both are safely idempotent: the draft de-dupes on job_id, and the
   // comms route enforces its own opt-in + dedupe, so a retried op is a no-op.
   registerHandler('job.complete', async (payload) => {
-    const p = payload as { id: string; patch: Record<string, unknown>; job: Job; notify?: boolean; baseUpdatedAt?: string | null }
+    // `bodyOverride` (Session 80): the completion dialog's edited message.
+    // Carried in the op so a visit completed offline still sends the words the
+    // owner actually approved, not the template they edited away from.
+    const p = payload as { id: string; patch: Record<string, unknown>; job: Job; notify?: boolean; bodyOverride?: string; baseUpdatedAt?: string | null }
     const supabase = createClient()
     await guardedPatch(supabase, 'jobs', p.id, p.patch, p.baseUpdatedAt)
     // Invoice before message: a draft we couldn't create keeps the op queued to retry,
@@ -180,7 +183,7 @@ export function registerOfflineHandlers(): void {
     if (p.notify && p.job.customer_id) {
       await fetch('/api/comms/send', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerId: p.job.customer_id, template: 'job_complete', jobId: p.id, dedupe: true }),
+        body: JSON.stringify({ customerId: p.job.customer_id, template: 'job_complete', jobId: p.id, dedupe: true, ...(p.bodyOverride ? { bodyOverride: p.bodyOverride } : {}) }),
       }).catch(() => {})   // a failed courtesy text must not re-run the invoice
     }
   })

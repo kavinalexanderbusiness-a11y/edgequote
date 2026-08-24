@@ -3,22 +3,22 @@
   {
    "fn": "crew_employer",
    "args": "",
-   "comment": "The owner user_id this signed-in employee works for, or NULL. NULL for anon, for owners, and for anyone deactivated/archived — every crew RLS predicate fails closed on it."
+   "comment": "The owner user_id this signed-in employee works for, or NULL. NULL for anon, for owners, and for anyone deactivated/archived â every crew RLS predicate fails closed on it."
   },
   {
    "fn": "crew_set_completion_record",
    "args": "p_job_id uuid, p_summary text, p_issue text",
-   "comment": "Crew Mode: record what was done (customer-visible) and what needs attention (internal) on an assigned, non-cancelled visit. Typed parameters only — writes exactly two columns and no lifecycle field. Re-checks employer + crew because DEFINER runs past RLS."
+   "comment": "Crew Mode: record what was done (customer-visible) and what needs attention (internal) on an assigned, non-cancelled visit. Typed parameters only â writes exactly two columns and no lifecycle field. Re-checks employer + crew because DEFINER runs past RLS."
   },
   {
    "fn": "find_portal_access_customers",
    "args": "p_email text",
-   "comment": "Portal-link recovery lookup. Normalises both sides (lower+trim). NOT executable by anon/authenticated — service-role only, or the public anon key becomes a customer-existence oracle."
+   "comment": "Portal-link recovery lookup. Normalises both sides (lower+trim). NOT executable by anon/authenticated â service-role only, or the public anon key becomes a customer-existence oracle."
   },
   {
    "fn": "is_verify_fixture_tenant",
    "args": "",
-   "comment": "True when the CALLER is a verification fixture tenant. Answers only about auth.uid(); takes no arguments so it cannot be used to enumerate or probe. Consulted by scripts/ only — no trigger, policy or application path reads it."
+   "comment": "True when the CALLER is a verification fixture tenant. Answers only about auth.uid(); takes no arguments so it cannot be used to enumerate or probe. Consulted by scripts/ only â no trigger, policy or application path reads it."
   },
   {
    "fn": "job_session_minutes",
@@ -38,27 +38,27 @@
   {
    "fn": "portal_set_scheduling_preference",
    "args": "p_token text, p_quote_id uuid, p_date date, p_date_2 date, p_timing text, p_note text",
-   "comment": "THE writer of a customer's scheduling preference. Token proves the customer; quote must be theirs and 'accepted'. A preference is a request — it never creates, moves, or implies a visit. All-null clears it."
+   "comment": "THE writer of a customer's scheduling preference. Token proves the customer; quote must be theirs and 'accepted'. A preference is a request â it never creates, moves, or implies a visit. All-null clears it."
   },
   {
    "fn": "schema_contract",
    "args": "",
-   "comment": "Full catalogue snapshot for npm run schema:contract. SERVICE_ROLE ONLY — it returns every RLS predicate and SECURITY DEFINER body, i.e. the product's authorization logic. Use schema_fingerprint() (hashes only) for anything that merely needs to detect change."
+   "comment": "Full catalogue snapshot for npm run schema:contract. SERVICE_ROLE ONLY â it returns every RLS predicate and SECURITY DEFINER body, i.e. the product's authorization logic. Use schema_fingerprint() (hashes only) for anything that merely needs to detect change."
   },
   {
    "fn": "schema_fingerprint",
    "args": "",
-   "comment": "Counts + md5 per schema section, for npm run verify:schema. Returns NO names and NO data — only shape hashes, so it is safe to expose to any signed-in caller. The instrument that makes repo-vs-production drift visible; before it existed, 30 migrations reached production with no repo file and nothing reported it."
+   "comment": "Counts + md5 per schema section, for npm run verify:schema. Returns NO names and NO data â only shape hashes, so it is safe to expose to any signed-in caller. The instrument that makes repo-vs-production drift visible; before it existed, 30 migrations reached production with no repo file and nothing reported it."
   }
  ],
  "table_comments": [
   {
    "tbl": "audit_events",
-   "comment": "Canonical audit trail: one row per meaningful business mutation, written ONLY by DB triggers/definer functions in the same transaction as the write it describes. Append-only: no client insert path, and audit_events_no_mutate refuses UPDATE/DELETE for every role. Money figures inside before/after are descriptive snapshots â€” the ledger engines remain the financial truth."
+   "comment": "Canonical audit trail: one row per meaningful business mutation, written ONLY by DB triggers/definer functions in the same transaction as the write it describes. Append-only: no client insert path, and audit_events_no_mutate refuses UPDATE/DELETE for every role. Money figures inside before/after are descriptive snapshots Ã¢â¬â the ledger engines remain the financial truth."
   },
   {
    "tbl": "beta_invites",
-   "comment": "One-time beta signup invites. Raw tokens are never stored — sha256 hex only. Service-role and DEFINER access only: RLS is on with zero policies."
+   "comment": "One-time beta signup invites. Raw tokens are never stored â sha256 hex only. Service-role and DEFINER access only: RLS is on with zero policies."
   },
   {
    "tbl": "change_orders",
@@ -66,15 +66,15 @@
   },
   {
    "tbl": "crew_media",
-   "comment": "CREW AUDIENCE. Reference photos/video the office sends TO the field — what a worker needs BEFORE and DURING the work. Never customer-facing: no portal projection selects it. Not proof of work — that is job_photos + jobs.completion_summary."
+   "comment": "CREW AUDIENCE. Reference photos/video the office sends TO the field â what a worker needs BEFORE and DURING the work. Never customer-facing: no portal projection selects it. Not proof of work â that is job_photos + jobs.completion_summary."
   },
   {
    "tbl": "crew_message_reads",
-   "comment": "High-water mark per (visit, reader). Unread is derived from it — deliberately NOT one row per message per user."
+   "comment": "High-water mark per (visit, reader). Unread is derived from it â deliberately NOT one row per message per user."
   },
   {
    "tbl": "crew_messages",
-   "comment": "CREW AUDIENCE (the business + the crew assigned to this visit). The conversation attached to one visit. Never customer-facing: no portal projection, no PDF, no public API selects it. Not a note — jobs.notes is the standing instruction; this is what was said and when."
+   "comment": "CREW AUDIENCE (the business + the crew assigned to this visit). The conversation attached to one visit. Never customer-facing: no portal projection, no PDF, no public API selects it. Not a note â jobs.notes is the standing instruction; this is what was said and when."
   },
   {
    "tbl": "dispatch_notes",
@@ -82,7 +82,7 @@
   },
   {
    "tbl": "follow_ups",
-   "comment": "Owner follow-up commitments: WHO (customer_id, mandatory) / WHEN (due_on, a local date) / WHY (reason) / open|done. NOT public.schedule_items (empty, unread, calendar-shaped) and NOT lib/followup.ts (the derived quote chaser). Never messages the customer — this is an owner reminder only."
+   "comment": "Owner follow-up commitments: WHO (customer_id, mandatory) / WHEN (due_on, a local date) / WHY (reason) / open|done. NOT public.schedule_items (empty, unread, calendar-shaped) and NOT lib/followup.ts (the derived quote chaser). Never messages the customer â this is an owner reminder only."
   },
   {
    "tbl": "form_template_fields",
@@ -110,7 +110,7 @@
   },
   {
    "tbl": "password_reset_requests",
-   "comment": "Abuse ledger for the public password-reset endpoint. email_key = sha256(lower(trim(email))) — never the address. No user_id/email/token/IP by design."
+   "comment": "Abuse ledger for the public password-reset endpoint. email_key = sha256(lower(trim(email))) â never the address. No user_id/email/token/IP by design."
   },
   {
    "tbl": "platform_capabilities",
@@ -122,19 +122,19 @@
   },
   {
    "tbl": "portal_access_requests",
-   "comment": "Abuse ledger for the public portal-link endpoint. email_key = sha256(lower(trim(email))) — never the address. No customer_id/user_id/token by design."
+   "comment": "Abuse ledger for the public portal-link endpoint. email_key = sha256(lower(trim(email))) â never the address. No customer_id/user_id/token by design."
   },
   {
    "tbl": "property_measurement_events",
-   "comment": "Append-only history for property_measurements, written by trigger. No UPDATE/DELETE policy — history cannot be rewritten. Distinct from `measurements` (the lawn auto-vs-accepted accuracy log that trains neighbourhood ratios)."
+   "comment": "Append-only history for property_measurements, written by trigger. No UPDATE/DELETE policy â history cannot be rewritten. Distinct from `measurements` (the lawn auto-vs-accepted accuracy log that trains neighbourhood ratios)."
   },
   {
    "tbl": "property_measurements",
-   "comment": "THE typed measurement ledger (Measurement Engine V2). One row per (property, kind). Unit follows kind by CHECK. Legacy properties.lawn_sqft/fence_length/mulch_area/rock_area are DERIVED from here by trigger for existing pricing/portal readers — drop them once Quote V2 reads this table."
+   "comment": "THE typed measurement ledger (Measurement Engine V2). One row per (property, kind). Unit follows kind by CHECK. Legacy properties.lawn_sqft/fence_length/mulch_area/rock_area are DERIVED from here by trigger for existing pricing/portal readers â drop them once Quote V2 reads this table."
   },
   {
    "tbl": "purchase_order_items",
-   "comment": "PO lines. qty_received is intentionally absent — it is derived from part_movements linked by purchase_order_item_id, so stock and receipts cannot drift apart."
+   "comment": "PO lines. qty_received is intentionally absent â it is derived from part_movements linked by purchase_order_item_id, so stock and receipts cannot drift apart."
   },
   {
    "tbl": "quote_options",
@@ -146,7 +146,7 @@
   },
   {
    "tbl": "schedule_items",
-   "comment": "Non-job calendar entries: estimate / callback / appointment / task / reminder. A row here is NEVER work — labour, revenue, invoicing, recurrence, work sessions, proof-of-work and review eligibility all read public.jobs, so completing an estimate appointment cannot reach any of them. type='estimate' is the scheduled visit that produces a quote (Session 79); converted_quote_id is the quote it is about, whether that quote existed first or was written afterwards."
+   "comment": "Non-job calendar entries: estimate / callback / appointment / task / reminder. A row here is NEVER work â labour, revenue, invoicing, recurrence, work sessions, proof-of-work and review eligibility all read public.jobs, so completing an estimate appointment cannot reach any of them. type='estimate' is the scheduled visit that produces a quote (Session 79); converted_quote_id is the quote it is about, whether that quote existed first or was written afterwards."
   },
   {
    "tbl": "technician_crew_history",
@@ -158,7 +158,7 @@
   },
   {
    "tbl": "verify_fixture_tenants",
-   "comment": "Tenants whose data is created by scripts/verify-*.ts. Marker only — grants nothing, relaxes nothing. Guards read it through is_verify_fixture_tenant() and refuse to write when it answers false. Writable only by migration/service_role."
+   "comment": "Tenants whose data is created by scripts/verify-*.ts. Marker only â grants nothing, relaxes nothing. Guards read it through is_verify_fixture_tenant() and refuse to write when it answers false. Writable only by migration/service_role."
   },
   {
    "tbl": "worker_availability",
@@ -174,12 +174,12 @@
   {
    "col": "actor_type",
    "tbl": "audit_events",
-   "comment": "owner | worker | customer | system â€” resolved in-database by audit_actor_context(), never supplied by a client. Do not lie about actor identity: a customer decision recorded by the owner is actor=owner (the write) with the decision provenance in after/meta."
+   "comment": "owner | worker | customer | system Ã¢â¬â resolved in-database by audit_actor_context(), never supplied by a client. Do not lie about actor identity: a customer decision recorded by the owner is actor=owner (the write) with the decision provenance in after/meta."
   },
   {
    "col": "before",
    "tbl": "audit_events",
-   "comment": "Meaningful changed values only â€” never a whole-row dump. Null-valued keys are kept deliberately: \"end_date: null\" IS the before-state of setting one."
+   "comment": "Meaningful changed values only Ã¢â¬â never a whole-row dump. Null-valued keys are kept deliberately: \"end_date: null\" IS the before-state of setting one."
   },
   {
    "col": "entity_label",
@@ -189,7 +189,7 @@
   {
    "col": "occurred_at",
    "tbl": "audit_events",
-   "comment": "clock_timestamp() (real wall clock), NOT now() â€” now() is transaction start and ties every row written in one transaction."
+   "comment": "clock_timestamp() (real wall clock), NOT now() Ã¢â¬â now() is transaction start and ties every row written in one transaction."
   },
   {
    "col": "seq",
@@ -219,7 +219,7 @@
   {
    "col": "business_type",
    "tbl": "business_settings",
-   "comment": "Trade/vertical key (registry: src/lib/trades). Selects seed data and default copy ONLY — engines never branch on it. Unknown key = neutral pack."
+   "comment": "Trade/vertical key (registry: src/lib/trades). Selects seed data and default copy ONLY â engines never branch on it. Unknown key = neutral pack."
   },
   {
    "col": "enabled_modules",
@@ -229,12 +229,12 @@
   {
    "col": "gst_number",
    "tbl": "business_settings",
-   "comment": "GST/HST registration number (e.g. 123456789RT0001). Printed on invoices/receipts when gst_percent > 0 — CRA requires it for the customer to claim an ITC on $30+. Null = not registered."
+   "comment": "GST/HST registration number (e.g. 123456789RT0001). Printed on invoices/receipts when gst_percent > 0 â CRA requires it for the customer to claim an ITC on $30+. Null = not registered."
   },
   {
    "col": "module_meta",
    "tbl": "business_settings",
-   "comment": "Per-module install state { key: { v: installedVersion, at: ISO } } — drives the Modules update badges (registry: src/lib/modules.ts). NULL = treat everything as current."
+   "comment": "Per-module install state { key: { v: installedVersion, at: ISO } } â drives the Modules update badges (registry: src/lib/modules.ts). NULL = treat everything as current."
   },
   {
    "col": "opening_balance_date",
@@ -279,7 +279,7 @@
   {
    "col": "pay_week_starts_on",
    "tbl": "business_settings",
-   "comment": "0=Sun..6=Sat. The OT WORK WEEK boundary — legally load-bearing, so it is explicit rather than assumed. Defaults to 1 (Mon) to match the existing timesheet week."
+   "comment": "0=Sun..6=Sat. The OT WORK WEEK boundary â legally load-bearing, so it is explicit rather than assumed. Defaults to 1 (Mon) to match the existing timesheet week."
   },
   {
    "col": "decided_via",
@@ -299,7 +299,7 @@
   {
    "col": "user_id",
    "tbl": "crew_messages",
-   "comment": "The BUSINESS that owns the visit — the tenant boundary. Never the crew author's own uid."
+   "comment": "The BUSINESS that owns the visit â the tenant boundary. Never the crew author's own uid."
   },
   {
    "col": "capacity_minutes",
@@ -309,7 +309,7 @@
   {
    "col": "color",
    "tbl": "crews",
-   "comment": "Palette key (lib/crews CREW_PALETTE) — board chips + map pin hues, not a hex."
+   "comment": "Palette key (lib/crews CREW_PALETTE) â board chips + map pin hues, not a hex."
   },
   {
    "col": "day_start",
@@ -329,7 +329,7 @@
   {
    "col": "subject",
    "tbl": "crm_campaigns",
-   "comment": "Owner-written email subject. Blank → the message template's built-in subject."
+   "comment": "Owner-written email subject. Blank â the message template's built-in subject."
   },
   {
    "col": "notes",
@@ -339,12 +339,12 @@
   {
    "col": "phone_digits",
    "tbl": "customers",
-   "comment": "Digits-only form of phone, for search only. Generated — never write to it. Display and dial from `phone`, which keeps the owner's own formatting."
+   "comment": "Digits-only form of phone, for search only. Generated â never write to it. Display and dial from `phone`, which keeps the owner's own formatting."
   },
   {
    "col": "preferred_channel",
    "tbl": "customers",
-   "comment": "How the customer prefers to be contacted: sms | email | phone | NULL (no preference). A PREFERENCE, never consent — it orders the channels consent already allows and can never grant one. 'phone' is an instruction to the owner; the send pipeline never places calls."
+   "comment": "How the customer prefers to be contacted: sms | email | phone | NULL (no preference). A PREFERENCE, never consent â it orders the channels consent already allows and can never grant one. 'phone' is an instruction to the owner; the send pipeline never places calls."
   },
   {
    "col": "crew_id",
@@ -374,7 +374,7 @@
   {
    "col": "expense_id",
    "tbl": "fixed_assets",
-   "comment": "The expense row this asset was bought with, when there is one. Traceability only — the P&L uses expenses.is_capital, not this link."
+   "comment": "The expense row this asset was bought with, when there is one. Traceability only â the P&L uses expenses.is_capital, not this link."
   },
   {
    "col": "completed_at",
@@ -384,12 +384,12 @@
   {
    "col": "due_on",
    "tbl": "follow_ups",
-   "comment": "A DATE, compared as a string against the owner's LOCAL today. Never a timestamp — \"Friday\" must not become Thursday for a traveller."
+   "comment": "A DATE, compared as a string against the owner's LOCAL today. Never a timestamp â \"Friday\" must not become Thursday for a traveller."
   },
   {
    "col": "deposit_amount",
    "tbl": "invoices",
-   "comment": "GST-inclusive amount requested up front. A deposit is a PARTIAL PAYMENT of this invoice, not a separate invoice. Percentage is derived, never stored — see lib/payments/deposit.ts."
+   "comment": "GST-inclusive amount requested up front. A deposit is a PARTIAL PAYMENT of this invoice, not a separate invoice. Percentage is derived, never stored â see lib/payments/deposit.ts."
   },
   {
    "col": "deposit_requested_at",
@@ -449,7 +449,7 @@
   {
    "col": "notes",
    "tbl": "jobs",
-   "comment": "INTERNAL ONLY. The access/instruction note for whoever does the work (gate code, where to park). Shipped to the crew by crew_day. Removed from get_portal_data 2026-08-11 — it was being rendered to customers. Customer-facing words go in completion_summary."
+   "comment": "INTERNAL ONLY. The access/instruction note for whoever does the work (gate code, where to park). Shipped to the crew by crew_day. Removed from get_portal_data 2026-08-11 â it was being rendered to customers. Customer-facing words go in completion_summary."
   },
   {
    "col": "technician_id",
@@ -464,12 +464,12 @@
   {
    "col": "supplier_id",
    "tbl": "parts",
-   "comment": "Vendor entity. Nullable. The legacy parts.supplier text is kept as a fallback and is NOT backfilled — resolve display via lib/suppliers.supplierLabel."
+   "comment": "Vendor entity. Nullable. The legacy parts.supplier text is kept as a fallback and is NOT backfilled â resolve display via lib/suppliers.supplierLabel."
   },
   {
    "col": "quote_id",
    "tbl": "payments",
-   "comment": "The quote/booking a PRE-INVOICE deposit secures (both legs of the recordDeposit pair carry it). Null on ordinary invoice payments. The scheduling gate sums signed cash rows (isCashRow) by this — a Stripe refund writes a negative row with the same quote_id, so readiness derives honestly."
+   "comment": "The quote/booking a PRE-INVOICE deposit secures (both legs of the recordDeposit pair carry it). Null on ordinary invoice payments. The scheduling gate sums signed cash rows (isCashRow) by this â a Stripe refund writes a negative row with the same quote_id, so readiness derives honestly."
   },
   {
    "col": "internal_notes",
@@ -479,7 +479,7 @@
   {
    "col": "seq",
    "tbl": "property_measurement_events",
-   "comment": "Monotonic tiebreaker. ORDER BY seq — created_at can tie at microsecond resolution."
+   "comment": "Monotonic tiebreaker. ORDER BY seq â created_at can tie at microsecond resolution."
   },
   {
    "col": "status",
@@ -489,12 +489,12 @@
   {
    "col": "kind",
    "tbl": "quote_services",
-   "comment": "What this line IS: service (labour you perform) or material (goods you supply). A material line is an ESTIMATE ON THE QUOTE — quantity x unit_price, same arithmetic, same discount engine. It never reserves, allocates or deducts stock, and carries no cost: see RUN-2026-07-16-quote-materials.sql."
+   "comment": "What this line IS: service (labour you perform) or material (goods you supply). A material line is an ESTIMATE ON THE QUOTE â quantity x unit_price, same arithmetic, same discount engine. It never reserves, allocates or deducts stock, and carries no cost: see RUN-2026-07-16-quote-materials.sql."
   },
   {
    "col": "service_type",
    "tbl": "quote_services",
-   "comment": "The line's display name. For kind=service, the service performed; for kind=material, the material supplied (\"Mulch\"). Historical name — not a claim that the line is a service."
+   "comment": "The line's display name. For kind=service, the service performed; for kind=material, the material supplied (\"Mulch\"). Historical name â not a claim that the line is a service."
   },
   {
    "col": "accepted_price",
@@ -504,27 +504,27 @@
   {
    "col": "deposit_override_at",
    "tbl": "quotes",
-   "comment": "Owner explicitly scheduled without the required deposit collected (the confirm dialog's stamp). The deposit remains owed — this records the decision, it does not waive the money."
+   "comment": "Owner explicitly scheduled without the required deposit collected (the confirm dialog's stamp). The deposit remains owed â this records the decision, it does not waive the money."
   },
   {
    "col": "deposit_type",
    "tbl": "quotes",
-   "comment": "Scheduling-deposit rule: 'percent' (deposit_value = % of the accepted price) or 'fixed' (deposit_value = dollars). NULL = no deposit required — the quote behaves exactly as before this feature existed. The dollar figure for percent is DERIVED at read time (lib/payments/depositGate), never stored."
+   "comment": "Scheduling-deposit rule: 'percent' (deposit_value = % of the accepted price) or 'fixed' (deposit_value = dollars). NULL = no deposit required â the quote behaves exactly as before this feature existed. The dollar figure for percent is DERIVED at read time (lib/payments/depositGate), never stored."
   },
   {
    "col": "internal_notes",
    "tbl": "quotes",
-   "comment": "INTERNAL ONLY. The owner's private margin on this quote — price floor, who to call before changing scope, why it was priced this way. MUST NOT be selected by get_portal_data or rendered by any PDF. Its customer-facing counterpart is quotes.notes."
+   "comment": "INTERNAL ONLY. The owner's private margin on this quote â price floor, who to call before changing scope, why it was priced this way. MUST NOT be selected by get_portal_data or rendered by any PDF. Its customer-facing counterpart is quotes.notes."
   },
   {
    "col": "notes",
    "tbl": "quotes",
-   "comment": "CUSTOMER-VISIBLE. The scope note the customer reads — printed in QuotePDF's Notes box and selected by get_portal_data. Never put a gate code or a price floor here; that is quotes.internal_notes."
+   "comment": "CUSTOMER-VISIBLE. The scope note the customer reads â printed in QuotePDF's Notes box and selected by get_portal_data. Never put a gate code or a price floor here; that is quotes.internal_notes."
   },
   {
    "col": "preferred_date",
    "tbl": "quotes",
-   "comment": "The customer's preferred work date — a REQUEST, never a booking. A real visit exists only when the owner schedules one. Written only by portal_set_scheduling_preference while the quote is accepted."
+   "comment": "The customer's preferred work date â a REQUEST, never a booking. A real visit exists only when the owner schedules one. Written only by portal_set_scheduling_preference while the quote is accepted."
   },
   {
    "col": "renewal_of_recurrence_id",
@@ -534,7 +534,7 @@
   {
    "col": "selected_cadence",
    "tbl": "quotes",
-   "comment": "Which cadence was actually bought (one_time|weekly|biweekly|monthly). NULL = nobody said — do NOT infer it from whichever price column is populated; that is the bug this column exists to kill."
+   "comment": "Which cadence was actually bought (one_time|weekly|biweekly|monthly). NULL = nobody said â do NOT infer it from whichever price column is populated; that is the bug this column exists to kill."
   },
   {
    "col": "selected_option_id",
@@ -544,12 +544,12 @@
   {
    "col": "total",
    "tbl": "quotes",
-   "comment": "GENERATED = initial_price + travel_fee. NULL when the quote has no price — deliberately NOT 0, because an unpriced quote is not a free one. It must never fall back to hours*crew_size*rate again: that fabricated a price the pricing engine never produced, and two customers were billed on it (see RUN-2026-07-16e)."
+   "comment": "GENERATED = initial_price + travel_fee. NULL when the quote has no price â deliberately NOT 0, because an unpriced quote is not a free one. It must never fall back to hours*crew_size*rate again: that fabricated a price the pricing engine never produced, and two customers were billed on it (see RUN-2026-07-16e)."
   },
   {
    "col": "valid_until",
    "tbl": "quotes",
-   "comment": "Calendar date this quote stops being valid. Null = never expires (incl. every quote sent before expiry existed). 'expired' is derived for display by lib/quoteStatus — it is never stored in quotes.status."
+   "comment": "Calendar date this quote stops being valid. Null = never expires (incl. every quote sent before expiry existed). 'expired' is derived for display by lib/quoteStatus â it is never stored in quotes.status."
   },
   {
    "col": "last_period_to",
@@ -574,7 +574,7 @@
   {
    "col": "notes",
    "tbl": "schedule_items",
-   "comment": "INTERNAL only — never rendered to a customer. Customer-facing wording lives in customer_note."
+   "comment": "INTERNAL only â never rendered to a customer. Customer-facing wording lives in customer_note."
   },
   {
    "col": "dedup_key",
@@ -584,7 +584,7 @@
   {
    "col": "from_portal",
    "tbl": "service_requests",
-   "comment": "True only for rows created by portal_submit_request (incl. its portal_request_service wrapper) — a customer acting in their own portal. Website leads, online bookings and system notes stay false."
+   "comment": "True only for rows created by portal_submit_request (incl. its portal_request_service wrapper) â a customer acting in their own portal. Website leads, online bookings and system notes stay false."
   },
   {
    "col": "photos",
@@ -599,7 +599,7 @@
   {
    "col": "is_favorite",
    "tbl": "service_templates",
-   "comment": "Owner shortlist — surfaced first in the quote builder picker."
+   "comment": "Owner shortlist â surfaced first in the quote builder picker."
   },
   {
    "col": "material_cost",
@@ -619,7 +619,7 @@
   {
    "col": "archived_at",
    "tbl": "technicians",
-   "comment": "Soft-archive: set when the technician leaves the roster (hidden everywhere, record preserved). NULL = active. Removing a technician must archive, never delete — their time_entries/wage_history/pto_entries are statutory records."
+   "comment": "Soft-archive: set when the technician leaves the roster (hidden everywhere, record preserved). NULL = active. Removing a technician must archive, never delete â their time_entries/wage_history/pto_entries are statutory records."
   },
   {
    "col": "auth_user_id",
@@ -629,7 +629,7 @@
   {
    "col": "hourly_wage",
    "tbl": "technicians",
-   "comment": "Default pay rate for the NEXT clock-in. Historical cost lives on time_entries.hourly_rate (snapshot) — changing this never rewrites past shifts."
+   "comment": "Default pay rate for the NEXT clock-in. Historical cost lives on time_entries.hourly_rate (snapshot) â changing this never rewrites past shifts."
   },
   {
    "col": "invite_code",
@@ -654,7 +654,7 @@
   {
    "col": "created_at",
    "tbl": "wage_history",
-   "comment": "clock_timestamp() (real wall clock), NOT now() — now() is transaction start and ties every row written in one transaction."
+   "comment": "clock_timestamp() (real wall clock), NOT now() â now() is transaction start and ties every row written in one transaction."
   },
   {
    "col": "seq",

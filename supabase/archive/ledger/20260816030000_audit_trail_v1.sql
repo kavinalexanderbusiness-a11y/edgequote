@@ -1,15 +1,16 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- ARCHIVED MIGRATION 
-—
- HISTORY ONLY. DO NOT RE-RUN.
+-- ARCHIVED MIGRATION — HISTORY ONLY. DO NOT RE-RUN.
 --
 --   version : 20260816030000
 --   name    : audit_trail_v1
 --
--- Applied to production 2026-08-16 by another session; the repo had no file.
--- Recovered from supabase_migrations.schema_migrations.statements by Session 75
--- so npm run verify:migrations can see it. Application code not landed here.
+-- Applied to production 2026-08-16 via the management API (Session 68) and
+-- recorded in supabase_migrations.schema_migrations. The SQL below is the
+-- text production executed.
 --
+-- Its effects are already folded into supabase/migrations/*_baseline.sql. This
+-- copy exists so "why is this column here?" is answerable, and for nothing else.
+-- Re-running one replaces a live object with an older body — silently, no error.
 -- ═══════════════════════════════════════════════════════════════════════════
 
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•

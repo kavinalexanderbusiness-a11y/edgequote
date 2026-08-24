@@ -456,8 +456,14 @@ check('…and it reports whether Repeat was touched this session, on both branch
   (formSrc.match(/repeatAsserted:\s*repeatTouched\.current/g) || []).length >= 2, true)
 check('…never as a constant the save cannot disbelieve',
   /repeatAsserted:\s*(true|false)/.test(formSrc), false)
+// S81 centralized the marking: every control calls markRepeatTouched(), and the
+// helper is the ONE place the intent ref and the dirty state flip together (so
+// the save's repeatAsserted and the discard guard can never disagree). The rule
+// is unchanged — five control sites must mark — the pin just follows the calls.
 check('every Repeat control marks the flag (select, custom count, custom unit, chips, one-time)',
-  (formSrc.match(/repeatTouched\.current\s*=\s*true/g) || []).length >= 5, true)
+  (formSrc.match(/(?<!function )markRepeatTouched\(\)/g) || []).length >= 5, true)
+check('…and the helper actually sets the intent ref the save reads',
+  /function markRepeatTouched\(\) \{ repeatTouched\.current = true; setRecDirty\(true\) \}/.test(formSrc), true)
 check('Season End anchors on the SERIES start, falling back to the visit',
   /seriesStartDate\s*\|\|\s*scheduledDate/.test(formSrc), true)
 check('the save routes removal through planRecurrenceRemoval', /planRecurrenceRemoval\(/.test(pageSrc), true)

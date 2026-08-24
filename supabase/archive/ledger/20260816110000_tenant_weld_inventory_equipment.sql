@@ -1,37 +1,39 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- ARCHIVED MIGRATION 
-—
- HISTORY ONLY. DO NOT RE-RUN.
+-- ARCHIVED MIGRATION — HISTORY ONLY. DO NOT RE-RUN.
 --
 --   version : 20260816110000
 --   name    : tenant_weld_inventory_equipment
 --
--- Applied to production 2026-08-16 via the management API (Session 75).
--- Two proven B2-class cross-tenant writes closed; folded into the baseline.
+-- Applied to production 2026-08-16 via the management API (another session;
+-- archived by Session 68 convergence) and recorded in
+-- supabase_migrations.schema_migrations. The SQL below is the text production executed.
 --
+-- Its effects are already folded into supabase/migrations/*_baseline.sql. This
+-- copy exists so "why is this column here?" is answerable, and for nothing else.
+-- Re-running one replaces a live object with an older body — silently, no error.
 -- ═══════════════════════════════════════════════════════════════════════════
 
--- ── Two more B2-class welds: parts and equipment ────────────────────────────
+-- ââ Two more B2-class welds: parts and equipment ââââââââââââââââââââââââââââ
 --
--- Found by classifying all 106 single-column tenant→tenant foreign keys by
--- EXPLOITABILITY rather than by shape. Shape alone proves nothing — 102 of the
+-- Found by classifying all 106 single-column tenantâtenant foreign keys by
+-- EXPLOITABILITY rather than by shape. Shape alone proves nothing â 102 of the
 -- 106 have an attacker-writable child row. What makes a relation dangerous is a
 -- SECURITY DEFINER path that traverses it WITHOUT constraining user_id. Eleven
--- did; these two reproduce the payments→invoices defect exactly.
+-- did; these two reproduce the paymentsâinvoices defect exactly.
 --
 -- PROVEN ON PRODUCTION 2026-08-16, inside a rolled-back transaction, with two
 -- real tenants:
---   part_movements(A) -> parts(B)          ACCEPTED — B's qty_on_hand 100 → -75
---   equipment_service(A) -> equipment(B)   ACCEPTED — B's last_service_at → 2099-01-01
+--   part_movements(A) -> parts(B)          ACCEPTED â B's qty_on_hand 100 â -75
+--   equipment_service(A) -> equipment(B)   ACCEPTED â B's last_service_at â 2099-01-01
 --
 -- The stock case is worse than corruption. recompute_part_stock REPLACES the
 -- parent's value with the sum of its movements, so tenant A does not nudge
--- tenant B's count — A's number becomes B's count outright.
+-- tenant B's count â A's number becomes B's count outright.
 --
 -- Preflight: 0 mismatched rows on both relations, and both child tables are
 -- empty, so these constraints validate instantly against existing data.
 
--- ── parts ───────────────────────────────────────────────────────────────────
+-- ââ parts âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 alter table public.parts
   add constraint parts_user_id_id_key unique (user_id, id);
 
@@ -44,7 +46,7 @@ alter table public.part_movements
   references public.parts (user_id, id)
   on delete cascade;
 
--- ── equipment ───────────────────────────────────────────────────────────────
+-- ââ equipment âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 alter table public.equipment
   add constraint equipment_user_id_id_key unique (user_id, id);
 
@@ -57,12 +59,12 @@ alter table public.equipment_service
   references public.equipment (user_id, id)
   on delete cascade;
 
--- ── Defence in depth: the recomputes refuse to cross a tenant ───────────────
+-- ââ Defence in depth: the recomputes refuse to cross a tenant âââââââââââââââ
 -- The constraints above already make a foreign-tenant child row unINSERTable.
 -- These make the aggregate itself refuse, so a row arriving by some other route
 -- (a service_role path, a restore, a future migration) still cannot move another
 -- business's totals. Bodies are production's current definitions with the tenant
--- predicate added — read with pg_get_functiondef, not from a repo copy.
+-- predicate added â read with pg_get_functiondef, not from a repo copy.
 
 create or replace function public.recompute_part_stock()
  returns trigger

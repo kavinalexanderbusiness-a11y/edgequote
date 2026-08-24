@@ -25,7 +25,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { addDays, format, parseISO } from 'date-fns'
 import { serviceHistory, type LaborComparison, type ServiceVariance } from '@/lib/estimateVsActual'
 import { loadCompletedVisitLearning } from '@/lib/estimateVsActualData'
-import { workersAvailableOn, type DayVisitLike, type DayFitInput } from '@/lib/dayFit'
+import { workersAvailableOn, type DayVisitLike, type DayFitInput, type TechForAvailability } from '@/lib/dayFit'
 import {
   workerDayStates, isBookedOff, isMissingRelation,
   type ApprovedTimeOffDay, type AvailabilityPatternRow,
@@ -55,6 +55,12 @@ export interface DayFitContext {
   historyFor: (serviceType: string | null | undefined) => ServiceVariance | null
   /** False when technicians/pto could not be read — reads as "unknown", not 0. */
   workforceKnown: boolean
+  /** The rows the two above were derived from, so a caller asking a NARROWER
+   *  question (can THIS crew staff this day?) reuses the same fetch and the same
+   *  availability rule instead of loading a second roster. Empty when unknown —
+   *  always check workforceKnown before reading a claim into them. */
+  technicians: TechForAvailability[]
+  ptoDates: { technician_id: string; date: string }[]
   /** Build the engine input for one day. */
   dayInput: (date: string) => DayFitInput
   /** The horizon, in order — every candidate day this context can answer for. */
@@ -88,6 +94,8 @@ export async function loadDayFitContext(
       .select('daily_capacity_hours, preferred_work_days')
       .eq('user_id', userId).maybeSingle(),
     supabase.from('technicians')
+      // crew_id rides along so availability can be asked per crew — the same
+      // rule, narrowed, rather than a second engine counting people.
       .select('id, name, crew_id, is_active, ended_on, archived_at')
       .eq('user_id', userId),
     // Time off is narrowed by `isBookedOff` AFTER the read, not by a status
@@ -188,6 +196,7 @@ export async function loadDayFitContext(
       capacityHours, preferredWorkDays, visitsByDate, workersByDate,
       staffingByDate, availabilityRecorded, crewNames,
       learnedFor, historyFor, workforceKnown, dayInput, horizonDates,
+      technicians: techs, ptoDates: pto,
     },
   }
 }
