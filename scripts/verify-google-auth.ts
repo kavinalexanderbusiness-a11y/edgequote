@@ -176,6 +176,12 @@ H('3. The beta gate is untouched (SQL, apply path)')
     !/redeemed_by\s*=\s*[^\s;]*email/i.test(SQL))
 
   const claim = /CREATE OR REPLACE FUNCTION public\.claim_beta_invite\(\)[\s\S]*?\$function\$([\s\S]*?)\$function\$/.exec(SQL)?.[1] ?? ''
+  // The structural half of "no duplicate business": even if every gate above
+  // were bypassed, the table itself cannot hold a second row for one owner.
+  check('business_settings cannot hold two rows for one user',
+    /business_settings_user_id_key|UNIQUE (user_id)/i.test(SQL),
+    'a unique constraint on user_id is what makes duplicate-business structurally impossible')
+
   check('claim_beta_invite() still refuses an unverified email',
     /email_confirmed_at/.test(claim) && /email-unverified/.test(claim))
 

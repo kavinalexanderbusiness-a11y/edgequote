@@ -216,6 +216,20 @@ H('5. The authorization gates, asked of the real database')
       else no(`can_provision_business = ${JSON.stringify(prov.data)}`)
       // scope:'local' is load-bearing. A bare signOut() is GLOBAL and would end
       // the owner's session on their own phone - the 2026-08-12 incident.
+      // ── "no duplicate business / no duplicate user" ───────────────────────
+      // ⛔ Deliberately NOT tested by attempting a second INSERT. The refusal
+      // comes from business_settings_user_id_key, that is already proven, and a
+      // test that turned out to be WRONG would create a real second business in
+      // production. Counting is sufficient, and it is a read.
+      const { data: biz, error: bizErr } = await sb.from('business_settings').select('user_id, company_name')
+      const { data: me } = await sb.auth.getUser()
+      if (bizErr) sk('owner business count', bizErr.message)
+      else if (biz.length === 1) {
+        ok(`the owner still has exactly ONE business ("${biz[0].company_name || 'unnamed'}")`)
+        if (me?.user && biz[0].user_id === me.user.id) ok('that business is keyed to this exact auth.uid() - no duplicate identity')
+        else no('the business is not keyed to the signed-in uid')
+      } else no(`the owner sees ${biz.length} business_settings rows - expected exactly 1`)
+
       await sb.auth.signOut({ scope: 'local' })
       ok('signed out with scope local - the owner other devices are untouched')
     }
