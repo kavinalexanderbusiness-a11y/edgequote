@@ -663,6 +663,9 @@ H('10. REFUNDS — tip-first, cumulative, and it cannot reopen a settled invoice
     check('  …with the tip leg capped against the LIVE tip held on the invoice',
       led.includes('tipHeldOnInvoice(sb, p.invoice.id)'),
       'assertCurrent compares amount_paid, which a tip movement never touches — so it cannot speak for this leg')
+    check('  …and the tip amount is actually COMPARED against it',
+      led.includes('if (tipAmt > held + 0.005) {'),
+      'a cap that is read and then never compared is not a cap — mutate-tips caught exactly this')
     check('  …and a failed tip read REFUSES rather than reading as no tip',
       led.includes('if (held === null) return { error:'),
       '"could not check" spent as "no tip" turns a cap into no cap at all')

@@ -200,8 +200,8 @@ const MUTATIONS = [
   {
     file: WEBHOOK,
     why: 'refund apportionment — the gross is booked entirely against the invoice',
-    from: 'const { invoiceDelta, tipDelta } = apportionRefund({\n            refundedTotal: refunded, alreadyInvoice, alreadyTip, tipRecorded,\n          })',
-    to: 'const invoiceDelta = Math.round((refunded - alreadyInvoice) * 100) / 100, tipDelta = 0',
+    from: 'const { invoiceDelta, tipDelta, basis } = apportionRefund({',
+    to: 'const invoiceDelta = Math.round((refunded - alreadyInvoice) * 100) / 100, tipDelta = 0, basis = "tip-first"; const _u = ({',
   },
   {
     file: TIPS,
