@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { confirm as confirmDialog } from '@/lib/confirm'
-import { loadGoogleMaps, addPropertyPin, flashRing, watchMapsAuthFailure, MAPS_FAILED_MESSAGE, type PropertyPinHandle } from '@/lib/googleMaps'
+import { loadGoogleMaps, addPropertyPin, flashRing, onMapsUnavailable, describeMapsError, type MapsUnavailable, type PropertyPinHandle } from '@/lib/googleMaps'
+import { MapUnavailable } from '@/components/maps/MapUnavailable'
 import { pricingPackage, estimateVisitMinutes, PricingConfig, CadenceKey } from '@/lib/pricing'
 import { Coord } from '@/lib/geo'
 import { ProspectContext, loadProspectContext, gradedProspectPricing } from '@/lib/prospect'
@@ -120,7 +121,9 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
   const [geoStatus, setGeoStatus] = useState<'none' | 'located' | 'approx' | 'failed'>('none')
 
   const [ready, setReady] = useState(false)
-  const [loadError, setLoadError] = useState<string | null>(null)
+  // Why there is no map, or null. Not a string: the reason carries a customer-safe
+  // sentence AND an owner-only diagnostic, and only MapUnavailable may separate them.
+  const [unavailable, setUnavailable] = useState<MapsUnavailable | null>(null)
   const [totalSqft, setTotalSqft] = useState(0)
   const [points, setPoints] = useState(0)
   const [shapes, setShapes] = useState(0)
@@ -226,7 +229,10 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
   // announce themselves via gm_authFailure. Without this, the modal renders
   // "Click around the edge…" over Google's own dead-map overlay (shipped to
   // production exactly that way when the domain moved).
-  useEffect(() => watchMapsAuthFailure(() => { setLoadError(MAPS_FAILED_MESSAGE); setReady(false) }), [])
+  // Subscribing, not awaiting: onMapsUnavailable also fires IMMEDIATELY when the
+  // refusal already happened before this modal opened, so the second map of a
+  // session is exactly as honest as the first.
+  useEffect(() => onMapsUnavailable(u => { setUnavailable(u); setReady(false) }), [])
 
   useEffect(() => {
     let cancelled = false
@@ -311,7 +317,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
           }
         } catch { /* unreadable draft — ignore */ }
       } catch (e) {
-        if (!cancelled) setLoadError(e instanceof Error ? e.message : 'Map failed to load')
+        if (!cancelled) setUnavailable(describeMapsError(e))
       }
     }
     init()
@@ -527,11 +533,11 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
               onAuto={r => { autoRef.current = r }}
               onUse={n => { overrideRef.current = n; setTotalSqft(n) }} />
           )}
-          {loadError ? (
-            <div className="text-sm text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3 space-y-1">
-              <p>The map couldn&apos;t load. Error detail:</p>
-              <p className="font-mono text-xs text-amber-300 break-words">{loadError}</p>
-            </div>
+          {unavailable ? (
+            /* The map DIV is not rendered at all in this branch — leaving it
+               mounted is what let Google paint its grey "Oops!" panel and sit
+               there. One owner-facing panel instead, diagnostic collapsed. */
+            <MapUnavailable unavailable={unavailable} audience="owner" />
           ) : (
             <>
               {/* Geocoding honesty — say when the pin is approximate or missing
