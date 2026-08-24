@@ -1,9 +1,15 @@
 # Google sign-in — the configuration only a human can do
 
-> ✅ **Configured and verified in production on 2026-08-23.** The provider is
-> enabled and the live sweep passes 33/33. What follows is the record of what
-> was set, and the runbook for re-doing it (new domain, new project, rotated
-> secret) — not outstanding work.
+> ⚠️ **The provider was enabled on 2026-08-23 and the flow was still broken.**
+> A real owner signed in successfully at Google and landed on
+> `404: NOT_FOUND / DEPLOYMENT_NOT_FOUND`. The sweep passed 33/33 throughout,
+> because nothing in the repository was wrong — the **Supabase project's URL
+> configuration** (§2.5) still named the host retired in August, and gotrue
+> silently falls back to Site URL for a `redirect_to` it will not honour.
+> See [The outage this document did not prevent](#the-outage-this-document-did-not-prevent).
+>
+> `verify:google-auth` now reads that live configuration and fails when it is
+> wrong, so this can no longer be true-on-paper and broken in practice.
 
 Nothing in this repository can turn Google sign-in on: it needs an OAuth client
 that belongs to the business, and a client secret that belongs in exactly one
@@ -70,11 +76,27 @@ sign-in breaks the same way emailed links did on 2026-08-15.
 3. Paste the **Client secret** into *Client Secret (for OAuth)*.
    ⛔ This is the only field that secret ever goes in.
 4. Save.
-5. **Authentication → URL Configuration**
+5. **Authentication → URL Configuration** — ⚠️ **the step that was missed.**
+   Setting the provider up (steps 1-4) is not enough; with these two fields
+   wrong, sign-in completes at Google and then dead-ends.
    - *Site URL*: `https://app.edgehq.ca`
-   - *Redirect URLs* — add:
+   - *Redirect URLs* — exactly these four:
      - `https://app.edgehq.ca/auth/callback`
+     - `https://app.edgehq.ca/auth/callback**`
      - `http://localhost:3000/auth/callback` (local dev only)
+     - `http://localhost:3000/auth/callback**` (local dev only)
+
+   ⭐ **Why the `**` twin of each entry.** gotrue matches the entry against the
+   WHOLE return URL, query string included, and the app appends `?next=…` when
+   the person was heading somewhere specific. A bare entry does not cover
+   `…/auth/callback?next=%2Fdashboard`, so without the wildcard form a deep-link
+   return silently falls back to Site URL. `verify:google-auth` asserts both.
+
+   ⛔ **`edgehq.ca` is deliberately NOT on this list.** The apex is a live alias
+   that serves `/login`, so a person can legitimately begin there — but
+   `appOrigin()` prefers the configured `NEXT_PUBLIC_APP_URL` over the request
+   origin, so the return is canonicalised onto `app.edgehq.ca` by construction.
+   Adding the apex would widen the allow list for a URL the app never generates.
 
 ## 3. Vercel
 
@@ -113,8 +135,15 @@ If step 2 shows **redirect_uri_mismatch**, the URI in Google (§1.3) does not
 exactly match the Supabase callback — check for a trailing slash or `http`
 vs `https`.
 
-If step 3 lands back on `/login` with *"could not be completed"*, the Supabase
-redirect allow list (§2.5) is missing `https://app.edgehq.ca/auth/callback`.
+If step 3 lands back on `/login` with *"could not be completed"*, the code
+exchange failed — a replayed link, or a missing PKCE verifier cookie.
+
+⚠️ If step 3 lands on a **Vercel 404 / `DEPLOYMENT_NOT_FOUND`**, or on any host
+that is not `app.edgehq.ca`, the problem is §2.5 and *not* this codebase: the
+allow list is missing `https://app.edgehq.ca/auth/callback`, so gotrue fell back
+to whatever *Site URL* names. Read both fields before changing any code —
+`npm run verify:google-auth` prints them. This is exactly what happened on
+2026-08-23; see [The outage this document did not prevent](#the-outage-this-document-did-not-prevent).
 
 ---
 
@@ -192,3 +221,63 @@ EdgeHQ's own code never generates a foreign `redirect_to` — every one is
 hostile `next` shapes through the start route to prove it. But that guarantee
 covers links *we* produce; the allow list is what covers links anyone else
 hand-crafts.
+
+---
+
+## The outage this document did not prevent
+
+**2026-08-23.** A real owner clicked *Sign in with Google* on production,
+authenticated at Google, and landed on:
+
+```
+404: NOT_FOUND
+Code: DEPLOYMENT_NOT_FOUND
+```
+
+The live configuration at the time:
+
+| field | value |
+|---|---|
+| Site URL | `https://app.edgepropertyservicesyyc.ca` ← retired, deployment deleted |
+| Redirect URLs | `https://app.edgepropertyservicesyyc.ca/**,http://localhost:3000/**` |
+
+The app was blameless: it sent `redirect_to=https://app.edgehq.ca/auth/callback`,
+which is correct. gotrue carried it to Google unvalidated, Google returned to
+`…supabase.co/auth/v1/callback` as registered, and *then* gotrue checked the
+stored `redirect_to` against the allow list, found no match, and fell back to
+Site URL — a hostname whose Vercel deployment no longer exists.
+
+**Three things made this hard to see, and all three are now guarded:**
+
+1. **The section above already described the mechanism.** Knowing that an
+   unlisted `redirect_to` falls back to Site URL, and *checking what Site URL
+   actually says*, are different acts. The guard now performs the second.
+2. **No other auth flow depends on this field.** `crewInvite.buildSetupUrl`,
+   `passwordRecovery.buildResetUrl` and `betaInvite` all build their own
+   `hashed_token` URLs specifically to avoid it — `passwordRecovery` even records
+   that Site URL was once `http://localhost:3000` in production. They engineered
+   *around* the broken field rather than fixing it, so nothing else ever failed
+   loudly enough to expose it. `signInWithOAuth` is the first consumer.
+3. **Every automated check was a source check.** The bug lived in a dashboard.
+   A guard that reads only this repository cannot see it, which is why
+   `verify:google-auth` §12-13 now query the deploy and the Supabase Management
+   API directly.
+
+⛔ **Do not conclude from "the provider probe returns 302" that sign-in works.**
+That probe proves the provider is enabled. It says nothing about the return trip,
+which is where this failed — and the return trip is the half a human experiences.
+
+### Verifying the live configuration
+
+```bash
+npm run verify:google-auth      # §12-13 read the deploy and the live project
+```
+
+Requires `SUPABASE_ACCESS_TOKEN` for §13; without it those checks report
+`SKIPPED` rather than passing. To read the two fields by hand:
+
+```bash
+curl -s -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+  'https://api.supabase.com/v1/projects/syhjarpnmpywatadhblu/config/auth' \
+  | grep -oE '"(site_url|uri_allow_list)":"[^"]*"'
+```
