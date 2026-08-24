@@ -150,7 +150,8 @@
     "schema:tenant-weld-manifest": "tsx scripts/schema/capture-tenant-weld-manifest.ts",
     "verify:rebuild": "tsx scripts/verify-rebuild.ts",
     "verify:schema": "tsx scripts/verify-schema.ts",
-    "verify:migrations": "tsx scripts/verify-migrations.ts"
+    "verify:migrations": "tsx scripts/verify-migrations.ts",
+    "verify:custom-fields": "tsx scripts/verify-custom-fields.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",
