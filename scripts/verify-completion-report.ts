@@ -272,6 +272,12 @@ console.log('\n═══ Dates and the completion gate ═══')
 
   const open = buildCompletionReport(baseInput({ job: job({ status: 'in_progress', completed_at: null }) }))
   eq('an unfinished visit is not a completed report', open.completed, false)
+
+  // Production holds completed visits from before the stamp existed:
+  // status='completed', completed_at NULL. They are finished work.
+  const legacy = buildCompletionReport(baseInput({ job: job({ status: 'completed', completed_at: null }), sessions: [] }))
+  eq('a legacy completion (status set, no stamp) IS completed', legacy.completed, true)
+  eq('…and its date line falls back to the scheduled day', workedDaysLine(legacy), 'Aug 14, 2026')
 }
 
 // ═══ 5. Money: the ledger engine, GST-inclusive, drafts private ══════════════

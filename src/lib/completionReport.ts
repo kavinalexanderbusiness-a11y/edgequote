@@ -372,7 +372,11 @@ export function buildCompletionReport(input: CompletionReportInput): CompletionR
   }
 
   return {
-    completed: job.status === 'completed' && !!job.completed_at,
+    // `status` answers WHETHER (the canonical state); `completed_at` answers
+    // WHEN. Visits completed before the stamp existed carry status='completed'
+    // with a null stamp — real finished work whose date line falls back to the
+    // scheduled day. Requiring both would call them "not completed yet".
+    completed: job.status === 'completed',
     completedAt: job.completed_at ?? null,
     scheduledDate: job.scheduled_date,
     title: job.title,
@@ -408,11 +412,14 @@ export function formatReportDay(dayISO: string): string {
   return `${MONTHS[Number(m[2]) - 1]} ${Number(m[3])}, ${m[1]}`
 }
 
-/** The one date line a report headline carries. Multi-day work says so. */
-export function workedDaysLine(report: Pick<CompletionReport, 'workedDays' | 'completedAt'>): string | null {
+/** The one date line a report headline carries. Multi-day work says so. A
+ *  visit finished before the completion stamp existed reports the day it was
+ *  scheduled — the one date the row does hold. */
+export function workedDaysLine(report: Pick<CompletionReport, 'workedDays' | 'completedAt' | 'scheduledDate'>): string | null {
   const w = report.workedDays
   if (!w) {
-    return report.completedAt ? formatReportDay(report.completedAt.slice(0, 10)) : null
+    if (report.completedAt) return formatReportDay(report.completedAt.slice(0, 10))
+    return report.scheduledDate ? formatReportDay(report.scheduledDate) : null
   }
   if (w.count <= 1 || w.first === w.last) return formatReportDay(w.first)
   return `${formatReportDay(w.first)} – ${formatReportDay(w.last)} (${w.count} days)`
