@@ -326,15 +326,55 @@ export async function overpaymentToCredit(sb: Supa, p: {
   return error ? { error: error.message } : {}
 }
 
+// Sum of the gratuity still held on an invoice — collected tips less any already
+// reversed. Signed, so a partly-refunded tip reports what is genuinely left.
+// A failed read returns null, NOT 0: "we could not check" must never be spent as
+// "there is no tip", which is how a refund cap silently becomes no cap at all.
+export async function tipHeldOnInvoice(sb: Supa, invoiceId: string): Promise<number | null> {
+  const { data, error } = await sb.from('payments')
+    .select('amount').eq('invoice_id', invoiceId).eq('kind', 'tip').eq('status', 'paid')
+  if (error) return null
+  return round2(((data as { amount: number }[]) || []).reduce((s, r) => s + (Number(r.amount) || 0), 0))
+}
+
 // Record a refund (reduces Total Paid). For card payments the actual money movement
 // happens in Stripe; this keeps balances/reports honest. Stored as a negative payment.
+//
+// ── OWNER-ORIGINATED, AND THEREFORE EXPLICIT ────────────────────────────────
+// This is the door the OWNER drives, so it never has to guess what a refund was
+// for: `amount` is the SERVICE portion and `tipAmount` the GRATUITY portion, and
+// either may be zero. That is the whole difference between this path and the
+// charge.refunded webhook, which is handed one cumulative number by Stripe with
+// no intent attached and must fall back to apportionRefund.
+//
+//   { amount: 100 }                 service only   — unchanged, today's behaviour
+//   { amount: 0,   tipAmount: 25 }  tip only       — amount_paid does NOT move
+//   { amount: 100, tipAmount: 25 }  both           — two rows, two caps
+//
+// The legs are SEPARATE ROWS of separate kinds, because that is the only way a
+// tip refund can leave the invoice balance alone: recompute_invoice_paid_for
+// sums kind='payment', so a negative kind='tip' row is invisible to it — exactly
+// as the positive one was.
 export async function recordRefund(sb: Supa, p: {
-  userId: string; invoice: Invoice; amount: number; notes?: string
+  userId: string; invoice: Invoice; amount: number; notes?: string; tipAmount?: number
 }): Promise<{ error?: string }> {
   const amt = round2(Math.abs(p.amount))
-  if (!(amt > 0)) return { error: 'Enter a refund amount.' }
+  const tipAmt = round2(Math.abs(Number(p.tipAmount) || 0))
+  if (!(amt > 0) && !(tipAmt > 0)) return { error: 'Enter a refund amount.' }
   const stale = await assertCurrent(sb, p.invoice)
   if (stale) return { error: stale }
+  // The tip leg gets its own live cap. assertCurrent above compares amount_paid,
+  // which a tip movement deliberately never touches — so it cannot speak for this
+  // leg, and reading the tip ledger IS this leg's freshness check.
+  if (tipAmt > 0) {
+    const held = await tipHeldOnInvoice(sb, p.invoice.id)
+    if (held === null) return { error: 'Could not check the tip on this invoice — try again.' }
+    if (tipAmt > held + 0.005) {
+      return { error: held > 0
+        ? `Only ${held.toFixed(2)} of tip is left on this invoice — you can’t refund more than that.`
+        : 'There is no tip on this invoice to refund.' }
+    }
+  }
   // The UI caps the field at `paid`, but that cap is only as fresh as the render it
   // came from. Refunding more than was ever collected is not a thing that can be
   // true, so the engine says so rather than trusting the form.
@@ -344,10 +384,16 @@ export async function recordRefund(sb: Supa, p: {
       ? `Only ${collected.toFixed(2)} was collected on this invoice — you can’t refund more than that.`
       : 'Nothing has been collected on this invoice yet, so there’s nothing to refund.' }
   }
-  const { error } = await sb.from('payments').insert({
+  const common = {
     user_id: p.userId, customer_id: p.invoice.customer_id, invoice_id: p.invoice.id,
-    amount: -amt, currency: 'cad', provider: 'refund', kind: 'payment', method: 'refund',
-    status: 'paid', paid_at: new Date().toISOString(), notes: p.notes?.trim() || 'Refund',
-  })
+    currency: 'cad', method: 'refund', status: 'paid', paid_at: new Date().toISOString(),
+  }
+  const note = p.notes?.trim() || 'Refund'
+  const rows: Record<string, unknown>[] = []
+  if (amt > 0) rows.push({ ...common, amount: -amt, provider: 'refund', kind: 'payment', notes: note })
+  // provider stays 'refund' so the row reads as a reversal everywhere provider is
+  // shown, while kind='tip' is what keeps it out of amount_paid and every cash figure.
+  if (tipAmt > 0) rows.push({ ...common, amount: -tipAmt, provider: 'refund', kind: 'tip', notes: `${note} — tip` })
+  const { error } = await sb.from('payments').insert(rows)
   return error ? { error: error.message } : {}
 }

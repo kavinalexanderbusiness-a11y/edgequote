@@ -60,9 +60,9 @@ export async function POST(req: NextRequest) {
     // of a quote deposit carry the same intent id, and the credit leg is not the
     // money-in row this lookup exists to find.
     const { data } = await sb.from('payments')
-      .select('id, invoice_id, quote_id, user_id, customer_id, invoices(invoice_number)')
+      .select('id, amount, invoice_id, quote_id, user_id, customer_id, invoices(invoice_number)')
       .eq('stripe_payment_intent', piId).eq('kind', 'payment').gt('amount', 0).limit(1).maybeSingle()
-    const p = data as { id: string; invoice_id: string | null; quote_id: string | null; user_id: string; customer_id: string | null; invoices?: { invoice_number: string } | { invoice_number: string }[] | null } | null
+    const p = data as { id: string; amount: number; invoice_id: string | null; quote_id: string | null; user_id: string; customer_id: string | null; invoices?: { invoice_number: string } | { invoice_number: string }[] | null } | null
     if (!p) return null
     const inv = Array.isArray(p.invoices) ? p.invoices[0] : p.invoices
     return { ...p, invoiceNumber: inv?.invoice_number ?? null }
@@ -509,6 +509,7 @@ export async function POST(req: NextRequest) {
         // account. Both legs stay cumulative-keyed, so a re-delivery computes
         // deltas of zero and writes nothing.
         let tipDeltaApplied = 0
+        let refundBasis: 'exact-tip' | 'exact-service' | 'full' | 'tip-first' | 'none' = 'none'
         if (p.invoice_id && refunded > 0) {
           const { data: prior, error: priorErr } = await sb.from('payments').select('amount')
             .eq('user_id', p.user_id).eq('invoice_id', p.invoice_id).eq('kind', 'payment')
@@ -529,9 +530,16 @@ export async function POST(req: NextRequest) {
           const tips = (tipRows as { amount: number }[] | null) || []
           const tipRecorded = tips.reduce((s, r) => s + Math.max(0, Number(r.amount) || 0), 0)
           const alreadyTip = tips.reduce((s, r) => s + Math.max(0, -(Number(r.amount) || 0)), 0)
-          const { invoiceDelta, tipDelta } = apportionRefund({
+          // invoiceRecorded is what THIS charge actually put against the invoice
+          // — the positive kind='payment' row paymentForIntent just resolved. With
+          // it, apportionRefund can recognise an exact service-only or full refund
+          // instead of guessing; without it the whole thing degrades to tip-first,
+          // which is why it is optional rather than required.
+          const { invoiceDelta, tipDelta, basis } = apportionRefund({
             refundedTotal: refunded, alreadyInvoice, alreadyTip, tipRecorded,
+            invoiceRecorded: Number(p.amount) || 0,
           })
+          refundBasis = basis
           tipDeltaApplied = tipDelta
           const cumulativeCents = Math.round(refunded * 100)
           if (tipDelta > 0.005) {
@@ -566,7 +574,14 @@ export async function POST(req: NextRequest) {
         // Name the split. The owner refunded in Stripe and told us only a total,
         // so if the apportionment guessed wrong about a PARTIAL refund this
         // sentence is what makes it correctable instead of silent.
-        const tipNote = tipDeltaApplied > 0.005 ? ` ${cad(tipDeltaApplied)} of that came off the tip.` : ''
+        // Name the split AND say whether it was read or guessed. "We matched it
+        // to the tip exactly" and "we had to choose, and chose the tip" are
+        // different claims, and only the second one asks the owner to check.
+        const tipNote = tipDeltaApplied > 0.005
+          ? ` ${cad(tipDeltaApplied)} of that came off the tip${refundBasis === 'tip-first'
+              ? ' — that part was a partial refund we could not match to either side, so it came off the tip first. Adjust it if that is not what you meant.'
+              : '.'}`
+          : ''
         await notifyOnce(p.user_id, 'payment_refunded', entityId, full ? 'Payment refunded' : 'Partial refund',
           `${p.invoiceNumber ? p.invoiceNumber + ': ' : ''}${cad(refunded)} refunded${full ? ' — the invoice balance reopened.' : '.'}${tipNote}`, p.customer_id)
       }

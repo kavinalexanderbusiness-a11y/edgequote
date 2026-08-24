@@ -83,6 +83,10 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
   // below, which only exists when they paid MORE than the invoice).
   const [refundOpen, setRefundOpen] = useState(false)
   const [refundAmount, setRefundAmount] = useState('')
+  // The TIP leg of an owner-recorded refund, kept separate from the service leg
+  // because the owner knows which one they mean and should never have to hope we
+  // guessed. Only rendered when this invoice actually holds a tip.
+  const [refundTip, setRefundTip] = useState('')
 
   // Revert = remove the ledger row through the engine; the trigger re-derives the
   // invoice (paid → partial/unpaid) naturally. Undo re-inserts the same row.
@@ -390,12 +394,19 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
                 the ledger row, the balance and the refund receipt all appear the moment Stripe confirms it.
                 Recording it here too would count the same refund twice.
               </p>
+              {tips.net > 0 && (
+                <p className="text-[11px] text-ink-muted">
+                  This one carries a {formatCurrency(tips.net)} tip. Refund exactly {formatCurrency(tips.net)} and it comes off the
+                  tip; refund exactly the invoice amount and it comes off the invoice; refund the whole charge and both reverse.
+                  Any other partial can’t be matched to one side, so it comes off the tip first — we’ll tell you when that happens.
+                </p>
+              )}
               <Button size="sm" variant="ghost" onClick={() => setRefundOpen(false)}>Got it</Button>
             </div>
           ) : (
           <div className="rounded-lg border border-border bg-bg-tertiary/50 p-2.5 space-y-2">
             <label className="block text-[11px] font-semibold text-ink-muted">
-              Refund amount
+              {tips.net > 0 ? 'Refund from the invoice payment' : 'Refund amount'}
               <div className="relative mt-1">
                 <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint text-sm" aria-hidden="true">$</span>
                 <input type="number" min="0" step="0.01" max={paid} value={refundAmount} autoFocus
@@ -404,16 +415,45 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
                   className="w-full bg-bg-tertiary border border-border-strong rounded-lg pl-6 pr-2 py-2 text-base sm:text-sm font-normal text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
               </div>
             </label>
+            {/* ── The tip leg ────────────────────────────────────────────────
+                Owner-originated refunds are EXPLICIT: the invoice portion and
+                the gratuity are separate fields with separate caps, so nothing
+                downstream has to infer which one was meant. Refunding the tip
+                leaves amount_paid — and therefore the balance and the status —
+                exactly where they were, because the row is kind='tip' and the
+                recompute trigger only ever sums kind='payment'. */}
+            {tips.net > 0 && (
+              <label className="block text-[11px] font-semibold text-ink-muted">
+                Refund from the tip
+                <div className="relative mt-1">
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint text-sm" aria-hidden="true">$</span>
+                  <input type="number" min="0" step="0.01" max={tips.net} value={refundTip}
+                    onChange={e => setRefundTip(e.target.value)}
+                    aria-label="Refund from the tip"
+                    className="w-full bg-bg-tertiary border border-border-strong rounded-lg pl-6 pr-2 py-2 text-base sm:text-sm font-normal text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+                </div>
+                <span className="block mt-1 text-[10px] font-normal text-ink-faint">
+                  {formatCurrency(tips.net)} of tip is held on this invoice. Refunding it doesn’t change the invoice balance.
+                </span>
+              </label>
+            )}
             <div className="flex items-center gap-2 flex-wrap">
-              <Button size="sm" loading={busy} disabled={!(Number(refundAmount) > 0) || Number(refundAmount) > paid}
-                title={!(Number(refundAmount) > 0) ? 'Enter a refund amount.' : Number(refundAmount) > paid ? `You can’t refund more than the ${formatCurrency(paid)} collected.` : undefined}
+              <Button size="sm" loading={busy}
+                disabled={!(Number(refundAmount) > 0 || Number(refundTip) > 0) || Number(refundAmount) > paid || Number(refundTip) > tips.net}
+                title={!(Number(refundAmount) > 0 || Number(refundTip) > 0) ? 'Enter a refund amount.'
+                  : Number(refundAmount) > paid ? `You can’t refund more than the ${formatCurrency(paid)} collected.`
+                  : Number(refundTip) > tips.net ? `Only ${formatCurrency(tips.net)} of tip is left.` : undefined}
                 onClick={() => run(
-                  () => recordRefund(supabase, { userId: uid, invoice, amount: Number(refundAmount) }),
-                  `Refund of ${formatCurrency(Number(refundAmount) || 0)} recorded.`,
-                ).then(() => { setRefundOpen(false); setRefundAmount('') })}>
+                  () => recordRefund(supabase, { userId: uid, invoice, amount: Number(refundAmount) || 0, tipAmount: Number(refundTip) || 0 }),
+                  Number(refundTip) > 0 && Number(refundAmount) > 0
+                    ? `Refund of ${formatCurrency(Number(refundAmount))} plus ${formatCurrency(Number(refundTip))} tip recorded.`
+                    : Number(refundTip) > 0
+                      ? `Tip refund of ${formatCurrency(Number(refundTip))} recorded — the invoice balance is unchanged.`
+                      : `Refund of ${formatCurrency(Number(refundAmount) || 0)} recorded.`,
+                ).then(() => { setRefundOpen(false); setRefundAmount(''); setRefundTip('') })}>
                 <Banknote className="w-3.5 h-3.5" /> Record refund
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => { setRefundOpen(false); setRefundAmount('') }}>Cancel</Button>
+              <Button size="sm" variant="ghost" onClick={() => { setRefundOpen(false); setRefundAmount(''); setRefundTip('') }}>Cancel</Button>
               {Number(refundAmount) > paid && <span className="text-[10px] text-amber-400">Only {formatCurrency(paid)} was collected.</span>}
             </div>
             {/* Never imply we moved money — we didn't. */}
@@ -423,7 +463,7 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
           </div>
           )
         ) : (
-          <button type="button" onClick={() => { setRefundOpen(true); setRefundAmount('') }}
+          <button type="button" onClick={() => { setRefundOpen(true); setRefundAmount(''); setRefundTip('') }}
             className="text-[11px] font-medium text-ink-faint hover:text-ink rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 inline-flex items-center gap-1">
             <Banknote className="w-3 h-3" /> Record a refund
           </button>

@@ -23,7 +23,7 @@ const WEBHOOK = 'src/app/api/stripe/webhook/route.ts'
 const PAY = 'src/app/api/portal/pay/route.ts'
 const TIPS = 'src/lib/payments/tips.ts'
 const LEDGER = 'src/lib/payments/ledger.ts'
-const MIG = 'supabase/migrations/20260816120000_tips_gratuity_v1.sql'
+const MIG = 'supabase/migrations/20260823120000_tips_gratuity_v1.sql'
 const TIMELINE = 'src/lib/timeline.ts'
 const CONFIG = 'src/lib/stripe/config.ts'
 const STATUS = 'src/app/api/payments/status/route.ts'
@@ -228,6 +228,72 @@ const MUTATIONS = [
     why: 'dispute restraint — the split read is taken from the Stripe charge payload',
     from: ".eq('user_id', p.user_id).eq('stripe_payment_intent', piId).eq('kind', 'tip')\n        const disputedTip",
     to: ".eq('user_id', p.user_id).eq('stripe_payment_intent', piId).eq('kind', 'tip')\n        void ch.metadata\n        const disputedTip",
+  },
+
+  // ── 7b. EXPLICIT VS GUESSED SCOPE ─────────────────────────────────────────
+  // The exact-match rules are what demote tip-first to a last resort. Losing
+  // them silently restores the old wrong case: a service-only refund eating the
+  // gratuity.
+  {
+    file: TIPS,
+    why: 'exact match — a service-only refund goes back to eating the tip',
+    from: '  if (invoiceRemaining > 0 && eq(outstanding, invoiceRemaining) && !eq(tipRemaining, invoiceRemaining)) {',
+    to: '  if (false) {',
+  },
+  {
+    file: TIPS,
+    why: 'exact match — a tip-only refund stops being recognised as one',
+    from: '  if (tipRemaining > 0 && eq(outstanding, tipRemaining) && !eq(tipRemaining, invoiceRemaining)) {',
+    to: '  if (false) {',
+  },
+  {
+    file: TIPS,
+    why: 'a TIE is treated as evidence, so an ambiguous refund claims to be exact',
+    from: 'eq(outstanding, tipRemaining) && !eq(tipRemaining, invoiceRemaining)',
+    to: 'eq(outstanding, tipRemaining)',
+  },
+  {
+    file: WEBHOOK,
+    why: 'the webhook stops telling the engine what the invoice actually received',
+    from: 'invoiceRecorded: Number(p.amount) || 0,',
+    to: 'invoiceRecorded: 0,',
+  },
+  {
+    file: WEBHOOK,
+    why: 'a guessed split is reported as though it had been matched exactly',
+    from: "refundBasis === 'tip-first'",
+    to: 'false',
+  },
+  // ── 7c. OWNER-ORIGINATED EXPLICIT REFUNDS ─────────────────────────────────
+  {
+    file: LEDGER,
+    why: 'owner tip refund — the tip leg is written as a PAYMENT, moving amount_paid',
+    from: "rows.push({ ...common, amount: -tipAmt, provider: 'refund', kind: 'tip'",
+    to: "rows.push({ ...common, amount: -tipAmt, provider: 'refund', kind: 'payment'",
+  },
+  {
+    file: LEDGER,
+    why: 'owner tip refund — the live tip cap disappears, so more tip can be given back than was taken',
+    from: '    if (tipAmt > held + 0.005) {',
+    to: '    if (false) {',
+  },
+  {
+    file: LEDGER,
+    why: 'owner tip refund — a failed tip read is spent as "no tip", turning the cap into no cap',
+    from: 'if (held === null) return { error: ',
+    to: 'if (false) return { error: ',
+  },
+  {
+    file: LEDGER,
+    why: 'tipHeldOnInvoice reports 0 instead of null on a failed read',
+    from: 'if (error) return null',
+    to: 'if (error) return 0',
+  },
+  {
+    file: 'src/components/payments/InvoicePaymentControls.tsx',
+    why: 'the owner form collapses both legs into one number again',
+    from: 'amount: Number(refundAmount) || 0, tipAmount: Number(refundTip) || 0',
+    to: 'amount: Number(refundAmount) || 0',
   },
 
   // ── 8. STRIPE SESSION ──────────────────────────────────────────────────────

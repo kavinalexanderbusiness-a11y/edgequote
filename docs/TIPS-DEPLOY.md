@@ -63,7 +63,7 @@ so an edit that drops one fails on a laptop rather than on an owner's books.
 
 ## 2 · SQL migration — RUN ONCE
 
-`supabase/migrations/20260816120000_tips_gratuity_v1.sql` (~110 lines). It is in
+`supabase/migrations/20260823120000_tips_gratuity_v1.sql` (~110 lines). It is in
 the apply path, per `docs/MIGRATIONS.md`, and it:
 
 - widens `payments_kind_check` to `('payment','credit','refund','tip')` —
@@ -96,7 +96,7 @@ npm run verify:rebuild       # empty Postgres + repo == production
 npm run verify:schema        # production and the repo agree
 ```
 
-Then move `20260816120000_tips_gratuity_v1.sql` into `supabase/archive/ledger/`
+Then move `20260823120000_tips_gratuity_v1.sql` into `supabase/archive/ledger/`
 and commit.
 
 ### It has been proven to apply — and to do nothing else

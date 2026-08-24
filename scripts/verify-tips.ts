@@ -27,7 +27,7 @@
 // and the routes/webhook/baseline are asserted as source text. Same discipline as
 // verify-deposit / verify-invoice-totals, runnable in CI beside them.
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   TIP_MAX_CENTS, TIP_MAX_PRESETS, TIP_DEFAULT_PRESETS, TIPS_OFF,
@@ -39,7 +39,7 @@ import { invoiceBalance, isCashRow } from '../src/lib/payments/ledger'
 import { invoiceTotals } from '../src/lib/invoiceTotals'
 import { ledgerRowType, summarizeTransactions, cashAmountOf } from '../src/lib/payments/analytics'
 import { depositChargeAmount } from '../src/lib/payments/deposit'
-import { baselineSql, functionSql } from './lib/schema-source'
+import { baselineFile, baselineSql, functionSql } from './lib/schema-source'
 
 let failures = 0
 const ok = (name: string) => console.log(`  ✓ ${name}`)
@@ -543,17 +543,21 @@ H('10. REFUNDS — tip-first, cumulative, and it cannot reopen a settled invoice
   {
     // Delivery 1: a $25 refund. Tip-first places all of it on the tip.
     const a = apportionRefund({ refundedTotal: 25, alreadyInvoice: 0, alreadyTip: 0, tipRecorded: 75 })
-    deep('a $25 refund on a $500+$75 charge comes off the tip first', a, { invoiceDelta: 0, tipDelta: 25 })
+    deep('a $25 refund on a $500+$75 charge comes off the tip first', a, { invoiceDelta: 0, tipDelta: 25, basis: 'tip-first' })
     // Delivery 2: cumulative $125. Tip has $50 left, so $50 more tip + $75 invoice.
     const b = apportionRefund({ refundedTotal: 125, alreadyInvoice: 0, alreadyTip: 25, tipRecorded: 75 })
-    deep('  …a further refund exhausts the tip, then reaches the invoice', b, { invoiceDelta: 50, tipDelta: 50 })
+    deep('  …a further refund exhausts the tip, then reaches the invoice', b, { invoiceDelta: 50, tipDelta: 50, basis: 'tip-first' })
   }
 
   // A FULL refund of the gross: every ordering agrees, and the invoice is
   // reversed by EXACTLY what it received — never by the gross.
   {
-    const r = apportionRefund({ refundedTotal: 575, alreadyInvoice: 0, alreadyTip: 0, tipRecorded: 75 })
-    deep('a full $575 refund reverses $500 invoice + $75 tip', r, { invoiceDelta: 500, tipDelta: 75 })
+    const r = apportionRefund({ refundedTotal: 575, alreadyInvoice: 0, alreadyTip: 0, tipRecorded: 75, invoiceRecorded: 500 })
+    deep('a full $575 refund reverses $500 invoice + $75 tip', r, { invoiceDelta: 500, tipDelta: 75, basis: 'full' })
+    // …and it reaches the same AMOUNTS without invoiceRecorded, via the fallback.
+    deep('  …same amounts through the fallback when the invoice side is unknown',
+      apportionRefund({ refundedTotal: 575, alreadyInvoice: 0, alreadyTip: 0, tipRecorded: 75 }),
+      { invoiceDelta: 500, tipDelta: 75, basis: 'tip-first' })
     check('  …the invoice is NOT reversed by the gross',
       r.invoiceDelta === 500,
       'reversing 575 against an invoice that received 500 drives amount_paid to −75, reopens the balance, and starts the chaser')
@@ -567,28 +571,28 @@ H('10. REFUNDS — tip-first, cumulative, and it cannot reopen a settled invoice
   // Idempotency: a re-delivered cumulative figure writes nothing.
   {
     const replay = apportionRefund({ refundedTotal: 575, alreadyInvoice: 500, alreadyTip: 75, tipRecorded: 75 })
-    deep('a re-delivered refund event computes deltas of zero', replay, { invoiceDelta: 0, tipDelta: 0 })
+    deep('a re-delivered refund event computes deltas of zero', replay, { invoiceDelta: 0, tipDelta: 0, basis: 'none' })
   }
 
   // A charge with NO tip behaves exactly as it always did.
   {
     const r = apportionRefund({ refundedTotal: 100, alreadyInvoice: 0, alreadyTip: 0, tipRecorded: 0 })
-    deep('an untipped charge refunds entirely against the invoice', r, { invoiceDelta: 100, tipDelta: 0 })
+    deep('an untipped charge refunds entirely against the invoice', r, { invoiceDelta: 100, tipDelta: 0, basis: 'tip-first' })
   }
 
   // Never reverse more tip than was collected.
   {
     const r = apportionRefund({ refundedTotal: 200, alreadyInvoice: 0, alreadyTip: 0, tipRecorded: 20 })
-    deep('the tip leg is capped at the tip actually recorded', r, { invoiceDelta: 180, tipDelta: 20 })
+    deep('the tip leg is capped at the tip actually recorded', r, { invoiceDelta: 180, tipDelta: 20, basis: 'tip-first' })
   }
 
   // Defensive: nonsense inputs must not invent money.
   deep('a negative cumulative figure writes nothing',
     apportionRefund({ refundedTotal: -50, alreadyInvoice: 0, alreadyTip: 0, tipRecorded: 75 }),
-    { invoiceDelta: 0, tipDelta: 0 })
+    { invoiceDelta: 0, tipDelta: 0, basis: 'none' })
   deep('an already-fully-reversed charge writes nothing',
     apportionRefund({ refundedTotal: 100, alreadyInvoice: 100, alreadyTip: 0, tipRecorded: 0 }),
-    { invoiceDelta: 0, tipDelta: 0 })
+    { invoiceDelta: 0, tipDelta: 0, basis: 'none' })
 
   // Conservation across a partial-refund grid.
   for (const total of [0, 0.01, 25, 75, 100, 500, 575]) {
@@ -600,7 +604,99 @@ H('10. REFUNDS — tip-first, cumulative, and it cannot reopen a settled invoice
   }
   ok('every partial refund places exactly the outstanding amount, tip first, tip capped')
 
+  // ── UNAMBIGUOUS BEATS THE FALLBACK ────────────────────────────────────────
+  // With invoiceRecorded known, most real refunds stop being a guess. tip-first
+  // is now reserved for a partial that genuinely matches neither side.
+  {
+    const P = { alreadyInvoice: 0, alreadyTip: 0, tipRecorded: 75, invoiceRecorded: 500 }
+    deep('a refund of exactly the tip is READ as a tip refund',
+      apportionRefund({ ...P, refundedTotal: 75 }),
+      { invoiceDelta: 0, tipDelta: 75, basis: 'exact-tip' })
+    deep('a refund of exactly the invoice payment is READ as a service refund',
+      apportionRefund({ ...P, refundedTotal: 500 }),
+      { invoiceDelta: 500, tipDelta: 0, basis: 'exact-service' })
+    check('  …and it does NOT eat the tip (the case tip-first used to get wrong)',
+      apportionRefund({ ...P, refundedTotal: 500 }).tipDelta === 0,
+      'a service-only refund must leave the gratuity alone — that is the whole point of the exact rules')
+    deep('a refund of the whole gross reverses both legs in full',
+      apportionRefund({ ...P, refundedTotal: 575 }),
+      { invoiceDelta: 500, tipDelta: 75, basis: 'full' })
+    deep('anything else is ambiguous and falls back to tip-first',
+      apportionRefund({ ...P, refundedTotal: 200 }),
+      { invoiceDelta: 125, tipDelta: 75, basis: 'tip-first' })
+    // A TIE is not evidence: equal remainders match both rules, so neither fires.
+    deep('equal remainders are a TIE, not an exact match → fallback',
+      apportionRefund({ refundedTotal: 75, alreadyInvoice: 0, alreadyTip: 0, tipRecorded: 75, invoiceRecorded: 75 }),
+      { invoiceDelta: 0, tipDelta: 75, basis: 'tip-first' })
+    // Without invoiceRecorded the exact rules cannot fire — the degradation is
+    // the previous behaviour, which is safe.
+    deep('omitting invoiceRecorded degrades to tip-first, never to a wrong exact match',
+      apportionRefund({ refundedTotal: 500, alreadyInvoice: 0, alreadyTip: 0, tipRecorded: 75 }),
+      { invoiceDelta: 425, tipDelta: 75, basis: 'tip-first' })
+    // After an exact tip refund, a second refund that clears the rest is 'full'
+    // (everything outstanding on both legs) — not 'exact-service'. The tip leg has
+    // nothing left, so the two rules describe the same money and the broader one
+    // wins. What matters is the AMOUNTS: the tip is never double-reversed.
+    {
+      const second = apportionRefund({ refundedTotal: 575, alreadyInvoice: 0, alreadyTip: 75, tipRecorded: 75, invoiceRecorded: 500 })
+      deep('after an exact tip refund, clearing the rest touches only the invoice',
+        second, { invoiceDelta: 500, tipDelta: 0, basis: 'full' })
+      check('  …and the tip is NOT reversed twice', second.tipDelta === 0,
+        'the tip was already given back; reversing it again would invent money')
+    }
+  }
+
+  // ── OWNER-ORIGINATED REFUNDS ARE EXPLICIT, NOT APPORTIONED ────────────────
+  // recordRefund is the door the OWNER drives, so it never guesses: the service
+  // portion and the gratuity are separate arguments with separate caps.
+  {
+    const led = read('src/lib/payments/ledger.ts')
+    check('recordRefund takes an explicit tipAmount alongside the service amount',
+      led.includes('userId: string; invoice: Invoice; amount: number; notes?: string; tipAmount?: number'),
+      'an owner-originated refund must be able to name which side it is refunding')
+    check("  …and writes the tip leg as kind='tip', so amount_paid cannot move",
+      led.includes("amount: -tipAmt, provider: 'refund', kind: 'tip'"),
+      "a kind='payment' tip refund would reduce the invoice balance")
+    check("  …while the service leg stays kind='payment'",
+      led.includes("amount: -amt, provider: 'refund', kind: 'payment'"),
+      'the service leg is what the recompute trigger must see')
+    check('  …with the tip leg capped against the LIVE tip held on the invoice',
+      led.includes('tipHeldOnInvoice(sb, p.invoice.id)'),
+      'assertCurrent compares amount_paid, which a tip movement never touches — so it cannot speak for this leg')
+    check('  …and a failed tip read REFUSES rather than reading as no tip',
+      led.includes('if (held === null) return { error:'),
+      '"could not check" spent as "no tip" turns a cap into no cap at all')
+    check('  …and either leg alone is a valid refund',
+      led.includes('if (!(amt > 0) && !(tipAmt > 0))'),
+      'a tip-only refund must be recordable without inventing a $0 service refund')
+    check('tipHeldOnInvoice reports null on a failed read, never 0',
+      led.includes('export async function tipHeldOnInvoice') && led.includes('if (error) return null'),
+      'a cap derived from a failed read is not a cap')
+
+    const ctl = read('src/components/payments/InvoicePaymentControls.tsx')
+    check('the owner refund form offers the tip leg when a tip is held',
+      ctl.includes('{tips.net > 0 && (') && ctl.includes('Refund from the tip'),
+      'the explicit path needs a way in')
+    check('  …capped in the UI too', ctl.includes('max={tips.net}'),
+      'the field should not let the owner ask for more than is there')
+    check('  …and passes BOTH legs to the engine',
+      ctl.includes('amount: Number(refundAmount) || 0, tipAmount: Number(refundTip) || 0'),
+      'the form must not collapse the two legs into one number')
+    check('  …and says a tip refund leaves the balance alone',
+      ctl.includes('change the invoice balance'),
+      'the owner should be told what will NOT move')
+    check('the card dead-end explains how Stripe’s number will be read',
+      ctl.includes('comes off the tip first'),
+      'for a card charge the owner refunds in Stripe — they need to know what an unmatched partial does')
+  }
+
   const wh = read('src/app/api/stripe/webhook/route.ts')
+  check('the webhook supplies invoiceRecorded so exact matches can be recognised',
+    wh.includes('invoiceRecorded: Number(p.amount) || 0'),
+    'without it every external refund degrades to the tip-first guess')
+  check('  …and the notification distinguishes a READ split from a GUESSED one',
+    wh.includes("refundBasis === 'tip-first'"),
+    '"we matched it exactly" and "we had to choose" are different claims; only one asks the owner to check')
   check('the refund branch apportions rather than booking the gross',
     /apportionRefund\(\{/.test(wh),
     'without apportionment a full refund of a tipped charge reopens a settled invoice')
@@ -692,7 +788,7 @@ H('11. CAPABILITY + SETTINGS — a tip cannot outlive the payment rail')
   deep('a business that never heard of tips gets NO tips', tipConfig({}), TIPS_OFF)
   deep('tips_enabled=false gets NO tips', tipConfig({ tips_enabled: false, tip_presets: [10, 15, 20] }), TIPS_OFF)
   check('the schema default is OFF',
-    /add column if not exists "tips_enabled" boolean default false not null/.test(read('supabase/migrations/20260816120000_tips_gratuity_v1.sql')),
+    /add column if not exists "tips_enabled" boolean default false not null/.test(read('supabase/migrations/20260823120000_tips_gratuity_v1.sql')),
     'most trades do not take gratuity; a tip prompt must never appear uninvited')
 
   // Half-configured collapses to off rather than showing an empty box.
@@ -953,7 +1049,7 @@ H('15. TAX — the seam is preserved, and no opinion is encoded')
 // ═══════════════════════════════════════════════════════════════════════════
 H('16. SCHEMA — the migration says exactly what the code assumes')
 {
-  const mig = read('supabase/migrations/20260816120000_tips_gratuity_v1.sql')
+  const mig = read('supabase/migrations/20260823120000_tips_gratuity_v1.sql')
   const base = baselineSql()
   check("the kind CHECK is widened to include 'tip'",
     /payments_kind_check"?\s*\n?\s*CHECK \(\(kind = ANY \(ARRAY\['payment'::text, 'credit'::text, 'refund'::text, 'tip'::text\]\)\)\)/.test(mig),
@@ -972,8 +1068,24 @@ H('16. SCHEMA — the migration says exactly what the code assumes')
   check('  …and every element is 1..100',
     /0 < ALL \(tip_presets\)[\s\S]{0,80}100 >= ALL \(tip_presets\)/.test(mig),
     'a 5000% preset is not a preset')
-  check('the migration sorts AFTER the generated baseline',
-    '20260816120000' > '20260815130001',
+  // ── The version floor, MEASURED, never hardcoded ────────────────────────
+  // This was pinned as a literal pair of version strings and rotted the moment
+  // main regenerated its baseline and landed two migrations above it: the
+  // assertion still passed while the file it described had fallen BELOW the
+  // floor. So it now reads the apply path and asserts the real property —
+  // this migration is the highest-sorting file there, and therefore replays
+  // last on a from-zero rebuild, in the order production will actually see it.
+  const applyPath = readdirSync(join(ROOT, 'supabase', 'migrations'))
+    .filter(n => n.endsWith('.sql') && n.length > 15 && /^[0-9]+$/.test(n.slice(0, 14))).sort()
+  const mine = applyPath.find(n => n.includes('tips_gratuity')) || ''
+  const others = applyPath.filter(n => n !== mine)
+  check('the tips migration is present in the apply path', !!mine,
+    'supabase/migrations is THE apply path; a migration outside it never runs')
+  check(`  …and sorts after every other migration there (floor ${others.slice(-1)[0] || 'none'})`,
+    others.every(n => mine.slice(0, 14) > n.slice(0, 14)),
+    `${mine} must sort above the floor so a from-zero rebuild replays it in production's order`)
+  check('  …including the generated baseline',
+    mine.slice(0, 14) > ((baselineFile().match(/([0-9]{14})_baseline/) || ['',''])[1]),
     'a migration that sorts before the baseline never runs on a fresh database')
   check('the migration adds no new TABLE (so no grants trap)',
     !/create table/i.test(mig),

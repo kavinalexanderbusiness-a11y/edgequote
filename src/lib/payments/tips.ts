@@ -259,6 +259,16 @@ export interface RefundApportionment {
   invoiceDelta: number
   /** Additional dollars to reverse against the TIP, this delivery. */
   tipDelta: number
+  /**
+   * WHY the split came out this way. Surfaced in the owner's notification so a
+   * guess is legible as a guess.
+   *   'exact-tip'     the refund equals exactly what is left of the tip
+   *   'exact-service' …exactly what is left of the invoice payment
+   *   'full'          …everything still outstanding on both legs
+   *   'tip-first'     genuinely AMBIGUOUS — the fallback, and the only guess
+   *   'none'          nothing left to place
+   */
+  basis: 'exact-tip' | 'exact-service' | 'full' | 'tip-first' | 'none'
 }
 
 /**
@@ -305,21 +315,55 @@ export function apportionRefund(p: {
   alreadyTip: number
   /** The tip originally recorded for this charge, in dollars. */
   tipRecorded: number
+  /**
+   * The invoice payment originally recorded for this charge, in dollars.
+   * Optional: when absent the exact-service and full rules cannot fire and this
+   * degrades to the previous tip-first-only behaviour, which is safe.
+   */
+  invoiceRecorded?: number
 }): RefundApportionment {
   const refunded = Math.max(0, round2(Number(p.refundedTotal) || 0))
   const doneInvoice = Math.max(0, round2(Number(p.alreadyInvoice) || 0))
   const doneTip = Math.max(0, round2(Number(p.alreadyTip) || 0))
   const tipRecorded = Math.max(0, round2(Number(p.tipRecorded) || 0))
 
+  const invoiceRecorded = Math.max(0, round2(Number(p.invoiceRecorded) || 0))
+
   // What this delivery newly has to place, across both legs.
   const outstanding = round2(refunded - doneInvoice - doneTip)
-  if (outstanding <= 0.005) return { invoiceDelta: 0, tipDelta: 0 }
+  if (outstanding <= 0.005) return { invoiceDelta: 0, tipDelta: 0, basis: 'none' }
 
-  // Tip first, but never more tip than was actually collected.
   const tipRemaining = Math.max(0, round2(tipRecorded - doneTip))
+  const invoiceRemaining = Math.max(0, round2(invoiceRecorded - doneInvoice))
+  const eq = (a: number, b: number) => Math.abs(a - b) <= 0.005
+
+  // ── UNAMBIGUOUS FIRST. Guess only when there is nothing to read. ──────────
+  // Stripe hands us one cumulative number and no intent, but the number itself
+  // is often intent enough: an owner refunding EXACTLY the tip, or EXACTLY the
+  // service, or the whole charge, has said what they meant as clearly as this
+  // channel allows. Reading that removes the common wrong case — a service-only
+  // refund that tip-first would have eaten out of the gratuity — and shrinks the
+  // fallback to what it should always have been: a last resort.
+  //
+  // A TIE is not evidence. When the two legs have the same amount left, an exact
+  // match names both and therefore names neither; that falls through to the
+  // fallback, which is the honest answer.
+  if (invoiceRecorded > 0 && eq(outstanding, round2(tipRemaining + invoiceRemaining))) {
+    return { invoiceDelta: invoiceRemaining, tipDelta: tipRemaining, basis: 'full' }
+  }
+  if (tipRemaining > 0 && eq(outstanding, tipRemaining) && !eq(tipRemaining, invoiceRemaining)) {
+    return { invoiceDelta: 0, tipDelta: tipRemaining, basis: 'exact-tip' }
+  }
+  if (invoiceRemaining > 0 && eq(outstanding, invoiceRemaining) && !eq(tipRemaining, invoiceRemaining)) {
+    return { invoiceDelta: invoiceRemaining, tipDelta: 0, basis: 'exact-service' }
+  }
+
+  // ── THE FALLBACK, for a genuinely ambiguous partial ───────────────────────
+  // Tip first, and never more tip than was actually collected. See the docblock
+  // above for why the cheap wrong answer is preferred to the expensive one.
   const tipDelta = round2(Math.min(outstanding, tipRemaining))
   const invoiceDelta = round2(outstanding - tipDelta)
-  return { invoiceDelta, tipDelta }
+  return { invoiceDelta, tipDelta, basis: 'tip-first' }
 }
 
 // ── Row identity ─────────────────────────────────────────────────────────────
