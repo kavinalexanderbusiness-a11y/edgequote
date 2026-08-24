@@ -8,17 +8,20 @@
 -- rebuild proof applies it, and verify:migrations will ADVISE that it is in
 -- flight — that advisory is correct and is the reconciliation gate.
 --
--- ⚠️⚠️ VERSION: 20260817070000, above the current production floor. main carries
--- baseline 20260816110001 plus 20260816213000_estimate_appointments and
--- 20260817060000_worker_access_v1 (the ledger max). This prefix has now been
--- chosen four times and was wrong three:
+-- ✅ VERSION: 20260823230000 — APPLIED TO PRODUCTION 2026-08-23 (Session 106).
+-- The prefix was chosen five times and was wrong four. It is now settled, because
+-- it is no longer a prediction: production RECORDED this version, and a shipped
+-- migration is immutable. The four earlier guesses, kept as the reason why:
 --   20260815000000 → sank below S69 regenerated baseline 20260815130001
 --   20260815140000 → sank below S75 regenerated baseline 20260816020001
 --   20260816030000 → COLLIDED with S68 reserved audit_trail_v1
--- Every landing regenerates the baseline at (newest ledger version + 1), so a
--- number picked while unapplied is a guess about what other lanes do next.
--- ⭐ RE-CHECK AND BUMP AFTER EVERY REBASE ONTO MAIN. It is never settled while
--- this migration is unlanded.
+--   20260817070000 → overtaken by S107 applying 20260823120000_measure_price_v2
+-- The last one is the lesson in one line: a version picked while unapplied is a
+-- guess about what other lanes do next, and S107 applied straight to production
+-- from an unlanded branch. So the number was taken AT APPLY TIME, from what
+-- production actually records, exactly as the note below always said to.
+--
+-- ⛔ DO NOT RENUMBER THIS FILE AGAIN. Production has run it under this version.
 --
 -- ⛔⛔ DO NOT LET GIT RELOCATE THIS FILE. supabase/pending/ was renamed to
 -- supabase/archive/ledger/ on main, so a rebase SUGGESTS moving this there — it
