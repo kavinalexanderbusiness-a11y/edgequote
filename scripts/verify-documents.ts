@@ -514,7 +514,19 @@ async function behaviour() {
       buf += c; i++
     }
     if (buf.trim()) out.push(buf.trim())
-    return out.filter(s => s && !/^(--[^\n]*\n?)*$/.test(s))
+    // ⚠️⚠️ LINEAR, NOT A REGEX. This filter used to be
+    //     !/^(--[^\n]*\n?)*$/.test(s)
+    // copied from verify:rebuild. `(--…\n?)*` anchored with `$` backtracks
+    // EXPONENTIALLY once a chunk is a long run of comment lines that fails to
+    // match at the very end — the engine re-partitions the same text every way
+    // it can before giving up. The baseline never triggered it because its
+    // comments are short; this migration's comment blocks hung the process for
+    // minutes with no output, which read exactly like a PGlite deadlock and
+    // cost this session several wrong diagnoses.
+    // A line scan answers the same question in O(n) and cannot blow up.
+    const commentsOnly = (s: string) =>
+      s.split('\n').every(l => { const t = l.trim(); return t === '' || t.startsWith('--') })
+    return out.filter(s => s && !commentsOnly(s))
   }
 
   // ── declared platform substitutions ──────────────────────────────────────
@@ -545,7 +557,7 @@ async function behaviour() {
     // (It cost this session two false "it's stuck" diagnoses before the real
     // cause — nine orphaned runs competing for the CPU — turned up.)
     const t0 = Date.now()
-    const step = Math.max(250, Math.floor(statements.length / 8))
+    const step = statements.length > 500 ? Math.floor(statements.length / 8) : 10
     try {
       for (const s of statements) {
         await db.exec(s + ';')
@@ -582,9 +594,10 @@ async function behaviour() {
   // between them.
   const A = '00000000-0000-0000-0000-0000000000aa'   // tenant A (the owner under test)
   const B = '00000000-0000-0000-0000-0000000000bb'   // tenant B (the neighbour)
+  const W = '00000000-0000-0000-0000-0000000000cc'   // a WORKER of tenant A
   try {
     await exec(`insert into auth.users (id, email) values
-      ('${A}', 'a@example.test'), ('${B}', 'b@example.test')`)
+      ('${A}', 'a@example.test'), ('${B}', 'b@example.test'), ('${W}', 'w@example.test')`)
     await exec(`
       insert into public.customers (id, user_id, name) values
         ('11111111-1111-1111-1111-111111111111', '${A}', 'Customer One'),
@@ -592,6 +605,13 @@ async function behaviour() {
         ('33333333-3333-3333-3333-333333333333', '${B}', 'Neighbour Customer');
       insert into public.properties (id, user_id, customer_id, address) values
         ('aaaaaaaa-0000-0000-0000-000000000001', '${A}', '11111111-1111-1111-1111-111111111111', '1 Test Way');
+      -- ⚠️ jobs_crew_same_owner is a COMPOSITE fk (crew_id, user_id) -> crews(id, user_id):
+      -- the tenant weld S66/S75 added. A crew row must exist, and it must belong
+      -- to the same tenant as the visit.
+      insert into public.crews (id, user_id, name) values
+        ('cccccccc-0000-0000-0000-000000000001', '${A}', 'Crew A');
+      insert into public.technicians (id, user_id, name, auth_user_id, crew_id) values
+        ('eeee1111-0000-0000-0000-000000000001', '${A}', 'Worker A', '${W}', 'cccccccc-0000-0000-0000-000000000001');
       insert into public.jobs (id, user_id, customer_id, title, scheduled_date, crew_id) values
         ('bbbbbbbb-0000-0000-0000-000000000001', '${A}', '11111111-1111-1111-1111-111111111111', 'Visit', current_date, 'cccccccc-0000-0000-0000-000000000001');
       insert into public.equipment (id, user_id, name) values
@@ -798,12 +818,76 @@ async function behaviour() {
     /already waiting on a signature/i,
     'two pending asks would let one act of consent satisfy both')
 
+  // ── the worker door, under the worker's OWN identity ───────────────────────
+  // ⭐ These run with request.jwt.claim.sub set to a real technician, so
+  // crew_employer() / crew_technician_id() resolve exactly as they do in
+  // production. Asserting the SQL text proves the predicate is written; only
+  // this proves it answers correctly.
+  await exec(`insert into public.documents (id, user_id, name, job_id, visibility) values
+    ('77770000-0000-0000-0000-000000000001', '${A}', 'Site permit',
+     'bbbbbbbb-0000-0000-0000-000000000001', 'worker')`)
+  await exec(`insert into public.document_versions (document_id, storage_path, file_name) values
+    ('77770000-0000-0000-0000-000000000001', '${A}/7777/permit.pdf', 'permit.pdf')`)
+  // A customer-visible document on the SAME visit — the crew must not see it.
+  await exec(`insert into public.documents (id, user_id, name, job_id, visibility) values
+    ('88880000-0000-0000-0000-000000000001', '${A}', 'Customer letter',
+     'bbbbbbbb-0000-0000-0000-000000000001', 'customer')`)
+  await exec(`insert into public.document_versions (document_id, storage_path, file_name) values
+    ('88880000-0000-0000-0000-000000000001', '${A}/8888/letter.pdf', 'letter.pdf')`)
+
+  await exec(`set request.jwt.claim.sub = '${W}'`)
+  const crewDocs = ((await db.query(
+    `select public.crew_job_documents('bbbbbbbb-0000-0000-0000-000000000001') as j`)).rows[0] as any).j
+  check('BEHAVIOUR · the assigned worker sees the visit\'s worker documents',
+    crewDocs?.ok === true && Array.isArray(crewDocs.documents) && crewDocs.documents.length === 1
+    && crewDocs.documents[0].name === 'Site permit')
+  check('BEHAVIOUR · the worker does NOT see the customer-visible document',
+    !JSON.stringify(crewDocs?.documents ?? []).includes('Customer letter'),
+    "a customer's copy is not crew-audience material")
+  check('BEHAVIOUR · the crew list carries no storage path',
+    !JSON.stringify(crewDocs ?? {}).includes('storage_path')
+    && !JSON.stringify(crewDocs ?? {}).includes(`${A}/7777`))
+
+  const crewFileOk = ((await db.query(
+    `select public.crew_document_file('77770000-0000-0000-0000-000000000001') as j`)).rows[0] as any).j
+  check('BEHAVIOUR · the worker can resolve the file for an authorized document',
+    crewFileOk?.ok === true && typeof crewFileOk.storage_path === 'string')
+  const crewFileNo = ((await db.query(
+    `select public.crew_document_file('88880000-0000-0000-0000-000000000001') as j`)).rows[0] as any).j
+  check('BEHAVIOUR · the worker cannot resolve a customer-visible document',
+    crewFileNo?.ok === false)
+  const crewFileForeign = ((await db.query(
+    `select public.crew_document_file('eeee0000-0000-0000-0000-000000000001') as j`)).rows[0] as any).j
+  check('BEHAVIOUR · the worker cannot resolve a document on no visit of theirs',
+    crewFileForeign?.ok === false, 'customer/site/equipment documents are unreachable to crew')
+
+  const counts = ((await db.query(
+    `select public.crew_document_counts(current_date) as j`)).rows[0] as any).j
+  check('BEHAVIOUR · the day counts name only the worker documents',
+    counts?.ok === true && counts.counts?.['bbbbbbbb-0000-0000-0000-000000000001'] === 1)
+
+  // A STRANGER: signed in, but not a technician of this tenant at all.
+  await exec(`set request.jwt.claim.sub = '${B}'`)
+  const stranger = ((await db.query(
+    `select public.crew_job_documents('bbbbbbbb-0000-0000-0000-000000000001') as j`)).rows[0] as any).j
+  check('BEHAVIOUR · a non-worker is refused the crew door',
+    stranger?.ok === false && stranger?.reason === 'not_authorized')
+  // Back to no crew identity for the remaining owner-side assertions.
+  await exec(`set request.jwt.claim.sub = '${A}'`)
+
   // ── archive ────────────────────────────────────────────────────────────────
   await exec(`update public.documents set archived_at = now()
     where id = 'eeee0000-0000-0000-0000-000000000001'`)
   const afterArchive = ((await db.query(`select public.portal_get_documents('tok-one') as j`)).rows[0] as any).j
+  // Asserts the ARCHIVED document is gone, not that the list is empty: the visit
+  // also carries a customer letter, and an emptiness test would silently start
+  // passing or failing for reasons that have nothing to do with archiving.
   check('BEHAVIOUR · an archived document leaves the portal',
-    Array.isArray(afterArchive) && afterArchive.length === 0)
+    Array.isArray(afterArchive)
+    && !afterArchive.some((d: any) => d.id === 'eeee0000-0000-0000-0000-000000000001'),
+    'the archived document is still projected to the customer')
+  check('BEHAVIOUR · archiving one document does not hide the others',
+    Array.isArray(afterArchive) && afterArchive.some((d: any) => d.name === 'Customer letter'))
   const stillThere = (await db.query(`select count(*)::int as n from public.document_signatures
     where document_id = 'eeee0000-0000-0000-0000-000000000001'`)).rows[0] as any
   check('BEHAVIOUR · archiving keeps the signed record', Number(stillThere?.n) === 1,
