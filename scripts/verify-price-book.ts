@@ -370,9 +370,20 @@ check('quotes.addons_total exists and is the add-on money column',
 // ⭐⭐ THE PRICING SEMANTIC ITSELF. quotes.total is GENERATED over three terms;
 // if a later change drops addons_total from that expression every accepted quote
 // silently loses its extras, and nothing else in the repo asserts it.
+// ⚠️⚠️ BOUND TO THE ONE COLUMN LINE. The first draft was
+//   /generated always as[^;]*initial_price[^;]*travel_fee[^;]*addons_total/
+// over the whole baseline. `[^;]*` does not stop at a newline, and the quotes
+// table declares `"addons_total" numeric(10,2)` FIFTEEN LINES BELOW `"total"`
+// inside the same semicolon-terminated statement — so deleting addons_total from
+// the generated expression left the regex matching the COLUMN instead, and the
+// check stayed green while every accepted quote silently lost its extras.
+// Mutation A1 caught it. Extract the line, then assert about the line.
+const totalCol = (baseline.match(/^\s*"total" numeric[^\r\n]*$/m) || [''])[0]
+check('the quotes.total column is readable', !!totalCol)
 check('quotes.total is still generated as initial_price + travel_fee + addons_total',
-  /generated always as[^;]*initial_price[^;]*travel_fee[^;]*addons_total/.test(baseline),
-  'the add-on total must remain a term of the one money figure')
+  !!totalCol && /generated always as/.test(totalCol) && /initial_price/.test(totalCol)
+    && /travel_fee/.test(totalCol) && /addons_total/.test(totalCol),
+  `the add-on total must remain a term of the one money figure\n      ${totalCol.trim()}`)
 check('quote_apply_choice is the canonical 4-arg choice engine',
   baseline.includes('FUNCTION public.quote_apply_choice(p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[], p_via text)'),
   'the portal and owner doors both delegate to this one function')
