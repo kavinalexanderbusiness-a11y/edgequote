@@ -160,87 +160,24 @@ export function DocumentsPanel({ userId, entity, customerId, heading = 'Document
         </InlineEmpty>
       ) : (
         <div className="space-y-1">
-          {visible.map(d => {
-            const VisIcon = VIS_ICON[d.visibility]
-            return (
-              <div key={d.id}
-                className="flex items-center gap-2 text-xs py-1.5 border-b border-border/50 last:border-0 flex-wrap">
-                <FileText className="w-3 h-3 text-ink-faint shrink-0" />
-                <button type="button" onClick={() => void open(d)}
-                  className="text-ink font-medium hover:text-accent-text truncate rounded max-w-[45%] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                  {d.name}
-                </button>
-
-                {d.current && d.current.version_no > 1 && (
-                  <span className="text-ink-faint shrink-0">v{d.current.version_no}</span>
-                )}
-                {d.category && <span className="text-ink-faint shrink-0 hidden sm:inline">{d.category}</span>}
-                {d.current?.size_bytes ? (
-                  <span className="text-ink-faint shrink-0 hidden sm:inline">{sizeLabel(d.current.size_bytes)}</span>
-                ) : null}
-
-                {/* Signature state, in plain words. "Awaiting" is a real state a
-                    business chases, so it is never left implicit. */}
-                {d.signature ? (
-                  <span className="shrink-0 text-emerald-400">
-                    Signed by {d.signature.signer_name} · {formatDate(d.signature.signed_at)}
-                  </span>
-                ) : d.openRequest ? (
-                  <span className="shrink-0 text-amber-400">Awaiting signature</span>
-                ) : null}
-
-                {d.archived_at && <span className="shrink-0 text-ink-faint">Archived</span>}
-
-                <div className="ml-auto flex items-center gap-1.5 shrink-0">
-                  {/* Visibility reads as a sentence, not a code. */}
-                  <Select
-                    value={d.visibility}
-                    onChange={e => void changeVisibility(d, e.target.value as DocumentVisibility)}
-                    aria-label={`Who can see ${d.name}`}
-                    className="h-8 py-0 text-xs"
-                    options={(['internal', 'worker', 'customer'] as DocumentVisibility[])
-                      // The schema refuses these combinations, so the control
-                      // never offers them: a disabled-by-database option that
-                      // looks available is a promise the save will break.
-                      .filter(v => (v !== 'worker' || entity.kind === 'job')
-                                && (v !== 'customer' || entity.kind !== 'equipment'))
-                      .map(v => ({ value: v, label: VISIBILITY_LABEL[v] }))}
-                  />
-                  <VisIcon className="w-3.5 h-3.5 text-ink-faint hidden sm:block" aria-hidden />
-
-                  {customerId && d.visibility === 'customer' && !d.signature && !d.openRequest && d.current && (
-                    <button type="button" onClick={() => setSignFor(d)} aria-label={`Request a signature on ${d.name}`}
-                      className="text-ink-faint hover:text-ink rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                      <PenLine className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                  {d.openRequest && (
-                    <Button size="sm" variant="ghost" onClick={async () => {
-                      const res = await cancelSignatureRequest(supabase, d.openRequest!.id)
-                      if (res.error) { toast.error(res.error); return }
-                      toast.success('Signature request cancelled.'); void load()
-                    }}>Cancel request</Button>
-                  )}
-
-                  <button type="button" onClick={() => { setVersionFor(d); versionRef.current?.click() }}
-                    aria-label={`Upload a new version of ${d.name}`}
-                    title={d.frozen ? 'Signed — a replacement is added as a new version' : 'Upload a new version'}
-                    className="text-ink-faint hover:text-ink rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                    <Upload className="w-3.5 h-3.5" />
-                  </button>
-                  <button type="button" onClick={() => void open(d)} aria-label={`Open ${d.name}`}
-                    className="text-ink-faint hover:text-ink rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                    <ExternalLink className="w-3.5 h-3.5" />
-                  </button>
-                  <button type="button" onClick={() => void archive(d)}
-                    aria-label={d.archived_at ? `Restore ${d.name}` : `Archive ${d.name}`}
-                    className="text-ink-faint hover:text-ink rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                    {d.archived_at ? <ArchiveRestore className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />}
-                  </button>
-                </div>
-              </div>
-            )
-          })}
+          {visible.map(d => (
+            <DocumentRow
+              key={d.id}
+              d={d}
+              entityKind={entity.kind}
+              customerId={customerId ?? null}
+              onOpen={() => void open(d)}
+              onVisibility={v => void changeVisibility(d, v)}
+              onArchive={() => void archive(d)}
+              onNewVersion={() => { setVersionFor(d); versionRef.current?.click() }}
+              onRequestSign={() => setSignFor(d)}
+              onCancelRequest={async () => {
+                const res = await cancelSignatureRequest(supabase, d.openRequest!.id)
+                if (res.error) { toast.error(res.error); return }
+                toast.success('Signature request cancelled.'); void load()
+              }}
+            />
+          ))}
         </div>
       )}
 
@@ -287,9 +224,104 @@ export function DocumentsPanel({ userId, entity, customerId, heading = 'Document
   )
 }
 
+// ── One document, as the owner sees it ───────────────────────────────────────
+// Presentational: it holds no data access, so scripts/documents-harness.tsx can
+// render the REAL row at 375/390/430 and measure it rather than a replica.
+export function DocumentRow({
+  d, entityKind, customerId,
+  onOpen, onVisibility, onArchive, onNewVersion, onRequestSign, onCancelRequest,
+}: {
+  d: DocumentView
+  entityKind: DocumentEntity['kind']
+  customerId: string | null
+  onOpen: () => void
+  onVisibility: (v: DocumentVisibility) => void
+  onArchive: () => void
+  onNewVersion: () => void
+  onRequestSign: () => void
+  onCancelRequest: () => void
+}) {
+  const VisIcon = VIS_ICON[d.visibility]
+  return (
+    <div className="flex items-center gap-2 text-xs py-1.5 border-b border-border/50 last:border-0 flex-wrap">
+      <FileText className="w-3 h-3 text-ink-faint shrink-0" />
+      <button type="button" onClick={onOpen}
+        className="tap-target-y text-left text-ink font-medium hover:text-accent-text truncate rounded max-w-[45%] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+        {d.name}
+      </button>
+
+      {d.current && d.current.version_no > 1 && (
+        <span className="text-ink-faint shrink-0">v{d.current.version_no}</span>
+      )}
+      {d.category && <span className="text-ink-faint shrink-0 hidden sm:inline">{d.category}</span>}
+      {d.current?.size_bytes ? (
+        <span className="text-ink-faint shrink-0 hidden sm:inline">{sizeLabel(d.current.size_bytes)}</span>
+      ) : null}
+
+      {/* Signature state, in plain words. "Awaiting" is a real state a business
+          chases, so it is never left implicit. */}
+      {d.signature ? (
+        <span className="shrink-0 text-emerald-400">
+          Signed by {d.signature.signer_name} · {formatDate(d.signature.signed_at)}
+        </span>
+      ) : d.openRequest ? (
+        <span className="shrink-0 text-amber-400">Awaiting signature</span>
+      ) : null}
+
+      {d.archived_at && <span className="shrink-0 text-ink-faint">Archived</span>}
+
+      <div className="w-full sm:w-auto sm:ml-auto flex items-center gap-1.5 flex-wrap justify-end">
+        {/* Visibility reads as a sentence, not a code. */}
+        <Select
+          value={d.visibility}
+          onChange={e => onVisibility(e.target.value as DocumentVisibility)}
+          aria-label={`Who can see ${d.name}`}
+          className="h-8 py-0 text-xs tap-target-y min-w-0 max-w-[11rem]"
+          options={(['internal', 'worker', 'customer'] as DocumentVisibility[])
+            // The schema refuses these combinations, so the control never offers
+            // them: a disabled-by-database option that looks available is a
+            // promise the save will break.
+            .filter(v => (v !== 'worker' || entityKind === 'job')
+                      && (v !== 'customer' || entityKind !== 'equipment'))
+            .map(v => ({ value: v, label: VISIBILITY_LABEL[v] }))}
+        />
+        <VisIcon className="w-3.5 h-3.5 text-ink-faint hidden sm:block" aria-hidden />
+
+        {customerId && d.visibility === 'customer' && !d.signature && !d.openRequest && d.current && (
+          <button type="button" onClick={onRequestSign} aria-label={`Request a signature on ${d.name}`}
+            className="tap-target inline-flex items-center justify-center text-ink-faint hover:text-ink rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            <PenLine className="w-3.5 h-3.5" />
+          </button>
+        )}
+        {d.openRequest && (
+          <Button size="sm" variant="ghost" onClick={onCancelRequest}>Cancel request</Button>
+        )}
+
+        <button type="button" onClick={onNewVersion}
+          aria-label={`Upload a new version of ${d.name}`}
+          title={d.frozen ? 'Signed — a replacement is added as a new version' : 'Upload a new version'}
+          className="tap-target inline-flex items-center justify-center text-ink-faint hover:text-ink rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+          <Upload className="w-3.5 h-3.5" />
+        </button>
+        <button type="button" onClick={onOpen} aria-label={`Open ${d.name}`}
+          className="tap-target inline-flex items-center justify-center text-ink-faint hover:text-ink rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+          <ExternalLink className="w-3.5 h-3.5" />
+        </button>
+        <button type="button" onClick={onArchive}
+          aria-label={d.archived_at ? `Restore ${d.name}` : `Archive ${d.name}`}
+          className="tap-target inline-flex items-center justify-center text-ink-faint hover:text-ink rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+          {d.archived_at ? <ArchiveRestore className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── Attaching ────────────────────────────────────────────────────────────────
 
-function UploadDialog({ file, entity, onClose, onSave }: {
+/** Exported so scripts/documents-harness.tsx can measure the REAL dialog at
+ *  phone widths rather than a replica of it. */
+export function UploadDialog({ file, entity, onClose, onSave }: {
   file: File
   entity: DocumentEntity
   onClose: () => void
@@ -341,7 +373,8 @@ function UploadDialog({ file, entity, onClose, onSave }: {
 
 // ── Asking for a signature ───────────────────────────────────────────────────
 
-function SignatureRequestDialog({ doc, onClose, onSave }: {
+/** Exported for the phone harness — see UploadDialog. */
+export function SignatureRequestDialog({ doc, onClose, onSave }: {
   doc: DocumentView
   onClose: () => void
   onSave: (v: { statement: string; purpose: SignaturePurpose }) => Promise<boolean>

@@ -33,3 +33,4 @@ search-*.png
 search-cdp-*.txt
 .chrome-search-*/
 .dayactions-harness/
+.documents-harness/

@@ -114,7 +114,8 @@ export function DocumentsTab({ token, documents, onSigned }: {
 
 // ── Signing ──────────────────────────────────────────────────────────────────
 
-function SignDialog({ token, doc, onClose, onDone }: {
+/** Exported so the phone harness measures the REAL signing sheet. */
+export function SignDialog({ token, doc, onClose, onDone }: {
   token: string
   doc: PortalDocument
   onClose: () => void
