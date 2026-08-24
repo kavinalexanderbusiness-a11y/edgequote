@@ -12,15 +12,32 @@ import {
   ChangeOrder, listChangeOrders, createChangeOrder, sendChangeOrder, cancelChangeOrder,
   recordOwnerDecision, changeOrderSendRequest,
 } from '@/lib/changeOrders'
-import { changeOrderMessageBody } from '@/lib/comms/templates'
+import { changeOrderMessageBody, renderMessage, toDisplayBody, fromDisplayBody, type MsgType } from '@/lib/comms/templates'
+// The day board's action doors + the completion-message plan (Session 80).
+// The plan predicts the job-complete text with THE reach predicate so the
+// dialog never promises a send that consent or a missing grant would block.
+import { completionMessagePlan, type CompletionCaps } from '@/lib/dayActions'
+import { tenantCapabilities } from '@/lib/capabilities'
+import { newClientMessageId } from '@/lib/comms/idempotency'
+import { CompleteConfirm } from '@/components/schedule/CompleteConfirm'
 import { Calendar, CalendarView } from '@/components/schedule/Calendar'
 import { DayOpsPanel, QuoteLite, QuickPatch } from '@/components/schedule/DayOpsPanel'
+// Estimate visits (Session 79) — scheduled calls to LOOK at work and price it.
+// They share the calendar with jobs and nothing else: they are rows in
+// schedule_items, so no engine on this page that reads `jobs` can see them.
+import { EstimateDayBoard } from '@/components/schedule/EstimateDayBoard'
+import { EstimateAppointmentDialog } from '@/components/schedule/EstimateAppointmentDialog'
+import { useEstimateAppointments } from '@/hooks/useEstimateAppointments'
+import type { EstimateAppointment } from '@/lib/estimateAppointments'
+import type { ScheduleItem } from '@/lib/scheduleItems'
 import { Coord, geocodeAddress } from '@/lib/geo'
 import { JobForm, Recurrence, SuggestionMeta } from '@/components/schedule/JobForm'
 import { ScopeDialog } from '@/components/schedule/ScopeDialog'
 import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel, visitsBeyondEnd, planSeriesChange, planRecurrenceRemoval, partitionSeriesVisits, scopeImpacts, type SeriesVisitLite } from '@/lib/recurrence'
 import { loadVisitEncumbrances } from '@/lib/seriesHistory'
-import type { JobRecurrence } from '@/types'
+import type { JobRecurrence, Crew, Technician } from '@/types'
+import { loadCrews, loadTechnicians } from '@/lib/crews'
+import { assigneeOf, sameAssignee } from '@/lib/crewAssignment'
 import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts, uncompleteJob } from '@/lib/invoicing'
 import { queueOrRun, isNetworkError } from '@/lib/offline/outbox'
 // THE completion stamp. Every door on this page that moves a visit to
@@ -47,6 +64,11 @@ interface FieldSettings {
   base_lat: number | null; base_lng: number | null; base_address: string | null
   preferred_work_days: number[] | null; work_start_time: string | null
   daily_capacity_hours: number | null; automations: unknown
+  // Session 80: the completion dialog composes the job-complete text with the
+  // SAME engine + owner overrides the composer uses, and the Review door needs
+  // the link — cached so both stay honest in a driveway with no signal.
+  company_name?: string | null; review_url?: string | null
+  message_templates?: Partial<Record<MsgType, string>> | null
 }
 
 interface FieldBundle {
@@ -78,11 +100,11 @@ import { orderDayStops, nextFieldStop } from '@/lib/fieldStops'
 import { toast } from '@/lib/toast'
 import { confirm } from '@/lib/confirm'
 import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays, parseISO, getDay } from 'date-fns'
-import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info, Phone, MessageSquare, Navigation, User as UserIcon, FileText, Receipt } from 'lucide-react'
+import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info, Phone, MessageSquare, Navigation, User as UserIcon, FileText, Receipt, MapPin } from 'lucide-react'
 import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
 import { RainDelayCenter } from '@/components/schedule/RainDelayCenter'
 import { WeatherStrip } from '@/components/weather/WeatherStrip'
-import { CalendarClock } from 'lucide-react'
+import { CalendarClock, Ruler } from 'lucide-react'
 import { analyzeSchedule, optimizeSchedule, planRainDelay, MOVE_REASON_LABEL } from '@/lib/optimizer'
 import type { PlannedMove, OptimizeScope, OptimizeMode, OptJob, ScheduleSuggestion, CadenceVisit, CadenceRecs } from '@/lib/optimizer'
 import { evaluateScheduleMove } from '@/lib/scheduleWarnings'
@@ -145,6 +167,11 @@ export default function SchedulePage() {
   const focusRec = searchParams.get('focus')
   const jobParam = searchParams.get('job')
   const dayParam = searchParams.get('d')
+  // `?estimate=new` opens the estimate dialog prefilled from wherever the owner
+  // came from (a customer, a property, a draft quote). One door on this page
+  // rather than the same dialog mounted on four others, so the scheduling rules
+  // cannot drift apart per surface.
+  const estimateParam = searchParams.get('estimate')
 
   const [jobs, setJobs] = useState<Job[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
@@ -222,10 +249,28 @@ export default function SchedulePage() {
   // null while loading, or when the read was unavailable — which lib/dayPlan
   // reports as a caveat rather than as a fully-staffed day.
   const [dayFitCtx, setDayFitCtx] = useState<DayFitContext | null>(null)
+  // Who work can be assigned to, and whether that list is trustworthy. null-ish
+  // state is deliberate: `rosterKnown` false means the assignment checks stay
+  // quiet rather than reporting an unstaffed day.
+  const [crews, setCrews] = useState<Crew[]>([])
+  const [technicians, setTechnicians] = useState<Technician[]>([])
+  const [rosterKnown, setRosterKnown] = useState(false)
   // Defaults come from the resolver, not a hand-copied literal — otherwise every
   // new automation has to be remembered here too (and this is loaded from
   // settings a moment later anyway).
   const [automations, setAutomations] = useState<Automations>(() => resolveAutomations(null))
+  // What the completion dialog + Review door need from settings: the owner's
+  // template overrides, business name and review link — loaded with the same
+  // settings read, cached in the field bundle.
+  const [msgCtx, setMsgCtx] = useState<{ company: string; reviewUrl: string; templates: Partial<Record<MsgType, string>> | null }>({ company: '', reviewUrl: '', templates: null })
+  // Tenant platform grants (lib/capabilities), read once per session for the
+  // completion-message plan. null = not read yet → the plan predicts the
+  // attempt and lets the route's authoritative read decide.
+  const [caps, setCaps] = useState<CompletionCaps | null>(null)
+  // The completion dialog: which visit is waiting on the message decision.
+  // Present ONLY when the plan says a message would actually go out.
+  const [completeAsk, setCompleteAsk] = useState<{ job: Job; channels: ('sms' | 'email')[]; contactKnown: boolean; text: string; defaultText: string } | null>(null)
+  const [completeBusy, setCompleteBusy] = useState(false)
   const [showOptimize, setShowOptimize] = useState(false)
   const [showRainCenter, setShowRainCenter] = useState(false)
   // The day the Weather hub should open on (e.g. a known rain day). null → its own
@@ -330,6 +375,11 @@ export default function SchedulePage() {
 
   // The roster + learning context for the day board. One load for the horizon;
   // a failure leaves it null, which the plan reports honestly.
+  //
+  // Crews and named people ride along because the board now answers a second
+  // question — whether the people this day was ASSIGNED to can staff it — and
+  // that needs their names, not just a headcount. A failed read leaves both
+  // empty, and the staffing check then claims nothing.
   useEffect(() => {
     let alive = true
     ;(async () => {
@@ -337,6 +387,16 @@ export default function SchedulePage() {
       if (!user) return
       const res = await loadDayFitContext(supabase, user.id, { fromISO: localToday() })
       if (alive && res.outcome === 'ok') setDayFitCtx(res.ctx)
+      try {
+        const [cs, ts] = await Promise.all([
+          loadCrews(supabase, user.id),
+          loadTechnicians(supabase, user.id),
+        ])
+        if (alive) { setCrews(cs); setTechnicians(ts); setRosterKnown(true) }
+      } catch {
+        // Same contract as everywhere else: couldn't ask ≠ nobody works here.
+        if (alive) setRosterKnown(false)
+      }
     })()
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -621,7 +681,7 @@ export default function SchedulePage() {
     for (let from = 0; ; from += PAGE_ROWS) {
       const { data, error } = await supabase
         .from('jobs')
-        .select('*, customers(id, name, phone, email, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)')
+        .select('*, customers(id, name, phone, email, preferred_days, avoid_days, pref_time_start, pref_time_end, sms_opt_in, email_opt_in, message_prefs, reviewed_at, review_requested_at, review_declined_at), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)')
         .eq('user_id', userId)
         .order('scheduled_date')
         .order('id')
@@ -645,7 +705,7 @@ export default function SchedulePage() {
       supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — can't schedule an archived customer without restoring
       supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
       supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
-      supabase.from('business_settings').select('base_lat, base_lng, base_address, preferred_work_days, work_start_time, daily_capacity_hours, automations, business_type').eq('user_id', user!.id).maybeSingle(),
+      supabase.from('business_settings').select('base_lat, base_lng, base_address, preferred_work_days, work_start_time, daily_capacity_hours, automations, business_type, company_name, review_url, message_templates').eq('user_id', user!.id).maybeSingle(),
       supabase.from('invoices').select('job_id').eq('user_id', user!.id).not('job_id', 'is', null),
       supabase.from('schedule_health_ignored').select('issue_key').eq('user_id', user!.id),
       supabase.from('day_statuses').select(DAY_STATUS_SELECT).eq('user_id', user!.id),
@@ -733,13 +793,14 @@ export default function SchedulePage() {
     }
 
     // Base coordinate for route optimization (geocode the address once if needed).
-    const s = sRes.data as { base_lat: number | null; base_lng: number | null; base_address: string | null; preferred_work_days: number[] | null; work_start_time: string | null; daily_capacity_hours: number | null; automations: unknown; business_type: string | null } | null
+    const s = sRes.data as (FieldSettings & { business_type: string | null }) | null
     // Add-on quick-chips come from the trade pack (UI defaults only — same
     // contract as the campaign preset menu). A pack with no list falls back to
     // the neutral chips; a failed read resolves to the neutral pack too.
     const packForChips = tradePack(s?.business_type)
     setAddonTemplates(packForChips.addons.length ? packForChips.addons : NEUTRAL_PACK.addons)
     setAutomations(resolveAutomations(s?.automations))
+    setMsgCtx({ company: s?.company_name || '', reviewUrl: s?.review_url || '', templates: s?.message_templates || null })
     setPreferredWorkDays(s?.preferred_work_days?.length ? s.preferred_work_days : [5, 6, 0])
     setWorkStartTime(s?.work_start_time || '08:00')
     setCapacityHours(s?.daily_capacity_hours && s.daily_capacity_hours > 0 ? s.daily_capacity_hours : 8)
@@ -781,6 +842,7 @@ export default function SchedulePage() {
       const s = b.settings
       if (s) {
         setAutomations(resolveAutomations(s.automations))
+        setMsgCtx({ company: s.company_name || '', reviewUrl: s.review_url || '', templates: s.message_templates || null })
         setPreferredWorkDays(s.preferred_work_days?.length ? s.preferred_work_days : [5, 6, 0])
         setWorkStartTime(s.work_start_time || '08:00')
         setCapacityHours(s.daily_capacity_hours && s.daily_capacity_hours > 0 ? s.daily_capacity_hours : 8)
@@ -790,6 +852,20 @@ export default function SchedulePage() {
     }
     fetchJobs()
   }, [fetchJobs])
+
+  // The tenant's platform grants, once per session — feeds the completion-
+  // message plan so the dialog doesn't promise an SMS on a channel this
+  // business has no grant for. tenantCapabilities never throws (it fails
+  // closed), so a failed read here reads as "no grants" and the dialog simply
+  // doesn't show — the route's own authoritative read still governs the send.
+  useEffect(() => {
+    if (!uid) return
+    let alive = true
+    tenantCapabilities(supabase, uid).then(c => {
+      if (alive) setCaps({ outboundSms: c.outboundSms, outboundEmail: c.outboundEmail })
+    })
+    return () => { alive = false }
+  }, [supabase, uid])
 
   // ── Day Status: live sync + optimistic set/clear (source of truth = day_statuses) ──
   // A failed REFRESH must not erase a good map. This runs on every realtime
@@ -1131,6 +1207,16 @@ export default function SchedulePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showForm, editing])
 
+  // A dirty editor also survives an accidental tab close — same protection the
+  // settings page carries. The ref is read at event time, so this registers
+  // once per open rather than on every keystroke.
+  useEffect(() => {
+    if (!showForm && !editing) return
+    const onBeforeUnload = (e: BeforeUnloadEvent) => { if (formDirty.current) e.preventDefault() }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [showForm, editing])
+
   async function handleAdd(values: JobFormValues, recurrence: Recurrence, meta?: SuggestionMeta, opts?: { addAnother?: boolean }) {
     const { data: { user } } = await supabase.auth.getUser()
     // ── The scheduling guard (the ?quote= door) ───────────────────────────────
@@ -1168,6 +1254,10 @@ export default function SchedulePage() {
       end_time: values.end_time || null,
       duration_minutes: values.duration_minutes ? Number(values.duration_minutes) : null,
       crew_size: Number(values.crew_size) || 1,
+      // Who is coming. Both columns always, so the pair can never disagree —
+      // the database refuses a row carrying a crew AND a person.
+      crew_id: values.crew_id ?? null,
+      technician_id: values.technician_id ?? null,
       status: values.status,
       notes: values.notes || null,
       price: Number(values.price) > 0 ? Number(values.price) : null,
@@ -1296,6 +1386,22 @@ export default function SchedulePage() {
       notes: values.notes || null,
       price: Number(values.price) > 0 ? Number(values.price) : null,
     }
+    // Assignment joins the patch ONLY when it changed this session — silence is
+    // not consent. The fixed set above is safe to overwrite on every save
+    // because the form seeds each of those fields from the loaded anchor row;
+    // assignment is set per-visit on the dispatch board, so a scope-wide save
+    // blasting the ANCHOR's assignee onto every sibling would silently undo
+    // dispatch's lane assignments. When it does apply, BOTH columns move
+    // together (lib/crewAssignment — jobs_one_assignee refuses half a write)
+    // with the same route_order reset as lib/crews.assignJob: a visit landing
+    // in a new lane must not inherit a foreign sequence slot.
+    const crewChanged = !sameAssignee(
+      assigneeOf({ crew_id: values.crew_id ?? null, technician_id: values.technician_id ?? null }),
+      assigneeOf(job),
+    )
+    const crewPatch = crewChanged
+      ? { crew_id: values.crew_id ?? null, technician_id: values.technician_id ?? null, route_order: null }
+      : {}
     // Status and actual time belong ONLY to the edited visit, never its siblings.
     // The third door onto COMPLETING (Complete button, quick-edit dropdown, this
     // form) — and the one that used to write the status with no completed_at at
@@ -1323,6 +1429,7 @@ export default function SchedulePage() {
     const delta = dayDelta(job.scheduled_date, values.scheduled_date)
     const results = await Promise.all(targets.map(t => supabase.from('jobs').update({
       ...fields,
+      ...crewPatch,
       ...(t.id === job.id ? perVisit : {}),
       scheduled_date: scope === 'this' ? values.scheduled_date : shiftDate(t.scheduled_date, delta),
     }).eq('id', t.id)))
@@ -1840,14 +1947,43 @@ export default function SchedulePage() {
   // ✓ Check out: stamps completion, derives actual_minutes from check-in →
   // check-out (the ONE timing value every engine reads), drafts the invoice.
   // Also the calendar's one-tap Done (works without a check-in — no actual then).
+  //
+  // Session 80: JOB STATE CHANGED and CUSTOMER MESSAGE SENT are separate
+  // decisions now. When the configured automation would actually reach someone
+  // (lib/dayActions.completionMessagePlan — THE reach predicate + the tenant
+  // grants), the dialog shows the exact text FIRST and the owner chooses
+  // "Complete & send" or "Complete without sending". When nothing would go out
+  // (automation off, no customer, opted out, no grant) completion behaves
+  // exactly as before — no dialog for a message that was never going to exist,
+  // and the route still records its honest skip rows.
   async function completeJob(job: Job) {
+    const plan = completionMessagePlan(
+      { kind: 'visit', status: job.status, customer: job.customers ?? null },
+      { automationOn: !!automations.job_complete, caps },
+    )
+    if (plan.wouldSend && job.customer_id) {
+      // The SAME engine + owner overrides the composers use, so the preview is
+      // exactly what the route would send (the route re-renders identically).
+      const text = toDisplayBody(renderMessage('job_complete', msgCtx.templates, {
+        firstName: job.customers?.name || 'there',
+        businessName: msgCtx.company,
+        address: job.properties?.address,
+      }).sms)
+      setCompleteAsk({ job, channels: plan.channels, contactKnown: plan.contactKnown, text, defaultText: text })
+      return
+    }
+    await performComplete(job, !!(automations.job_complete && job.customer_id))
+  }
+
+  // The completion itself — state change + invoice draft (+ the message when
+  // the dialog said yes). `notify` is the DECISION now, not a re-derivation.
+  async function performComplete(job: Job, notify: boolean, bodyOverride?: string) {
     const prev = { status: job.status, completed_at: job.completed_at, actual_minutes: job.actual_minutes }
     // THE completion stamp (lib/jobStatus) — status + completed_at + accumulated
     // actual_minutes. Shared with the quick-edit dropdown, the job form and the
     // dispatch board so "completed" can't mean four slightly different rows.
     const patch = completionPatch(job)
     const completed = { ...job, ...patch }
-    const notify = !!(automations.job_complete && job.customer_id)
 
     // Completing is patch + draft invoice + courtesy text. Offline, all three
     // queue together as ONE op (kind 'job.complete') so reconnecting can never
@@ -1855,7 +1991,7 @@ export default function SchedulePage() {
     let outcome: 'ran' | 'queued'
     try {
       outcome = await queueOrRun(
-        { kind: 'job.complete', payload: { id: job.id, patch, job: completed, notify, baseUpdatedAt: job.updated_at }, label: `Complete ${job.title || 'job'}` },
+        { kind: 'job.complete', payload: { id: job.id, patch, job: completed, notify, bodyOverride, baseUpdatedAt: job.updated_at }, label: `Complete ${job.title || 'job'}` },
         async () => {
           const { error } = await supabase.from('jobs').update(patch).eq('id', job.id)
           if (error) throw new Error(error.message)
@@ -1867,9 +2003,17 @@ export default function SchedulePage() {
           // is never billed, with no trace pointing at it. ('exists' stays quiet: an invoice
           // does exist, so nothing is misclaimed.)
           else if (res.reason === 'error') setBanner('Job completed, but the draft invoice could not be created — invoice it manually from the job.')
-          // Automated job-complete message (opt-in + dedupe are enforced by the route).
+          // The job-complete message (opt-in + dedupe are enforced by the route;
+          // clientMessageId guards a retry against a double text).
           if (notify) {
-            fetch('/api/comms/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customerId: job.customer_id, template: 'job_complete', jobId: job.id, dedupe: true }) }).catch(() => {})
+            fetch('/api/comms/send', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                customerId: job.customer_id, template: 'job_complete', jobId: job.id, dedupe: true,
+                clientMessageId: newClientMessageId(),
+                ...(bodyOverride ? { bodyOverride } : {}),
+              }),
+            }).catch(() => {})
           }
         },
       )
@@ -1937,14 +2081,35 @@ export default function SchedulePage() {
   // completing the job → 'job.complete' (patch + draft invoice); a plain edit →
   // 'job.update', carrying a price change through to an existing draft.
   async function quickSaveJob(job: Job, patch: QuickPatch) {
+    // ── The partial-patch contract (see QuickPatch): apply ONLY the keys the
+    // quick editor actually sent. The sheet renders a SUBSET of the row, so a
+    // fixed field list here would turn every column it doesn't render into a
+    // silent null on save — the exact bulk-save trap the full form avoids by
+    // seeding every patched field from the loaded row. Price is deliberately
+    // not a key: the board's Price door (setJobPrice) is the audited path
+    // (job_price_changes + draft-invoice re-sync), and a quick save must not
+    // be a second, unaudited way to move money.
+    const base: Record<string, unknown> = {}
+    if ('start_time' in patch) base.start_time = patch.start_time ?? null
+    if ('crew_size' in patch) base.crew_size = patch.crew_size ?? 1
+    if ('duration_minutes' in patch) base.duration_minutes = patch.duration_minutes ?? null
+    if ('status' in patch) base.status = patch.status
+    if ('notes' in patch) base.notes = patch.notes ?? null
+    if ('service_type' in patch) base.service_type = patch.service_type ?? null
+    // Reassignment: BOTH columns move together (lib/crewAssignment — the sheet
+    // always sends the pair, and jobs_one_assignee refuses half a write) with
+    // the same route_order reset as lib/crews.assignJob — the visit leaves its
+    // old lane's hand-set route position. ONE semantic, however many doors.
+    if ('crew_id' in patch || 'technician_id' in patch) {
+      base.crew_id = patch.crew_id ?? null
+      base.technician_id = patch.technician_id ?? null
+      base.route_order = null
+    }
+    if (Object.keys(base).length === 0) return
+
     const completing = patch.status === 'completed' && job.status !== 'completed'
     const fields = {
-      start_time: patch.start_time,
-      crew_size: patch.crew_size,
-      duration_minutes: patch.duration_minutes,
-      status: patch.status,
-      notes: patch.notes,
-      price: patch.price,
+      ...base,
       // Moving the dropdown to Done is the SAME transition as tapping Complete,
       // so it has to write the same row. It used to write the status alone: no
       // completed_at, no time on site. The visit then never appeared as a
@@ -1957,7 +2122,6 @@ export default function SchedulePage() {
     // to scheduled/in-progress. Same money consequence as the undo toast, so it
     // takes the same path rather than a plain patch that would strand the invoice.
     const uncompleting = job.status === 'completed' && !!patch.status && patch.status !== 'completed'
-    const repriced = Number(patch.price) !== Number(job.price)
     const completed = { ...job, ...fields }
 
     // Un-completing carries an invoice with it, so it goes through the one engine
@@ -1972,27 +2136,20 @@ export default function SchedulePage() {
       outcome = await queueOrRun(
         completing
           ? { kind: 'job.complete', payload: { id: job.id, patch: fields, job: completed, notify: false, baseUpdatedAt: job.updated_at }, label: `Complete ${job.title || 'job'}` }
-          : { kind: 'job.update', payload: { id: job.id, patch: fields, syncPrice: repriced, baseUpdatedAt: job.updated_at }, label: `Edit ${job.title || 'job'}` },
+          : { kind: 'job.update', payload: { id: job.id, patch: fields, syncPrice: false, baseUpdatedAt: job.updated_at }, label: `Edit ${job.title || 'job'}` },
         async () => {
           const { error } = await supabase.from('jobs').update(fields).eq('id', job.id)
           if (error) throw new Error(error.message)
           if (completing) {
             // `completed` (job + this edit), not the pre-edit row: the offline
-            // replay already drafts from it, and a quick-edit that sets the price
-            // AND completes in one save would otherwise draft yesterday's amount
-            // and rely on the re-price below to correct it.
+            // replay already drafts from it, so both doors bill the same amount.
             const res = await createDraftInvoiceForCompletedJob(supabase, completed)
             if (res.created) draftInvoiceToast(res.invoiceNumber, `Saved — draft invoice ${res.invoiceNumber} created.`)
             else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
-            // The quick-edit dropdown completes a job through the same transition as the Complete
+            // The quick-edit sheet completes a job through the same transition as the Complete
             // button, which DOES report this (completeJob below). Without it a failed draft leaves
             // the visit out of the un-invoiced queue and it is never billed, with no trace.
             else if (res.reason === 'error') setBanner('Job completed, but the draft invoice could not be created — invoice it manually from the job.')
-          }
-          // If the inline edit changed the price, keep its draft invoice in sync.
-          if (repriced) {
-            const { failed } = await syncDraftInvoiceAmounts(supabase, [job.id])
-            if (failed > 0) setBanner('Saved, but its draft invoice still shows the old amount — open the invoice to re-price it.')
           }
         },
       )
@@ -2625,6 +2782,40 @@ export default function SchedulePage() {
   const dayISO = format(cursor, 'yyyy-MM-dd')
   const dayJobs = useMemo(() => jobs.filter(j => j.scheduled_date === dayISO), [jobs, dayISO])
 
+  // ── Estimate visits ─────────────────────────────────────────────────────────
+  // Loaded unbounded (the table holds one row per estimate visit, not per
+  // recurring occurrence, so there is no jobs-sized volume here) and filtered per
+  // day / per month in the render. The hook is the only writer.
+  const estimates = useEstimateAppointments()
+  const [estimateDialog, setEstimateDialog] = useState<{ date: string; existing: EstimateAppointment | null } | null>(null)
+  const dayEstimates = useMemo(
+    () => estimates.items.filter(i => i.scheduled_date === dayISO),
+    [estimates.items, dayISO])
+
+  // Open the dialog once, when arrived at with ?estimate=new. Guarded by a ref
+  // rather than the param so that closing the dialog does not immediately
+  // reopen it on the next render.
+  const estimateDeepLinkUsed = useRef(false)
+  useEffect(() => {
+    if (estimateParam !== 'new' || estimateDeepLinkUsed.current) return
+    estimateDeepLinkUsed.current = true
+    setEstimateDialog({ date: dayISO, existing: null })
+  }, [estimateParam, dayISO])
+
+  const setEstimateStatus = useCallback(async (item: EstimateAppointment, to: ScheduleItem['status']) => {
+    const err = await estimates.setStatus(item.id, to)
+    if (err) { toast.error(err); return }
+    // The wording is the contract. "Visit done" and never "job complete" — the
+    // customer's work has not been performed, and this is the surface where the
+    // old $0-job workaround used to say otherwise.
+    toast.success(
+      to === 'completed' ? 'Estimate visit marked done — write the quote when you’re ready.'
+      : to === 'cancelled' ? 'Estimate visit cancelled.'
+      : to === 'no_show' ? 'Marked as a no-show.'
+      : 'Estimate visit is back on the schedule.',
+    )
+  }, [estimates])
+
   const pendingVerb = pendingAction?.type === 'delete' ? 'Delete'
     : pendingAction?.type === 'move' ? 'Move'
     : pendingAction?.type === 'price' ? 'Update price for' : 'Save changes to'
@@ -2686,6 +2877,12 @@ export default function SchedulePage() {
             </Button>
             <Button variant="secondary" onClick={() => launchOptimizer()} title="Optimize your schedule — pick scope and goal">
               <Rocket className="w-4 h-4" /> Optimize
+            </Button>
+            {/* Its OWN door, never folded into "Add job". These create different
+                things — one is work, one is a visit to price work — and merging
+                creation doors by label is how the $0-job workaround started. */}
+            <Button variant="secondary" onClick={() => setEstimateDialog({ date: dayISO, existing: null })} title="Schedule an estimate visit — no job, no $0 quote">
+              <Ruler className="w-4 h-4" /> Add estimate
             </Button>
             <Button onClick={() => openNewJob(cursor)}>
               <Plus className="w-4 h-4" /> Add job
@@ -2836,6 +3033,28 @@ export default function SchedulePage() {
         </div>
       )}
 
+      {/* Schedule / edit an estimate visit. Its own dialog, not JobForm: JobForm
+          collects price, recurrence and service — every one of which is a claim
+          an estimate visit must not be able to make. */}
+      <EstimateAppointmentDialog
+        open={estimateDialog !== null}
+        onClose={() => setEstimateDialog(null)}
+        customers={customers}
+        crews={crews}
+        technicians={technicians}
+        existing={estimateDialog?.existing ?? null}
+        defaultDateISO={estimateDialog?.date}
+        defaultCustomerId={customerParam}
+        defaultPropertyId={propertyParam}
+        quoteId={quoteId}
+        onSave={async (input) => {
+          if (estimateDialog?.existing) return estimates.update(estimateDialog.existing.id, input)
+          const { error } = await estimates.create(input)
+          if (!error) toast.success('Estimate visit scheduled.')
+          return error
+        }}
+      />
+
       {/* Edit/New job — modal overlay so Open always brings the correct job into view */}
       {(showForm || editing) && (
         <div className="fixed inset-0 z-overlay overflow-y-auto bg-black/50" onClick={requestCloseForm}>
@@ -2872,6 +3091,10 @@ export default function SchedulePage() {
                     href={directionsUrl({ lat: editing.properties?.lat ?? null, lng: editing.properties?.lng ?? null, address: editing.properties?.address }, baseCoord)} />
                 )}
                 {editing.customer_id && <QuickAction href={`/dashboard/customers/${editing.customer_id}`} icon={UserIcon} label="Customer" />}
+                {/* The visit's LOCATION page — its history, access notes and siblings.
+                    Distinct from Navigate (directions to it) and Customer (who it's
+                    for): a customer with several addresses needs the door to THIS one. */}
+                {editing.property_id && <QuickAction href={`/dashboard/properties/${editing.property_id}`} icon={MapPin} label="Location" />}
                 {editing.quote_id && <QuickAction href={`/dashboard/quotes/${editing.quote_id}`} icon={FileText} label="Quote" />}
                 {editing.status === 'completed' && <QuickAction href="/dashboard/invoices" icon={Receipt} label="Invoice" />}
               </div>
@@ -2879,6 +3102,8 @@ export default function SchedulePage() {
             <JobForm
               key={editing?.id ?? `new-${formSeq}`}
               customers={customers}
+              crews={crews}
+              technicians={technicians}
               excludeJobId={editing?.id}
               allowAddAnother={!editing && !quoteCtx && !customerPrefill}
               initialRecurrence={editing?.recurrence_id && recurrences[editing.recurrence_id]
@@ -2899,7 +3124,13 @@ export default function SchedulePage() {
                 notes: editing.notes || '',
                 actual_minutes: editing.actual_minutes || 0,
                 price: editing.price ?? 0,
+                crew_id: editing.crew_id ?? null,
+                technician_id: editing.technician_id ?? null,
               } : (quotePrefill ?? customerPrefill ?? { scheduled_date: formDate })}
+              quoteLinked={!!editing?.quote_id}
+              // ?panel=time|cost lands on anchors inside the editor's More
+              // options section — open it so the scroll has somewhere to go.
+              initialMoreOpen={!!readJobPanel(panelParam)}
               suggestedPrice={editing?.quote_id
                 ? quoteVisitAmount(
                     quotesById[editing.quote_id] as unknown as Record<string, unknown>,
@@ -2958,6 +3189,16 @@ export default function SchedulePage() {
           onResetCapacity={() => resetDayCapacity(dayISO)}
           onToggleDisable={() => toggleDisableDay(dayISO)}
         />
+        {/* Above the work board, in the same language: the owner reads one day —
+            what I'm quoting, and what I'm doing. Renders nothing when there are
+            no estimate visits, so a normal day is unchanged. */}
+        <EstimateDayBoard
+          items={dayEstimates}
+          error={estimates.error}
+          onEdit={(item) => setEstimateDialog({ date: item.scheduled_date, existing: item })}
+          onSetStatus={setEstimateStatus}
+          onAdd={() => setEstimateDialog({ date: dayISO, existing: null })}
+        />
         <DayOpsPanel
           date={dayISO}
           dateLabel={format(cursor, 'EEEE, MMMM d, yyyy')}
@@ -2992,11 +3233,14 @@ export default function SchedulePage() {
           workersOnDay={workersOnOpenDay}
           staffingOnDay={staffingOnOpenDay}
           crewNames={dayFitCtx?.crewNames}
+          crews={crews}
+          technicians={technicians}
           availabilityRecorded={dayFitCtx?.availabilityRecorded}
           learnedDurationFor={dayFitCtx?.learnedFor}
           onRainDelay={() => rainDelayDay(dayISO)}
           onAddJob={() => openNewJob(cursor)}
           onQuickSave={quickSaveJob}
+          reviewUrl={msgCtx.reviewUrl}
         />
         </>
       ) : (
@@ -3016,8 +3260,43 @@ export default function SchedulePage() {
           selectedDays={selectedDays}
           onToggleDaySelect={toggleDaySelect}
           capacityForDate={optBaseOpts.capacityForDate}
+          // The prop Calendar has always accepted and nothing ever passed —
+          // which is exactly why the table sat empty. Estimates now sit beside
+          // the work in month and week view, in their own colour.
+          scheduleItems={estimates.items}
+          onSelectItem={(item) => setEstimateDialog({ date: item.scheduled_date, existing: item as EstimateAppointment })}
+          onMoveItem={async (item, iso) => {
+            const err = await estimates.update(item.id, { scheduled_date: iso })
+            if (err) toast.error(err)
+          }}
         />
       )}
+
+      {/* The completion message, shown BEFORE it goes out (Session 80). Cancel
+          (X/Escape/backdrop) completes nothing — the visit stays as it was. */}
+      <CompleteConfirm
+        open={!!completeAsk}
+        customerName={completeAsk?.job.customers?.name || 'the customer'}
+        channels={completeAsk?.channels ?? []}
+        contactKnown={completeAsk?.contactKnown ?? true}
+        text={completeAsk?.text ?? ''}
+        onText={t => setCompleteAsk(a => (a ? { ...a, text: t } : a))}
+        busy={completeBusy}
+        onConfirm={async send => {
+          if (!completeAsk || completeBusy) return
+          setCompleteBusy(true)
+          try {
+            // Only an EDITED text rides as bodyOverride — an untouched preview
+            // lets the route render from the owner's template as it always has.
+            const edited = completeAsk.text.trim() !== completeAsk.defaultText.trim()
+            await performComplete(completeAsk.job, send, send && edited ? fromDisplayBody(completeAsk.text) : undefined)
+            setCompleteAsk(null)
+          } finally {
+            setCompleteBusy(false)
+          }
+        }}
+        onCancel={() => { if (!completeBusy) setCompleteAsk(null) }}
+      />
 
       {pendingAction && (
         <ScopeDialog

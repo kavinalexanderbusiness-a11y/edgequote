@@ -13,6 +13,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Invoice, Quote } from '@/types'
+import { needsFollowUp } from '@/lib/followup'
 import { invoiceBalance, displayInvoiceStatus, collectedBetween, dayBoundsIso } from '@/lib/payments/ledger'
 import type { ReachCustomer } from '@/lib/comms/reach'
 import { computeLeadsNeedingResponse, type LeadConvRow, type LeadQuoteRow } from '@/lib/leadResponse'
@@ -77,6 +78,15 @@ export interface DashboardData {
    *  reserved, same-height slot via Suspense. Resolves null on failure —
    *  the strip's own "couldn't check" honesty rules are unchanged. */
   weather: Promise<WeatherImpactReport | null>
+  /** quotes.filter(needsFollowUp).length — the SAME predicate behind the
+   *  Quotes page's "Follow-ups due" tile, counted here for the briefing strip
+   *  so the chip and the page it opens can never disagree. (The S13 queue's
+   *  followups row splits this set by reachability; this is the whole set.) */
+  followupsDue: number
+  /** Open portal requests, via lib/portalRequests' own predicate — the count
+   *  behind the briefing's "customer requests" chip, from the read the queue
+   *  already made. */
+  requestsOpen: number
   greeting: string
   dateLine: string
   /** Has this business done ANYTHING yet — a customer, quote, job or invoice?
@@ -282,16 +292,18 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   for (const r of (depositRowsRes.data as { quote_id: string | null; amount: number; kind: string | null; provider: string | null; status: string | null }[]) || []) {
     if (r.quote_id) (quoteDepositRows[r.quote_id] ||= []).push(r)
   }
+  // Through THE request engine's own predicate, so "open" means one thing in
+  // the queue row, in the briefing chip, and in the card the owner opens from
+  // either — even though the query above already asked the database the same
+  // question.
+  const openReqs = openRequests((reqRes.data as PortalRequestRow[] | null) ?? [])
   const priorities = computePriorities({
     quotes, invoices, jobs, recById, quoteDepositRows,
     customers: customerRows,
     // Only the unread ones are a "reply to messages" job. customer_id must
     // survive — the messages row uses it to exclude people leads already counted.
     conversations: conversations.filter(c => Number(c.unread || 0) > 0),
-    // Through THE request engine's own predicate, so "open" means one thing in
-    // the queue row and in the card the owner opens from it — even though the
-    // query above already asked the database the same question.
-    requests: openRequests((reqRes.data as PortalRequestRow[] | null) ?? []),
+    requests: openReqs,
     leads,
     seasons: settingsToSeasons(settings?.service_seasons),
     feeSettings: settings,
@@ -349,6 +361,8 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     },
     priorities,
     dayPlan,
+    followupsDue: quotes.filter(needsFollowUp).length,
+    requestsOpen: openReqs.length,
     month: {
       collected: monthCash.total,
       collectedLastMonthToDate: lastMonthCash.total,

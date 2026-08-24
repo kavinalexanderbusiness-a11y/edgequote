@@ -146,6 +146,17 @@ function stopProjection(s: CrewStop): CrewStop {
     property: s.property
       ? { address: s.property.address, lat: s.property.lat, lng: s.property.lng }
       : null,
+    /** ⭐ Assigned to this worker BY NAME rather than to their crew (S65 direct
+     *  assignment). Cached because dropping it makes a worker’s own job render
+     *  as crew work the moment they lose signal — CrewToday reads it for both
+     *  the header claim and the per-card badge. A boolean about the reader’s
+     *  own assignment: nothing sensitive, nothing business-wide.
+     *
+     *  ⚠️ The TRI-STATE is preserved deliberately. `undefined` means the payload
+     *  did not say (a day cached before this field existed), which is NOT the
+     *  same claim as `false`. CrewToday tests `=== true`, so an unknown stays
+     *  correctly unclaimed rather than being asserted as crew work. */
+    personal: s.personal,
     // ⭐ COUNTS ONLY — the checklist summary, never a single field's content
     // (crew_job_forms loads the real form on tap). A worker offline still needs
     // to see "3 of 7 · 2 required open" to know what is outstanding, and the

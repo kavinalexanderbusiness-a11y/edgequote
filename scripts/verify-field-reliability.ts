@@ -333,6 +333,21 @@ console.log('\n── Field reliability + offline resilience ──────�
   check('⛔ no checklist FIELD CONTENT is cached',
     !/label|answer|value|prompt|question/i.test(JSON.stringify(withList.stops[0].checklist)))
 
+  // ⭐⭐ S65 DIRECT ASSIGNMENT survives going offline. `personal` marks a visit
+  // assigned to this worker BY NAME rather than to their crew, and CrewToday
+  // reads it for both the header claim and the per-card badge. Dropped from the
+  // cache, a worker's own job silently renders as crew work the moment they lose
+  // signal — the same silent-omission shape that lost `checklist` once already.
+  const mine = projectDayForCache({ ...day, stops: [{ ...stop, personal: true }] })
+  const ours = projectDayForCache({ ...day, stops: [{ ...stop, personal: false }] })
+  check('⭐⭐ a by-name assignment stays by-name offline',
+    mine.stops[0].personal === true && ours.stops[0].personal === false)
+  // ⚠️ TRI-STATE. `undefined` means the payload did not say (a day cached before
+  // the field existed) and is NOT the same claim as `false`. CrewToday tests
+  // `=== true`, so an unknown stays correctly unclaimed.
+  check('…and "the payload didn\'t say" is not turned into "no"',
+    projected.stops[0].personal === undefined)
+
   check('a cached day expires', isExpired(Date.now() - FIELD_CACHE_MAX_AGE_MS - 1))
   check('…but not within a working day', !isExpired(Date.now() - 10 * 60 * 60_000))
   check('⭐ the bound is under a day, so a revoked worker loses access fast',
@@ -486,10 +501,34 @@ console.log('\n── Field reliability + offline resilience ──────�
 
   // A disabled worker: the roster switches are the access control, and every
   // door re-asks. The cache TTL bounds what a phone that can no longer ask keeps.
-  check('the crew completion route still resolves the technician per the roster',
-    /is_active', true\)\.is\('archived_at', null\)/.test(read('src/app/api/crew/complete/route.ts')))
-  check('the photo route does too',
-    /is_active', true\)\.is\('archived_at', null\)/.test(read('src/app/api/crew/photos/route.ts')))
+  //
+  // ⚠️ RE-EXPRESSED, NOT DELETED (S66 worker-access landed). These checks used to
+  // grep each route for an INLINE `is_active`/`archived_at` lookup. That
+  // predicate now lives in ONE place — lib/workerAccess — and both routes call
+  // through it, so the old assertions went red because the WORLD changed, not
+  // because the rule stopped holding. The rule is unchanged: a deactivated
+  // worker is refused at every write door, mid-shift, unexpired JWT and all.
+  //
+  // ⭐ Pinning the canonical door is STRICTER than the old grep — it also forbids
+  // a route quietly re-rolling its own weaker check, which is how the predicate
+  // drifts back apart.
+  const WA = read('src/lib/workerAccess.ts')
+  check('⭐⭐ the roster predicate lives in ONE place (lib/workerAccess)',
+    /\.eq\('is_active', true\)/.test(WA) && /\.is\('archived_at', null\)/.test(WA))
+  check('the crew completion route goes through that canonical door',
+    /authorizeWorkerVisit\(/.test(read('src/app/api/crew/complete/route.ts')))
+  check('…and so does the photo route',
+    /authorizeWorkerVisit\(/.test(read('src/app/api/crew/photos/route.ts')))
+  check('⛔ neither re-rolls its own weaker roster lookup',
+    !/\.eq\('is_active', true\)/.test(read('src/app/api/crew/complete/route.ts'))
+    && !/\.eq\('is_active', true\)/.test(read('src/app/api/crew/photos/route.ts')))
+  check('⭐ a failed lookup DENIES rather than passing (fails closed)',
+    /'lookup-failed'/.test(WA))
+  // ⭐ S65 direct assignment: the crew-OR-by-name predicate is the DB's, mirrored
+  // once. A queued write replays against it, so the offline layer inherits the
+  // same answer the online path gets.
+  check('⭐ assignment is the ONE predicate — crew OR by name',
+    /crew_assignment_covers/.test(WA) && /workerCoversVisit/.test(WA))
   check('⭐ a revoked replay is terminal, not retried forever',
     /kind === 'revoked'/.test(read('src/lib/field/handlers.ts')))
   check('a failed re-read keeps the op queued instead of dropping it',

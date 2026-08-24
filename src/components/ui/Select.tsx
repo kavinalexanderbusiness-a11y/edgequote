@@ -8,7 +8,12 @@ interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
   error?: string
   /** ReactNode to match Input's hint — the form primitives take the same shapes. */
   hint?: ReactNode
-  options: { value: string; label: string; disabled?: boolean }[]
+  /** `group` is optional: options carrying one are rendered under an <optgroup>
+   *  heading, in first-seen order. With no groups this renders exactly as before
+   *  — the flat list every existing caller passes. Grouping exists because some
+   *  lists mix kinds of thing (a crew and a person), and a flat list of names
+   *  cannot say which is which. */
+  options: { value: string; label: string; disabled?: boolean; group?: string }[]
   placeholder?: string
   /** 'sm' = the blessed compact field (rounded-lg px-3 py-2 text-sm) — matches Input's. */
   fieldSize?: 'sm' | 'md'
@@ -40,10 +45,19 @@ const Select = forwardRef<HTMLSelectElement, SelectProps>(
           {...props}
         >
           {placeholder && <option value="">{placeholder}</option>}
-          {options.map((opt) => (
+          {options.filter(o => !o.group).map((opt) => (
             <option key={opt.value} value={opt.value} disabled={opt.disabled} className="bg-bg-secondary">
               {opt.label}
             </option>
+          ))}
+          {Array.from(new Set(options.map(o => o.group).filter(Boolean) as string[])).map(group => (
+            <optgroup key={group} label={group}>
+              {options.filter(o => o.group === group).map((opt) => (
+                <option key={opt.value} value={opt.value} disabled={opt.disabled} className="bg-bg-secondary">
+                  {opt.label}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
         {error && <p id={errorId} className="text-xs text-red-400 animate-fade">{error}</p>}
