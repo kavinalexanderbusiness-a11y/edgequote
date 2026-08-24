@@ -1018,6 +1018,31 @@ H('14. ATTRIBUTION — context, never payroll')
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+H('14b. QUOTED / AUTHORIZED VALUE — a tip is not service revenue')
+{
+  // A tip is post-service voluntary money. It must never reach the figures that
+  // answer "what was this job worth" or "what did we sell" — quoted value,
+  // authorized value, pipeline, margin. verify:sales-analytics owns the rule
+  // from its own side (its §12 bans the words outright); this asserts the
+  // DEPENDENCY DIRECTION, which is the tips lane's own business: nothing in the
+  // value/revenue engines may import the tip engine, in either spelling.
+  for (const f of ['src/lib/sales/analytics.ts', 'src/lib/sales/data.ts', 'src/lib/visitValue.ts', 'src/lib/invoicing.ts', 'src/lib/invoiceTotals.ts']) {
+    let src = null
+    try { src = readCode(f) } catch { src = null }
+    if (src === null) { ok(`${f} is absent on this tree (nothing to assert)`); continue }
+    check(`${f} does not import the tip engine`,
+      !src.includes('payments/tips') && !src.includes('summarizeTips') && !src.includes('tipAmountOf'),
+      'quoted/authorized/service revenue must not be able to see a gratuity — the import itself is the hazard')
+  }
+  // And the reverse: the tip engine must not reach into the value engines either,
+  // which is what would let a tip be derived FROM a quote.
+  const tipsSrc = readCode('src/lib/payments/tips.ts')
+  check('the tip engine reads no quote/authorized value',
+    !/quote|authorized|margin|pipeline/i.test(tipsSrc),
+    'a tip is chosen by the customer against a charge, never derived from what was quoted')
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 H('15. TAX — the seam is preserved, and no opinion is encoded')
 {
   const tipsSrc = read('src/lib/payments/tips.ts')

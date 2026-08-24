@@ -74,11 +74,18 @@ the apply path, per `docs/MIGRATIONS.md`, and it:
 - adds two partial indexes on `payments where kind = 'tip'`.
 
 It creates **no table**, so there is no grants trap. Every statement is
-`if not exists` / `drop … if exists` — safe to re-run. It sorts after the
-current generated baseline (`20260816020001_baseline.sql`).
+`if not exists` / `drop … if exists` — safe to re-run.
 
-**It reconciles with S75's tenant welds** (landed on main as
-`20260816020000_tenant_weld_portal_payments_storage.sql`). `payments.invoice_id`
+**Version.** `20260823120000` sorts above the whole apply path — baseline
+`20260816110001`, then `20260816213000_estimate_appointments`, then
+`20260817060000_worker_access_v1`, which is also the highest version in
+`contract/ledger.json` and therefore the real floor. An earlier draft of this
+lane was versioned `20260816120000`, which fell BELOW that floor once S66 and
+S79 landed; a from-zero rebuild would then have replayed it out of the order
+production actually saw. `verify:tips` §16 now **measures** the floor from
+`supabase/migrations/` instead of hardcoding it, so this cannot rot again.
+
+**It reconciles with the tenant welds now folded into main's baseline.** `payments.invoice_id`
 is now welded composite — `(user_id, invoice_id) → invoices(user_id, id)` — and a
 tip row carries both keys, taken from the same verified Stripe metadata as its
 payment row. So the cross-tenant wall S75 built covers tips **identically and for
@@ -116,10 +123,12 @@ constraint definitions:     payments_kind_check
 indexes      UNEXPECTED 2:  payments_tip_intent_idx, payments_tip_user_paid_at_idx
 ```
 
-Everything else was byte-identical: **131 functions, all function bodies, every
-EXECUTE grant, every table grant, RLS on every table, 359 policies and their
-predicates, 93 triggers, 7 buckets, 20 storage policies.** `get_portal_data` and
-`search_records` still execute against the rebuilt database.
+Everything else was byte-identical: **112 tables, 151 functions, all function
+bodies, every EXECUTE grant, every table grant, RLS on every table, 361 policies
+and their predicates, 129 triggers, 7 buckets, 20 storage policies.**
+`get_portal_data` and `search_records` still execute against the rebuilt
+database. (Re-measured after reconciling onto current main — the counts grew
+with the baseline; the drift did not.)
 
 > ⚠️ **So `verify:rebuild` is RED between merge and apply, by design** — that
 > drift *is* the report that production has not run this yet. It goes green after
@@ -197,33 +206,70 @@ the balance at **$600, not $540** — because that is a money invariant, and the
 rule above is a product decision layered on top of it. Lifting the restriction
 later is a one-line change to `tippable:`, with no ledger consequence.
 
-### 5.3 Refunds are apportioned TIP-FIRST — DECIDED, and it is a judgement call
+### 5.3 Refunds: explicit where the owner speaks, exact where Stripe's number does
 
-**This one deserves the owner's eye.** It is one comparison in
-`apportionRefund()` and trivially reversible.
+There are two refund origins and they carry different amounts of information, so
+they get different rules. Guessing is now the last of three answers, not the
+first.
 
-EdgeHQ never calls Stripe's refund API — owners refund in the Stripe dashboard —
-so no refund object exists that could carry our metadata, and Stripe tells us
-only a cumulative amount. On a **full** refund every ordering gives the same
-answer. They differ only on a **partial**, and the failure modes are asymmetric:
+**Owner-originated — EXPLICIT.** `recordRefund` is the door the owner drives, so
+it never has to infer intent: `amount` is the service portion, `tipAmount` the
+gratuity, either may be zero, and each has its own cap. The legs are separate
+rows of separate kinds — `kind='payment'` for service, `kind='tip'` for the tip —
+which is the only way a tip refund can leave the invoice alone, since
+`recompute_invoice_paid_for` sums `kind='payment'`.
 
-- *tip-first guesses wrong* → a tip is reversed that the owner meant to keep.
-  Visible in the ledger, and **nobody is chased**.
+```
+{ amount: 100 }                  service only  — unchanged, today's behaviour
+{ amount: 0,   tipAmount: 25 }   tip only      — amount_paid does NOT move
+{ amount: 100, tipAmount: 25 }   both          — two rows, two caps
+```
+
+The tip leg is capped against `tipHeldOnInvoice`, a **live** read, because
+`assertCurrent` compares `amount_paid` and a tip movement never touches it — so
+`amount_paid` cannot speak for that leg. A failed tip read **refuses**: "could
+not check" spent as "no tip" turns a cap into no cap at all.
+
+The form renders the tip field only when the invoice actually holds a tip, and
+says plainly that refunding it does not change the balance.
+
+**Externally-originated — READ THE NUMBER, THEN GUESS.** For a card charge the
+owner refunds in the Stripe dashboard. EdgeHQ never calls Stripe's refund API, so
+no refund object exists that could carry our metadata, and we are handed one
+cumulative figure with no intent attached. But the figure itself is often intent
+enough, so `apportionRefund` now reads it before guessing:
+
+| Stripe's cumulative refund | basis | result |
+|---|---|---|
+| exactly the outstanding tip | `exact-tip` | all tip |
+| exactly the outstanding service | `exact-service` | all service |
+| the whole charge | `full` | both legs in full |
+| anything else | `tip-first` | **the fallback** |
+
+That removes the common wrong case: a **service-only** refund which tip-first
+used to eat out of the gratuity. A **tie** is deliberately not evidence — when
+both legs have the same amount left, an exact match names both and therefore
+neither, so it falls through to the fallback.
+
+**Why the fallback is still tip-first.** On a full refund every ordering agrees;
+they differ only on an ambiguous partial, and the failure modes are asymmetric:
+
+- *tip-first guesses wrong* → a tip is reversed the owner meant to keep. Visible
+  in the ledger, correctable, and **nobody is chased**.
 - *invoice-first guesses wrong* → the invoice balance reopens past its due date,
   `dueForAutoReminder` goes true, and the chaser texts a customer who is square.
   That is precisely the outcome the dispute branch already refuses to risk.
 
-So the cheap wrong answer is preferred to the expensive one, and the owner's
-refund notification **names the split** ("$20 of that came off the tip") so a
-wrong guess is correctable rather than silent.
+`apportionRefund` returns the `basis`, and the owner's notification says whether
+the split was **read** or **guessed** — "we matched it exactly" and "we had to
+choose" are different claims, and only the second asks them to check. The card
+dead-end panel states the four rules up front, so an owner can choose an amount
+that is unambiguous.
 
 Making the branch tip-aware at all is **not** optional: without it a full refund
 of a $575 charge books −$575 against an invoice that received $500, driving
 `amount_paid` to −$75 and reopening a $575 balance on a $500 invoice.
 
-**Manual tip refunds do not exist in V1.** Card tips are refunded in Stripe only,
-exactly like card payments — `removePayment` already refuses `provider='stripe'`
-rows, and the tip row offers no revert affordance.
 
 ### 5.4 Tax — a seam is preserved, no opinion is encoded
 
@@ -335,15 +381,15 @@ answer.
 ## 7 · Verification
 
 ```bash
-npm run verify:tips          # 248 assertions — the money boundaries
-node scripts/mutate-tips.mjs # 36 mutations, all must be caught (needs a clean tree)
+npm run verify:tips          # 281 assertions — the money boundaries
+node scripts/mutate-tips.mjs # 46 mutations, all must be caught (needs a clean tree)
 npm run verify               # every guard + the file↔script parity contract
 npm run typecheck && npm run lint && npm run build
 ```
 
 `scripts/mutate-tips.mjs` is **not** a `verify:` entry — it edits source files and
 reverts with `git checkout --`, so it refuses to run on a dirty tree. It is worth
-running: it found **six** holes that the assertion suite alone did not, every one
+running: it found **seven** holes that the assertion suite alone did not, every one
 a guard matching words rather than structure.
 
 ### Mobile — measured, not asserted
@@ -400,3 +446,45 @@ This requires `STRIPE_SECRET_KEY` (test), `STRIPE_WEBHOOK_SECRET` and
 
 Do **not** run this against a real customer, and do not create an unreconciled
 real charge to test it.
+
+---
+
+## 8 · Landing — this branch does NOT merge itself
+
+Reconciled onto `origin/main` at the time of writing and **clean**: no conflicts,
+`tsc` 0, `lint` 0, `build` 0, 46/46 mutations caught, and every named guard green
+except the one described below.
+
+**Two hard stops, both deliberate:**
+
+1. **Session 106 owns schema convergence.** The migration is written, versioned
+   above the floor and proven from zero — but it has **not** been applied, and
+   must not be while another lane owns convergence. Two agents regenerating a
+   baseline concurrently is the failure class that silently dropped a `crew_day`
+   column in production.
+2. **`main` is not merged by this branch.** Before any landing: `git fetch`,
+   re-measure, and confirm sole ownership of `main` — a rival lander shows up in
+   `git reflog show main -5`.
+
+**Order of operations when S106 (or whoever holds convergence) lands this:**
+
+```bash
+git fetch origin && git reflog show main -5   # confirm nobody else is landing
+git merge origin/main                          # into this branch; re-run the battery
+# then, in one sitting:
+#   apply supabase/migrations/20260823120000_tips_gratuity_v1.sql
+npm run schema:contract && npm run schema:baseline
+npm run verify:rebuild && npm run verify:schema
+# move the migration to supabase/archive/ledger/ and commit
+```
+
+⚠️ **`verify:rebuild` is the one red until the migration is applied**, and that
+red *is* the report that production has not run it. It goes green after
+`schema:contract` + `schema:baseline`. `@electric-sql/pglite` is a real
+devDependency (`verify:tenant-weld` hard-fails without it rather than skipping),
+so `npm run verify` **will** show it — do not merge and walk away.
+
+⚠️ **Still unrun: the Stripe test-mode E2E** in §7. It needs
+`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `SUPABASE_SERVICE_ROLE_KEY`,
+which are deliberately absent from `.env.local` and require owner action. Nothing
+in this lane has been exercised against a real Stripe charge.
