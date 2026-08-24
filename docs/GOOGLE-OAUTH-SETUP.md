@@ -1,11 +1,15 @@
 # Google sign-in — the configuration only a human can do
 
-Session 105 shipped the code. Nothing in this repository can turn Google
-sign-in on: it needs an OAuth client that belongs to the business, and a
-client secret that belongs in exactly one place. Until the two dashboards
-below are filled in, the button is present and every attempt ends on the
-login screen saying the sign-in could not be completed — which is the
-intended failure, not a bug.
+> ✅ **Configured and verified in production on 2026-08-23.** The provider is
+> enabled and the live sweep passes 33/33. What follows is the record of what
+> was set, and the runbook for re-doing it (new domain, new project, rotated
+> secret) — not outstanding work.
+
+Nothing in this repository can turn Google sign-in on: it needs an OAuth client
+that belongs to the business, and a client secret that belongs in exactly one
+place. With the two dashboards below unfilled, the button is present and every
+attempt ends on the login screen saying the sign-in could not be completed —
+which is the intended failure, not a bug.
 
 > ⛔ **Never paste the client secret into a chat, a commit, an issue, a log,
 > or a `.env` file.** It goes in one field, in the Supabase dashboard, and
@@ -140,3 +144,51 @@ loosened something, and it did not:
 `verify:google-auth` pins all of the above, and
 `node scripts/mutate-google-auth.mjs` proves the guard can still fail (21
 mutations, 21 caught).
+
+---
+
+## The one-command truth test
+
+Before clicking anything, ask Supabase directly whether the provider is on:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' \
+  'https://syhjarpnmpywatadhblu.supabase.co/auth/v1/authorize?provider=google'
+```
+
+- **302** → enabled. Follow the `Location` header: it should point at
+  `accounts.google.com` with a `client_id` ending `.apps.googleusercontent.com`.
+- **400** with `{"error":"validation_failed","error_description":"Unsupported provider: provider is not enabled"}`
+  → the provider is off, or the Client ID field is wrong.
+
+⚠️⚠️ **`supabase.auth.signInWithOAuth()` succeeding proves NOTHING.** It only
+builds a URL locally and returns it — it never contacts Supabase, so it returns
+a perfectly-formed URL for a provider that is disabled. This exact false
+positive cost a debugging cycle on 2026-08-23, when the Client IDs field
+contained an email address rather than the OAuth client ID. Always probe
+`/auth/v1/authorize` over HTTP.
+
+Full sweep (33 checks against the live project):
+
+```bash
+node scripts/googleauth-e2e.mjs https://app.edgehq.ca
+```
+
+## ⚠️⚠️ Keep the Redirect URLs allow list tight
+
+Measured 2026-08-23: Supabase **does** carry a foreign `redirect_to` all the way
+into Google's authorize URL. It does not validate at that step — the **allow
+list is enforced when the provider returns**, and anything unlisted falls back
+to Site URL.
+
+That makes the allow list the actual control, so:
+
+- ⛔ **No wildcard hosts.** `https://app.edgehq.ca/auth/callback` and the
+  localhost entry are all that belong there.
+- Removing a stale entry is a security change, not tidying.
+
+EdgeHQ's own code never generates a foreign `redirect_to` — every one is
+`appOrigin()` plus a `safeReturnPath`-validated path, and the E2E drives five
+hostile `next` shapes through the start route to prove it. But that guarantee
+covers links *we* produce; the allow list is what covers links anyone else
+hand-crafts.

@@ -6,10 +6,15 @@ import { OAUTH_START_PATH } from '@/lib/googleAuth'
 //  1. It is a navigation — the flow begins on the server, at OAUTH_START_PATH,
 //     which writes the PKCE verifier cookie and redirects on to Google. There is
 //     no client-side handler to run and nothing to await.
-//  2. It therefore works on a phone that has painted the page but not yet
-//     finished executing its JavaScript, which on a bad connection is a real
-//     window and is exactly when somebody is most likely to be stabbing at a
-//     login screen.
+//  2. There is no handler to mis-wire, no loading state to get stuck in, and
+//     no way for a failed fetch to leave the button dead. The browser does the
+//     one thing it is best at.
+//     ⚠️ It does NOT render before the page's JavaScript. Both screens that use
+//     this are client components (login sits inside <Suspense fallback={null}>),
+//     so nothing here exists until hydration — curl'ing production /login
+//     returns no button at all. An earlier version of this comment claimed a
+//     no-JS benefit that measuring production disproved. Recorded rather than
+//     quietly deleted: a comment that overclaims is how the next person is misled.
 //  3. A <button> inside the sign-in <form> would default to type="submit" and
 //     fire the password submit instead — the trap this codebase has been caught
 //     by before. An anchor cannot submit anything.
