@@ -89,6 +89,21 @@ ok('booking-uploads is bounded by size and MIME on the apply path',
 ok('the paid-total recompute is tenant-filtered on the apply path',
   /p\.user_id = v_inv\.user_id/.test(code))
 
+// -- The inventory / equipment welds ------------------------------------------
+// Added after B1-B3, by classifying all 106 single-column tenant FKs on the only
+// question that separates a latent shape from a live defect: does a SECURITY
+// DEFINER path traverse the relation WITHOUT constraining user_id? Two did, and
+// both reproduce B2 exactly. The stock one is worse than corruption, because
+// recompute_part_stock REPLACES qty_on_hand rather than adjusting it.
+ok('parts carries the composite key its weld references',
+  /add constraint "?parts_user_id_id_key"?\s+unique \(user_id, id\)/i.test(code))
+ok('equipment carries the composite key its weld references',
+  /add constraint "?equipment_user_id_id_key"?\s+unique \(user_id, id\)/i.test(code))
+ok('the part-movement -> part weld is on the apply path',
+  weld('part_movements_part_tenant_fkey', 'user_id, part_id', 'parts'))
+ok('the equipment-service -> equipment weld is on the apply path',
+  weld('equipment_service_equipment_tenant_fkey', 'user_id, equipment_id', 'equipment'))
+
 // ═══════════════════════════════════════════════════════════════════════════
 H('2. THE ATTACKS — run against a database built from that apply path')
 
@@ -124,6 +139,20 @@ for (const [label, raw] of [
   }
 }
 console.log(`  ✅ built a database from the prelude + ${migrationFiles.length} migration file(s)`)
+
+// ── The schema AT REST, snapshotted before any attack mutates it ─────────────
+// Section 2b deliberately DROPS customer_portal_tokens_customer_same_owner to
+// prove the portal predicates hold on their own, and section 3 must not read
+// that disposable damage as a regression. So the ratchets in section 3 measure
+// what the APPLY PATH produced, captured here, not what survives the probes.
+const weldsAtRest = new Set(((await db.query(`
+  select con.conname from pg_constraint con
+    join pg_class ch on ch.oid = con.conrelid
+    join pg_namespace n on n.oid = ch.relnamespace
+   where con.contype = 'f' and array_length(con.conkey, 1) = 2 and n.nspname = 'public'
+     and exists (select 1 from pg_attribute a
+                  where a.attrelid = ch.oid and a.attname = 'user_id' and a.attnum = any(con.conkey))
+`)).rows as any[]).map(r => r.conname as string))
 
 // Two tenants. auth.users is provided by the platform prelude, so seed it directly.
 const A = '11111111-1111-4111-8111-111111111111'
@@ -204,6 +233,41 @@ const ins = await db.query(`
    where schemaname = 'storage' and tablename = 'objects'
      and policyname = 'booking_uploads_public_insert'`)
 ok('B3: the public booking upload path is preserved (anon INSERT still exists)', ins.rows[0].n === 1)
+
+// -- B4 / B5: the inventory + equipment welds, proved by attack ---------------
+// Seeded here rather than at the top because nothing above needs them, and a
+// failed seed should read as a seed failure, not as a weld that let something in.
+await db.exec(`
+  insert into public.parts (id, user_id, name, qty_on_hand) values
+    ('aaaaaaaa-0000-4000-8000-00000000000a', '${A}', 'A widget', 100),
+    ('bbbbbbbb-0000-4000-8000-00000000000a', '${B}', 'B widget', 100);
+  insert into public.equipment (id, user_id, name) values
+    ('aaaaaaaa-0000-4000-8000-00000000000b', '${A}', 'A mower'),
+    ('bbbbbbbb-0000-4000-8000-00000000000b', '${B}', 'B mower');
+`)
+
+await refused("B4: tenant A cannot move stock against tenant B's part",
+  `insert into public.part_movements (user_id, part_id, kind, qty)
+     values ('${A}', 'bbbbbbbb-0000-4000-8000-00000000000a', 'consume', -175);`)
+await accepted('B4: tenant A CAN still move stock against its own part',
+  `insert into public.part_movements (user_id, part_id, kind, qty)
+     values ('${A}', 'aaaaaaaa-0000-4000-8000-00000000000a', 'restock', 5);`)
+
+await refused("B5: tenant A cannot log service against tenant B's equipment",
+  `insert into public.equipment_service (user_id, equipment_id, kind, service_date)
+     values ('${A}', 'bbbbbbbb-0000-4000-8000-00000000000b', 'repair', '2099-01-01');`)
+await accepted('B5: tenant A CAN still log service against its own equipment',
+  `insert into public.equipment_service (user_id, equipment_id, kind, service_date)
+     values ('${A}', 'aaaaaaaa-0000-4000-8000-00000000000b', 'repair', '2026-01-01');`)
+
+// The consequence, not the row. recompute_part_stock REPLACES qty_on_hand from
+// the movement ledger, so an accepted forged movement does not corrupt the number
+// — it OVERWRITES it. B's stock must read exactly what it was seeded with.
+const bPart = await db.query(`select qty_on_hand from public.parts where id = 'bbbbbbbb-0000-4000-8000-00000000000a'`)
+ok("B4: tenant B's stock on hand was NOT moved by any of the above",
+  Number(bPart.rows[0].qty_on_hand) === 100,
+  `B's part reads qty_on_hand=${bPart.rows[0].qty_on_hand}, expected 100`)
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 H('2b. THE PORTAL PROVES BOTH — every customer lookup also constrains the tenant')
@@ -312,10 +376,50 @@ ok('…while the legitimate token still returns its own customer',
   !!honest.rows[0]?.d && JSON.stringify(honest.rows[0].d).includes('Tenant A customer'))
 
 // ═══════════════════════════════════════════════════════════════════════════
-H('3. THE CLASS — welds that still need doing, counted so it cannot be forgotten')
+H('3. THE CLASS — enforced, not merely counted')
 
-// Every single-column FK between two tenant-owned tables is the same latent shape.
-// This does not fail the build; it reports, so the number cannot quietly grow.
+// This section used to PRINT the number of unwelded single-column tenant FKs and
+// pass regardless. That made it a report, not a guard: a weld could be dropped, a
+// new latent relation could appear, or a new SECURITY DEFINER path could be opened
+// over an existing one, and this file would still exit 0.
+//
+// It is now three ratchets against scripts/schema/tenant-weld-manifest.json. None
+// is an enumerated list of things to check — each is a property of the WHOLE
+// schema, so a relation nobody thought about is caught by default:
+//
+//   R1  every weld in the manifest still exists        (no silent REMOVAL)
+//   R2  the unwelded tenant-FK count never rises       (no silent GROWTH)
+//   R3  no unreviewed SECURITY DEFINER function exists (no silent NEW TRAVERSAL)
+//
+// R3 closes the hole R1+R2 cannot. Shape alone proves nothing — 102 of the 106
+// single-column tenant FKs have an attacker-writable child row and are harmless.
+// What turns a shape into a defect is a SECURITY DEFINER path that traverses it
+// WITHOUT constraining user_id, because that is what runs as the table owner and
+// escapes RLS. A new DEFINER function is therefore the exact event that can make
+// any remaining relation exploitable, and it cannot land without a human adding
+// its name here.
+//
+// ⛔ Widening the manifest to clear a red is how this protection dies. Each
+//    failure below prints what to do instead.
+
+const manifest = JSON.parse(readFileSync(join(ROOT, 'scripts', 'schema', 'tenant-weld-manifest.json'), 'utf8'))
+
+// ── R1: no weld may disappear ────────────────────────────────────────────────
+const liveWelds = weldsAtRest
+const lostWelds = (manifest.welds as string[]).filter(w => !liveWelds.has(w))
+ok(`R1: all ${manifest.welds.length} canonical tenant welds are still present`,
+  lostWelds.length === 0,
+  lostWelds.length
+    ? `MISSING: ${lostWelds.join(', ')}\n     A weld was DROPPED. Restore it — do not delete it from the manifest.`
+    : '')
+// Growth is the healthy direction, so it is reported rather than failed.
+const newWelds = [...liveWelds].filter(w => !(manifest.welds as string[]).includes(w))
+if (newWelds.length) {
+  console.log(`  ℹ ${newWelds.length} weld(s) exist that the manifest does not list: ${newWelds.join(', ')}`)
+  console.log('    Welcome. Add them to the manifest so they become protected too.')
+}
+
+// ── R2: the latent class may not grow ────────────────────────────────────────
 const cls = await db.query(`
   with tenant_tables as (
     select c.oid, c.relname from pg_class c
@@ -327,9 +431,35 @@ const cls = await db.query(`
     join tenant_tables ch on ch.oid = con.conrelid
     join tenant_tables pa on pa.oid = con.confrelid
    where con.contype = 'f' and array_length(con.conkey, 1) = 1 and ch.oid <> pa.oid`)
-console.log(`  ℹ ${cls.rows[0].n} single-column tenant→tenant foreign keys remain unwelded.`)
-console.log('    Not a failure: only the three with a demonstrated exploit path were in scope.')
-console.log('    They are the same latent shape and are recorded in the readiness report.')
+const unwelded = cls.rows[0].n as number
+ok(`R2: unwelded single-column tenant FKs did not grow (${unwelded} <= ${manifest.unweldedMax})`,
+  unwelded <= manifest.unweldedMax,
+  `${unwelded - manifest.unweldedMax} NEW tenant->tenant relation(s) landed unwelded.`
+  + `\n     Either weld the new one with a composite (user_id, id) FK, or — if a DEFINER`
+  + `\n     path provably cannot traverse it without user_id — raise unweldedMax and say why.`)
+if (unwelded < manifest.unweldedMax) {
+  console.log(`  ℹ the class SHRANK to ${unwelded}. Lower unweldedMax to ${unwelded} to keep the ratchet tight.`)
+}
+
+// ── R3: no unreviewed SECURITY DEFINER path ──────────────────────────────────
+const liveDefiners = ((await db.query(`
+  select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.prosecdef group by p.proname`)).rows as any[]).map(r => r.proname as string)
+const unreviewed = liveDefiners.filter(d => !(manifest.securityDefiners as string[]).includes(d))
+ok(`R3: every SECURITY DEFINER function is reviewed (${liveDefiners.length} live)`,
+  unreviewed.length === 0,
+  unreviewed.length
+    ? `UNREVIEWED: ${unreviewed.join(', ')}`
+      + `\n     A DEFINER function runs as the table owner and escapes RLS, so it is the one`
+      + `\n     thing that can make an unwelded tenant relation exploitable. Read each body:`
+      + `\n     does it traverse a tenant relation WITHOUT constraining user_id? Fix it if so,`
+      + `\n     then add the name to the manifest to record that someone looked.`
+    : '')
+const goneDefiners = (manifest.securityDefiners as string[]).filter(d => !liveDefiners.includes(d))
+if (goneDefiners.length) {
+  console.log(`  ℹ ${goneDefiners.length} reviewed DEFINER function(s) no longer exist: ${goneDefiners.join(', ')}`)
+  console.log('    Removing a DEFINER path is safe. Prune them from the manifest when convenient.')
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:tenant-weld — ${pass} passed, ${fail} failed\n`)
