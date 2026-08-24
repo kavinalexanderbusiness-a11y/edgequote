@@ -3,6 +3,18 @@
 --
 -- Session 76. Two nullable columns on the catalogue that already exists.
 --
+-- ⚠️⚠️ RE-VERSIONED 20260815120000 → 20260817120000 (Session 76 reconciliation).
+-- The original version was a COLLISION: production's ledger already records
+-- `20260815120000` as **job_forms_v1** (Session 69, sql_len 56289,
+-- sql_md5 ee82282896147da50370de7507a3ddc0). Shipping this file under that
+-- version would have made two different bodies claim one version — and because
+-- `supabase_migrations.schema_migrations` keys on the version, the second one
+-- would simply never apply while every hygiene check reported it as shipped.
+-- It also sorted BEFORE the current generated baseline (20260816110001), which
+-- on a from-zero rebuild means altering a table that does not exist yet.
+-- The new version sorts after the applied floor (20260817060000 worker_access_v1)
+-- and after the baseline. ⛔ Do NOT restore the old number to 'match' anything.
+--
 -- ⛔ THERE IS NO NEW TABLE, AND THERE IS DELIBERATELY NO NEW PRICING ENGINE.
 -- `service_templates` has BEEN the price book since the product had one: it owns
 -- `name`, `category`, `default_rate`, `pricing_display_type`, `default_description`,

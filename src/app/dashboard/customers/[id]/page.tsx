@@ -25,6 +25,7 @@ import {
   type CustomerTimelineSources, type JobTimelineSources,
 } from '@/lib/timelineData'
 import { TimelineCard } from '@/components/timeline/TimelineCard'
+import { HistoryPanel } from '@/components/audit/HistoryPanel'
 import { needsFollowUp, daysSince } from '@/lib/followup'
 import { isWon } from '@/lib/salesStage'
 import { quoteNextAction, type PQuote, type PInvoice, type PCustomer } from '@/lib/pipeline'
@@ -998,6 +999,11 @@ export default function CustomerDetailPage() {
             <Link href={`/dashboard/schedule?customer=${customer.id}`} className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border border-border bg-surface text-ink hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
               <CalendarPlus className="w-4 h-4" /> Schedule
             </Link>
+            {/* Booking a visit to PRICE the work, which is not the same door as
+                booking the work — see lib/estimateAppointments. */}
+            <Link href={`/dashboard/schedule?estimate=new&customer=${customer.id}`} title="Book a visit to look at the work and quote it" className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border border-border bg-surface text-ink hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+              <Ruler className="w-4 h-4" /> Estimate
+            </Link>
             <a href={phone ? `tel:${phone}` : undefined} aria-disabled={!phone} className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${phone ? 'bg-surface border-border text-ink hover:border-border-strong' : 'border-border text-ink-faint pointer-events-none opacity-50'}`}>
               <Phone className="w-4 h-4" /> Call
             </a>
@@ -1465,6 +1471,24 @@ export default function CustomerDetailPage() {
           friction. Behind one disclosure they cost a line instead of half the page,
           and NOTHING is removed — one tap restores every card exactly as it was. */}
       <MoreAboutCustomer>
+      {/* Change history — WHO changed what on this customer's records.
+          Deliberately NOT a second timeline: TimelineCard above says what happened
+          WITH this customer (quotes, visits, money, messages) and is the reason the
+          page gets opened; this answers the different question of who changed it and
+          what it was before. It lives in the disclosure because that is reference
+          material — and because the relationship history must keep the position
+          verify:mobile-shell pins for it. */}
+      <Card>
+        <CardBody>
+          <HistoryPanel
+            filter={{ customerId: customer.id }}
+            title="Change history"
+            emptyText="No recorded changes for this customer yet."
+            pageSize={10}
+          />
+        </CardBody>
+      </Card>
+
       {/* Communication — consent + history */}
       <CustomerComms customerId={customer.id} smsOptIn={!!customer.sms_opt_in} emailOptIn={!!customer.email_opt_in}
         onChange={patch => setCustomer({ ...customer, ...patch })} />

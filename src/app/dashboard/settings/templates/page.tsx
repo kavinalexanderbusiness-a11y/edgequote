@@ -25,6 +25,7 @@ import { toast } from '@/lib/toast'
 import { Plus, Edit2, Trash2, X, Star } from 'lucide-react'
 import { ServiceBundles } from '@/components/settings/ServiceBundles'
 import { scrollBehavior } from '@/lib/motion'
+import { listFormTemplates, type FormTemplate } from '@/lib/jobForms'
 
 // Sentinel for the "Other…" option. Never persisted: onSubmit swaps it for the
 // typed name, so the DB only ever sees a real category.
@@ -67,13 +68,20 @@ export default function ServiceTemplatesPage() {
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<ServiceTemplate | null>(null)
   const formRef = useRef<HTMLDivElement>(null)
+  // Checklists this service can carry by default (Job Forms V1). A failed load
+  // leaves the picker with just "No checklist" — the service still saves.
+  const [formTemplates, setFormTemplates] = useState<FormTemplate[]>([])
+  useEffect(() => {
+    listFormTemplates(supabase).then(setFormTemplates).catch(() => setFormTemplates([]))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const { register, handleSubmit, reset, watch, setValue, formState: { isSubmitting, errors } } =
     useForm<ServiceTemplateFormValues>({
       // category/rate are re-seeded from this business's own catalogue in openNew();
       // 'General' is the neutral member of the starter list, not a trade.
       // Costs default to '' — unknown — never 0.
-      defaultValues: { name: '', category: 'General', pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true, unit_cost: '', material_cost: '', is_favorite: false, recurrence: '', default_minutes: '', default_crew_size: '' },
+      defaultValues: { name: '', category: 'General', pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true, unit_cost: '', material_cost: '', is_favorite: false, recurrence: '', default_minutes: '', default_crew_size: '', form_template_id: '' },
     })
 
   const isActive = watch('is_active')
@@ -105,7 +113,7 @@ export default function ServiceTemplatesPage() {
     // it used to be hardcoded 'Lawn Care', so every trade's second service landed
     // in a lawn bucket unless they noticed the dropdown. Falls back to the neutral
     // 'General' before they have any services.
-    reset({ name: '', category: topCategory, pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true, unit_cost: '', material_cost: '', is_favorite: false, recurrence: '', default_minutes: '', default_crew_size: '' })
+    reset({ name: '', category: topCategory, pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true, unit_cost: '', material_cost: '', is_favorite: false, recurrence: '', default_minutes: '', default_crew_size: '', form_template_id: '' })
     setCustomCategory('')
     setEditing(null)
     setShowForm(true)
@@ -125,6 +133,7 @@ export default function ServiceTemplatesPage() {
       // Same rule for the Price Book defaults: a service that has never stated a
       // duration or a crew opens with empty boxes, so re-saving it cannot invent one.
       default_minutes: numToField(t.default_minutes), default_crew_size: numToField(t.default_crew_size),
+      form_template_id: t.form_template_id || '',
     })
     setEditing(t)
     setShowForm(true)
@@ -157,6 +166,9 @@ export default function ServiceTemplatesPage() {
       // the database cannot disagree about what is storable.
       default_minutes: parseWholeMin(values.default_minutes, 1),
       default_crew_size: parseWholeMin(values.default_crew_size, 1),
+      // '' → NULL: no default checklist. Changing this never rewrites a form
+      // already minted on a visit — resolution happens at attach time.
+      form_template_id: values.form_template_id || null,
     }
     // A failed save must not close the form as if it succeeded — the owner's
     // edits stay on screen with an honest error instead of silently vanishing.
@@ -291,6 +303,20 @@ export default function ServiceTemplatesPage() {
                       : watch('recurrence') === 'recurring_ok'
                         ? 'Recurring suggestions are allowed when visits show a rhythm.'
                         : 'Tells scheduling whether this service can repeat.'}
+                </p>
+              </div>
+              {/* Default checklist (Job Forms V1) — the form visits of this
+                  service carry. Attach-time resolution: pointing at a new one
+                  affects future visits only. Built in Settings → Job Checklists. */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+                <Select label="Default checklist" options={[
+                  { value: '', label: 'No checklist' },
+                  ...formTemplates.map(ft => ({ value: ft.id, label: ft.name })),
+                ]} {...register('form_template_id')} />
+                <p className="text-xs text-ink-muted sm:pt-7">
+                  {watch('form_template_id')
+                    ? 'Visits booked for this service carry this checklist; required items gate completion.'
+                    : 'Visits booked for this service carry no checklist.'}
                 </p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">

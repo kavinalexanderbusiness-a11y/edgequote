@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Quote, Customer, QuoteFormValues, QuoteService, QuoteOption, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, STATUS_LABELS, PAYMENT_METHODS } from '@/types'
 import { sumServiceLines, serviceLineTotals, splitServices, recentTemplateIdsFrom } from '@/lib/quoteServices'
@@ -11,6 +12,7 @@ import {
 } from '@/lib/quoteOptions'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { JobPhotos } from '@/components/photos/JobPhotos'
+import { HistoryPanel } from '@/components/audit/HistoryPanel'
 import { extractBookingPhotos, bookingPhotoViews } from '@/lib/bookingPhotos'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { DetailHeader } from '@/components/layout/DetailHeader'
@@ -134,7 +136,7 @@ export default function QuoteDetailPage() {
         supabase.from('quote_services').select('*').eq('quote_id', id).order('sort_order'),
         // The owner's own order, which is the order the customer saw.
         supabase.from('quote_options').select('*').eq('quote_id', id).order('sort_order'),
-        supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
+        supabase.from('customers').select('*, properties(id, address, city, province, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
         supabase.from('service_templates').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('travel_fee_tiers').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('business_settings').select('*').eq('user_id', user!.id).maybeSingle(),
@@ -1074,6 +1076,22 @@ export default function QuoteDetailPage() {
               <FileDown className="w-3.5 h-3.5" /> Open PDF
             </Button>
           )}
+          {/* The other direction of the estimate/quote link: a quote the owner
+              has started but cannot finish without seeing the property. Offered
+              while the quote is still unanswered — once it is won or lost, the
+              visit that would have priced it is beside the point. */}
+          {(quote.status === 'draft' || quote.status === 'sent') && (
+            <Button
+              variant="secondary" size="sm"
+              onClick={() => router.push(
+                `/dashboard/schedule?estimate=new&quote=${quote.id}`
+                + (quote.customer_id ? `&customer=${quote.customer_id}` : '')
+                + (quote.property_id ? `&property=${quote.property_id}` : ''))}
+              title="Book a visit to see the property before pricing this"
+            >
+              <CalendarClock className="w-3.5 h-3.5" /> Book estimate visit
+            </Button>
+          )}
           <QuoteStatusControl
             key={quote.status}
             quoteId={quote.id}
@@ -1475,8 +1493,25 @@ export default function QuoteDetailPage() {
       <Card>
         <div className="p-6 border-b border-border bg-gradient-to-r from-accent/5 to-transparent">
           <p className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide mb-1">Customer</p>
-          <p className="text-lg font-bold text-ink">{quote.customer_name}</p>
-          <p className="text-sm text-ink-muted mt-0.5">{quote.address}</p>
+          {/* Doors, not captions — from a quote you constantly need the customer
+              (call them, check what they owe) or the location (access notes, what
+              else happened there). Plain text when the quote has no linked row. */}
+          {quote.customer_id ? (
+            <Link href={`/dashboard/customers/${quote.customer_id}`}
+              className="text-lg font-bold text-ink hover:text-accent-text transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              {quote.customer_name}
+            </Link>
+          ) : (
+            <p className="text-lg font-bold text-ink">{quote.customer_name}</p>
+          )}
+          {quote.property_id ? (
+            <Link href={`/dashboard/properties/${quote.property_id}`}
+              className="block text-sm text-ink-muted mt-0.5 hover:text-accent-text transition-colors rounded w-fit focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              {quote.address}
+            </Link>
+          ) : (
+            <p className="text-sm text-ink-muted mt-0.5">{quote.address}</p>
+          )}
         </div>
         <CardBody className="space-y-3">
           <div className="grid grid-cols-2 gap-4 text-sm">
@@ -1745,6 +1780,20 @@ export default function QuoteDetailPage() {
           </CardBody>
         </Card>
       )}
+
+      {/* History — last, because it is the record rather than the work. It is the
+          same engine as the business Activity feed, filtered to this quote, so
+          "the customer approved this" and "the owner recorded an approval taken by
+          phone" stay visibly different acts here. */}
+      <Card>
+        <CardBody>
+          <HistoryPanel
+            filter={{ entity: { type: 'quote', id: quote.id } }}
+            emptyText="No recorded changes to this quote yet."
+            pageSize={10}
+          />
+        </CardBody>
+      </Card>
     </div>
   )
 }

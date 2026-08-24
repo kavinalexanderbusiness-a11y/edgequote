@@ -34,13 +34,15 @@
 //    6  a quote's own figure always wins over the catalogue
 //    7  bundles follow the catalogue for TIME exactly as they do for PRICE
 //    8  Quote Options are untouched (an option REPLACES; it is not a default)
-//    9  Quote Add-ons are untouched (an add-on ADDS; the S57 seam is declared)
+//    9  Quote Add-ons: S57's pricing seam is canonical and left intact
 //   10  crew: default ≠ scheduled assignment ≠ who actually worked
 //   11  archive hides from FUTURE picking; it never edits the past
-//   12  forms (S69) / assets (S72) are NOT wired — the seam is asserted absent
+//   12  forms (S69) landed: the catalogue holds it, the price book does not own it
 //   13  tenancy: every catalogue read is user-scoped
 //   14  mobile: the new fields cannot introduce a fixed width
 //   15  the migration says what it does, and can only add nullable columns
+//   16  the neighbouring engines (smart time, S79 appointments, measure,
+//       bundles) keep their own jobs — the price book absorbs none of them
 
 import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -69,6 +71,10 @@ const T = (over: Partial<ServiceTemplate> & { id: string }): ServiceTemplate => 
   default_rate: 100, default_description: null, notes: null, is_active: true,
   sort_order: 0, user_id: 'u1', unit_cost: null, material_cost: null,
   is_favorite: false, recurrence: null, default_minutes: null, default_crew_size: null,
+  // S69's default-checklist column. null here so every assertion in this file is
+  // about the price book alone; §12 sets it explicitly where the two must be
+  // shown to be independent.
+  form_template_id: null,
   ...over,
 })
 const I = (over: Partial<ServiceBundleItem> & { name: string }): ServiceBundleItem => ({
@@ -106,6 +112,15 @@ check('the schema baseline is readable', baseline.length > 0)
 const migrationDir = 'supabase/migrations'
 const allMigrations = readdirSync(join(process.cwd(), migrationDir))
   .filter(f => f.endsWith('.sql')).map(f => read(join(migrationDir, f))).join('\n')
+
+// ⚠️ DISCOVERED BY SUFFIX, never by version. This migration has already been
+// re-versioned once — `20260815120000` collided with production's job_forms_v1
+// (Session 69) and also sorted before the current baseline. A hardcoded path
+// would simply have gone unreadable at that rename, silently taking every
+// assertion that depends on it down to a vacuous pass.
+const pbMigrationFile = readdirSync(join(process.cwd(), migrationDir))
+  .find(x => /_price_book_defaults\.sql$/.test(x)) || ''
+const pbMigration = pbMigrationFile ? read(join(migrationDir, pbMigrationFile)) : ''
 const rivalTable = /create table (if not exists )?(public\.)?"?(price_book|price_book_items|catalog_services|service_catalog)"?/i
 check('no rival price-book table is created anywhere in the apply path',
   !rivalTable.test(allMigrations),
@@ -339,36 +354,49 @@ check('the options shape rule still exists in the schema',
   'options are a separate table and stay one')
 
 // ═════════════════════════════════════════════════════════════════════════════
-console.log('\n── 9 · Quote Add-ons: untouched, and the S57 seam is declared ──')
+console.log('\n── 9 · Quote Add-ons: the S57 pricing seam, preserved ──')
 
-// An ADD-ON adds to the price; an option REPLACES it; a catalogue entry seeds a
-// line. Three concepts, and this session must not have merged any of them.
-const addonsLanded = /quote_addons/.test(baseline)
-if (addonsLanded) {
-  const addonSrc = readIf('src/lib/quoteAddons.ts')
-  check('the add-on engine does not import the price book',
-    !/from '@\/lib\/priceBook'/.test(addonSrc),
-    'an add-on is chosen scope, not a catalogue default')
+// An ADD-ON adds to the price; an OPTION replaces it; a CATALOGUE entry seeds a
+// line. Three concepts this session must never have merged.
+//
+// ⭐ Session 57's schema IS now canonical on main (baseline 20260816110001), so
+// this is no longer a DECLARED seam — it is a live invariant, and the price book
+// reconciles with it by touching none of it.
+check('the Quote Add-ons schema is canonical in the baseline',
+  /quote_addons/.test(baseline),
+  'S57 landed its schema; if this goes false the baseline regressed')
+check('quotes.addons_total exists and is the add-on money column',
+  /"addons_total" numeric/.test(baseline))
+// ⭐⭐ THE PRICING SEMANTIC ITSELF. quotes.total is GENERATED over three terms;
+// if a later change drops addons_total from that expression every accepted quote
+// silently loses its extras, and nothing else in the repo asserts it.
+check('quotes.total is still generated as initial_price + travel_fee + addons_total',
+  /generated always as[^;]*initial_price[^;]*travel_fee[^;]*addons_total/.test(baseline),
+  'the add-on total must remain a term of the one money figure')
+check('quote_apply_choice is the canonical 4-arg choice engine',
+  baseline.includes('FUNCTION public.quote_apply_choice(p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[], p_via text)'),
+  'the portal and owner doors both delegate to this one function')
+check('…and it is granted to NO role',
+  /revoke all on function public."quote_apply_choice"[^;]*from public, anon, authenticated, service_role;/.test(baseline),
+  'it is reachable only through the two SECURITY DEFINER doors')
+
+// The APP half of S57 is still not on main. Say so, rather than let a green run
+// imply the whole feature shipped.
+const addonLib = readIf('src/lib/quoteAddons.ts')
+if (!addonLib) {
+  console.log('  ⚠ src/lib/quoteAddons.ts is NOT on main — S57 shipped its SCHEMA only,')
+  console.log('      and scripts/verify-quote-addons.ts does not exist yet. The price')
+  console.log('      book never needed that code; the pricing seam above is what gated it.')
 } else {
-  // ⚠️ THIS IS THE HONEST STATE, NOT A PASS BY DEFAULT. Session 57 applied
-  // quote_addons + quotes.addons_total to PRODUCTION and re-expressed the
-  // generated quotes.total; none of that is in this repo's baseline. The price
-  // book deliberately does not touch quotes.total, addons_total, or the choice
-  // RPC — so the two are separable — but the seam is real and is reported so it
-  // cannot be forgotten at land time.
-  console.log('  ⚠ quote_addons is NOT in the repo baseline (Session 57 seam)')
-  console.log('      Applied to production, absent here. The price book touches')
-  console.log('      neither quotes.total nor addons_total — verified next.')
+  check('the add-on engine does not import the price book',
+    !/priceBook/.test(addonLib),
+    'an add-on is chosen scope, not a catalogue default')
 }
-// Whatever the seam's state, the price book must be nowhere near the money column.
+
+// Whatever the app half's state, the price book stays away from the money.
 check('nothing in lib/priceBook references quotes.total or addons_total',
-  !/addons_total|quotes\.total/.test(priceBookSrc),
+  !/addons_total|quotes.total/.test(priceBookSrc),
   'a catalogue default must never reach the one money figure')
-const pbMigration = readIf('supabase/migrations/20260815120000_price_book_defaults.sql')
-check('the price-book migration touches no money column',
-  !!pbMigration && !/addons_total|initial_price|travel_fee|\btotal\b/i.test(
-    pbMigration.split('\n').filter(l => !/^\s*--/.test(l)).join('\n')),
-  'this migration adds two operational columns and nothing else')
 
 // ═════════════════════════════════════════════════════════════════════════════
 console.log('\n── 10 · crew: default ≠ scheduled ≠ actual ──')
@@ -416,14 +444,40 @@ check('archiving is a flag, not a delete',
   'deleting would break the link an old quote uses to say which service it was')
 
 // ═════════════════════════════════════════════════════════════════════════════
-console.log('\n── 12 · forms (S69) and assets (S72) are NOT wired ──')
+console.log('\n── 12 · forms (S69) landed: the catalogue carries one, the price book does NOT own it ──')
 
-// The prompt gates both on those sessions landing. Neither is on main, so the
-// honest state is ABSENT — and asserting the absence is what stops a future
-// reader assuming a seam exists that was never built or tested.
-check('no form/checklist association exists on the catalogue',
-  !/default_form|checklist_id|form_template_id/i.test(baseline + priceBookSrc),
-  'Session 69 has not landed on main; a seam built blind against it would be untested')
+// ⭐ THIS RULE WAS RE-EXPRESSED, NOT DELETED. When S76 was written neither S69
+// nor S72 was on main, so the honest assertion was that no such seam existed.
+// S69 has since landed and `service_templates.form_template_id` is real. A guard
+// that went red because the WORLD changed must have its RULE restated, never
+// removed — the thing worth defending was never 'forms are absent', it was that
+// the price book does not absorb a concern that belongs to another engine.
+const formsLanded = /form_template_id/.test(baseline)
+if (formsLanded) {
+  check('the catalogue carries a default checklist (S69 owns this column)',
+    /"form_template_id" uuid/.test(baseline))
+  // ⛔ THE SEPARATION. lib/priceBook answers 'how long, how many, what rate'.
+  // Which checklist a visit gets is Job Forms' question, resolved lazily at
+  // attach time so changing it never rewrites a form already minted on a visit.
+  check('lib/priceBook does not read or resolve the form association',
+    !/form_template_id|formTemplate|checklist/i.test(priceBookSrc),
+    'the price book must not become the forms engine')
+  check('the price-book migration does not touch the forms column',
+    !!pbMigration && !/form_template_id/i.test(pbMigration),
+    'S69 owns that column; S76 adds two of its own and nothing else')
+  // The two concerns share a table and must stay independently settable: a
+  // service with a checklist and no duration, or a duration and no checklist,
+  // are both ordinary states.
+  eq('a catalogue row with a checklist but no duration still reports null minutes',
+    catalogDefaults(T({ id: 'f1', form_template_id: 'ft-1' } as never)).minutes, null)
+  eq('…and a duration with no checklist is unaffected by the forms column',
+    catalogDefaults(T({ id: 'f2', default_minutes: 45, form_template_id: null } as never)).minutes, 45)
+} else {
+  console.log('  ⚠ form_template_id is not in the baseline — S69 is not landed here.')
+}
+
+// S72 customer-assets still does not exist. The prompt explicitly did not
+// require it, so absence remains the correct assertion.
 check('no asset/category association exists on the catalogue',
   !/asset_category|asset_type_id/i.test(baseline + priceBookSrc),
   'Session 72 does not exist; the prompt explicitly does not require it')
@@ -518,6 +572,76 @@ const baseIdx = files.findIndex(f => /_baseline\.sql$/.test(f))
 const pbIdx = files.findIndex(f => /_price_book_defaults\.sql$/.test(f))
 check('the price-book migration sorts after the baseline', baseIdx >= 0 && pbIdx > baseIdx,
   `baseline at ${baseIdx}, price book at ${pbIdx}`)
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n── 16 · the neighbouring engines keep their own jobs ──')
+
+// Session 76 reconciled onto a main that had moved a long way. Each engine below
+// touches DURATION or PRICE somewhere, and the reconciliation risk is the same in
+// every case: the price book quietly becoming the place that answers their
+// question too. These pin the boundary rather than the wiring.
+
+// ── Smart Time / estimate-vs-actual ──────────────────────────────────────────
+// ⭐ ONE duration rule. lib/workEstimate must keep delegating to dayFit's
+// resolveDuration; a second precedence ladder is how the card in the job form and
+// the 'Fits Tuesday' claim start disagreeing about the same work.
+check('lib/workEstimate still delegates to dayFit.resolveDuration',
+  workEstimateSrc.includes('resolveDuration('),
+  'the smart estimate must not grow a rival precedence')
+check('…and still asks the pure history question (null own estimate)',
+  workEstimateSrc.includes('resolveDuration(null,'))
+// ⛔ And it must NOT have been handed a catalogue default: the smart estimate
+// answers 'what does history say?', and a typed default is not history. Feeding
+// one in would make an unmeasured service report a confident learned figure.
+check('the smart estimate is NOT given a catalogue default',
+  !/resolveDuration\(null,[^)]*catalog/i.test(workEstimateSrc),
+  'workEstimate must stay a report about MEASURED history only')
+check('lib/workEstimate does not import the price book',
+  !/priceBook/.test(workEstimateSrc),
+  'learning and defaults are separate claims and stay separate modules')
+
+// ── Estimate appointments (S79) ──────────────────────────────────────────────
+// A booked estimate visit is scheduled time, not quoted work. It must not pick up
+// a catalogue price or duration by accident.
+const apptSrc = readIf('src/lib/estimateAppointments.ts')
+check('estimate appointments module is present (S79 landed)', !!apptSrc)
+check('…and does not import the price book',
+  !apptSrc || !/priceBook/.test(apptSrc),
+  'an estimate appointment is a visit to GO AND LOOK — it has no catalogue price')
+check('schedule_items is still the estimate-appointment table',
+  atLineStart(String.raw`create table if not exists public\."schedule_items"`).test(baseline),
+  'S79 revived this table rather than building a rival')
+
+// ── Measure & Price ──────────────────────────────────────────────────────────
+// Measurement drives PRICE through the pricing engine, never through the
+// catalogue. If the price book ever read a measurement it would be deriving a
+// price, which rule 1 forbids.
+check('lib/priceBook reads no measurement',
+  !/measured_sqft|lawn_sqft|measurement|sqft/i.test(stripped),
+  'area drives the pricing engine; the catalogue only reports a stored rate')
+const autoMeasure = readIf('src/lib/autoMeasure.ts')
+check('the measure path does not import the price book',
+  !autoMeasure || !/priceBook/.test(autoMeasure),
+  'measurement and catalogue defaults are independent inputs to a quote')
+
+// ── Bundles ──────────────────────────────────────────────────────────────────
+// Already pinned behaviourally in §7; this is the structural half — the bundle
+// engine may READ the catalogue, and still owns no rate of its own.
+const bundleSrc = read('src/lib/serviceBundles.ts')
+check('bundles resolve duration through the ONE price-book helper',
+  bundleSrc.includes('resolveEstMinutes(it, templates)'),
+  'a second inline fallback here is how price and time drift apart')
+check('…and still resolve price through their own resolveUnitPrice',
+  bundleSrc.includes('resolveUnitPrice(it, templates)'))
+// ⭐ COPY, NOT LIVE LINK — asserted over the ABSENCE, the same way Service
+// Bundles guaranteed it originally. With no bundle_id to follow, editing or
+// deleting a bundle cannot reach a quote already sent or approved.
+const qsDdlForBundle = (baseline.match(
+  /create table if not exists public\."quote_services"[\s\S]*?\n\);/) || [''])[0]
+check('the quote_services DDL is readable', !!qsDdlForBundle)
+check('no bundle_id was added to a quote line (copy, not live link)',
+  !!qsDdlForBundle && !/bundle_id/.test(qsDdlForBundle),
+  'the absence IS the guarantee that editing a bundle cannot reach a sent quote')
 
 // ── Wording ──────────────────────────────────────────────────────────────────
 console.log('\n── wording: a typed default never claims to be measured ──')

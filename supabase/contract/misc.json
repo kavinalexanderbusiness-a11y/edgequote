@@ -4,8 +4,15 @@
    "id": "booking-uploads",
    "name": "booking-uploads",
    "public": true,
-   "file_size_limit": null,
-   "allowed_mime_types": null,
+   "file_size_limit": 15728640,
+   "allowed_mime_types": [
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+    "image/heif"
+   ],
    "avif_autodetection": false
   },
   {
@@ -69,6 +76,10 @@
  "seq_acls": [
   {
    "acl": "{postgres=rwU/postgres,anon=rwU/postgres,authenticated=rwU/postgres,service_role=rwU/postgres}",
+   "name": "audit_events_seq_seq"
+  },
+  {
+   "acl": "{postgres=rwU/postgres,anon=rwU/postgres,authenticated=rwU/postgres,service_role=rwU/postgres}",
    "name": "property_measurement_events_seq_seq"
   },
   {
@@ -114,7 +125,7 @@
   }
  ],
  "pg_version": "PostgreSQL 17.6 on aarch64-unknown-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit",
- "captured_at": "2026-08-14 06:21:34.912661+00",
+ "captured_at": "2026-08-17 04:39:02.443772+00",
  "default_acls": [
   {
    "acl": "{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
@@ -261,7 +272,7 @@
    "objtype": "S"
   }
  ],
- "latest_migration": "20260814060713",
+ "latest_migration": "20260817060000",
  "publication_tables": [
   "public.content_pieces",
   "public.conversations",

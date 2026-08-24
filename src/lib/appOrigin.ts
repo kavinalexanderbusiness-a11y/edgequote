@@ -1,0 +1,113 @@
+// ── THE origin every generated link is built on ──────────────────────────────
+// One question — "what address does this deploy tell the outside world to come
+// back to?" — with one answer. Portal links, booking links, crew invitations and
+// password resets all leave the building carrying it, and every one of them is
+// unreachable if it is wrong.
+//
+// ⚠️ WHY THIS SANITISES RATHER THAN TRUSTS. NEXT_PUBLIC_APP_URL is typed by a
+// human into a dashboard, or piped in by a shell. On 2026-08-15 both failure
+// modes landed within an hour of each other:
+//
+//   1. The production domain moved to app.edgehq.ca and the variable still held
+//      the retired host, so every emailed link answered DEPLOYMENT_NOT_FOUND.
+//   2. Setting it from PowerShell wrote a UTF-8 BOM into the value —
+//      "﻿https://app.edgehq.ca" — which is invisible in every dashboard
+//      that displays it and produces a link no browser can resolve.
+//
+// A stray BOM, a wrapping quote, a trailing slash or a newline are all things a
+// value can pick up in transit. None of them is worth a broken invitation, and
+// none is detectable by eye. So the value is CLEANED here, once, and every
+// caller gets the same clean answer.
+//
+// What this does NOT do is invent an origin. If the variable is absent, the
+// caller's own request origin is the honest fallback (correct for local dev and
+// preview deploys); if there is no request either, the empty string is returned
+// rather than a guessed hostname — a relative link that visibly fails beats an
+// absolute one pointing somewhere real and wrong.
+
+/**
+ * Strip what a value picks up in transit: a byte-order mark, surrounding
+ * whitespace or newlines, wrapping quotes, and any trailing slash.
+ *
+ * Exported for the guard, which drives it over each corruption shape rather
+ * than trusting that the regex says what it means.
+ */
+export function cleanOrigin(raw: string | null | undefined): string {
+  if (!raw) return ''
+  return raw
+    // The invisibles `trim()` CANNOT reach. U+FEFF is deliberately absent from
+    // this class — trim() already takes it (see below), and re-listing it here
+    // is the dead code mutation testing correctly deleted once. These are the
+    // ones that are NOT WhiteSpace: zero-width space/joiners, the LTR/RTL marks
+    // and the bidi overrides. A value copied out of a rendered web page rather
+    // than typed picks them up, they survive trim() untouched, and they break a
+    // URL exactly as invisibly as the BOM did.
+    // Load-bearing, and proved so: verify:app-origin drives U+200B through this
+    // and fails if the line is removed.
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069]/g, '')
+    // ⭐ `trim()` is what removes the BOM. U+FEFF is <ZWNBSP>, which ECMAScript
+    // counts as WhiteSpace, so a leading byte-order mark goes with the spaces
+    // and newlines a shell pipe leaves behind. An explicit BOM replace used to
+    // sit here and was DEAD CODE — mutation testing proved deleting it changed
+    // nothing, which is exactly how a line that looks load-bearing gets trusted.
+    // The behaviour is asserted directly in verify:crew-auth instead.
+    .trim()
+    .replace(/^["']|["']$/g, '')   // quotes a .env line can carry in
+    .trim()
+    .replace(/\/+$/, '')           // trailing slash — every caller appends its own
+}
+
+/**
+ * THE origin, for server code that has a request in hand.
+ *
+ * Prefers the configured value (the deploy's own answer, and the only one that
+ * is right when a request arrives on an internal or alias hostname), and falls
+ * back to the request's origin so previews and local dev work untouched.
+ */
+export function appOrigin(requestOrigin?: string | null): string {
+  return cleanOrigin(process.env.NEXT_PUBLIC_APP_URL) || cleanOrigin(requestOrigin)
+}
+
+/**
+ * What the deploy STORED versus what it will USE — the two answers the comms
+ * self-test shows side by side.
+ *
+ * `sanitized` is true when cleaning had to change the configured value, which is
+ * the only visible symptom of the failure this module exists for: a BOM, a
+ * zero-width character or a wrapping quote is invisible in every dashboard that
+ * renders the variable, so "it looks right" and "it works" come apart with
+ * nothing on screen to explain it. Reported rather than repaired quietly,
+ * because the stored value is what a human will read next time.
+ *
+ * Note it reports on the CONFIGURED value alone — no request origin fallback.
+ * The question being asked is "is this deploy configured correctly?", and a
+ * request-derived answer would mask an unset variable.
+ */
+export function appOriginReport(): { origin: string; sanitized: boolean } {
+  const raw = process.env.NEXT_PUBLIC_APP_URL ?? ''
+  const origin = cleanOrigin(raw)
+  return { origin, sanitized: raw !== '' && raw !== origin }
+}
+
+/**
+ * Is this a value the app can actually build links on? Cleaning removes what a
+ * value picks up in transit; it cannot rescue a value that was wrong to begin
+ * with — "app.edgehq.ca" with no scheme, or a stray "javascript:" — and those
+ * produce links that fail at the browser rather than here.
+ *
+ * Deliberately SEPARATE from cleanOrigin rather than folded into it: cleanOrigin's
+ * contract (clean it, never invent one) is landed, guarded and mutation-tested,
+ * and every caller's fallback chain is written against it. This is the extra
+ * question /api/health asks so a deploy configured with an unusable origin says
+ * so out loud instead of sending broken links quietly.
+ */
+export function isUsableOrigin(value: string | null | undefined): boolean {
+  const v = cleanOrigin(value)
+  if (!v) return false
+  try {
+    const u = new URL(v)
+    return u.protocol === 'https:' || u.protocol === 'http:'
+  } catch {
+    return false
+  }
+}

@@ -43,6 +43,13 @@ const PRIORITY: Record<string, NotifPriority> = {
   // A no is not a problem either: nothing was added and nothing is owed. Whether
   // to re-price it is a decision, not a repair.
   change_order_declined: 'update',
+  // A worker asked for a day off. A real decision, but NOT 'action': that tier
+  // is money and trust problems, shown item-by-item and never buried, and a
+  // leave request is neither urgent nor a repair. Nothing breaks while it
+  // waits — the plan simply keeps counting on them, which is the truthful
+  // state until the owner answers. It groups as an update and the time-off
+  // page carries the queue with its own count.
+  time_off_requested: 'update',
 }
 export function notifPriority(type: string): NotifPriority {
   return PRIORITY[type] ?? 'update'
@@ -70,6 +77,9 @@ const ACTION_VERB: Record<string, string> = {
   // the tap actually does.
   change_order_approved: 'Open visit',
   change_order_declined: 'Open visit',
+  // Its href opens the time-off page on the requests queue, so the verb
+  // promises what the tap actually does.
+  time_off_requested: 'Review',
 }
 export function notificationActionLabel(type: string): string {
   return ACTION_VERB[type] ?? 'View'

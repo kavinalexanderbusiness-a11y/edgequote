@@ -6,7 +6,9 @@ import { useRouter } from 'next/navigation'
 import { addDays, format, startOfDay, startOfWeek, endOfWeek, subMonths, startOfMonth } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
-import type { BusinessSettings, Crew, PayRun, PtoEntry, Technician, TimeEntry, WageHistoryEntry } from '@/types'
+import type { BusinessSettings, Crew, Job, PayRun, PtoEntry, Technician, TimeEntry, WageHistoryEntry, WorkerAvailability } from '@/types'
+import { loadWorkerAvailability } from '@/lib/workerAvailabilityData'
+import { isBookedOff } from '@/lib/workerAvailability'
 import { loadCrews, loadTechnicians } from '@/lib/crews'
 import { loadTimeEntries, decimalHours, formatDuration } from '@/lib/timeTracking'
 import { payrollRules, payPeriodFor, overtimeOff } from '@/lib/payroll'
@@ -17,7 +19,11 @@ import {
   laborTrend, forecastNextPeriod, ptoAnalytics, wageTrends, payRunStats,
 } from '@/lib/workforce'
 import { TeamPanel } from '@/components/workforce/TeamPanel'
+import { TeamAvailabilityWeek } from '@/components/workforce/TeamAvailabilityWeek'
 import { EmployeeEditor } from '@/components/workforce/EmployeeEditor'
+import { CrewsPanel, type CrewRowData } from '@/components/workforce/CrewsPanel'
+import { CrewEditor } from '@/components/workforce/CrewEditor'
+import { createCrew } from '@/lib/crews'
 import { WageHistoryDialog } from '@/components/dispatch/WageHistoryDialog'
 import type { CrewAccessRow } from '@/lib/crewInvite'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -63,10 +69,17 @@ export default function WorkforcePage() {
   // dialog is open means "add somebody new".
   const [editorOpen, setEditorOpen] = useState(false)
   const [editing, setEditing] = useState<Technician | null>(null)
+  const [crewOpen, setCrewOpen] = useState(false)
+  const [editingCrew, setEditingCrew] = useState<Crew | null>(null)
+  const [crewJobs, setCrewJobs] = useState<Job[]>([])
   const [wageHistoryFor, setWageHistoryFor] = useState<Technician | null>(null)
   // App-access state for the whole roster in ONE call — "has this person ever
   // signed in" lives in auth.users, which no owner client can read.
   const [accessById, setAccessById] = useState<Record<string, CrewAccessRow>>({})
+  // The team's standard weeks (Session 67), and whether that read succeeded —
+  // "no pattern set" and "couldn't read the patterns" are different answers.
+  const [availabilityRows, setAvailabilityRows] = useState<WorkerAvailability[]>([])
+  const [availabilityReadable, setAvailabilityReadable] = useState(true)
 
   const fetchAll = useCallback(async () => {
     try {
@@ -76,7 +89,7 @@ export default function WorkforcePage() {
       setUid(user.id)
       // A year back covers the trend + forecast window and the PTO year.
       const from = startOfMonth(subMonths(new Date(), 12))
-      const [sRes, t, c, e, pRes, rRes, wRes] = await Promise.all([
+      const [sRes, t, c, e, pRes, rRes, wRes, aRes] = await Promise.all([
         supabase.from('business_settings').select('*').eq('user_id', user.id).maybeSingle(),
         // includeArchived, like every other surface that reads paid time. The
         // roster list does NOT gate the money — payrollSummary groups by the
@@ -95,6 +108,7 @@ export default function WorkforcePage() {
         supabase.from('pto_entries').select('*').eq('user_id', user.id).gte('date', format(from, 'yyyy-MM-dd')),
         supabase.from('pay_runs').select('*').eq('user_id', user.id).order('period_start', { ascending: false }),
         supabase.from('wage_history').select('*').eq('user_id', user.id).order('seq', { ascending: false }).limit(200),
+        loadWorkerAvailability(supabase, user.id),
       ])
       setSettings(sRes.data as BusinessSettings | null)
       setTechs(t); setCrews(c); setEntries(e)
@@ -103,7 +117,25 @@ export default function WorkforcePage() {
       supabase.rpc('crew_access_states').then(({ data, error }) => {
         if (!error && data) setAccessById(data as Record<string, CrewAccessRow>)
       })
-      setPtoEntries((pRes.data as PtoEntry[]) ?? [])
+      // ⭐ GRANTED leave only, filtered once at the read. Everything below —
+      // the draft pay run, who's off today, the trend, the allowance analytics
+      // — reads this state, and none of them may count a day nobody approved.
+      // (The requests queue itself lives on the time-off page.)
+      setPtoEntries(((pRes.data as PtoEntry[]) ?? []).filter(isBookedOff))
+      // A failed availability read is reported as unknown, never as an empty
+      // week — the panel says so instead of implying everyone is free.
+      setAvailabilityRows(aRes.outcome === 'ok' ? aRes.rows : [])
+      setAvailabilityReadable(aRes.outcome === 'ok')
+      // What each crew is booked to do — today and the week ahead. Narrow on
+      // purpose: this page answers "is this crew real and staffed", not "what is
+      // the schedule", so it reads the assignment columns and nothing else.
+      const todayISO = format(new Date(), 'yyyy-MM-dd')
+      const { data: jRows } = await supabase.from('jobs')
+        .select('id, user_id, title, scheduled_date, status, crew_id, technician_id, crew_size, duration_minutes')
+        .eq('user_id', user.id)
+        .gte('scheduled_date', todayISO)
+        .lte('scheduled_date', format(addDays(new Date(), 7), 'yyyy-MM-dd'))
+      setCrewJobs((jRows as Job[]) ?? [])
       setRuns((rRes.data as PayRun[]) ?? [])
       setWageHistory((wRes.data as WageHistoryEntry[]) ?? [])
       setLoadError(null)
@@ -215,12 +247,57 @@ export default function WorkforcePage() {
     />
   )
 
+  // Crews sit under Team because they are the same subject — who works here, and
+  // how they go out. Each row's numbers come from the loaded window; PTO gives
+  // the availability line, and an unreadable PTO read leaves it unknown.
+  const todayISO = format(new Date(), 'yyyy-MM-dd')
+  const ptoTodayIds = ptoEntries.filter(p => p.date.slice(0, 10) === todayISO).map(p => p.technician_id ?? '')
+  const crewRows: CrewRowData[] = crews.map(c => {
+    const members = roster.filter(t => t.is_active && t.crew_id === c.id)
+    const mine = crewJobs.filter(j => j.crew_id === c.id && j.status !== 'cancelled')
+    return {
+      crew: c,
+      members,
+      leadName: c.lead_technician_id
+        ? roster.find(t => t.id === c.lead_technician_id)?.name ?? null
+        : null,
+      today: mine.filter(j => j.scheduled_date === todayISO).length,
+      upcoming: mine.filter(j => j.scheduled_date > todayISO).length,
+      availableToday: members.filter(m => !ptoTodayIds.includes(m.id)).length,
+    }
+  })
+  const crewsPanel = (
+    <>
+      <CrewsPanel
+        rows={crewRows}
+        onOpen={c => { setEditingCrew(c); setCrewOpen(true) }}
+        onCreate={async name => {
+          const { error } = await createCrew(supabase, uid ?? '', name, crews)
+          if (error) return error
+          await fetchAll()
+          return null
+        }}
+      />
+      <CrewEditor
+        open={crewOpen}
+        onClose={() => setCrewOpen(false)}
+        crew={editingCrew ? crews.find(c => c.id === editingCrew.id) ?? editingCrew : null}
+        technicians={roster}
+        jobs={crewJobs}
+        todayISO={todayISO}
+        ptoTodayIds={ptoTodayIds}
+        onSaved={fetchAll}
+      />
+    </>
+  )
+
   if (activeTechs.length === 0) {
     return (
       <div className="max-w-6xl space-y-5">
         <PageHeader title="Workforce" description="Who works here — their crew, their app access, their hours and pay." />
         {teamPanel}
         {teamEditor}
+        {crewsPanel}
       </div>
     )
   }
@@ -253,6 +330,10 @@ export default function WorkforcePage() {
           money to find out who it belongs to. */}
       {teamPanel}
       {teamEditor}
+
+      {/* ── How they go out ── the same subject as Team, one level up: a crew is
+          a group of these people, and work is assigned to it. */}
+      {crewsPanel}
 
       {/* ── The KPI row: this pay period ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -288,6 +369,18 @@ export default function WorkforcePage() {
           but cost $0.
         </Banner>
       )}
+
+      {/* ── The week ahead: who is actually there when the work is planned ──
+          "Today" below answers who is on the clock NOW (time entries). This
+          answers who CAN work each of the next seven days — the question the
+          schedule asks. Different questions, different engines, side by side. */}
+      <TeamAvailabilityWeek
+        technicians={roster}
+        patterns={availabilityRows}
+        ptoEntries={ptoEntries}
+        readable={availabilityReadable}
+        capacityHours={settings?.daily_capacity_hours ?? null}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* ── Availability: the three systems, finally joined ── */}

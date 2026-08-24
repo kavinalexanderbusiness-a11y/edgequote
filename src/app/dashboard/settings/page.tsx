@@ -32,7 +32,7 @@ import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
 import { ServiceSeasons, ServiceSeason, DEFAULT_SEASONS, settingsToSeasons, seasonLabel, LAWN_HINTS, SNOW_HINTS } from '@/lib/seasons'
 import { weekdayLong } from '@/lib/preferences'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
-import { Download, Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin, LayoutGrid, Wallet, X, ArrowRight, LayoutTemplate } from 'lucide-react'
+import { Download, Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin, LayoutGrid, Wallet, X, ArrowRight, LayoutTemplate, ClipboardCheck } from 'lucide-react'
 
 const SETTINGS_TABS: TabItem[] = [
   { key: 'business', label: 'Business', icon: Building2 },
@@ -559,6 +559,19 @@ export default function SettingsPage() {
               <span className="min-w-0 flex-1">
                 <span className="block text-sm font-bold tracking-tight text-ink">Service templates</span>
                 <span className="block text-xs text-ink-muted mt-0.5">The services you sell and their default prices — what a new quote starts from.</span>
+              </span>
+              <ArrowRight aria-hidden className="w-4 h-4 shrink-0 text-accent-text transition-transform group-hover:translate-x-0.5" />
+            </Link>
+            {/* Job checklists live beside the services that carry them — a
+                service names its default checklist in the editor above. */}
+            <Link href="/dashboard/settings/form-templates"
+              className="group mt-2 flex items-center gap-3.5 rounded-xl -m-2 p-2 transition-colors hover:bg-bg-tertiary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              <span className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
+                <ClipboardCheck aria-hidden className="w-5 h-5 text-accent-text" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-bold tracking-tight text-ink">Job checklists</span>
+                <span className="block text-xs text-ink-muted mt-0.5">Standard checklists and forms your visits carry — filled by the crew, checked before completion.</span>
               </span>
               <ArrowRight aria-hidden className="w-4 h-4 shrink-0 text-accent-text transition-transform group-hover:translate-x-0.5" />
             </Link>

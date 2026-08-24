@@ -1,7 +1,7 @@
 import type { LucideIcon } from 'lucide-react'
 import {
   LayoutDashboard, CalendarDays, Users, Home, FileText, Receipt, Wallet, MessageSquare, Wrench, Bot, Sprout, Radio, Plug,
-  Calculator, HardHat, Target,
+  Calculator, HardHat, Target, Inbox, History, TrendingUp,
 } from 'lucide-react'
 
 // ── Feature-module registry ───────────────────────────────────────────────────
@@ -80,6 +80,15 @@ export const FEATURE_MODULES: FeatureModule[] = [
     category: 'operations', version: 1, updatedAt: '2026-07-15',
     description: 'The morning command center — money, priorities, and the day ahead.',
     permissions: ['customers:read', 'jobs:read', 'invoices:read'] },
+  // Directly under Dashboard: the same subject at full depth. The dashboard
+  // previews the top of this queue; the Inbox IS the queue — everything that
+  // needs the owner, then the week's news. Core for the same reason the
+  // dashboard is: a front door for attention is not an optional feature.
+  { key: 'inbox',      label: 'Inbox',      href: '/dashboard/inbox',      icon: Inbox, core: true,
+    category: 'operations', version: 1, updatedAt: '2026-08-15',
+    description: 'What needs you, and what happened — one calm list.',
+    permissions: ['customers:read', 'jobs:read', 'invoices:read', 'messages:read'],
+    keywords: 'needs attention notifications updates action items todo' },
   { key: 'schedule',   label: 'Schedule',   href: '/dashboard/schedule',   icon: CalendarDays,
     category: 'operations', version: 1, updatedAt: '2026-07-09',
     description: 'Visits, routes, capacity and the day plan.',
@@ -101,6 +110,16 @@ export const FEATURE_MODULES: FeatureModule[] = [
     whatsNew: 'Payroll, timesheets and time off now have a home of their own.',
     permissions: ['crews:read', 'crews:write', 'payroll:read', 'payroll:write'],
     keywords: 'payroll employees staff team timesheet hours wages time off' },
+  // Registered here rather than special-cased into the sidebar, for the same
+  // reason payroll was: the registry is what makes the sidebar, ⌘K and the Modules
+  // manager agree. An owner looking for "who changed this" types "audit" or "who
+  // changed" — both are keywords, because neither is in the label.
+  { key: 'activity',   label: 'Activity',   href: '/dashboard/activity',   icon: History,
+    category: 'admin', version: 1, updatedAt: '2026-08-15',
+    description: 'Who changed what, when — and what it was before.',
+    whatsNew: 'Every meaningful change is now recorded, with the person who made it.',
+    permissions: ['activity:read'],
+    keywords: 'audit trail history who changed log accountability record' },
   { key: 'customers',  label: 'Customers',  href: '/dashboard/customers',  icon: Users,
     category: 'customers', version: 1, updatedAt: '2026-07-15',
     description: 'Every customer, their history, and the conversation.',
@@ -157,6 +176,18 @@ export const FEATURE_MODULES: FeatureModule[] = [
     // "maintenance", "service" and "parts" all found nothing, and only the
     // literal word "equipment" reached it. The owner's words, not ours.
     keywords: 'mower trailer truck fleet maintenance service hours parts vehicle' },
+  // Sits beside Grow because it answers the same question at a different
+  // altitude: not "what should I try next" but "what did selling actually
+  // produce". `requires: quotes` is a real dependency — every figure on the page
+  // is anchored to a quote, so without that module the report has no cohort to
+  // describe. It reads invoices and payments too, but degrades honestly without
+  // them (invoiced and collected simply stay at zero, which is the truth).
+  { key: 'sales',      label: 'Sales',      href: '/dashboard/sales',      icon: TrendingUp,
+    category: 'growth', version: 1, updatedAt: '2026-08-16', requires: ['quotes'],
+    description: 'What you quoted, won, invoiced and actually collected — and which sources produced it.',
+    whatsNew: 'Quoted, won, authorized, invoiced and collected are now five separate figures you can trace back to the quotes behind them.',
+    permissions: ['quotes:read', 'invoices:read', 'payments:read', 'customers:read'],
+    keywords: 'sales analytics revenue quoted won lost collected conversion win rate lead source attribution funnel forecast reporting' },
   { key: 'grow',       label: 'Grow',       href: '/dashboard/grow',       icon: Sprout,
     category: 'growth', version: 1, updatedAt: '2026-07-14', featured: true,
     description: 'Analytics, marketing and the tools that win more work.',

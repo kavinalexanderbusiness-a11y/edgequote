@@ -13,6 +13,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Invoice, Quote } from '@/types'
+import { needsFollowUp } from '@/lib/followup'
 import { invoiceBalance, displayInvoiceStatus, collectedBetween, dayBoundsIso } from '@/lib/payments/ledger'
 import type { ReachCustomer } from '@/lib/comms/reach'
 import { computeLeadsNeedingResponse, type LeadConvRow, type LeadQuoteRow } from '@/lib/leadResponse'
@@ -46,7 +47,9 @@ type PortalRequestRow = { id: string; customer_id: string | null; from_portal: b
 // deposit_type/deposit_value/accepted_price/deposit_override_at feed the
 // scheduling gate: WITHOUT them a deposit-gated quote reads as gateless and the
 // queue would urge scheduling a booking the owner deliberately gated.
-const QUOTE_COLUMNS =
+// Exported: lib/inboxData reads the same union for the same engines — one list,
+// so a column added for the queue can never be missing from the inbox's copy of it.
+export const QUOTE_COLUMNS =
   'id, customer_id, customer_name, status, total, service_type, created_at, sent_at, last_followed_up_at, initial_price, weekly_price, biweekly_price, monthly_price, lead_meta, accepted_price, deposit_type, deposit_value, deposit_override_at'
 
 export interface DashboardData {
@@ -75,6 +78,15 @@ export interface DashboardData {
    *  reserved, same-height slot via Suspense. Resolves null on failure —
    *  the strip's own "couldn't check" honesty rules are unchanged. */
   weather: Promise<WeatherImpactReport | null>
+  /** quotes.filter(needsFollowUp).length — the SAME predicate behind the
+   *  Quotes page's "Follow-ups due" tile, counted here for the briefing strip
+   *  so the chip and the page it opens can never disagree. (The S13 queue's
+   *  followups row splits this set by reachability; this is the whole set.) */
+  followupsDue: number
+  /** Open portal requests, via lib/portalRequests' own predicate — the count
+   *  behind the briefing's "customer requests" chip, from the read the queue
+   *  already made. */
+  requestsOpen: number
   greeting: string
   dateLine: string
   /** Has this business done ANYTHING yet — a customer, quote, job or invoice?
@@ -280,24 +292,27 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   for (const r of (depositRowsRes.data as { quote_id: string | null; amount: number; kind: string | null; provider: string | null; status: string | null }[]) || []) {
     if (r.quote_id) (quoteDepositRows[r.quote_id] ||= []).push(r)
   }
+  // Through THE request engine's own predicate, so "open" means one thing in
+  // the queue row, in the briefing chip, and in the card the owner opens from
+  // either — even though the query above already asked the database the same
+  // question.
+  const openReqs = openRequests((reqRes.data as PortalRequestRow[] | null) ?? [])
   const priorities = computePriorities({
     quotes, invoices, jobs, recById, quoteDepositRows,
     customers: customerRows,
     // Only the unread ones are a "reply to messages" job. customer_id must
     // survive — the messages row uses it to exclude people leads already counted.
     conversations: conversations.filter(c => Number(c.unread || 0) > 0),
-    // Through THE request engine's own predicate, so "open" means one thing in
-    // the queue row and in the card the owner opens from it — even though the
-    // query above already asked the database the same question.
-    requests: openRequests((reqRes.data as PortalRequestRow[] | null) ?? []),
+    requests: openReqs,
     leads,
     seasons: settingsToSeasons(settings?.service_seasons),
     feeSettings: settings,
     today,
-    // 8, up from the default 6: the queue now owns a tall desktop column, and at
-    // 6 the two lowest tiers (messages, lapsed) vanished with no trace whenever
-    // more than six kinds fired — rows silently cut with nothing saying so.
-    limit: 8,
+    // Uncapped in effect (the kinds can't reach 50): the queue now feeds the
+    // Owner Inbox composition, whose COUNT must be the truth — a cap here would
+    // make the dashboard's "N need you" quietly smaller than the inbox it links
+    // to. How many rows to SHOW is the preview's decision, made at render.
+    limit: 50,
   })
 
   // ── Day plan (THE day-plan engine) ──
@@ -346,6 +361,8 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     },
     priorities,
     dayPlan,
+    followupsDue: quotes.filter(needsFollowUp).length,
+    requestsOpen: openReqs.length,
     month: {
       collected: monthCash.total,
       collectedLastMonthToDate: lastMonthCash.total,

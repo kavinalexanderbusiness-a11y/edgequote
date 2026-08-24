@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { resolveAppRole } from '@/lib/crewAccess'
+import { authorizeWorkerVisit, WORKER_DENIAL_MESSAGE, WORKER_DENIAL_STATUS } from '@/lib/workerAccess'
 import { createDraftInvoiceForCompletedJob, uncompleteJob } from '@/lib/invoicing'
 import { attemptAutoPayCharge } from '@/lib/payments/autopay'
 import type { Job } from '@/types'
@@ -69,8 +69,10 @@ export async function POST(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Sign in first.' }, { status: 401 })
 
-  const role = await resolveAppRole(supabase)
-  if (role !== 'crew') return NextResponse.json({ error: 'Only crew members complete visits here.' }, { status: 403 })
+  // ⛔ No separate role check here. `authorizeWorkerVisit` below asks the
+  // stronger question — an ACTIVE roster row, resolved from this session's own
+  // uid — and answers it once. A second, differently-worded "is this a worker?"
+  // is exactly the drift this module exists to end.
 
   const body = await req.json().catch(() => null) as {
     jobId?: unknown; action?: unknown; baseUpdatedAt?: unknown; next?: VisitStateBody; prev?: VisitStateBody
@@ -81,29 +83,37 @@ export async function POST(req: NextRequest) {
   if (!jobId || !action || !baseUpdatedAt) return NextResponse.json({ error: 'bad request' }, { status: 400 })
 
   const admin = createAdminClient()
+  // No service key configured → this door cannot verify anything, so it stays
+  // shut. (authorizeWorkerVisit would refuse too; asking here keeps the refusal
+  // in this route's own words and lets the engines below see a non-null client.)
   if (!admin) return NextResponse.json({ error: 'Completing visits isn’t available right now.' }, { status: 503 })
 
-  // The worker, per the roster switches — the same predicate crew_technician_id()
-  // enforces in SQL. A failed read refuses; it is never "checked out fine".
-  const { data: tech, error: techErr } = await admin.from('technicians')
-    .select('id, user_id, crew_id')
-    .eq('auth_user_id', user.id).eq('is_active', true).is('archived_at', null)
-    .maybeSingle()
-  if (techErr) return NextResponse.json({ error: 'Couldn’t verify your crew access — try again.' }, { status: 502 })
-  const t = tech as { id: string; user_id: string; crew_id: string | null } | null
-  if (!t || !t.crew_id) return NextResponse.json({ error: 'Your account is no longer active on a crew.' }, { status: 403 })
+  // ⭐ THE canonical door (lib/workerAccess): active worker + this worker's
+  // tenant + the S65 assignment predicate, in that order. It replaced a
+  // hand-rolled lookup here that asked `.eq('crew_id', tech.crew_id)` and
+  // refused any worker whose crew_id was null — which locked a BY-NAME assignee
+  // out of completing their own visit. Owner identity for everything below comes
+  // from the verified roster row this returns, never from the request.
+  const auth = await authorizeWorkerVisit(admin, user.id, jobId)
+  if (!auth.ok) {
+    return NextResponse.json(
+      { error: WORKER_DENIAL_MESSAGE[auth.denial] },
+      { status: WORKER_DENIAL_STATUS[auth.denial] },
+    )
+  }
+  const ownerId = auth.worker.employerId
 
-  // The visit, proven to be this crew's work for this employer. Owner identity
-  // for everything below comes from THIS row.
+  // The full row the billing engines need. Re-read (not echoed from the
+  // authorisation, which carries identity only) and scoped by the SAME employer
+  // id, with cancelled work excluded — a called-off visit is not completable.
   const { data: jobRow, error: jobErr } = await admin.from('jobs')
     .select('*')
-    .eq('id', jobId).eq('user_id', t.user_id).eq('crew_id', t.crew_id)
+    .eq('id', jobId).eq('user_id', ownerId)
     .neq('status', 'cancelled')
     .maybeSingle()
   if (jobErr) return NextResponse.json({ error: 'Couldn’t check that visit — try again.' }, { status: 502 })
-  if (!jobRow) return NextResponse.json({ error: 'That visit isn’t on your board.' }, { status: 404 })
+  if (!jobRow) return NextResponse.json({ error: WORKER_DENIAL_MESSAGE['not-assigned'] }, { status: 404 })
   const job = jobRow as Job
-  const ownerId = t.user_id
 
   // The typed lifecycle fields, exactly as crew_set_visit_status has always
   // taken them (labor stats, not billing — the invoice amount never reads them).
@@ -117,6 +127,20 @@ export async function POST(req: NextRequest) {
   })
 
   if (action === 'complete') {
+    // 0 — the checklist gate, asked of THE definition (job_form_missing_items,
+    // the same function the jobs BEFORE UPDATE trigger enforces). Asking first
+    // turns a database refusal into a readable list on the worker's phone;
+    // skipping this step would not skip the rule — the trigger backstops it.
+    // A failed read fails CLOSED: "couldn't check" is never "checked out fine".
+    const { data: missing, error: gateErr } = await admin.rpc('job_form_missing_items', {
+      p_job_id: jobId, p_user_id: ownerId,
+    })
+    if (gateErr) return NextResponse.json({ error: 'Couldn’t check this visit’s checklist — try again.' }, { status: 502 })
+    const checklist = (missing ?? []) as { form: string; label: string; field_id: string }[]
+    if (Array.isArray(checklist) && checklist.length > 0) {
+      return NextResponse.json({ ok: false, checklist }, { status: 422 })
+    }
+
     // 1 — status, through the SAME door as always (caller's session: the RPC
     // re-checks assignment and the optimistic version itself).
     const { data: rpcData, error: rpcErr } = await supabase.rpc('crew_set_visit_status', rpcParams(body?.next, 'completed'))
