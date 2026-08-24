@@ -1,5 +1,10 @@
 import { type Tone, toneSoft } from '@/lib/tone'
 import type { MessagePrefs } from '@/lib/comms/templates'
+// Type-only, and deliberately so: measurePricing imports PricingDisplayType back
+// out of this file. `import type` is erased at compile time, so the cycle never
+// exists at runtime — and the snapshot's shape belongs beside the engine that
+// builds it, not copied here where the two could drift.
+import type { MeasurementSnapshotV2 } from '@/lib/measurePricing'
 
 export type QuoteStatus =
   | 'draft' | 'sent' | 'accepted' | 'scheduled' | 'completed' | 'paid' | 'declined'
@@ -1219,6 +1224,12 @@ export interface Quote {
   // Measurement provenance — lets us later compare suggested vs. actual vs. outcome.
   measured_sqft: number | null
   suggested_price: number | null
+  // ⭐ THE FREEZE (Measure & Price V2, Session 107). The measurement AND the
+  // pricing rule that produced this quote's figure, copied at use time and never
+  // re-derived from the Price Book on read — so raising a rate next winter cannot
+  // rewrite a quote the customer already accepted. Shape: MeasurementSnapshotV2
+  // in lib/measurePricing. null on every quote not priced from a measurement.
+  measurement_snapshot: MeasurementSnapshotV2 | null
   // Per-section breakdown captured from the Measurement Tool (sq ft).
   front_lawn_sqft: number | null
   back_lawn_sqft: number | null
@@ -1769,6 +1780,34 @@ export interface ServiceTemplate {
   // service carry it. Resolved lazily at attach time — changing it never
   // rewrites a form already minted on a visit. null = no checklist.
   form_template_id: string | null
+  // How this service is measured on the map (Measure & Price V2, Session 107).
+  // null = the owner hasn't said; lib/measurePricing then falls back to reading
+  // pricing_display_type, which is why every already-configured per_sqft service
+  // works untouched. Never inferred from the service's NAME.
+  measured_by: 'area' | 'length' | 'count' | null
+}
+
+// ── The ways one service is sold (Measure & Price V2, Session 107) ───────────
+// A row of `service_pricing_plans`. ⭐ THE ROW EXISTING IS THE OFFER — there is
+// no is_enabled flag, because a flag that can be false while the row survives is
+// one UPDATE away from quoting a plan the business withdrew.
+//
+// ⛔⛔ `term` is a COMMERCIAL term — how the customer buys and what the money is
+// per. It is NOT a visit schedule: 'monthly' does not mean four visits a month.
+// Operational recurrence lives in job_recurrences and is never derived from this.
+export interface ServicePricingPlanRow {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  service_template_id: string
+  term: 'one_time' | 'weekly' | 'biweekly' | 'monthly' | 'seasonal'
+  /** per_unit: price = rate × the measurement. flat: price = rate. */
+  basis: 'per_unit' | 'flat'
+  /** $/unit when per_unit, $ when flat. 0 is read as UNCONFIGURED, never free. */
+  rate: number
+  is_recommended: boolean
+  sort_order: number
 }
 
 export interface ServiceTemplateFormValues {
