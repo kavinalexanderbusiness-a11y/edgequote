@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { resolveAppRole } from '@/lib/crewAccess'
+import { authorizeWorkerVisit, WORKER_DENIAL_MESSAGE, WORKER_DENIAL_STATUS } from '@/lib/workerAccess'
 import { PHOTO_BUCKET } from '@/lib/photos'
 
 export const runtime = 'nodejs'          // the service role must never run at the edge
@@ -53,8 +53,8 @@ export async function POST(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Sign in first.' }, { status: 401 })
 
-  const role = await resolveAppRole(supabase)
-  if (role !== 'crew') return NextResponse.json({ error: 'Only crew members can add job photos here.' }, { status: 403 })
+  // ⛔ No separate role check. The canonical door below asks the stronger
+  // question — an ACTIVE roster row for this session — and answers it once.
 
   const form = await req.formData().catch(() => null)
   if (!form) return NextResponse.json({ error: 'bad request' }, { status: 400 })
@@ -76,26 +76,31 @@ export async function POST(req: NextRequest) {
   // shut (the invite route's contract). Never fall back to a weaker check.
   if (!admin) return NextResponse.json({ error: 'Photo upload isn’t available right now.' }, { status: 503 })
 
-  // 3 — who is this worker, per the roster switches. Fails closed on any error:
-  // "couldn't check" must never be treated as "checked out fine".
-  const { data: tech, error: techErr } = await admin.from('technicians')
-    .select('id, user_id, crew_id')
-    .eq('auth_user_id', user.id).eq('is_active', true).is('archived_at', null)
-    .maybeSingle()
-  if (techErr) return NextResponse.json({ error: 'Couldn’t verify your crew access — try again.' }, { status: 502 })
-  const t = tech as { id: string; user_id: string; crew_id: string | null } | null
-  if (!t || !t.crew_id) return NextResponse.json({ error: 'Your account is no longer active on a crew.' }, { status: 403 })
+  // 3 + 4 — ⭐ THE canonical door (lib/workerAccess): an ACTIVE roster row, this
+  // worker's tenant, then the S65 assignment predicate — crew OR by name. It
+  // replaced a hand-rolled pair of lookups that asked `.eq('crew_id',
+  // tech.crew_id)` and refused any crewless worker outright, so a by-name
+  // assignee could not upload proof of their own work. Fails closed on any read
+  // error: "couldn't check" is never "checked out fine".
+  const auth = await authorizeWorkerVisit(admin, user.id, jobId)
+  if (!auth.ok) {
+    return NextResponse.json(
+      { error: WORKER_DENIAL_MESSAGE[auth.denial] },
+      { status: WORKER_DENIAL_STATUS[auth.denial] },
+    )
+  }
 
-  // 4 — the job, proven to be this crew's work. customer/property identity comes
-  // from THIS row, never from the client.
+  // The columns this door needs. Re-read under the SAME verified employer id —
+  // customer/property identity comes from THIS row, never from the client — and
+  // cancelled work is excluded: called-off visits take no proof.
   const { data: job, error: jobErr } = await admin.from('jobs')
     .select('id, user_id, crew_id, customer_id, property_id, status')
-    .eq('id', jobId).eq('user_id', t.user_id).eq('crew_id', t.crew_id)
+    .eq('id', jobId).eq('user_id', auth.worker.employerId)
     .neq('status', 'cancelled')
     .maybeSingle()
   if (jobErr) return NextResponse.json({ error: 'Couldn’t check that visit — try again.' }, { status: 502 })
   const j = job as { id: string; user_id: string; customer_id: string | null; property_id: string | null; status: string } | null
-  if (!j) return NextResponse.json({ error: 'That visit isn’t on your board.' }, { status: 404 })
+  if (!j) return NextResponse.json({ error: WORKER_DENIAL_MESSAGE['not-assigned'] }, { status: 404 })
 
   // 5 (checklist photos only) — the named form must be THIS visit's, still
   // open, and the named field must be a photo requirement on its snapshot.

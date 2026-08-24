@@ -407,13 +407,23 @@ check('there is no second media bucket',
   !/storage\.buckets/.test(sql) && !/'crew-media-2'|'message-media'/.test(sql))
 
 const mediaRoute = stripTs(read('src/app/api/crew/media/route.ts'))
-check('the upload door proves the crew role from the DATABASE',
-  /resolveAppRole\(supabase\)/.test(mediaRoute) && /role !== 'crew'/.test(mediaRoute))
+// ⚠️ THE SAME THREE QUESTIONS, ASKED IN ONE PLACE NOW. Session 66 moved
+// identity and assignment into lib/workerAccess: three doors had drifted onto
+// the pre-S65 model (crew only; no crew ⇒ refused outright), so a worker
+// assigned BY NAME could not upload to their own visit. The door must delegate,
+// and the layer must still ask all three — which verify:worker-access proves
+// against real Postgres and mutation-tests predicate by predicate.
+const accessLayer = stripTs(read(join('src', 'lib', 'workerAccess.ts')))
+check('the upload door proves the worker from the DATABASE',
+  /authorizeWorkerVisit\(/.test(mediaRoute) && /from\('technicians'\)/.test(accessLayer))
 check('the upload door resolves the worker by the roster switches',
-  /eq\('auth_user_id', user\.id\)\.eq\('is_active', true\)\.is\('archived_at', null\)/.test(mediaRoute),
+  /eq\('is_active', true\)/.test(accessLayer) && /is\('archived_at', null\)/.test(accessLayer) &&
+  /eq\('auth_user_id', authUserId\)/.test(accessLayer),
   'a worker deactivated mid-shift must fail HERE, unexpired JWT and all')
-check('the upload door proves the visit belongs to this worker\'s employer AND crew',
-  /eq\('id', jobId\)\.eq\('user_id', t\.user_id\)\.eq\('crew_id', t\.crew_id\)/.test(mediaRoute))
+check('the upload door proves the visit belongs to this worker\'s employer AND assignment',
+  /eq\('id', jobId\)/.test(accessLayer) &&
+  /eq\('user_id', worker\.employerId\)/.test(accessLayer) &&
+  /workerCoversVisit\(worker, visit\)/.test(accessLayer))
 check('⭐ the upload door ALSO proves the message is on that visit',
   /from\('crew_messages'\)[\s\S]{0,200}eq\('id', messageId\)\.eq\('job_id', j\.id\)\.eq\('user_id', j\.user_id\)/.test(mediaRoute),
   'without it, a message id from another visit or another business could carry a file')

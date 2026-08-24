@@ -56,6 +56,10 @@ export default function NewQuotePage() {
   const searchParams = useSearchParams()
   const defaultCustomerId = searchParams.get('customer') || undefined
   const defaultPropertyId = searchParams.get('property') || undefined
+  // The estimate VISIT this quote is being written from (Session 79). Carried as
+  // a query param rather than state because the builder survives refreshes, and
+  // the link must survive them too. Spent only on a successful save — see below.
+  const fromEstimateId = searchParams.get('estimate') || undefined
   // ── Renewing a service plan ────────────────────────────────────────────────
   // This IS the renewal review screen. There is no separate renewal form: the
   // owner lands in the builder they already know, with last cycle's service,
@@ -127,7 +131,7 @@ export default function NewQuotePage() {
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
       const [customersRes, templatesRes, tiersRes, settingsRes, recentRes] = await Promise.all([
-        supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
+        supabase.from('customers').select('*, properties(id, address, city, province, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
         supabase.from('service_templates').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('travel_fee_tiers').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('business_settings').select('*').eq('user_id', user!.id).maybeSingle(),
@@ -528,6 +532,16 @@ export default function NewQuotePage() {
       // landed — same rule as the lead handoff above, for the same reason: a
       // refresh mid-build must not sever it.
       if (renewalOfRecurrenceId) clearRenewalPrefill()
+      // The estimate visit that produced this quote now points at it. Deliberately
+      // NOT fatal: the quote is saved and real, and failing the whole save because
+      // a back-link could not be written would lose the priced work the owner just
+      // did. The visit stays "done, no quote yet" — a visible, correctable state —
+      // rather than the save silently rolling back.
+      if (fromEstimateId) {
+        const { error: linkErr } = await supabase.from('schedule_items')
+          .update({ converted_quote_id: data.id }).eq('id', fromEstimateId)
+        if (linkErr) toast.error('Quote saved, but it could not be linked back to the estimate visit.')
+      }
       toast.success(
         renewalOfRecurrenceId ? 'Renewal quote created — send it, and their plan is booked once they accept.'
         : lead ? 'Quote created from the website lead.'

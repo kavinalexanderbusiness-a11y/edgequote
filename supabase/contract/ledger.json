@@ -1055,5 +1055,61 @@
   "sql_md5": "f55ba548c55c5817a901a4ed4b3a7989",
   "version": "20260816020000",
   "stmt_count": 1
+ },
+ {
+  "name": "audit_trail_v1",
+  "sql_len": 45697,
+  "sql_md5": "2b6d878d9893f609be6348108077dce9",
+  "version": "20260816030000",
+  "stmt_count": 1
+ },
+ {
+  "name": "job_forms_waive_audit",
+  "sql_len": 2924,
+  "sql_md5": "c0b6506b52462fab6a47ae2263abd1a7",
+  "version": "20260816031500",
+  "stmt_count": 1
+ },
+ {
+  "name": "crews_team_assignments_v1",
+  "sql_len": 32700,
+  "sql_md5": "eb539baabcb941c8211fb4671a0dd9b4",
+  "version": "20260816043000",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_tenant_scoped_lookups",
+  "sql_len": 26137,
+  "sql_md5": "8f29192b4f04363389e321a16c3a60bd",
+  "version": "20260816090000",
+  "stmt_count": 1
+ },
+ {
+  "name": "portal_change_order_tenant_scope",
+  "sql_len": 1911,
+  "sql_md5": "0ba4b5f2863eda148e05fdb3dbe4d92d",
+  "version": "20260816093000",
+  "stmt_count": 1
+ },
+ {
+  "name": "crew_day_restore_checklist",
+  "sql_len": 4734,
+  "sql_md5": "349dbcb3ca8ebfb01aab6d5e6783c84f",
+  "version": "20260816095000",
+  "stmt_count": 1
+ },
+ {
+  "name": "tenant_weld_inventory_equipment",
+  "sql_len": 4317,
+  "sql_md5": "d7a95058e0b892c862a767c822440d3f",
+  "version": "20260816110000",
+  "stmt_count": 1
+ },
+ {
+  "name": "worker_access_v1",
+  "sql_len": 9381,
+  "sql_md5": "9e93597bba2abc24702b02079fb23d1a",
+  "version": "20260817060000",
+  "stmt_count": 1
  }
 ]

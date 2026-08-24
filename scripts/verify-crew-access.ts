@@ -38,6 +38,17 @@ const ROOT = process.cwd()
 const SRC = join(ROOT, 'src')
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8')
 
+// ⭐ THE CANONICAL WORKER AUTHORISATION LAYER (Session 66). Identity and
+// assignment used to be re-asked, in each door's own words, by /api/crew/photos,
+// /api/crew/media and /api/crew/complete — and three of those were still asking
+// the PRE-S65 question (crew only, and a worker with no crew refused outright),
+// so somebody assigned to a visit BY NAME could not act on their own work. The
+// checks below therefore assert the invariant in two halves: the ROUTE must
+// delegate to authorizeWorkerVisit, and THIS FILE must still ask every question
+// the routes used to ask. verify:worker-access proves the layer against real
+// Postgres and mutation-tests each predicate individually.
+const WORKER_ACCESS_LAYER = read('src/lib/workerAccess.ts')
+
 // ── 1. The routing table, as behaviour ───────────────────────────────────────
 console.log('\n═══ Who may be where ═══')
 
@@ -322,13 +333,19 @@ const PHOTO_ROUTE = 'src/app/api/crew/photos/route.ts'
 check('the crew photo route exists', existsSync(join(ROOT, PHOTO_ROUTE)))
 if (existsSync(join(ROOT, PHOTO_ROUTE))) {
   const R = read(PHOTO_ROUTE)
+  // ⚠️ Session 66 moved these three questions into lib/workerAccess — see the
+  // note at WORKER_ACCESS_LAYER below. The route must DELEGATE; the layer must
+  // still ask all three, including by-name assignment (S65), which the old
+  // crew-only spelling here could not express.
   check('the route requires the crew role from the DATABASE',
-    /resolveAppRole/.test(R) && /role !== 'crew'/.test(R))
+    /await authorizeWorkerVisit\(/.test(R) && /from\('technicians'\)/.test(WORKER_ACCESS_LAYER))
   check('the technician is resolved by the roster switches',
-    /\.eq\('auth_user_id', user\.id\)\.eq\('is_active', true\)\.is\('archived_at', null\)/.test(R),
+    /\.eq\('is_active', true\)/.test(WORKER_ACCESS_LAYER) &&
+    /\.is\('archived_at', null\)/.test(WORKER_ACCESS_LAYER),
     'a deactivated worker must fail here mid-shift, unexpired JWT and all')
-  check('the job is proven to belong to this worker’s employer AND crew',
-    /\.eq\('id', jobId\)\.eq\('user_id', t\.user_id\)\.eq\('crew_id', t\.crew_id\)/.test(R))
+  check('the job is proven to belong to this worker’s employer AND assignment',
+    /\.eq\('user_id', worker\.employerId\)/.test(WORKER_ACCESS_LAYER) &&
+    /workerCoversVisit\(worker, visit\)/.test(WORKER_ACCESS_LAYER))
   check('a cancelled visit takes no photos', /\.neq\('status', 'cancelled'\)/.test(R))
   check('photo identity comes from the VERIFIED JOB ROW, never the form',
     /user_id: j\.user_id/.test(R) && /customer_id: j\.customer_id/.test(R) && /property_id: j\.property_id/.test(R) &&
@@ -345,7 +362,7 @@ if (existsSync(join(ROOT, PHOTO_ROUTE))) {
   check('no service key → the door stays shut',
     /if \(!admin\) return/.test(R), 'never fall back to a weaker check')
   check('a failed technician/job read refuses, never guesses',
-    /if \(techErr\) return/.test(R) && /if \(jobErr\) return/.test(R),
+    /denial: 'lookup-failed'/.test(WORKER_ACCESS_LAYER) && /if \(jobErr\) return/.test(R),
     '"couldn’t check" must never be treated as "checked out fine"')
 }
 const CAPTURE = read('src/components/crew/CrewStopPhotos.tsx')
@@ -428,13 +445,16 @@ check('the completion route exists', existsSync(join(ROOT, COMPLETE_ROUTE)))
 if (existsSync(join(ROOT, COMPLETE_ROUTE))) {
   const R = read(COMPLETE_ROUTE)
   check('the route requires the crew role from the DATABASE',
-    /resolveAppRole/.test(R) && /role !== 'crew'/.test(R))
+    /await authorizeWorkerVisit\(/.test(R) && /from\('technicians'\)/.test(WORKER_ACCESS_LAYER))
   check('the worker is resolved by the roster switches',
-    /\.eq\('auth_user_id', user\.id\)\.eq\('is_active', true\)\.is\('archived_at', null\)/.test(R))
-  check('the visit is proven to belong to this worker’s employer AND crew, and not cancelled',
-    /\.eq\('id', jobId\)\.eq\('user_id', t\.user_id\)\.eq\('crew_id', t\.crew_id\)/.test(R) && /\.neq\('status', 'cancelled'\)/.test(R))
+    /\.eq\('is_active', true\)/.test(WORKER_ACCESS_LAYER) &&
+    /\.is\('archived_at', null\)/.test(WORKER_ACCESS_LAYER))
+  check('the visit is proven to belong to this worker’s employer AND assignment, and not cancelled',
+    /\.eq\('user_id', worker\.employerId\)/.test(WORKER_ACCESS_LAYER) &&
+    /workerCoversVisit\(worker, visit\)/.test(WORKER_ACCESS_LAYER) &&
+    /\.neq\('status', 'cancelled'\)/.test(R))
   check('the owner’s identity comes ONLY from the verified roster row',
-    /const ownerId = t\.user_id/.test(R) &&
+    /const ownerId = auth\.worker\.employerId/.test(R) &&
     !/body\??\.\w*[Oo]wner/.test(R) && !/body\??\.\w*[Aa]mount/.test(R) && !/body\??\.\w*[Cc]ustomer/.test(R),
     'a crafted owner/customer/amount in the body must have nowhere to go')
   check('the status write STILL goes through the crew RPC on the CALLER’s session',

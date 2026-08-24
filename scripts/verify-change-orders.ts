@@ -211,9 +211,19 @@ console.log('\n■ 4. The LIVE SCHEMA states the guarantees (read from the gener
   const portal = portalDataSql()
   check('get_portal_data projects change_orders', /'change_orders', coalesce/.test(portal),
     'the customer cannot see, or answer, what is not serialized')
+  // Asserted as properties of the change_orders select rather than as one fixed
+  // spelling. Session 75 added `and user_id = v_user` between the customer and
+  // draft predicates (B1 defence in depth), which a clause-adjacency regex read as
+  // "the draft filter is gone" — a guard failing on where a predicate sits instead
+  // of on whether it is there. Both are still required, and the tenant predicate
+  // is now required too.
+  const changeOrderSelect = /from public\.change_orders[^)]*/.exec(portal)?.[0] ?? ''
   check('…and withholds DRAFTS (a privacy predicate, not a preference)',
-    /from public\.change_orders where customer_id = v_customer and status <> 'draft'/.test(portal),
+    /status <> 'draft'/.test(changeOrderSelect),
     'a draft is the owner\'s unfinished ask — a price nobody has decided to charge')
+  check('…and proves the TENANT as well as the customer',
+    /user_id = v_user/.test(changeOrderSelect),
+    'a token must not resolve rows by customer alone (S75 B1)')
   check('…scoped to the token\'s customer, like every other projection',
     !/from public\.change_orders(?![^\n]*customer_id = v_customer)/.test(portal))
 }
