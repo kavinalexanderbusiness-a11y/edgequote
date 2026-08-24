@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import type { CrewChange, CrewChangeKind } from '@/lib/crewBrief'
 import {
-  Ban, XCircle, PlusCircle, Clock, ArrowUpDown, StickyNote, Megaphone, MessageSquare,
+  Ban, XCircle, PlusCircle, Clock, ArrowUpDown, StickyNote, Megaphone, MessageSquare, Users,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -30,7 +30,7 @@ const MAX_LINES = 4
 
 const ICONS: Record<CrewChangeKind, LucideIcon> = {
   removed: Ban, cancelled: XCircle, added: PlusCircle, time: Clock, moved: ArrowUpDown,
-  instruction: StickyNote, crew_note: Megaphone, day_note: Megaphone, message: MessageSquare,
+  crew: Users, instruction: StickyNote, crew_note: Megaphone, day_note: Megaphone, message: MessageSquare,
 }
 
 /** Only the two "do not drive there" kinds get colour. If everything is urgent

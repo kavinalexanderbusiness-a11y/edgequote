@@ -23,7 +23,7 @@ import { LocationSummaryCard } from '@/components/properties/LocationSummaryCard
 import { loadLocationSummary } from '@/lib/locationSummaryData'
 import type { LocationSummary } from '@/lib/locationSummary'
 import { toast } from '@/lib/toast'
-import { Home, Ruler, FileText, User, MapPin, Edit2, StickyNote, Sparkles, CalendarPlus } from 'lucide-react'
+import { Home, Ruler, FileText, User, MapPin, Edit2, StickyNote, Sparkles, CalendarPlus, CalendarClock } from 'lucide-react'
 
 // The history of ONE address. The properties list already shows what a property IS
 // (health, plan, performance, pricing, latest measurement) — this shows what
@@ -66,6 +66,10 @@ export default function PropertyDetailPage() {
   // carries its OWN failure state (visitsUnknown) so a broken visit read says so
   // instead of reading as "never serviced".
   const [summary, setSummary] = useState<LocationSummary | null>(null)
+  // The customer's OTHER locations — one-tap hops between a landlord's addresses
+  // without the round trip through their profile. Navigation sugar: a failed read
+  // renders no chips (a missing shortcut, not a wrong claim).
+  const [siblings, setSiblings] = useState<{ id: string; address: string; is_primary: boolean }[]>([])
 
   useEffect(() => {
     let active = true
@@ -102,7 +106,7 @@ export default function PropertyDetailPage() {
       const cust = Array.isArray(prop.customers) ? prop.customers[0] ?? null : prop.customers ?? null
       if (active) { setLoadError(null); setProperty(prop); setCustomer(cust) }
 
-      const [tl, setRes, ctx, loc] = await Promise.all([
+      const [tl, setRes, ctx, loc, sibRes] = await Promise.all([
         loadPropertyTimelineSources(supabase, user.id, id),
         supabase.from('business_settings').select('gst_percent').eq('user_id', user.id).maybeSingle(),
         getPropertyContext(supabase, id),
@@ -114,11 +118,19 @@ export default function PropertyDetailPage() {
             visitsUnknown: true, lastVisit: null, nextVisit: null, completedCount: null,
             services: [], typicalDuration: null, timedVisits: null, photoCount: null,
           })),
+        // Sibling locations for the switcher — primary first, same order as every
+        // other picker. Tenant-scoped like the property read above.
+        prop.customer_id
+          ? supabase.from('properties').select('id, address, is_primary').eq('customer_id', prop.customer_id).eq('user_id', user.id).neq('id', id).order('is_primary', { ascending: false }).order('address')
+          : Promise.resolve({ data: null, error: null }),
       ])
       // Two independent honesty contracts, both preserved: `missing` names the
       // timeline sources that failed, `summary.visitsUnknown` says the summary's
       // own visit read did. Neither can speak for the other.
-      if (active) { setInsight(ctx); setMissing(tl.missing); setSummary(loc) }
+      if (active) {
+        setInsight(ctx); setMissing(tl.missing); setSummary(loc)
+        setSiblings((sibRes.data as { id: string; address: string; is_primary: boolean }[] | null) ?? [])
+      }
       const all = buildTimeline({
         ...tl.sources,
         gstPercent: Number((setRes.data as { gst_percent?: number | null } | null)?.gst_percent) || 0,
@@ -250,6 +262,28 @@ export default function PropertyDetailPage() {
           <Edit2 className="w-3 h-3" /> Edit address
         </button>
       </div>
+
+      {/* The customer's other locations — hop between a landlord's addresses
+          without the round trip through their profile. Absent for the common
+          one-location customer, capped for the forty-address landlord (the
+          full list lives on the profile's Properties card, one tap away). */}
+      {siblings.length > 0 && customer && (
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="text-ink-faint">{customer.name.split(' ')[0]}’s other locations:</span>
+          {siblings.slice(0, 6).map(s => (
+            <Link key={s.id} href={`/dashboard/properties/${s.id}`}
+              className="inline-flex items-center gap-1 rounded-lg border border-border bg-surface px-2 py-1 text-[11px] font-medium text-ink-muted hover:text-ink hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              <Home className="w-3 h-3 shrink-0 text-ink-faint" aria-hidden />
+              {s.address}{s.is_primary ? ' · primary' : ''}
+            </Link>
+          ))}
+          {siblings.length > 6 && (
+            <Link href={`/dashboard/customers/${customer.id}`} className="text-[11px] text-accent-text hover:underline">
+              +{siblings.length - 6} more
+            </Link>
+          )}
+        </div>
+      )}
 
       {/* Customer V2: THE address editor — the property owns its address, so a
           correction happens here, on one table, and can never half-apply across
@@ -389,6 +423,16 @@ export default function PropertyDetailPage() {
               <Link href={`/dashboard/schedule?customer=${property.customer_id}&property=${property.id}`}
                 className="text-[11px] font-medium px-2 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong transition-colors inline-flex items-center gap-1">
                 <CalendarPlus className="w-3 h-3" /> Schedule
+              </Link>
+            )}
+            {property.customer_id && (
+              // A visit to price the work, not to do it. CalendarClock rather
+              // than the Ruler this page already spends on Measure — two rulers
+              // side by side would read as one feature.
+              <Link href={`/dashboard/schedule?estimate=new&customer=${property.customer_id}&property=${property.id}`}
+                title="Book a visit to look at the work and quote it"
+                className="text-[11px] font-medium px-2 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong transition-colors inline-flex items-center gap-1">
+                <CalendarClock className="w-3 h-3" /> Estimate
               </Link>
             )}
             <Link href={`/dashboard/properties/measure?id=${property.id}`}

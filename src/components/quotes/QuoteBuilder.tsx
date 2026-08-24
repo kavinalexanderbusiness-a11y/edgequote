@@ -52,7 +52,7 @@ import type { MeasurementSnapshot, SavedRecommendation } from '@/types'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { PriceIntelligence } from '@/components/pricing/PriceIntelligence'
-import { Clock, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp, ChevronDown, Package, Wallet } from 'lucide-react'
+import { Clock, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp, ChevronDown, Package, Wallet, Home, Star } from 'lucide-react'
 
 interface QuoteBuilderProps {
   customers: Customer[]
@@ -807,6 +807,38 @@ export function QuoteBuilder({
   // customer B — the one-tap prices quoted the wrong property.
   const autoFilledSqft = useRef<number | null>(null)
 
+  // ── Which address is this quote for? (multi-location customers) ─────────────
+  // The effects below fill the address with the customer's PRIMARY property. For
+  // a one-address customer that is the right silent default — nothing to decide.
+  // For a landlord with several, it silently pointed every new quote at the
+  // primary, and the only way to target another address was to already know it
+  // and retype it. Their saved addresses are now one-tap choices above the field;
+  // the field itself still takes any other address (a new job site is quoted
+  // before anyone files it as a property — the save path's find-or-create seam
+  // handles both identically).
+  const [pickedPropertyId, setPickedPropertyId] = useState<string | null>(null)
+  // A pick speaks only for the customer it was made for — same rule
+  // defaultPropertyId follows above.
+  useEffect(() => { setPickedPropertyId(null) }, [customerId])
+  const customerProperties = useMemo(() => {
+    if (!customerId || customerId === '__manual') return []
+    const c = customers.find(x => x.id === customerId) as
+      (Customer & { properties?: { id?: string; address: string; city?: string | null; province?: string | null; is_primary?: boolean }[] }) | undefined
+    const rows = (c?.properties ?? []).filter(p => (p.address || '').trim())
+    // Primary first, then stable by address — the order every property picker shows.
+    return [...rows].sort((a, b) => Number(!!b.is_primary) - Number(!!a.is_primary) || a.address.localeCompare(b.address))
+  }, [customerId, customers])
+  function pickPropertyAddress(p: { id?: string; address: string; city?: string | null; province?: string | null }) {
+    const full = [p.address, p.city, p.province].filter(Boolean).join(', ')
+    setValue('address', full)
+    // Recorded as OUR fill — a later customer switch may replace it, the same
+    // autoFilledAddress contract the two effects below enforce.
+    autoFilledAddress.current = full
+    setPickedPropertyId(p.id ?? null)
+    // Same follow-up a picked autocomplete address gets.
+    calculateDistance(full)
+  }
+
   useEffect(() => {
     if (!customerId || customerId === '__manual') return
     const customer = customers.find(c => c.id === customerId)
@@ -836,12 +868,17 @@ export function QuoteBuilder({
     // effect resolves after the customer effect's sync write, so it always won).
     // The prop only speaks for the customer it came with.
     const propertyStillApplies = !!defaultPropertyId && (!defaultCustomerId || customerId === defaultCustomerId)
+    // An address chip picked above outranks the URL's property (it is the LATER,
+    // deliberate act); both outrank the primary-property fallback. This is what
+    // makes the measured price follow the picked location — without it, tapping
+    // "45 Lake Rd" still priced the plan tiles off the primary's lawn.
+    const targetPropertyId = pickedPropertyId ?? (propertyStillApplies ? defaultPropertyId! : null)
     let active = true
     async function load() {
       const supabase = createClient()
       const cols = 'lawn_sqft, measurement_history, address, city, province'
-      const res = propertyStillApplies
-        ? await supabase.from('properties').select(cols).eq('id', defaultPropertyId!).limit(1).maybeSingle()
+      const res = targetPropertyId
+        ? await supabase.from('properties').select(cols).eq('id', targetPropertyId).limit(1).maybeSingle()
         : await supabase.from('properties').select(cols).eq('customer_id', customerId).order('is_primary', { ascending: false }).limit(1).maybeSingle()
       if (!active) return
       const row = res.data as { lawn_sqft: number | null; measurement_history: MeasurementSnapshot[]; address: string | null; city: string | null; province: string | null } | null
@@ -870,7 +907,7 @@ export function QuoteBuilder({
       if (!isEdit && row?.address) {
         const full = [row.address, row.city, row.province].filter(Boolean).join(', ')
         const current = String(getValues('address') || '')
-        if (full && (propertyStillApplies || !current.trim() || current === autoFilledAddress.current)) {
+        if (full && (targetPropertyId || !current.trim() || current === autoFilledAddress.current)) {
           setValue('address', full)
           autoFilledAddress.current = full
         }
@@ -878,7 +915,7 @@ export function QuoteBuilder({
     }
     load()
     return () => { active = false }
-  }, [customerId, defaultPropertyId, defaultCustomerId, isEdit, getValues, setValue])
+  }, [customerId, defaultPropertyId, defaultCustomerId, pickedPropertyId, isEdit, getValues, setValue])
 
   // Same rule for the notes a template pre-fills. Changing service used to
   // REPLACE whatever was in the Notes field — including a scope the owner had
@@ -1380,6 +1417,39 @@ export function QuoteBuilder({
                 </div>
               )}
 
+              {/* Which address? — a customer with several saved addresses gets them
+                  as one-tap choices, so pointing the quote at the right location is
+                  an explicit act instead of a silent primary-address default. One
+                  address = nothing to decide, so the row doesn't render and the
+                  auto-fill below stays as it was. The chips FILL the field — the
+                  field stays the single source the save path resolves. */}
+              {customerProperties.length > 1 && (
+                <div className="rounded-xl border border-border bg-bg-tertiary/50 p-3 space-y-2">
+                  <p className="text-[11px] font-semibold text-ink-muted flex items-center gap-1.5 uppercase tracking-wide">
+                    <Home className="w-3.5 h-3.5 text-accent-text shrink-0" />
+                    {customerProperties.length} saved addresses — which one is this quote for?
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {customerProperties.map(p => {
+                      const addrNow = String(watch('address') || '').trim()
+                      // Selected = the explicit pick, or (before any pick) the address
+                      // the field already holds — so the primary auto-fill reads as
+                      // the current answer, not as "nothing chosen".
+                      const sel = pickedPropertyId ? pickedPropertyId === (p.id ?? '') : !!addrNow && addrNow.startsWith(p.address.trim())
+                      return (
+                        <button key={p.id ?? p.address} type="button" onClick={() => pickPropertyAddress(p)}
+                          aria-pressed={sel}
+                          className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+                            sel ? 'border-accent/40 bg-accent/10 text-accent-text' : 'border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong'}`}>
+                          {p.is_primary && <Star className="w-3 h-3 shrink-0 fill-current opacity-70" aria-label="Primary address" />}
+                          {p.address}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p className="text-[10px] text-ink-faint">Somewhere else? Type it below — it’s saved as one of their properties automatically.</p>
+                </div>
+              )}
               {/* Property */}
               <Controller name="address" control={control}
                 rules={{ required: 'Address is required' }}
@@ -1388,8 +1458,11 @@ export function QuoteBuilder({
                     label="Service Address *"
                     placeholder="123 Main Street, Calgary, AB"
                     value={field.value || ''}
-                    onChange={field.onChange}
-                    onSelect={(p) => { field.onChange(p.formatted); calculateDistance(p.formatted) }}
+                    // A hand-edited address ends the chip's authority — without this
+                    // the picked chip stays lit (and keeps driving the measured
+                    // price) while the field says somewhere else.
+                    onChange={v => { field.onChange(v); if (pickedPropertyId && v !== autoFilledAddress.current) setPickedPropertyId(null) }}
+                    onSelect={(p) => { field.onChange(p.formatted); if (pickedPropertyId) setPickedPropertyId(null); calculateDistance(p.formatted) }}
                     error={errors.address?.message}
                   />
                 )} />

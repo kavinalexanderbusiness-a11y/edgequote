@@ -1,23 +1,38 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- JOB FORMS: the waive joins the audit trail — pending migration (Session 69)
+-- ARCHIVED MIGRATION — HISTORY ONLY. DO NOT RE-RUN.
 --
--- ⚠️ LIFECYCLE — the same one 2026-08-15-audit-trail-v1.sql documents for
+--   version : 20260816031500
+--   name    : job_forms_waive_audit
+--
+-- Applied to production 2026-08-16 via the management API (Session 68) and
+-- recorded in supabase_migrations.schema_migrations. The SQL below is the
+-- text production executed.
+--
+-- Its effects are already folded into supabase/migrations/*_baseline.sql. This
+-- copy exists so "why is this column here?" is answerable, and for nothing else.
+-- Re-running one replaces a live object with an older body — silently, no error.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+-- JOB FORMS: the waive joins the audit trail â€” pending migration (Session 69)
+--
+-- âš ï¸ LIFECYCLE â€” the same one 2026-08-15-audit-trail-v1.sql documents for
 -- itself, because this file DEPENDS on that one (audit_log does not exist
 -- until it runs):
 --   1. apply audit-trail-v1 to production first, then this file
 --      (name it job_forms_waive_audit),
 --   2. npm run schema:contract && npm run schema:baseline,
---   3. DELETE both files in the same commit — the baseline then carries them.
+--   3. DELETE both files in the same commit â€” the baseline then carries them.
 --   Until then, waives are still fully recorded on the instance itself
---   (job_forms.waived_at / waived_by / waive_reason — written only with a
+--   (job_forms.waived_at / waived_by / waive_reason â€” written only with a
 --   reason, enforced by trigger); this adds the same fact to the ONE audit
 --   feed so "who overrode a checklist, and why" appears beside every other
 --   accountability event.
 --
 -- WHY A TRIGGER (not app code): the same choke-point reasoning as every other
--- audit_* function — the waive is a browser supabase-js write with no server
+-- audit_* function â€” the waive is a browser supabase-js write with no server
 -- seam, and the event must commit and roll back WITH the write it describes.
--- ═══════════════════════════════════════════════════════════════════════════
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 create or replace function public.audit_job_forms()
 returns trigger

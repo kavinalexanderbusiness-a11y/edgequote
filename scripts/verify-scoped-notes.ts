@@ -249,12 +249,24 @@ if (has(MEDIA_ROUTE)) {
   check('runs on node (the service role must never run at the edge)',
     /runtime\s*=\s*['"]nodejs['"]/.test(src))
   check('1 — requires a session', /auth\.getUser\(\)/.test(src) && /401/.test(src))
-  check('2 — asks the DATABASE for the role', /resolveAppRole/.test(src) && /!==\s*['"]crew['"]/.test(src))
+  // ⚠️ THESE THREE MOVED, THEY DID NOT GO AWAY. Session 66 lifted identity and
+  // assignment out of this route into lib/workerAccess, because four doors were
+  // each answering "is this yours?" in their own words and three of them were
+  // still asking the PRE-S65 question (crew only, and no crew ⇒ refused), which
+  // locked a by-name assignee out of their own work. So the invariants are now
+  // asserted in their new spelling — the route must DELEGATE, and the layer must
+  // still ask all three questions. verify:worker-access proves the layer's half
+  // against a real database and mutation-tests every predicate in it.
+  const layer = stripTs(read(join('src', 'lib', 'workerAccess.ts')))
+  check('2 — asks the DATABASE who this is (via the canonical resolver)',
+    /resolveWorker\(/.test(src) && /from\(\s*['"]technicians['"]\s*\)/.test(layer))
   check('3 — re-checks the roster switches',
-    /is_active/.test(src) && /archived_at/.test(src) && /auth_user_id/.test(src),
+    /is_active/.test(layer) && /archived_at/.test(layer) && /auth_user_id/.test(layer),
     'without these a worker deactivated mid-shift keeps reading with an unexpired JWT')
-  check('4 — scopes the visit to this employer AND this crew',
-    /\.eq\(\s*['"]user_id['"]/.test(src) && /\.eq\(\s*['"]crew_id['"]/.test(src),
+  check('4 — scopes the visit to this employer AND this worker’s assignment',
+    /authorizeWorkerVisit\(/.test(src) &&
+    /\.eq\(\s*['"]user_id['"]\s*,\s*worker\.employerId\s*\)/.test(layer) &&
+    /workerCoversVisit\(/.test(layer),
     'employer alone lets any employee read any crew\'s visit; crew alone crosses the tenant boundary')
   check('the catalogue read is scoped by BOTH job and owner',
     /\.eq\(\s*['"]job_id['"][^)]*\)\s*\.eq\(\s*['"]user_id['"]/.test(src.replace(/\s+/g, ' ')),

@@ -1,5 +1,14 @@
-// ── Verify: the crew's daily brief tells the truth about change ──────────────
-//   npm run verify:crew-brief
+// ── Verify: the worker's field home tells the truth ──────────────────────────
+//   npm run verify:field-home
+//
+// Grown out of verify:crew-brief (Session 61): the brief's change-honesty rules
+// are still the heart of it, and the file now also pins the FIELD HOME surface
+// claims — where a worker lands, what the header answers, which exits from the
+// clock exist, and what the offline shell may hold. The deeper boundaries this
+// surface stands on are pinned by their own guards and deliberately not
+// restated here: crew-access (RPC-only access), work-sessions (the one-number
+// clock), completion (proof of work), scoped-notes (audience), crew-messages
+// (chat), day-plan (the owner's mirror of crew order).
 //
 // WHY THIS SCRIPT EXISTS
 // "What changed since you looked" is the one answer on a field screen that
@@ -23,17 +32,19 @@
 // feature makes are asserted over the real source and the real database.
 //
 // ⭐ NO FIXTURE TENANT, NO LIVE BOOK. The engine is pure, so its rules are
-// pinned by calling it — no rows are written anywhere. The three database facts
-// the feature depends on are read out of the CATALOGUE (pg_get_functiondef),
-// which is a statement about the schema and not about anybody's data. Guards
-// that assert over live production rows are coin flips
-// (see the guard-fixtures-not-the-book note); this one has nothing to flip.
+// pinned by calling it — no rows are written anywhere. The database facts the
+// feature depends on are read from the repo's OWN migrations (the last
+// definition of crew_day on disk), a statement about the schema as versioned
+// here — not about anybody's data, and not about a hand-applied prod-only
+// definition, which this guard cannot see. Guards that assert over live
+// production rows are coin flips (guard-fixtures-not-the-book); this one has
+// nothing to flip.
 
 import {
   crewDaySnapshot, diffCrewDay, crewOrderBasis, textMark,
   type CrewDaySnapshot, type CrewChange, type CrewChangeKind,
 } from '../src/lib/crewBrief'
-import type { CrewDay, CrewStop } from '../src/lib/crewAccess'
+import { routeFor, type CrewDay, type CrewStop } from '../src/lib/crewAccess'
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -237,6 +248,73 @@ console.log('\n── 3. Instructions, notes and messages ───────�
     diffCrewDay(snap(d, { a: 3 }), snap(d, { a: 0 })).length === 0)
 }
 
+console.log('\n── 3b. Who the worker is with ─────────────────────────────────')
+// "Crew A, with Sarah and Mike" is read once at sign-in and then trusted all
+// day. When the office moves people between crews mid-morning, the header
+// silently re-renders — the same silent-refetch problem the whole brief exists
+// for, applied to people instead of stops.
+{
+  const mates = (ts: { id: string; name: string }[]) =>
+    day([stop({ id: 'a' })], { teammates: ts.map(t => ({ ...t, role: null })) })
+  const before = snap(mates([]))
+  const joined = snap(mates([{ id: 't2', name: 'Sarah' }]))
+  const cs = diffCrewDay(before, joined)
+  check('a teammate joining the crew is reported', has(cs, 'crew'), JSON.stringify(kinds(cs)))
+  check('…and the line says who the worker is with NOW',
+    /now with Sarah/.test(cs.find(c => c.kind === 'crew')?.detail ?? ''),
+    cs.find(c => c.kind === 'crew')?.detail ?? '(none)')
+  const alone = diffCrewDay(joined, before)
+  check('a teammate leaving is reported as working solo',
+    /working solo/.test(alone.find(c => c.kind === 'crew')?.detail ?? ''),
+    JSON.stringify(alone))
+}
+{
+  // Identity is the SET of ids. A rename is the office fixing a typo; a
+  // reordered payload is JSON, not a staffing decision. Neither is news.
+  const withMates = (ts: { id: string; name: string }[]) =>
+    snap(day([stop({ id: 'a' })], { teammates: ts.map(t => ({ ...t, role: null })) }))
+  check('a renamed teammate is not a crew change',
+    diffCrewDay(withMates([{ id: 't2', name: 'Sara' }]), withMates([{ id: 't2', name: 'Sarah' }])).length === 0)
+  check('the same people in a different payload order is not a crew change',
+    diffCrewDay(
+      withMates([{ id: 't2', name: 'Sarah' }, { id: 't3', name: 'Mike' }]),
+      withMates([{ id: 't3', name: 'Mike' }, { id: 't2', name: 'Sarah' }]),
+    ).length === 0)
+}
+{
+  // Moved to a DIFFERENT crew with the same teammates: the crew id is part of
+  // identity — a different crew has a different note, a different board and a
+  // different day_start, and the worker should know they were moved.
+  const onCrew = (crewId: string) =>
+    snap(day([stop({ id: 'a' })], { crew: { id: crewId, name: 'Crew', color: '#0af', day_start: '08:00' } }))
+  check('being moved to another crew is reported', has(diffCrewDay(onCrew('crew-1'), onCrew('crew-2')), 'crew'))
+}
+{
+  // ⭐ THE LEGACY BASELINE. Snapshots saved by the build BEFORE these fields
+  // existed are still on phones. Absent fields make NO crew claims — the same
+  // "no baseline ⇒ no claims" rule, per field. Announcing "your crew changed"
+  // to every worker on deploy morning would spend the feature's credibility on
+  // a version skew.
+  const now = snap(day([stop({ id: 'a' })], { teammates: [{ id: 't2', name: 'Sarah', role: null }] }))
+  const legacy = { ...now } as CrewDaySnapshot
+  delete legacy.crewId
+  delete legacy.mateIds
+  delete legacy.mateNames
+  const cs = diffCrewDay(legacy, now)
+  check('a baseline that never recorded the crew makes no crew claims',
+    !has(cs, 'crew'), JSON.stringify(kinds(cs)))
+}
+{
+  // Severity: a crew change matters like a sequence change (it changes how the
+  // day is worked) but must never outrank a wasted trip.
+  const before = snap(day([stop({ id: 'a' }), stop({ id: 'b' })]))
+  const after = snap(day([stop({ id: 'b' })], { teammates: [{ id: 't2', name: 'Sarah', role: null }] }))
+  const order = kinds(diffCrewDay(before, after))
+  check('a removed stop still outranks a crew change',
+    order.indexOf('removed') !== -1 && order.indexOf('removed') < order.indexOf('crew'),
+    JSON.stringify(order))
+}
+
 console.log('\n── 4. ⛔ What must NEVER be reported ──────────────────────────')
 // The whole feature turns on this section. Every line here is a mutation that
 // really does happen, really does move jobs.updated_at, and must produce no
@@ -301,8 +379,16 @@ console.log('\n── 5. Whose order is the numbered list? ───────
   // lib/route owns ordering for the owner's board and the RPC owns it for the
   // phone; a third would be a third answer to "what is stop one?".
   const BRIEF = read('src/lib/crewBrief.ts')
+  // Two sorts are legitimate and neither is a stop order: the severity sort on
+  // the way out (changes, not stops) and the teammate-ID canonicalisation in
+  // the snapshot (a SET compared as a string — sorting ids is what makes "same
+  // people, different payload order" a non-change). Anything else is suspect.
   check('the brief engine never sorts the day',
-    !/\.sort\(/.test(BRIEF.replace(/return out\.sort\([\s\S]*?\)\n\}/, '')),
+    !/\.sort\(/.test(
+      BRIEF
+        .replace(/return out\.sort\([\s\S]*?\)\n\}/, '')
+        .replace(/day\.teammates\.map\(t => t\.id\)\.sort\(\)/, ''),
+    ),
     'lib/crewBrief must not re-order stops — crew_day owns the sequence')
   const TODAY = read('src/components/crew/CrewToday.tsx')
   check('Today renders the stops in the order the RPC returned them',
@@ -479,9 +565,94 @@ console.log('\n── 9. Mobile: the banner cannot push the day off the screen �
     order[0] === 'removed', JSON.stringify(order))
 }
 
+console.log('\n── 10. The field home surface ─────────────────────────────────')
+// The landing, the header, the two exits from the clock, and the offline shell.
+// Each is asserted at the place a refactor would break it.
+{
+  // WHERE A WORKER LANDS. The redirect table is pure — run it, don't read it.
+  // A crew sign-in must arrive at Today, and no path through the table may put
+  // a crew session on the owner's CRM.
+  check('a crew sign-in lands on Today', routeFor('crew', '/login', true) === '/crew')
+  check('a crew session on the owner dashboard is sent home',
+    routeFor('crew', '/dashboard', true) === '/crew')
+  check('…including deep owner paths', routeFor('crew', '/dashboard/customers', true) === '/crew')
+  check('a crew session already home is left alone', routeFor('crew', '/crew', true) === null)
+  check('an owner is never routed into Crew Mode', routeFor('owner', '/crew', true) === '/dashboard')
+  check('a linked-to-nothing account is sent to join, not shown a day',
+    routeFor('none', '/crew', true) === '/crew/join')
+  check('signed out, the day is behind the login', routeFor('none', '/crew', false) === '/login')
+}
+{
+  const TODAY = read('src/components/crew/CrewToday.tsx')
+  // THE HEADER ANSWERS AT A GLANCE: what kind of morning, and where first.
+  check('the header states day progress in all three shapes',
+    /Nothing booked today/.test(TODAY) && /of \$\{active\.length\} to go/.test(TODAY) &&
+    /All \$\{active\.length\} done/.test(TODAY))
+  check('the header names the first/next stop before any scrolling',
+    /First up/.test(TODAY) && /'Now'/.test(TODAY) &&
+    /next\.customer\?\.name \|\| next\.title/.test(TODAY))
+  // TWO EXITS FROM THE CLOCK, two writers. "Done for today" banks the time and
+  // leaves the visit open; "Finish" hands off to billing. Conflating them is
+  // the multi-day bug the work-sessions vocabulary exists to prevent.
+  check('stopping for the day and finishing are different writers',
+    /crewStopForToday\(/.test(TODAY) && /crewCompleteVisit\(/.test(TODAY) &&
+    /Done for today/.test(TODAY))
+}
+{
+  // THE OFFLINE SHELL. sw.js caches field-route HTML by explicit allowlist.
+  // '/crew' is a client page under a data-free gate layout, so it qualifies;
+  // '/crew/schedule' is an async SERVER component that bakes day counts into
+  // its HTML, so caching it would replay a stale week as live — it must stay
+  // OFF the list. The !res.redirected guard is what keeps a signed-out bounce
+  // from being pinned as the crew's shell forever.
+  const SW = read('public/sw.js')
+  const shells = SW.match(/const FIELD_SHELLS = \[([^\]]*)\]/)?.[1] ?? ''
+  check("the worker's day is on the offline-shell allowlist", /'\/crew'/.test(shells), shells)
+  check('the server-rendered crew week is NOT cached', !/crew\/schedule/.test(shells), shells)
+  check('a redirected response is never cached as a shell', /!res\.redirected/.test(SW))
+}
+{
+  // ⭐⭐ THREE THINGS S65 MADE SEPARABLE, and the surface must not merge them:
+  //   crew MEMBERSHIP        → day.teammates (who shares the crew)
+  //   planned ASSIGNMENT     → crew_assignment_covers: the crew's, or a person's
+  //   actual PARTICIPATION   → not claimed here at all
+  // The failure this pins: a worker on Crew A whose whole day is assigned to
+  // them individually being told they are "with Sarah, Mike" — a roster fact
+  // rendered as a fact about today's work.
+  const TODAY = read('src/components/crew/CrewToday.tsx')
+  check('the direct-vs-crew distinction comes from the SERVER, never inferred',
+    /s\.personal === true/.test(TODAY) && !/technician_id/.test(TODAY),
+    'the phone must read crew_day\'s `personal`, never re-derive assignment')
+  check('an all-direct day does not name teammates as today\'s company',
+    /!allPersonal/.test(TODAY) && /allPersonal && <span>· today’s stops are assigned to you/.test(TODAY),
+    'membership is not participation — the teammate list is a claim about the crew, not the day')
+  check('an empty day makes no assignment claim at all',
+    /active\.length > 0 && active\.every\(s => s\.personal === true\)/.test(TODAY),
+    'with no stops there is nothing to say about who they belong to')
+}
+{
+  // S69's checklist summary and S67's availability reach this screen through
+  // crew_day and lib/dayFit respectively. This surface must carry them, not
+  // re-implement or drop them.
+  const TODAY = read('src/components/crew/CrewToday.tsx')
+  check('the S69 checklist summary still reaches the card',
+    /CrewStopChecklist/.test(TODAY) && /gateBlocked/.test(TODAY),
+    'the completion gate\'s required-item list must survive this lane')
+}
+{
+  // NO MONEY ON A WORKER'S PHONE. crew_day already selects none (section 8);
+  // this pins the render side of the same claim over the two components this
+  // session owns, comments stripped first so the rule cannot be satisfied or
+  // tripped by its own documentation.
+  const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/[^\n]*$/gm, '').replace(/([^:'"])\/\/[^\n]*/g, '$1')
+  const src = strip(read('src/components/crew/CrewToday.tsx')) + strip(read('src/components/crew/CrewChanges.tsx'))
+  check('no money identifier reaches the field home render',
+    !/\b(price|margin|profit|revenue|balance|wage|invoice_total)\b/i.test(src))
+}
+
 console.log('\n── Summary ────────────────────────────────────────────────────')
 if (failures) {
-  console.log(`\n❌ verify:crew-brief — ${failures} failure${failures === 1 ? '' : 's'}\n`)
+  console.log(`\n❌ verify:field-home — ${failures} failure${failures === 1 ? '' : 's'}\n`)
   process.exit(1)
 }
-console.log('\n✅ verify:crew-brief — the brief reports what changed, and nothing else\n')
+console.log('\n✅ verify:field-home — the field home says what is true, and nothing else\n')
