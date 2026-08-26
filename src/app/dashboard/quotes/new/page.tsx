@@ -328,6 +328,9 @@ export default function NewQuotePage() {
       rate: finalRate,
       travel_fee: applyFeeRecovery(Number(values.travel_fee), settings) ?? 0,
       measured_sqft: Number(values.measured_sqft) || measurement?.sqft || null,
+      // The frozen Measure & Price record (Session 107) — written as produced,
+      // never re-derived from the Price Book on read.
+      measurement_snapshot: values.measurement_snapshot ?? null,
       // The LIVE form value wins: re-measuring or re-applying a recommendation
       // inside the builder updates values.suggested_price, and preferring the
       // handoff's snapshot here stored yesterday's suggestion against today's

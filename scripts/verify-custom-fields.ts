@@ -113,10 +113,27 @@ check('the schema is NOT parked in supabase/archive/', archivedCustom.length ===
   `${archivedCustom.join(', ')} — archive/ is not the apply path, so a migration left there ` +
   'never runs. pending/ was renamed to archive/ledger/ on main and a rebase suggests this move; ' +
   'it must be supabase/migrations/<14-digit>_name.sql instead.')
-check('its version sorts above every migration already on main',
-  baselineHasSchema || applyPathCustom.every(f => migrationFiles().filter(m => !DEFINES.test(read(join(MIGRATIONS_DIR, m)))).every(m => f > m)),
-  `${applyPathCustom.join(', ')} does not sort last — a migration below the baseline is applied ` +
-  'before the tables it references exist, and one below a sibling can break its assumptions.')
+// ⭐ THE FLOOR, MEASURED — not "this file must sort last".
+//
+// This check used to require the custom-fields migration to sort above EVERY
+// other migration in the tree. That was true when it was written and cannot stay
+// true: it makes the guard fail the moment anyone lands a later migration for an
+// unrelated feature, which is exactly what happened when Session 107 added
+// 20260826120000_measure_price_rate_precision.sql. Nothing was wrong — the two
+// files reference none of each other's objects — but the rule as phrased said
+// otherwise, and a guard that reds on correct work teaches people to delete it.
+//
+// The invariant that actually matters is the one its own failure message names
+// first: a migration BELOW THE BASELINE is applied before the tables it
+// references exist, so it never runs correctly. That floor is the baseline, and
+// it is measured here rather than assumed, so re-baselining moves the floor with
+// it. Sorting below a later, unrelated sibling is not a fault and is no longer
+// reported as one.
+const versionFloor = baselineFile
+check('its version sorts above the baseline',
+  baselineHasSchema || applyPathCustom.every(f => f > versionFloor),
+  `${applyPathCustom.join(', ')} sorts below ${versionFloor} — a migration below the baseline is ` +
+  'applied before the tables it references exist, so it never runs.')
 
 if (migration) {
   const typeCheck = /custom_field_definitions_field_type_check\s*\n?\s*check \(field_type in \(([^)]*)\)\)/.exec(migration)

@@ -25,7 +25,8 @@ import { useBulkSelect } from '@/hooks/useBulkSelect'
 import { BulkActionBar, SelectCheckbox, SelectAllToggle, type BulkAction } from '@/components/ui/BulkActions'
 import { exportRowsToCsv } from '@/lib/csv'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
-import { Trash2, Bell, Send, FileText, Copy, Download, MoreHorizontal } from 'lucide-react'
+import { Trash2, Bell, Send, FileText, Copy, Download, MoreHorizontal, StickyNote } from 'lucide-react'
+import { QuoteNotesSheet } from '@/components/quotes/QuoteNotesSheet'
 
 interface QuoteListProps {
   quotes: Quote[]
@@ -35,6 +36,9 @@ interface QuoteListProps {
    *  missing from it) means the row behaves exactly as it did before — the queue
    *  must never invent a block it isn't sure about. */
   reachById?: Record<string, ReachCustomer>
+  /** Quick-notes saved a row's notes — hand the patch up so the parent's copy
+   *  (which feeds the CSV export) stays current without a refetch. */
+  onNotesSaved?: (id: string, patch: { notes: string | null; internal_notes: string | null }) => void
 }
 
 const STATUS_FILTERS: { value: '' | QuoteStatus; label: string }[] = [
@@ -48,12 +52,15 @@ const STATUS_FILTERS: { value: '' | QuoteStatus; label: string }[] = [
   { value: 'declined', label: 'Declined' },
 ]
 
-export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
+export function QuoteList({ quotes, onDelete, reachById, onNotesSaved }: QuoteListProps) {
   const router = useRouter()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'' | QuoteStatus>('')
   const [followUpOnly, setFollowUpOnly] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
+  // Which quote's quick-notes sheet is open. By id, never a snapshot — the
+  // sheet must read whatever the freshest props row holds.
+  const [notesId, setNotesId] = useState<string | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   // '/' focuses search, 'n' starts a new quote — the shared list idiom.
   useListShortcuts({ search: searchRef, onNew: () => router.push('/dashboard/quotes/new') })
@@ -508,6 +515,9 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
                           Nothing is removed and the undo still works. */}
                       <div className="flex items-center gap-1 justify-end">
                         <Menu align="end" width={180} ariaLabel="Quote actions" items={[
+                          // The light door into the one quote-note system —
+                          // annotating a quote must not require the full builder.
+                          { key: 'notes', label: 'Edit notes', icon: StickyNote, onSelect: () => setNotesId(q.id) },
                           { key: 'delete', label: 'Delete quote', icon: Trash2, danger: true, onSelect: () => handleDelete(q.id) },
                         ]}>
                           {({ toggle, triggerProps }) => (
@@ -535,6 +545,18 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
           </div>
         </Card>
       )}
+
+      {(() => {
+        const q = notesId ? quotes.find(x => x.id === notesId) : null
+        if (!q) return null
+        return (
+          <QuoteNotesSheet
+            quote={q}
+            onClose={() => setNotesId(null)}
+            onSaved={patch => onNotesSaved?.(q.id, patch)}
+          />
+        )
+      })()}
     </div>
   )
 }

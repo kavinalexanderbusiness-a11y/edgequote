@@ -1,9 +1,9 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { loadGoogleMaps } from '@/lib/googleMaps'
+import { loadGoogleMaps, onMapsUnavailable, describeMapsError, type MapsUnavailable } from '@/lib/googleMaps'
+import { MapUnavailable } from '@/components/maps/MapUnavailable'
 import { Grade, GRADE_COLORS } from '@/lib/profitability'
-import { Banner } from '@/components/ui/Banner'
 
 export interface ProfitPoint { lat: number; lng: number; grade: Grade; title: string }
 
@@ -14,7 +14,11 @@ export function ProfitMap({ points }: { points: ProfitPoint[] }) {
   const gmap = useRef<any>(null)
   const markers = useRef<any[]>([])
   const [ready, setReady] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
+  const [unavailable, setUnavailable] = useState<MapsUnavailable | null>(null)
+
+  // Google reports an auth refusal AFTER a successful-looking load — subscribe,
+  // don't await; fires immediately if the refusal already happened this page load.
+  useEffect(() => onMapsUnavailable(setUnavailable), [])
 
   useEffect(() => {
     let cancelled = false
@@ -30,7 +34,7 @@ export function ProfitMap({ points }: { points: ProfitPoint[] }) {
           streetViewControl: false, fullscreenControl: false, mapTypeControl: false,
         })
         setReady(true)
-      } catch (e) { if (!cancelled) setErr(e instanceof Error ? e.message : 'Map failed to load') }
+      } catch (e) { if (!cancelled) setUnavailable(describeMapsError(e)) }
     }
     init()
     return () => {
@@ -56,8 +60,8 @@ export function ProfitMap({ points }: { points: ProfitPoint[] }) {
     if (points.length) gmap.current.fitBounds(bounds)
   }, [ready, points])
 
-  if (err) {
-    return <Banner tone="warn">{err}</Banner>
+  if (unavailable) {
+    return <MapUnavailable unavailable={unavailable} audience="owner" />
   }
   return (
     <div className="relative rounded-card overflow-hidden border border-border">

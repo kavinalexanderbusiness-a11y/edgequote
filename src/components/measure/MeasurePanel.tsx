@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { loadGoogleMaps } from '@/lib/googleMaps'
+import { loadGoogleMaps, onMapsUnavailable, describeMapsError, type MapsUnavailable } from '@/lib/googleMaps'
+import { MapUnavailable } from '@/components/maps/MapUnavailable'
 import {
   MEASUREMENT_KINDS, kindDef, formatMeasurement, measureShapes, usableShapes,
   readMeasurements, canAutoMeasure,
@@ -93,6 +94,11 @@ export function MeasurePanel({ supabase, userId, propertyId, center, onChanged }
   useEffect(() => { refresh() }, [refresh])
 
   // ── map ──
+  // Google reports an auth refusal AFTER a successful-looking load — subscribe,
+  // don't await; fires immediately if the refusal already happened this page load.
+  const [unavailable, setUnavailable] = useState<MapsUnavailable | null>(null)
+  useEffect(() => onMapsUnavailable(setUnavailable), [])
+
   useEffect(() => {
     let dead = false
     if (!center) { setLoading(false); return }
@@ -104,7 +110,7 @@ export function MeasurePanel({ supabase, userId, propertyId, center, onChanged }
         disableDefaultUI: true, zoomControl: true, gestureHandling: 'greedy',
       })
       setMapReady(true)
-    }).catch(() => setMapReady(false))
+    }).catch(e => { setMapReady(false); if (!dead) setUnavailable(describeMapsError(e)) })
     return () => { dead = true }
   }, [center])
 
@@ -315,6 +321,9 @@ export function MeasurePanel({ supabase, userId, propertyId, center, onChanged }
       {/* ── Map ── */}
       {!center ? (
         <InlineEmpty icon={MapPin}>This property has no map location yet, so it can’t be traced. You can still enter a number below.</InlineEmpty>
+      ) : unavailable ? (
+        // INSTEAD of the map div — never over it. Manual entry below still works.
+        <MapUnavailable unavailable={unavailable} audience="owner" />
       ) : (
         <div className="relative rounded-xl overflow-hidden border border-border">
           <div ref={mapEl} className="w-full h-[420px] bg-bg-tertiary" />
@@ -333,7 +342,7 @@ export function MeasurePanel({ supabase, userId, propertyId, center, onChanged }
       )}
 
       {/* ── Drawing controls ── */}
-      {center && (
+      {center && !unavailable && (
         <div className="flex flex-wrap items-center gap-2">
           {!drawing ? (
             <Button size="sm" onClick={startDrawing} disabled={!mapReady}>

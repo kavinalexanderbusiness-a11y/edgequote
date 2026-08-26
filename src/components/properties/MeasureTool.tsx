@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { loadGoogleMaps, addPropertyPin, flashRing, type PropertyPinHandle } from '@/lib/googleMaps'
+import { loadGoogleMaps, addPropertyPin, flashRing, onMapsUnavailable, MAPS_UNAVAILABLE_MESSAGE, type PropertyPinHandle } from '@/lib/googleMaps'
 import { createClient } from '@/lib/supabase/client'
 import { Property, BusinessSettings, MeasurementSnapshot, LawnSections, LawnPolygon, PricingConfidence, CONFIDENCE_LABELS, CONFIDENCE_COLORS } from '@/types'
 import { priceTiers, routeDensityTravel, pricingConfidence, travelFeeForDistance, pricingConfigFromSettings, PricingConfig, DEFAULT_PRICING, PriceTier, pricingPackage, estimateVisitMinutes, buildSavedRecommendation } from '@/lib/pricing'
@@ -393,6 +393,10 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
       try { setProspect(await loadProspectContext(supabase, user.id, target)) } catch { /* card just won't render */ }
     }
   }
+
+  // gm_authFailure fires AFTER a successful-looking load (see lib/googleMaps) —
+  // route it into the same honest panel instead of a dead map under controls.
+  useEffect(() => onMapsUnavailable(() => { setLoadError(MAPS_UNAVAILABLE_MESSAGE); setReady(false) }), [])
 
   useEffect(() => {
     let cancelled = false
