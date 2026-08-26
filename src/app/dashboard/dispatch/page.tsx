@@ -27,9 +27,14 @@ import { DayStatusRow, DAY_STATUS_SELECT, dayStatusLabel } from '@/lib/dayStatus
 import {
   laneStats, LaneStats, detectDayConflicts, DispatchConflict, ConflictLaneInput, laneConflictSummary,
   laneProgress, nudgeAcrossVisible, bestOrderSavingsKm, dayKpis, buildActivityFeed, ActivityItem,
-  itineraryText, suggestPromiseOrder, PromiseOrderSuggestion,
+  itineraryText,
   DispatchSheet, SheetLane, sheetCsvRows, SHEET_CSV_COLUMNS, openPrintSheet,
 } from '@/lib/dispatchOps'
+// ⭐ The ONE within-day optimizer (Session 82). This board used to carry its own
+// narrow promise-order repair; it now asks the same engine the day board asks,
+// so the remedy offered here and the suggestion offered there are the same
+// proposal, scored the same way.
+import { sequenceDay, promiseMinutes, lockFromStatus, type DaySequenceProposal } from '@/lib/daySequence'
 import { startVisit, completeVisit, revertVisit } from '@/lib/jobStatus'
 import { checklistBlockMessage } from '@/lib/jobForms'
 import { formatDuration, formatWorked, workdayMinutes } from '@/lib/workDuration'
@@ -1262,18 +1267,45 @@ export default function DispatchPage() {
   // Late promise → the timed visits swapped into promise order within their
   // current slots, accepted only if the ETA chain says it actually helps.
   const promiseFixes = useMemo(() => {
-    const out: Record<string, PromiseOrderSuggestion> = {}
+    const out: Record<string, DaySequenceProposal> = {}
     for (const laneId of new Set(conflicts.filter(c => c.kind === 'late_arrival').map(c => c.laneId))) {
       const route = laneRoutes[laneId]
       if (!route) continue
-      const promises: Record<string, number> = {}
-      for (const j of route.seq) if (j.start_time) promises[j.id] = timeToMinutes(j.start_time)
-      const durations = Object.fromEntries(route.seq.map(j => [j.id, j.duration_minutes || DEFAULT_JOB_MIN]))
-      const fix = suggestPromiseOrder(settings.base, route.seq.map(jobStop), route.seq.map(j => j.id), route.startHHmm, durations, promises)
-      if (fix) out[laneId] = fix
+      // This board has no cached road distances, so the proposal is judged on
+      // straight-line grouping — and lib/dayPlan says exactly that in the
+      // result rather than letting the number pass as a drive time.
+      const proposal = sequenceDay({
+        stops: route.seq.map(j => ({
+          id: j.id,
+          label: j.customers?.name || j.title,
+          coord: j.properties?.lat != null && j.properties?.lng != null
+            ? { lat: j.properties.lat, lng: j.properties.lng } : null,
+          address: j.properties?.address ?? '',
+          propertyId: j.property_id ?? null,
+          promiseMin: promiseMinutes(j.start_time),
+          lock: lockFromStatus(j.status),
+          durationMinutes: j.duration_minutes,
+          crewSize: j.crew_size,
+          serviceType: j.service_type,
+          status: j.status,
+          crewId: j.crew_id ?? null,
+          technicianId: j.technician_id ?? null,
+          workedMinutes: j.actual_minutes,
+        })),
+        base: settings.base,
+        day: {
+          startTime: route.startHHmm,
+          capacityHours: route.capacityMin / 60,
+          // The lane's own people. Null would make no labour claim at all; this
+          // board genuinely knows who is on the crew, so it says.
+          workers: laneInputs.find(l => l.laneId === laneId)?.availableTechs ?? null,
+          hasBase: !!settings.base,
+        },
+      })
+      if (proposal.accepted) out[laneId] = proposal
     }
     return out
-  }, [conflicts, laneRoutes, settings.base])
+  }, [conflicts, laneRoutes, laneInputs, settings.base])
 
   // The one-tap remedy for each conflict kind — every fix is an EXISTING
   // engine's answer; the panel never grows its own logic.
@@ -1296,7 +1328,7 @@ export default function DispatchPage() {
         if (fix) {
           return {
             label: `Fix order — ${fix.lateBefore} late → ${fix.lateAfter}`,
-            run: () => { applyLaneOrder(fix.ids); notify.success(`Timed visits re-slotted by promise — ${fix.lateBefore} late became ${fix.lateAfter}.`) },
+            run: () => { applyLaneOrder(fix.persistableOrder); notify.success(`Re-ordered — ${fix.lateBefore} late became ${fix.lateAfter}.`) },
           }
         }
         return settings.base ? { label: 'Optimize route', run: () => bestOrderLane(c.laneId) } : null

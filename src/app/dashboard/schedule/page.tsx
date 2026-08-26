@@ -28,7 +28,7 @@ import { DayOpsPanel, QuoteLite, QuickPatch } from '@/components/schedule/DayOps
 import { EstimateDayBoard } from '@/components/schedule/EstimateDayBoard'
 import { EstimateAppointmentDialog } from '@/components/schedule/EstimateAppointmentDialog'
 import { useEstimateAppointments } from '@/hooks/useEstimateAppointments'
-import type { EstimateAppointment } from '@/lib/estimateAppointments'
+import { isOpen as estimateIsOpen, type EstimateAppointment } from '@/lib/estimateAppointments'
 import type { ScheduleItem } from '@/lib/scheduleItems'
 import { Coord, geocodeAddress } from '@/lib/geo'
 import { JobForm, Recurrence, SuggestionMeta } from '@/components/schedule/JobForm'
@@ -2791,6 +2791,9 @@ export default function SchedulePage() {
   const dayEstimates = useMemo(
     () => estimates.items.filter(i => i.scheduled_date === dayISO),
     [estimates.items, dayISO])
+  // Only the OPEN ones hold time the day still has to spend — a cancelled or
+  // completed appointment is not a trip left to plan.
+  const openDayEstimates = useMemo(() => dayEstimates.filter(estimateIsOpen), [dayEstimates])
 
   // Open the dialog once, when arrived at with ?estimate=new. Guarded by a ref
   // rather than the param so that closing the dialog does not immediately
@@ -3236,6 +3239,12 @@ export default function SchedulePage() {
           crews={crews}
           technicians={technicians}
           availabilityRecorded={dayFitCtx?.availabilityRecorded}
+          // Session 82: the day's OPEN estimate appointments, so "Optimize day"
+          // plans around the trips this day genuinely has to make. They anchor
+          // the order; they are never re-sequenced (no route_order column).
+          estimates={openDayEstimates}
+          // A billed visit is immutable — the optimizer must not move one.
+          invoicedJobIds={invoicedJobIds}
           learnedDurationFor={dayFitCtx?.learnedFor}
           onRainDelay={() => rainDelayDay(dayISO)}
           onAddJob={() => openNewJob(cursor)}
