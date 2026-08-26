@@ -14,10 +14,8 @@
 
 import { CsvColumn } from '@/lib/csv'
 import { laneLoad } from '@/lib/crews'
-import {
-  minutesToTime12, timeToMinutes, nearestNeighborRoute, sequenceRoute, computeDayEtas, RouteStop,
-} from '@/lib/route'
-import { Coord } from '@/lib/geo'
+import { minutesToTime12, timeToMinutes, nearestNeighborRoute, RouteStop } from '@/lib/route'
+import { PROMISE_GRACE_MIN } from '@/lib/daySequence'
 
 // ── Lane statistics ──────────────────────────────────────────────────────────
 // All four numbers fall out of the ETA chain the timeline already draws:
@@ -176,7 +174,10 @@ export interface ConflictLaneInput {
 }
 
 // A visit is "late" once the ETA slips this far past the promised time.
-const LATE_GRACE_MIN = 15
+// ⭐ ONE definition, owned by lib/daySequence — the optimizer that has to FIX a
+// late promise and the detector that flags it must agree on what 'late' means,
+// or the board reports a problem its own remedy scores as fine.
+const LATE_GRACE_MIN = PROMISE_GRACE_MIN
 
 const SEVERITY_ORDER: Record<ConflictSeverity, number> = { error: 0, warn: 1, info: 2 }
 
@@ -327,60 +328,6 @@ export function dayKpis(lanes: ConflictLaneInput[], nowMin?: number): DayKpis {
     driveSharePct: busySum > 0 ? Math.round((driveSum / busySum) * 100) : null,
     latestFinishMin: latest,
   }
-}
-
-// ── Promise-order suggestion ─────────────────────────────────────────────────
-// When a promised time is being missed, try the cheapest honest candidate:
-// keep every SLOT of the current route where it is, but let the timed visits
-// swap among their own slots into promise order (the 9 AM appointment stops
-// queuing behind the 1 PM one). The candidate is then judged by the SAME
-// engines (sequenceRoute → computeDayEtas); it is only suggested when it
-// strictly reduces the number of late promises.
-export interface PromiseOrderSuggestion {
-  ids: string[]
-  lateBefore: number
-  lateAfter: number
-}
-
-const PROMISE_GRACE_MIN = 15
-
-function countLate(
-  base: Coord | null,
-  stops: RouteStop[],
-  ids: string[],
-  startHHmm: string,
-  durations: Record<string, number>,
-  promises: Record<string, number>,
-): number {
-  const ordered = base
-    ? sequenceRoute(base, stops, ids).ordered
-    : ids.map((id, i) => ({ ...(stops.find(s => s.jobId === id) as RouteStop), order: i + 1, legKm: null }))
-  const etas = computeDayEtas(startHHmm, ordered, durations)
-  let late = 0
-  for (const s of etas.stops) {
-    const promise = promises[s.jobId]
-    if (promise != null && s.arrivalMin > promise + PROMISE_GRACE_MIN) late++
-  }
-  return late
-}
-
-export function suggestPromiseOrder(
-  base: Coord | null,
-  stops: RouteStop[],
-  currentIds: string[],
-  startHHmm: string,
-  durations: Record<string, number>,
-  promises: Record<string, number>,   // jobId → promised minutes-since-midnight
-): PromiseOrderSuggestion | null {
-  const timedSlots = currentIds.map((id, i) => ({ id, i })).filter(x => promises[x.id] != null)
-  if (timedSlots.length < 2) return null
-  const byPromise = [...timedSlots].sort((a, b) => promises[a.id] - promises[b.id])
-  const ids = [...currentIds]
-  timedSlots.forEach((slot, k) => { ids[slot.i] = byPromise[k].id })
-  if (ids.join() === currentIds.join()) return null
-  const lateBefore = countLate(base, stops, currentIds, startHHmm, durations, promises)
-  const lateAfter = countLate(base, stops, ids, startHHmm, durations, promises)
-  return lateAfter < lateBefore ? { ids, lateBefore, lateAfter } : null
 }
 
 // ── Activity feed ────────────────────────────────────────────────────────────
