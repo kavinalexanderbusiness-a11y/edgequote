@@ -30,6 +30,7 @@ import {
   crewAccessState, CREW_WELCOME_PATH, type CrewSelfStatus,
 } from '../src/lib/crewInvite'
 import { routeFor, landingFor, isWelcomePath } from '../src/lib/crewAccess'
+import { safeReturnPath } from '../src/lib/googleAuth'
 import { cleanOrigin, appOrigin } from '../src/lib/appOrigin'
 import { crewInviteEmail } from '../src/lib/crewInviteServer'
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
@@ -287,8 +288,21 @@ check('sign-in asks for the role before navigating',
   /resolveAppRole\(/.test(login) && /landingFor\(/.test(login),
   'pushing /dashboard and letting middleware bounce is a flash of the wrong product')
 check('sign-in still honours an explicit ?next=', /next \?\? landingFor\(/.test(login))
+// ⭐ The check MOVED (session 105). Google sign-in gave the same rule two more
+// callers — the OAuth start route and the callback — so the login form's inline
+// two-clause test became lib/googleAuth.safeReturnPath, one home for one
+// security predicate. The contract is unchanged and this assertion is now
+// STRONGER than the text match it replaces: it drives the real function over
+// real hostile input instead of confirming that two substrings are present.
+// ⛔ Do not weaken this back to a grep, and do not delete it — re-point it again
+// if the gate moves house a second time.
 check('the ?next= open-redirect guard survives',
-  /startsWith\('\/'\)/.test(login) && /startsWith\('\/\/'\)/.test(login))
+  /safeReturnPath\(/.test(login) &&
+  safeReturnPath('//evil.tld') === null &&
+  safeReturnPath('/\\evil.tld') === null &&
+  safeReturnPath('https://evil.tld') === null &&
+  safeReturnPath('/dashboard') === '/dashboard',
+  'the login form must delegate to safeReturnPath, and safeReturnPath must reject protocol-relative and absolute destinations')
 
 const reset = read('src/components/auth/ResetPasswordForm.tsx')
 check('a worker who resets their password lands in the crew app',

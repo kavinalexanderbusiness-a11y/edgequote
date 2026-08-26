@@ -71,7 +71,12 @@ export function DayPlanPanel({ plan, crew, onSendOrderToCrew, sendingOrder, acti
         <span className="flex items-center gap-1.5 text-xs font-semibold text-ink-muted uppercase tracking-wide">
           <RouteIcon className="w-3.5 h-3.5 text-accent-text" aria-hidden /> Day plan
         </span>
-        {actions && <span className="flex items-center gap-3 shrink-0">{actions}</span>}
+        {/* ⚠️ WRAPS, and must. This row was `shrink-0` with no wrapping, which
+            was survivable while it held two actions and broke the moment it held
+            three: at 375px the extra control simply ran off the right edge
+            (measured, Session 82). The header itself already wraps — the actions
+            group has to as well, or it hands the overflow to the page. */}
+        {actions && <span className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1.5 min-w-0">{actions}</span>}
       </div>
 
       {noBase ? (

@@ -5,6 +5,7 @@ import type { MessagePrefs } from '@/lib/comms/templates'
 // exists at runtime — and the snapshot's shape belongs beside the engine that
 // builds it, not copied here where the two could drift.
 import type { MeasurementSnapshotV2 } from '@/lib/measurePricing'
+import { type PreferredChannel } from '@/lib/comms/reach'
 
 export type QuoteStatus =
   | 'draft' | 'sent' | 'accepted' | 'scheduled' | 'completed' | 'paid' | 'declined'
@@ -41,6 +42,17 @@ export interface Customer {
   // Optional because most reads don't select it; reach.ts treats absent as
   // "no category opt-outs recorded".
   message_prefs?: MessagePrefs | null
+  // How they'd RATHER be contacted. A preference, not a permission: it orders
+  // the channels consent above already allows and can never grant one, so
+  // 'sms' here with sms_opt_in false still never sends a text. null = no
+  // preference, the state every existing customer is in. 'phone' means call
+  // them — the owner does that, this product never places calls.
+  // THE resolver is resolveReach in lib/comms/reach; nothing reads this raw.
+  //
+  // ⚠️ ORTHOGONAL to message_prefs above, and both are load-bearing:
+  // message_prefs answers "may we send this CATEGORY at all", preferred_channel
+  // answers "which allowed channel FIRST". Consent gates; preference orders.
+  preferred_channel?: PreferredChannel | null
   // ── CRM automation ──
   // Review lifecycle on top of reviewed_at (status DERIVED in lib/crm/reviews):
   //   declined → review_declined_at · reviewed → reviewed_at · requested →
@@ -2057,4 +2069,54 @@ export interface IntegrationEventRow {
   entity_type: string
   entity_id: string | null
   payload: Record<string, unknown>
+}
+
+// ── Custom fields ────────────────────────────────────────────────────────────
+// The owner-defined attribute store. `src/lib/customFields.ts` is the engine;
+// the constraints in supabase/migrations/*_custom_fields_v1.sql are the law.
+//
+// ⚠️ These values are INTERNAL — owner screens only. There is deliberately no
+// visibility flag on the definition; see the note at the top of customFields.ts
+// and src/lib/noteScope.ts for why, and for where exposure would be added later.
+
+/** One field an owner has defined for a kind of record. */
+export interface CustomFieldDefinition {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  /** 'customer' | 'property' | 'job' — see CUSTOM_FIELD_ENTITIES. */
+  entity: string
+  /** Stable slug. Immutable once created; it is the export/import identity. */
+  field_key: string
+  label: string
+  /** See CUSTOM_FIELD_TYPES. */
+  field_type: string
+  /** Dropdown choices as [{ value, label }]. Empty for every other type. */
+  options: { value: string; label: string }[]
+  help_text: string | null
+  sort_order: number
+  /** Archived fields stop being offered and keep every answer they collected. */
+  archived_at: string | null
+}
+
+/**
+ * One answer. Exactly one `value_*` column is set, and which one is decided by
+ * `field_type` — enforced by a CHECK, not by whoever wrote the last INSERT.
+ */
+export interface CustomFieldValue {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  definition_id: string
+  entity: string
+  field_type: string
+  customer_id: string | null
+  property_id: string | null
+  job_id: string | null
+  value_text: string | null
+  value_number: number | null
+  value_boolean: boolean | null
+  value_date: string | null
 }

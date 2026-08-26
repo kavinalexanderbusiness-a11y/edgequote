@@ -46,6 +46,7 @@ import { Modal } from '@/components/ui/Modal'
 import { CustomerForm } from '@/components/customers/CustomerForm'
 import { Banner } from '@/components/ui/Banner'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { CustomFieldsSection } from '@/components/customFields/CustomFieldsSection'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Button, ButtonLink } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
@@ -56,6 +57,7 @@ import { formatCurrency, formatDate, cn, localTodayISO } from '@/lib/utils'
 import { ensurePortalToken, portalUrl, rotatePortalToken } from '@/lib/portal'
 import { CustomerComms } from '@/components/customers/CustomerComms'
 import { CommsHealth } from '@/components/customers/CommsHealth'
+import { PreferredChannelCard } from '@/components/customers/PreferredChannel'
 import { ReviewLifecycle } from '@/components/customers/ReviewLifecycle'
 import { CustomerAiSummary } from '@/components/ai/CustomerAiSummary'
 import { ReferralPanel } from '@/components/customers/ReferralPanel'
@@ -1111,6 +1113,11 @@ export default function CustomerDetailPage() {
         </CardBody>
       </Card>
 
+      {/* The owner's own attributes for a customer. Renders nothing at all when
+          this business has defined none, so an account that never opens Settings
+          › Custom fields never sees a trace of the feature. */}
+      <CustomFieldsSection entity="customer" recordId={customer.id} />
+
       {/* Revenue + service history — anchor target for the header's "Owes" chip */}
       <div id="customer-revenue" className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {revenueCards.map(c => {
@@ -1445,6 +1452,12 @@ export default function CustomerDetailPage() {
           schedule) must never sit below a 440px conversation pane. */}
       {/* Communication health — opt-in/contact mismatches (only shows when relevant) */}
       <CommsHealth customer={customer} onChange={patch => setCustomer({ ...customer, ...patch })} />
+
+      {/* Preferred contact — what a message would ACTUALLY do, and what they asked
+          for. Above the fold-out because "how do I contact them right now" is a
+          phone-call question, like owed/notes/schedule. Consent itself stays in
+          the Communication card below; this can never override it. */}
+      <PreferredChannelCard customer={customer} onChange={patch => setCustomer({ ...customer, ...patch })} />
 
       {/* AI brief — on-demand summary of this customer's history (renders nothing
           when no AI key is configured; never automatic, never stored) */}

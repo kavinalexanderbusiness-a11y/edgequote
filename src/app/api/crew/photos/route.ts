@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { authorizeWorkerVisit, WORKER_DENIAL_MESSAGE, WORKER_DENIAL_STATUS } from '@/lib/workerAccess'
 import { PHOTO_BUCKET } from '@/lib/photos'
+import { photoStoragePath, isValidPhotoToken } from '@/lib/field/photoIntent'
 
 export const runtime = 'nodejs'          // the service role must never run at the edge
 export const dynamic = 'force-dynamic'
@@ -36,8 +37,24 @@ export const dynamic = 'force-dynamic'
 // stored file back (uploadPhoto's own rule: storage never drifts from the
 // catalogue).
 //
-// Online-only, like every crew write in V1 — the client reports a failed upload
-// honestly instead of queueing it.
+// ⭐⭐ IDEMPOTENT UNDER RETRY (Field Reliability V1). The client mints an upload
+// token when the camera returns the shot and reuses it for every retry of THAT
+// shot; the object's path is derived from it (lib/field/photoIntent), so all
+// attempts address the SAME object instead of a fresh random name each time.
+// That closes the case this route could not previously survive: bytes land, the
+// response dies in a dead zone, the worker taps Retry — and the customer's
+// timeline ends up showing the same photo twice, with a second stored object
+// nobody can account for.
+//
+// The retry path is also CHEAP, which matters more than it sounds: the row
+// lookup happens BEFORE the bytes are read, so a retry on a marginal connection
+// re-sends nothing at all when the first attempt actually landed. On a truck
+// tethered to one bar that is the difference between a working Retry button and
+// one that times out forever.
+//
+// A request without a token still works (an older client, mid-deploy) — it just
+// gets the previous random-path behaviour, so a phone running yesterday's bundle
+// keeps uploading rather than failing closed on a field it never learned to send.
 
 const MAX_BYTES = 8 * 1024 * 1024   // client downscales to ~300KB; this is the abuse cap
 const KINDS = new Set(['before', 'after'])
@@ -68,6 +85,15 @@ export async function POST(req: NextRequest) {
   if ((formId && !fieldId) || (!formId && fieldId)) return NextResponse.json({ error: 'bad request' }, { status: 400 })
   if (!jobId || !(file instanceof File)) return NextResponse.json({ error: 'bad request' }, { status: 400 })
   if (!(formId ? FORM_KINDS : KINDS).has(kind)) return NextResponse.json({ error: 'bad request' }, { status: 400 })
+  // The retry identity. ⛔ Refused rather than sanitised when malformed: a token
+  // we rewrote would address a different object than the first attempt wrote,
+  // silently restoring the duplicate this exists to prevent. It also lands in a
+  // storage path, so the character class is a boundary, not a style preference.
+  const rawToken = String(form.get('uploadToken') || '')
+  if (rawToken && !isValidPhotoToken(rawToken)) {
+    return NextResponse.json({ error: 'bad request' }, { status: 400 })
+  }
+  const token = rawToken || null
   if (!file.type.startsWith('image/')) return NextResponse.json({ error: 'Only photos can be uploaded.' }, { status: 415 })
   if (file.size > MAX_BYTES) return NextResponse.json({ error: 'That photo is too large — try again (it should shrink automatically).' }, { status: 413 })
 
@@ -123,13 +149,45 @@ export async function POST(req: NextRequest) {
   // Store + catalogue, exactly the canonical shapes (uploadPhoto's path and row).
   const contentType = file.type
   const ext = EXT[contentType] || 'jpg'
-  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  const path = `${j.user_id}/${j.property_id ?? 'unassigned'}/${stamp}.${ext}`
+  // ⭐ Derived from the client's token when it sent one, so every retry of this
+  // shot addresses the same object. Without a token, the old random name — which
+  // means a retry can duplicate, exactly as before. That is the compatibility
+  // cost of not making the field mandatory, and it is bounded to old clients.
+  const path = token
+    ? photoStoragePath(j.user_id, j.property_id, j.id, token, ext)
+    : `${j.user_id}/${j.property_id ?? 'unassigned'}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+
+  // ⭐⭐ THE RETRY SHORT-CIRCUIT, before a single byte is read. If this exact shot
+  // was already catalogued, the previous attempt succeeded and only its response
+  // was lost — so the honest answer is the row we already have. Returning the
+  // SAME id/url a first success would have returned is what lets the client
+  // treat a retry and an original as indistinguishable.
+  if (token) {
+    const { data: prior, error: priorErr } = await admin.from('job_photos')
+      .select('id').eq('user_id', j.user_id).eq('storage_path', path).maybeSingle()
+    // ⚠️ A failed lookup is NOT "no prior row" — treating it as one would upload
+    // again and re-insert. Refuse instead; the worker's Retry is still there and
+    // the shot is still in hand.
+    if (priorErr) return NextResponse.json({ error: 'Couldn’t check that photo — try again.' }, { status: 502 })
+    if (prior) {
+      const { data: had } = admin.storage.from(PHOTO_BUCKET).getPublicUrl(path)
+      return NextResponse.json({ ok: true, id: (prior as { id: string }).id, url: had.publicUrl, deduped: true })
+    }
+  }
 
   const bytes = Buffer.from(await file.arrayBuffer())
   const { error: upErr } = await admin.storage.from(PHOTO_BUCKET)
     .upload(path, bytes, { upsert: false, contentType })
-  if (upErr) return NextResponse.json({ error: 'The photo didn’t upload — check your signal and try again.' }, { status: 502 })
+  if (upErr) {
+    // ⭐ `upsert: false` makes storage itself the atomic guard: a second writer to
+    // the same path is REFUSED. Reaching here with an already-exists error means
+    // a previous attempt's bytes landed but its catalogue row did not (the row
+    // lookup above just missed) — so the object is right where it should be and
+    // the only thing left to do is catalogue it. Any other storage error is a
+    // real failure.
+    const already = /exist|duplicate|conflict/i.test(upErr.message || '')
+    if (!already) return NextResponse.json({ error: 'The photo didn’t upload — check your signal and try again.' }, { status: 502 })
+  }
 
   const { data: row, error: rowErr } = await admin.from('job_photos').insert({
     user_id: j.user_id,

@@ -43,7 +43,7 @@ export default function QuotesPage() {
         .order('created_at', { ascending: false }),
       // Exactly the fields lib/comms/reach needs, so the follow-up queue can say
       // which chases are actually possible. Parallel — it never delays the list.
-      supabase.from('customers').select('id, phone, email, sms_opt_in, email_opt_in, message_prefs').eq('user_id', user!.id),
+      supabase.from('customers').select('id, phone, email, sms_opt_in, email_opt_in, message_prefs, preferred_channel').eq('user_id', user!.id),
     ])
     // A failed load must NEVER fall through to "No quotes yet" — telling an owner with
     // 200 quotes that they have none (and inviting them to start over) is a false

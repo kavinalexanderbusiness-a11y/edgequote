@@ -187,7 +187,7 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     // person actually go out" — so the follow-up row can tell the owner which
     // chases are real. Rides along in the batch that was already going out; the
     // reactivation engine only reads `id` and ignores the rest.
-    sb.from('customers').select('id, phone, email, sms_opt_in, email_opt_in, message_prefs').eq('user_id', userId).is('archived_at', null),
+    sb.from('customers').select('id, phone, email, sms_opt_in, email_opt_in, message_prefs, preferred_channel').eq('user_id', userId).is('archived_at', null),
     // Open portal requests. Filtered in SQL on the two columns that define
     // "open" (from_portal + status) rather than pulling the table and deciding
     // here — service_requests also holds website leads and online bookings, and
