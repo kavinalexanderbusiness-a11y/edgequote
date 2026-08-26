@@ -330,7 +330,42 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
 
         let center: { lat: number; lng: number } | null = null
         let precise = false
-        if (address) {
+
+        // ⭐ THE CANONICAL SERVICE LOCATION FIRST. A property EdgeHQ already knows
+        // carries its own lat/lng, saved when the address was resolved. Asking
+        // Google to re-resolve the same address on every open was a round trip to
+        // re-learn a fact we had already stored — slower, billed, and the single
+        // point of failure that put the whole tool out of action on 2026-08-23
+        // when the SERVER key (GOOGLE_MAPS_API_KEY, a different credential from
+        // the browser one) was revoked and /api/geocode began answering
+        //   422 {"error":"Google: REQUEST_DENIED — The provided API key is invalid."}
+        // Every measured property centred on downtown Calgary as a result.
+        //
+        // ⛔ This is NOT a fallback that hides that fault. Geocoding is still the
+        // ONLY path for an address with no property row, its failure is still
+        // reported honestly below, and nothing invents coordinates. It is simply
+        // that the owner's own saved location outranks a re-derivation of it.
+        if (propertyId) {
+          const { data: { user } } = await supabase.auth.getUser()
+          if (user) {
+            const { data: prop } = await supabase
+              .from('properties')
+              .select('lat, lng')
+              .eq('id', propertyId)
+              .eq('user_id', user.id)   // tenancy, stated rather than assumed
+              .maybeSingle()
+            const pLat = (prop as { lat: number | null; lng: number | null } | null)?.lat
+            const pLng = (prop as { lat: number | null; lng: number | null } | null)?.lng
+            if (typeof pLat === 'number' && typeof pLng === 'number') {
+              center = { lat: pLat, lng: pLng }
+              // A stored fix is the address the owner accepted for this property,
+              // not a guess we just made — so it pins as located.
+              precise = true
+            }
+          }
+        }
+
+        if (!center && address) {
           try {
             const res = await fetch('/api/geocode', {
               method: 'POST',
@@ -353,7 +388,12 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
         if (cancelled || !mapEl.current) return
 
         gmap.current = new Map(mapEl.current, {
-          center, zoom: 20, mapTypeId: 'satellite', tilt: 0,
+          // Lot zoom ONLY when we actually have this property's location. Opening
+          // at 20 over the city fallback framed a stranger's rooftop as if it were
+          // the lot being quoted — the warning said "couldn't locate this address"
+          // while the map showed something perfectly plausible to trace. A wide
+          // frame reads as "this is not your property" without needing the words.
+          center, zoom: hadFix ? 20 : 12, mapTypeId: 'satellite', tilt: 0,
           streetViewControl: false, fullscreenControl: false, mapTypeControl: false,
           draggableCursor: 'crosshair',
           // Reliable single-click placement (see MeasureTool for the rationale).
