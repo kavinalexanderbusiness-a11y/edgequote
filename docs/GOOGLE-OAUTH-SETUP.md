@@ -1,9 +1,15 @@
 # Google sign-in — the configuration only a human can do
 
-> ✅ **Configured and verified in production on 2026-08-23.** The provider is
-> enabled and the live sweep passes 33/33. What follows is the record of what
-> was set, and the runbook for re-doing it (new domain, new project, rotated
-> secret) — not outstanding work.
+> ⚠️ **The provider was enabled on 2026-08-23 and the flow was still broken.**
+> A real owner signed in successfully at Google and landed on
+> `404: NOT_FOUND / DEPLOYMENT_NOT_FOUND`. The sweep passed 33/33 throughout,
+> because nothing in the repository was wrong — the **Supabase project's URL
+> configuration** (§2.5) still named the host retired in August, and gotrue
+> silently falls back to Site URL for a `redirect_to` it will not honour.
+> See [The outage this document did not prevent](#the-outage-this-document-did-not-prevent).
+>
+> `verify:google-auth` now reads that live configuration and fails when it is
+> wrong, so this can no longer be true-on-paper and broken in practice.
 
 Nothing in this repository can turn Google sign-in on: it needs an OAuth client
 that belongs to the business, and a client secret that belongs in exactly one
@@ -70,11 +76,41 @@ sign-in breaks the same way emailed links did on 2026-08-15.
 3. Paste the **Client secret** into *Client Secret (for OAuth)*.
    ⛔ This is the only field that secret ever goes in.
 4. Save.
-5. **Authentication → URL Configuration**
+5. **Authentication → URL Configuration** — ⚠️ **the step that was missed.**
+   Setting the provider up (steps 1-4) is not enough; with these two fields
+   wrong, sign-in completes at Google and then dead-ends.
    - *Site URL*: `https://app.edgehq.ca`
-   - *Redirect URLs* — add:
-     - `https://app.edgehq.ca/auth/callback`
-     - `http://localhost:3000/auth/callback` (local dev only)
+   - *Redirect URLs* — as configured in production:
+     - `https://app.edgehq.ca/**`
+     - `https://edgehq.ca/**`
+     - `http://localhost:3000/**`
+
+   ⭐ **A trailing `/**` is required, and a bare origin is not enough.** gotrue
+   matches each entry against the WHOLE return URL — path and query string
+   included. `https://app.edgehq.ca` on its own matches only that exact string,
+   so it does **not** cover `https://app.edgehq.ca/auth/callback`. This is not
+   hypothetical: during the 2026-08-23 repair the entry was first saved without
+   the `/**`, and sign-in stayed broken for exactly that reason until
+   `verify:google-auth` reported which URL matched no entry. `/**` crosses `/`
+   and `?` alike, so one entry per origin covers both the bare callback and the
+   `?next=…` form the app sends for a deep-link return.
+
+   ⛔ **Do not widen these to a bare `**` or a wildcard host.** The allow list is
+   the only thing standing between a hand-crafted `redirect_to` and a foreign
+   origin, and gotrue consults it *before* any EdgeHQ code runs — so
+   `safeReturnPath` cannot defend this boundary. Note in particular that
+   `https://app.edgehq.ca**` (no slash) would admit
+   `https://app.edgehq.ca.evil.tld/…`, because `**` crosses dots too.
+   `verify:google-auth` drives four foreign origins through every entry.
+
+   ℹ️ **`edgehq.ca` is headroom, not a requirement.** The apex is a live alias
+   that serves `/login`, so a person can legitimately begin the flow there — but
+   `appOrigin()` prefers the configured `NEXT_PUBLIC_APP_URL` over the request
+   origin, so an apex entry is canonicalised onto `app.edgehq.ca` before Google
+   is ever contacted (measured; `verify:google-auth` §11 asserts it). The app
+   therefore never generates an apex return URL. The entry costs nothing on our
+   own domain and keeps the flow working if `NEXT_PUBLIC_APP_URL` is ever unset,
+   which is why it is listed rather than removed.
 
 ## 3. Vercel
 
@@ -113,8 +149,15 @@ If step 2 shows **redirect_uri_mismatch**, the URI in Google (§1.3) does not
 exactly match the Supabase callback — check for a trailing slash or `http`
 vs `https`.
 
-If step 3 lands back on `/login` with *"could not be completed"*, the Supabase
-redirect allow list (§2.5) is missing `https://app.edgehq.ca/auth/callback`.
+If step 3 lands back on `/login` with *"could not be completed"*, the code
+exchange failed — a replayed link, or a missing PKCE verifier cookie.
+
+⚠️ If step 3 lands on a **Vercel 404 / `DEPLOYMENT_NOT_FOUND`**, or on any host
+that is not `app.edgehq.ca`, the problem is §2.5 and *not* this codebase: the
+allow list is missing `https://app.edgehq.ca/auth/callback`, so gotrue fell back
+to whatever *Site URL* names. Read both fields before changing any code —
+`npm run verify:google-auth` prints them. This is exactly what happened on
+2026-08-23; see [The outage this document did not prevent](#the-outage-this-document-did-not-prevent).
 
 ---
 
@@ -192,3 +235,257 @@ EdgeHQ's own code never generates a foreign `redirect_to` — every one is
 hostile `next` shapes through the start route to prove it. But that guarantee
 covers links *we* produce; the allow list is what covers links anyone else
 hand-crafts.
+
+---
+
+## The outage this document did not prevent
+
+**2026-08-23.** A real owner clicked *Sign in with Google* on production,
+authenticated at Google, and landed on:
+
+```
+404: NOT_FOUND
+Code: DEPLOYMENT_NOT_FOUND
+```
+
+The live configuration at the time:
+
+| field | value |
+|---|---|
+| Site URL | `https://app.edgepropertyservicesyyc.ca` ← retired, deployment deleted |
+| Redirect URLs | `https://app.edgepropertyservicesyyc.ca/**,http://localhost:3000/**` |
+
+Repaired to Site URL `https://app.edgehq.ca` and the three entries in §2.5.
+⚠️ The repair itself took two attempts: the first save left Site URL untouched
+and wrote `https://app.edgehq.ca` without a trailing `/**`, which matches no
+callback URL — so the flow still dead-ended on the retired host. Both slips were
+invisible in the dashboard and named immediately by `verify:google-auth`, which
+is the whole argument for a guard that reads the live configuration.
+
+The app was blameless: it sent `redirect_to=https://app.edgehq.ca/auth/callback`,
+which is correct. gotrue carried it to Google unvalidated, Google returned to
+`…supabase.co/auth/v1/callback` as registered, and *then* gotrue checked the
+stored `redirect_to` against the allow list, found no match, and fell back to
+Site URL — a hostname whose Vercel deployment no longer exists.
+
+**Three things made this hard to see, and all three are now guarded:**
+
+1. **The section above already described the mechanism.** Knowing that an
+   unlisted `redirect_to` falls back to Site URL, and *checking what Site URL
+   actually says*, are different acts. The guard now performs the second.
+2. **No other auth flow depends on this field.** `crewInvite.buildSetupUrl`,
+   `passwordRecovery.buildResetUrl` and `betaInvite` all build their own
+   `hashed_token` URLs specifically to avoid it — `passwordRecovery` even records
+   that Site URL was once `http://localhost:3000` in production. They engineered
+   *around* the broken field rather than fixing it, so nothing else ever failed
+   loudly enough to expose it. `signInWithOAuth` is the first consumer.
+3. **Every automated check was a source check.** The bug lived in a dashboard.
+   A guard that reads only this repository cannot see it, which is why
+   `verify:google-auth` §12-13 now query the deploy and the Supabase Management
+   API directly.
+
+⛔ **Do not conclude from "the provider probe returns 302" that sign-in works.**
+That probe proves the provider is enabled. It says nothing about the return trip,
+which is where this failed — and the return trip is the half a human experiences.
+
+### ⛔ Recreating the Google OAuth client: BOTH fields, or sign-in breaks
+
+**2026-08-26, the third failure in this sequence.** With Site URL correct and the
+canonical host correct, sign-in still failed — the owner reached Google, consented,
+came back, and got *"could not be completed"*. The cause, from Supabase's own log:
+
+```json
+{"level":"error","path":"/callback",
+ "error":"oauth2: \"invalid_client\" \"The provided client secret is invalid.\"",
+ "msg":"500: Unable to exchange external code"}
+```
+
+The OAuth client had been **recreated** in Google Cloud. The new **Client ID** was
+pasted into Supabase; the **Client Secret** was not — so Supabase held the *old*
+client's secret. Recreating a client mints a new secret, and the two are only ever
+valid as a pair.
+
+⚠️ **Why the consent screen still worked, which is what makes this confusing.**
+The Client ID is used in the browser-visible `/authorize` hop, so Google recognised
+it and showed the account chooser normally. The secret is used only in the
+**back-channel token exchange**, server to server, *after* consent. So everything a
+person can see succeeds, and the failure happens in the one step nobody watches.
+
+⭐ Diagnosing it: `invalid_client` + *"client secret is invalid"* means Google
+**recognised the client and rejected the secret** — the ID is right, the secret is
+wrong. (An unknown ID reads *"The OAuth client was not found"* instead.)
+
+**Fix:** Supabase → Authentication → Providers → Google → paste the Client Secret
+belonging to the client ID currently in the *Client IDs* field → Save. Nothing in
+this repository changes, and no redeploy is needed.
+
+### Verifying the live configuration
+
+```bash
+npm run verify:google-auth      # §12-13 read the deploy and the live project
+```
+
+Requires `SUPABASE_ACCESS_TOKEN` for §13; without it those checks report
+`SKIPPED` rather than passing. To read the two fields by hand:
+
+```bash
+curl -s -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+  'https://api.supabase.com/v1/projects/syhjarpnmpywatadhblu/config/auth' \
+  | grep -oE '"(site_url|uri_allow_list)":"[^"]*"'
+```
+
+---
+
+## ⭐⭐ One host holds the session — why `edgehq.ca` signed the owner out
+
+**The report:** *"Every time I reopen EdgeHQ on desktop, it makes me sign in with
+Google again."*
+
+**It was never the session expiring.** Measured against production on 2026-08-26
+with `scripts/authpersist-cdp.mjs`, which signs in, genuinely quits Chrome against
+a persistent profile, and relaunches it:
+
+| | measured |
+|---|---|
+| cookie lifetime | `Max-Age` 400 days — **not** a session cookie |
+| domain | `app.edgehq.ca`, **host-only** (no `Domain=`) |
+| path / sameSite | `/` · `Lax` |
+| survives a real browser quit and reopen | **yes** |
+
+So persistence works. The failure is *which hostname was asked*. In one browser
+profile, seconds apart:
+
+```
+https://app.edgehq.ca/dashboard → dashboard, 2 auth cookies present
+https://edgehq.ca/dashboard     → /login?next=%2Fdashboard, ZERO cookies
+https://app.edgehq.ca/dashboard → dashboard again, still signed in
+```
+
+`edgehq.ca` is not a redirect and not a marketing page — it serves a
+**byte-identical copy of the application** (same md5 for `/login`, same
+deployment), and its `/` sends you to `/dashboard` exactly like the canonical
+host. Supabase's session cookie is host-only, so the apex structurally cannot hold
+a session; and OAuth always *finishes* on `app.edgehq.ca`, because `redirectTo` is
+built from `NEXT_PUBLIC_APP_URL`.
+
+An owner whose shortcut, bookmark or address-bar autocomplete resolves to
+`edgehq.ca` therefore: sees a login form → signs in with Google → is deposited on
+`app.edgehq.ca` → reopens their shortcut on `edgehq.ca` → is signed out again.
+**Every time, by construction.** That is the "every time" in the report.
+
+### The fix, and what it deliberately is not
+
+`src/lib/canonicalHost.ts` + `src/middleware.ts` redirect any request arriving on
+a non-canonical hostname to `NEXT_PUBLIC_APP_URL`, path and query intact, **before
+any auth state is read or written**.
+
+⛔ **Not** `Domain=.edgehq.ca`. That fixes it in one line and is the wrong answer:
+it hands the owner's access token to every present and future subdomain forever. A
+stolen session on some later `blog.edgehq.ca` would be a stolen CRM. The cookie
+stays host-only; the *person* is moved instead.
+
+Deliberate exemptions, each of which would be a real outage if canonicalised:
+
+- **`/api/*` and `/monitoring`** — Stripe, Twilio and Resend hold a literal URL in
+  a console and do **not** follow 307s. A canonicalised webhook is a silently
+  dropped webhook.
+- **Non-GET/HEAD** — same reason, for anything that POSTs.
+- **`localhost`, `127.0.0.1`, `*.vercel.app`** — there the hostname *is* the
+  deployment; redirecting a preview to production deletes the preview.
+- **`/api/auth/google/start`** keeps doing its own hop (S108), because it must
+  canonicalise *before* writing PKCE state — stricter than this, and not
+  delegable upward.
+
+Capped at one hop by a 10-second `eq-canon-hop` cookie, so even a wrong host
+comparison costs one wasted redirect rather than an infinite loop on the front
+door. `verify:auth-session` pins all of it, including 8 mutations that must each
+break the rule.
+
+### What a human still has to do
+
+1. **Deploy this branch.** Until it ships, `edgehq.ca` keeps stranding sessions —
+   `scripts/authpersist-cdp.mjs` fails on exactly that check and passes after.
+2. **If the PWA was installed from `edgehq.ca`, reinstall it from
+   `https://app.edgehq.ca`.** An installed app is scoped to the hostname it was
+   installed from. The redirect will still sign you in, but the window may hand
+   off to a browser tab on the way. Reinstalling from the canonical host removes
+   the hop entirely.
+3. **Point desktop shortcuts and bookmarks at `https://app.edgehq.ca`.**
+4. Decide, separately, what `edgehq.ca` is *for*. Serving the whole app on the
+   apex is what created this; a marketing site or a plain redirect there would be
+   the durable answer. The middleware makes it harmless either way.
+
+### Verifying it
+
+```bash
+# fails on production today (CASE D), passes once this branch is deployed
+node scripts/authpersist-cdp.mjs https://app.edgehq.ca https://edgehq.ca
+
+npm run verify:auth-session     # the whole contract; 19 mutation tests
+```
+
+### ✅ Fixed here: the session cookie now carries `Secure`
+
+Measured before: `secure=false` on `sb-…-auth-token.0/.1`. That is
+`@supabase/ssr`'s default — `DEFAULT_COOKIE_OPTIONS` names `path`, `sameSite`,
+`httpOnly` and `maxAge` and says nothing about `Secure` — not a decision anyone
+made here.
+
+`src/lib/supabase/cookieSecurity.ts` is now the one rule, applied at all **five**
+writers (browser client, server client, middleware, `/auth/callback`, and the
+OAuth start route whose PKCE verifier gets the same treatment). Missing one
+would mean a token rotation silently downgrading a cookie another path wrote
+correctly — and the app keeps working either way, so nobody would notice.
+
+⭐ **Derived from the canonical origin, not from `x-forwarded-proto`.** The
+forwarded scheme is a *header* — something a caller proposes. `x-forwarded-proto:
+http` on a genuine HTTPS request would talk the app into writing a non-`Secure`
+session cookie: a downgrade handed over on request. `NEXT_PUBLIC_APP_URL` is
+configuration, and nothing a caller sends can move it.
+
+⛔ **And it must stay `false` on plain HTTP.** A `Secure` cookie is simply dropped
+over `http://`, so hard-coding `true` would stop local development and LAN testing
+on a real phone (`http://10.0.0.x:3163` — how the 375/390/430 checks get run on
+hardware) from signing in at all. Both directions are mutation-tested.
+
+Proven rather than reasoned: rebuilt with the production origin and re-run through
+`scripts/authpersist-cdp.mjs` — cookies report `secure=true`, sign-in still reaches
+the dashboard, and the session still survives a genuine Chrome quit and relaunch.
+(Chrome accepts `Secure` cookies on `127.0.0.1` because it is a trustworthy origin.)
+
+⚠️ `httpOnly` stays **false**, deliberately. `@supabase/ssr`'s browser client reads
+the session out of `document.cookie`; an `httpOnly` session cookie would mean no
+client-side auth at all. Asserted in the guard so a future "hardening" fails there
+rather than bricking sign-in.
+
+### Where the session is stored — one place, measured
+
+Asked of a real signed-in browser, not inferred:
+
+| store | contents |
+|---|---|
+| cookies | `sb-…-auth-token.0`, `sb-…-auth-token.1` — **the session, and only here** |
+| `localStorage` | `eq-logo` (branding cache). No auth material. |
+| `sessionStorage` | empty |
+| IndexedDB | `eq-offline`, `eq-photo-queue` — the field queues. No auth material. |
+
+One auth store. `@supabase/ssr` is configured with the cookie adapter, so
+supabase-js persists the session there and nowhere else. **Do not add a second
+store** — two answers to "are you signed in" means one of them goes stale.
+
+### Live Google provider state, verified 2026-08-26
+
+- `verify:google-auth` §13 reads the **live** project (needs `SUPABASE_ACCESS_TOKEN`):
+  Google enabled, Site URL = `https://app.edgehq.ca`, the allow list covers the
+  callback the app actually sends (with and without `?next=`), no entry names a
+  retired or ephemeral host, and **no entry admits any of 4 foreign origins**.
+- The owner account carries **one** auth uid with **two** identities on it —
+  `email` (created 2026-06-04) and `google` (created *and* last signed in
+  2026-08-26T06:12:05Z). A Google exchange therefore **succeeded**, token exchange
+  included, so the `invalid_client` failure is **not current**. No duplicate auth
+  user, and exactly one business (`Edge Property Services`).
+
+⚠️ `/auth/v1/authorize` returns a Google consent redirect even for a `redirect_to`
+that is not on the allow list — the `state` is an opaque server-side handle, so
+that endpoint cannot be used to test the allow list from outside. The allow list is
+enforced later, server-side, on the way back; §13 above is what actually verifies it.

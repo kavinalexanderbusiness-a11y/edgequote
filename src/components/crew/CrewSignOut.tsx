@@ -69,7 +69,9 @@ export function CrewSignOut() {
       await clearCachedDays()
       clearAllDrafts()
 
-      await createClient().auth.signOut()
+      // Scope named, not inherited — identical behaviour to the bare call it replaces.
+      // See Sidebar.handleSignOut: the choice itself is an open product question.
+      await createClient().auth.signOut({ scope: 'global' })
       router.replace('/login')
       router.refresh()
     } finally {

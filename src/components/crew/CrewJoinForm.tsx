@@ -54,7 +54,7 @@ export function CrewJoinForm() {
       </Button>
       <button
         type="button"
-        onClick={async () => { await createClient().auth.signOut(); router.replace('/login'); router.refresh() }}
+        onClick={async () => { await createClient().auth.signOut({ scope: 'global' }); router.replace('/login'); router.refresh() }}
         className="w-full text-xs text-ink-muted hover:text-ink flex items-center justify-center gap-1.5 py-2"
       >
         <LogOut className="w-3.5 h-3.5" aria-hidden /> Sign out
