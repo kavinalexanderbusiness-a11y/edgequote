@@ -4,6 +4,7 @@ import { resolveAppRole, CREW_JOIN, OWNER_ROOT } from '@/lib/crewAccess'
 import { readUser } from '@/lib/authState'
 import { AuthUnavailable } from '@/components/auth/AuthUnavailable'
 import { CrewNav } from '@/components/crew/CrewNav'
+import { FieldSyncStatus } from '@/components/crew/FieldSyncStatus'
 import { Toaster } from '@/components/ui/Toaster'
 
 // ── Crew Mode shell ──────────────────────────────────────────────────────────
@@ -39,6 +40,9 @@ export default async function CrewLayout({ children }: { children: React.ReactNo
         <div className="mx-auto w-full max-w-lg">{children}</div>
       </main>
       <CrewNav />
+      {/* The queue's only voice. Renders nothing when there is signal and
+          nothing waiting, which is most of the time. */}
+      <FieldSyncStatus />
       <Toaster />
     </div>
   )

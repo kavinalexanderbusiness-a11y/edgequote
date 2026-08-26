@@ -64,25 +64,67 @@ interface Props {
   /** How many photos the slot above still hasn't landed. Non-zero makes the
    *  confirmation say so instead of implying every piece of evidence saved. */
   photosOutstanding?: number
+  /**
+   * ⭐ Optional DURABLE draft, supplied by callers who run where the network
+   * fails mid-sentence (the crew's phone; lib/field/drafts). Without it the
+   * sheet behaves exactly as before — the words survive a failed save because
+   * they stay in the boxes, but not a killed tab.
+   *
+   * ⛔ Deliberately callbacks rather than a storage key: this component must not
+   * learn where drafts live, or the owner's copy of it grows a dependency on the
+   * field layer for a feature it does not use.
+   *
+   * The contract: `save` on every keystroke, `load` when the sheet opens (an
+   * unsent draft OUTRANKS the row — it is newer, and it is the only copy), and
+   * `clear` only once the server has confirmed.
+   */
+  draftStore?: {
+    load: () => { summary: string; issue: string } | null
+    save: (record: CompletionRecord) => void
+    clear: () => void
+  }
 }
 
 export function CompletionSheet({
-  open, onClose, job, onSave, onSaved, photos, photosOutstanding = 0,
+  open, onClose, job, onSave, onSaved, photos, photosOutstanding = 0, draftStore,
 }: Props) {
   const [summary, setSummary] = useState('')
   const [issue, setIssue] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** The boxes were filled from an UNSENT draft rather than the saved row. The
+   *  worker is told, and offered the other option — ⛔ "do not silently resend
+   *  forever": Retry (Save) and Discard are both a tap away, and neither happens
+   *  on its own. */
+  const [restored, setRestored] = useState(false)
 
   // Seed from the ROW every time the sheet opens, never from the last time it
   // was open: reopening on a visit whose note the office edited meanwhile must
   // show theirs, and saving a stale copy would silently overwrite it.
   useEffect(() => {
     if (!open) return
-    setSummary(job.completion_summary || '')
-    setIssue(job.completion_issue || '')
+    // ⭐ An unsent DRAFT wins over the row. The row is what the server last
+    // accepted; the draft is what this worker typed afterwards and the network
+    // never took. Seeding from the row would silently discard it — which is
+    // precisely the "long note eaten by a dead zone" this exists to prevent.
+    const draft = draftStore?.load() ?? null
+    setSummary(draft ? draft.summary : (job.completion_summary || ''))
+    setIssue(draft ? draft.issue : (job.completion_issue || ''))
     setError(null)
+    setRestored(!!draft)
+    // draftStore is a fresh object each render for most callers; depending on it
+    // would re-seed the boxes on every keystroke and fight the typist.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, job.id, job.completion_summary, job.completion_issue])
+
+  // Persist as they type. Synchronous and tiny (lib/field/drafts uses
+  // localStorage for exactly this reason), so there is no window between the
+  // words existing and the words being safe.
+  useEffect(() => {
+    if (!open || !draftStore) return
+    draftStore.save({ completion_summary: summary || null, completion_issue: issue || null })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, summary, issue])
 
   const finished = job.status === 'completed'
   const next = normalizeCompletionRecord({ summary, issue })
@@ -100,15 +142,29 @@ export function CompletionSheet({
       setError(res.error || 'That didn’t save. Try again.')
       return
     }
+    // ⛔ The draft dies ONLY here — after the transport has accepted the words,
+    // never on a failure and never on a timer.
+    draftStore?.clear()
+    setRestored(false)
     onSaved?.(next)
     // Say what is true and no more. When a photo is still outstanding the
     // sentence names it — "Saved" alone would be a claim about evidence this
-    // save never touched.
-    toast.success(
-      photosOutstanding > 0
-        ? `Note saved — ${photosOutstanding} photo${photosOutstanding === 1 ? '' : 's'} still to upload.`
-        : res.unchanged ? 'Nothing to change.' : 'Saved to this visit.',
-    )
+    // save never touched. And a note held on the PHONE is not a note the office
+    // can read: `pending` gets its own sentence rather than borrowing "Saved".
+    if (res.pending) {
+      toast(
+        photosOutstanding > 0
+          ? `Notes saved on your phone — they’ll sync, and ${photosOutstanding} photo${photosOutstanding === 1 ? '' : 's'} still to upload.`
+          : 'Notes saved on your phone — they’ll sync when you have signal.',
+        { tone: 'info', duration: 6000 },
+      )
+    } else {
+      toast.success(
+        photosOutstanding > 0
+          ? `Note saved — ${photosOutstanding} photo${photosOutstanding === 1 ? '' : 's'} still to upload.`
+          : res.unchanged ? 'Nothing to change.' : 'Saved to this visit.',
+      )
+    }
     onClose()
   }
 
@@ -188,6 +244,29 @@ export function CompletionSheet({
           />
         </Field>
 
+        {/* ⭐ Unsent words, restored. The worker is TOLD where these came from —
+            silently repopulating a box is how somebody re-saves a note they had
+            already decided against. Both exits are here: Save retries, Discard
+            throws it away. Nothing resends on its own. */}
+        {restored && (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2 flex items-start justify-between gap-2" role="status">
+            <p className="text-[11px] text-ink-muted">
+              These notes never reached the office — restored from this phone.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                draftStore?.clear()
+                setSummary(job.completion_summary || '')
+                setIssue(job.completion_issue || '')
+                setRestored(false)
+              }}
+              className="shrink-0 text-[11px] font-medium text-ink-muted underline underline-offset-2 hover:text-ink"
+            >
+              Discard
+            </button>
+          </div>
+        )}
         {error && (
           <p className="text-xs text-red-400" role="alert">{error}</p>
         )}

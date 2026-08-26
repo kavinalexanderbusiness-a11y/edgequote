@@ -33,3 +33,7 @@ search-*.png
 search-cdp-*.txt
 .chrome-search-*/
 .dayactions-harness/
+
+# Session fixture credentials (worker passwords for authenticated E2E proofs).
+# ⛔ Never commit: these are real logins on the production project.
+scripts/.s*-fixture.json
