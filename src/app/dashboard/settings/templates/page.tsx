@@ -26,6 +26,10 @@ import { Plus, Edit2, Trash2, X, Star } from 'lucide-react'
 import { ServiceBundles } from '@/components/settings/ServiceBundles'
 import { scrollBehavior } from '@/lib/motion'
 import { listFormTemplates, type FormTemplate } from '@/lib/jobForms'
+import { MeasurePricingEditor } from '@/components/pricing/MeasurePricingEditor'
+import { loadPricingPlans, savePricingPlans, draftsFor, plansByTemplate, type PlanDraft } from '@/lib/servicePlans'
+import type { MeasurementType } from '@/lib/measurePricing'
+import type { ServicePricingPlanRow } from '@/types'
 
 // Sentinel for the "Other…" option. Never persisted: onSubmit swaps it for the
 // typed name, so the DB only ever sees a real category.
@@ -74,6 +78,22 @@ export default function ServiceTemplatesPage() {
   const pdType = watch('pricing_display_type')
   const catValue = watch('category')
   const [customCategory, setCustomCategory] = useState('')
+
+  // ── Measure & Price configuration (Session 107) ────────────────────────────
+  // Plans live in their own table, so they are held beside the form rather than
+  // in it, and written after the template exists (a new service has no id to
+  // hang them off until it is inserted).
+  const [measuredBy, setMeasuredBy] = useState<'' | MeasurementType>('')
+  const [planDrafts, setPlanDrafts] = useState<PlanDraft[]>(draftsFor([]))
+  const [allPlans, setAllPlans] = useState<Map<string, ServicePricingPlanRow[]>>(new Map())
+
+  async function refreshPlans() {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+    try { setAllPlans(plansByTemplate(await loadPricingPlans(supabase, user.id))) }
+    catch { /* the editor just shows no plans; nothing is invented from a failed read */ }
+  }
+  useEffect(() => { void refreshPlans() /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
   const priceVal = watch('default_rate')
   const isFavorite = watch('is_favorite')
 
@@ -101,6 +121,8 @@ export default function ServiceTemplatesPage() {
     // 'General' before they have any services.
     reset({ name: '', category: topCategory, pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true, unit_cost: '', material_cost: '', is_favorite: false, recurrence: '', form_template_id: '' })
     setCustomCategory('')
+    setMeasuredBy('')
+    setPlanDrafts(draftsFor([]))
     setEditing(null)
     setShowForm(true)
   }
@@ -118,6 +140,10 @@ export default function ServiceTemplatesPage() {
       recurrence: t.recurrence || '',
       form_template_id: t.form_template_id || '',
     })
+    // Seeded from the row and its own plan rows — never from a default set, so
+    // opening a service that offers nothing shows nothing offered.
+    setMeasuredBy((t.measured_by as MeasurementType | null) ?? '')
+    setPlanDrafts(draftsFor(allPlans.get(t.id) ?? []))
     setEditing(t)
     setShowForm(true)
   }
