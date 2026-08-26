@@ -49,9 +49,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ⚠️⚠️ NODE 22 IS A FLOOR, NOT A PREFERENCE. @supabase/realtime-js refuses to
+      # construct a client without a WebSocket implementation, and its own source
+      # says why: "Node.js < 22 doesn't have native WebSocket". On 20 it throws
+      #     Error: Node.js 20 detected without native WebSocket support
+      # the moment anything builds a Supabase client — which verify:comm-prefs does
+      # when it renders the screen. That failure was invisible for days: every
+      # developer here runs Node 24, so the suite was green locally and red in CI
+      # with no diff to explain it, and reproducing CI's env, its LF line endings
+      # and its placeholder credentials all still passed. Only the runner's own log
+      # named it. The floor is also declared in package.json engines, so the two
+      # cannot drift apart again.
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       # `npm ci` not `npm install`: it installs exactly the lockfile and fails if
