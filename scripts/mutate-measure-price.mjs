@@ -85,14 +85,24 @@ let caught = 0
 let missed = 0
 const skipped = []
 
+// ⚠️⚠️ CRLF DISARMS A MULTI-LINE ANCHOR. These files are checked out with CRLF on
+// Windows (git says so on every write: "LF will be replaced by CRLF"), while the
+// anchors below are written with \n. An exact `includes()` therefore misses any
+// anchor spanning more than one line, and the mutation reports SKIP — which reads
+// like a stale anchor and is really a mutation that silently stopped running. A
+// guard nobody is mutating is a guard nobody is checking.
+// Match on a line-ending-agnostic regex instead, so the same anchor works on both.
+const rx = s => new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\r?\n/g, '\\r?\\n'))
+
 for (const m of MUTATIONS) {
   const original = readFileSync(m.file, 'utf8')
-  if (!original.includes(m.from)) {
+  const anchor = rx(m.from)
+  if (!anchor.test(original)) {
     skipped.push(m.name)
     console.log(`⚠️  SKIP  ${m.name}\n         anchor not found in ${m.file} — the mutation is stale, not the guard`)
     continue
   }
-  writeFileSync(m.file, original.replace(m.from, m.to))
+  writeFileSync(m.file, original.replace(anchor, m.to.replace(/\$/g, '$$$$')))
   let red = false
   try {
     execSync('npm run verify:measure-price', { stdio: 'pipe' })
