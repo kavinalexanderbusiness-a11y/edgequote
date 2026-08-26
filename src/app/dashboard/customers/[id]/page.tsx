@@ -57,6 +57,7 @@ import { formatCurrency, formatDate, cn, localTodayISO } from '@/lib/utils'
 import { ensurePortalToken, portalUrl, rotatePortalToken } from '@/lib/portal'
 import { CustomerComms } from '@/components/customers/CustomerComms'
 import { CommsHealth } from '@/components/customers/CommsHealth'
+import { PreferredChannelCard } from '@/components/customers/PreferredChannel'
 import { ReviewLifecycle } from '@/components/customers/ReviewLifecycle'
 import { CustomerAiSummary } from '@/components/ai/CustomerAiSummary'
 import { ReferralPanel } from '@/components/customers/ReferralPanel'
@@ -1451,6 +1452,12 @@ export default function CustomerDetailPage() {
           schedule) must never sit below a 440px conversation pane. */}
       {/* Communication health — opt-in/contact mismatches (only shows when relevant) */}
       <CommsHealth customer={customer} onChange={patch => setCustomer({ ...customer, ...patch })} />
+
+      {/* Preferred contact — what a message would ACTUALLY do, and what they asked
+          for. Above the fold-out because "how do I contact them right now" is a
+          phone-call question, like owed/notes/schedule. Consent itself stays in
+          the Communication card below; this can never override it. */}
+      <PreferredChannelCard customer={customer} onChange={patch => setCustomer({ ...customer, ...patch })} />
 
       {/* AI brief — on-demand summary of this customer's history (renders nothing
           when no AI key is configured; never automatic, never stored) */}

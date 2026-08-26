@@ -194,10 +194,23 @@ check('the allowlist has not silently emptied (chokepoint + manual route still i
   senders.includes('src/lib/comms/dispatch.ts') && senders.includes('src/app/api/comms/send/route.ts'))
 check('dispatch blocks per-channel on the tenant grants before the governor',
   (() => {
+    // The per-channel rule now lives in lib/comms/reach as capabilityBlocks, so
+    // the pure predicate (audience preview, follow-up queue) and the send path
+    // share ONE definition instead of two that can drift. Dispatch still reads
+    // the grants and still applies them ahead of the governor — which is what
+    // this check is about — so it follows the seam across both files rather
+    // than the old inline expression. Pinning the moved text here would have
+    // reported RED for a refactor that strengthened the very thing it guards.
     const t = read('src/lib/comms/dispatch.ts')
-    const cap = t.indexOf('outboundSms')
+    const cap = t.indexOf('capabilityBlocks(')
     const gov = t.indexOf('governCheck(')
-    return cap > -1 && t.includes('outboundEmail') && t.includes('SKIP_REASON.NOT_ENABLED') && gov > cap
+    if (cap < 0 || gov < cap) return false
+    if (!t.includes('tenantCapabilities(') || !t.includes('SKIP_REASON.NOT_ENABLED')) return false
+    // Isolate the rule's own body before asserting it reads BOTH grants: run
+    // over the whole file and a mention in a neighbouring comment or interface
+    // satisfies the check without any code doing the work.
+    const body = /export function capabilityBlocks[\s\S]*?\n}/.exec(read('src/lib/comms/reach.ts'))
+    return !!body && body[0].includes('outboundSms') && body[0].includes('outboundEmail')
   })())
 check('manual send route mirrors the same per-channel capability block',
   (() => {
