@@ -174,6 +174,9 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
   // Why there is no map, or null. Not a string: the reason carries a customer-safe
   // sentence AND an owner-only diagnostic, and only MapUnavailable may separate them.
   const [unavailable, setUnavailable] = useState<MapsUnavailable | null>(null)
+  // The typed figure when there is no map. Held as a STRING so an empty box is
+  // distinguishable from a zero — Number('') is 0, and "0 sq ft" is a claim.
+  const [manualEntry, setManualEntry] = useState('')
   const [totalSqft, setTotalSqft] = useState(0)
   const [points, setPoints] = useState(0)
   const [shapes, setShapes] = useState(0)
@@ -750,7 +753,38 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
             /* The map DIV is not rendered at all in this branch — leaving it
                mounted is what let Google paint its grey "Oops!" panel and sit
                there. One owner-facing panel instead, diagnostic collapsed. */
-            <MapUnavailable unavailable={unavailable} audience="owner" />
+            <>
+              <MapUnavailable unavailable={unavailable} audience="owner" />
+              {/* ⭐ THE PROMISE THE PANEL MAKES, KEPT. "You can enter measurements
+                  by hand" has to be true where it is said, and a measurement is a
+                  number about a property — tracing is only the nicest way to
+                  arrive at it. With this, a Maps outage costs the owner the
+                  satellite view and nothing else: the plans still price, the notes
+                  still save, and the quote still gets its snapshot.
+                  ⛔ Recorded as source 'manual' downstream, never as 'traced' —
+                  a typed figure must never wear a traced measurement's confidence. */}
+              <label className="block rounded-card border border-border bg-bg-tertiary p-4">
+                <span className="text-sm font-medium text-ink">
+                  {measurementType === 'count' ? 'Enter the count' : `Enter the measurement (${unitLabel(measurementType) || 'sq ft'})`}
+                </span>
+                <span className="mt-1 block text-xs text-ink-muted">
+                  Typed by hand, so it is recorded as an estimate rather than a trace.
+                </span>
+                <input
+                  type="number" min="0" step="1" inputMode="decimal"
+                  value={manualEntry}
+                  onChange={e => {
+                    setManualEntry(e.target.value)
+                    const n = parseFloat(e.target.value)
+                    const v = Number.isFinite(n) && n > 0 ? n : 0
+                    overrideRef.current = v
+                    setTotalSqft(v)
+                  }}
+                  placeholder="0"
+                  className="mt-3 w-full h-12 bg-bg border border-border-strong rounded-lg px-3 text-base text-ink tabular-nums outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
+                />
+              </label>
+            </>
           ) : (
             <>
               {/* Geocoding honesty — say when the pin is approximate or missing
@@ -809,8 +843,18 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
                   <Trash2 className="w-4 h-4" /> Clear
                 </Button>
               </div>
+            </>
+          )}
 
-              <div className="bg-bg-tertiary border border-border rounded-card p-4 space-y-3">
+          {/* ⭐ EVERYTHING BELOW IS SHARED WITH THE NO-MAP STATE, ON PURPOSE.
+              It used to live inside the "we have a map" branch, so a Maps outage
+              hid the total, the plans, the notes and the Use button along with
+              the map — and the panel above cheerfully said "everything else on
+              this page still works", which was then simply untrue.
+              Measuring is the part that needs Google. Pricing a measurement,
+              writing the notes and putting it on the quote are ours, and they
+              keep working whether or not Google will talk to us. */}
+          <div className="bg-bg-tertiary border border-border rounded-card p-4 space-y-3">
                 <div className="flex items-center justify-between flex-wrap gap-3">
                   <div className="flex items-center gap-2">
                     <Ruler className="w-4 h-4 text-accent-text" />
@@ -1059,10 +1103,10 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
                   )}
               </div>
 
-              <p className="text-xs text-ink-faint">
-                Tap each corner of the area to trace it — tap near your starting point (or <span className="text-ink font-medium">Add area</span>) to close the shape. Close one area, then trace the next — they add up.{lawnPricing ? ' The price is your rate × area, plus the travel fee from the quote.' : ''}
-              </p>
-            </>
+          {!unavailable && (
+            <p className="text-xs text-ink-faint">
+              Tap each corner of the area to trace it — tap near your starting point (or <span className="text-ink font-medium">Add area</span>) to close the shape. Close one area, then trace the next — they add up.{lawnPricing ? ' The price is your rate × area, plus the travel fee from the quote.' : ''}
+            </p>
           )}
         </div>
       </div>
