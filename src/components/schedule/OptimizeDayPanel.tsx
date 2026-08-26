@@ -20,9 +20,9 @@
 //
 // ⛔ No money. lib/daySequence cannot see revenue and neither can this panel.
 
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import {
-  ArrowRight, Check, Clock, Lightbulb, Lock, Navigation, Route as RouteIcon,
+  ArrowRight, Check, Clock, Lightbulb, Lock, LockOpen, Navigation, Route as RouteIcon,
   AlertTriangle, Info, X, CalendarClock,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -31,7 +31,7 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
 import { minutesToTime12 } from '@/lib/route'
 import { travelBasisLabel } from '@/lib/dayPlan'
-import { LOCK_LABEL, type DaySequenceProposal } from '@/lib/daySequence'
+import { LOCK_LABEL, type DaySequenceProposal, type PinConflictReport } from '@/lib/daySequence'
 
 function fmtMin(min: number): string {
   const m = Math.max(0, Math.round(min))
@@ -48,14 +48,37 @@ interface Props {
   onApply: (order: string[]) => void | Promise<void>
   applying?: boolean
   /** Estimate appointments on this day that could NOT be placed in the order —
-   *  no promised time, or no located property. Disclosed rather than guessed at. */
+   *  no located property. Disclosed rather than guessed at. */
   unplacedEstimates?: number
+  /**
+   * Which question this panel is answering (Session 110).
+   *   remaining — the owner's pins are held; only the rest is re-ordered.
+   *   all       — the pins were explicitly released for this run.
+   */
+  mode?: 'remaining' | 'all'
+  /** How many stops the owner has pinned. */
+  pinCount?: number
+  /**
+   * What the pins COST, when they cost something. Present only in `remaining`
+   * mode with at least one pin. ⛔ Never used to override a pin — only to say
+   * what holding it means, and to offer the owner the alternatives.
+   */
+  conflict?: PinConflictReport | null
+  /** Release the named pins. Recomputes; writes nothing. */
+  onReleasePins?: (ids: string[]) => void
   onClose: () => void
 }
 
-export function OptimizeDayPanel({ proposal, dateLabel, onApply, applying, unplacedEstimates = 0, onClose }: Props) {
+export function OptimizeDayPanel({
+  proposal, dateLabel, onApply, applying, unplacedEstimates = 0,
+  mode = 'remaining', pinCount = 0, conflict = null, onReleasePins, onClose,
+}: Props) {
   const dialogRef = useFocusTrap<HTMLDivElement>(true, onClose)
   const { current, suggested, accepted } = proposal
+  // The owner can say "I know — keep my order". That answer is theirs to give
+  // once, and the panel then stops asking for this run.
+  const [conflictAck, setConflictAck] = useState(false)
+  const showConflict = !!conflict?.conflict && !conflictAck
 
   const movedIds = useMemo(() => new Set(proposal.moves.map(m => m.id)), [proposal.moves])
   const lockedById = useMemo(
@@ -82,7 +105,9 @@ export function OptimizeDayPanel({ proposal, dateLabel, onApply, applying, unpla
           <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-3">
             <h2 id="optimize-day-title" className="text-sm font-semibold tracking-tight text-ink flex items-center gap-2 min-w-0">
               <RouteIcon className="w-4 h-4 text-accent-text shrink-0" aria-hidden />
-              <span className="truncate">Optimize day · {dateLabel}</span>
+              <span className="truncate">
+                {mode === 'all' ? 'Optimize all' : 'Optimize remaining'} · {dateLabel}
+              </span>
             </h2>
             <button type="button" onClick={onClose} aria-label="Close"
               className="w-9 h-9 -mr-2 flex items-center justify-center text-ink-faint hover:text-ink shrink-0">
@@ -91,6 +116,91 @@ export function OptimizeDayPanel({ proposal, dateLabel, onApply, applying, unpla
           </div>
 
           <CardBody className="space-y-4">
+            {/* ⭐ What the pins COST — the one thing the owner cannot see for
+                themselves. Shown BEFORE the verdict, because it changes what
+                the verdict means. ⛔ The pins are never overridden here: the
+                three buttons are all the owner's, and none of them writes. */}
+            {showConflict && conflict && (
+              <div className="rounded-xl border border-amber-500/40 bg-amber-500/[0.09] px-3.5 py-3 space-y-2.5">
+                <p className="text-sm font-semibold text-amber-200 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden />
+                  Your pinned order causes a scheduling conflict.
+                </p>
+                <div className="text-xs text-amber-100/90 space-y-1">
+                  {conflict.lateWithPins > conflict.lateWithoutPins && (
+                    <p>
+                      Holding {pinCount === 1 ? 'your pin' : 'your pins'} misses{' '}
+                      <span className="font-semibold">{conflict.lateWithPins}</span> promised time
+                      {conflict.lateWithPins === 1 ? '' : 's'} — without{' '}
+                      {pinCount === 1 ? 'it' : 'them'} the day misses {conflict.lateWithoutPins}.
+                    </p>
+                  )}
+                  {conflict.blockingWithPins > conflict.blockingWithoutPins && (
+                    <p>
+                      It also leaves{' '}
+                      <span className="font-semibold">
+                        {conflict.blockingWithPins - conflict.blockingWithoutPins}
+                      </span>{' '}
+                      problem{conflict.blockingWithPins - conflict.blockingWithoutPins === 1 ? '' : 's'} that
+                      would otherwise clear.
+                    </p>
+                  )}
+                  {conflict.culprits.length > 0 ? (
+                    <ul className="space-y-0.5 pt-0.5">
+                      {conflict.culprits.map(c => (
+                        <li key={c.id}>
+                          • <span className="font-semibold">{c.label}</span> pinned at #{c.position}
+                          {c.recoversPromises > 0 && ` — unpinning it keeps ${c.recoversPromises} more promised time${c.recoversPromises === 1 ? '' : 's'}`}
+                          {c.clearsBlocking > 0 && `${c.recoversPromises > 0 ? ', and' : ' — unpinning it'} clears ${c.clearsBlocking} problem${c.clearsBlocking === 1 ? '' : 's'}`}.
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    // ⭐ Honest about the limit of the diagnosis: pins can
+                    // conflict jointly with no single one at fault, and naming
+                    // a stop we did not actually find would be a guess.
+                    <p className="pt-0.5">
+                      No single pin is responsible — it is the combination. Releasing one at a time
+                      does not recover the promise.
+                    </p>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                  <Button size="sm" variant="secondary" onClick={() => setConflictAck(true)}>
+                    <Lock className="w-3.5 h-3.5" /> Keep my order
+                  </Button>
+                  {conflict.culprits.length > 0 && onReleasePins && (
+                    <Button size="sm" variant="secondary"
+                      onClick={() => onReleasePins(conflict.culprits.map(c => c.id))}>
+                      <LockOpen className="w-3.5 h-3.5" />
+                      Unpin {conflict.culprits.length === 1 ? conflict.culprits[0].label : `${conflict.culprits.length} stops`}
+                    </Button>
+                  )}
+                  {conflict.withoutPins.accepted && onReleasePins && (
+                    <Button size="sm" variant="ghost"
+                      onClick={() => onReleasePins(conflict.withPins.locked.filter(l => l.reason === 'pinned').map(l => l.id))}>
+                      <ArrowRight className="w-3.5 h-3.5" /> Use suggested order
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* The pins were honoured — said plainly, because "did it respect
+                what I asked for" is the first question an owner has. */}
+            {pinCount > 0 && mode === 'remaining' && !showConflict && (
+              <p className="text-[11px] text-accent-text flex items-center gap-1.5">
+                <Lock className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                All {pinCount} pinned stop{pinCount === 1 ? '' : 's'} kept {pinCount === 1 ? 'its' : 'their'} position.
+              </p>
+            )}
+            {mode === 'all' && pinCount > 0 && (
+              <p className="text-[11px] text-amber-300 flex items-center gap-1.5">
+                <LockOpen className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                This run ignores your {pinCount} pin{pinCount === 1 ? '' : 's'} — every stop was free to move.
+              </p>
+            )}
+
             {!accepted ? (
               // ⭐ The honest empty case. The search ran and could not beat the
               // day as booked — which is a RESULT, not a failure, and saying so

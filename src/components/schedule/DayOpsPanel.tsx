@@ -11,8 +11,16 @@ import { planDay, type DayPlanStopInput } from '@/lib/dayPlan'
 // ⭐ THE within-day optimizer (Session 82). It proposes an ORDER and asks
 // planDay — the engine already timing this board — to judge it, so the
 // suggestion and the day it is compared against are the same arithmetic.
-import { sequenceDay, promiseMinutes, lockFromStatus, type SequenceStop, type DaySequenceProposal } from '@/lib/daySequence'
+import { sequenceDay, analysePinConflict, promiseMinutes, lockFromStatus, type SequenceStop, type DaySequenceProposal, type PinConflictReport } from '@/lib/daySequence'
+// ⭐ Pins (Session 110) — "hold this stop here while you re-order the rest".
+// The primitive is pure and lives in lib/routePins; this board owns only WHERE
+// the pins are kept, which today is this component's own state.
+import {
+  orderWithPins, repositionPins, reconcilePins, pinAtCurrentPosition, unpin,
+  type RoutePin,
+} from '@/lib/routePins'
 import { OptimizeDayPanel } from '@/components/schedule/OptimizeDayPanel'
+import { DayRoutePanel, type RouteSequenceStop } from '@/components/schedule/DayRoutePanel'
 import { estimateMinutes, type EstimateAppointment } from '@/lib/estimateAppointments'
 import type { WorkerDayDetail } from '@/lib/workerAvailability'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
@@ -447,6 +455,29 @@ export function DayOpsPanel({
   const [localSeq, setLocalSeq] = useState<string[] | 'auto' | null>(null)
   useEffect(() => { setLocalSeq(null) }, [date])
 
+  // ── Pins (Session 110) ─────────────────────────────────────────────────────
+  // ⚠️ HELD IN COMPONENT STATE, and that is a measured limitation rather than a
+  // shortcut. There is no column and no table in this schema in which a pin can
+  // live: `jobs` has route_order (where a stop IS, which is true of every stop)
+  // and no way to say the owner CHOSE it; `schedule_items` has neither. The
+  // generic day-level tables that looked like candidates — day_statuses,
+  // dispatch_notes, schedule_health_ignored, suggestion_dismissals — model a
+  // day's availability, a free-text note and two kinds of dismissal, none of
+  // which is a position constraint. Encoding pins into any of their text keys
+  // would be hiding structured state in prose.
+  // ⛔ Deliberately NOT localStorage either: a planning constraint that exists
+  // on one browser and not the owner's phone is a constraint that lies. The
+  // smallest honest addition is designed and handed to Session 106 — see
+  // supabase/proposals/ — and until it lands the panel SAYS pins last while the
+  // day is open rather than letting the owner discover it on refresh.
+  const [pins, setPins] = useState<RoutePin[]>([])
+  // The owner moved or pinned something and has not re-optimized since. Drives
+  // the OFFER; ⛔ never an automatic re-run.
+  const [routeDirty, setRouteDirty] = useState(false)
+  // Which question the open panel is answering: hold the pins, or let them go.
+  const [optimizeMode, setOptimizeMode] = useState<'remaining' | 'all'>('remaining')
+  useEffect(() => { setPins([]); setRouteDirty(false) }, [date])
+
   // Unread crew messages for the visits on this day. Two queries for the whole
   // board rather than one per card, and a failure is deliberately SILENT: an
   // absent badge hides an affordance, while an error banner over the day's work
@@ -585,26 +616,61 @@ export function DayOpsPanel({
     if (savedKey === localSeq.join('|') || fresh) setLocalSeq(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [localSeq, savedKey, jobs])
+  // ── ONE reorder path, for both surfaces (Session 110) ──────────────────────
+  // The route panel and the job cards move stops through these same two
+  // functions, so a drag in one place cannot come to mean something different
+  // from a chevron in the other. They work on the UNIFIED order — visits and
+  // estimate appointments together — because that is the order the day is
+  // actually driven in.
+  //
+  // ⚠️ Only visits reach route_order. An estimate lives on `schedule_items`,
+  // which has no such column, so its place in the sequence is real for planning
+  // and cannot be written. That is disclosed in the panel, never papered over.
+  const unifiedOrderRef = useRef<string[]>([])
+  const jobIdSetRef = useRef<Set<string>>(new Set())
+
+  function commitSequence(seq: string[], placedId?: string) {
+    const jobIds = seq.filter(id => jobIdSetRef.current.has(id))
+    setPins(prev => {
+      // Everything between the old and new seat shifted, so every pin re-reads
+      // its position from the order that now exists.
+      const moved = repositionPins(prev, seq)
+      if (!placedId) return moved
+      // ⭐ The owner just PUT this stop here, so it is pinned — VISIBLY. The
+      // alternative (move it, then have the next optimize run put it back) is
+      // what made manual ordering feel like it did not work. ⛔ What we must
+      // not do is create the constraint invisibly: the row grows a lock icon
+      // and an Unpin control the moment this happens.
+      return pinAtCurrentPosition(moved, seq, placedId,
+        jobIdSetRef.current.has(placedId) ? 'job' : 'appointment')
+    })
+    setRouteDirty(true)
+    void applyOrder(jobIds)
+  }
+
   function moveStop(id: string, dir: -1 | 1) {
-    const seq = (manualSeq ?? sortedJobs.map(j => j.id)).slice()
+    const seq = unifiedOrderRef.current.slice()
     const i = seq.indexOf(id)
     const j = i + dir
     if (i < 0 || j < 0 || j >= seq.length) return
     ;[seq[i], seq[j]] = [seq[j], seq[i]]
-    applyOrder(seq)
+    commitSequence(seq, id)
+  }
+  function moveOnto(fromId: string, targetId: string) {
+    const seq = unifiedOrderRef.current.slice()
+    const fi = seq.indexOf(fromId)
+    const ti = seq.indexOf(targetId)
+    if (fi < 0 || ti < 0) return
+    seq.splice(fi, 1)
+    seq.splice(ti, 0, fromId)
+    commitSequence(seq, fromId)
   }
   const dragId = useRef<string | null>(null)
   function dropOn(targetId: string) {
     const from = dragId.current
     dragId.current = null
     if (!from || from === targetId) return
-    const seq = (manualSeq ?? sortedJobs.map(j => j.id)).slice()
-    const fi = seq.indexOf(from)
-    const ti = seq.indexOf(targetId)
-    if (fi < 0 || ti < 0) return
-    seq.splice(fi, 1)
-    seq.splice(ti, 0, from)
-    applyOrder(seq)
+    moveOnto(from, targetId)
   }
   // "Reset to best route": clear any manual order so the day snaps back to the
   // continuously-computed optimized route (the SAME engine output in `route` —
@@ -738,68 +804,174 @@ export function DayOpsPanel({
   // their promised time falls in the plan as it stands; one with no promised
   // time cannot be placed at all, so it is left out and counted for disclosure
   // rather than dropped into a slot nobody chose.
-  const anchorableEstimates = (estimates ?? []).filter(e => e.start_time && e.properties?.lat != null && e.properties?.lng != null)
-  const unplacedEstimates = (estimates ?? []).length - anchorableEstimates.length
-  const proposal: DaySequenceProposal | null = useMemo(() => {
-    if (!optimizeOpen) return null
-    const jobStops: SequenceStop[] = sortedJobs.map(j => ({
-      id: j.id,
-      label: j.customers?.name || j.title,
-      coord: j.properties?.lat != null && j.properties?.lng != null
-        ? { lat: j.properties.lat, lng: j.properties.lng } : null,
-      address: j.properties?.address ?? '',
-      propertyId: j.property_id ?? null,
-      promiseMin: promiseMinutes(j.start_time),
-      lock: lockFromStatus(j.status, { billed: invoicedJobIds?.has(j.id) }),
-      durationMinutes: j.duration_minutes,
-      crewSize: j.crew_size,
-      serviceType: j.service_type,
-      status: j.status,
-      crewId: j.crew_id ?? null,
-      technicianId: j.technician_id ?? null,
-      workedMinutes: j.actual_minutes,
-    }))
-    // Slot each anchored estimate in front of the first visit the plan already
-    // reaches after its promised time.
-    const withEstimates = [...jobStops]
-    for (const e of anchorableEstimates) {
-      const at = timeToMinutes(e.start_time)
-      let idx = withEstimates.findIndex(s => (arrivalMinByJob[s.id] ?? Number.POSITIVE_INFINITY) > at)
-      if (idx < 0) idx = withEstimates.length
-      withEstimates.splice(idx, 0, {
-        id: e.id,
-        label: e.customers?.name || e.title,
-        coord: { lat: e.properties!.lat as number, lng: e.properties!.lng as number },
-        address: e.properties?.address ?? '',
-        propertyId: e.property_id ?? null,
-        promiseMin: at,
-        // ⛔ Never re-sequenced: schedule_items has no route_order column, so a
-        // position proposed for it could not be saved.
-        lock: 'appointment',
-        durationMinutes: estimateMinutes(e),
-        status: e.status,
-      })
+  // ── THE day's routable sequence — visits and estimates in ONE order ────────
+  // Session 110. An estimate appointment is not work and must never gain a work
+  // affordance, but it is absolutely a trip: you cannot drive to a 10 AM
+  // estimate without it costing the visit on either side. Planning it in a
+  // second list meant planning the route in neither.
+  //
+  // ⭐ An estimate needs an ADDRESS to be sequenced at all. With one:
+  //   • a TIMED estimate anchors, in front of the first visit the plan already
+  //     reaches after its promised time — Session 82's rule, unchanged.
+  //   • an UNTIMED estimate has no anchor anyone could derive, so it is NOT
+  //     given an invented slot. It joins the order at the end, movable, where
+  //     the owner can put it where the trip really belongs. Session 82 dropped
+  //     these from planning entirely, which meant the day's finish time quietly
+  //     excluded a real drive; counting it is strictly more honest.
+  const locatedEstimates = useMemo(
+    () => (estimates ?? []).filter(e => e.properties?.lat != null && e.properties?.lng != null),
+    [estimates],
+  )
+  const unplacedEstimates = (estimates ?? []).length - locatedEstimates.length
+
+  const jobById = useMemo(() => new Map(sortedJobs.map(j => [j.id, j])), [sortedJobs])
+  const estimateById = useMemo(() => new Map(locatedEstimates.map(e => [e.id, e])), [locatedEstimates])
+
+  const arrivalKey = sortedJobs.map(j => `${j.id}:${arrivalMinByJob[j.id] ?? ''}`).join('|')
+  const baseUnifiedOrder = useMemo(() => {
+    const order = sortedJobs.map(j => j.id)
+    const timed = locatedEstimates.filter(e => e.start_time)
+    const untimed = locatedEstimates.filter(e => !e.start_time)
+    for (const e of timed) {
+      const at = timeToMinutes(e.start_time as string)
+      let idx = order.findIndex(id => (arrivalMinByJob[id] ?? Number.POSITIVE_INFINITY) > at)
+      if (idx < 0) idx = order.length
+      order.splice(idx, 0, e.id)
     }
-    return sequenceDay({
-      stops: withEstimates,
-      base: baseCoord,
-      day: {
-        startTime: workStartTime,
-        capacityHours,
-        workers: workersOnDay ?? null,
-        learnedFor: learnedDurationFor,
-        speed: travel,
-        hasBase: !!baseCoord,
-        staffing: staffingOnDay ?? null,
-        crewNames,
-        availabilityRecorded,
-      },
-      dist: road?.dist,
-      seconds: road?.seconds,
-      hasRoad: road?.hasRoad,
-    })
+    order.push(...untimed.map(e => e.id))
+    return order
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [optimizeOpen, sortedJobs, estimates, invoicedJobIds, baseCoord, road, travel, workStartTime, capacityHours, workersOnDay, staffingOnDay, crewNames, availabilityRecorded])
+  }, [sortedJobs, locatedEstimates, arrivalKey])
+
+  // Pins asserted over that order, and stale ones reported. A pin whose stop
+  // left the day (cancelled, moved to another date) is DROPPED — never silently
+  // re-aimed at whoever now sits at that index.
+  const reconciled = useMemo(() => reconcilePins(pins, baseUnifiedOrder), [pins, baseUnifiedOrder])
+  const unifiedOrder = useMemo(
+    () => orderWithPins(baseUnifiedOrder, reconciled.pins),
+    [baseUnifiedOrder, reconciled.pins],
+  )
+  // Drop stale pins from state once, so the count the owner sees is the count
+  // that is real. Guarded on length so it cannot loop.
+  useEffect(() => {
+    if (reconciled.dropped.length > 0) setPins(reconciled.pins)
+  }, [reconciled])
+
+  unifiedOrderRef.current = unifiedOrder
+  jobIdSetRef.current = new Set(sortedJobs.map(j => j.id))
+  const pinnedIds = useMemo(() => new Set(reconciled.pins.map(p => p.stopId)), [reconciled.pins])
+
+  /** The stops as the OPTIMIZER sees them — one shape for both kinds. */
+  const sequenceStops: SequenceStop[] = useMemo(() => unifiedOrder.map((id): SequenceStop | null => {
+    const j = jobById.get(id)
+    if (j) {
+      return {
+        id: j.id,
+        kind: 'job' as const,
+        label: j.customers?.name || j.title,
+        coord: j.properties?.lat != null && j.properties?.lng != null
+          ? { lat: j.properties.lat, lng: j.properties.lng } : null,
+        address: j.properties?.address ?? '',
+        propertyId: j.property_id ?? null,
+        promiseMin: promiseMinutes(j.start_time),
+        lock: lockFromStatus(j.status, { billed: invoicedJobIds?.has(j.id) }),
+        pinned: pinnedIds.has(j.id),
+        durationMinutes: j.duration_minutes,
+        crewSize: j.crew_size,
+        serviceType: j.service_type,
+        status: j.status,
+        crewId: j.crew_id ?? null,
+        technicianId: j.technician_id ?? null,
+        workedMinutes: j.actual_minutes,
+      }
+    }
+    const e = estimateById.get(id)
+    if (!e) return null
+    return {
+      id: e.id,
+      // ⭐ The KIND is what keeps an estimate out of a route_order write, and it
+      // is stated separately from the lock precisely so a PINNED estimate stays
+      // unpersistable. See lib/daySequence SequenceStop.kind.
+      kind: 'appointment' as const,
+      label: e.customers?.name || e.title,
+      coord: { lat: e.properties!.lat as number, lng: e.properties!.lng as number },
+      address: e.properties?.address ?? '',
+      propertyId: e.property_id ?? null,
+      promiseMin: e.start_time ? timeToMinutes(e.start_time) : null,
+      // A timed estimate ANCHORS (Session 82). An untimed one has no promise to
+      // hold it, so it is free to move like any other unpromised stop.
+      lock: e.start_time ? ('appointment' as const) : null,
+      pinned: pinnedIds.has(e.id),
+      durationMinutes: estimateMinutes(e),
+      status: e.status,
+    }
+  }).filter((s): s is SequenceStop => s !== null), [unifiedOrder, jobById, estimateById, invoicedJobIds, pinnedIds])
+
+  // ── "Optimize" — the PROPOSAL (Session 82, pins added in Session 110) ───────
+  // Built only while the panel is open: every candidate order is timed by a
+  // full planDay run, which is far too much work to do on every render of a
+  // board that re-renders on a one-minute tick.
+  //
+  // Two questions, ONE engine: "optimize remaining" honours the owner's pins,
+  // "optimize all" releases them. The second is not a different algorithm — it
+  // is the same search with fewer seats taken.
+  const optimizeResult = useMemo((): { proposal: DaySequenceProposal; conflict: PinConflictReport | null } | null => {
+    if (!optimizeOpen) return null
+    const day = {
+      startTime: workStartTime,
+      capacityHours,
+      workers: workersOnDay ?? null,
+      learnedFor: learnedDurationFor,
+      speed: travel,
+      hasBase: !!baseCoord,
+      staffing: staffingOnDay ?? null,
+      crewNames,
+      availabilityRecorded,
+    }
+    const common = { base: baseCoord, day, dist: road?.dist, seconds: road?.seconds, hasRoad: road?.hasRoad }
+    if (optimizeMode === 'remaining' && pinnedIds.size > 0) {
+      // Plans the day twice — pins held, pins released — and reports what the
+      // pins cost. `withPins` IS the proposal, so nothing is searched twice.
+      const report = analysePinConflict({ ...common, stops: sequenceStops })
+      return { proposal: report.withPins, conflict: report }
+    }
+    const stops = optimizeMode === 'all'
+      ? sequenceStops.map(s => (s.pinned ? { ...s, pinned: false } : s))
+      : sequenceStops
+    return { proposal: sequenceDay({ ...common, stops }), conflict: null }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [optimizeOpen, optimizeMode, sequenceStops, pinnedIds, baseCoord, road, travel, workStartTime, capacityHours, workersOnDay, staffingOnDay, crewNames, availabilityRecorded])
+  const proposal = optimizeResult?.proposal ?? null
+  const pinConflict = optimizeResult?.conflict ?? null
+
+  // The sequence as the ROUTE PANEL shows it — planning facts only. Not
+  // memoised: it is one pass over a day's stops, and `etaByJob` is rebuilt on
+  // every render (the board ticks each minute), so a memo keyed on it would
+  // recompute every time anyway while claiming not to.
+  const routeStops: RouteSequenceStop[] = sequenceStops.map(s => ({
+    id: s.id,
+    kind: s.kind ?? 'job',
+    label: s.label,
+    address: s.address ?? null,
+    promise: s.promiseMin != null ? minutesToTime12(s.promiseMin) : null,
+    arrival: etaByJob[s.id] ?? null,
+    lock: s.lock ?? (s.pinned ? 'pinned' : null),
+    located: !!s.coord,
+    done: s.status === 'completed',
+  }))
+
+  function togglePin(stop: RouteSequenceStop) {
+    setPins(prev => stop.lock === 'pinned'
+      ? unpin(prev, stop.id)
+      : pinAtCurrentPosition(prev, unifiedOrderRef.current, stop.id, stop.kind))
+    setRouteDirty(true)
+  }
+  function clearPins() { setPins([]); setRouteDirty(true) }
+  function openOptimize(mode: 'remaining' | 'all') {
+    setOptimizeMode(mode)
+    setOptimizeOpen(true)
+    setRouteDirty(false)
+  }
   // The load pill reads the plan's OWN clock total (work + the route's real
   // drive legs), through the same dayLoad state function the calendar uses — so
   // "Room for ~2h" is now a statement about this day's actual route rather than
@@ -1036,8 +1208,8 @@ export function DayOpsPanel({
                     address too — an order can still be repaired for promises
                     when there is no route to measure. */}
                 {active.length > 1 && (
-                  <button type="button" onClick={() => setOptimizeOpen(true)}
-                    title="Suggest a better order for this day — promises, locked work, people and travel weighed together"
+                  <button type="button" onClick={() => openOptimize('remaining')}
+                    title="Suggest a better order for this day — promises, pinned stops, locked work, people and travel weighed together"
                     className="text-xs font-medium rounded-lg border border-accent/40 text-accent-text hover:bg-accent/10 px-2.5 py-1 flex items-center gap-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                     <Sparkles className="w-3 h-3" /> Optimize day
                   </button>
@@ -1074,6 +1246,29 @@ export function DayOpsPanel({
               omitted={active.length - timelineStops.length}
             />
           )}
+
+          {/* ⭐ ONE sequence for everything this day drives to — visits AND
+              estimate appointments (Session 110). Pin, re-order and optimize
+              live here; what you DO at a stop stays on its own card below, so
+              a job affordance still cannot reach an estimate. */}
+          <DayRoutePanel
+            stops={routeStops}
+            pins={reconciled.pins}
+            onTogglePin={togglePin}
+            onClearPins={clearPins}
+            onMove={moveStop}
+            onDropOn={moveOnto}
+            onOptimizeRemaining={() => openOptimize('remaining')}
+            onOptimizeAll={() => openOptimize('all')}
+            onJump={s => jumpToStop(s.id)}
+            dirty={routeDirty}
+            onDismissDirty={() => setRouteDirty(false)}
+            busy={applyingOrder}
+            // ⚠️ FALSE, and stated rather than discovered: no schema can store a
+            // pin today. See the Session 110 handoff in supabase/proposals/.
+            pinsPersist={false}
+            unplacedEstimates={unplacedEstimates}
+          />
 
           {/* Jobs in route order, with one-tap actions */}
           <div className="space-y-2">
@@ -1658,16 +1853,33 @@ export function DayOpsPanel({
           dateLabel={dateLabel}
           applying={applyingOrder}
           unplacedEstimates={unplacedEstimates}
+          mode={optimizeMode}
+          conflict={pinConflict}
+          pinCount={pinnedIds.size}
           onClose={() => setOptimizeOpen(false)}
+          // "Unpin the stop that is causing it" — releases only the named pins
+          // and leaves the panel open, so the owner immediately sees what that
+          // bought. ⛔ Nothing is written by this.
+          onReleasePins={ids => setPins(prev => ids.reduce((acc, id) => unpin(acc, id), prev))}
           onApply={async order => {
             setApplyingOrder(true)
             const prevSeq = manualSeq ? [...manualSeq] : null
+            const prevPins = pins
             const ok = await applyOrder(order)
             setApplyingOrder(false)
             if (!ok) return          // applyOrder already said why; no fake success.
+            // The applied order is the new truth, so every surviving pin re-reads
+            // its seat from it. ⛔ Applying does NOT pin what it moved: the owner
+            // accepted a suggestion, they did not place six stops by hand.
+            setPins(prev => repositionPins(prev, proposal.order))
+            setRouteDirty(false)
             setOptimizeOpen(false)
-            if (prevSeq) toast.undo('Day re-ordered.', () => { void applyOrder(prevSeq) })
-            else toast.success('Day re-ordered — the new order is saved.')
+            if (prevSeq) {
+              toast.undo('Day re-ordered.', () => {
+                void applyOrder(prevSeq)
+                setPins(prevPins)
+              })
+            } else toast.success('Day re-ordered — the new order is saved.')
           }}
         />
       )}
