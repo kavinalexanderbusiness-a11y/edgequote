@@ -86,6 +86,34 @@ export type IntentVerdict =
   | { kind: 'gone' }
 
 /**
+ * ⭐⭐ COMPARE INSTANTS, NEVER STRINGS. This one line is the difference between
+ * the engine working and the engine being confidently wrong.
+ *
+ * The client mints `new Date().toISOString()` → `2026-08-24T05:13:10.745Z`.
+ * Postgres stores it in a `timestamptz` and hands it back as
+ * `2026-08-24T05:13:10.745+00:00`. Identical instant, DIFFERENT TEXT — so a
+ * strict `===` never matches, and every landed write looked like somebody
+ * else's edit. In production that meant an ambiguous Start told the worker
+ * "somebody already started this visit" about their own tap. (Only the
+ * database's `on conflict (job_id, started_at)` index stopped it becoming a
+ * duplicate work session; the engine was doing the wrong thing regardless.)
+ *
+ * ⚠️ Caught ONLY by running against the real database — the unit guard feeds
+ * hand-written facts, so both sides were JS-minted there and matched happily.
+ * That is the whole reason the authenticated proof exists.
+ *
+ * Millisecond precision is deliberate and sufficient: the value ORIGINATES as a
+ * JS millisecond timestamp, so Postgres's extra microsecond digits are always
+ * zero for the values this compares. `Date.parse` truncates to ms on both sides.
+ */
+function sameStamp(a: string | null, b: string | null): boolean {
+  if (a === null || b === null) return a === b     // null is a real state, not "unknown"
+  const ta = Date.parse(a), tb = Date.parse(b)
+  if (Number.isNaN(ta) || Number.isNaN(tb)) return a === b   // unparseable → fall back to text
+  return ta === tb
+}
+
+/**
  * Does the server row show OUR intent already applied?
  *
  * Each kind names its own distinguishing evidence. The rule throughout: a field
@@ -102,7 +130,7 @@ function isApplied(intent: VisitIntent, facts: VisitFacts): boolean {
     case 'start':
       return facts.status === 'in_progress'
         && facts.started_at != null
-        && facts.started_at === intent.next.started_at
+        && sameStamp(facts.started_at, intent.next.started_at)
 
     // Client-minted `completed_at`, same reasoning. ⚠️ A row that is `completed`
     // with a DIFFERENT stamp is not ours — it is somebody else's completion, and
@@ -111,7 +139,7 @@ function isApplied(intent: VisitIntent, facts: VisitFacts): boolean {
     case 'complete':
       return facts.status === 'completed'
         && facts.completed_at != null
-        && facts.completed_at === intent.next.completed_at
+        && sameStamp(facts.completed_at, intent.next.completed_at)
 
     // ⭐ No minted stamp exists here — stopping CLEARS the clock rather than
     // setting anything. So the end state itself is the evidence: in_progress
@@ -124,10 +152,12 @@ function isApplied(intent: VisitIntent, facts: VisitFacts): boolean {
       return facts.status === 'in_progress' && facts.started_at == null
 
     // Undo restores a remembered state, so compare the whole lifecycle shape.
+    // Undo restores a remembered state, so compare the whole lifecycle shape —
+    // instants, not text, for the same reason as above.
     case 'revert':
       return facts.status === intent.next.status
-        && facts.started_at === intent.next.started_at
-        && facts.completed_at === intent.next.completed_at
+        && sameStamp(facts.started_at, intent.next.started_at)
+        && sameStamp(facts.completed_at, intent.next.completed_at)
   }
 }
 

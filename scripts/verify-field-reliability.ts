@@ -111,6 +111,37 @@ console.log('\n── Field reliability + offline resilience ──────�
   check('⭐ complete: somebody ELSE finished it → superseded, not a false success',
     reconcileVisitIntent(c, facts({ status: 'completed', completed_at: '2026-08-15T11:00:00.000Z', updated_at: V2 })).kind === 'superseded')
 
+  // ⭐⭐ THE POSTGRES TIMESTAMP FORMAT. The client mints `…745Z`; a timestamptz
+  // comes back as `…745+00:00`. Same instant, DIFFERENT TEXT — and a strict
+  // string compare therefore matched NOTHING, so every landed write read as
+  // somebody else's edit and an ambiguous Start told the worker "somebody
+  // already started this visit" about their own tap.
+  //
+  // ⚠️ This section could not have caught it before: the facts were hand-written
+  // here, so both sides were JS-minted and matched happily. It was found by
+  // running the engine against the real database (scripts/s73-offline-proof.ts),
+  // and this case exists so it can never come back silently.
+  const pgFmt = (iso: string) => iso.replace('Z', '+00:00')
+  check('⭐⭐ a Postgres-formatted timestamp is the SAME instant, not a conflict',
+    reconcileVisitIntent(i, facts({
+      status: 'in_progress', started_at: pgFmt(i.next.started_at!), updated_at: V1,
+    })).kind === 'applied',
+    'client mints …Z, timestamptz returns …+00:00 — compare instants, never text')
+  check('…and the same holds for a completion stamp',
+    reconcileVisitIntent(c, facts({
+      status: 'completed', started_at: c.next.started_at, completed_at: pgFmt(c.next.completed_at!), updated_at: V1,
+    })).kind === 'applied')
+  check('⛔ but a genuinely different instant is still superseded',
+    reconcileVisitIntent(i, facts({
+      status: 'in_progress', started_at: '2026-08-15T09:05:00.001+00:00', updated_at: V1,
+    })).kind === 'superseded',
+    'instant-compare must not become a fuzzy match')
+  // Microsecond precision must not read as a different moment either.
+  check('…and trailing microseconds do not invent a conflict',
+    reconcileVisitIntent(i, facts({
+      status: 'in_progress', started_at: i.next.started_at!.replace('Z', '000+00:00'), updated_at: V1,
+    })).kind === 'applied')
+
   const s = intent('stop_for_day')
   check('done-for-today: in_progress with the clock cleared → applied',
     reconcileVisitIntent(s, facts({ status: 'in_progress', started_at: null, updated_at: V1 })).kind === 'applied')
