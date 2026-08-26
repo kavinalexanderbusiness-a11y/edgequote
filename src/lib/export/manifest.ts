@@ -104,7 +104,7 @@ const CUSTOMERS = [
   'address', 'city', 'province', 'postal_code', 'notes', 'tags',
   'acquisition_source', 'referred_by_customer_id',
   'preferred_days', 'avoid_days', 'pref_time_start', 'pref_time_end',
-  'sms_opt_in', 'email_opt_in', 'photo_marketing_consent', 'photo_marketing_consent_at',
+  'sms_opt_in', 'email_opt_in', 'preferred_channel', 'photo_marketing_consent', 'photo_marketing_consent_at',
   'autopay_enabled', 'autopay_charge_mode',
   'review_requested_at', 'review_source', 'review_rating', 'review_declined_at',
   'birthday', 'anniversary', 'last_contacted_at', 'archived_at',
