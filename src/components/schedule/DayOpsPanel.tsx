@@ -648,14 +648,33 @@ export function DayOpsPanel({
     void applyOrder(jobIds)
   }
 
-  function moveStop(id: string, dir: -1 | 1) {
+  /**
+   * Move a stop one place within a DOMAIN of the day's order.
+   *
+   * ⭐ The domain is an argument, not a second implementation. The route panel's
+   * domain is every routable stop, because that list shows every routable stop.
+   * The job cards' domain is VISITS ONLY, because that list does not render
+   * estimates — and without this, tapping "move up" on a visit sitting next to
+   * an estimate swapped it with the estimate and the card list did not appear
+   * to move at all. The sequence had changed; the list the owner was looking at
+   * had not.
+   */
+  function moveStopWithin(id: string, dir: -1 | 1, domain?: Set<string>) {
     const seq = unifiedOrderRef.current.slice()
     const i = seq.indexOf(id)
-    const j = i + dir
-    if (i < 0 || j < 0 || j >= seq.length) return
-    ;[seq[i], seq[j]] = [seq[j], seq[i]]
+    if (i < 0) return
+    // Walk to the next seat that the CALLING list can actually see.
+    let j = i + dir
+    while (j >= 0 && j < seq.length && domain && !domain.has(seq[j])) j += dir
+    if (j < 0 || j >= seq.length) return
+    const [moved] = seq.splice(i, 1)
+    seq.splice(j, 0, moved)
     commitSequence(seq, id)
   }
+  /** The route panel: the whole sequence, estimates included. */
+  function moveStop(id: string, dir: -1 | 1) { moveStopWithin(id, dir) }
+  /** The job cards: among visits, which is what that list renders. */
+  function moveVisit(id: string, dir: -1 | 1) { moveStopWithin(id, dir, jobIdSetRef.current) }
   function moveOnto(fromId: string, targetId: string) {
     const seq = unifiedOrderRef.current.slice()
     const fi = seq.indexOf(fromId)
@@ -1323,11 +1342,11 @@ export function DayOpsPanel({
                           so a thumb never grabs the card when it meant the chevron. */}
                       {sortedJobs.length > 1 && (
                         <div className="flex flex-col">
-                          <button onClick={e => { e.stopPropagation(); moveStop(job.id, -1) }} disabled={idx === 0}
+                          <button onClick={e => { e.stopPropagation(); moveVisit(job.id, -1) }} disabled={idx === 0}
                             aria-label="Move up" className="p-1.5 -mx-1 text-ink-faint hover:text-ink disabled:opacity-25 leading-none">
                             <ChevronUp className="w-4 h-4" />
                           </button>
-                          <button onClick={e => { e.stopPropagation(); moveStop(job.id, 1) }} disabled={idx === sortedJobs.length - 1}
+                          <button onClick={e => { e.stopPropagation(); moveVisit(job.id, 1) }} disabled={idx === sortedJobs.length - 1}
                             aria-label="Move down" className="p-1.5 -mx-1 text-ink-faint hover:text-ink disabled:opacity-25 leading-none">
                             <ChevronDown className="w-4 h-4" />
                           </button>
