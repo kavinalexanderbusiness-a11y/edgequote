@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { classifyCronHealth, STALE_AFTER_DAYS, type CronVerdict } from '@/lib/cron/heartbeat'
 import { appOrigin, isUsableOrigin } from '@/lib/appOrigin'
+import { looksLikeMapsKey } from '@/lib/mapsKey'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -132,7 +133,7 @@ export async function GET() {
   const email = !!(process.env.RESEND_API_KEY && process.env.RESEND_FROM)
   const sms = !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM)
   const cron = !!process.env.CRON_SECRET
-  const maps = !!process.env.GOOGLE_MAPS_API_KEY
+  const maps = looksLikeMapsKey(process.env.GOOGLE_MAPS_API_KEY)
 
   // AutoPay refuses to charge without the webhook secret — money is never taken
   // with no path to mark the invoice paid. Surface that specific half-configured

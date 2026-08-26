@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { serverMapsKey, looksLikeMapsKey } from '@/lib/mapsKey'
 
 // Pull the best human area name from Google address components.
 // Priority: community/neighborhood → sublocality (district) → null.
@@ -30,9 +31,22 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Provide an address, or lat+lng for reverse lookup.' }, { status: 422 })
     }
 
-    const key = process.env.GOOGLE_MAPS_API_KEY
+    const key = serverMapsKey()
     if (!key) {
       return NextResponse.json({ error: 'Maps API key not found on server. Check .env.local and restart.' }, { status: 500 })
+    }
+    // ⭐ A MALFORMED KEY IS OUR FAULT; A REVOKED ONE IS THE OWNER'S TO REPLACE.
+    // Google answers both with the identical sentence — "REQUEST_DENIED — The
+    // provided API key is invalid." — so an owner reading that has no way to know
+    // whether to re-paste the value or mint a new credential. We can tell the two
+    // apart without asking Google, because a key that fails this shape check never
+    // reached Google intact. Saying so here is the difference between a five-second
+    // fix and an afternoon in the Cloud Console.
+    if (!looksLikeMapsKey(key)) {
+      return NextResponse.json(
+        { error: 'The server Maps key is set but malformed (it is not a `AIza…` key of the expected length). Re-paste GOOGLE_MAPS_API_KEY in the Vercel project — a stray quote, newline or byte-order mark is the usual cause — and redeploy.' },
+        { status: 500 }
+      )
     }
 
     const url = new URL('https://maps.googleapis.com/maps/api/geocode/json')

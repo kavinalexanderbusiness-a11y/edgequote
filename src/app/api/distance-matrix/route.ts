@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { serverMapsKey } from '@/lib/mapsKey'
 
 interface LatLng { lat: number; lng: number }
 
@@ -26,7 +27,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Too many elements (max 100 per request).' }, { status: 422 })
     }
 
-    const key = process.env.GOOGLE_MAPS_API_KEY
+    const key = serverMapsKey()
     if (!key) {
       return NextResponse.json({ error: 'Maps API key not found on server.' }, { status: 500 })
     }

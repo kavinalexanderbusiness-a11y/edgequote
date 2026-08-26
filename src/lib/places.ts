@@ -1,6 +1,7 @@
 import 'server-only'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
+import { serverMapsKey } from '@/lib/mapsKey'
 
 // ── THE Google Places seam ────────────────────────────────────────────────────
 // Address autocomplete is the ONE Maps capability that used to call Google from
@@ -52,7 +53,7 @@ export interface PlaceSuggestion {
 // Autocomplete predictions from the Places API (New). Canada-scoped and
 // session-tokened so a type-then-select round trip is billed as one session.
 export async function fetchPlaceSuggestions(input: string, sessionToken?: string): Promise<PlaceSuggestion[]> {
-  const key = process.env.GOOGLE_MAPS_API_KEY
+  const key = serverMapsKey()
   if (!key) throw new Error('missing-maps-key')
 
   const res = await fetch(`${PLACES}/places:autocomplete`, {
@@ -86,7 +87,7 @@ export interface ParsedPlace {
 // consumes. Same field priorities the component used when it read the JS SDK's
 // place object, so the parsed result is byte-for-byte what callers already expect.
 export async function fetchPlaceDetails(placeId: string, sessionToken?: string): Promise<ParsedPlace> {
-  const key = process.env.GOOGLE_MAPS_API_KEY
+  const key = serverMapsKey()
   if (!key) throw new Error('missing-maps-key')
 
   const url = new URL(`${PLACES}/places/${encodeURIComponent(placeId)}`)
