@@ -302,8 +302,18 @@ const admits = (v: string) => new RegExp(`'${v}'`).test(checkLine)
 check('the value set is constrained in the database, not only in TypeScript',
   !!checkLine && /null/i.test(checkLine) && admits('sms') && admits('email') && admits('phone'), true)
 // A fourth value would be a channel nothing knows how to send on.
-check('…and admits no channel beyond sms / email / phone',
-  (checkLine.match(/'[a-z_]+'(?!::)/gi) || []).filter(v => !/'(sms|email|phone)'/i.test(v)).length === 0, true)
+// ⚠️ Strip the ::text casts BEFORE extracting the literals. A negative lookahead
+// for `::` was written to skip casts and instead skipped EVERY value in the
+// generated spelling (where each one is 'sms'::text), so the check matched
+// nothing, filtered nothing, and passed for a schema carrying a fourth channel —
+// caught by mutating the baseline rather than by reading the regex.
+const admitted = ((checkLine.replace(/::[a-z ]+/gi, '')).match(/'[a-z_]+'/gi) || [])
+  .map(v => v.replace(/'/g, '').toLowerCase())
+// `admitted.length > 0` is load-bearing: without it an extraction that finds
+// nothing reports a pass, which is exactly how the first version of this check
+// survived a fourth channel.
+check(`…and admits no channel beyond sms / email / phone (found: ${admitted.join(', ') || 'NOTHING'})`,
+  admitted.length > 0 && admitted.every(v => v === 'sms' || v === 'email' || v === 'phone'), true)
 // Scoped to the column's OWN definition line: a bare /not null/ over the whole
 // apply path matches some other table's column and passes for the wrong reason.
 const colLine = applyPath.split('\n').find(l => /"?preferred_channel"?\s+text/i.test(l)) || ''
