@@ -135,7 +135,12 @@ export default function QuotesPage() {
         <EmptyState icon={AlertTriangle} title="Couldn't load your quotes" description={loadError}
           action={{ label: 'Retry', onClick: () => { setLoading(true); fetchQuotes() } }} />
       ) : (
-        <QuoteList quotes={quotes} onDelete={handleDelete} reachById={reachById} />
+        <QuoteList
+          quotes={quotes}
+          onDelete={handleDelete}
+          reachById={reachById}
+          onNotesSaved={(id, patch) => setQuotes(p => p.map(q => q.id === id ? { ...q, ...patch } : q))}
+        />
       )}
     </div>
   )

@@ -5,7 +5,8 @@ import { createClient } from '@/lib/supabase/client'
 import { pricingConfigFromSettings, pricingPackage } from '@/lib/pricing'
 import { applyFeeRecovery } from '@/lib/invoiceTotals'
 import { autoMeasureLawn, AutoMeasureResult, neighborhoodOf } from '@/lib/autoMeasure'
-import { loadGoogleMaps } from '@/lib/googleMaps'
+import { loadGoogleMaps, onMapsUnavailable, type MapsUnavailable } from '@/lib/googleMaps'
+import { MapUnavailable } from '@/components/maps/MapUnavailable'
 import { AddressAutocomplete, ParsedAddress } from '@/components/ui/AddressAutocomplete'
 import { Button } from '@/components/ui/Button'
 import { formatCurrency, cn } from '@/lib/utils'
@@ -174,6 +175,9 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
   const poly = useRef<unknown>(null)
   const pts = useRef<unknown[]>([])
   const [mapErr, setMapErr] = useState<string | null>(null)
+  // Set only when GOOGLE refused the key (vs. an ordinary load hiccup) — swaps
+  // the amber sentence for the shared customer-audience panel.
+  const [mapsDown, setMapsDown] = useState<MapsUnavailable | null>(null)
 
   function recompute() {
     const g = (window as { google?: { maps: { geometry: { spherical: { computeArea: (p: unknown[]) => number } } } } }).google
@@ -214,7 +218,16 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
         })
       } catch { if (!cancelled) setMapErr('Map could not load — enter your approximate lawn size instead.') }
     })()
-    return () => { cancelled = true }
+    // Google can also reject the key AFTER the loader resolved (referrer /
+    // billing / API errors announce themselves only via gm_authFailure). Same
+    // customer-facing fallback: the manual size entry still works. This is the
+    // PUBLIC funnel — the neutral customer panel renders, never the owner detail.
+    const unwatch = onMapsUnavailable(u => {
+      if (cancelled) return
+      setMapsDown(u)
+      setMapErr('Map could not load — enter your approximate lawn size instead.')
+    })
+    return () => { cancelled = true; unwatch() }
   }, [step, parsed, showTracer])
 
   function undo() { pts.current.pop(); redraw(); recompute() }
@@ -403,7 +416,9 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
               </div>
             ) : mapErr && mapErr !== 'manual' ? (
               <div className="space-y-3">
-                <p className="text-sm text-amber-400">{mapErr}</p>
+                {mapsDown
+                  ? <MapUnavailable unavailable={mapsDown} audience="customer" />
+                  : <p className="text-sm text-amber-400">{mapErr}</p>}
                 <label className="flex flex-col gap-1.5">
                   <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Approximate lawn size (sq ft)</span>
                   <input type="number" inputMode="numeric" autoFocus value={manualSqft} onChange={e => { setManualSqft(e.target.value); setSqft(Number(e.target.value) || 0) }}

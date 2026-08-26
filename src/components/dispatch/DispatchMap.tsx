@@ -1,9 +1,9 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { loadGoogleMaps } from '@/lib/googleMaps'
+import { loadGoogleMaps, onMapsUnavailable, describeMapsError, type MapsUnavailable } from '@/lib/googleMaps'
+import { MapUnavailable } from '@/components/maps/MapUnavailable'
 import { Coord } from '@/lib/geo'
-import { Banner } from '@/components/ui/Banner'
 import { cn } from '@/lib/utils'
 
 export interface DispatchMapStop {
@@ -34,8 +34,13 @@ export function DispatchMap({
   const gmap = useRef<any>(null)
   const overlays = useRef<any[]>([])
   const [ready, setReady] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
+  const [unavailable, setUnavailable] = useState<MapsUnavailable | null>(null)
   const [hidden, setHidden] = useState<Set<string>>(new Set())
+
+  // Google reports an auth refusal AFTER a successful-looking load (referrer /
+  // billing / disabled API — only gm_authFailure ever says so). Subscribe, don't
+  // await: this fires immediately if the refusal already happened this page load.
+  useEffect(() => onMapsUnavailable(setUnavailable), [])
   // Marker click handlers are attached once per draw; read the callback through
   // a ref so a re-render can't strand them on a stale closure.
   const selectRef = useRef(onSelectStop)
@@ -56,7 +61,7 @@ export function DispatchMap({
           streetViewControl: false, fullscreenControl: true, mapTypeControl: false,
         })
         setReady(true)
-      } catch (e) { if (!cancelled) setErr(e instanceof Error ? e.message : 'Map failed to load') }
+      } catch (e) { if (!cancelled) setUnavailable(describeMapsError(e)) }
     }
     init()
     return () => {
@@ -111,8 +116,10 @@ export function DispatchMap({
     if (base || lanes.some(l => l.stops.length && !hidden.has(l.id))) gmap.current.fitBounds(bounds, 56)
   }, [ready, lanes, base, hidden])
 
-  if (err) {
-    return <Banner tone="warn">{err}</Banner>
+  if (unavailable) {
+    // INSTEAD of the map div — leaving Google's grey "Oops!" panel mounted
+    // under our own UI is the exact bug this replaces.
+    return <MapUnavailable unavailable={unavailable} audience="owner" />
   }
   const legend = lanes.filter(l => l.stops.length > 0)
   return (

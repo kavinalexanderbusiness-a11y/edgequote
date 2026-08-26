@@ -1,5 +1,10 @@
 import type { PricingDisplayType } from '@/types'
 import { serviceKey } from './labor'
+// THE one measurement→money multiplication. This file used to carry its own
+// `Math.round(rate * sqft)`; Measure & Price now prices plans with the same step,
+// and two copies of one arithmetic is exactly how the builder's recommendation
+// and the map's price come to disagree by a dollar nobody can explain.
+import { unitRatePrice } from './measurePricing'
 
 // ── Service pricing formatter ───────────────────────────────────────────────────
 // THE single place service-template prices become a display string. Every surface
@@ -193,7 +198,7 @@ export function serviceRecommendation(i: ServiceRecInput): ServiceRec | null {
     const rate = Number(i.template.default_rate) || 0
     if (rate > 0 && i.measuredSqft > 0) {
       return {
-        price: Math.round(rate * i.measuredSqft),
+        price: unitRatePrice(rate, i.measuredSqft),
         basis: `${unitRate(rate)}/sq ft × ${Math.round(i.measuredSqft).toLocaleString()} sq ft`,
         materials, source: 'area_rate',
       }
