@@ -28,7 +28,7 @@ import {
   safeReturnPath, googleEmailVerified, classifyProviderError, readGoogleAuthError,
   buildCallbackUrl, GOOGLE_SCOPES, GOOGLE_PROVIDER, GOOGLE_AUTH_ERROR_TEXT,
   AUTH_CALLBACK_PATH, OAUTH_START_PATH, OAUTH_INVITE_COOKIE, OAUTH_INVITE_TTL_SECONDS,
-  AUTH_ERROR_PARAM,
+  AUTH_ERROR_PARAM, hasPkceVerifier,
 } from '../src/lib/googleAuth'
 import { hashInviteToken } from '../src/lib/googleAuthServer'
 import { hashBetaToken } from '../src/lib/betaInviteServer'
@@ -403,6 +403,27 @@ H('8. Tokens, scopes and what is deliberately NOT requested')
 // ─────────────────────────────────────────────────────────────────────────────
 H('9. Failure is legible, and never reflected')
 {
+  // ⛔ NO FAILURE MAY COLLAPSE INTO ANOTHER. "This browser holds no verifier" and
+  // "that code will not exchange" arrive from Supabase as one indistinguishable
+  // error and need opposite advice. The callback asks the answerable half itself,
+  // BEFORE the exchange, or the distinction is lost for good.
+  check('a missing PKCE verifier is its own answer, not a generic exchange failure',
+    /hasPkceVerifier\(/.test(cCALLBACK) && /fail\('no-verifier'\)/.test(cCALLBACK))
+  check('the verifier is checked BEFORE the exchange',
+    cCALLBACK.indexOf('hasPkceVerifier') < cCALLBACK.indexOf('exchangeCodeForSession'),
+    'afterwards the two causes are indistinguishable')
+  check('the verifier cookie is matched by SUFFIX, never a hard-coded name',
+    /endsWith\(PKCE_VERIFIER_COOKIE_SUFFIX\)/.test(strip(GOOGLE_LIB)),
+    '@supabase/ssr owns the storage key; a duplicated name silently stops matching')
+  check('only the PRESENCE of the verifier is read, never its value',
+    /getAll\(\)\.map\(c => c\.name\)/.test(cCALLBACK),
+    'the value is the secret half of the handshake')
+  check('hasPkceVerifier finds the real @supabase/ssr cookie and nothing else',
+    hasPkceVerifier(['sb-abcdefghijklmnop-auth-token-code-verifier']) &&
+    hasPkceVerifier(['other', 'sb-x-auth-token-code-verifier']) &&
+    !hasPkceVerifier(['sb-abcdefghijklmnop-auth-token']) &&
+    !hasPkceVerifier([]) && !hasPkceVerifier(['eq-oauth-invite']))
+
   check('a cancelled consent screen reads as cancelled, not as an error',
     classifyProviderError('access_denied') === 'cancelled')
   check('every other provider error is uninformative on purpose',
@@ -557,6 +578,39 @@ const forbiddenIn = (s: string) => FORBIDDEN_RETURN.filter(([, re]) => re.test(s
   check('a hostile Host header cannot become the return origin',
     appOrigin('https://evil.tld') === CANONICAL_ORIGIN,
     'the configured value must win over anything the request carries')
+
+  // ⭐⭐ THE 2026-08-26 FAILURE. appOrigin canonicalising the RETURN is correct;
+  // it also means a flow begun on an alias host writes its PKCE verifier on that
+  // host — a cookie with no Domain attribute, so host-only — and then returns to
+  // a different one holding nothing to exchange with. The start route must move
+  // the browser to the canonical host BEFORE it writes any state.
+  check('the start route canonicalises the host before writing PKCE state',
+    /requestHost\s*!==\s*canonicalHost/.test(cSTART),
+    'an alias-host start strands the verifier on the wrong host — the exchange then has nothing to exchange against')
+
+  // ⚠️⚠️ THE COMPARISON MUST BE THE HOST HEADER. Written against
+  // `req.nextUrl.origin` this looped forever in a measured local run: a request
+  // whose Host already WAS the configured origin still compared unequal and
+  // redirected to itself. An infinite redirect on the sign-in door is worse than
+  // the bug it was fixing, so the shape is pinned, not just the behaviour.
+  check('the hop compares the HOST HEADER, never req.nextUrl.origin',
+    /req\.headers\.get\('x-forwarded-host'\)/.test(cSTART) &&
+    /req\.headers\.get\('host'\)/.test(cSTART) &&
+    !/cleanOrigin\(req\.nextUrl\.origin\)/.test(cSTART),
+    'nextUrl.origin is framework-normalised and is not the address the browser used')
+  check('the hop is capped at ONE, so a loop is structurally impossible',
+    /alreadyHopped/.test(cSTART) && /searchParams\.set\('canon', '1'\)/.test(cSTART),
+    'a wrong host comparison must cost one wasted redirect, never a hang')
+
+  // ⚠️ Anchored to the CALL, not the bare identifier: `createServerClient` also
+  // appears in the import on line 2, so an indexOf on the name alone compares
+  // against the top of the file and passes for any placement. Caught by this
+  // guard failing on a correct implementation — the useful direction to fail in.
+  check('that redirect happens BEFORE the supabase client is created',
+    cSTART.indexOf('requestHost !== canonicalHost') < cSTART.indexOf('= createServerClient('),
+    'redirecting after the verifier is written would write it on the wrong host anyway')
+  check('the canonicalising hop carries the query string (next, invite) forward',
+    /canonical\.search\s*=\s*req\.nextUrl\.search/.test(cSTART))
   if (savedAppUrl === undefined) delete process.env.NEXT_PUBLIC_APP_URL
   else process.env.NEXT_PUBLIC_APP_URL = savedAppUrl
 }

@@ -69,6 +69,32 @@ export const OAUTH_INVITE_TTL_SECONDS = 600
  *  silently drop, leaving a legitimate invited owner unbindable. */
 export const OAUTH_INVITE_COOKIE = 'eq-oauth-invite'
 
+/**
+ * Does this browser still hold the PKCE verifier that STARTED the flow?
+ *
+ * ⭐ WHY THIS IS ASKED SEPARATELY rather than left to the exchange to discover.
+ * "No verifier" and "bad code" both come back from exchangeCodeForSession as one
+ * indistinguishable error, and they mean opposite things to the person reading
+ * the screen: one is "finish where you started", the other is "that link is
+ * spent". Collapsing them is what made a real production failure unreadable on
+ * 2026-08-26 — the message said the link could not be completed when the truth
+ * was that the round trip had begun on a different host.
+ *
+ * Matched by SUFFIX, deliberately. @supabase/ssr names the cookie
+ * `sb-<project-ref>-auth-token-code-verifier`, built from a storageKey this file
+ * does not own and must not duplicate — a hard-coded copy would silently stop
+ * matching the day the key changes, and a check that never matches is a check
+ * that always reports "missing".
+ *
+ * ⛔ Presence only. The VALUE is never read, compared, logged or returned: it is
+ * the secret half of the handshake, and this question does not need it.
+ */
+export const PKCE_VERIFIER_COOKIE_SUFFIX = '-code-verifier'
+
+export function hasPkceVerifier(cookieNames: readonly string[]): boolean {
+  return cookieNames.some(n => n.endsWith(PKCE_VERIFIER_COOKIE_SUFFIX))
+}
+
 // ── The return destination ───────────────────────────────────────────────────
 // THE open-redirect gate, in one place, because there are now three callers (the
 // login form, the OAuth start route and the callback) and three copies of a
@@ -186,6 +212,7 @@ export function googleEmailVerified(user: ProviderUserLike | null | undefined): 
 export type GoogleAuthError =
   | 'cancelled'        // they closed Google's consent screen, or denied it
   | 'exchange'         // the code would not exchange: replayed, expired, forged
+  | 'no-verifier'      // this browser holds no PKCE verifier — see below
   | 'unverified'       // Google would not vouch for the address
   | 'no-invite'        // authenticated fine; holds no licence to create a business
   | 'invite-invalid'   // the invite is expired, revoked or already used
@@ -197,6 +224,7 @@ export type GoogleAuthError =
 export const GOOGLE_AUTH_ERROR_TEXT: Record<GoogleAuthError, string> = {
   cancelled: 'Google sign-in was cancelled. You can try again, or use your email and password.',
   exchange: 'That Google sign-in link could not be completed. Please try again.',
+  'no-verifier': 'This browser didn’t keep the security key that finishes Google sign-in. Start again from this page — and if you began on a different address, use app.edgehq.ca.',
   unverified: 'Google did not confirm that email address, so we can’t use it to sign in. Try email and password instead.',
   'no-invite': 'That Google account isn’t part of the EdgeHQ beta yet. Use the invite link you were sent, or sign in with the account you already have.',
   'invite-invalid': 'That invite is no longer valid — it may have expired or already been used. Ask EdgeHQ for a new one.',

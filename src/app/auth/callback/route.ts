@@ -6,7 +6,7 @@ import { readUser } from '@/lib/authState'
 import { bindBetaInviteToGoogleUser } from '@/lib/googleAuthServer'
 import {
   AUTH_ERROR_PARAM, OAUTH_INVITE_COOKIE,
-  classifyProviderError, safeReturnPath, type GoogleAuthError,
+  classifyProviderError, safeReturnPath, hasPkceVerifier, type GoogleAuthError,
 } from '@/lib/googleAuth'
 
 export const runtime = 'nodejs'
@@ -67,6 +67,19 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const code = params.get('code')
   if (!code) return fail('exchange')
+
+  // ⭐ ASKED BEFORE THE EXCHANGE, because afterwards it is unanswerable. A
+  // missing verifier and a spent code are the SAME error out of
+  // exchangeCodeForSession, and they need opposite advice: "finish in the browser
+  // you started in" versus "that link is used up, start again". Distinguishing
+  // them here is what turns the 2026-08-26 production failure from an
+  // uninformative retry loop into a sentence that names what to do.
+  //
+  // The start route now canonicalises the host before writing this cookie, so a
+  // legitimate flow always arrives holding one. Reaching this line therefore
+  // means something genuinely unusual — a cleared jar, a cross-device paste, a
+  // third-party-cookie policy — and none of those are helped by "try again".
+  if (!hasPkceVerifier(req.cookies.getAll().map(c => c.name))) return fail('no-verifier')
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
