@@ -333,3 +333,104 @@ curl -s -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
   'https://api.supabase.com/v1/projects/syhjarpnmpywatadhblu/config/auth' \
   | grep -oE '"(site_url|uri_allow_list)":"[^"]*"'
 ```
+
+---
+
+## ⭐⭐ One host holds the session — why `edgehq.ca` signed the owner out
+
+**The report:** *"Every time I reopen EdgeHQ on desktop, it makes me sign in with
+Google again."*
+
+**It was never the session expiring.** Measured against production on 2026-08-26
+with `scripts/authpersist-cdp.mjs`, which signs in, genuinely quits Chrome against
+a persistent profile, and relaunches it:
+
+| | measured |
+|---|---|
+| cookie lifetime | `Max-Age` 400 days — **not** a session cookie |
+| domain | `app.edgehq.ca`, **host-only** (no `Domain=`) |
+| path / sameSite | `/` · `Lax` |
+| survives a real browser quit and reopen | **yes** |
+
+So persistence works. The failure is *which hostname was asked*. In one browser
+profile, seconds apart:
+
+```
+https://app.edgehq.ca/dashboard → dashboard, 2 auth cookies present
+https://edgehq.ca/dashboard     → /login?next=%2Fdashboard, ZERO cookies
+https://app.edgehq.ca/dashboard → dashboard again, still signed in
+```
+
+`edgehq.ca` is not a redirect and not a marketing page — it serves a
+**byte-identical copy of the application** (same md5 for `/login`, same
+deployment), and its `/` sends you to `/dashboard` exactly like the canonical
+host. Supabase's session cookie is host-only, so the apex structurally cannot hold
+a session; and OAuth always *finishes* on `app.edgehq.ca`, because `redirectTo` is
+built from `NEXT_PUBLIC_APP_URL`.
+
+An owner whose shortcut, bookmark or address-bar autocomplete resolves to
+`edgehq.ca` therefore: sees a login form → signs in with Google → is deposited on
+`app.edgehq.ca` → reopens their shortcut on `edgehq.ca` → is signed out again.
+**Every time, by construction.** That is the "every time" in the report.
+
+### The fix, and what it deliberately is not
+
+`src/lib/canonicalHost.ts` + `src/middleware.ts` redirect any request arriving on
+a non-canonical hostname to `NEXT_PUBLIC_APP_URL`, path and query intact, **before
+any auth state is read or written**.
+
+⛔ **Not** `Domain=.edgehq.ca`. That fixes it in one line and is the wrong answer:
+it hands the owner's access token to every present and future subdomain forever. A
+stolen session on some later `blog.edgehq.ca` would be a stolen CRM. The cookie
+stays host-only; the *person* is moved instead.
+
+Deliberate exemptions, each of which would be a real outage if canonicalised:
+
+- **`/api/*` and `/monitoring`** — Stripe, Twilio and Resend hold a literal URL in
+  a console and do **not** follow 307s. A canonicalised webhook is a silently
+  dropped webhook.
+- **Non-GET/HEAD** — same reason, for anything that POSTs.
+- **`localhost`, `127.0.0.1`, `*.vercel.app`** — there the hostname *is* the
+  deployment; redirecting a preview to production deletes the preview.
+- **`/api/auth/google/start`** keeps doing its own hop (S108), because it must
+  canonicalise *before* writing PKCE state — stricter than this, and not
+  delegable upward.
+
+Capped at one hop by a 10-second `eq-canon-hop` cookie, so even a wrong host
+comparison costs one wasted redirect rather than an infinite loop on the front
+door. `verify:auth-session` pins all of it, including 8 mutations that must each
+break the rule.
+
+### What a human still has to do
+
+1. **Deploy this branch.** Until it ships, `edgehq.ca` keeps stranding sessions —
+   `scripts/authpersist-cdp.mjs` fails on exactly that check and passes after.
+2. **If the PWA was installed from `edgehq.ca`, reinstall it from
+   `https://app.edgehq.ca`.** An installed app is scoped to the hostname it was
+   installed from. The redirect will still sign you in, but the window may hand
+   off to a browser tab on the way. Reinstalling from the canonical host removes
+   the hop entirely.
+3. **Point desktop shortcuts and bookmarks at `https://app.edgehq.ca`.**
+4. Decide, separately, what `edgehq.ca` is *for*. Serving the whole app on the
+   apex is what created this; a marketing site or a plain redirect there would be
+   the durable answer. The middleware makes it harmless either way.
+
+### Verifying it
+
+```bash
+# fails on production today (CASE D), passes once this branch is deployed
+node scripts/authpersist-cdp.mjs https://app.edgehq.ca https://edgehq.ca
+
+npm run verify:auth-session     # the rule, plus 8 mutation tests
+```
+
+### ⚠️ Noted, not changed: the session cookie is not `Secure`
+
+Measured: `secure=false` on `sb-…-auth-token.0/.1`. The practical exposure is
+small — `edgehq.ca` is HSTS-preloaded with `includeSubDomains`, so a browser will
+not send it over plaintext — but it is a real gap on a site that serves invoices,
+and it is `@supabase/ssr`'s default rather than a decision anyone made here.
+
+Left alone **deliberately** in this session: it changes the exact cookie write path
+whose correctness is the acceptance criterion, and getting it wrong signs everyone
+out. It wants its own change, with its own close-and-reopen proof run.
