@@ -305,7 +305,7 @@ check('the basis vocabulary is pinned in the database',
 // ⚠️ THE PRECISION BUG, PINNED. numeric(10,2) silently made $0.035/ft² into
 // $0.04. Read the CURRENT declared type across both migrations — the corrective
 // one widens it, and this must fail if anyone narrows it back.
-const PRECISION = read('supabase/migrations/20260824090000_measure_price_rate_precision.sql')
+const PRECISION = read('supabase/migrations/20260826120000_measure_price_rate_precision.sql')
 check('the rate column keeps sub-cent precision',
   /alter column\s+"?rate"?\s+type\s+numeric\(\s*12\s*,\s*4\s*\)/i.test(PRECISION),
   'a per-unit rate finer than a cent is ordinary; numeric(10,2) overcharges by rounding it up')

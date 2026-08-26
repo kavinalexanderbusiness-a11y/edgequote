@@ -41,7 +41,7 @@ const PLANS = {
     { term: 'one_time', basis: 'per_unit', rate: 0.04, is_recommended: false, sort_order: 0 },
     { term: 'weekly', basis: 'per_unit', rate: 0.03, is_recommended: true, sort_order: 1 },
         // 0.05, not 0.035: production's rate column is still numeric(10,2) until
-    // 20260824090000 is applied, and a sub-cent rate would be rounded on insert.
+    // 20260826120000 is applied, and a sub-cent rate would be rounded on insert.
     { term: 'biweekly', basis: 'per_unit', rate: 0.05, is_recommended: false, sort_order: 2 },
     { term: 'monthly', basis: 'flat', rate: 180, is_recommended: false, sort_order: 3 },
   ],

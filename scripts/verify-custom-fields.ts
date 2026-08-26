@@ -119,7 +119,7 @@ check('the schema is NOT parked in supabase/archive/', archivedCustom.length ===
 // other migration in the tree. That was true when it was written and cannot stay
 // true: it makes the guard fail the moment anyone lands a later migration for an
 // unrelated feature, which is exactly what happened when Session 107 added
-// 20260824090000_measure_price_rate_precision.sql. Nothing was wrong — the two
+// 20260826120000_measure_price_rate_precision.sql. Nothing was wrong — the two
 // files reference none of each other's objects — but the rule as phrased said
 // otherwise, and a guard that reds on correct work teaches people to delete it.
 //

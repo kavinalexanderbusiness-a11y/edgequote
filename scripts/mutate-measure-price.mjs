@@ -68,7 +68,7 @@ const MUTATIONS = [
     to: '        <p className="mt-1 text-xs text-ink-muted">{unavailable.detail}</p>',
   },
   {
-    file: 'supabase/migrations/20260824090000_measure_price_rate_precision.sql',
+    file: 'supabase/migrations/20260826120000_measure_price_rate_precision.sql',
     name: 'the rate column is narrowed back to cents',
     from: 'alter column "rate" type numeric(12,4);',
     to: 'alter column "rate" type numeric(10,2);',
