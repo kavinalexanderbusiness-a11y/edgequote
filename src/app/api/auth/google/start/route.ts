@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
+import { sessionCookieOptions } from '@/lib/supabase/cookieSecurity'
 import { appOrigin } from '@/lib/appOrigin'
 import { BETA_TOKEN_RE } from '@/lib/betaInvite'
 import {
   GOOGLE_PROVIDER, GOOGLE_SCOPES, AUTH_ERROR_PARAM,
-  OAUTH_INVITE_COOKIE, OAUTH_INVITE_TTL_SECONDS,
+  OAUTH_INVITE_COOKIE, OAUTH_INVITE_TTL_SECONDS, OAUTH_START_PATH,
   buildCallbackUrl, safeReturnPath,
 } from '@/lib/googleAuth'
 
@@ -51,6 +52,47 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       headers: { 'Cache-Control': 'no-store' },
     })
 
+  // ⭐⭐ THE ROUND TRIP MUST BEGIN ON THE HOST IT WILL END ON.
+  //
+  // PKCE's verifier is written below as a cookie with NO Domain attribute, so it
+  // is HOST-ONLY. `redirectTo` is built from appOrigin(), which deliberately
+  // prefers the configured NEXT_PUBLIC_APP_URL over the request — correct for
+  // every emailed link, and correct for keeping one canonical origin.
+  //
+  // Those two facts fight each other the moment somebody starts here on an alias
+  // host. edgehq.ca is a live alias that serves /login, so this is a route a real
+  // person takes: the verifier is stored on edgehq.ca, the provider returns to
+  // app.edgehq.ca/auth/callback, the browser sends no verifier to a host that
+  // never received one, and the exchange fails with nothing to exchange against.
+  // Measured on production 2026-08-26 — it is the "sign-in could not be
+  // completed" a real owner hit after the Site URL repair.
+  //
+  // ⭐ The fix is to move BEFORE writing any state, not to loosen redirectTo.
+  // Sending the browser to the canonical host first means cookie and callback
+  // agree by construction, and appOrigin keeps its contract — the request's Host
+  // still never decides where the provider returns to.
+  //
+  // ⚠️⚠️ COMPARED ON THE HOST HEADER, NOT `req.nextUrl.origin`. The obvious
+  // version of this check used nextUrl.origin and LOOPED FOREVER — measured, not
+  // feared: a request whose Host already WAS the configured origin still compared
+  // unequal and redirected to itself, indefinitely. nextUrl.origin is normalised
+  // by the framework and is not the address the browser used. An infinite
+  // redirect on the sign-in door is far worse than the bug being fixed.
+  //
+  // ⭐ AND CAPPED AT ONE HOP by `canon`, so a loop is structurally impossible even
+  // if the host comparison is wrong on some platform. Worst case then is a single
+  // wasted redirect and the original cross-host failure — never a hang.
+  const canonicalHost = (() => { try { return new URL(origin).host.toLowerCase() } catch { return '' } })()
+  const requestHost = (req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? '')
+    .trim().toLowerCase()
+  const alreadyHopped = req.nextUrl.searchParams.get('canon') === '1'
+  if (canonicalHost && requestHost && requestHost !== canonicalHost && !alreadyHopped) {
+    const canonical = new URL(`${origin}${OAUTH_START_PATH}`)
+    canonical.search = req.nextUrl.search
+    canonical.searchParams.set('canon', '1')
+    return NextResponse.redirect(canonical, { headers: { 'Cache-Control': 'no-store' } })
+  }
+
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   if (!url || !key) return failure('unavailable')
@@ -62,6 +104,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // is a NEW response and carries none of it.
   const jar: { name: string; value: string; options?: Record<string, unknown> }[] = []
   const supabase = createServerClient(url, key, {
+    // The PKCE verifier is a secret half of a handshake and gets the same
+    // treatment as the session itself.
+    cookieOptions: sessionCookieOptions(req.nextUrl.origin),
     // PKCE is @supabase/ssr's default; stated outright because it is the thing
     // that makes a stolen or replayed authorization code useless without the
     // verifier cookie that only this browser holds.

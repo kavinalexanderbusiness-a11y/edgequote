@@ -2,6 +2,7 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 import { resolveAppRole, routeFor, isOwnerPath, isCrewPath, isJoinPath } from '@/lib/crewAccess'
 import { readUser } from '@/lib/authState'
+import { sessionCookieOptions } from './cookieSecurity'
 
 /**
  * A redirect that KEEPS whatever the session write-back put on the response.
@@ -44,6 +45,10 @@ export async function updateSession(request: NextRequest) {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      // ⭐ Every refresh this middleware performs rewrites the session cookie, so
+      // it is one of the places the Secure flag has to be set — omit it here and a
+      // token rotation quietly downgrades a cookie the callback wrote correctly.
+      cookieOptions: sessionCookieOptions(request.nextUrl.origin),
       cookies: {
         getAll() {
           return request.cookies.getAll()
