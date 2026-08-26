@@ -103,6 +103,29 @@ async function main() {
 
   if (process.argv.includes('--cleanup')) return cleanup(db, st)
 
+  // ⭐⭐ DOES THE FIXTURE STILL EXIST? The check above reads the STATE FILE, which
+  // only says the ids were recorded once — not that the rows are still there.
+  // They belong to Session 61 and live in a shared production tenant, so another
+  // session's cleanup can remove them at any moment, and it did: mid-way through
+  // this session's browser run the four visits vanished and the next run showed
+  // "Nothing booked today". Every positive assertion then fails while every
+  // negative one passes, which reads EXACTLY like a catastrophic visibility
+  // regression and is nothing of the kind.
+  //
+  // Third time this session that assuming a precondition beat establishing one
+  // (stale date, leaked roster state, and now deleted rows). Fail fast, name the
+  // remedy, and never let a missing fixture masquerade as a broken product.
+  const { data: live, error: liveErr } = await db.from('jobs')
+    .select('id').in('id', [st.jobCrew, st.jobDirectA, st.jobDirectB, st.jobUnassigned].filter(Boolean))
+  if (liveErr) { no('check the fixture is still live', liveErr.message); return 1 }
+  if ((live || []).length < 4) {
+    console.error(`\n⛔ The S61 fixture visits are GONE (${(live || []).length}/4 still present).`)
+    console.error('   Another session cleaned them up. Recreate, then re-run this proof:\n')
+    console.error('     node scripts/s61-field-proof.mjs --keep\n')
+    return 1
+  }
+  ok('the S61 fixture is still live', `${(live || []).length}/4 visits present`)
+
   // ── 1. Worker B through the canonical invite door ─────────────────────────
   console.log('\n── 1. Worker B via the canonical S64 invite ───────────────────')
   let pwB = s73.workerPwB
@@ -148,7 +171,80 @@ async function main() {
   ok('worker B signed in')
   const wc = w.client
 
-  const { data: role } = await wc.rpc('current_app_role')
+  // ⭐⭐ RE-LINK IF THE ROSTER WAS REBUILT. `acceptedB` in the state file only
+  // records that this login accepted an invite ONCE. When another session
+  // recreates the S61 fixture, the technician ROW is new and this auth account
+  // is linked to nothing — so current_app_role() answers 'none' and every crew
+  // read below returns empty, which looks like a total access regression and is
+  // just a rebuilt fixture. (The fourth and last time this session that a
+  // recorded fact was mistaken for a live one.)
+  //
+  // The remedy is the door the product itself points at when /api/crew/invite
+  // refuses to re-bind an existing address — that refusal IS the
+  // account-takeover guard, and re-binding is the attack it stops. So: the owner
+  // mints a join code, and the worker redeems it themselves. ⛔ No back-door
+  // user, no direct auth manipulation, no fresh mailbox per run.
+  // ⚠️⚠️ "IS THIS ACCOUNT CREW?" IS A PROXY, AND IT LIED. A rebuilt fixture
+  // leaves the OLD technician row active and still linked to this login, while
+  // the new visits point at the NEW row. current_app_role() then answers 'crew'
+  // — perfectly true, about the wrong row — and every positive assertion below
+  // fails while every negative one passes. That reads as a total access
+  // regression and is a stale link.
+  //
+  // ⭐ So assert the SPECIFIC fact: which technician row is this login actually
+  // bound to. Never the proxy.
+  const { data: me } = await wc.auth.getUser()
+  const authUid = me.user?.id
+  // ⚠️ ANY bound row, active or not. crew_redeem_invite refuses while this
+  // account holds ANY link — it does not check is_active or archived_at — so a
+  // lookup that filtered those out would report "unlinked", walk into redeem,
+  // and fail with "already linked to an employee" having just proved otherwise.
+  // Match what actually blocks, not what looks tidy.
+  const linkedRow = async () => (await db.from('technicians')
+    .select('id, name').eq('auth_user_id', authUid!)
+    .maybeSingle()).data as { id: string; name: string } | null
+
+  let linked = await linkedRow()
+  if (linked && linked.id !== st.techB) {
+    // ⛔ GUARDED: only ever a row this fixture created. The name check is the
+    // whole safety of this branch — archiving is an owner action on their own
+    // roster, and it must be impossible for it to touch a real employee.
+    if (!/S61 FIELD FIXTURE/i.test(linked.name || '')) {
+      no('refusing to touch a non-fixture roster row', `${linked.id} "${linked.name}"`)
+      return 1
+    }
+    // ⭐ THE CANONICAL UNLINK: crew_revoke_access, the owner-callable RPC S64
+    // ships for exactly this. An account may hold only ONE link, and
+    // crew_redeem_invite refuses while one exists — it does NOT care that the
+    // row is archived, so deactivating alone leaves the account stuck ("this
+    // account is already linked to an employee"). ⛔ The alternative, writing
+    // auth_user_id = null by hand, would be inventing a second unlink path
+    // beside the product's own.
+    const { error: rvErr } = await db.rpc('crew_revoke_access', { p_technician_id: linked.id })
+    if (rvErr) { no('revoke the stale row\'s access', rvErr.message); return 1 }
+    const { error: aErr } = await db.from('technicians')
+      .update({ is_active: false, archived_at: new Date().toISOString() }).eq('id', linked.id)
+    if (aErr) { no('retire the stale fixture roster row', aErr.message); return 1 }
+    ok('retired the stale fixture roster row', `${linked.id} — crew_revoke_access + archived`)
+    linked = null
+  }
+
+  if (!linked) {
+    // The door the product points at when /api/crew/invite refuses to re-bind an
+    // existing address — that refusal IS the account-takeover guard. The owner
+    // mints a code; the worker redeems it themselves. ⛔ No back-door user.
+    const { data: code, error: cErr } = await db.rpc('crew_issue_invite',
+      { p_technician_id: st.techB, p_hours: 1 })
+    if (cErr || !code?.code) { no('owner mints a join code', cErr?.message || 'no code'); return 1 }
+    const { error: rErr } = await wc.rpc('crew_redeem_invite', { p_code: code.code })
+    if (rErr) { no('worker B redeems the join code', rErr.message); return 1 }
+    ok('⭐ worker B joined via the canonical join code', 'they accepted it themselves')
+    linked = await linkedRow()
+  }
+
+  t('⭐ worker B is bound to THIS fixture\'s roster row', linked?.id === st.techB,
+    `linked=${linked?.id} expected=${st.techB}`)
+  const role = (await wc.rpc('current_app_role')).data
   t('worker B resolves as crew, not owner', role === 'crew', `got ${role}`)
 
   // ── 2. What this worker may see ───────────────────────────────────────────
