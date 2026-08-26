@@ -124,7 +124,19 @@ export function MeasurePricingEditor({
                       <input
                         type="number"
                         min="0"
-                        step={d.basis === 'per_unit' ? '0.01' : '1'}
+                        // ⭐⭐ THE STEP MUST MATCH THE COLUMN, which is numeric(12,4).
+                        // A number input REFUSES a value off its step: the field goes
+                        // :invalid, and because it sits inside the service form, the
+                        // browser then blocks submit — so the WHOLE service silently
+                        // fails to save, measurement type included. Not a rejected
+                        // field, no message, nothing written.
+                        //   step="0.01" refused 0.035 and 0.0025 — the sub-cent rates
+                        //   20260826120000 widened the column to keep.
+                        //   step="1"    refused $249.50 and $1,200.75 — i.e. any flat
+                        //   price with cents in it, which is most of them.
+                        // Measured on production: typing 0.035 wrote no plan and no
+                        // measurement type; typing 0.08 wrote both.
+                        step={d.basis === 'per_unit' ? '0.0001' : '0.01'}
                         // Held as TEXT so blank stays blank: Number('') is 0, and a
                         // rate the owner never typed must not become a $0 plan that
                         // quotes the work as free.
