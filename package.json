@@ -16,6 +16,7 @@
     "verify:comms-governor": "tsx scripts/verify-comms-governor.ts",
     "verify:comm-prefs": "tsx scripts/verify-comm-prefs.ts",
     "verify:completion": "tsx scripts/verify-completion.ts",
+    "verify:completion-report": "tsx scripts/verify-completion-report.ts",
     "verify:scoped-notes": "tsx scripts/verify-scoped-notes.ts",
     "verify:business-shape": "tsx scripts/verify-business-shape.ts",
     "verify:trades": "tsx scripts/verify-trades.ts",
