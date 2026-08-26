@@ -45,6 +45,13 @@
 //    their exact position. So does an estimate appointment — `schedule_items`
 //    has no `route_order` column, so its position CANNOT be persisted, and
 //    proposing one would be a promise the database cannot keep.
+// 1b. A PINNED STOP DOES NOT MOVE EITHER, and for a different reason: the owner
+//    said so (Session 110, lib/routePins). Held by the SAME mechanism as a lock
+//    — its slot is reserved in `intoMovableSlots` — so "optimize the rest" adds
+//    no second code path that could forget. ⛔ A pin is never invented: nothing
+//    in this engine creates one, and applying a suggested order does not pin
+//    what it moved. ⛔ A pin is NOT a customer promise; lateness is still scored
+//    against the committed time and a pin can never manufacture one.
 // 2. A PROMISE IS A CONSTRAINT, NOT A POSITION. A timed visit may be re-ordered
 //    — that is the whole point — but lateness against its promise is scored
 //    ahead of distance, so the optimizer can never buy kilometres with a missed
@@ -75,6 +82,7 @@ import {
   type DayPlan, type DayPlanStopInput,
 } from '@/lib/dayPlan'
 import type { WorkerDayDetail } from '@/lib/workerAvailability'
+import type { RouteStopKind } from '@/lib/routePins'
 
 // ── The promise grace ────────────────────────────────────────────────────────
 /**
@@ -99,8 +107,15 @@ export const PROMISE_GRACE_MIN = 15
  *  appointment  — an estimate appointment (schedule_items). It holds time and
  *                 is driven to, but it has no route_order column, so its place
  *                 in the order cannot be saved. It anchors; it never moves.
+ *  pinned       — Session 110. The OWNER put it here and asked for it to be
+ *                 held. ⭐ This is the only reason on this list that is a
+ *                 DECISION rather than a fact about the row: the other four are
+ *                 things that happened to the work, and no button can undo
+ *                 them, while a pin is the owner's and they may take it back.
+ *                 A surface must therefore offer "Unpin" for this one and for
+ *                 no other — see lib/routePins.
  */
-export type LockReason = 'completed' | 'in_progress' | 'billed' | 'appointment'
+export type LockReason = 'completed' | 'in_progress' | 'billed' | 'appointment' | 'pinned'
 
 /**
  * The lock a stop carries purely from its own row.
@@ -127,6 +142,35 @@ export const LOCK_LABEL: Record<LockReason, string> = {
   in_progress: 'under way',
   billed: 'already billed',
   appointment: 'an estimate appointment — its order cannot be saved',
+  pinned: 'pinned by you',
+}
+
+/** True for the one lock the owner can take back. */
+export function isReleasable(reason: LockReason): boolean {
+  return reason === 'pinned'
+}
+
+/**
+ * What kind of record a stop is, believing either way of saying it.
+ *
+ * `kind` says it directly; Session 82's `lock: 'appointment'` was the only way
+ * to say it before `kind` existed. Reading both means an older caller cannot
+ * silently start persisting an estimate's position — see SequenceStop.kind.
+ */
+function stopKind(s: SequenceStop): RouteStopKind {
+  return s.kind ?? (s.lock === 'appointment' ? 'appointment' : 'job')
+}
+
+/**
+ * Why this stop may not move, counting the owner's own pin.
+ *
+ * A row's own lock outranks a pin: pinning a completed visit does not make it
+ * "pinned by you", because the reason it cannot move is that it already
+ * happened, and telling the owner they may unpin it would be an offer the
+ * engine cannot honour.
+ */
+function effectiveLock(s: SequenceStop): LockReason | null {
+  return s.lock ?? (s.pinned ? 'pinned' : null)
 }
 
 // ── Input ────────────────────────────────────────────────────────────────────
@@ -155,8 +199,37 @@ export interface SequenceStop {
   /** A committed appointment time (jobs.start_time / schedule_items.start_time)
    *  as minutes since midnight, or null when nothing was promised. */
   promiseMin: number | null
-  /** Set when this stop's position is fixed. Null = free to move. */
+  /** Set when this stop's position is fixed BY ITS OWN ROW. Null = free to
+   *  move. A pin is not expressed here — see `pinned`. */
   lock: LockReason | null
+  /**
+   * What kind of record this stop is — Session 110.
+   *
+   * ⭐ Separate from `lock` because they answer different questions, and
+   * conflating them was a live bug waiting to happen. Session 82 used
+   * `lock === 'appointment'` to mean BOTH "do not move it" and "its position
+   * cannot be saved". The moment an estimate could also be `pinned`, that one
+   * field could no longer say both, and an estimate would have started being
+   * written into `persistableOrder` — a route_order write against a table with
+   * no route_order column.
+   *
+   * Absent means `job`, except that a Session 82 caller's `lock:'appointment'`
+   * is still read as an appointment, so a caller written before this field
+   * existed cannot start persisting estimate positions.
+   */
+  kind?: RouteStopKind
+  /**
+   * The owner pinned this stop at the index it occupies in `stops` — Session
+   * 110. Honoured exactly like a lock: its slot is reserved by construction in
+   * `intoMovableSlots`, so "optimize the rest" is the same search with one more
+   * seat taken, not a second algorithm.
+   *
+   * ⚠️ The caller must have already placed the stop AT its pinned position
+   * (lib/routePins `orderWithPins` does this), because the engine reserves a
+   * locked stop's CURRENT index. Passing `pinned` on a stop sitting somewhere
+   * else faithfully holds the WRONG seat.
+   */
+  pinned?: boolean
 
   // ── Handed straight to lib/dayPlan, unchanged ──
   durationMinutes?: number | null
@@ -531,8 +604,12 @@ export function sequenceDay(input: DaySequenceInput): DaySequenceProposal {
   const promises = new Map<string, number>()
   for (const s of stops) if (s.promiseMin != null) promises.set(s.id, s.promiseMin)
 
-  const lockedIds = new Set(stops.filter(s => s.lock).map(s => s.id))
-  const movable = stops.filter(s => !s.lock)
+  // ⭐ A pin takes a seat exactly the way a lock does. "Optimize remaining" is
+  // therefore not a second algorithm — it is this same search with one more
+  // slot already spoken for, which is why a pinned position cannot be lost by
+  // an oversight in a candidate generator that has never heard of pins.
+  const lockedIds = new Set(stops.filter(s => effectiveLock(s)).map(s => s.id))
+  const movable = stops.filter(s => !effectiveLock(s))
 
   const currentPlan = planOrder({ ...input, stops }, currentOrder)
   const currentScore = scoreOf(currentPlan, promises)
@@ -588,8 +665,8 @@ export function sequenceDay(input: DaySequenceInput): DaySequenceProposal {
     .sort((a, b) => Math.abs(b.to - b.from) - Math.abs(a.to - a.from))
 
   const locked: LockedNote[] = stops
-    .filter(s => s.lock)
-    .map(s => ({ id: s.id, label: s.label, reason: s.lock as LockReason }))
+    .filter(s => effectiveLock(s))
+    .map(s => ({ id: s.id, label: s.label, reason: effectiveLock(s) as LockReason }))
 
   const latePromises: PromiseNote[] = suggested.stops
     .filter(s => lateNow(s.jobId, arrivalMinAfter))
@@ -647,9 +724,14 @@ export function sequenceDay(input: DaySequenceInput): DaySequenceProposal {
     // appointment is driven to and timed, but `schedule_items` has no
     // route_order column — offering to persist its place would be a promise the
     // database cannot keep, so it is excluded from what a caller may write.
+    //
+    // ⭐ Session 110: the test is the stop's KIND, not its lock reason. Once an
+    // estimate can also be `pinned`, "is it locked as an appointment" stops
+    // being the same question as "can its position be written", and reading the
+    // lock would have started emitting estimate ids into a route_order write.
     persistableOrder: best.order.filter(id => {
       const s = stops.find(x => x.id === id)
-      return !!s && s.lock !== 'appointment'
+      return !!s && stopKind(s) === 'job'
     }),
     moves,
     locked,
@@ -671,6 +753,135 @@ function fmtMin(min: number): string {
   if (m < 60) return `${m} min`
   const h = Math.floor(m / 60), r = m % 60
   return r ? `${h}h ${r}m` : `${h}h`
+}
+
+// ── What the owner's pins are COSTING ────────────────────────────────────────
+// Session 110.
+//
+// A pin is the owner overriding the optimizer, and the optimizer does not get a
+// veto — honesty rule 1b. But silently obeying a pin that makes a customer late
+// is not respect for the owner's decision, it is withholding the one fact they
+// needed to make it. So the day is planned twice, by the SAME function, and the
+// difference is reported.
+//
+// ⭐ WHAT COUNTS AS A CONFLICT is deliberately narrow: a pin conflicts when it
+// costs a KEPT PROMISE or makes the day IMPOSSIBLE. It does not conflict merely
+// by driving further. Kilometres are the owner's to spend — "first thing for
+// Brenda" is worth ten minutes of driving and the product has no business
+// arguing — so extra travel is DISCLOSED as a number and never dressed up as a
+// problem with choices attached. That is the same lexicographic priority the
+// score itself uses, applied to what we interrupt the owner about.
+
+/** A pinned stop whose release recovers a promise or clears a blocker. */
+export interface PinConflictCulprit {
+  id: string
+  label: string
+  /** 1-based position it is pinned at. */
+  position: number
+  /** Promises kept again if this one pin is released. */
+  recoversPromises: number
+  /** Blocking verdicts cleared if this one pin is released. */
+  clearsBlocking: number
+}
+
+export interface PinConflictReport {
+  /** The day with the owner's pins honoured — what "Optimize remaining" gives. */
+  withPins: DaySequenceProposal
+  /** The same day with every pin released — what the engine would do unasked. */
+  withoutPins: DaySequenceProposal
+  /** True only when the pins cost a promise or the day's feasibility. */
+  conflict: boolean
+  /** Which pins are responsible, worst first. May be empty even when `conflict`
+   *  is true: pins can conflict jointly without any single one being the cause,
+   *  and claiming a culprit we did not find would be a guess. */
+  culprits: PinConflictCulprit[]
+  lateWithPins: number
+  lateWithoutPins: number
+  blockingWithPins: number
+  blockingWithoutPins: number
+  /** Extra travel the pins cost, in minutes. ⛔ Never a conflict on its own. */
+  extraTravelMin: number
+  /** True when there was at least one pin to reason about at all. */
+  hadPins: boolean
+}
+
+/** How many single-pin releases we are willing to time. Each probe is a full
+ *  search, so this is a real cost; six covers any day a person hand-pins. */
+const MAX_CULPRIT_PROBES = 6
+
+function blockingCount(p: DaySequenceProposal): number {
+  return p.suggested.warnings.filter(w => w.severity === 'blocking').length
+}
+
+/** The same input with every owner pin released. Row locks are untouched. */
+function withoutPinsInput(input: DaySequenceInput): DaySequenceInput {
+  return { ...input, stops: input.stops.map(s => (s.pinned ? { ...s, pinned: false } : s)) }
+}
+
+/**
+ * Plan the day twice — pins honoured, pins released — and report the cost.
+ *
+ * ⛔ Decides nothing and writes nothing. It hands the owner the two numbers and
+ * the names, and the surface offers the choice: keep my order, unpin the stop
+ * that is causing it, or take the suggestion.
+ */
+export function analysePinConflict(input: DaySequenceInput): PinConflictReport {
+  const pinnedStops = input.stops.filter(s => s.pinned && !s.lock && s.status !== 'cancelled')
+  const withPins = sequenceDay(input)
+
+  if (pinnedStops.length === 0) {
+    return {
+      withPins, withoutPins: withPins, conflict: false, culprits: [],
+      lateWithPins: withPins.lateAfter, lateWithoutPins: withPins.lateAfter,
+      blockingWithPins: blockingCount(withPins), blockingWithoutPins: blockingCount(withPins),
+      extraTravelMin: 0, hadPins: false,
+    }
+  }
+
+  const withoutPins = sequenceDay(withoutPinsInput(input))
+
+  const lateWithPins = withPins.lateAfter
+  const lateWithoutPins = withoutPins.lateAfter
+  const blockingWithPins = blockingCount(withPins)
+  const blockingWithoutPins = blockingCount(withoutPins)
+
+  // Travel is compared on the SUGGESTED plans, which is the comparison the
+  // owner is actually choosing between.
+  const extraTravelMin = Math.max(0, withPins.suggested.driveMin - withoutPins.suggested.driveMin)
+
+  const conflict = blockingWithPins > blockingWithoutPins || lateWithPins > lateWithoutPins
+
+  // Name the pin responsible, by releasing exactly one at a time. A pin only
+  // earns the name if letting it go actually recovers something — which is why
+  // `culprits` can legitimately come back empty on a real conflict.
+  const culprits: PinConflictCulprit[] = []
+  if (conflict) {
+    for (const s of pinnedStops.slice(0, MAX_CULPRIT_PROBES)) {
+      const probe = sequenceDay({
+        ...input,
+        stops: input.stops.map(x => (x.id === s.id ? { ...x, pinned: false } : x)),
+      })
+      const recoversPromises = Math.max(0, lateWithPins - probe.lateAfter)
+      const clearsBlocking = Math.max(0, blockingWithPins - blockingCount(probe))
+      if (recoversPromises > 0 || clearsBlocking > 0) {
+        culprits.push({
+          id: s.id,
+          label: s.label,
+          position: input.stops.findIndex(x => x.id === s.id) + 1,
+          recoversPromises,
+          clearsBlocking,
+        })
+      }
+    }
+    culprits.sort((a, b) =>
+      (b.clearsBlocking - a.clearsBlocking) || (b.recoversPromises - a.recoversPromises))
+  }
+
+  return {
+    withPins, withoutPins, conflict, culprits,
+    lateWithPins, lateWithoutPins, blockingWithPins, blockingWithoutPins,
+    extraTravelMin, hadPins: true,
+  }
 }
 
 // ── Reading a promise back ───────────────────────────────────────────────────
