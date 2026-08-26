@@ -172,13 +172,34 @@ export default function ServiceTemplatesPage() {
       // '' → NULL: no default checklist. Changing this never rewrites a form
       // already minted on a visit — resolution happens at attach time.
       form_template_id: values.form_template_id || null,
+      // '' → NULL: this service is not measured, so Measure & Price does not
+      // offer it. Same blank-vs-zero discipline as the cost fields.
+      measured_by: (measuredBy || null) as ServiceTemplate['measured_by'],
     }
     // A failed save must not close the form as if it succeeded — the owner's
     // edits stay on screen with an honest error instead of silently vanishing.
-    const { error } = editing
-      ? await supabase.from('service_templates').update(payload).eq('id', editing.id)
-      : await supabase.from('service_templates').insert({ ...payload, sort_order: templates.length + 1, user_id: user!.id })
+    //
+    // The insert needs its id back: plans live in their own table and a brand new
+    // service has nothing to hang them off until it exists.
+    const { data: saved, error } = editing
+      ? await supabase.from('service_templates').update(payload).eq('id', editing.id).select('id').maybeSingle()
+      : await supabase.from('service_templates').insert({ ...payload, sort_order: templates.length + 1, user_id: user!.id }).select('id').maybeSingle()
     if (error) { toast.error('Could not save the service: ' + error.message); return }
+
+    // ── The plans, written after the service is certainly there ───────────────
+    // ⚠️ Reported separately on failure. The service DID save; saying "could not
+    // save the service" would send the owner back to re-enter work that is
+    // already stored, and closing silently would lose the plans without a word.
+    const templateId = saved?.id ?? editing?.id
+    if (templateId && user) {
+      try {
+        await savePricingPlans(supabase, user.id, templateId, planDrafts)
+      } catch (e) {
+        toast.error('The service saved, but its pricing plans did not: ' + (e instanceof Error ? e.message : 'unknown error'))
+      }
+      await refreshPlans()
+    }
+
     setShowForm(false)
     setEditing(null)
     refresh()
@@ -370,11 +391,40 @@ export default function ServiceTemplatesPage() {
                 )}
               </div>
 
+              {/* ⭐ Directly under the price fields, because it IS a pricing
+                  decision — "measured by area, sold one-time / monthly /
+                  seasonal" belongs beside "starting price", not buried in its own
+                  settings screen. Optional and collapsed to two controls until
+                  the owner says the service is measured, so a service that isn't
+                  measured costs them nothing to skip. */}
+              <MeasurePricingEditor
+                measuredBy={measuredBy}
+                onMeasuredByChange={setMeasuredBy}
+                drafts={planDrafts}
+                onDraftsChange={setPlanDrafts}
+              />
+
               <Textarea label="Default Description" {...register('default_description')} />
               <Textarea label="Internal Notes" {...register('notes')} />
-              <div className="flex items-center justify-between pt-1 gap-3">
-                <div className="flex items-center gap-4">
-                  <Toggle checked={isActive} onChange={v => setValue('is_active', v)} label={isActive ? 'Active' : 'Inactive'} />
+              <div className="flex items-start justify-between pt-1 gap-3">
+                <div className="flex items-start gap-4 flex-wrap">
+                  <div>
+                    <Toggle checked={isActive} onChange={v => setValue('is_active', v)} label={isActive ? 'Active' : 'Inactive'} />
+                    {/* ⭐ SAY WHAT THE TOGGLE DOES, NOT JUST WHAT IT IS.
+                        "Inactive" named a state without naming a consequence, and
+                        the consequence is the whole point: an inactive service is
+                        filtered out of the quote builder's picker, which is the
+                        same list Measure & Price offers. A seasonal business that
+                        deactivates its winter services over summer — as this one
+                        does — then cannot find Snow Removal on the map and has no
+                        way to learn why from this screen. Deliberate exclusion,
+                        previously invisible. */}
+                    <p className="mt-1 max-w-xs text-[11px] text-ink-muted">
+                      {isActive
+                        ? 'Offered when quoting, and available in Measure & Price.'
+                        : 'Hidden from new quotes and from Measure & Price. Its pricing is kept — turn this back on to sell it again.'}
+                    </p>
+                  </div>
                   {/* Favourites surface this service at the top of the quote
                       builder's picker — the payoff is there, not here. */}
                   <Toggle checked={!!isFavorite} onChange={v => setValue('is_favorite', v)} label="Favourite" />
