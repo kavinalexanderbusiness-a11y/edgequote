@@ -28,7 +28,7 @@ import {
   safeReturnPath, googleEmailVerified, classifyProviderError, readGoogleAuthError,
   buildCallbackUrl, GOOGLE_SCOPES, GOOGLE_PROVIDER, GOOGLE_AUTH_ERROR_TEXT,
   AUTH_CALLBACK_PATH, OAUTH_START_PATH, OAUTH_INVITE_COOKIE, OAUTH_INVITE_TTL_SECONDS,
-  AUTH_ERROR_PARAM, hasPkceVerifier,
+  AUTH_ERROR_PARAM, hasPkceVerifier, readProviderFragmentError,
 } from '../src/lib/googleAuth'
 import { hashInviteToken } from '../src/lib/googleAuthServer'
 import { hashBetaToken } from '../src/lib/betaInviteServer'
@@ -423,6 +423,38 @@ H('9. Failure is legible, and never reflected')
     hasPkceVerifier(['other', 'sb-x-auth-token-code-verifier']) &&
     !hasPkceVerifier(['sb-abcdefghijklmnop-auth-token']) &&
     !hasPkceVerifier([]) && !hasPkceVerifier(['eq-oauth-invite']))
+
+  // ── The failure the SERVER cannot see ──────────────────────────────────────
+  // ⚠️⚠️ gotrue reports its OWN return-leg failures in the URL FRAGMENT, which is
+  // never sent to a server. On 2026-08-26 that turned
+  //   error=server_error&error_code=unexpected_failure
+  // (Google refusing OUR client secret — "invalid_client") into "the link could
+  // not be completed. Please try again", advice that could never have worked.
+  // The fragment survives to /login, so that is where it must be read.
+  check('a provider fragment failure is read, not lost',
+    readProviderFragmentError('#error=server_error&error_code=unexpected_failure') === 'provider-config',
+    'a server-side provider failure must not read as a generic retry')
+  check('a cancelled consent screen is still cancelled from the fragment',
+    readProviderFragmentError('#error=access_denied') === 'cancelled')
+  check('an unknown fragment code degrades to exchange, never to nothing',
+    readProviderFragmentError('#error=some_new_thing') === 'exchange')
+  check('a fragment with no error at all is null (normal sign-in untouched)',
+    readProviderFragmentError('') === null && readProviderFragmentError(null) === null &&
+    readProviderFragmentError('#access_token=x') === null)
+  check('the leading # is optional',
+    readProviderFragmentError('error=access_denied') === 'cancelled')
+  // ⛔ error_description is attacker-controllable: anyone can hand a victim a
+  // /login URL carrying any fragment. Rendering it is a phishing surface.
+  check('the provider’s own text is NEVER rendered',
+    !/error_description/.test(strip(LOGIN)) &&
+    /GOOGLE_AUTH_ERROR_TEXT\[authError\]/.test(strip(LOGIN)),
+    'only our own sentences may reach the screen')
+  check('the login page reads the fragment and clears it once read',
+    /readProviderFragmentError\(window\.location\.hash\)/.test(strip(LOGIN)) &&
+    /history\.replaceState/.test(strip(LOGIN)),
+    'a fragment left behind rides along to the next page')
+  check('the fragment outranks the generic query code when both are present',
+    /fragmentError \?\? queryAuthError/.test(strip(LOGIN)))
 
   check('a cancelled consent screen reads as cancelled, not as an error',
     classifyProviderError('access_denied') === 'cancelled')

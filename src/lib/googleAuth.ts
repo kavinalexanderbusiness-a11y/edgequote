@@ -213,6 +213,7 @@ export type GoogleAuthError =
   | 'cancelled'        // they closed Google's consent screen, or denied it
   | 'exchange'         // the code would not exchange: replayed, expired, forged
   | 'no-verifier'      // this browser holds no PKCE verifier — see below
+  | 'provider-config'  // the provider refused OUR credentials — see below
   | 'unverified'       // Google would not vouch for the address
   | 'no-invite'        // authenticated fine; holds no licence to create a business
   | 'invite-invalid'   // the invite is expired, revoked or already used
@@ -225,6 +226,7 @@ export const GOOGLE_AUTH_ERROR_TEXT: Record<GoogleAuthError, string> = {
   cancelled: 'Google sign-in was cancelled. You can try again, or use your email and password.',
   exchange: 'That Google sign-in link could not be completed. Please try again.',
   'no-verifier': 'This browser didn’t keep the security key that finishes Google sign-in. Start again from this page — and if you began on a different address, use app.edgehq.ca.',
+  'provider-config': 'Google sign-in isn’t working right now — that’s a problem on our side, not with your account or your Google password. Use your email and password for now; we’ve been told about it.',
   unverified: 'Google did not confirm that email address, so we can’t use it to sign in. Try email and password instead.',
   'no-invite': 'That Google account isn’t part of the EdgeHQ beta yet. Use the invite link you were sent, or sign in with the account you already have.',
   'invite-invalid': 'That invite is no longer valid — it may have expired or already been used. Ask EdgeHQ for a new one.',
@@ -245,6 +247,50 @@ export function readGoogleAuthError(raw: string | null | undefined): GoogleAuthE
 
 /** THE query parameter the callback fails back with. */
 export const AUTH_ERROR_PARAM = 'auth_error'
+
+// ── The failure the SERVER cannot see ────────────────────────────────────────
+// ⚠️⚠️ When gotrue itself fails on the return leg — it could not exchange the
+// provider's code, its own credentials were refused, the provider 500'd — it does
+// NOT put that on the query string. It redirects to
+//
+//   https://app.edgehq.ca/auth/callback#error=server_error&error_code=unexpected_failure&…
+//
+// and a URL FRAGMENT IS NEVER SENT TO A SERVER. So /auth/callback sees no `code`
+// and no `error`, and its only honest reading is "no code" — which is how a real,
+// specific, server-side configuration failure surfaced to an owner on 2026-08-26
+// as "That Google sign-in link could not be completed. Please try again." Trying
+// again could never have worked: Google was rejecting OUR client secret, and the
+// evidence naming that sat only in Supabase's logs.
+//
+// The fragment does survive the hop to /login, so the LOGIN PAGE can read what
+// the server could not. That is the only place this can be recovered.
+//
+// ⛔ THE PROVIDER'S OWN TEXT IS NEVER RENDERED. `error_description` is
+// attacker-controllable — anyone can hand-craft a link to /login carrying any
+// fragment they like — so echoing it turns the login page into a phishing
+// surface. Known codes map to OUR sentences; everything else is 'exchange'.
+const PROVIDER_FRAGMENT_ERRORS: Record<string, GoogleAuthError> = {
+  access_denied: 'cancelled',
+  server_error: 'provider-config',
+  unexpected_failure: 'provider-config',
+  temporarily_unavailable: 'provider-config',
+}
+
+/**
+ * Read a provider failure out of a URL fragment, and nothing else out of it.
+ *
+ * Accepts the raw `location.hash` (with or without the leading '#'). Returns null
+ * when there is no error there at all, so a normal sign-in is unaffected.
+ */
+export function readProviderFragmentError(hash: string | null | undefined): GoogleAuthError | null {
+  if (!hash) return null
+  const p = new URLSearchParams(hash.replace(/^#/, ''))
+  const error = p.get('error')
+  const code = p.get('error_code')
+  if (!error && !code) return null
+  // error_code is the more specific of the two, so it is consulted first.
+  return PROVIDER_FRAGMENT_ERRORS[code ?? ''] ?? PROVIDER_FRAGMENT_ERRORS[error ?? ''] ?? 'exchange'
+}
 
 /**
  * How the provider's own failure maps onto ours.

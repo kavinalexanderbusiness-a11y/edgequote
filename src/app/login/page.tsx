@@ -12,6 +12,7 @@ import { resolveAppRole, landingFor } from '@/lib/crewAccess'
 import { GoogleButton, AuthDivider } from '@/components/auth/GoogleButton'
 import {
   AUTH_ERROR_PARAM, GOOGLE_AUTH_ERROR_TEXT, readGoogleAuthError, safeReturnPath,
+  readProviderFragmentError, type GoogleAuthError,
 } from '@/lib/googleAuth'
 import { Zap } from 'lucide-react'
 
@@ -33,7 +34,26 @@ function LoginForm() {
   // How a failed Google round trip comes home. A short stable code, never a
   // message from the provider — a reflected error string is how a login page
   // becomes a phishing surface.
-  const authError = readGoogleAuthError(params.get(AUTH_ERROR_PARAM))
+  const queryAuthError = readGoogleAuthError(params.get(AUTH_ERROR_PARAM))
+  // ⭐ The half the SERVER could not see. gotrue reports its OWN failures in the
+  // URL fragment, which never reaches a server — so /auth/callback could only
+  // read "no code" and fail back with the generic 'exchange'. Read here, the
+  // fragment says which failure it actually was. See readProviderFragmentError.
+  const [fragmentError, setFragmentError] = useState<GoogleAuthError | null>(null)
+  useEffect(() => {
+    const found = readProviderFragmentError(window.location.hash)
+    if (!found) return
+    setFragmentError(found)
+    // Drop the fragment once it has been read. It is not ours to keep: it would
+    // ride along to every page navigated to next, and re-render this banner over
+    // a login that has since succeeded.
+    try {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search)
+    } catch { /* a failed tidy-up must never block the message */ }
+  }, [])
+  // The fragment is the more specific of the two — the query only ever carries
+  // the generic code in this case — so it wins when both are present.
+  const authError = fragmentError ?? queryAuthError
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')

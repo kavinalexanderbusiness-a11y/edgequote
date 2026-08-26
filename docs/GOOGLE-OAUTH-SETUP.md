@@ -288,6 +288,37 @@ Site URL — a hostname whose Vercel deployment no longer exists.
 That probe proves the provider is enabled. It says nothing about the return trip,
 which is where this failed — and the return trip is the half a human experiences.
 
+### ⛔ Recreating the Google OAuth client: BOTH fields, or sign-in breaks
+
+**2026-08-26, the third failure in this sequence.** With Site URL correct and the
+canonical host correct, sign-in still failed — the owner reached Google, consented,
+came back, and got *"could not be completed"*. The cause, from Supabase's own log:
+
+```json
+{"level":"error","path":"/callback",
+ "error":"oauth2: \"invalid_client\" \"The provided client secret is invalid.\"",
+ "msg":"500: Unable to exchange external code"}
+```
+
+The OAuth client had been **recreated** in Google Cloud. The new **Client ID** was
+pasted into Supabase; the **Client Secret** was not — so Supabase held the *old*
+client's secret. Recreating a client mints a new secret, and the two are only ever
+valid as a pair.
+
+⚠️ **Why the consent screen still worked, which is what makes this confusing.**
+The Client ID is used in the browser-visible `/authorize` hop, so Google recognised
+it and showed the account chooser normally. The secret is used only in the
+**back-channel token exchange**, server to server, *after* consent. So everything a
+person can see succeeds, and the failure happens in the one step nobody watches.
+
+⭐ Diagnosing it: `invalid_client` + *"client secret is invalid"* means Google
+**recognised the client and rejected the secret** — the ID is right, the secret is
+wrong. (An unknown ID reads *"The OAuth client was not found"* instead.)
+
+**Fix:** Supabase → Authentication → Providers → Google → paste the Client Secret
+belonging to the client ID currently in the *Client IDs* field → Save. Nothing in
+this repository changes, and no redeploy is needed.
+
 ### Verifying the live configuration
 
 ```bash
