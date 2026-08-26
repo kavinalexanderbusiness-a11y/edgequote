@@ -421,16 +421,71 @@ break the rule.
 # fails on production today (CASE D), passes once this branch is deployed
 node scripts/authpersist-cdp.mjs https://app.edgehq.ca https://edgehq.ca
 
-npm run verify:auth-session     # the rule, plus 8 mutation tests
+npm run verify:auth-session     # the whole contract; 19 mutation tests
 ```
 
-### ⚠️ Noted, not changed: the session cookie is not `Secure`
+### ✅ Fixed here: the session cookie now carries `Secure`
 
-Measured: `secure=false` on `sb-…-auth-token.0/.1`. The practical exposure is
-small — `edgehq.ca` is HSTS-preloaded with `includeSubDomains`, so a browser will
-not send it over plaintext — but it is a real gap on a site that serves invoices,
-and it is `@supabase/ssr`'s default rather than a decision anyone made here.
+Measured before: `secure=false` on `sb-…-auth-token.0/.1`. That is
+`@supabase/ssr`'s default — `DEFAULT_COOKIE_OPTIONS` names `path`, `sameSite`,
+`httpOnly` and `maxAge` and says nothing about `Secure` — not a decision anyone
+made here.
 
-Left alone **deliberately** in this session: it changes the exact cookie write path
-whose correctness is the acceptance criterion, and getting it wrong signs everyone
-out. It wants its own change, with its own close-and-reopen proof run.
+`src/lib/supabase/cookieSecurity.ts` is now the one rule, applied at all **five**
+writers (browser client, server client, middleware, `/auth/callback`, and the
+OAuth start route whose PKCE verifier gets the same treatment). Missing one
+would mean a token rotation silently downgrading a cookie another path wrote
+correctly — and the app keeps working either way, so nobody would notice.
+
+⭐ **Derived from the canonical origin, not from `x-forwarded-proto`.** The
+forwarded scheme is a *header* — something a caller proposes. `x-forwarded-proto:
+http` on a genuine HTTPS request would talk the app into writing a non-`Secure`
+session cookie: a downgrade handed over on request. `NEXT_PUBLIC_APP_URL` is
+configuration, and nothing a caller sends can move it.
+
+⛔ **And it must stay `false` on plain HTTP.** A `Secure` cookie is simply dropped
+over `http://`, so hard-coding `true` would stop local development and LAN testing
+on a real phone (`http://10.0.0.x:3163` — how the 375/390/430 checks get run on
+hardware) from signing in at all. Both directions are mutation-tested.
+
+Proven rather than reasoned: rebuilt with the production origin and re-run through
+`scripts/authpersist-cdp.mjs` — cookies report `secure=true`, sign-in still reaches
+the dashboard, and the session still survives a genuine Chrome quit and relaunch.
+(Chrome accepts `Secure` cookies on `127.0.0.1` because it is a trustworthy origin.)
+
+⚠️ `httpOnly` stays **false**, deliberately. `@supabase/ssr`'s browser client reads
+the session out of `document.cookie`; an `httpOnly` session cookie would mean no
+client-side auth at all. Asserted in the guard so a future "hardening" fails there
+rather than bricking sign-in.
+
+### Where the session is stored — one place, measured
+
+Asked of a real signed-in browser, not inferred:
+
+| store | contents |
+|---|---|
+| cookies | `sb-…-auth-token.0`, `sb-…-auth-token.1` — **the session, and only here** |
+| `localStorage` | `eq-logo` (branding cache). No auth material. |
+| `sessionStorage` | empty |
+| IndexedDB | `eq-offline`, `eq-photo-queue` — the field queues. No auth material. |
+
+One auth store. `@supabase/ssr` is configured with the cookie adapter, so
+supabase-js persists the session there and nowhere else. **Do not add a second
+store** — two answers to "are you signed in" means one of them goes stale.
+
+### Live Google provider state, verified 2026-08-26
+
+- `verify:google-auth` §13 reads the **live** project (needs `SUPABASE_ACCESS_TOKEN`):
+  Google enabled, Site URL = `https://app.edgehq.ca`, the allow list covers the
+  callback the app actually sends (with and without `?next=`), no entry names a
+  retired or ephemeral host, and **no entry admits any of 4 foreign origins**.
+- The owner account carries **one** auth uid with **two** identities on it —
+  `email` (created 2026-06-04) and `google` (created *and* last signed in
+  2026-08-26T06:12:05Z). A Google exchange therefore **succeeded**, token exchange
+  included, so the `invalid_client` failure is **not current**. No duplicate auth
+  user, and exactly one business (`Edge Property Services`).
+
+⚠️ `/auth/v1/authorize` returns a Google consent redirect even for a `redirect_to`
+that is not on the allow list — the `state` is an opaque server-side handle, so
+that endpoint cannot be used to test the allow list from outside. The allow list is
+enforced later, server-side, on the way back; §13 above is what actually verifies it.
