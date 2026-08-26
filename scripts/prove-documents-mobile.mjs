@@ -71,7 +71,7 @@ async function main() {
     }
   }
   await send('Runtime.enable'); await send('Page.enable')
-  // P setDeviceMetricsOverride(mobile:true) does NOT make (pointer: coarse)
+  // NOTE: setDeviceMetricsOverride(mobile:true) does NOT make (pointer: coarse)
   // match in headless Chrome — only touch emulation does (measured, Session 71).
   // Without it every .tap-target rule stays inert and the 44px assertions below
   // would be measuring a mouse UI and passing for the wrong reason.

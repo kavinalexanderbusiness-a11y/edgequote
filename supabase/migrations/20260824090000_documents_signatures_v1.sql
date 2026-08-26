@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- DOCUMENTS + SIGNATURES V1 — migration 20260823120000 (Session 74)
+-- DOCUMENTS + SIGNATURES V1 — migration 20260824090000 (Session 74)
 --
 -- ⚠️ LIFECYCLE OF THIS FILE — read before touching:
 --   This file IS the apply path. It sits in supabase/migrations/ because it is
@@ -18,9 +18,10 @@
 --   archive/ledger/ in an earlier session and the similarity score matches. That
 --   offer must be refused every time.
 --
---   ⭐ THE VERSION. 20260823120000 sorts after every version this repo has ever
+--   ⭐ THE VERSION. 20260824090000 sorts after every version this repo has ever
 --   used — the baseline (20260816110001) and the two migrations that follow it
---   (20260816213000, 20260817060000), plus every reserved version in
+--   (20260816213000, 20260817060000) and the applied custom-fields migration
+--   (20260823230000), plus every reserved version in
 --   archive/ledger. It reuses nothing: sessions 65 and 69 both minted
 --   20260815120000 for different bodies, and a reused version is a migration
 --   that silently does not run.

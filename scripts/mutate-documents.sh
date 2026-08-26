@@ -19,7 +19,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-SCHEMA="supabase/migrations/20260823120000_documents_signatures_v1.sql"
+SCHEMA="supabase/migrations/20260824090000_documents_signatures_v1.sql"
 PAD="src/components/documents/SignaturePad.tsx"
 BACKUP_DIR="$(mktemp -d)"
 cp "$SCHEMA" "$BACKUP_DIR/schema.sql"
