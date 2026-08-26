@@ -1111,5 +1111,26 @@
   "sql_md5": "9e93597bba2abc24702b02079fb23d1a",
   "version": "20260817060000",
   "stmt_count": 1
+ },
+ {
+  "name": "measure_price_v2",
+  "sql_len": 10192,
+  "sql_md5": "bd27a15f94c8f9a5a1223c4e71a6ddbe",
+  "version": "20260823120000",
+  "stmt_count": 1
+ },
+ {
+  "name": "custom_fields_v1",
+  "sql_len": 24194,
+  "sql_md5": "912df98a2f93fbf67ab4968757a552dd",
+  "version": "20260823230000",
+  "stmt_count": 1
+ },
+ {
+  "name": "measure_price_rate_precision",
+  "sql_len": null,
+  "sql_md5": null,
+  "version": "20260826120000",
+  "stmt_count": 0
  }
 ]

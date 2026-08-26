@@ -109,10 +109,25 @@ check('…and in exactly ONE of them, never both', !(baselineHasSchema && applyP
     ? `defined BOTH in ${baselineFile} and in ${applyPathCustom.join(', ')}. Production has applied ` +
       'it and the baseline was regenerated, so DELETE the standalone migration.'
     : '')
-check('the schema is NOT parked in supabase/archive/', archivedCustom.length === 0,
-  `${archivedCustom.join(', ')} — archive/ is not the apply path, so a migration left there ` +
-  'never runs. pending/ was renamed to archive/ledger/ on main and a rebase suggests this move; ' +
-  'it must be supabase/migrations/<14-digit>_name.sql instead.')
+// ⚠️ THE ARCHIVE RULE HAS A CONDITION, and it is the baseline.
+// Before production ran this migration, a copy in archive/ was the trap: archive/
+// is not the apply path, so the schema would silently never be created. AFTER
+// production ran it and the baseline absorbed it, archive/ledger/ is exactly where
+// the historical file BELONGS — that is what convergence does with every applied
+// migration. Asserting "never in archive/" unconditionally turned a correct resync
+// into a failure. What must always hold is that the apply path still defines the
+// tables, which `baselineHasSchema || applyPathCustom.length` says directly.
+check('the schema is reachable by the apply path',
+  baselineHasSchema || applyPathCustom.length > 0,
+  'neither the baseline nor any migration defines custom_field_definitions — ' +
+  'archive/ is not applied by anything, so a migration left only there never runs')
+if (!baselineHasSchema) {
+  check('an unabsorbed migration is NOT parked in supabase/archive/', archivedCustom.length === 0,
+    `${archivedCustom.join(', ')} — the baseline does not carry this schema yet, so a copy in ` +
+    'archive/ is the only one there is and it will never run. pending/ was renamed to ' +
+    'archive/ledger/ on main and a rebase suggests this move; it must be ' +
+    'supabase/migrations/<14-digit>_name.sql instead.')
+}
 // ⭐ THE FLOOR, MEASURED — not "this file must sort last".
 //
 // This check used to require the custom-fields migration to sort above EVERY
@@ -136,26 +151,52 @@ check('its version sorts above the baseline',
   'applied before the tables it references exist, so it never runs.')
 
 if (migration) {
-  const typeCheck = /custom_field_definitions_field_type_check\s*\n?\s*check \(field_type in \(([^)]*)\)\)/.exec(migration)
-  const schemaTypes = (typeCheck?.[1] || '').split(',').map(s => s.trim().replace(/'/g, '')).filter(Boolean).sort()
+  // ⚠️ ONE CONSTRAINT, TWO SPELLINGS. The hand-written migration says
+  //     check (field_type in ('text','textarea',…))
+  // and the GENERATED baseline says
+  //     CHECK ((field_type = ANY (ARRAY['text'::text, 'textarea'::text, …])))
+  // A regex pinned to either goes green today and silently stops checking after the
+  // next resync — which is what happened here: every one of these asserted against
+  // a shape the converged apply path no longer uses. Read the named constraint's
+  // body and take the literals out of it, so the spelling stops mattering.
+  const constraintBody = (name: string): string => {
+    const i = migration.indexOf(name)
+    if (i < 0) return ''
+    const end = migration.indexOf(';', i)
+    return end < 0 ? migration.slice(i) : migration.slice(i, end)
+  }
+  const literalsIn = (s: string): string[] =>
+    [...new Set((s.replace(/::[a-z ]+/gi, '').match(/'[^']*'/g) || []).map(x => x.slice(1, -1)))]
+
+  const schemaTypes = literalsIn(constraintBody('custom_field_definitions_field_type_check')).sort()
   eq('CUSTOM_FIELD_TYPES matches the field_type CHECK', [...CUSTOM_FIELD_TYPES].sort(), schemaTypes)
 
-  const entityCheck = /custom_field_definitions_entity_check\s*\n?\s*check \(entity in \(([^)]*)\)\)/.exec(migration)
-  const schemaEntities = (entityCheck?.[1] || '').split(',').map(s => s.trim().replace(/'/g, '')).filter(Boolean).sort()
+  const schemaEntities = literalsIn(constraintBody('custom_field_definitions_entity_check')).sort()
   eq('CUSTOM_FIELD_ENTITIES matches the entity CHECK', [...CUSTOM_FIELD_ENTITIES].sort(), schemaEntities)
 
   // Every type must map to a column the type CHECK actually permits for it.
-  const typeBlock = /custom_field_values_type_check check \(([\s\S]*?)\n  \),/.exec(migration)?.[1] || ''
+  // Same two-spellings problem, and one more difference: the hand-written form put
+  // each alternative on its own line (`or\n`), while the generator emits the whole
+  // CHECK as a single line. Split on the OR itself, not on a newline, and compare
+  // case-insensitively — the generator upper-cases IS NOT NULL.
+  const typeBlock = constraintBody('custom_field_values_type_check')
+  check('the value type CHECK is present in the apply path', typeBlock.length > 0,
+    'without it every per-type assertion below would pass or fail for the wrong reason')
+  const clauses = typeBlock.split(/\)\s*OR\s*\(/i)
   for (const t of CUSTOM_FIELD_TYPES) {
     const column = TYPE_COLUMN[t]
-    const clause = typeBlock.split('or\n').find(c => new RegExp(`'${t}'`).test(c)) || ''
+    const clause = clauses.find(c => new RegExp(`'${t}'`).test(c)) || ''
     check(`${t} stores into ${column}, and the CHECK agrees`,
-      new RegExp(`${column} is not null`).test(clause),
-      `the migration's type CHECK does not require ${column} for '${t}'`)
+      new RegExp(`${column}\\s+is\\s+not\\s+null`, 'i').test(clause),
+      clause ? `the type CHECK does not require ${column} for '${t}'`
+             : `no clause in custom_field_values_type_check mentions '${t}' at all`)
   }
 
+  // Case-insensitive and whitespace-tolerant: the generated baseline emits
+  // `UNIQUE NULLS NOT DISTINCT (…)` in caps, so the lower-case literal matched
+  // nothing after convergence and this check failed on spelling, not on substance.
   check('the upsert target names the one-answer constraint\'s columns',
-    new RegExp(`unique nulls not distinct \\(${UPSERT_CONFLICT.split(',').join(', ')}\\)`).test(migration),
+    new RegExp(`unique\\s+nulls\\s+not\\s+distinct\\s*\\(\\s*${UPSERT_CONFLICT.split(',').join('\\s*,\\s*')}\\s*\\)`, 'i').test(migration),
     `UPSERT_CONFLICT is "${UPSERT_CONFLICT}" — PostgREST cannot infer a constraint it does not name exactly`)
 
   for (const e of CUSTOM_FIELD_ENTITIES) {
@@ -173,8 +214,14 @@ console.log('\n═══ 2. custom field values are internal ═══')
 
 if (migration) {
   const forbidden = /\b(worker_visible|portal_visible|customer_visible|crew_visible|is_public|visibility|audience|exposure)\b/i
+  // ⚠️ SCOPED TO THIS FEATURE'S OWN DDL. `migration` is the whole apply path once
+  // the baseline absorbs the schema, and the rest of the product legitimately has
+  // visibility/audience columns — portal flags, note scoping, public buckets. An
+  // unscoped scan reports those as violations of a rule that was only ever about
+  // custom fields, so it fails on other features' correct code.
   const offending = migration.split('\n')
     .filter(l => !l.trim().startsWith('--'))
+    .filter(l => /custom_field/i.test(l))
     .filter(l => forbidden.test(l))
   check('the schema carries no visibility/audience column', offending.length === 0,
     `${offending.length} line(s), e.g. ${offending[0]?.trim().slice(0, 110)}\n      ` +
@@ -545,7 +592,12 @@ check('the searchable set is a subset of the real types',
   SEARCHABLE_TYPES.every(t => (CUSTOM_FIELD_TYPES as readonly string[]).includes(t)))
 if (migration) {
   check('…and exactly one index backs it', /custom_field_values_text_lookup/.test(migration))
-  check('…and it is not a trigram sweep over every value', !/gin_trgm_ops|to_tsvector/.test(migration),
+  // Scoped the same way, and for the same reason: other features index with
+  // trigrams quite deliberately. The claim here is only that CUSTOM FIELD values
+  // are not swept that way.
+  const customFieldIndexLines = migration.split('\n').filter(l => /custom_field/i.test(l))
+  check('…and it is not a trigram sweep over every value',
+    !/gin_trgm_ops|to_tsvector/.test(customFieldIndexLines.join('\n')),
     'a full-text or trigram index over arbitrary attributes is the cost V1 declined')
 }
 

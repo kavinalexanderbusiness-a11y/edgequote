@@ -104,14 +104,30 @@ if (!existsSync(CONTRACT_LEDGER)) {
   console.log('\n── shipped migrations are immutable ──')
   const byVersion = new Map(ledger.map(l => [l.version, l]))
   const mutated: string[] = []
+  // ⚠️ A ledger row can carry NO sql_md5 — production records the version and name
+  // but not the statements when a migration is applied by a path that does not
+  // write them. Reading .slice() off that null threw, and a guard that THROWS
+  // reports nothing at all: every other check in this file stopped running too.
+  // "No SQL recorded" is its own finding — it is not a match and not a mismatch,
+  // it is a migration whose immutability CANNOT be checked — so it is counted and
+  // named rather than skipped into silence.
+  const unhashed: string[] = []
   for (const f of archived) {
     const entry = byVersion.get(f.slice(0, 14))
     if (!entry) continue
+    if (!entry.sql_md5) { unhashed.push(`${f} (production recorded no statements)`); continue }
     const body = readFileSync(join(LEDGER_DIR, f), 'utf8')
     // Strip the archive header this repo adds, then compare to what production ran.
     const sql = body.replace(/^[\s\S]*?═══\n\n/, '')
     const md5 = createHash('md5').update(sql, 'utf8').digest('hex')
     if (md5 !== entry.sql_md5) mutated.push(`${f} (repo ${md5.slice(0, 8)} ≠ applied ${entry.sql_md5.slice(0, 8)})`)
+  }
+  if (unhashed.length) {
+    advise(`${unhashed.length} archived migration(s) have NO recorded SQL in production`,
+      unhashed.slice(0, 5).join('\n      ') +
+      '\n      Production knows the version ran but not what it ran, so immutability cannot' +
+      '\n      be checked for it. Backfill supabase_migrations.schema_migrations.statements' +
+      '\n      with the SQL that was applied.')
   }
   if (mutated.length) {
     // Whitespace/line-ending normalisation on checkout can shift a hash without

@@ -27,7 +27,7 @@
 // This executes the real engine and parses the real migration. It never mocks the
 // thing under test.
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 import {
@@ -284,15 +284,37 @@ check('a bare measurement still records the amount', bare.value === 800)
 // ── 10. Tenancy is the database's job, and is actually declared ─────────────
 console.log('\nTenant boundary')
 
-const MIGRATION = read('supabase/migrations/20260823120000_measure_price_v2.sql')
+// ⚠️ READ THE APPLY PATH, NOT A FILENAME. A migration has two lives: its own file
+// while in flight, and the generated baseline once production has run it and the
+// baseline absorbs it (the file then moves to archive/ledger/, which is never
+// applied). Pinning the filename made this guard CRASH — ENOENT — the moment the
+// schema converged, which stops every check below it from running at all.
+// The invariants are about the STATE the apply path produces, so read all of it,
+// and match both spellings: a hand-written `in ('a','b')` and the generated
+// `= ANY (ARRAY['a'::text,…])` are one constraint written two ways.
+const MIGRATION = readdirSync(join(ROOT, 'supabase', 'migrations'))
+  .filter(f => f.endsWith('.sql')).sort()
+  .map(f => readFileSync(join(ROOT, 'supabase', 'migrations', f), 'utf8'))
+  .join('\n')
 check('plans carry a user_id', /"user_id"\s+uuid\s+not null/.test(MIGRATION))
 check('RLS is enabled on the plans table',
   /alter table[^;]*"service_pricing_plans"[^;]*enable row level security/i.test(MIGRATION))
 // ⭐ THE COMPOSITE FK IS THE REAL GUARANTEE: it makes attaching a plan to another
 // tenant's service impossible at the constraint, not at a check someone can forget.
+// ⚠️ SCOPE THE SEARCH TO THIS TABLE. `service_bundle_items` carries a
+// byte-identical composite FK onto service_templates, so an unscoped search for
+// the shape is satisfied by the OTHER table's weld — the check would go green with
+// this one deleted. Found by mutation: weakening the FK left the guard passing,
+// because replace() had rewritten service_bundle_items instead.
+// Take only the lines that name service_pricing_plans, then ask about those.
+const PLAN_FKS = MIGRATION.split('\n').filter(l =>
+  /service_pricing_plans/.test(l) && /foreign key/i.test(l) && /service_template_id/i.test(l)).join('\n')
 check('a plan cannot be attached to a foreign service',
-  /foreign key\s*\(\s*"?service_template_id"?\s*,\s*"?user_id"?\s*\)\s*references\s+(public\.)?"?service_templates"?\s*\(\s*"?id"?\s*,\s*"?user_id"?\s*\)/i.test(MIGRATION),
-  'the (service_template_id, user_id) composite FK must reference service_templates(id, user_id)')
+  PLAN_FKS.length > 0 &&
+  /foreign key\s*\(\s*"?service_template_id"?\s*,\s*"?user_id"?\s*\)\s*references\s+(public\.)?"?service_templates"?\s*\(\s*"?id"?\s*,\s*"?user_id"?\s*\)/i.test(PLAN_FKS),
+  PLAN_FKS.length === 0
+    ? 'no service_pricing_plans → service_templates foreign key found at all'
+    : `the (service_template_id, user_id) composite FK must reference service_templates(id, user_id); found: ${PLAN_FKS.slice(0, 160)}`)
 check('one plan per term per service',
   /unique\s*\(\s*"?service_template_id"?\s*,\s*"?term"?\s*\)/i.test(MIGRATION),
   'two "Monthly" rows would be a choice between identical offers')
@@ -305,10 +327,28 @@ check('the basis vocabulary is pinned in the database',
 // ⚠️ THE PRECISION BUG, PINNED. numeric(10,2) silently made $0.035/ft² into
 // $0.04. Read the CURRENT declared type across both migrations — the corrective
 // one widens it, and this must fail if anyone narrows it back.
-const PRECISION = read('supabase/migrations/20260826120000_measure_price_rate_precision.sql')
+// ⚠️ SCOPE IT TO THE TABLE. `"rate" numeric(8,2)` also appears in the apply path —
+// it is quotes.rate, a different column entirely — so a whole-file search for a
+// numeric precision answers about whichever table happened to match first. Cut the
+// service_pricing_plans block out and ask inside it, and accept EITHER spelling:
+// the corrective `alter column … type numeric(12,4)` while the migration is its own
+// file, or the plain `"rate" numeric(12,4)` the generated baseline declares once it
+// has been absorbed.
+const PLANS_TABLE = (MIGRATION.match(
+  /create table[^;]*?"service_pricing_plans"\s*\([\s\S]*?\n\);/i) || [''])[0]
+check('the apply path actually declares service_pricing_plans', PLANS_TABLE.length > 0,
+  'without the table block the precision check below would pass or fail for the wrong reason')
 check('the rate column keeps sub-cent precision',
-  /alter column\s+"?rate"?\s+type\s+numeric\(\s*12\s*,\s*4\s*\)/i.test(PRECISION),
+  /"?rate"?\s+numeric\(\s*12\s*,\s*4\s*\)/i.test(PLANS_TABLE)
+  || /alter column\s+"?rate"?\s+type\s+numeric\(\s*12\s*,\s*4\s*\)/i.test(MIGRATION),
   'a per-unit rate finer than a cent is ordinary; numeric(10,2) overcharges by rounding it up')
+// The other half of the same promise: the FORM must not refuse what the column
+// keeps. step="0.01" made 0.035 :invalid, which blocked submit and silently saved
+// nothing at all — the column was widened and the input still rounded to cents.
+const EDITOR = read('src/components/pricing/MeasurePricingEditor.tsx')
+check('the rate input admits four decimals, like the column',
+  /step=\{[^}]*'0\.0001'/.test(EDITOR),
+  'step="0.01" refuses 0.035: the field goes :invalid and the whole service fails to save')
 
 // ── 11. The Google Maps loader contract ─────────────────────────────────────
 console.log('\nThe map loads, or says why')
