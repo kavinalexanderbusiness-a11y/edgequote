@@ -140,12 +140,28 @@ check('signed in as the owner', !String(signedIn).includes('/login'),
 if (String(signedIn).includes('/login')) { ws.close(); chrome.kill(); process.exit(1) }
 
 // ── Page probes ──────────────────────────────────────────────────────────────
+// ⚠️ An element wider than the viewport is only a DEFECT when nothing is
+// scrolling it. This product deliberately puts wide content — the dispatch lane
+// board, tables, code blocks — inside its own `overflow-x: auto` container, and
+// a probe that flags those reports the design as a bug and then gets ignored,
+// which is worse than not measuring at all. So: walk up from each offender, and
+// if any ancestor scrolls or clips horizontally, the content is reachable and
+// this is not a page-breaking overflow. What IS a defect is the SCROLLER itself
+// (or anything not inside one) pushing past the viewport.
 const OVERFLOW = `(() => {
   const bad = []
+  const scrolls = el => {
+    for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+      const ox = getComputedStyle(p).overflowX
+      if (ox === 'auto' || ox === 'scroll' || ox === 'hidden') return true
+    }
+    return false
+  }
   for (const el of document.querySelectorAll('body *')) {
     const r = el.getBoundingClientRect()
     if (r.width === 0) continue
     if (r.right > innerWidth + 1 || r.left < -1) {
+      if (scrolls(el)) continue
       const label = (el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 30)
       const where = el.closest('[role="dialog"]') ? 'IN-DIALOG' : 'page'
       bad.push(where + ' ' + el.tagName.toLowerCase() + ' "' + label + '"'

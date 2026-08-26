@@ -148,7 +148,10 @@ export function DayRoutePanel({
 
       <ol className="divide-y divide-border">
         {stops.map((s, i) => {
-          const pinned = s.lock === 'pinned'
+          // ⭐ "Can the owner take this lock back?" is lib/daySequence's
+          // question, not this panel's — so the Unpin control appears on
+          // exactly the locks that can actually be released.
+          const pinned = !!s.lock && isReleasable(s.lock)
           const canPin = !s.lock || pinned
           const isEstimate = s.kind === 'appointment'
           return (
@@ -186,7 +189,7 @@ export function DayRoutePanel({
               <button
                 type="button"
                 onClick={() => onJump(s)}
-                className="min-w-0 flex-1 text-left tap-target-y flex flex-col justify-center"
+                className="min-w-0 flex-1 text-left min-h-[44px] sm:min-h-0 flex flex-col justify-center"
               >
                 <span className="flex items-center gap-1.5 min-w-0">
                   {isEstimate && (
@@ -225,12 +228,12 @@ export function DayRoutePanel({
                   <>
                     <button type="button" onClick={() => onMove(s.id, -1)} disabled={i === 0}
                       aria-label={`Move ${s.label} up`}
-                      className="tap-target flex items-center justify-center text-ink-faint hover:text-ink disabled:opacity-25">
+                      className="w-11 h-11 sm:w-8 sm:h-8 flex items-center justify-center text-ink-faint hover:text-ink disabled:opacity-25">
                       <ChevronUp className="w-4 h-4" />
                     </button>
                     <button type="button" onClick={() => onMove(s.id, 1)} disabled={i === stops.length - 1}
                       aria-label={`Move ${s.label} down`}
-                      className="tap-target flex items-center justify-center text-ink-faint hover:text-ink disabled:opacity-25">
+                      className="w-11 h-11 sm:w-8 sm:h-8 flex items-center justify-center text-ink-faint hover:text-ink disabled:opacity-25">
                       <ChevronDown className="w-4 h-4" />
                     </button>
                   </>
@@ -242,7 +245,7 @@ export function DayRoutePanel({
                     aria-label={pinned ? `Unpin ${s.label}` : `Pin ${s.label} at position ${i + 1}`}
                     aria-pressed={pinned}
                     title={pinned ? 'Unpin — the optimizer may move it again' : 'Pin here — optimizing will not move it'}
-                    className={cn('tap-target flex items-center justify-center rounded-lg transition-colors',
+                    className={cn('w-11 h-11 sm:w-8 sm:h-8 flex items-center justify-center rounded-lg transition-colors',
                       pinned ? 'text-accent-text' : 'text-ink-faint hover:text-ink')}
                   >
                     {pinned ? <Lock className="w-4 h-4" /> : <LockOpen className="w-4 h-4" />}
