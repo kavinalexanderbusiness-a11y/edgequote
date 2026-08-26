@@ -2871,7 +2871,13 @@ export default function SchedulePage() {
         title="Schedule"
         description={scheduleSubtitle(jobs.length)}
         action={
-          <div className="flex items-center gap-2">
+          // ⚠️ WRAPS. Four actions do not fit a phone: measured at 375px,
+          // "Add estimate" ended at 400 and "Add job" at 491 — both off-screen,
+          // so the primary create door on the schedule was unreachable there.
+          // Pre-dates Session 82 (the fourth button arrived with estimate
+          // appointments); found by scripts/dayseq-cdp.mjs and fixed here
+          // because an unreachable "Add job" is not a cosmetic issue.
+          <div className="flex flex-wrap items-center justify-end gap-2">
             {/* Reschedule picks destination days the same way the optimizer does
                 (planRainDelay skips blocked dates), so it carries the same risk
                 when availability is unknown — refuse for the same reason. */}
