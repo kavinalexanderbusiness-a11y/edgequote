@@ -127,6 +127,22 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
   // this same code and get their own numbers.
   const measurementType = measurementTypeFor(template)
   const enginePlans = useMemo(() => toPricingPlans(plans), [plans])
+
+  // ⭐⭐ WHEN THE OWNER HAS SPOKEN, THE OWNER WINS.
+  // `lawnPricing` used to decide the whole pricing panel on its own, so a service
+  // whose name matched /mow|grass cut|lawn cut/ got the residential cadence engine
+  // NO MATTER WHAT the owner had configured. Once the Price Book could express
+  // "Weekly Mowing: one-time $0.04/ft², weekly $0.03/ft², monthly $180 flat",
+  // that was no longer a defensible default — it silently discarded the owner's
+  // own plans in favour of an engine that never saw them, for one class of trade,
+  // decided by a regex on a name. That is precisely the assumption this session
+  // exists to remove.
+  //
+  // So the Price Book speaks first, for EVERY trade. The lawn cadence engine
+  // remains the fallback for services with no configured plans, which is every
+  // service on every existing install today — so nothing anyone currently relies
+  // on changes until they choose to configure plans. Pinned by verify:measure-price.
+  const priceBookSpeaks = enginePlans.length > 0
   const supabase = createClient()
   const [center, setCenter] = useState<Coord | null>(null)
   const [hoodName, setHoodName] = useState<string | null>(null)
@@ -743,7 +759,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
               really is of a lawn, so the honest fix is to show it only where that's
               true, not to rename it "area" and let a lawn-ratio guess pass for a
               measurement of something else. Tracing still works for every trade. */}
-          {center && lawnPricing && (
+          {center && lawnPricing && !priceBookSpeaks && (
             <AutoMeasureBanner lat={center.lat} lng={center.lng}
               neighborhood={neighborhoodOf(null, null, hoodName)}
               onAuto={r => { autoRef.current = r }}
@@ -874,7 +890,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
                       "×1.25 applied to prices" against prices that aren't on screen.
                       (The de-lawned tooltip title below arrived independently from the
                       trades session — same conclusion, kept as theirs.) */}
-                  {lawnPricing && (
+                  {lawnPricing && !priceBookSpeaks && (
                   <label className="flex items-center gap-1.5 text-xs text-ink-muted" title="Condition multiplier — 0.75 easy, 1.0 standard, 1.25 overgrown">
                     <span>
                       Condition<span className="block text-[10px] text-ink-faint">1.0 standard · 1.25 overgrown</span>
@@ -932,7 +948,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
                     Replaces the block that told every non-lawn trade EdgeQuote had
                     no engine for them. It had an engine; it just wasn't wired to
                     anything but grass. */}
-                {!lawnPricing ? (
+                {(!lawnPricing || priceBookSpeaks) ? (
                   <div className="border-t border-border pt-3 animate-fade space-y-2.5">
                     <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">
                       Pricing options
@@ -1076,7 +1092,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
                     mowing price. There is no recommendation to use — the honest
                     action is to keep the measurement, which the builder applies
                     without touching the price. */}
-                {!lawnPricing
+                {(!lawnPricing || priceBookSpeaks)
                   ? totalSqft > 0 && (
                     <>
                       {/* ⭐ REUSING QUOTE OPTIONS, not building a second chooser.
