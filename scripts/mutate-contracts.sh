@@ -61,11 +61,28 @@ pass=0; fail=0
 # is itself the thing most worth testing.
 run_static() { npx tsx scripts/verify-contracts.ts 2>&1; }
 
-# mutate <name> <expected-check-substring> <file> <sed-expression>
+# mutate <name> <expected-check-substring> <file> <perl-expression>
+#
+# ⚠️⚠️ A MUTATION THAT NEVER APPLIED LOOKS EXACTLY LIKE A GUARD THAT CAUGHT
+# NOTHING. Both leave the suite green, and the harness would report "SURVIVED"
+# for a rule that is perfectly well defended — sending someone to fix a guard
+# that was never broken. (The first version of this file had two: the anchors
+# contained box-drawing characters, and perl works on BYTES, so `..` could not
+# match a 3-byte `─`.) So: checksum the file, and treat "no change" as a HARNESS
+# error, loudly and separately from a real survivor.
 mutate() {
   local name="$1" expect="$2" file="$3" expr="$4"
   restore
+  local before after
+  before=$(cksum < "$file")
   perl -0pi -e "$expr" "$file"
+  after=$(cksum < "$file")
+  if [ "$before" = "$after" ]; then
+    echo "  ⚠ HARNESS BUG: $name"
+    echo "      the mutation did not change $file — its anchor no longer matches."
+    fail=$((fail+1))
+    return
+  fi
   if ! grep -q "$(printf '%s' "$expect")" <(run_static | grep '✗' || true); then
     echo "  ✗ SURVIVED: $name"
     echo "      nothing went red — expected a failure naming: $expect"
@@ -81,10 +98,12 @@ echo "══ mutations ═══════════════════
 echo ""
 
 # ── The separation of the three truths ──────────────────────────────────────
+# ⚠️ ASCII-ONLY ANCHORS. perl -0pi works on bytes, so a `─` is three of them and
+# a dot-per-character pattern silently matches nothing.
 mutate "a trigger that creates a recurring series on signature" \
   "nothing in the contracts schema writes job_recurrences" \
   "$SCHEMA" \
-  "s/-- .. 7 . audit/insert into public.job_recurrences (user_id, start_date) values (new.user_id, current_date);\n-- 7 audit/"
+  "s/revoke all on function public.contract_is_expired/insert into public.job_recurrences (user_id, start_date) values (gen_random_uuid(), current_date);\nrevoke all on function public.contract_is_expired/"
 
 mutate "the library booking work when a contract activates" \
   "writes no job, invoice or payment" \
@@ -96,10 +115,15 @@ mutate "renewal awareness reaching for Session 53's engine" \
   "$LIB" \
   "s|import type \{ SupabaseClient \}|import \{ planRenewal \} from '\@/lib/signals/renewal'\nimport type \{ SupabaseClient \}|"
 
+# ⚠️ THIS MUTATION MUST BE REAL SQL, NOT A COMMENT. The guard strips comments
+# before asserting absence (deliberately — a comment saying a thing is absent
+# must not read as the thing being present), so a commented-out coupling would
+# be invisible and the mutation would "survive" against a guard behaving exactly
+# as designed.
 mutate "a contract term read off the recurrence" \
   "no contract date is copied from a recurrence" \
   "$SCHEMA" \
-  "s/\"end_date\"       date,/\"end_date\"       date, -- recurrence.end_date\n  \"x_end\" date,/"
+  "s/  new.updated_at := now\(\);/  new.end_date := (select r.end_date from public.job_recurrences r where r.id = new.job_recurrence_id);\n  new.updated_at := now();/"
 
 # ── Honest status ───────────────────────────────────────────────────────────
 mutate "expiry stored as a column instead of derived" \
