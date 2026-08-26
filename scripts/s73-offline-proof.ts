@@ -155,6 +155,42 @@ async function main() {
   console.log('\n── 2. Assignment visibility (S65 crew XOR by-name) ────────────')
   const today = new Date(); today.setMinutes(today.getMinutes() - today.getTimezoneOffset())
   const todayISO = today.toISOString().slice(0, 10)
+
+  // ⭐⭐ RE-DATE THE FIXTURE ONTO TODAY, every run.
+  //
+  // The fixture visits are created once and REUSED across runs, so on any day
+  // after the one they were made they sit in the past — and `crew_day(today)`
+  // correctly returns nothing. Every positive assertion below then fails while
+  // every negative one passes, which reads exactly like a catastrophic
+  // visibility regression and is in fact a stale fixture. (It cost a full
+  // investigation on the first resumed run: the shapes were all perfect —
+  // jobCrew crew-set/tech-null, the direct pair tech-set, unassigned both-null
+  // — the rows were simply dated three days earlier.)
+  //
+  // ⛔ This does NOT weaken anything. It moves the fixture's own rows to the day
+  // being asserted on; the ASSIGNMENT columns, which are what section 2 tests,
+  // are untouched. Without it the proof is only honest on the day it was
+  // written, which is not a proof.
+  const fixtureJobs = [st.jobCrew, st.jobDirectA, st.jobDirectB, st.jobUnassigned].filter(Boolean)
+  const { error: dateErr } = await db.from('jobs')
+    .update({ scheduled_date: todayISO }).in('id', fixtureJobs)
+  if (dateErr) { no('re-date the fixture visits onto today', dateErr.message); return 1 }
+  ok('fixture visits re-dated onto today', todayISO)
+
+  // ⭐ ESTABLISH THE PRECONDITION, don't assume it. Section 2 tests a CREWLESS
+  // worker first and then adds them to the crew — but that second step MUTATES
+  // the roster and the script never put it back, so every re-run began with B
+  // already on the crew and "…nor the crew's work, while they are on no crew"
+  // failed while describing a state that no longer existed.
+  //
+  // A proof that only holds on its first execution is not a proof. Same lesson
+  // as the stale fixture date directly above: reusable fixtures must be RESET
+  // to the documented starting state, never inherited from the last run.
+  const { error: crewlessErr } = await db.from('technicians')
+    .update({ crew_id: null }).eq('id', st.techB)
+  if (crewlessErr) { no('reset worker B to crewless', crewlessErr.message); return 1 }
+  ok('worker B reset to CREWLESS (the precondition section 2 asserts on)')
+
   const { data: dayRaw, error: dErr } = await wc.rpc('crew_day', { p_date: todayISO })
   if (dErr) { no('crew_day', dErr.message); return 1 }
   const day = dayRaw as { stops: Record<string, unknown>[] } | null
@@ -224,8 +260,14 @@ async function main() {
   const verdict = reconcileVisitIntent(intent, after)
   t('⭐⭐ the engine reads the landed write as APPLIED, not a conflict',
     verdict.kind === 'applied', `got ${verdict.kind} · server=${JSON.stringify(after)}`)
+  // ⚠️ COMPARE THE INSTANT, not the text — the very trap this run exposed in the
+  // engine, which this assertion then fell into itself. The client sent `…042Z`
+  // and the timestamptz came back `…042+00:00`: one moment, two spellings. A
+  // `===` here would fail forever while the product is perfectly correct, and
+  // "the proof is red" is how a correct product gets 'fixed' into a broken one.
   t('…and the server holds OUR client-minted started_at',
-    after?.started_at === startedAt, `${after?.started_at} vs ${startedAt}`)
+    after?.started_at != null && Date.parse(after.started_at) === Date.parse(startedAt),
+    `${after?.started_at} vs ${startedAt}`)
 
   // The database itself: exactly one clock is running, and no session banked yet.
   const { data: openSessions } = await db.from('job_work_sessions').select('id').eq('job_id', jobId)
