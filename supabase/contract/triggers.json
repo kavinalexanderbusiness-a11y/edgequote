@@ -102,6 +102,30 @@
   "tgenabled": "O"
  },
  {
+  "def": "CREATE TRIGGER custom_field_definitions_guard BEFORE UPDATE ON public.custom_field_definitions FOR EACH ROW EXECUTE FUNCTION custom_field_definition_guard()",
+  "tbl": "custom_field_definitions",
+  "tgname": "custom_field_definitions_guard",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER custom_field_definitions_updated_at BEFORE UPDATE ON public.custom_field_definitions FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "custom_field_definitions",
+  "tgname": "custom_field_definitions_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER custom_field_values_guard BEFORE INSERT OR UPDATE ON public.custom_field_values FOR EACH ROW EXECUTE FUNCTION custom_field_value_guard()",
+  "tbl": "custom_field_values",
+  "tgname": "custom_field_values_guard",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER custom_field_values_updated_at BEFORE UPDATE ON public.custom_field_values FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "custom_field_values",
+  "tgname": "custom_field_values_updated_at",
+  "tgenabled": "O"
+ },
+ {
   "def": "CREATE TRIGGER customers_updated_at BEFORE UPDATE ON public.customers FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
   "tbl": "customers",
   "tgname": "customers_updated_at",
@@ -657,6 +681,12 @@
   "def": "CREATE TRIGGER service_bundles_updated_at BEFORE UPDATE ON public.service_bundles FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
   "tbl": "service_bundles",
   "tgname": "service_bundles_updated_at",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER service_pricing_plans_updated_at BEFORE UPDATE ON public.service_pricing_plans FOR EACH ROW EXECUTE FUNCTION handle_updated_at()",
+  "tbl": "service_pricing_plans",
+  "tgname": "service_pricing_plans_updated_at",
   "tgenabled": "O"
  },
  {

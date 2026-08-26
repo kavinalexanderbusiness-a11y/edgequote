@@ -438,6 +438,72 @@
   "backs_constraint": false
  },
  {
+  "tbl": "custom_field_definitions",
+  "indexdef": "CREATE UNIQUE INDEX custom_field_definitions_fk_target ON public.custom_field_definitions USING btree (id, user_id, entity, field_type)",
+  "indexname": "custom_field_definitions_fk_target",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "custom_field_definitions",
+  "indexdef": "CREATE INDEX custom_field_definitions_owner_idx ON public.custom_field_definitions USING btree (user_id, entity, sort_order)",
+  "indexname": "custom_field_definitions_owner_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "custom_field_definitions",
+  "indexdef": "CREATE UNIQUE INDEX custom_field_definitions_owner_key_unique ON public.custom_field_definitions USING btree (user_id, entity, field_key)",
+  "indexname": "custom_field_definitions_owner_key_unique",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "custom_field_definitions",
+  "indexdef": "CREATE UNIQUE INDEX custom_field_definitions_pkey ON public.custom_field_definitions USING btree (id)",
+  "indexname": "custom_field_definitions_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "custom_field_values",
+  "indexdef": "CREATE INDEX custom_field_values_customer_idx ON public.custom_field_values USING btree (user_id, customer_id) WHERE (customer_id IS NOT NULL)",
+  "indexname": "custom_field_values_customer_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "custom_field_values",
+  "indexdef": "CREATE INDEX custom_field_values_definition_idx ON public.custom_field_values USING btree (definition_id)",
+  "indexname": "custom_field_values_definition_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "custom_field_values",
+  "indexdef": "CREATE INDEX custom_field_values_job_idx ON public.custom_field_values USING btree (user_id, job_id) WHERE (job_id IS NOT NULL)",
+  "indexname": "custom_field_values_job_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "custom_field_values",
+  "indexdef": "CREATE UNIQUE INDEX custom_field_values_one_answer ON public.custom_field_values USING btree (definition_id, customer_id, property_id, job_id) NULLS NOT DISTINCT",
+  "indexname": "custom_field_values_one_answer",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "custom_field_values",
+  "indexdef": "CREATE UNIQUE INDEX custom_field_values_pkey ON public.custom_field_values USING btree (id)",
+  "indexname": "custom_field_values_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "custom_field_values",
+  "indexdef": "CREATE INDEX custom_field_values_property_idx ON public.custom_field_values USING btree (user_id, property_id) WHERE (property_id IS NOT NULL)",
+  "indexname": "custom_field_values_property_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "custom_field_values",
+  "indexdef": "CREATE INDEX custom_field_values_text_lookup ON public.custom_field_values USING btree (user_id, lower(btrim(value_text))) WHERE (value_text IS NOT NULL)",
+  "indexname": "custom_field_values_text_lookup",
+  "backs_constraint": false
+ },
+ {
   "tbl": "customer_imports",
   "indexdef": "CREATE UNIQUE INDEX customer_imports_pkey ON public.customer_imports USING btree (id)",
   "indexname": "customer_imports_pkey",
@@ -2307,6 +2373,36 @@
   "tbl": "service_bundles",
   "indexdef": "CREATE INDEX service_bundles_user_sort_idx ON public.service_bundles USING btree (user_id, sort_order, created_at)",
   "indexname": "service_bundles_user_sort_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "service_pricing_plans",
+  "indexdef": "CREATE UNIQUE INDEX service_pricing_plans_one_recommended ON public.service_pricing_plans USING btree (service_template_id) WHERE is_recommended",
+  "indexname": "service_pricing_plans_one_recommended",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "service_pricing_plans",
+  "indexdef": "CREATE UNIQUE INDEX service_pricing_plans_pkey ON public.service_pricing_plans USING btree (id)",
+  "indexname": "service_pricing_plans_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "service_pricing_plans",
+  "indexdef": "CREATE UNIQUE INDEX service_pricing_plans_service_term_uk ON public.service_pricing_plans USING btree (service_template_id, term)",
+  "indexname": "service_pricing_plans_service_term_uk",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "service_pricing_plans",
+  "indexdef": "CREATE INDEX service_pricing_plans_template_idx ON public.service_pricing_plans USING btree (service_template_id, sort_order)",
+  "indexname": "service_pricing_plans_template_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "service_pricing_plans",
+  "indexdef": "CREATE INDEX service_pricing_plans_user_idx ON public.service_pricing_plans USING btree (user_id)",
+  "indexname": "service_pricing_plans_user_idx",
   "backs_constraint": false
  },
  {

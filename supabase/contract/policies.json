@@ -410,6 +410,86 @@
   "with_check": null
  },
  {
+  "cmd": "DELETE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "custom_field_definitions",
+  "permissive": "PERMISSIVE",
+  "policyname": "custom_field_definitions: delete own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "INSERT",
+  "qual": null,
+  "roles": "{public}",
+  "tablename": "custom_field_definitions",
+  "permissive": "PERMISSIVE",
+  "policyname": "custom_field_definitions: insert own",
+  "schemaname": "public",
+  "with_check": "(auth.uid() = user_id)"
+ },
+ {
+  "cmd": "SELECT",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "custom_field_definitions",
+  "permissive": "PERMISSIVE",
+  "policyname": "custom_field_definitions: select own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "UPDATE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "custom_field_definitions",
+  "permissive": "PERMISSIVE",
+  "policyname": "custom_field_definitions: update own",
+  "schemaname": "public",
+  "with_check": "(auth.uid() = user_id)"
+ },
+ {
+  "cmd": "DELETE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "custom_field_values",
+  "permissive": "PERMISSIVE",
+  "policyname": "custom_field_values: delete own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "INSERT",
+  "qual": null,
+  "roles": "{public}",
+  "tablename": "custom_field_values",
+  "permissive": "PERMISSIVE",
+  "policyname": "custom_field_values: insert own",
+  "schemaname": "public",
+  "with_check": "(auth.uid() = user_id)"
+ },
+ {
+  "cmd": "SELECT",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "custom_field_values",
+  "permissive": "PERMISSIVE",
+  "policyname": "custom_field_values: select own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "UPDATE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "custom_field_values",
+  "permissive": "PERMISSIVE",
+  "policyname": "custom_field_values: update own",
+  "schemaname": "public",
+  "with_check": "(auth.uid() = user_id)"
+ },
+ {
   "cmd": "INSERT",
   "qual": null,
   "roles": "{public}",
@@ -3018,6 +3098,46 @@
   "policyname": "bundles: update own",
   "schemaname": "public",
   "with_check": "(auth.uid() = user_id)"
+ },
+ {
+  "cmd": "DELETE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "service_pricing_plans",
+  "permissive": "PERMISSIVE",
+  "policyname": "pricing plans: delete own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "INSERT",
+  "qual": null,
+  "roles": "{public}",
+  "tablename": "service_pricing_plans",
+  "permissive": "PERMISSIVE",
+  "policyname": "pricing plans: insert own",
+  "schemaname": "public",
+  "with_check": "(auth.uid() = user_id)"
+ },
+ {
+  "cmd": "SELECT",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "service_pricing_plans",
+  "permissive": "PERMISSIVE",
+  "policyname": "pricing plans: select own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
+  "cmd": "UPDATE",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "service_pricing_plans",
+  "permissive": "PERMISSIVE",
+  "policyname": "pricing plans: update own",
+  "schemaname": "public",
+  "with_check": null
  },
  {
   "cmd": "DELETE",

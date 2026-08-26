@@ -2364,6 +2364,230 @@
     "generated": ""
    },
    {
+    "name": "updated_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "user_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "entity",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "field_key",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "label",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "field_type",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "options",
+    "type": "jsonb",
+    "default": "'[]'::jsonb",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "help_text",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "sort_order",
+    "type": "integer",
+    "default": "0",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "archived_at",
+    "type": "timestamp with time zone",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   }
+  ],
+  "relname": "custom_field_definitions",
+  "force_rls": false
+ },
+ {
+  "acl": "{postgres=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
+  "rls": true,
+  "cols": [
+   {
+    "name": "id",
+    "type": "uuid",
+    "default": "extensions.uuid_generate_v4()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "user_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "definition_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "entity",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "field_type",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "customer_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "property_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "job_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "value_text",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "value_number",
+    "type": "numeric",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "value_boolean",
+    "type": "boolean",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "value_date",
+    "type": "date",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   }
+  ],
+  "relname": "custom_field_values",
+  "force_rls": false
+ },
+ {
+  "acl": "{postgres=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
+  "rls": true,
+  "cols": [
+   {
+    "name": "id",
+    "type": "uuid",
+    "default": "extensions.uuid_generate_v4()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
     "name": "user_id",
     "type": "uuid",
     "default": null,
@@ -10346,6 +10570,14 @@
     "notnull": true,
     "identity": "",
     "generated": ""
+   },
+   {
+    "name": "measurement_snapshot",
+    "type": "jsonb",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
    }
   ],
   "relname": "quotes",
@@ -11232,6 +11464,94 @@
   "force_rls": false
  },
  {
+  "acl": "{postgres=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
+  "rls": true,
+  "cols": [
+   {
+    "name": "id",
+    "type": "uuid",
+    "default": "gen_random_uuid()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "user_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "service_template_id",
+    "type": "uuid",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "term",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "basis",
+    "type": "text",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "rate",
+    "type": "numeric(12,4)",
+    "default": null,
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "is_recommended",
+    "type": "boolean",
+    "default": "false",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "sort_order",
+    "type": "integer",
+    "default": "0",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   }
+  ],
+  "relname": "service_pricing_plans",
+  "force_rls": false
+ },
+ {
   "acl": "{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
   "rls": true,
   "cols": [
@@ -11494,6 +11814,14 @@
    {
     "name": "form_template_id",
     "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "measured_by",
+    "type": "text",
     "default": null,
     "notnull": false,
     "identity": "",

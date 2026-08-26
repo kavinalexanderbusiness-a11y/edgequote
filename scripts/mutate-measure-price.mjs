@@ -67,17 +67,32 @@ const MUTATIONS = [
     from: '        <p className="mt-1 text-xs text-ink-muted">\n          You can still continue — just type your address below.\n        </p>',
     to: '        <p className="mt-1 text-xs text-ink-muted">{unavailable.detail}</p>',
   },
+  // ⚠️ These two moved from the hand-written migration to the GENERATED baseline
+  // when production absorbed them, and the generator spells SQL its own way —
+  // `"rate" numeric(12,4)` in the table body rather than a corrective
+  // `alter column`, and an unquoted `FOREIGN KEY (a, b)` rather than a quoted one.
+  // The old anchors matched nothing after convergence, so both mutations silently
+  // stopped running and the two money/tenancy checks went unverified.
   {
-    file: 'supabase/migrations/20260826120000_measure_price_rate_precision.sql',
+    file: 'supabase/migrations/20260826120001_baseline.sql',
     name: 'the rate column is narrowed back to cents',
-    from: 'alter column "rate" type numeric(12,4);',
-    to: 'alter column "rate" type numeric(10,2);',
+    from: '"rate" numeric(12,4) not null,',
+    to: '"rate" numeric(10,2) not null,',
   },
   {
-    file: 'supabase/migrations/20260823120000_measure_price_v2.sql',
+    file: 'supabase/migrations/20260826120001_baseline.sql',
     name: 'the composite tenant FK is weakened to a single column',
-    from: '    foreign key ("service_template_id", "user_id")',
-    to: '    foreign key ("service_template_id")',
+    from: 'public."service_pricing_plans" add constraint "service_pricing_plans_template_same_owner" FOREIGN KEY (service_template_id, user_id) REFERENCES service_templates(id, user_id)',
+    to: 'public."service_pricing_plans" add constraint "service_pricing_plans_template_same_owner" FOREIGN KEY (service_template_id) REFERENCES service_templates(id)',
+  },
+  // The form half of the precision promise. Widening the column achieved nothing
+  // while the input still refused the value — proved on production, where 0.035
+  // saved NOTHING at all.
+  {
+    file: 'src/components/pricing/MeasurePricingEditor.tsx',
+    name: 'the rate input goes back to refusing sub-cent rates',
+    from: "step={d.basis === 'per_unit' ? '0.0001' : '0.01'}",
+    to: "step={d.basis === 'per_unit' ? '0.01' : '1'}",
   },
 ]
 

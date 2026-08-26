@@ -665,6 +665,125 @@
   "convalidated": true
  },
  {
+  "def": "CHECK ((entity = ANY (ARRAY['customer'::text, 'property'::text, 'job'::text])))",
+  "tbl": "custom_field_definitions",
+  "conname": "custom_field_definitions_entity_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((field_key ~ '^[a-z][a-z0-9_]{0,47}$'::text))",
+  "tbl": "custom_field_definitions",
+  "conname": "custom_field_definitions_field_key_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((field_type = ANY (ARRAY['text'::text, 'textarea'::text, 'number'::text, 'boolean'::text, 'date'::text, 'select'::text, 'currency'::text])))",
+  "tbl": "custom_field_definitions",
+  "conname": "custom_field_definitions_field_type_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (id, user_id, entity, field_type)",
+  "tbl": "custom_field_definitions",
+  "conname": "custom_field_definitions_fk_target",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((length(btrim(label)) >= 1) AND (length(btrim(label)) <= 60)))",
+  "tbl": "custom_field_definitions",
+  "conname": "custom_field_definitions_label_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((jsonb_typeof(options) = 'array'::text) AND ((field_type = 'select'::text) OR (options = '[]'::jsonb))))",
+  "tbl": "custom_field_definitions",
+  "conname": "custom_field_definitions_options_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, entity, field_key)",
+  "tbl": "custom_field_definitions",
+  "conname": "custom_field_definitions_owner_key_unique",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "custom_field_definitions",
+  "conname": "custom_field_definitions_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((((entity = 'customer'::text) AND (customer_id IS NOT NULL) AND (property_id IS NULL) AND (job_id IS NULL)) OR ((entity = 'property'::text) AND (property_id IS NOT NULL) AND (customer_id IS NULL) AND (job_id IS NULL)) OR ((entity = 'job'::text) AND (job_id IS NOT NULL) AND (customer_id IS NULL) AND (property_id IS NULL))))",
+  "tbl": "custom_field_values",
+  "conname": "custom_field_values_attachment_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id, customer_id) REFERENCES customers(user_id, id) ON DELETE CASCADE",
+  "tbl": "custom_field_values",
+  "conname": "custom_field_values_customer_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (definition_id, user_id, entity, field_type) REFERENCES custom_field_definitions(id, user_id, entity, field_type) ON UPDATE CASCADE ON DELETE RESTRICT",
+  "tbl": "custom_field_values",
+  "conname": "custom_field_values_definition_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (job_id, user_id) REFERENCES jobs(id, user_id) ON DELETE CASCADE",
+  "tbl": "custom_field_values",
+  "conname": "custom_field_values_job_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE NULLS NOT DISTINCT (definition_id, customer_id, property_id, job_id)",
+  "tbl": "custom_field_values",
+  "conname": "custom_field_values_one_answer",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "custom_field_values",
+  "conname": "custom_field_values_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (property_id, user_id) REFERENCES properties(id, user_id) ON DELETE CASCADE",
+  "tbl": "custom_field_values",
+  "conname": "custom_field_values_property_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((value_text IS NULL) OR ((length(btrim(value_text)) >= 1) AND (length(btrim(value_text)) <= 4000))))",
+  "tbl": "custom_field_values",
+  "conname": "custom_field_values_text_not_blank",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((((field_type = ANY (ARRAY['text'::text, 'textarea'::text, 'select'::text])) AND (value_text IS NOT NULL) AND (value_number IS NULL) AND (value_boolean IS NULL) AND (value_date IS NULL)) OR ((field_type = ANY (ARRAY['number'::text, 'currency'::text])) AND (value_number IS NOT NULL) AND (value_text IS NULL) AND (value_boolean IS NULL) AND (value_date IS NULL)) OR ((field_type = 'boolean'::text) AND (value_boolean IS NOT NULL) AND (value_text IS NULL) AND (value_number IS NULL) AND (value_date IS NULL)) OR ((field_type = 'date'::text) AND (value_date IS NOT NULL) AND (value_text IS NULL) AND (value_number IS NULL) AND (value_boolean IS NULL))))",
+  "tbl": "custom_field_values",
+  "conname": "custom_field_values_type_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
   "def": "CHECK (((rows_detected >= 0) AND (customers_created >= 0) AND (rows_skipped_existing >= 0) AND (rows_failed >= 0) AND (properties_created >= 0)))",
   "tbl": "customer_imports",
   "conname": "customer_imports_counts_sane",
@@ -3710,6 +3829,55 @@
   "convalidated": true
  },
  {
+  "def": "CHECK ((basis = ANY (ARRAY['per_unit'::text, 'flat'::text])))",
+  "tbl": "service_pricing_plans",
+  "conname": "service_pricing_plans_basis_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "service_pricing_plans",
+  "conname": "service_pricing_plans_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((rate >= (0)::numeric))",
+  "tbl": "service_pricing_plans",
+  "conname": "service_pricing_plans_rate_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (service_template_id, term)",
+  "tbl": "service_pricing_plans",
+  "conname": "service_pricing_plans_service_term_uk",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (service_template_id, user_id) REFERENCES service_templates(id, user_id) ON DELETE CASCADE",
+  "tbl": "service_pricing_plans",
+  "conname": "service_pricing_plans_template_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((term = ANY (ARRAY['one_time'::text, 'weekly'::text, 'biweekly'::text, 'monthly'::text, 'seasonal'::text])))",
+  "tbl": "service_pricing_plans",
+  "conname": "service_pricing_plans_term_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "service_pricing_plans",
+  "conname": "service_pricing_plans_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
   "def": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL",
   "tbl": "service_requests",
   "conname": "service_requests_customer_id_fkey",
@@ -3784,6 +3952,13 @@
   "tbl": "service_templates",
   "conname": "service_templates_id_user_uk",
   "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((measured_by IS NULL) OR (measured_by = ANY (ARRAY['area'::text, 'length'::text, 'count'::text]))))",
+  "tbl": "service_templates",
+  "conname": "service_templates_measured_by_check",
+  "contype": "c",
   "convalidated": true
  },
  {

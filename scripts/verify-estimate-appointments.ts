@@ -56,11 +56,21 @@ function stripComments(s: string): string {
     .replace(/\/\*[\s\S]*?\*\//g, '')
 }
 
-/** The one migration this session added. */
+/**
+ * THE APPLY PATH — every .sql production would replay, concatenated.
+ *
+ * ⚠️ Not "the file whose name contains estimate_appointments". A migration has two
+ * lives: its own file while in flight, and the generated BASELINE once production
+ * has run it and a resync folds it in — at which point the named file moves to
+ * supabase/archive/ledger/, which is never applied. Searching by filename found
+ * nothing the moment the schema converged, and every assertion below then failed
+ * for a reason that had nothing to do with the schema, which is still there.
+ * The invariants are about the STATE the apply path produces, so read all of it.
+ */
 function estimateMigration(): string {
   const dir = 'supabase/migrations'
-  const f = readdirSync(dir).find(n => n.includes('estimate_appointments'))
-  return f ? readFileSync(join(dir, f), 'utf8') : ''
+  return readdirSync(dir).filter(n => n.endsWith('.sql')).sort()
+    .map(n => readFileSync(join(dir, n), 'utf8')).join('\n')
 }
 
 console.log('\n── Estimate appointments ──────────────────────────────────────────\n')
@@ -253,10 +263,23 @@ for (const needed of ['schedule_items_type_check', 'schedule_items_status_check'
 check('the update policy gained its tenant weld',
   /for update[\s\S]{0,200}with check/i.test(migration),
   'USING without WITH CHECK lets a tenant hand a row to another user_id')
-check('no trigger in the migration writes to another table',
-  !/create\s+trigger[\s\S]*?execute\s+function\s+(?!public\.set_updated_at)/i.test(
-    stripComments(migration).replace(/create trigger trg_schedule_items_updated[\s\S]*?set_updated_at\(\);/i, '')),
-  'a trigger reaching out of schedule_items is how the boundary would erode')
+// ⚠️ SCOPED TO TRIGGERS ON schedule_items, not to every trigger in the apply path.
+// The rule has always been about THIS table — "a trigger reaching out of
+// schedule_items is how the boundary would erode" — and while the feature had its
+// own migration file, "every trigger in the file" and "every trigger on the table"
+// were the same set. Read against the whole converged apply path they are not:
+// the baseline carries every trigger the product has, most of which legitimately
+// write elsewhere, so the unscoped form fails on other features' correct code.
+const scheduleItemTriggers = [...stripComments(migration)
+  .matchAll(/create\s+(?:or\s+replace\s+)?trigger\s+[\s\S]*?;/gi)]
+  .map(m => m[0])
+  .filter(t => /\bon\s+(?:public\.)?"?schedule_items"?/i.test(t))
+const strayTrigger = scheduleItemTriggers.find(t => !/execute\s+(?:function|procedure)\s+(?:public\.)?set_updated_at/i.test(t))
+check('no trigger on schedule_items writes to another table',
+  scheduleItemTriggers.length > 0 && !strayTrigger,
+  scheduleItemTriggers.length === 0
+    ? 'no trigger on schedule_items found at all — the apply path should carry set_updated_at'
+    : `a trigger reaching out of schedule_items is how the boundary would erode: ${String(strayTrigger).slice(0, 160)}`)
 
 // The estimate code path must never write the tables the boundary protects.
 const ESTIMATE_SOURCES = [
