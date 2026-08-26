@@ -146,6 +146,27 @@ export async function count(): Promise<number> {
 }
 
 async function remove(id: string): Promise<void> { await tx('readwrite', s => s.delete(id)); notify() }
+
+/**
+ * Drop EVERY queued op.
+ *
+ * ⛔⛔ Exactly one legitimate caller: sign-out, after the human has been told how
+ * much unsent work this destroys and has chosen to proceed anyway. It is the
+ * only function here that discards work without even attempting it, so it must
+ * never be reached by a code path that merely *thinks* the queue is stale.
+ *
+ * ⭐ WHY SIGN-OUT MUST DO THIS AT ALL. An op replays against whatever session is
+ * current when the flush runs — it carries an intent, not a credential. A work
+ * phone that changes hands between shifts would therefore replay the previous
+ * worker's writes under the NEW worker's session, and for two people on the same
+ * crew (assigned the same visits) those writes SUCCEED. One person's day lands
+ * on another person's timesheet. Clearing at sign-out is what closes that.
+ */
+export async function clearAll(): Promise<void> {
+  if (!hasIDB()) return
+  try { await tx('readwrite', s => s.clear()) } catch { /* ignore */ }
+  notify()
+}
 async function bumpAttempts(op: OutboxOp): Promise<void> { await tx('readwrite', s => s.put({ ...op, attempts: op.attempts + 1 })); notify() }
 
 let flushing = false

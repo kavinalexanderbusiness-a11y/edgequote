@@ -31,12 +31,30 @@
 //     owner-side sweep over completed-and-uninvoiced visits, or a server route
 //     holding the owner's privileges) is the first follow-up this foundation
 //     needs — see the session report.
-//   • the offline outbox. Crew writes are online-only in V1 and say so out loud
-//     when they fail; queueing them means registering the replay handlers in the
-//     crew shell, which is real work and belongs with the offline pass.
-//
 // Every function here REPORTS ITS WRITE. A status that silently didn't save is
 // the worst outcome in the field: the worker drives away certain it is done.
+//
+// ── ⭐ THESE ARE NOW THE TRANSPORT, NOT THE WHOLE STORY (Field Reliability V1) ──
+// This module used to be online-only, and said so here. It no longer is — but
+// nothing in THIS file changed to make that true, and that is the design:
+//
+//   ⛔ CALL SITES MUST NOT CALL THESE DIRECTLY. Go through lib/field/fieldWrite,
+//   which owns the three answers a field write may give (saved · pending ·
+//   failed) and — crucially — RECONCILES before reporting a failure. Called
+//   bare, every function below still reports a lost RESPONSE as a failed WRITE,
+//   which is what sends a worker to press Retry on work that already landed.
+//
+// The split is deliberate: these stay the one true transport (typed DEFINER
+// RPCs, the completion route, the shared stamp engine), and the resilience layer
+// wraps them — for the online path, the queued replay and the retry alike. One
+// definition of the write; one place that decides what to tell the human.
+//
+// ⛔ THE ONE EXCEPTION, and it is deliberate: the UNDO pair below
+// (crewUncompleteVisit / crewRevertVisit) is called directly and stays
+// ONLINE-ONLY. Un-completing deletes the draft invoice the completion created,
+// and a queued undo that replayed only the status would leave a live invoice
+// behind it. Classified as such in lib/field/writeClass — read the note there
+// before changing it.
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { completionPatch } from '@/lib/jobStatus'

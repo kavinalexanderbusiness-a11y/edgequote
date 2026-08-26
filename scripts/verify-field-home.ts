@@ -594,9 +594,28 @@ console.log('\n── 10. The field home surface ──────────�
   // TWO EXITS FROM THE CLOCK, two writers. "Done for today" banks the time and
   // leaves the visit open; "Finish" hands off to billing. Conflating them is
   // the multi-day bug the work-sessions vocabulary exists to prevent.
+  //
+  // ⚠️ RE-EXPRESSED, NOT WEAKENED (Field Reliability V1). Both writers used to be
+  // called from this component, so grepping it proved they were distinct. The
+  // offline layer moved the CALL behind one dispatcher — CrewToday now builds a
+  // typed intent and lib/field/fieldWrite routes it — so the old grep went red
+  // because the seam moved, not because the two exits merged.
+  //
+  // ⭐ The rule is now asserted where it actually lives, and more strictly than
+  // before: the intent KINDS must stay distinct, and the dispatcher must map
+  // each to its OWN writer. A future edit that pointed 'stop_for_day' at
+  // crewCompleteVisit — the actual multi-day bug — would now fail here, whereas
+  // the old grep would happily have passed on two unrelated mentions.
+  const FW = read('src/lib/field/fieldWrite.ts')
+  check('“Done for today” is still its own intent, not a flavour of finishing',
+    /'stop_for_day'/.test(FW) && /'complete'/.test(FW) && /Done for today/.test(TODAY))
   check('stopping for the day and finishing are different writers',
-    /crewStopForToday\(/.test(TODAY) && /crewCompleteVisit\(/.test(TODAY) &&
-    /Done for today/.test(TODAY))
+    /crewStopForToday\(/.test(FW) && /crewCompleteVisit\(/.test(FW))
+  check('…and the dispatcher maps each intent to its OWN writer',
+    /kind === 'stop_for_day' \? await crewStopForToday\(/.test(FW) &&
+    /kind === 'complete' \? await crewCompleteVisit\(/.test(FW))
+  check('the component still routes both through the one honest reporter',
+    /runVisitIntent\(/.test(TODAY) && /buildVisitIntent\(/.test(TODAY))
 }
 {
   // THE OFFLINE SHELL. sw.js caches field-route HTML by explicit allowlist.
