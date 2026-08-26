@@ -242,11 +242,13 @@ export default function NewContractPage() {
 
         {/* type="button": a bare <button> inside a form defaults to submit and
             would navigate on Enter before the handler ran. */}
-        <div className="flex gap-2">
-          <Button type="button" onClick={() => void submit()} disabled={busy}>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <Button type="button" onClick={() => void submit()} disabled={busy} className="w-full sm:w-auto">
             {busy ? 'Creating…' : 'Create draft'}
           </Button>
-          <Button type="button" variant="ghost" onClick={() => router.back()}>Cancel</Button>
+          <Button type="button" variant="ghost" onClick={() => router.back()} className="w-full sm:w-auto">
+            Cancel
+          </Button>
         </div>
       </div>
     </PageContainer>

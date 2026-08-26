@@ -361,8 +361,9 @@ check('10 · no contracts API route is exposed under the portal',
 // sideways. Every owner surface must lay out in one column and widen at `sm:`.
 for (const [label, s] of ownerSurfaces) {
   if (!s) continue
-  check(`${label}: stacks on a phone, widens at sm:`,
-    /flex-col sm:flex-row|grid-cols-1 sm:grid-cols/.test(s),
+  const stacks = (/\bflex-col\b/.test(s) && /\bsm:flex-row\b/.test(s))
+    || (/\bgrid-cols-1\b/.test(s) && /\bsm:grid-cols-/.test(s))
+  check(`${label}: stacks on a phone, widens at sm:`, stacks,
     'a fixed row at 375px is how a surface overflows sideways')
 }
 check('contract detail: the action buttons are full-width on a phone',
