@@ -1924,7 +1924,7 @@ export default function DispatchPage() {
                     <button
                       type="button"
                       onClick={() => setReportJobId(job.id)}
-                      className="text-sm font-medium text-accent hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 tap-target-y"
+                      className="inline-flex items-center min-h-[44px] text-sm font-medium text-accent hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                     >
                       Preview completion report…
                     </button>
