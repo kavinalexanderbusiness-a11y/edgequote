@@ -15,7 +15,7 @@
 // ⛔ Creates a DRAFT quote and deletes it again unless --keep. It never touches an
 // existing quote, and never an accepted one.
 import { spawn } from 'node:child_process'
-import { writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
 
 const CHROME = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe'
 const argv = process.argv.slice(2)
@@ -36,6 +36,13 @@ function env() {
   return {}
 }
 const E = env()
+
+// ⚠️⚠️ START FROM A COLD PROFILE, ALWAYS. EdgeQuote ships a service worker, so a
+// reused Chrome profile serves the JS bundle it cached on a previous run. That
+// cost three debugging cycles here: the modal kept rendering a version of itself
+// from before the edit under test, and every symptom pointed at React state.
+// A profile is cheap; a false negative that looks like a product bug is not.
+try { rmSync(profile, { recursive: true, force: true }) } catch { /* first run */ }
 
 const chrome = spawn(CHROME, [
   '--headless=new', '--disable-gpu', '--no-sandbox', '--hide-scrollbars',
@@ -284,7 +291,9 @@ if (process.env.E2E_DEBUG) {
 }
 const typed = await ev(`(() => {
   const dlg = document.querySelector('[aria-label="Measure & Price"]')
-  const input = dlg && dlg.querySelector('input[type=number]')
+  const labels = [...dlg.querySelectorAll('label')]
+  const own = labels.find(l => /Enter the (measurement|count)/.test(l.textContent||''))
+  const input = (own && own.querySelector('input[type=number]')) || null
   if (!input) return 'no input'
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
   setter.call(input, String(${MEASURED}))
