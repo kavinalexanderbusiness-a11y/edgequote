@@ -306,6 +306,9 @@ console.log('\n═══ Who did the work — never guessed ═══')
     { id: 't-sam', name: 'Sam', auth_user_id: 'uid-sam' },
     { id: 't-alex', name: 'Alex', auth_user_id: 'uid-alex' },
     { id: 't-pat', name: 'Pat', auth_user_id: 'uid-pat' },
+    // ⚠️ Solo owner-operators are ON the roster: an actor_type='owner' event
+    // must stay out of workers even when the owner's uid resolves to a name.
+    { id: 't-owner', name: 'Olive Owner', auth_user_id: 'uid-owner' },
     // ⚠️ THE TRAP: technicians.user_id is the EMPLOYER. A person must only ever
     // resolve through auth_user_id; this row exists to be wrongly matched.
     { id: 'uid-tenant', name: 'Tenant Trap', auth_user_id: 'uid-elsewhere' },
@@ -333,8 +336,8 @@ console.log('\n═══ Who did the work — never guessed ═══')
   check('a checklist answer + a resume prove Alex (name from the roster when the snapshot is null)',
     alex?.name === 'Alex' && alex.evidence.includes('checklist') && alex.evidence.includes('started'),
     JSON.stringify(alex))
-  check('an OWNER pressing Complete is not a worker',
-    !audit.some(e => e.actor_id === 'uid-owner' && a.workers.some(w => w.name === technicians.find(t => t.auth_user_id === 'uid-owner')?.name)),
+  check('an OWNER pressing Complete is not a worker — even one on the roster',
+    !a.workers.some(w => w.name === 'Olive Owner'),
     'the office completing from the dashboard became field attendance')
   check('answered_by resolves via auth_user_id, NEVER the tenant/employer id',
     !a.workers.some(w => w.name === 'Tenant Trap'),
