@@ -1,7 +1,7 @@
 import type { LucideIcon } from 'lucide-react'
 import {
   LayoutDashboard, CalendarDays, Users, Home, FileText, Receipt, Wallet, MessageSquare, Wrench, Bot, Sprout, Radio, Plug,
-  Calculator, HardHat, Target, Inbox, History, TrendingUp,
+  Calculator, HardHat, Target, Inbox, History, TrendingUp, FileSignature,
 } from 'lucide-react'
 
 // ── Feature-module registry ───────────────────────────────────────────────────
@@ -145,6 +145,11 @@ export const FEATURE_MODULES: FeatureModule[] = [
     description: 'Quote work, send it, and track it to a decision.',
     permissions: ['quotes:read', 'quotes:write', 'customers:read', 'messages:send'],
     keywords: 'estimates proposals pricing' },
+  { key: 'contracts',  label: 'Contracts',  href: '/dashboard/contracts',  icon: FileSignature,
+    category: 'customers', version: 1, updatedAt: '2026-08-26', requires: ['customers'],
+    description: 'Service agreements and contracts, signed and tracked to their term.',
+    permissions: ['contracts:read', 'contracts:write', 'customers:read', 'documents:read', 'documents:write'],
+    keywords: 'agreements service agreement maintenance terms signature sign renewal' },
   { key: 'invoices',   label: 'Invoices',   href: '/dashboard/invoices',   icon: Receipt,
     category: 'money', version: 1, updatedAt: '2026-07-15', requires: ['customers'],
     description: 'Invoicing, receipts and what you\'re owed.',
