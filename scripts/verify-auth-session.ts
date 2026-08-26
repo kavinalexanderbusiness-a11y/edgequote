@@ -197,6 +197,43 @@ console.log('\nNo script may end sessions it does not own:')
       if (/\.auth\.signOut\(\s*\)/.test(line)) offenders.push(`${rel(f)}: ${line.trim()}`)
     }
   }
+  // ── The PRODUCT's sign-outs, which this guard did not cover at all ──────────
+  // The incident above was AUTOMATION revoking a human's sessions, so the scan
+  // below reads scripts/. That left every sign-out a real person can press
+  // completely unguarded, and all three inherited supabase-js's 'global' default
+  // silently — the Sidebar's carried no comment about scope at all, while every
+  // deliberate choice in this codebase (RESET_SIGNOUT_SCOPE 'others', the OAuth
+  // rejection path 'local') writes down its reason.
+  //
+  // ⚖️ This does NOT decide the semantics. Nothing in the product states whether
+  // pressing "Sign out" should end the session on your phone too, so the measured
+  // status quo is pinned as-is. What it enforces is that the answer is a DECISION:
+  // named at the call site, and impossible to flip — in either direction — without
+  // this failing and someone saying which behaviour is intended.
+  const PRODUCT_SIGNOUTS: [string, string][] = [
+    ['src/components/layout/Sidebar.tsx', 'global'],       // owner presses Sign out
+    ['src/components/crew/CrewSignOut.tsx', 'global'],     // worker presses Sign out
+    ['src/components/crew/CrewJoinForm.tsx', 'global'],    // worker abandons a join
+    ['src/app/auth/callback/route.ts', 'local'],           // no entitlement: drop THIS session only
+    ['src/components/auth/ResetPasswordForm.tsx', 'others'], // keep this device, revoke the rest
+  ]
+  for (const [file, scope] of PRODUCT_SIGNOUTS) {
+    const src = read(file)
+    const calls = (src.match(/\.auth\.signOut\([^)]*\)/g) || [])
+    check(`${file.split('/').pop()} signs out with scope '${scope}'`,
+      calls.length > 0 && calls.every(c => new RegExp(`scope:\\s*(['"]${scope}['"]|RESET_SIGNOUT_SCOPE)`).test(c)),
+      calls.length === 0
+        ? 'no .auth.signOut() found — if the call moved, move this pin with it'
+        : `found ${JSON.stringify(calls)} — a bare signOut() is GLOBAL by default, which is a ` +
+          'library choice, not a product one. Name the scope, and if you are CHANGING it, ' +
+          'change this pin in the same commit so the decision is reviewed.')
+  }
+  const bareInSrc = walk('src').filter(f => /\.tsx?$/.test(f))
+    .flatMap(f => stripComments(readFileSync(f, 'utf8').replace(/\r\n?/g, '\n')).split('\n')
+      .filter(l => /\.auth\.signOut\(\s*\)/.test(l)).map(l => `${rel(f)}: ${l.trim()}`))
+  check('no bare .auth.signOut() anywhere in src/ either', bareInSrc.length === 0,
+    `these inherit scope:'global' from the library rather than choosing it:\n      ${bareInSrc.join('\n      ')}`)
+
   check('no bare .auth.signOut() anywhere in scripts/', offenders.length === 0,
     `these revoke EVERY session the account holds, including the owner's phone:\n      ${offenders.join('\n      ')}\n      use .auth.signOut({ scope: 'local' })`)
 
@@ -213,10 +250,18 @@ console.log('\nNo script may end sessions it does not own:')
 // click. Pinned so a later edit is a decision rather than a drift.
 console.log('\nExplicit human sign-out stays global:')
 {
+  // ⚠️ ASSERT THE SCOPE, NOT THE SPELLING. This used to require a BARE signOut() —
+  // using "the author wrote no argument" as the proxy for "global", because that is
+  // supabase-js's default. But bare and { scope: 'global' } are the same call, and
+  // the explicit one is strictly better: it puts the decision this comment
+  // describes at the call site instead of leaving it inherited from a library.
+  // Requiring the bare form punished writing the decision down.
   const sidebar = read('src/components/layout/Sidebar.tsx')
-  check('Sidebar sign-out revokes every session (default global scope)',
-    /supabase\.auth\.signOut\(\s*\)/.test(sidebar),
-    'if this becomes scope-limited it must be a deliberate product decision, recorded')
+  const call = (sidebar.match(/supabase\.auth\.signOut\([^)]*\)/) || [''])[0]
+  check('Sidebar sign-out revokes every session (global scope)',
+    !!call && !/scope:\s*['"](local|others)['"]/.test(call),
+    `found ${JSON.stringify(call)} — if this becomes scope-limited it must be a ` +
+    'deliberate product decision, recorded here and at the call site')
 }
 
 // ── 6. MUTATION TESTS ────────────────────────────────────────────────────────

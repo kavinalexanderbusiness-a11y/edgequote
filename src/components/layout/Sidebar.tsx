@@ -140,7 +140,19 @@ export function Sidebar() {
 
   async function handleSignOut() {
     const supabase = createClient()
-    await supabase.auth.signOut()
+    // ⚠️ SCOPE NAMED, NOT INHERITED. This is exactly what a bare signOut() already
+    // did — supabase-js defaults to 'global' — so behaviour is unchanged. What
+    // changes is that it is now a DECISION on the page rather than a library
+    // default nobody chose, which is the rule this codebase already applies to
+    // every other sign-out it makes (RESET_SIGNOUT_SCOPE is 'others'; the OAuth
+    // callback's rejection path is 'local', each with its reason written down).
+    //
+    // ⭐ GLOBAL IS THE PRODUCT DECISION, not a default that happened. A person
+    // clicking "Sign out" asked for it, and revoking everywhere is the
+    // security-positive reading of that click — it ends the session on a phone
+    // that may be lost. verify:auth-session §5 has pinned this deliberately, and
+    // fails if it ever becomes scope-limited without someone saying so.
+    await supabase.auth.signOut({ scope: 'global' })
     router.push('/login')
   }
 
