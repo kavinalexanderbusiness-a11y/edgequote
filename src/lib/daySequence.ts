@@ -503,6 +503,43 @@ function geographicSeq(input: DaySequenceInput, movable: SequenceStop[]): string
 }
 
 /**
+ * The geographic candidate CONTINUED from a fixed opening stop — Session 110.
+ *
+ * `geographicSeq` walks the movable stops outward from the BASE, which is the
+ * right origin for a day that may start anywhere. It is the WRONG origin the
+ * moment the first stop is fixed — which is exactly what pinning "do this one
+ * first" does. The van is standing at that stop when it starts driving the
+ * rest, so the nearest-neighbour walk has to start there too.
+ *
+ * Without this, pinning the farthest stop first produced a candidate that drove
+ * back out to the near cluster and worked outward again. The search was safe
+ * (a worse candidate is never accepted) but it was weak precisely where the
+ * owner had just told it what they wanted.
+ *
+ * ⛔ Still no new measurement: same lib/route walk, same cached distances, only
+ * a different starting coordinate.
+ */
+function geographicFromOpeningSeq(
+  input: DaySequenceInput,
+  currentOrder: string[],
+  lockedIds: Set<string>,
+  movable: SequenceStop[],
+): string[] | null {
+  const firstId = currentOrder[0]
+  if (!firstId || !lockedIds.has(firstId)) return null
+  const origin = input.stops.find(s => s.id === firstId)?.coord
+  if (!origin) return null
+  const located = movable.filter(s => s.coord)
+  if (located.length < 2) return null
+  const stops: RouteStop[] = located.map(s => ({
+    jobId: s.id, title: s.label, address: s.address ?? '', propertyId: s.propertyId ?? null,
+    lat: s.coord!.lat, lng: s.coord!.lng,
+  }))
+  const nn = nearestNeighborRoute(origin, stops, input.dist)
+  return [...nn.ordered.map(o => o.jobId), ...movable.filter(s => !s.coord).map(s => s.id)]
+}
+
+/**
  * ⭐ THE ABSORBED `suggestPromiseOrder` (was lib/dispatchOps).
  *
  * The cheapest honest repair: leave every SLOT of the current route where it
@@ -621,6 +658,7 @@ export function sequenceDay(input: DaySequenceInput): DaySequenceProposal {
     const seqInput = { ...input, stops }
     const candidates = [
       geographicSeq(seqInput, movable),
+      geographicFromOpeningSeq(seqInput, currentOrder, lockedIds, movable),
       promiseSlotSwapSeq(movable),
       promiseFirstSeq(seqInput, movable),
     ].filter((s): s is string[] => !!s)
