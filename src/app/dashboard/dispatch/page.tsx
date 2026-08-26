@@ -1532,7 +1532,12 @@ export default function DispatchPage() {
             <Button variant="secondary" size="sm" onClick={() => setDate(todayISO())}>Today</Button>
           )}
         </div>
-        <div className="ml-auto flex items-center gap-1.5">
+        {/* ⚠️ WRAPS. Six controls (Board · Map · Activity · Recent · Sheet ·
+            Balance) sat on one un-wrapping row, so at 375/390/430 the last of
+            them ran off the right edge — the outer toolbar wrapped, this inner
+            row did not, and a nested nowrap row makes its parent's flex-wrap
+            irrelevant. `justify-end` keeps them right-aligned once wrapped. */}
+        <div className="ml-auto flex flex-wrap justify-end items-center gap-1.5">
           <FilterPill active={view === 'board'} onClick={() => setView('board')}><LayoutGrid className="w-3.5 h-3.5" /> Board</FilterPill>
           <FilterPill active={view === 'map'} onClick={() => setView('map')}><MapIcon className="w-3.5 h-3.5" /> Map</FilterPill>
           <Button variant="ghost" size="sm" onClick={() => setActivityOpen(true)} aria-label="Today's activity" title="Today's activity">

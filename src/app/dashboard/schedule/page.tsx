@@ -2935,7 +2935,11 @@ export default function SchedulePage() {
               onClick={() => setView(v)}
               aria-pressed={view === v}
               className={cn(
-                'px-3 py-1.5 rounded-lg text-sm font-medium capitalize transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                // 44px on a phone, unchanged on a desktop. These three were
+                // 32px tall at every phone width — the primary way to change
+                // what the schedule shows, and under the product's own minimum.
+                // text-sm has a 20px line box, so py-3 → 20 + 24 = 44.
+                'px-3 py-3 sm:py-1.5 rounded-lg text-sm font-medium capitalize transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                 view === v ? 'bg-accent text-black' : 'text-ink-muted hover:text-ink'
               )}
             >
