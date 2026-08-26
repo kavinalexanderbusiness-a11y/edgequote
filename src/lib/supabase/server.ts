@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { sessionCookieOptions } from './cookieSecurity'
 
 export async function createClient() {
   const cookieStore = await cookies()
@@ -8,6 +9,10 @@ export async function createClient() {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      // No request origin in hand here (this runs inside Server Components as
+      // well as route handlers), so the configured NEXT_PUBLIC_APP_URL answers —
+      // which is exactly what production has set. See lib/supabase/cookieSecurity.
+      cookieOptions: sessionCookieOptions(),
       cookies: {
         getAll() {
           return cookieStore.getAll()

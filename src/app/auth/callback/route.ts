@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
+import { sessionCookieOptions } from '@/lib/supabase/cookieSecurity'
 import { appOrigin } from '@/lib/appOrigin'
 import { landingFor, OWNER_ROOT, type AppRole } from '@/lib/crewAccess'
 import { readUser } from '@/lib/authState'
@@ -87,6 +88,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const supabase = createServerClient(url, key, {
     auth: { flowType: 'pkce' },
+    // The exchange below WRITES the session. This is the single most important
+    // place for the Secure flag, because it is where the cookie is born.
+    cookieOptions: sessionCookieOptions(req.nextUrl.origin),
     cookies: {
       getAll: () => req.cookies.getAll(),
       setAll: (toSet: { name: string; value: string; options?: Record<string, unknown> }[]) => {

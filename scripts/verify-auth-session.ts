@@ -42,6 +42,7 @@ import { AuthApiError, AuthRetryableFetchError, AuthSessionMissingError, type Au
 import { classifyAuthError, describeAuthFailure } from '../src/lib/authState'
 import { redirectPreservingSession } from '../src/lib/supabase/middleware'
 import { canonicalRedirectTarget, type CanonicalInput } from '../src/lib/canonicalHost'
+import { secureForOrigin, sessionCookieOptions } from '../src/lib/supabase/cookieSecurity'
 
 let failures = 0
 const ok = (name: string) => console.log(`  ✓ ${name}`)
@@ -506,6 +507,208 @@ console.log('\nMutation tests — breaking the host rule must break the suite:')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+
+    check(`caught: ${mu.name}`, observed,
+      'the mutant produced the SAME answer as the real rule — it is not load-bearing')
+  }
+}
+
+// ── 8. The session cookie carries Secure ─────────────────────────────────────
+// Measured on production 2026-08-26: `secure=false` on both `sb-…-auth-token`
+// chunks. That is @supabase/ssr's default (DEFAULT_COOKIE_OPTIONS names path,
+// sameSite, httpOnly and maxAge, and says nothing about Secure), not a decision
+// anyone made here.
+//
+// ⚠️ httpOnly stays FALSE and that is not a defect: @supabase/ssr's browser
+// client reads the session out of document.cookie, so an httpOnly session cookie
+// would mean no client-side auth at all. It is asserted below so the day someone
+// "hardens" it, the failure is here rather than a dead app.
+console.log('\nSecure on the session cookie — derived from configuration, not from a header:')
+{
+  const saved = process.env.NEXT_PUBLIC_APP_URL
+
+  check('https origin → Secure', secureForOrigin('https://app.edgehq.ca') === true)
+  check('http origin → NOT Secure (a Secure cookie is dropped over http)',
+    secureForOrigin('http://localhost:3000') === false,
+    'hard-coding true makes local dev and LAN testing on a real phone unable to sign in')
+  check('scheme is matched case-insensitively',
+    secureForOrigin('HTTPS://APP.EDGEHQ.CA') === true)
+  check('empty / null origin → NOT Secure', !secureForOrigin('') && !secureForOrigin(null))
+  check('a look-alike scheme is not https',
+    !secureForOrigin('httpsx://app.edgehq.ca') && !secureForOrigin('ftp://app.edgehq.ca'))
+
+  // ⭐⭐ THE anti-downgrade property. The configured origin decides, so a request
+  // that arrives claiming to be plaintext cannot talk this into writing a
+  // non-Secure session cookie.
+  process.env.NEXT_PUBLIC_APP_URL = 'https://app.edgehq.ca'
+  check('a plaintext REQUEST cannot downgrade a configured https deploy',
+    sessionCookieOptions('http://127.0.0.1:3161').secure === true,
+    'reading x-forwarded-proto here would hand an attacker a non-Secure session cookie on request')
+  check('the configured origin still wins with no request in hand',
+    sessionCookieOptions().secure === true)
+  check('it returns ONLY secure — anything else joins the cookie identity',
+    JSON.stringify(Object.keys(sessionCookieOptions())) === '["secure"]')
+
+  delete process.env.NEXT_PUBLIC_APP_URL
+  check('unconfigured deploy falls back to the request origin (local dev)',
+    sessionCookieOptions('http://localhost:3000').secure === false)
+  check('unconfigured deploy on an https preview is still Secure',
+    sessionCookieOptions('https://edgequote-git-x.vercel.app').secure === true)
+
+  if (saved === undefined) delete process.env.NEXT_PUBLIC_APP_URL
+  else process.env.NEXT_PUBLIC_APP_URL = saved
+
+  // Every client that can WRITE the session must be constructed with it. Missing
+  // one means a token rotation silently downgrades a cookie another path wrote
+  // correctly — invisible, because the app keeps working either way.
+  const WRITERS = [
+    'src/lib/supabase/client.ts',
+    'src/lib/supabase/server.ts',
+    'src/lib/supabase/middleware.ts',
+    'src/app/auth/callback/route.ts',
+    'src/app/api/auth/google/start/route.ts',
+  ]
+  for (const rel of WRITERS)
+    check(`${rel} passes cookieOptions: sessionCookieOptions(...)`,
+      /cookieOptions:\s*sessionCookieOptions\(/.test(stripComments(read(rel))),
+      'a client without it writes the @supabase/ssr default, which is secure=false')
+
+  check('the browser client stays readable to JS (httpOnly must NOT be set)',
+    !/httpOnly:\s*true/.test(stripComments(read('src/lib/supabase/client.ts'))),
+    '@supabase/ssr reads the session from document.cookie — httpOnly would break auth entirely')
+
+  // ⛔ No second auth store. The session lives in cookies and nowhere else.
+  for (const rel of WRITERS.concat(['src/lib/authState.ts'])) {
+    const src = stripComments(read(rel))
+    check(`${rel} adds no localStorage/sessionStorage auth store`,
+      !/localStorage|sessionStorage/.test(src),
+      'two persistence stores means two answers to "are you signed in" and one of them goes stale')
+  }
+}
+
+// ── 8b. MUTATION TESTS — the redirect must really carry the refresh ──────────
+// Section 2 asserts the behaviour against the real helper. These prove those
+// assertions would FAIL against a broken one: the production defect they encode
+// (a redirect that drops a rotated token) is invisible by inspection, which is
+// exactly the kind that comes back.
+console.log('\nMutation tests — breaking the refresh hand-off must break the suite:')
+{
+  const enginePath = join(ROOT, 'src', 'lib', 'supabase', 'middleware.ts')
+  const original = readFileSync(enginePath, 'utf8').replace(/\r\n?/g, '\n')
+  const srcDir = join(ROOT, 'src').replace(/\\/g, '/')
+  const req = createRequire(join(ROOT, 'scripts', 'verify-auth-session.ts'))
+  type Mw = typeof import('../src/lib/supabase/middleware')
+
+  /** The same rotation section 2 asserts on, run against a mutant. */
+  const carry = () => {
+    const c = NextResponse.next()
+    c.cookies.set('sb-proj-auth-token', 'ROTATED', { path: '/', maxAge: 34560000, sameSite: 'lax' })
+    c.cookies.set('sb-proj-auth-token.1', 'CHUNK', { path: '/' })
+    return c
+  }
+
+  const mutations: { name: string; from: string; to: string; wrong: (m: Mw) => boolean }[] = [
+    {
+      name: 'the redirect stops carrying cookies at all — the measured production defect',
+      from: '  for (const cookie of carrying.cookies.getAll()) redirected.cookies.set(cookie)',
+      to:   '  for (const cookie of [] as ReturnType<typeof carrying.cookies.getAll>) redirected.cookies.set(cookie)',
+      wrong: m => m.redirectPreservingSession(new URL('https://a.example/login'), carry())
+        .cookies.get('sb-proj-auth-token')?.value !== 'ROTATED',
+    },
+    {
+      name: 'only the FIRST chunk is carried — a Google-sized session arrives corrupt',
+      from: '  for (const cookie of carrying.cookies.getAll()) redirected.cookies.set(cookie)',
+      to:   '  for (const cookie of carrying.cookies.getAll().slice(0, 1)) redirected.cookies.set(cookie)',
+      wrong: m => m.redirectPreservingSession(new URL('https://a.example/login'), carry())
+        .cookies.get('sb-proj-auth-token.1')?.value !== 'CHUNK',
+    },
+    {
+      name: 'name and value survive but the ATTRIBUTES are dropped — a 400-day cookie becomes session-only',
+      from: '  for (const cookie of carrying.cookies.getAll()) redirected.cookies.set(cookie)',
+      to:   '  for (const cookie of carrying.cookies.getAll()) redirected.cookies.set(cookie.name, cookie.value)',
+      wrong: m => m.redirectPreservingSession(new URL('https://a.example/login'), carry())
+        .cookies.get('sb-proj-auth-token')?.maxAge !== 34560000,
+    },
+  ]
+
+  for (const mu of mutations) {
+    if (!original.includes(mu.from)) {
+      fail(`mutation "${mu.name}" could not be applied`,
+        `the anchor is no longer in src/lib/supabase/middleware.ts:\n      ${mu.from}`)
+      continue
+    }
+    const mutated = original.replace(mu.from, mu.to)
+    if (mutated === original) { fail(`mutation "${mu.name}" changed nothing`, 'replacement identical'); continue }
+
+    const dir = mkdtempSync(join(tmpdir(), 'mw-mutant-'))
+    const file = join(dir, 'middleware.ts')
+    writeFileSync(file, mutated
+      .replace(/from '@\/([^']+)'/g, (_x, p) => `from '${srcDir}/${p}'`)
+      .replace(/from '\.\/([^']+)'/g, (_x, p) => `from '${srcDir}/lib/supabase/${p}'`), 'utf8')
+
+    let observed: boolean
+    try { observed = mu.wrong(req(file) as Mw) } catch { observed = true }
+    finally { rmSync(dir, { recursive: true, force: true }) }
+
+    check(`caught: ${mu.name}`, observed,
+      'the mutant behaved like the real helper — section 2 is not actually pinning this')
+  }
+}
+
+// ── 8c. MUTATION TESTS — the Secure flag must be load-bearing ────────────────
+console.log('\nMutation tests — breaking the Secure rule must break the suite:')
+{
+  const enginePath = join(ROOT, 'src', 'lib', 'supabase', 'cookieSecurity.ts')
+  const original = readFileSync(enginePath, 'utf8').replace(/\r\n?/g, '\n')
+  const srcDir = join(ROOT, 'src').replace(/\\/g, '/')
+  const req = createRequire(join(ROOT, 'scripts', 'verify-auth-session.ts'))
+  type Engine = typeof import('../src/lib/supabase/cookieSecurity')
+
+  const mutations: { name: string; from: string; to: string; wrong: (m: Engine) => boolean }[] = [
+    {
+      name: 'Secure is never set — production writes a plaintext-capable session cookie',
+      from: "  return typeof origin === 'string' && origin.trim().toLowerCase().startsWith('https://')",
+      to: '  return false',
+      wrong: m => m.secureForOrigin('https://app.edgehq.ca') === false,
+    },
+    {
+      name: 'Secure is ALWAYS set — local dev and LAN phone testing can no longer sign in',
+      from: "  return typeof origin === 'string' && origin.trim().toLowerCase().startsWith('https://')",
+      to: '  return true',
+      wrong: m => m.secureForOrigin('http://localhost:3000') === true,
+    },
+    {
+      name: 'the REQUEST decides instead of the configuration — a header downgrades the cookie',
+      from: '  return { secure: secureForOrigin(appOrigin(requestOrigin)) }',
+      to: '  return { secure: secureForOrigin(requestOrigin) }',
+      wrong: m => {
+        const saved = process.env.NEXT_PUBLIC_APP_URL
+        process.env.NEXT_PUBLIC_APP_URL = 'https://app.edgehq.ca'
+        try { return m.sessionCookieOptions('http://127.0.0.1:3161').secure === false }
+        finally {
+          if (saved === undefined) delete process.env.NEXT_PUBLIC_APP_URL
+          else process.env.NEXT_PUBLIC_APP_URL = saved
+        }
+      },
+    },
+  ]
+
+  for (const mu of mutations) {
+    if (!original.includes(mu.from)) {
+      fail(`mutation "${mu.name}" could not be applied`,
+        `the anchor is no longer in src/lib/supabase/cookieSecurity.ts:\n      ${mu.from}`)
+      continue
+    }
+    const mutated = original.replace(mu.from, mu.to)
+    if (mutated === original) { fail(`mutation "${mu.name}" changed nothing`, 'replacement identical'); continue }
+
+    const dir = mkdtempSync(join(tmpdir(), 'cookiesec-mutant-'))
+    const file = join(dir, 'cookieSecurity.ts')
+    writeFileSync(file, mutated.replace(/from '@\/([^']+)'/g, (_x, p) => `from '${srcDir}/${p}'`), 'utf8')
+
+    let observed: boolean
+    try { observed = mu.wrong(req(file) as Engine) } catch { observed = true }
+    finally { rmSync(dir, { recursive: true, force: true }) }
 
     check(`caught: ${mu.name}`, observed,
       'the mutant produced the SAME answer as the real rule — it is not load-bearing')

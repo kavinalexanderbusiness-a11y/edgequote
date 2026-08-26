@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
+import { sessionCookieOptions } from '@/lib/supabase/cookieSecurity'
 import { appOrigin } from '@/lib/appOrigin'
 import { BETA_TOKEN_RE } from '@/lib/betaInvite'
 import {
@@ -103,6 +104,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // is a NEW response and carries none of it.
   const jar: { name: string; value: string; options?: Record<string, unknown> }[] = []
   const supabase = createServerClient(url, key, {
+    // The PKCE verifier is a secret half of a handshake and gets the same
+    // treatment as the session itself.
+    cookieOptions: sessionCookieOptions(req.nextUrl.origin),
     // PKCE is @supabase/ssr's default; stated outright because it is the thing
     // that makes a stolen or replayed authorization code useless without the
     // verifier cookie that only this browser holds.
