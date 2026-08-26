@@ -199,6 +199,28 @@ check('…and billed is opt-in, so a surface that cannot see invoices asserts no
   lockFromStatus('scheduled', {}) === null && lockFromStatus('scheduled', { billed: false }) === null)
 
 {
+  // ⭐ THE case that actually exercises slot reservation: a locked stop in the
+  // MIDDLE, with enough movable work either side that a reorder genuinely wants
+  // its index. A lock at the END is preserved by accident — there is nothing
+  // after it to take its place — so a guard that only tests that shape passes
+  // against an engine that reserves no slots at all.
+  const p = sequenceDay(input([
+    stop('A', 0.005),
+    stop('LOCK', 0.02, { status: 'completed', lock: 'completed' }),
+    stop('C', 0.03),
+    stop('D', 0.05, { promiseMin: promiseMinutes('08:30') }),
+  ]))
+  eq('a locked stop mid-day keeps its exact index', p.order.indexOf('LOCK'), 1)
+  check('…and the reorder around it actually happened', p.order[0] === 'D',
+    p.order.join(' → '))
+  // The invariant that makes the above meaningful: an order that dropped or
+  // duplicated a stop could satisfy an index check while being nonsense.
+  eq('the proposed order is a permutation of the day — nothing lost or duplicated',
+    [...p.order].sort(), ['A', 'C', 'D', 'LOCK'])
+  eq('…and so is what would be written', [...p.persistableOrder].sort(), ['A', 'C', 'D', 'LOCK'])
+}
+
+{
   // A locked stop must not be displaced even when the promise repair wants its
   // slot: the FIRST stop is done, and a promised stop is late behind it.
   const p = sequenceDay(input([
