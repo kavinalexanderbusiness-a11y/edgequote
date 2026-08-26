@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from '@/lib/toast'
 import { confirm } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
@@ -8,6 +8,12 @@ import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, AddonTempl
 import { Coord } from '@/lib/geo'
 import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, sequenceRoute, roundTripMapsUrl, MAX_MAPS_WAYPOINTS, directionsUrl, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
 import { planDay, type DayPlanStopInput } from '@/lib/dayPlan'
+// ⭐ THE within-day optimizer (Session 82). It proposes an ORDER and asks
+// planDay — the engine already timing this board — to judge it, so the
+// suggestion and the day it is compared against are the same arithmetic.
+import { sequenceDay, promiseMinutes, lockFromStatus, type SequenceStop, type DaySequenceProposal } from '@/lib/daySequence'
+import { OptimizeDayPanel } from '@/components/schedule/OptimizeDayPanel'
+import { estimateMinutes, type EstimateAppointment } from '@/lib/estimateAppointments'
 import type { WorkerDayDetail } from '@/lib/workerAvailability'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { buildRoadDistance, type RoadDist, type RoadSeconds, type RoadHas } from '@/lib/distance'
@@ -40,7 +46,7 @@ import { SendMessageDialog, type MessageRecipient } from '@/components/comms/Sen
 import {
   DollarSign, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
   Plus, Pencil, Move, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send, Receipt,
-  ChevronUp, ChevronDown, Wand2, MoreHorizontal, CalendarDays, StickyNote, MessagesSquare, PauseCircle,
+  ChevronUp, ChevronDown, Wand2, Sparkles, MoreHorizontal, CalendarDays, StickyNote, MessagesSquare, PauseCircle,
   FileSignature, ClipboardCheck, Phone, User as UserIcon, Star,
 } from 'lucide-react'
 import StopForTodaySheet from '@/components/jobs/StopForTodaySheet'
@@ -103,6 +109,24 @@ interface Props {
   technicians?: Technician[]
   /** False when nobody has a recorded weekly pattern — availability is assumed. */
   availabilityRecorded?: boolean
+  /**
+   * ⭐ Session 79's estimate appointments for THIS day, so the optimizer plans
+   * around the trips the day actually has to make. They hold time and are
+   * driven to, but `schedule_items` has no `route_order` column — so they
+   * ANCHOR the order at their promised time and are never re-sequenced. An
+   * appointment with no promised time cannot be placed and is left out, which
+   * the panel discloses rather than guessing a slot for it.
+   */
+  estimates?: EstimateAppointment[]
+  /**
+   * ⭐ Visits that already have an invoice. A billed visit is immutable — the
+   * same lock lib/optimizer honours when it moves work between days — so the
+   * optimizer must not propose a new position for one. Absent means NOT KNOWN,
+   * and lib/daySequence treats it as such rather than asserting none are
+   * billed: `billed` is opt-in precisely so a surface that cannot see invoices
+   * cannot silently claim there are none.
+   */
+  invoicedJobIds?: Set<string>
   learnedDurationFor?: (serviceType: string | null | undefined) => number | null
   onRainDelay: () => void
   onAddJob: () => void
@@ -147,7 +171,7 @@ interface Props {
 export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
   onOpenJob, onStartJob, onMarkDone, onMove, onStopForToday, onResume, onSetPrice, workStartTime, capacityHours,
-  workersOnDay, staffingOnDay, crewNames, crews, technicians, availabilityRecorded, learnedDurationFor, onRainDelay, onAddJob, onQuickSave,
+  workersOnDay, staffingOnDay, crewNames, crews, technicians, availabilityRecorded, estimates, invoicedJobIds, learnedDurationFor, onRainDelay, onAddJob, onQuickSave,
   addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons, addonTemplates,
   changeOrdersByJobId, onCreateChangeOrder, onSendChangeOrder, onCancelChangeOrder, onOwnerChangeDecision, onRemindChangeOrder,
   onStopOrder, onChatUnread, reviewUrl,
@@ -588,6 +612,10 @@ export function DayOpsPanel({
   // re-flow because effOrdered switches source. Confirms only when a manual
   // order actually exists; offers Undo to restore the exact previous sequence.
   const [optimizing, setOptimizing] = useState(false)
+  // "Optimize day" (Session 82) — the proposal is only COMPUTED while this is
+  // open, and nothing is written until the owner approves it.
+  const [optimizeOpen, setOptimizeOpen] = useState(false)
+  const [applyingOrder, setApplyingOrder] = useState(false)
   async function optimizeRouteNow() {
     if (optimizing) return
     const prevSeq = manualSeq // snapshot of the DISPLAYED order (undo target)
@@ -699,6 +727,79 @@ export function DayOpsPanel({
     const startMin = j.start_time ? timeToMinutes(j.start_time) : (arrivalMinByJob[j.id] ?? null)
     if (startMin != null) windowByJob[j.id] = `${minutesToTime12(startMin)}–${minutesToTime12(startMin + 120)}`
   }
+
+  // ── "Optimize day" — the PROPOSAL (Session 82) ─────────────────────────────
+  // Built only while the panel is open: every candidate order is timed by a
+  // full planDay run, which is far too much work to do on every render of a
+  // board that re-renders on a one-minute tick.
+  //
+  // The stops handed over are this day's visits IN THEIR CURRENT ORDER, plus
+  // the estimate appointments that hold time on it. Estimates anchor where
+  // their promised time falls in the plan as it stands; one with no promised
+  // time cannot be placed at all, so it is left out and counted for disclosure
+  // rather than dropped into a slot nobody chose.
+  const anchorableEstimates = (estimates ?? []).filter(e => e.start_time && e.properties?.lat != null && e.properties?.lng != null)
+  const unplacedEstimates = (estimates ?? []).length - anchorableEstimates.length
+  const proposal: DaySequenceProposal | null = useMemo(() => {
+    if (!optimizeOpen) return null
+    const jobStops: SequenceStop[] = sortedJobs.map(j => ({
+      id: j.id,
+      label: j.customers?.name || j.title,
+      coord: j.properties?.lat != null && j.properties?.lng != null
+        ? { lat: j.properties.lat, lng: j.properties.lng } : null,
+      address: j.properties?.address ?? '',
+      propertyId: j.property_id ?? null,
+      promiseMin: promiseMinutes(j.start_time),
+      lock: lockFromStatus(j.status, { billed: invoicedJobIds?.has(j.id) }),
+      durationMinutes: j.duration_minutes,
+      crewSize: j.crew_size,
+      serviceType: j.service_type,
+      status: j.status,
+      crewId: j.crew_id ?? null,
+      technicianId: j.technician_id ?? null,
+      workedMinutes: j.actual_minutes,
+    }))
+    // Slot each anchored estimate in front of the first visit the plan already
+    // reaches after its promised time.
+    const withEstimates = [...jobStops]
+    for (const e of anchorableEstimates) {
+      const at = timeToMinutes(e.start_time)
+      let idx = withEstimates.findIndex(s => (arrivalMinByJob[s.id] ?? Number.POSITIVE_INFINITY) > at)
+      if (idx < 0) idx = withEstimates.length
+      withEstimates.splice(idx, 0, {
+        id: e.id,
+        label: e.customers?.name || e.title,
+        coord: { lat: e.properties!.lat as number, lng: e.properties!.lng as number },
+        address: e.properties?.address ?? '',
+        propertyId: e.property_id ?? null,
+        promiseMin: at,
+        // ⛔ Never re-sequenced: schedule_items has no route_order column, so a
+        // position proposed for it could not be saved.
+        lock: 'appointment',
+        durationMinutes: estimateMinutes(e),
+        status: e.status,
+      })
+    }
+    return sequenceDay({
+      stops: withEstimates,
+      base: baseCoord,
+      day: {
+        startTime: workStartTime,
+        capacityHours,
+        workers: workersOnDay ?? null,
+        learnedFor: learnedDurationFor,
+        speed: travel,
+        hasBase: !!baseCoord,
+        staffing: staffingOnDay ?? null,
+        crewNames,
+        availabilityRecorded,
+      },
+      dist: road?.dist,
+      seconds: road?.seconds,
+      hasRoad: road?.hasRoad,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [optimizeOpen, sortedJobs, estimates, invoicedJobIds, baseCoord, road, travel, workStartTime, capacityHours, workersOnDay, staffingOnDay, crewNames, availabilityRecorded])
   // The load pill reads the plan's OWN clock total (work + the route's real
   // drive legs), through the same dayLoad state function the calendar uses — so
   // "Room for ~2h" is now a statement about this day's actual route rather than
@@ -927,6 +1028,20 @@ export function DayOpsPanel({
               )}>
                 {manualSeq ? 'Confirmed order' : 'Suggested order'}
               </span>
+                {/* ⭐ Optimize DAY — the constraint-aware proposal (Session 82).
+                    Distinct from "Optimize route" beside it, and deliberately so:
+                    that one re-sorts by geography and applies immediately, this
+                    one weighs promised times, locked work, the people available
+                    and the day's hours, then ASKS. Available without a base
+                    address too — an order can still be repaired for promises
+                    when there is no route to measure. */}
+                {active.length > 1 && (
+                  <button type="button" onClick={() => setOptimizeOpen(true)}
+                    title="Suggest a better order for this day — promises, locked work, people and travel weighed together"
+                    className="text-xs font-medium rounded-lg border border-accent/40 text-accent-text hover:bg-accent/10 px-2.5 py-1 flex items-center gap-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                    <Sparkles className="w-3 h-3" /> Optimize day
+                  </button>
+                )}
                 {/* Persistent "reset to best route" — reuses the continuously-computed
                     optimized order; confirms only when a manual order would be lost. */}
                 {active.length > 1 && baseCoord && (
@@ -1533,6 +1648,29 @@ export function DayOpsPanel({
         onSave={onQuickSave}
         onMove={onMove}
       />
+
+      {/* ⭐ The day's suggested order (Session 82). A PROPOSAL — it writes
+          nothing until "Use this order", and then only through applyOrder, the
+          ONE route_order writer this board already had. */}
+      {optimizeOpen && proposal && (
+        <OptimizeDayPanel
+          proposal={proposal}
+          dateLabel={dateLabel}
+          applying={applyingOrder}
+          unplacedEstimates={unplacedEstimates}
+          onClose={() => setOptimizeOpen(false)}
+          onApply={async order => {
+            setApplyingOrder(true)
+            const prevSeq = manualSeq ? [...manualSeq] : null
+            const ok = await applyOrder(order)
+            setApplyingOrder(false)
+            if (!ok) return          // applyOrder already said why; no fake success.
+            setOptimizeOpen(false)
+            if (prevSeq) toast.undo('Day re-ordered.', () => { void applyOrder(prevSeq) })
+            else toast.success('Day re-ordered — the new order is saved.')
+          }}
+        />
+      )}
     </div>
   )
 }
