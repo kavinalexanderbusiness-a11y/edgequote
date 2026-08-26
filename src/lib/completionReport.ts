@@ -58,6 +58,107 @@ import { loadWorkSessions, sessionTotals } from '@/lib/workSession'
 import { invoiceBalance, displayInvoiceStatus } from '@/lib/payments/ledger'
 import type { FeeSettings } from '@/lib/invoiceTotals'
 import { readUser } from '@/lib/authState'
+import { loadHistory, type AuditEvent } from '@/lib/audit/history'
+
+// ── Who did the work: PARTICIPATION vs ASSIGNMENT, never confused ────────────
+// A customer report may say "Work done by Sam" only when Sam provably acted on
+// THIS visit. Two sources on this tree can say that, both keyed on the worker's
+// AUTH uid (technicians.auth_user_id — ⛔ never technicians.user_id, which is
+// the EMPLOYER):
+//   · audit_events, actor_type='worker', entity=this visit — trigger-written,
+//     immutable, with the name snapshotted at the time (actor_label).
+//   · job_form_responses.answered_by with answered_role='crew' — a worker
+//     answered this visit's checklist (checklist photos anchor here too).
+// Assignment (jobs.technician_id / jobs.crew_id) is a separate fact and is
+// LABELLED as one: "Assigned to" / "Crew:", never "done by".
+// ⛔ Never a proxy: job_work_sessions.workers is the PLANNED crew size copied
+// by a trigger; time_entries is owner-typed payroll with a wage on every row;
+// crew membership is a roster, not attendance.
+
+export type WorkerEvidence = 'completed' | 'started' | 'checklist'
+
+export interface ReportWorker {
+  name: string
+  evidence: WorkerEvidence[]
+}
+
+export interface ReportAttribution {
+  /** Provable participants — a named person, this visit, and an act. */
+  workers: ReportWorker[]
+  /** false = a read that proves participation failed: say "unknown", never
+   *  "nobody". */
+  workersKnown: boolean
+  /** Assignment, as assignment. */
+  assignedTechnician: string | null
+  crewName: string | null
+}
+
+export interface ReportTechnician {
+  id: string
+  name: string
+  auth_user_id: string | null
+}
+
+const PARTICIPATION_ACTIONS: Record<string, WorkerEvidence> = {
+  visit_completed: 'completed',
+  visit_started: 'started',
+  work_paused: 'started',
+  work_resumed: 'started',
+}
+
+export function reportAttribution(i: {
+  audit: Pick<AuditEvent, 'actor_type' | 'actor_id' | 'actor_label' | 'action'>[] | null
+  responses: Pick<JobFormResponse, 'answered_by' | 'answered_role'>[] | null
+  technicians: ReportTechnician[] | null
+  assignedTechnicianId: string | null
+  crewName: string | null
+}): ReportAttribution {
+  const workersKnown = i.audit !== null && i.responses !== null && i.technicians !== null
+  const techs = i.technicians ?? []
+  const nameByUid = new Map<string, string>()
+  for (const t of techs) if (t.auth_user_id) nameByUid.set(t.auth_user_id, t.name)
+
+  const byUid = new Map<string, ReportWorker>()
+  const add = (uid: string, name: string, ev: WorkerEvidence) => {
+    const w = byUid.get(uid) ?? { name, evidence: [] }
+    if (!w.evidence.includes(ev)) w.evidence.push(ev)
+    byUid.set(uid, w)
+  }
+  for (const e of i.audit ?? []) {
+    if (e.actor_type !== 'worker' || !e.actor_id) continue
+    const ev = PARTICIPATION_ACTIONS[e.action]
+    if (!ev) continue
+    // The snapshot name is what the record said at the time; the roster is
+    // the fallback for rows written before actor_label existed.
+    const name = e.actor_label || nameByUid.get(e.actor_id)
+    if (name) add(e.actor_id, name, ev)
+  }
+  for (const r of i.responses ?? []) {
+    if (r.answered_role !== 'crew' || !r.answered_by) continue
+    const name = nameByUid.get(r.answered_by)
+    if (name) add(r.answered_by, name, 'checklist')
+  }
+  const rank = (w: ReportWorker) => (w.evidence.includes('completed') ? 0 : w.evidence.includes('started') ? 1 : 2)
+  const workers = [...byUid.values()].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
+
+  return {
+    workers,
+    workersKnown,
+    assignedTechnician: i.assignedTechnicianId
+      ? techs.find(t => t.id === i.assignedTechnicianId)?.name ?? null
+      : null,
+    crewName: i.crewName,
+  }
+}
+
+/** The one headline line about people. The verb IS the basis: "Work done by"
+ *  is participation, "Assigned to" / "Crew:" is assignment. */
+export function attributionLine(a: ReportAttribution): string | null {
+  if (a.workers.length > 0) return `Work done by ${a.workers.map(w => w.name).join(', ')}`
+  if (a.assignedTechnician) return `Assigned to ${a.assignedTechnician}`
+  if (a.crewName) return `Crew: ${a.crewName}`
+  return null
+}
 
 // ── Shapes ───────────────────────────────────────────────────────────────────
 
@@ -73,6 +174,7 @@ export interface ReportJob {
   actual_minutes: number | null
   completion_summary?: string | null
   crew_id?: string | null
+  technician_id?: string | null
 }
 
 export interface ReportBusiness {
@@ -151,7 +253,7 @@ export interface CompletionReport {
   customerName: string | null
   address: string | null
   business: ReportBusiness | null
-  crewName: string | null
+  attribution: ReportAttribution
   summary: string | null
   photoGroups: ReportPhotoGroup[]
   photoCount: number
@@ -334,12 +436,25 @@ export interface CompletionReportInput {
   invoice: Invoice | null
   fees: FeeSettings | null
   crewName: string | null
+  /** audit_events for THIS visit (null = read failed). */
+  audit: Pick<AuditEvent, 'actor_type' | 'actor_id' | 'actor_label' | 'action'>[] | null
+  /** The tenant's roster, name + auth link only (null = read failed). */
+  technicians: ReportTechnician[] | null
   todayISO: string
 }
 
 export function buildCompletionReport(input: CompletionReportInput): CompletionReport {
   const { job } = input
   const unavailable: string[] = []
+
+  const attribution = reportAttribution({
+    audit: input.audit,
+    responses: input.responses,
+    technicians: input.technicians,
+    assignedTechnicianId: job.technician_id ?? null,
+    crewName: input.crewName,
+  })
+  if (!attribution.workersKnown) unavailable.push('who did the work')
 
   const photosKnown = input.photos !== null
   if (!photosKnown) unavailable.push('photos')
@@ -384,7 +499,7 @@ export function buildCompletionReport(input: CompletionReportInput): CompletionR
     customerName: input.customerName,
     address: input.address,
     business: input.business,
-    crewName: input.crewName,
+    attribution,
     summary: job.completion_summary ?? null,
     photoGroups,
     photoCount,
@@ -433,7 +548,11 @@ export function workedDaysLine(report: Pick<CompletionReport, 'workedDays' | 'co
 // completion_summary.
 const REPORT_JOB_SELECT =
   'id, title, service_type, status, scheduled_date, completed_at, actual_minutes, '
-  + 'completion_summary, crew_id, customers(name), properties(address)'
+  + 'completion_summary, crew_id, technician_id, customers(name), properties(address)'
+
+// Name + auth link ONLY. The roster row also carries hourly_wage, phone and
+// email — none of which a report needs, so none of which enters this module.
+const REPORT_TECHNICIAN_SELECT = 'id, name, auth_user_id'
 
 const REPORT_FORM_SELECT =
   'id, job_id, template_id, template_name, fields, source, waived_at, waived_by, waive_reason, created_at'
@@ -476,13 +595,14 @@ export async function loadCompletionReport(
     actual_minutes: (row.actual_minutes as number | null) ?? null,
     completion_summary: (row.completion_summary as string | null) ?? null,
     crew_id: (row.crew_id as string | null) ?? null,
+    technician_id: (row.technician_id as string | null) ?? null,
   }
   const customerName = ((row.customers as { name?: string } | null)?.name) ?? null
   const address = ((row.properties as { address?: string } | null)?.address) ?? null
 
   // The remaining halves are independent; one failing must not take the rest
   // down, and each failure is REPORTED, never rendered as emptiness.
-  const [photosRes, formsRes, settingsRes, sessionsRes, invoiceRes] = await Promise.all([
+  const [photosRes, formsRes, settingsRes, sessionsRes, invoiceRes, auditRes, techRes] = await Promise.all([
     listPhotosResult(supabase, userId, { jobId }),
     supabase.from('job_forms').select(REPORT_FORM_SELECT).eq('job_id', jobId),
     supabase.from('business_settings')
@@ -491,6 +611,11 @@ export async function loadCompletionReport(
     loadWorkSessions(supabase, jobId),
     supabase.from('invoices').select(REPORT_INVOICE_SELECT)
       .eq('job_id', jobId).order('created_at', { ascending: false }),
+    // Participation evidence: THE canonical actor record for this visit,
+    // through the one audit reader. actorType server-side keeps the page small;
+    // 200 covers any real visit's lifecycle.
+    loadHistory(supabase, { entity: { type: 'visit', id: jobId }, actorType: 'worker', limit: 200 }),
+    supabase.from('technicians').select(REPORT_TECHNICIAN_SELECT),
   ])
 
   const photos = photosRes.error ? null : photosRes.photos
@@ -555,6 +680,11 @@ export async function loadCompletionReport(
     crewName = ((crewRow as { name?: string } | null)?.name) ?? null
   }
 
+  const audit = auditRes.failed ? null : auditRes.events
+  const technicians = techRes.error
+    ? null
+    : ((techRes.data ?? []) as unknown as ReportTechnician[])
+
   return {
     report: buildCompletionReport({
       job,
@@ -569,6 +699,8 @@ export async function loadCompletionReport(
       invoice,
       fees,
       crewName,
+      audit,
+      technicians,
       todayISO: new Date().toISOString().slice(0, 10),
     }),
     error: null,

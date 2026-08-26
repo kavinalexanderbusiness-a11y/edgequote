@@ -34,7 +34,7 @@ import type { JobPhotoView } from '../src/lib/photos'
 import type { JobFormInstance, JobFormResponse, ResponsePhotoLink } from '../src/lib/jobForms'
 import {
   buildCompletionReport, checklistItemState, formatReportDay, groupReportPhotos,
-  photoChecklistLabels, reportPayment, workedDaysLine,
+  photoChecklistLabels, reportAttribution, attributionLine, reportPayment, workedDaysLine,
   type CompletionReportInput, type ReportJob,
 } from '../src/lib/completionReport'
 
@@ -148,6 +148,8 @@ const baseInput = (over: Partial<CompletionReportInput> = {}): CompletionReportI
   invoice: invoice(),
   fees: { gst_percent: 5 },
   crewName: 'North crew',
+  audit: [],
+  technicians: [],
   todayISO: '2026-08-16',
   ...over,
 });
@@ -295,6 +297,62 @@ console.log('\n═══ Payment honesty ═══')
   const overdue = reportPayment(invoice({ status: 'unpaid', due_date: '2026-08-01' } as Partial<Invoice>), gst, '2026-08-16')
   check('overdue is derived from the display engine', overdue?.overdue === true, JSON.stringify(overdue))
   eq('no invoice, no claim', reportPayment(null, gst, '2026-08-16'), null)
+}
+
+// ═══ 5b. Attribution: participation is proven, assignment is labelled ════════
+console.log('\n═══ Who did the work — never guessed ═══')
+{
+  const technicians = [
+    { id: 't-sam', name: 'Sam', auth_user_id: 'uid-sam' },
+    { id: 't-alex', name: 'Alex', auth_user_id: 'uid-alex' },
+    { id: 't-pat', name: 'Pat', auth_user_id: 'uid-pat' },
+    // ⚠️ THE TRAP: technicians.user_id is the EMPLOYER. A person must only ever
+    // resolve through auth_user_id; this row exists to be wrongly matched.
+    { id: 'uid-tenant', name: 'Tenant Trap', auth_user_id: 'uid-elsewhere' },
+  ]
+  const audit = [
+    { actor_type: 'worker' as const, actor_id: 'uid-sam', actor_label: 'Sam', action: 'visit_completed' },
+    { actor_type: 'worker' as const, actor_id: 'uid-sam', actor_label: 'Sam', action: 'visit_started' },
+    { actor_type: 'owner' as const, actor_id: 'uid-owner', actor_label: null, action: 'visit_completed' },
+    { actor_type: 'worker' as const, actor_id: 'uid-alex', actor_label: null, action: 'work_resumed' },
+    { actor_type: 'worker' as const, actor_id: 'uid-sam', actor_label: 'Sam', action: 'visit_price_changed' },
+  ]
+  const responses = [
+    resp('ra', 'fa', { answered_by: 'uid-alex', answered_role: 'crew' }),
+    resp('rb', 'fb', { answered_by: 'uid-owner', answered_role: 'owner' }),
+    resp('rc', 'fc', { answered_by: 'uid-tenant', answered_role: 'crew' }),
+  ]
+  const a = reportAttribution({ audit, responses, technicians, assignedTechnicianId: 't-pat', crewName: 'North crew' })
+  eq('exactly the two provable workers', a.workers.length, 2)
+  const sam = a.workers[0]
+  check('the completer ranks first, with completed + started',
+    sam?.name === 'Sam' && sam.evidence.includes('completed') && sam.evidence.includes('started'),
+    JSON.stringify(a.workers))
+  eq('a price edit is not field participation — no third evidence kind', sam.evidence.length, 2)
+  const alex = a.workers[1]
+  check('a checklist answer + a resume prove Alex (name from the roster when the snapshot is null)',
+    alex?.name === 'Alex' && alex.evidence.includes('checklist') && alex.evidence.includes('started'),
+    JSON.stringify(alex))
+  check('an OWNER pressing Complete is not a worker',
+    !audit.some(e => e.actor_id === 'uid-owner' && a.workers.some(w => w.name === technicians.find(t => t.auth_user_id === 'uid-owner')?.name)),
+    'the office completing from the dashboard became field attendance')
+  check('answered_by resolves via auth_user_id, NEVER the tenant/employer id',
+    !a.workers.some(w => w.name === 'Tenant Trap'),
+    'a response keyed on an EMPLOYER uid resolved to a person — the user_id/auth_user_id confusion')
+  eq('assignment is carried, labelled, apart', a.assignedTechnician, 'Pat')
+  check('assignment never enters workers', !a.workers.some(w => w.name === 'Pat'),
+    'jobs.technician_id is a plan; the report may not present it as attendance')
+  eq('the line says the basis: participation', attributionLine(a), 'Work done by Sam, Alex')
+  eq('assignment-only wording', attributionLine({ workers: [], workersKnown: true, assignedTechnician: 'Pat', crewName: null }), 'Assigned to Pat')
+  eq('crew-only wording', attributionLine({ workers: [], workersKnown: true, assignedTechnician: null, crewName: 'North crew' }), 'Crew: North crew')
+  eq('nothing provable, nothing assigned — silence, never a guess',
+    attributionLine({ workers: [], workersKnown: true, assignedTechnician: null, crewName: null }), null)
+
+  // baseInput carries work sessions with headcounts — they must add nobody.
+  const failed = buildCompletionReport(baseInput({ audit: null, technicians: null }))
+  check('a failed participation read says unknown, never nobody',
+    failed.attribution.workersKnown === false && failed.unavailable.includes('who did the work'),
+    JSON.stringify(failed.unavailable))
 }
 
 // ═══ 6. The source holds the boundary structurally ═══════════════════════════

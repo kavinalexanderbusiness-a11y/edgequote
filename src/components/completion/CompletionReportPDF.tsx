@@ -20,7 +20,7 @@ import {
 } from '@react-pdf/renderer'
 import { pdfLogoUrl, thumbUrl } from '@/lib/photos'
 import {
-  formatReportDay, workedDaysLine,
+  formatReportDay, workedDaysLine, attributionLine,
   type CompletionReport, type ReportChecklistItem,
 } from '@/lib/completionReport'
 
@@ -120,7 +120,7 @@ export function CompletionReportDocument({ report }: { report: CompletionReport 
           <Text style={styles.titleLabel}>Job Completion Report</Text>
           <Text style={styles.titleValue}>{report.title}</Text>
           <Text style={styles.titleMeta}>
-            {[dateLine ? `Completed ${dateLine}` : null, report.crewName ? `Crew: ${report.crewName}` : null]
+            {[dateLine ? `Completed ${dateLine}` : null, attributionLine(report.attribution)]
               .filter(Boolean).join('   ·   ')}
           </Text>
         </View>

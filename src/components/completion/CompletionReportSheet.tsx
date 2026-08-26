@@ -17,7 +17,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Modal } from '@/components/ui/Modal'
 import { thumbUrl } from '@/lib/photos'
 import {
-  loadCompletionReport, workedDaysLine,
+  loadCompletionReport, workedDaysLine, attributionLine,
   type CompletionReport, type ReportChecklistItem,
 } from '@/lib/completionReport'
 
@@ -143,7 +143,7 @@ export function CompletionReportSheet({ jobId, onClose }: {
                 workedDaysLine(report),
                 report.customerName,
                 report.address,
-                report.crewName ? `Crew: ${report.crewName}` : null,
+                attributionLine(report.attribution),
               ].filter(Boolean).join(' · ')}
             </p>
           </div>
