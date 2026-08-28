@@ -1686,7 +1686,12 @@ export default function DispatchPage() {
               status badge, start/complete, nudges, menu) kept its width and the
               one flexible thing on the row absorbed the whole squeeze. The board
               was WIDER per lane at 1024px than at 1280px. */}
-          <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3 items-start">
+          {/* grid-cols-1 is load-bearing, not a default: a bare `grid` track is
+              floored at its items' MIN-CONTENT, so one wide crew card held every
+              lane at 628px inside a 375px phone — the whole board scrolled
+              sideways. grid-cols-1 = minmax(0,1fr), which lets lanes shrink.
+              (Same bug the customers list had; see verify:ui-simplification.) */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3 items-start">
             {visibleLanes.map((lane, i) => (
               <CrewLaneCard
                 key={lane.laneId}

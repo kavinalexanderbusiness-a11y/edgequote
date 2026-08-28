@@ -47,11 +47,16 @@ console.log('\n═══ ONE Quick Add, and it knows where it is ═══')
 
   // — Global: the three doors that are always true, and nothing else.
   const global = quickAddActions({ kind: 'none' }, ALL)
-  check('with no context it offers exactly Quote · Visit · Customer',
-    global.map(a => a.key).join(',') === 'quote,visit,customer',
+  // S112 widened the sheet from three doors to five: Estimate visit (the other
+  // thing an owner books from the truck — ?estimate=new opens the schedule's
+  // EstimateAppointmentDialog) and Invoice (the same ?new=1 creator the ⌘K
+  // palette uses). The RULE is unchanged: a short list of genuinely common
+  // creates — five, not twenty — and every one of them opens a CREATOR.
+  check('with no context it offers exactly Quote · Visit · Estimate · Customer · Invoice',
+    global.map(a => a.key).join(',') === 'quote,visit,estimate,customer,invoice',
     global.map(a => a.key).join(',') || '(nothing)')
   check('…and every one of them CREATES something',
-    global.every(a => /\/new|\?new=1|\/dashboard\/schedule$/.test(a.href)),
+    global.every(a => /\/new|\?new=1|\?estimate=new|\/dashboard\/schedule$/.test(a.href)),
     `${global.map(a => a.href).join(' · ')} — a create sheet that navigates teaches nobody what + means`)
   check('…and none of them claims a context it does not have',
     global.every(a => !a.contextual && !/customer=/.test(a.href)))

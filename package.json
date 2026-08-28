@@ -159,7 +159,9 @@
     "verify:rebuild": "tsx scripts/verify-rebuild.ts",
     "verify:schema": "tsx scripts/verify-schema.ts",
     "verify:migrations": "tsx scripts/verify-migrations.ts",
-    "verify:custom-fields": "tsx scripts/verify-custom-fields.ts"
+    "verify:custom-fields": "tsx scripts/verify-custom-fields.ts",
+    "verify:information-architecture": "tsx scripts/verify-information-architecture.ts",
+    "verify:ui-simplification": "tsx scripts/verify-ui-simplification.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

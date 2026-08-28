@@ -135,12 +135,30 @@ export function quickAddActions(ctx: QuickAddContext, enabled: ReadonlySet<strin
       href: `/dashboard/schedule${qs({ customer: cust.id, property: cust.propertyId })}`,
       icon: 'visit', moduleKey: 'schedule', contextual: !!cust.id,
     })
+    // An estimate visit is the OTHER thing an owner books from the truck —
+    // "come look at the yard Tuesday". Same door the schedule day view offers
+    // (?estimate=new opens EstimateAppointmentDialog); this only puts it in
+    // thumb reach. schedule_items stays the one home for estimate visits.
+    out.push({
+      key: 'estimate', label: 'Estimate visit', sub: 'Book a look at the work',
+      href: '/dashboard/schedule?estimate=new',
+      icon: 'visit', moduleKey: 'schedule', contextual: false,
+    })
   }
   if (enabled.has('customers')) {
     out.push({
       key: 'customer', label: 'Customer', sub: 'Add someone new',
       href: '/dashboard/customers?new=1',
       icon: 'customer', moduleKey: 'customers', contextual: false,
+    })
+  }
+  // The same door the ⌘K palette's "New Invoice" uses — the invoices page opens
+  // its own draft dialog on ?new=1 and stays the one place drafts are created.
+  if (enabled.has('invoices')) {
+    out.push({
+      key: 'invoice', label: 'Invoice', sub: 'Bill a customer directly',
+      href: '/dashboard/invoices?new=1',
+      icon: 'cost', moduleKey: 'invoices', contextual: false,
     })
   }
 
