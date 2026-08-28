@@ -171,8 +171,8 @@ export async function POST(req: NextRequest) {
 
   const stamp = new Date().toISOString().slice(11, 16)
   const result = channel === 'sms'
-    ? await sendSms(to, `✅ EdgeQuote test SMS (${stamp}). Your Twilio setup is working.`)
-    : await sendEmail(to, 'EdgeQuote test email ✅', '<p>✅ Your Resend setup is working.</p>', '✅ Your Resend setup is working.')
+    ? await sendSms(to, `✅ EdgeHQ test SMS (${stamp}). Your Twilio setup is working.`)
+    : await sendEmail(to, 'EdgeHQ test email ✅', '<p>✅ Your Resend setup is working.</p>', '✅ Your Resend setup is working.')
 
   return NextResponse.json({ channel, ...result })
 }

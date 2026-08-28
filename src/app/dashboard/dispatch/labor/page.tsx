@@ -432,7 +432,7 @@ export default function LaborPage() {
                 Read these together, not as a score. Revenue per hour reflects the jobs someone was
                 <em> given</em>, not how fast they work. “Vs estimate” compares a whole job against its
                 estimate — it judges the estimate as much as the person, and a job with two people on it
-                shares one estimate. EdgeQuote won’t rank your crew for you.
+                shares one estimate. EdgeHQ won’t rank your crew for you.
               </p>
             </div>
           </CardBody>

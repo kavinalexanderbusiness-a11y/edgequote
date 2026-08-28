@@ -8,6 +8,12 @@ export interface TabItem {
   key: string
   label: string
   icon?: LucideIcon
+  /** Optional cluster name. Consecutive tabs sharing a `group` render together;
+   *  where the group CHANGES, a hairline divider marks the seam — so a long rail
+   *  (Settings has ten) reads as a few families instead of one undifferentiated
+   *  row. Purely visual: keys, order, hash links and keyboard behaviour are
+   *  untouched, and tabs without a group get no divider at all. */
+  group?: string
 }
 
 interface TabsProps {
@@ -56,12 +62,14 @@ export function Tabs({ tabs, active, onChange, className }: TabsProps) {
   }
 
   return (
-    <div role="tablist" aria-orientation="horizontal" className={cn('flex gap-1.5 overflow-x-auto', className)}>
+    <div role="tablist" aria-orientation="horizontal" className={cn('flex items-center gap-1.5 overflow-x-auto', className)}>
       {tabs.map((t, i) => {
         const selected = active === t.key
+        const newGroup = i > 0 && t.group !== tabs[i - 1].group && (t.group || tabs[i - 1].group)
         return (
+          <div key={t.key} className="shrink-0 flex items-center gap-1.5">
+          {newGroup && <span aria-hidden="true" className="h-4 w-px bg-border mx-1" />}
           <button
-            key={t.key}
             ref={el => { btnRefs.current[i] = el }}
             type="button"
             role="tab"
@@ -81,6 +89,7 @@ export function Tabs({ tabs, active, onChange, className }: TabsProps) {
           >
             {t.icon && <t.icon className="w-3.5 h-3.5" />} {t.label}
           </button>
+          </div>
         )
       })}
     </div>

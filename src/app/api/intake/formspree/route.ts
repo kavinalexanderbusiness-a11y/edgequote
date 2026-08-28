@@ -4,7 +4,7 @@ import { submitLead, normalizeFormspree } from '@/lib/intake'
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
-// Formspree → EdgeQuote. Point a Formspree form's JSON webhook/redirect at this
+// Formspree → EdgeHQ. Point a Formspree form's JSON webhook/redirect at this
 // URL with the owner's booking token (?token=… or a hidden `token` field). The
 // form fields are flattened and routed through the shared intake pipeline with
 // source 'Formspree' — the lead appears instantly as a customer + property + lead.

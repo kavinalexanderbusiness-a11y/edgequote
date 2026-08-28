@@ -909,7 +909,7 @@ export interface Payment {
 }
 
 // Manual payment methods the owner can record (Stripe rows come from the webhook;
-// 'card' = a card charged outside EdgeQuote, e.g. a terminal or another processor).
+// 'card' = a card charged outside EdgeHQ, e.g. a terminal or another processor).
 // The picker offers Card / E-transfer / Cash — the three ways customers actually pay.
 // Retired methods (cheque/debit/other) still LABEL correctly on legacy rows via the
 // fallback in paymentMethodLabel; 'credit' stays for labeling but is filtered out of
@@ -1668,7 +1668,7 @@ export interface BusinessSettings {
   // ── Payroll: overtime rules + pay period ───────────────────────────────────
   // Consumed ONLY by lib/payroll (the one payroll engine). Overtime law is
   // jurisdictional, so both thresholds default to null = "that rule doesn't
-  // apply" — EdgeQuote never guesses a threshold and silently inflates pay.
+  // apply" — EdgeHQ never guesses a threshold and silently inflates pay.
   /** Hours in a DAY after which OT applies. null = no daily rule (e.g. Ontario). */
   ot_daily_hours: number | null
   /** Hours in a WORK WEEK after which OT applies. null = no weekly rule. */

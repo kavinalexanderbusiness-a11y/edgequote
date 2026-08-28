@@ -272,7 +272,7 @@ function icsStamp(iso: string): string {
 // representation — we never invent an appointment hour. `stampISO` is injected
 // (kept pure) so verify is deterministic.
 export function buildVisitICS(visits: CalendarVisit[], opts: { stampISO: string; calName?: string }): string {
-  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//EdgeQuote//Customer Portal//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH']
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//EdgeHQ//Customer Portal//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH']
   if (opts.calName) lines.push(icsFold(`X-WR-CALNAME:${icsEscape(opts.calName)}`))
   const stamp = icsStamp(opts.stampISO)
   for (const v of visits) {

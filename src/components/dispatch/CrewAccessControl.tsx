@@ -27,10 +27,10 @@ import { Smartphone, Copy, KeyRound, ShieldOff, Check, Link2, Mail } from 'lucid
 //   Disabled       → nothing to do here; the roster switch above is the cause
 //
 // TWO WAYS IN, because they fail differently. Inviting by email creates the
-// account server-side, in /api/crew/invite, which is the only code in EdgeQuote
+// account server-side, in /api/crew/invite, which is the only code in EdgeHQ
 // holding an admin credential — and it needs one env var set on the deployment,
 // which its own error message names. A join code needs nothing, but only works
-// for somebody who already HAS an EdgeQuote login. So when provisioning is not
+// for somebody who already HAS an EdgeHQ login. So when provisioning is not
 // configured, the invite panel offers the code path by name rather than dead-ending.
 //
 // Nothing here is trusted: crew_issue_invite / crew_revoke_access are SECURITY
@@ -193,7 +193,7 @@ export function CrewAccessControl({ tech, access, onChanged }: {
             <Button size="sm" variant="ghost" type="button" onClick={() => setEmailing(false)}>Cancel</Button>
             {/* The fallback, named up front rather than only after a failure. */}
             <Button size="sm" variant="ghost" type="button" onClick={issueCode} loading={busy === 'code'} className="ml-auto"
-              title="For someone who already has an EdgeQuote login">
+              title="For someone who already has an EdgeHQ login">
               <KeyRound className="w-3.5 h-3.5" aria-hidden /> Join code instead
             </Button>
           </div>

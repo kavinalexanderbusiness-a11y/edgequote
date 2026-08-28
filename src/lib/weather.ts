@@ -131,7 +131,7 @@ export async function fetchForecast(lat: number, lng: number, days = 7): Promise
   return run
 }
 
-// A third party must never be able to hang EdgeQuote. The dashboard renders this
+// A third party must never be able to hang EdgeHQ. The dashboard renders this
 // on the server, so an Open-Meteo stall would otherwise hold the whole morning
 // view hostage with no way to bail. Time it out and degrade to "no forecast" —
 // the strip and Weather Ops both already handle an empty forecast.

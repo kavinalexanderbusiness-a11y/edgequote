@@ -1,6 +1,6 @@
 import type { TradePack } from './types'
 
-// ── The Lawn & Landscaping pack — EdgeQuote's founding trade ─────────────────
+// ── The Lawn & Landscaping pack — EdgeHQ's founding trade ─────────────────
 // VERBATIM data. The seasons (dates + match hints) are copied character-for-
 // character from lib/seasons.ts, and the seasonal campaigns from
 // lib/crm/campaigns.ts SEASONAL_TEMPLATES. They are COPIES on purpose: this

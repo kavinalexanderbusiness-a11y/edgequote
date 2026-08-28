@@ -1,5 +1,5 @@
 // ── Property Health (the ONE property scorer) ────────────────────────────────
-// Collapses everything EdgeQuote already knows about a property — measurement
+// Collapses everything EdgeHQ already knows about a property — measurement
 // freshness, pricing confidence, service history, recurring stability, upcoming
 // work, AI Vision analysis — into a single 0–100 health score, the SINGLE
 // highest-priority recommendation, and the ONE primary action for its current

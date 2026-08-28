@@ -9,7 +9,7 @@ export const runtime = 'nodejs'
 //   { token, source?, name|firstName|lastName, phone, email, address, ...leadFields }
 // `token` is the owner's booking_token; `source` labels the lead (defaults
 // 'Website'). Everything routes through the shared submit_website_lead pipeline —
-// the customer/property/lead/notification all appear instantly in EdgeQuote.
+// the customer/property/lead/notification all appear instantly in EdgeHQ.
 // CORS-open so a browser form on the marketing site can post directly.
 
 const CORS = {

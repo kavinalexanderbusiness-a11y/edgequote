@@ -1,6 +1,6 @@
 // ── Image quality + "best photo" ranking (the ONE reusable photo-ranking engine) ──
 // Deterministic, pixel-based photo assessment for ranking before/after pairs — and
-// reusable anywhere EdgeQuote needs "the best photo". Pure canvas math over the SAME
+// reusable anywhere EdgeHQ needs "the best photo". Pure canvas math over the SAME
 // untainted loader Before/After already uses (lib/beforeafter/imageLoad). It reads a
 // tiny downscaled sample (never the full image) so it's cheap; scores are RELATIVE,
 // so they only need to rank consistently, not be physically exact.

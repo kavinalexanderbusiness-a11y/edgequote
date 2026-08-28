@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from 'react'
 import { HistoryPanel } from '@/components/audit/HistoryPanel'
+import { PageContainer } from '@/components/layout/PageContainer'
+import { PageHeader } from '@/components/layout/PageHeader'
 import {
   AUDIT_CATEGORIES, CATEGORY_LABELS, actionsInCategory, type AuditCategory,
 } from '@/lib/audit/phrase'
@@ -53,14 +55,13 @@ export default function ActivityPage() {
   }), [actor, category, days])
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
-      <header>
-        <h1 className="text-xl font-semibold text-ink">Activity</h1>
-        <p className="mt-1 text-sm text-ink-muted">
-          Every meaningful change to your business — who made it, when, and what it
-          was before.
-        </p>
-      </header>
+    // THE page shell — this was the one module page still hand-rolling its own
+    // container (which double-padded against the layout's gutters) and heading.
+    <PageContainer width="narrow">
+      <PageHeader
+        title="Activity"
+        description="Every meaningful change to your business — who made it, when, and what it was before."
+      />
 
       {/* Filter chips wrap rather than scroll: a horizontal scroller hides options
           on exactly the screens that have the least room to spare. */}
@@ -94,7 +95,7 @@ export default function ActivityPage() {
         title="Recent activity"
         emptyText="Nothing matches these filters."
       />
-    </div>
+    </PageContainer>
   )
 }
 

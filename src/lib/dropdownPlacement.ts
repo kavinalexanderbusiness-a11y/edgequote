@@ -17,7 +17,7 @@
 //   elementFromPoint(312, 810) → SPAN "General Landscaping"
 //   a real touch tap there → submits attempted = 0, and service_type CHANGED
 //
-// So "EdgeQuote sometimes won't let me save on my phone" was literal: the tap
+// So "EdgeHQ sometimes won't let me save on my phone" was literal: the tap
 // never reached Save, and instead silently re-picked the service. The outside-
 // close handlers listen for `mousedown`, and a tap INSIDE the list is not
 // outside — so tapping again did the same thing again.

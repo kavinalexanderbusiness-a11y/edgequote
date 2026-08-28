@@ -7,7 +7,7 @@ import { coverCrop } from './imageLoad'
 // target W/H, so a 760px preview and a 1920px export are pixel-for-pixel the same
 // layout. No server, no `sharp` — the owner's browser does the compositing.
 
-export const BRAND_ACCENT = '#00C896' // EdgeQuote green (matches the app accent)
+export const BRAND_ACCENT = '#00C896' // EdgeHQ green (matches the app accent)
 const BG = '#0b1018'
 const INK = '#F2F5FC'
 const INK_MUTED = '#9FB0C8'

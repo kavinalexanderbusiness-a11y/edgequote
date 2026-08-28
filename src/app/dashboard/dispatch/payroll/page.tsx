@@ -266,7 +266,7 @@ export default function PayrollPage() {
       {otOff && (
         <Banner tone="info" icon={Timer}
           action={<Link href="/dashboard/settings#payroll" className="shrink-0 text-xs font-semibold underline">Set rules</Link>}>
-          No overtime rule is set, so every hour is paid as regular time. EdgeQuote won’t guess a
+          No overtime rule is set, so every hour is paid as regular time. EdgeHQ won’t guess a
           threshold — overtime law differs by province (Alberta 8/day &amp; 44/week, Ontario 44/week).
         </Banner>
       )}

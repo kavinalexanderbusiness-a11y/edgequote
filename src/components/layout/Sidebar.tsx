@@ -155,7 +155,7 @@ export function Sidebar() {
   }, [])
 
 
-  // Tab-title badge: "(3) EdgeQuote …" while messages wait — the one attention cue
+  // Tab-title badge: "(3) EdgeHQ …" while messages wait — the one attention cue
   // that works with the app open in a background tab, no permission needed.
   // Best-effort: a route change re-renders the title without the prefix, and the
   // next unread change re-applies it.
@@ -313,7 +313,7 @@ export function Sidebar() {
         </div>
       )}
       <div className="min-w-0">
-        <p className="text-sm font-bold text-ink leading-none truncate">EdgeQuote</p>
+        <p className="text-sm font-bold text-ink leading-none truncate">EdgeHQ</p>
         {/* The OWNER's business name (Settings → Branding) — the platform never
             assumes whose business this is. Hidden until a name is set. */}
         {brand.name && <p className="text-[10px] text-ink-faint leading-none mt-0.5 truncate">{brand.name}</p>}

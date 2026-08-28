@@ -4,7 +4,7 @@ import { loadTravelModel, type TravelModel } from '@/lib/travelLearning'
 import { loadQuotePricingModel, type LoadedQuoteModel } from '@/lib/quoteLearning'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 
-// ── Business Memory — the ONE read seam over everything EdgeQuote has learned ────
+// ── Business Memory — the ONE read seam over everything EdgeHQ has learned ────
 // NOT a new learning engine and NOT new storage. Every learner keeps its single
 // responsibility — labor (lib/labor), travel (lib/travelLearning), pricing win-rates
 // (lib/quoteLearning), win/loss (lib/winLoss), marketing quality (marketing_assets),

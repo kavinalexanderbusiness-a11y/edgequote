@@ -1,5 +1,5 @@
 // ── Customer CSV import ──────────────────────────────────────────────────────
-// Moving a business's customer book into EdgeQuote from whatever it used before:
+// Moving a business's customer book into EdgeHQ from whatever it used before:
 // a spreadsheet, Jobber, Housecall Pro, another CRM. No vendor integration — a
 // CSV and a column-mapping step, because that is the one export every one of
 // them can produce.
@@ -166,7 +166,7 @@ export function parseCsv(text: string): ParsedCsv {
 
 // ── Column mapping ───────────────────────────────────────────────────────────
 
-/** The EdgeQuote fields a V1 import can fill. Deliberately small — see the
+/** The EdgeHQ fields a V1 import can fill. Deliberately small — see the
  *  session scope: customers, contact, one service address, optional notes. */
 export type ImportField =
   | 'name' | 'first_name' | 'last_name'
@@ -463,7 +463,7 @@ export function planImport({ parsed, mapping, existing }: PlanInput): PlannedRow
     if (!values.name) {
       out.push({
         line, values, warnings, status: 'invalid',
-        reason: 'No name in this row — EdgeQuote needs a name to create a customer.',
+        reason: 'No name in this row — EdgeHQ needs a name to create a customer.',
         matchId: null, matchName: null, matchedBy: null, duplicateOfLine: null, include: false,
       })
       return
@@ -491,7 +491,7 @@ export function planImport({ parsed, mapping, existing }: PlanInput): PlannedRow
         line, values, warnings, status: 'existing',
         reason: isRow
           ? `Same ${match.reason} as row ${dupLine} in this file — importing once.`
-          : `Already in EdgeQuote as "${match.customer.name}" (same ${match.reason}) — leaving that record untouched.`,
+          : `Already in EdgeHQ as "${match.customer.name}" (same ${match.reason}) — leaving that record untouched.`,
         matchId: isRow ? null : match.customer.id,
         matchName: match.customer.name,
         matchedBy: match.reason,
@@ -510,7 +510,7 @@ export function planImport({ parsed, mapping, existing }: PlanInput): PlannedRow
         line, values, warnings, status: 'review',
         reason: isRow
           ? `Same name as row ${Number(match.customer.id.slice(4))} in this file, and nothing else to tell them apart.`
-          : `"${match.customer.name}" is already in EdgeQuote with the same name, but no phone, email or address confirms it is the same person.`,
+          : `"${match.customer.name}" is already in EdgeHQ with the same name, but no phone, email or address confirms it is the same person.`,
         matchId: isRow ? null : match.customer.id,
         matchName: match.customer.name,
         matchedBy: match.reason,

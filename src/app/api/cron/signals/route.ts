@@ -14,7 +14,7 @@ export const maxDuration = 300
 // ── Signal sweep (Vercel Cron → see vercel.json) ─────────────────────────────
 // THE detection half of the automation engine.
 //
-// The problem it exists for: EdgeQuote has ~75 detectors and, before this, three
+// The problem it exists for: EdgeHQ has ~75 detectors and, before this, three
 // of them ran without a browser open. Ran-out, churn risk, VIP-at-risk and the
 // rest were computed in a useEffect — so an owner who stopped opening the app was
 // never told a $2,400/yr customer was slipping, while the birthday cron cheerfully

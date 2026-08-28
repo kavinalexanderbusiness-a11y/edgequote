@@ -4,7 +4,7 @@ import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { clamp } from '@/lib/utils'
 
 // ── Drive-time learning ──────────────────────────────────────────────────────
-// EdgeQuote already turns distance → minutes with ONE constant (geo.ts
+// EdgeHQ already turns distance → minutes with ONE constant (geo.ts
 // AVG_SPEED_KM_PER_MIN = 0.5 km/min → 2 min/km), used by the optimizer, ETA, and
 // best-day suggester. This engine LEARNS that speed (and the per-stop load/unload
 // overhead) from completed routes instead of assuming it — then feeds the SAME

@@ -945,7 +945,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
                 )}
 
                 {/* ── The owner's own plans, priced from the trace ──────────────
-                    Replaces the block that told every non-lawn trade EdgeQuote had
+                    Replaces the block that told every non-lawn trade EdgeHQ had
                     no engine for them. It had an engine; it just wasn't wired to
                     anything but grass. */}
                 {(!lawnPricing || priceBookSpeaks) ? (

@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { CrewAvailability } from '@/components/crew/CrewAvailability'
 import { ChevronLeft } from 'lucide-react'
 
-export const metadata = { title: 'My availability — EdgeQuote' }
+export const metadata = { title: 'My availability — EdgeHQ' }
 
 // ── My availability ──────────────────────────────────────────────────────────
 // Reached from Me rather than the nav bar: four tabs is what fits a 375px phone

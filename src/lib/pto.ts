@@ -24,7 +24,7 @@
 // (Alberta's average-daily-wage over 4 weeks vs BC's over 30 days vs Ontario's
 // own), and eligibility has its own tests (days worked in the last 12 months,
 // the shift before and after, and so on). Computing it wrong means underpaying a
-// person, which is a legal problem, not a rounding error. So EdgeQuote does not
+// person, which is a legal problem, not a rounding error. So EdgeHQ does not
 // decide eligibility and does not invent the formula: a holiday is paid hours the
 // OWNER sets, at the employee's own rate. averageDailyWage() below is offered as
 // an INPUT to that decision, clearly labelled, never applied automatically.

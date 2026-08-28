@@ -8,7 +8,7 @@ import { ArrowRight } from 'lucide-react'
 
 // ── Where the open money is sitting ──────────────────────────────────────────
 // ⛔ NOT A FORECAST. There is no "$18,000 expected revenue" here, because
-// EdgeQuote has no model that could defend the number. Every figure below is a
+// EdgeHQ has no model that could defend the number. Every figure below is a
 // DETERMINISTIC BUCKET: a fact about a record, not a guess about a person.
 //
 // The split between "needs a follow-up" and "awaiting them" is the owner's own
@@ -99,7 +99,7 @@ export function PipelineBuckets({ s }: { s: SalesSnapshot }) {
         </ul>
 
         <p className="text-[11px] text-ink-faint leading-relaxed">
-          These are counts of real quotes, not a forecast. EdgeQuote does not predict which open
+          These are counts of real quotes, not a forecast. EdgeHQ does not predict which open
           quotes will close — it shows what each one is actually waiting on.
         </p>
       </CardBody>

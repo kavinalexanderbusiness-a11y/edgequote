@@ -1,7 +1,7 @@
 // ── Work sessions: stopping without finishing ────────────────────────────────
 //
 // THE THING THIS MAKES POSSIBLE, in one sentence: a business can say "worked
-// three hours today, back Thursday" without EdgeQuote hearing "job complete".
+// three hours today, back Thursday" without EdgeHQ hearing "job complete".
 //
 // Before this, a job had two honest states — not started, and finished — plus a
 // running clock in between. The only way to record partial work was to complete

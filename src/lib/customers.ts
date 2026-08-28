@@ -385,7 +385,7 @@ export function describePropertyLinks(links: PropertyLink[]): string {
   if (held.length === 0) return ''
   const parts = held.map(l => `${l.count} ${l.count === 1 ? l.noun : l.plural}`)
   const list = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0]
-  return `This address holds ${list}. EdgeQuote keeps history attached to its address, so a property with records can't be removed.`
+  return `This address holds ${list}. EdgeHQ keeps history attached to its address, so a property with records can't be removed.`
 }
 
 /**

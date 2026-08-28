@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic'
 
 // GET /api/public/availability?token=<booking_token>&days=14
 // The next bookable days, derived from the owner's preferred work days + daily capacity
-// minus jobs already on the EdgeQuote calendar — so the website never guesses or stores
+// minus jobs already on the EdgeHQ calendar — so the website never guesses or stores
 // its own availability. Short edge cache (60s) keeps it fast without going stale.
 const CORS = {
   'Access-Control-Allow-Origin': '*',

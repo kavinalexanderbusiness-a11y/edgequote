@@ -12,7 +12,7 @@ import { FileText, Hourglass, Trophy, XCircle, ClipboardCheck, Receipt, Banknote
 // apart in meaning that mistaking them is expensive. "Quoted $31,200" next to
 // "Collected $7,850" is only honest if the owner can see why they differ.
 //
-// ⛔ There is deliberately no "expected revenue" tile. EdgeQuote has no
+// ⛔ There is deliberately no "expected revenue" tile. EdgeHQ has no
 // defensible model for what an open quote will become, so it states what IS
 // ($9,600 in open quotes awaiting a decision) rather than what might be.
 

@@ -82,7 +82,7 @@ export async function saveTraced(
  *
  * No shapes: there is no geometry, and pretending otherwise would make the value
  * look re-derivable when it isn't. Confidence is high because this is the owner's
- * own figure, not EdgeQuote's estimate — but `source` records that nobody traced
+ * own figure, not EdgeHQ's estimate — but `source` records that nobody traced
  * it, so a later reader can tell the difference.
  */
 export async function saveManual(
@@ -96,7 +96,7 @@ export async function saveManual(
 }
 
 /**
- * Save an AUTO measurement — EdgeQuote's own estimate.
+ * Save an AUTO measurement — EdgeHQ's own estimate.
  *
  * Refuses outright for any kind that cannot be honestly estimated from imagery,
  * rather than returning a number with a caveat. This is the gate that stops

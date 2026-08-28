@@ -1,5 +1,5 @@
 // ── Scoped notes: WHO IS THIS WRITTEN FOR ────────────────────────────────────
-// EdgeQuote carries three kinds of written information, and they must never
+// EdgeHQ carries three kinds of written information, and they must never
 // leak into one another:
 //
 //   INTERNAL  the business only — "don't discount below $700", "difficult about

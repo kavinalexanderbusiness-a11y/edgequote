@@ -3,7 +3,7 @@ import { isWon } from '@/lib/winLoss'
 
 // ── THE answer to "where did this customer come from?" ───────────────────────
 //
-// EdgeQuote already had ONE field for this — `customers.acquisition_source` — and
+// EdgeHQ already had ONE field for this — `customers.acquisition_source` — and
 // four different vocabularies writing into it:
 //
 //   1. ACQUISITION_SOURCES (src/types)  — the owner's dropdown on the customer form
@@ -35,7 +35,7 @@ import { isWon } from '@/lib/winLoss'
 // ⛔ WHAT THIS FILE DELIBERATELY IS NOT.
 // It records where a customer said they came from. That is not ad attribution.
 // There is no paid-vs-organic split (a customer choosing "Google" is not evidence
-// of an ad — inventing that distinction would be a claim EdgeQuote cannot support),
+// of an ad — inventing that distinction would be a claim EdgeHQ cannot support),
 // no ad-platform spend, no ROAS, no multi-touch. And no money: see the note above
 // `AcquisitionFunnel` for why revenue is out of V1 on purpose.
 
@@ -63,7 +63,7 @@ export interface SourceCategoryMeta {
 export const SOURCE_CATEGORIES: SourceCategoryMeta[] = [
   { key: 'referral',    label: 'Referral',            hint: 'Sent by someone who already knows you.' },
   { key: 'repeat',      label: 'Repeat customer',     hint: 'Came back on their own.' },
-  { key: 'google',      label: 'Google',              hint: 'Search or the maps listing. EdgeQuote cannot tell paid from organic, and does not guess.' },
+  { key: 'google',      label: 'Google',              hint: 'Search or the maps listing. EdgeHQ cannot tell paid from organic, and does not guess.' },
   { key: 'facebook',    label: 'Facebook',            hint: 'Facebook, including Meta ads.' },
   { key: 'instagram',   label: 'Instagram',           hint: 'Instagram, including Meta ads.' },
   { key: 'nextdoor',    label: 'Nextdoor',            hint: 'The Nextdoor neighbourhood app.' },
@@ -203,7 +203,7 @@ export function describeSource(raw: string | null | undefined): SourceDescriptio
 // quotes and nine completed visits contributes exactly 1 to each stage. Nothing in
 // this file sums a per-quote or per-job number, so no join can multiply anything.
 //
-// Note the denominator this makes honest: "leads" is not a table in EdgeQuote.
+// Note the denominator this makes honest: "leads" is not a table in EdgeHQ.
 // `website_leads` is only ONE of three intake doors, and a customer entered by hand
 // or won by door knocking never has a row in it. Counting customers counts all of
 // them, which is why the report says "customers", not "leads".

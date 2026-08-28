@@ -1,5 +1,5 @@
 // ── "Leads needing a response" — the ONE unread-lead count ───────────────────
-// A lead can reach EdgeQuote by three different doors, and until this existed no
+// A lead can reach EdgeHQ by three different doors, and until this existed no
 // single place counted all three, so the owner's "new leads" number silently
 // undercounted every online booking:
 //

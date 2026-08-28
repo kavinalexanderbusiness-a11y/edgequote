@@ -105,7 +105,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   //
   // SHARED ADDRESSES: every matching customer is collected, not just the first.
   // One address can legitimately be on two records (a couple, a landlord and
-  // their tenant, or the same homeowner using two EdgeQuote businesses), and
+  // their tenant, or the same homeowner using two EdgeHQ businesses), and
   // silently picking one would send someone the wrong portal with no way to tell.
   // Isolation is preserved by the token contract, not by this query: each token
   // resolves through get_portal_data to exactly ONE customer, so N links are N

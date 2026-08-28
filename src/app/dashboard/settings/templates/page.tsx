@@ -22,7 +22,8 @@ import { totalUnitCost, marginPct, markupPct, unitProfit, marginTone, formatPct 
 import { toneText } from '@/lib/tone'
 import { formatCurrency, cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
-import { Plus, Edit2, Trash2, X, Star } from 'lucide-react'
+import { Plus, Edit2, Trash2, X, Star, Repeat, DollarSign, StickyNote } from 'lucide-react'
+import { Collapsible } from '@/components/ui/Collapsible'
 import { ServiceBundles } from '@/components/settings/ServiceBundles'
 import { scrollBehavior } from '@/lib/motion'
 import { listFormTemplates, type FormTemplate } from '@/lib/jobForms'
@@ -308,59 +309,42 @@ export default function ServiceTemplatesPage() {
                 </div>
                 <Select label="Pricing Display Type" options={pricingTypeOptions} {...register('pricing_display_type')} />
               </div>
-              {/* Recurrence eligibility — the ONE place a service is declared
-                  repeatable or one-time (Session 46). "Not set" is honest: the
-                  advisor then needs real repeat-visit evidence before it may
-                  suggest a plan; "One-time only" forbids the suggestion outright. */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
-                <Select label="Recurrence" options={[
-                  { value: '', label: 'Not set' },
-                  { value: 'one_time', label: 'One-time only' },
-                  { value: 'recurring_ok', label: 'Recurring allowed' },
-                  { value: 'usually_recurring', label: 'Usually recurring' },
-                ]} {...register('recurrence')} />
-                <p className="text-xs text-ink-muted sm:pt-7">
-                  {watch('recurrence') === 'one_time'
-                    ? 'EdgeQuote will never suggest making this service recurring.'
-                    : watch('recurrence') === 'usually_recurring'
-                      ? 'This service normally runs as a recurring plan.'
-                      : watch('recurrence') === 'recurring_ok'
-                        ? 'Recurring suggestions are allowed when visits show a rhythm.'
-                        : 'Tells scheduling whether this service can repeat.'}
-                </p>
-              </div>
-              {/* Default checklist (Job Forms V1) — the form visits of this
-                  service carry. Attach-time resolution: pointing at a new one
-                  affects future visits only. Built in Settings → Job Checklists. */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
-                <Select label="Default checklist" options={[
-                  { value: '', label: 'No checklist' },
-                  ...formTemplates.map(ft => ({ value: ft.id, label: ft.name })),
-                ]} {...register('form_template_id')} />
-                <p className="text-xs text-ink-muted sm:pt-7">
-                  {watch('form_template_id')
-                    ? 'Visits booked for this service carry this checklist; required items gate completion.'
-                    : 'Visits booked for this service carry no checklist.'}
-                </p>
-              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
                 <Input label={`${priceInputLabel(pdType)} *`} type="number" step={priceInputStep(pdType)} min="0"
                   error={errors.default_rate ? 'A price is required' : undefined}
                   {...register('default_rate', { required: true })} />
-                <div className="sm:pt-7">
+                <div className="sm:pt-7 space-y-1">
                   <p className="text-xs text-ink-muted">Shows as <span className="font-semibold text-accent-text">{formatServicePrice({ pricing_display_type: pdType, default_rate: Number(priceVal) || 0 })}</span></p>
+                  {/* Which price wins — the answer to "which price does EdgeHQ
+                      actually use?", in the engine's own order
+                      (lib/servicePricing.serviceRecommendation). */}
+                  <p className="text-[11px] text-ink-faint">
+                    Quotes start from the most specific price that exists: a measured
+                    plan or area rate first, then a real labour estimate, then this.
+                    A price you type on a quote always wins.
+                  </p>
                 </div>
               </div>
-              {/* ── Cost & margin ────────────────────────────────────────────
-                  Optional, and deliberately quiet: an owner who doesn't track cost
-                  should be able to ignore this entirely and see no margin claimed
-                  anywhere. Both fields are labelled with the SAME basis as the
-                  price above, so the margin compares like with like. */}
-              <div className="rounded-xl border border-border bg-surface/30 p-4 space-y-3">
+              {/* ── Progressive disclosure ───────────────────────────────────
+                  The default view is what most owners set on most services:
+                  name, category, how the price reads, the price. Everything
+                  below is real capability that most edits never touch — each
+                  section opens itself when the service already uses it (a
+                  checklist attached, a cost tracked, a note written), so
+                  nothing an owner configured is ever hidden from them.
+                  Collapsed fields keep their values (react-hook-form retains
+                  unmounted state) and none carry `required` rules, so a submit
+                  with sections closed is identical to one with them open. */}
+
+              {/* Cost & margin — optional, and deliberately quiet: an owner who
+                  doesn't track cost sees no margin claimed anywhere. Both
+                  fields carry the SAME basis as the price above, so the margin
+                  compares like with like. */}
+              <Collapsible key={`cost-${editing?.id ?? 'new'}`} title="Cost & margin" icon={DollarSign}
+                defaultOpen={cost != null}
+                summary={cost == null ? 'Not tracked — nothing is guessed' : `${formatPct(margin)} margin`}>
                 <div className="flex items-baseline justify-between gap-3">
-                  <h3 className="text-xs font-semibold text-ink">
-                    Cost to deliver <span className="font-normal text-ink-faint">· optional</span>
-                  </h3>
+                  <span className="text-xs text-ink-muted">Optional — leave blank if you don&apos;t track cost.</span>
                   <span className="text-[11px] text-ink-faint">Priced {basis}</span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -389,7 +373,7 @@ export default function ServiceTemplatesPage() {
                     )}
                   </p>
                 )}
-              </div>
+              </Collapsible>
 
               {/* ⭐ Directly under the price fields, because it IS a pricing
                   decision — "measured by area, sold one-time / monthly /
@@ -404,8 +388,61 @@ export default function ServiceTemplatesPage() {
                 onDraftsChange={setPlanDrafts}
               />
 
+              {/* Delivery — how visits for this service behave once booked. */}
+              <Collapsible key={`delivery-${editing?.id ?? 'new'}`} title="Delivery" icon={Repeat}
+                defaultOpen={!!(editing?.recurrence || editing?.form_template_id)}
+                summary={[
+                  watch('recurrence') === 'one_time' ? 'one-time'
+                    : watch('recurrence') === 'usually_recurring' ? 'usually recurring'
+                    : watch('recurrence') === 'recurring_ok' ? 'recurring allowed' : null,
+                  watch('form_template_id') ? 'checklist attached' : null,
+                ].filter(Boolean).join(' · ') || 'Recurrence & checklist'}>
+                {/* Recurrence eligibility — the ONE place a service is declared
+                    repeatable or one-time (Session 46). "Not set" is honest: the
+                    advisor then needs real repeat-visit evidence before it may
+                    suggest a plan; "One-time only" forbids the suggestion outright. */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+                  <Select label="Recurrence" options={[
+                    { value: '', label: 'Not set' },
+                    { value: 'one_time', label: 'One-time only' },
+                    { value: 'recurring_ok', label: 'Recurring allowed' },
+                    { value: 'usually_recurring', label: 'Usually recurring' },
+                  ]} {...register('recurrence')} />
+                  <p className="text-xs text-ink-muted sm:pt-7">
+                    {watch('recurrence') === 'one_time'
+                      ? 'EdgeHQ will never suggest making this service recurring.'
+                      : watch('recurrence') === 'usually_recurring'
+                        ? 'This service normally runs as a recurring plan.'
+                        : watch('recurrence') === 'recurring_ok'
+                          ? 'Recurring suggestions are allowed when visits show a rhythm.'
+                          : 'Tells scheduling whether this service can repeat.'}
+                  </p>
+                </div>
+                {/* Default checklist (Job Forms V1) — the form visits of this
+                    service carry. Attach-time resolution: pointing at a new one
+                    affects future visits only. Built in Settings → Job Checklists. */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+                  <Select label="Default checklist" options={[
+                    { value: '', label: 'No checklist' },
+                    ...formTemplates.map(ft => ({ value: ft.id, label: ft.name })),
+                  ]} {...register('form_template_id')} />
+                  <p className="text-xs text-ink-muted sm:pt-7">
+                    {watch('form_template_id')
+                      ? 'Visits booked for this service carry this checklist; required items gate completion.'
+                      : 'Visits booked for this service carry no checklist.'}
+                  </p>
+                </div>
+              </Collapsible>
+
               <Textarea label="Default Description" {...register('default_description')} />
-              <Textarea label="Internal Notes" {...register('notes')} />
+
+              {/* Internal notes — never customer-facing; folded because most
+                  services have none, open wherever one is already written. */}
+              <Collapsible key={`notes-${editing?.id ?? 'new'}`} title="Internal notes" icon={StickyNote}
+                defaultOpen={!!editing?.notes}
+                summary={watch('notes') ? 'Has a note' : 'Only you see these'}>
+                <Textarea label="Internal Notes" {...register('notes')} />
+              </Collapsible>
               <div className="flex items-start justify-between pt-1 gap-3">
                 <div className="flex items-start gap-4 flex-wrap">
                   <div>

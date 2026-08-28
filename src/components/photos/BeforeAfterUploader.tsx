@@ -401,7 +401,7 @@ export function BeforeAfterUploader({
           dragOver ? 'border-accent bg-accent/10' : 'border-border hover:border-border-strong bg-bg-tertiary')}>
         <UploadCloud className={cn('w-6 h-6', dragOver ? 'text-accent-text' : 'text-ink-faint')} />
         <p className="text-sm font-medium text-ink">Drag photos here, or click to choose</p>
-        <p className="text-[11px] text-ink-faint">Drop a whole day at once — EdgeQuote splits it into visits and sorts before/after</p>
+        <p className="text-[11px] text-ink-faint">Drop a whole day at once — EdgeHQ splits it into visits and sorts before/after</p>
       </label>
 
       {/* ── Duplicate question (one, clear) ── */}

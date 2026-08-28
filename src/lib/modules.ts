@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 
 // ── Feature-module registry ───────────────────────────────────────────────────
-// THE declarative catalogue of EdgeQuote's feature modules — the platform seam
+// THE declarative catalogue of EdgeHQ's feature modules — the platform seam
 // for per-business composition and the foundation the marketplace stands on.
 // Navigation (sidebar + command palette) renders FROM this registry; a
 // business's `business_settings.enabled_modules` (jsonb string[]) decides which
@@ -224,7 +224,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
   // still holds all of it — the pitch just stops opening with it.
   { key: 'integrations', label: 'Integrations', href: '/dashboard/integrations', icon: Plug,
     category: 'admin', tier: 'secondary', version: 1, updatedAt: '2026-08-09',
-    description: 'Connect other apps to EdgeQuote — plus a developer API, if yours needs one.',
+    description: 'Connect other apps to EdgeHQ — plus a developer API, if yours needs one.',
     permissions: ['customers:read', 'quotes:read', 'jobs:read', 'invoices:read', 'payments:read', 'customers:write', 'webhooks:send'],
     keywords: 'api webhooks zapier make connect apps developer accounts' },
 ]

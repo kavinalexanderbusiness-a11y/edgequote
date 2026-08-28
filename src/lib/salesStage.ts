@@ -1,5 +1,5 @@
 // ── THE sales stage vocabulary ───────────────────────────────────────────────
-// Six rungs, one ladder, derived from records EdgeQuote already keeps. No
+// Six rungs, one ladder, derived from records EdgeHQ already keeps. No
 // `stage` column, no `pipeline_status`, no second lifecycle to keep in sync with
 // quotes.status — the same posture lib/quoteStatus took with 'expired' and
 // lib/payments/ledger took with 'overdue': a display state DERIVED from real

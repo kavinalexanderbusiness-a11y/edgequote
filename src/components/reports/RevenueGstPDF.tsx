@@ -14,7 +14,7 @@ import { PDF_COLORS, pdfLogoSize } from '@/lib/pdfTheme'
 // via the shared `@/lib/pdfTheme`.
 //
 // This is NOT a profit / P&L / net-income statement, and must never be dressed
-// up as one: EdgeQuote has no expense table anywhere, so the cost side of the
+// up as one: EdgeHQ has no expense table anywhere, so the cost side of the
 // business is simply absent from the data. `crew_cost_per_hour` is an internal
 // costing ASSUMPTION for pricing, not a record of money spent — synthesising
 // "expenses" from it would hand an accountant a fabricated number. The document
@@ -291,7 +291,7 @@ export function RevenueGstDoc({ report, settings }: RevenueGstPDFProps): JSX.Ele
               ? ` Also excludes ${report.excludedDrafts.count} draft invoice${report.excludedDrafts.count === 1 ? '' : 's'} (${formatCurrency(report.excludedDrafts.total)}) that have not been sent to a customer.`
               : ' Draft invoices, if any, are excluded until sent.'}
             {' '}GST shown is charged on invoices, not a filing figure. This is a revenue summary, not a
-            profit statement — business expenses are not tracked in EdgeQuote.
+            profit statement — business expenses are not tracked in EdgeHQ.
           </Text>
         </View>
 

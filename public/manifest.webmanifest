@@ -1,7 +1,7 @@
 {
-  "name": "EdgeQuote — Edge Property Services",
-  "short_name": "EdgeQuote",
-  "description": "Quoting, scheduling and field operations for Edge Property Services.",
+  "name": "EdgeHQ — Field Service Platform",
+  "short_name": "EdgeHQ",
+  "description": "Quoting, scheduling and field operations for service businesses.",
   "start_url": "/dashboard",
   "scope": "/",
   "display": "standalone",

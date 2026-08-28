@@ -9,7 +9,7 @@
 // it hands over — exactly as passwordResetEmail and betaVerifyEmail do.
 //
 // ── WHY THIS IS PLATFORM MAIL, NOT TENANT MAIL ───────────────────────────────
-// It is addressed to somebody about their EdgeQuote LOGIN — an account matter,
+// It is addressed to somebody about their EdgeHQ LOGIN — an account matter,
 // not a message the business is sending its customer. So it goes straight
 // through sendEmail(): no consent check (the recipient is not a customer), no
 // governor (that is customer-cadence machinery), no notification_log (that

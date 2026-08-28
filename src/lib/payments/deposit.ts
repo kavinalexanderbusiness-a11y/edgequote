@@ -5,7 +5,7 @@ import { invoiceBalance } from '@/lib/payments/ledger'
 
 // ── THE deposit / upfront-request engine ─────────────────────────────────────
 //
-// A deposit in EdgeQuote is NOT a second invoice and NOT a new kind of money row.
+// A deposit in EdgeHQ is NOT a second invoice and NOT a new kind of money row.
 // It is a PARTIAL PAYMENT against the invoice that already exists, plus a
 // remembered request for how much of it to collect now.
 //

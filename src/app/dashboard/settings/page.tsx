@@ -35,17 +35,21 @@ import { weekdayLong } from '@/lib/preferences'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
 import { Download, Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin, LayoutGrid, Wallet, X, ArrowRight, LayoutTemplate, ClipboardCheck, SlidersHorizontal } from 'lucide-react'
 
+// Ten sections, clustered by the question an owner arrives with rather than by
+// the order features shipped: the business itself → money → how customers hear
+// from you → the workspace's own plumbing. Keys are UNCHANGED — #hash links,
+// bookmarks and every "/dashboard/settings#x" door in the app keep working.
 const SETTINGS_TABS: TabItem[] = [
-  { key: 'business', label: 'Business', icon: Building2 },
-  { key: 'pricing', label: 'Pricing & Fees', icon: DollarSign },
-  { key: 'scheduling', label: 'Scheduling', icon: CalendarRange },
-  { key: 'messaging', label: 'Messaging', icon: MessageSquare },
-  { key: 'notifications', label: 'Notifications', icon: Bell },
-  { key: 'booking', label: 'Booking', icon: LinkIcon },
-  { key: 'payroll', label: 'Payroll', icon: Wallet },
-  { key: 'modules', label: 'Features', icon: LayoutGrid },
-  { key: 'custom-fields', label: 'Custom fields', icon: SlidersHorizontal },
-  { key: 'data', label: 'Your data', icon: Download },
+  { key: 'business', label: 'Business', icon: Building2, group: 'business' },
+  { key: 'scheduling', label: 'Scheduling', icon: CalendarRange, group: 'business' },
+  { key: 'pricing', label: 'Pricing & Fees', icon: DollarSign, group: 'money' },
+  { key: 'payroll', label: 'Payroll', icon: Wallet, group: 'money' },
+  { key: 'messaging', label: 'Messaging', icon: MessageSquare, group: 'customers' },
+  { key: 'notifications', label: 'Notifications', icon: Bell, group: 'customers' },
+  { key: 'booking', label: 'Booking', icon: LinkIcon, group: 'customers' },
+  { key: 'modules', label: 'Features', icon: LayoutGrid, group: 'workspace' },
+  { key: 'custom-fields', label: 'Custom fields', icon: SlidersHorizontal, group: 'workspace' },
+  { key: 'data', label: 'Your data', icon: Download, group: 'workspace' },
 ]
 type SettingsTab = (typeof SETTINGS_TABS)[number]['key']
 

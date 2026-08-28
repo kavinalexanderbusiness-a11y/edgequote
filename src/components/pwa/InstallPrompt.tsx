@@ -23,7 +23,7 @@ function recentlyDismissed(): boolean {
   } catch { return false }
 }
 
-// Gentle, dismissible "Install EdgeQuote" banner. Never shows when already
+// Gentle, dismissible "Install EdgeHQ" banner. Never shows when already
 // installed, recently dismissed, or before the owner has had a moment to use the
 // app. Android gets a one-tap install; iOS gets the Share → Add to Home Screen
 // hint (Safari has no programmatic install).
@@ -81,7 +81,7 @@ export function InstallPrompt() {
           <Download className="w-5 h-5" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-ink">Install EdgeQuote</p>
+          <p className="text-sm font-semibold text-ink">Install EdgeHQ</p>
           {iosHint ? (
             <p className="text-xs text-ink-muted mt-0.5 leading-relaxed">
               Tap <Share className="inline w-3.5 h-3.5 -mt-0.5" /> <span className="font-medium text-ink">Share</span>, then

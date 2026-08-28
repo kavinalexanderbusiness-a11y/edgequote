@@ -27,7 +27,7 @@ export const dynamic = 'force-dynamic'
 //   2. ENUMERATION. POST /auth/v1/recover answers 200 for an address with no
 //      account, 429 for one that has an account and asked twice inside a minute,
 //      and 400 for one whose address its mailer rejects. Two requests a minute
-//      apart therefore identify an EdgeQuote owner. Nothing a page can do closes
+//      apart therefore identify an EdgeHQ owner. Nothing a page can do closes
 //      that, because the endpoint is reachable with the public anon key — so the
 //      browser stops calling it, and asks this instead.
 //
@@ -51,7 +51,7 @@ export const dynamic = 'force-dynamic'
 
 // The one neutral sentence. Deliberately a constant so there is exactly one
 // success shape and it cannot drift into two.
-const NEUTRAL = 'If that address has an EdgeQuote account, a link to choose a new password is on its way.'
+const NEUTRAL = 'If that address has an EdgeHQ account, a link to choose a new password is on its way.'
 const ok = () => NextResponse.json({ ok: true, message: NEUTRAL }, { headers: { 'Cache-Control': 'no-store' } })
 const unavailable = () => NextResponse.json(
   { error: 'We can’t send reset links right now. Please try again shortly.' },

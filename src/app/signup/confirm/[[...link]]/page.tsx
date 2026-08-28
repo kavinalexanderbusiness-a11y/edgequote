@@ -114,7 +114,7 @@ function ConfirmFlow() {
 
       {phase === 'revoked' && (
         <Card icon={<TriangleAlert className="w-6 h-6 text-amber-300" aria-hidden />} title="This invite was revoked">
-          <p className="text-sm text-ink-muted">Your email is confirmed, but the invite behind it is no longer active. Contact EdgeQuote if that’s unexpected.</p>
+          <p className="text-sm text-ink-muted">Your email is confirmed, but the invite behind it is no longer active. Contact EdgeHQ if that’s unexpected.</p>
         </Card>
       )}
 

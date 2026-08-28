@@ -13,7 +13,7 @@ import { GoogleButton, AuthDivider } from '@/components/auth/GoogleButton'
 
 // ── /signup — the invite-only front door ─────────────────────────────────────
 // Reached only from an invite URL (/signup?invite=eqb_…) handed out by the
-// EdgeQuote operator. Without a valid token this page is a dead end on purpose:
+// EdgeHQ operator. Without a valid token this page is a dead end on purpose:
 // there is no open registration, and the business_settings INSERT policy would
 // refuse a tenant anyway — this page is the honest face of that rule, not the
 // enforcement of it.
@@ -226,9 +226,9 @@ const DEAD_TITLES: Record<'invalid' | 'expired' | 'revoked' | 'used', string> = 
 }
 
 const DEAD_BODIES: Record<'invalid' | 'expired' | 'revoked' | 'used', string> = {
-  invalid: 'EdgeQuote is in private beta — accounts are created by invite. Check the link you were sent, or ask for a fresh one.',
-  expired: 'Invites are time-limited. Ask EdgeQuote for a new one — your details aren’t lost, nothing was created yet.',
-  revoked: 'This invite is no longer active. Contact EdgeQuote if you think that’s a mistake.',
+  invalid: 'EdgeHQ is in private beta — accounts are created by invite. Check the link you were sent, or ask for a fresh one.',
+  expired: 'Invites are time-limited. Ask EdgeHQ for a new one — your details aren’t lost, nothing was created yet.',
+  revoked: 'This invite is no longer active. Contact EdgeHQ if you think that’s a mistake.',
   used: 'Each invite creates exactly one business. If that was you, sign in below.',
 }
 
@@ -238,7 +238,7 @@ function Brand({ sub }: { sub: string }) {
       <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-accent to-emerald-700 flex items-center justify-center mb-4 shadow-lg shadow-accent/20">
         <Zap className="w-6 h-6 text-black fill-black" />
       </div>
-      <h1 className="text-xl font-bold tracking-tight text-ink">EdgeQuote AI</h1>
+      <h1 className="text-xl font-bold tracking-tight text-ink">EdgeHQ</h1>
       <p className="text-sm text-ink-muted mt-1">{sub}</p>
     </div>
   )

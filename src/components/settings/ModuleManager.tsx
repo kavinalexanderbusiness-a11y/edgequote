@@ -20,7 +20,7 @@ import { LayoutGrid, Star, ArrowUpCircle } from 'lucide-react'
 // of this product has. It was also two surfaces over one registry, which is how
 // they start disagreeing. The storefront is now a redirect here.
 //
-// What is left is the honest job: a list of what EdgeQuote can do, with a switch
+// What is left is the honest job: a list of what EdgeHQ can do, with a switch
 // beside each one for the parts a given business doesn't want cluttering its
 // menu. Dependencies come along atomically when something is switched ON, and a
 // switch OFF is refused (by name) while something else still needs it. "Off"

@@ -6,7 +6,7 @@ import type { PricingDisplayType } from '@/types'
 export const dynamic = 'force-dynamic' // token-keyed; we set our own Cache-Control
 
 // GET /api/public/services?token=<booking_token>
-// The website's service list + pricing, straight from EdgeQuote Service Templates — so
+// The website's service list + pricing, straight from EdgeHQ Service Templates — so
 // the site never duplicates services or prices. Cached at the edge (5 min) so it stays
 // fast and SEO-friendly. Open CORS so a browser on the marketing site can read it.
 const CORS = {
@@ -31,7 +31,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   if (!data) return NextResponse.json({ error: 'not found' }, { status: 404, headers: CORS })
 
   const d = data as { business: unknown; services: ServiceRow[] }
-  // Format each price through THE canonical formatter so labels match EdgeQuote exactly.
+  // Format each price through THE canonical formatter so labels match EdgeHQ exactly.
   const services = (d.services || []).map(s => ({
     ...s,
     priceLabel: formatServicePrice({ pricing_display_type: s.pricing_display_type, default_rate: Number(s.default_rate) }),

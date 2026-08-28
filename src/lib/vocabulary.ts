@@ -1,5 +1,5 @@
 // ── THE words for the work ───────────────────────────────────────────────────
-// EdgeQuote called the same thing a job, a visit and a stop on adjacent screens
+// EdgeHQ called the same thing a job, a visit and a stop on adjacent screens
 // — sometimes on the SAME screen. This file is the one place the three words are
 // defined, so a future change can look them up instead of guessing.
 //

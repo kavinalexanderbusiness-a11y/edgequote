@@ -51,7 +51,7 @@ export interface RuleConstraints {
 }
 
 // ── Delay ────────────────────────────────────────────────────────────────────
-/** The stage EdgeQuote has never had. A fired rule becomes a queued action, not
+/** The stage EdgeHQ has never had. A fired rule becomes a queued action, not
  *  a send. The queue is what makes quiet hours, frequency caps and undo possible. */
 export interface QueuedAction {
   id: string

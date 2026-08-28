@@ -1,5 +1,5 @@
 // ── The team, as the owner talks about it ────────────────────────────────────
-// EdgeQuote's tables say `technicians`. Owners say "my guys", "the crew",
+// EdgeHQ's tables say `technicians`. Owners say "my guys", "the crew",
 // "who's on today". The database name is load-bearing (renaming it would touch
 // time_entries, wage_history, pay_run_lines, payroll replay and the crew-access
 // RPCs, for a word), so the translation happens HERE, once, and every surface

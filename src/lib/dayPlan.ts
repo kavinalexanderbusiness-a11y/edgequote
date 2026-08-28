@@ -679,7 +679,7 @@ export function travelBasisLabel(travel: DayPlan['travel']): string {
 /**
  * ⭐ WHAT THE TRAVEL NUMBER IS ALLOWED TO BE CALLED.
  *
- * "17 minutes of driving" is a claim about roads. EdgeQuote can make it only
+ * "17 minutes of driving" is a claim about roads. EdgeHQ can make it only
  * for legs a routing provider actually timed — and those durations are already
  * in `road_distance_cache.seconds`; nothing new is called to get them. For
  * every other leg the number is an allowance derived from how far apart the

@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { serviceCategory } from '@/lib/seasons'
 
 // ── businessShape — THE derivation of what a business does ────────────────────
-// EdgeQuote is lawn-care-first, but the same product has to fit a plumber, an
+// EdgeHQ is lawn-care-first, but the same product has to fit a plumber, an
 // HVAC tech, a cleaner, a roofer. Those trades have no lawn, and a plumber
 // should not be asked for a lawn size.
 //

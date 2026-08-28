@@ -9,7 +9,7 @@ import type { SourceReport } from '@/lib/sales/analytics'
 // answer, and a raw value nobody recognised keeps its own text.
 //
 // ⚠️ THE LABELS ARE LOAD-BEARING. These are figures FROM customers acquired
-// through a channel — never revenue CAUSED by it. EdgeQuote records where a
+// through a channel — never revenue CAUSED by it. EdgeHQ records where a
 // customer said they came from; that is not ad attribution, and a causal claim
 // is one this app cannot support.
 //
@@ -87,7 +87,7 @@ export function SourceTable({ sources }: { sources: SourceReport }) {
         <div className="space-y-1 text-[11px] text-ink-faint leading-relaxed">
           <p>
             Money here is what came <em>from customers who arrived through that source</em> — not
-            revenue caused by it. EdgeQuote records where a customer said they came from; it does
+            revenue caused by it. EdgeHQ records where a customer said they came from; it does
             not track ads.
           </p>
           <p>

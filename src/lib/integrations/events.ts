@@ -140,7 +140,7 @@ export const INTEGRATION_EVENTS: IntegrationEventDef[] = [
 /** The synthetic event used by the "Send test" tool — never captured from data. */
 export const TEST_EVENT = 'test.ping'
 export const TEST_SAMPLE: Record<string, unknown> = {
-  message: 'Test delivery from EdgeQuote — your endpoint is wired up.',
+  message: 'Test delivery from EdgeHQ — your endpoint is wired up.',
 }
 
 export const EVENT_KEYS = INTEGRATION_EVENTS.map((e) => e.key)

@@ -81,7 +81,7 @@ export function exportFilename(companyName: string | null | undefined, isoDate: 
 }
 
 // ── README.txt ───────────────────────────────────────────────────────────────
-// The archive has to explain itself to somebody who is not looking at EdgeQuote:
+// The archive has to explain itself to somebody who is not looking at EdgeHQ:
 // an accountant, a new system, the owner in two years. The money paragraph is the
 // point of the whole file — "amount" is a word three different systems define
 // three different ways.
@@ -102,7 +102,7 @@ function readmeText(input: {
   L.push('')
   L.push('This is your business data, in plain files. Open any .csv in Excel,')
   L.push('Numbers, Google Sheets, or any accounting package. Nothing in here needs')
-  L.push('EdgeQuote to read it. manifest.json says the same thing in a form a')
+  L.push('EdgeHQ to read it. manifest.json says the same thing in a form a')
   L.push('program can read.')
   L.push('')
   L.push('WHAT IS IN EACH FILE')
@@ -128,7 +128,7 @@ function readmeText(input: {
   L.push('      <- invoices.csv          customer_id      (+ property_id, quote_id, job_id)')
   L.push('      <- payments.csv          customer_id      (+ invoice_id)')
   L.push('')
-  L.push('"job_id" refers to visits.csv: inside EdgeQuote a visit is stored in a')
+  L.push('"job_id" refers to visits.csv: inside EdgeHQ a visit is stored in a')
   L.push('table called "jobs", and one row is one visit. recurring-jobs.csv holds')
   L.push('the ongoing arrangement that produced them.')
   L.push('')

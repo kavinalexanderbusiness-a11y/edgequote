@@ -114,7 +114,7 @@ function LoginForm() {
               <Zap className="w-6 h-6 text-black fill-black" />
             </div>
           )}
-          <h1 className="text-xl font-bold tracking-tight text-ink">EdgeQuote AI</h1>
+          <h1 className="text-xl font-bold tracking-tight text-ink">EdgeHQ</h1>
           <p className="text-sm text-ink-muted mt-1">Your field service workspace</p>
         </div>
 

@@ -12,7 +12,7 @@ import type { ExpenseCategory, ExpenseCategoryKind } from '@/types'
 // visit; after that they are ordinary rows. Renaming "Fuel" to "Gas" or deleting
 // one is permanent and correct, and re-seeding never resurrects it (see below).
 //
-// INDUSTRY-NEUTRAL on purpose. There is no industry picker in EdgeQuote and
+// INDUSTRY-NEUTRAL on purpose. There is no industry picker in EdgeHQ and
 // these must read as sane to a landscaper, an electrician and a cleaner alike —
 // so no "Mulch", no "Wire", no "Chemicals". A trade-specific category is one the
 // owner adds in five seconds, and one we would otherwise be guessing at.

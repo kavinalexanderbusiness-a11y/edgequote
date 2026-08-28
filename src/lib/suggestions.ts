@@ -24,7 +24,7 @@ import { dayDelta, type RecurringPlanPayload } from '@/lib/recurrence'
 import { ServiceSeasons, serviceCategory, seasonForService, seasonEndDateFor, isWithinSeason, nextSeasonStartISO } from '@/lib/seasons'
 import { addDays, parseISO, format, getDay } from 'date-fns'
 
-// ── Suggestions Center — EdgeQuote's business advisor ────────────────────────
+// ── Suggestions Center — EdgeHQ's business advisor ────────────────────────
 // Decision-first, action-first. This is NOT another analytics view: it turns the
 // existing engines (pricing, economics, profitability, optimizer, seasons,
 // reactivation, neighborhoods) into a RANKED feed of "do this next" actions.

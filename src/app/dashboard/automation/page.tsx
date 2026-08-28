@@ -167,7 +167,7 @@ interface CommsTest {
 // so they can't drift. The old one — "what the automation engine saw, decided and
 // did" — described the machine to someone who only wants to know whether anything
 // is about to be sent to their customers.
-const LEDE = 'Customers EdgeQuote thinks are due for another visit. It flags them here — it never contacts anyone on its own.'
+const LEDE = 'Customers EdgeHQ thinks are due for another visit. It flags them here — it never contacts anyone on its own.'
 
 const TABS: TabItem[] = [
   { key: 'overview', label: 'Overview', icon: Gauge },
@@ -417,7 +417,7 @@ export default function AutomationPage() {
           there is nothing to switch on here, and saying so is kinder than leaving
           people hunting for a toggle that shouldn't exist. */}
       <Banner tone="info" icon={Info}>
-        EdgeQuote watches for customers whose recurring work has run out, or who have drifted past their usual
+        EdgeHQ watches for customers whose recurring work has run out, or who have drifted past their usual
         visit. It flags them here and stops — it never texts, emails or books anyone on its own, and there is
         nothing on this page to switch on.
       </Banner>

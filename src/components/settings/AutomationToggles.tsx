@@ -93,7 +93,7 @@ export function AutomationToggles() {
   }
 
   // The revert is honest, but a switch that slides back by itself in silence
-  // reads as a UI glitch — and these switches decide whether EdgeQuote texts the
+  // reads as a UI glitch — and these switches decide whether EdgeHQ texts the
   // owner's customers. Say what happened. (persist() also returns false on an
   // expired session, which looked identical to a write failure and equally mute.)
   async function toggle(key: keyof Automations, value: boolean) {

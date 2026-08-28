@@ -536,7 +536,7 @@ export function sheetPrintHtml(sheet: DispatchSheet): string {
   <p class="sub">${sheet.lanes.length} crew${sheet.lanes.length !== 1 ? 's' : ''} · ${sheet.lanes.reduce((s, l) => s + l.stops.length, 0)} visits</p>
   ${sheet.dayNote ? `<p class="daynote">${esc(sheet.dayNote)}</p>` : ''}
   ${laneHtml}
-  <footer><span class="sig">Completed by / time in</span><span>EdgeQuote dispatch · ${esc(sheet.dateISO)}</span></footer>
+  <footer><span class="sig">Completed by / time in</span><span>EdgeHQ dispatch · ${esc(sheet.dateISO)}</span></footer>
   <script>window.onload = function () { window.print() }</script>
 </body></html>`
 }

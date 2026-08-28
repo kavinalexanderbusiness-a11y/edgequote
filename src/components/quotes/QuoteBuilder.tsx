@@ -681,7 +681,7 @@ export function QuoteBuilder({
       ? 'Measure the property to see recommended pricing for this service.'
       : rate <= 0
         ? <>No recommendation yet — {settingsLink('set your Default Labour Rate in Settings')}, or type a price.</>
-        : 'No recommendation yet — add hours in the Labour calculator, or type a price. EdgeQuote won’t guess.'
+        : 'No recommendation yet — add hours in the Labour calculator, or type a price. EdgeHQ won’t guess.'
 
   // Accept for one-off services: fill the one price that makes sense and CLEAR
   // the lawn cadence fields (weekly mulch makes no sense on a quote).
@@ -1932,7 +1932,7 @@ export function QuoteBuilder({
           {/* The price field itself lives in the fast path above — see the note
               there. These sections hold the engine that FEEDS it. */}
 
-          {/* ── Pricing help — EdgeQuote working out a number, not the number ──
+          {/* ── Pricing help — EdgeHQ working out a number, not the number ──
               Labour and plan pricing were two of the seven drawers, ranked beside
               Notes and Scheduling as if they were the same kind of decision. They
               are not: they are the internal arithmetic BEHIND the customer price
@@ -1942,7 +1942,7 @@ export function QuoteBuilder({
           <Collapsible title="Pricing help" icon={Calculator} summary={pricingHelpSummary}
             open={laborOpen || planOpen} onOpenChange={setPricingHelp}>
             <p className="text-[11px] text-ink-faint">
-              This is how EdgeQuote works out a suggestion. The customer never sees any of it — they see the price above.
+              This is how EdgeHQ works out a suggestion. The customer never sees any of it — they see the price above.
             </p>
             <div className="rounded-xl border border-border bg-bg-secondary p-3 space-y-3">
             {/* "Labour" named the accounting concept; this names the job the block

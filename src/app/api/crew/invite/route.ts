@@ -14,7 +14,7 @@ export const runtime = 'nodejs'          // the service role must never run at t
 export const dynamic = 'force-dynamic'
 
 // ── Provisioning an employee login ───────────────────────────────────────────
-// THE owner-authenticated server boundary. This is the only place in EdgeQuote
+// THE owner-authenticated server boundary. This is the only place in EdgeHQ
 // that creates an auth account, and the only crew-related code that touches the
 // service role.
 //
@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
     // should know their next move without opening a dashboard to guess.
     return fail(
       'not-configured',
-      'Creating logins needs SUPABASE_SERVICE_ROLE_KEY set on the deployment. Until then, use “Join code” — it works for someone who already has an EdgeQuote login.',
+      'Creating logins needs SUPABASE_SERVICE_ROLE_KEY set on the deployment. Until then, use “Join code” — it works for someone who already has an EdgeHQ login.',
       503,
     )
   }
@@ -114,7 +114,7 @@ export async function POST(req: NextRequest) {
   // ⚠️ ACCOUNT-TAKEOVER GUARD (2026-08-10 tenant audit). Below this point the
   // route LINKS the account and mints a `recovery` token for the address, and
   // hands that token back to the caller. So binding a PRE-EXISTING account that
-  // isn't already this employee's is the whole attack: name any EdgeQuote user's
+  // isn't already this employee's is the whole attack: name any EdgeHQ user's
   // email — another business's owner, say — and the response is a password-reset
   // token for their account.
   //
@@ -133,7 +133,7 @@ export async function POST(req: NextRequest) {
   // the Join code, which requires the person to sign in and consent themselves.
   if (existingId && existingId !== tech.auth_user_id) {
     return fail('email-taken',
-      'That email already has an EdgeQuote login. Ask them to sign in and enter a Join code instead — that way they accept the invite themselves.',
+      'That email already has an EdgeHQ login. Ask them to sign in and enter a Join code instead — that way they accept the invite themselves.',
       409)
   }
   if (tech.auth_user_id && tech.auth_user_id !== existingId) {

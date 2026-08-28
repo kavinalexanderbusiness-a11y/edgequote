@@ -34,28 +34,28 @@ export function hashBetaToken(rawToken: string): string {
 // recipient who never asked for it — ignoring it must be safe and sufficient.
 export function betaVerifyEmail(confirmUrl: string): { subject: string; html: string; text: string } {
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-  const subject = 'Confirm your EdgeQuote account'
+  const subject = 'Confirm your EdgeHQ account'
   const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto;padding:28px 22px;color:#111827">
-  <p style="margin:0 0 14px;font-size:16px">Welcome to the EdgeQuote beta,</p>
+  <p style="margin:0 0 14px;font-size:16px">Welcome to the EdgeHQ beta,</p>
   <p style="margin:0;font-size:15px;line-height:1.55;color:#374151">Confirm your email address to finish creating your account. This link is single-use — requesting a new one replaces it.</p>
   <p style="margin:24px 0 0">
     <a href="${esc(confirmUrl)}" style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:10px;font-weight:600;font-size:15px">Confirm my email</a>
   </p>
   <p style="margin:26px 0 0;font-size:13px;line-height:1.5;color:#6b7280">
-    If you didn’t sign up for EdgeQuote, ignore this message — nothing happens without this link.
+    If you didn’t sign up for EdgeHQ, ignore this message — nothing happens without this link.
   </p>
-  <p style="margin:18px 0 0;font-size:13px;color:#9ca3af">— EdgeQuote</p>
+  <p style="margin:18px 0 0;font-size:13px;color:#9ca3af">— EdgeHQ</p>
 </div>`
   const text = [
-    'Welcome to the EdgeQuote beta,',
+    'Welcome to the EdgeHQ beta,',
     '',
     'Confirm your email address to finish creating your account. This link is single-use — requesting a new one replaces it.',
     '',
     confirmUrl,
     '',
-    'If you didn’t sign up for EdgeQuote, ignore this message — nothing happens without this link.',
+    'If you didn’t sign up for EdgeHQ, ignore this message — nothing happens without this link.',
     '',
-    '— EdgeQuote',
+    '— EdgeHQ',
   ].join('\n')
   return { subject, html, text }
 }

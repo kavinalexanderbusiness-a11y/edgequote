@@ -1,7 +1,7 @@
 // ── THE sales analytics composition ──────────────────────────────────────────
 //
 // WHAT THIS IS
-// The owner's money questions about SELLING, answered from records EdgeQuote
+// The owner's money questions about SELLING, answered from records EdgeHQ
 // already keeps: how much did I quote, what is still open, what was won, what
 // was lost, what is authorized now, what did I actually invoice, and what did I
 // actually collect. Plus which lead sources produced each of those.
@@ -296,7 +296,7 @@ export interface SalesFunnel {
   /**
    * Customers created in the period who never received a quote. Counted at the
    * CUSTOMER level — the same unit lib/attribution's funnel uses — because
-   * "leads" is not a table in EdgeQuote and a deal has no record before a quote.
+   * "leads" is not a table in EdgeHQ and a deal has no record before a quote.
    */
   unquotedLeads: number
   /** True when any quote in the cohort has no `sent_at`, so the UI can explain
@@ -316,7 +316,7 @@ export interface SalesFunnel {
 // invoiceTotals / invoiceBalance / cashAmountOf, and nothing in this file adds a
 // money rule. (b) is answered by LABELLING, and the labels are load-bearing:
 // these figures are "collected FROM customers acquired via X", never "revenue
-// caused by X". EdgeQuote cannot support a causal claim and does not make one.
+// caused by X". EdgeHQ cannot support a causal claim and does not make one.
 //
 // ⭐ The CATEGORY is still derived in lib/attribution and nowhere else. This
 // module calls describeSource and stores the answer; it contains no mapping of
@@ -744,7 +744,7 @@ export function computeSalesAnalytics(i: SalesAnalyticsInput): SalesAnalyticsRep
     cohortNote:
       'Every figure follows the quotes you created in this period. ' +
       'Money is counted in full whenever it arrived, even after the period ended — ' +
-      'EdgeQuote does not record the date a quote was accepted, so it is never guessed.',
+      'EdgeHQ does not record the date a quote was accepted, so it is never guessed.',
     snapshot,
     funnel,
     sources,

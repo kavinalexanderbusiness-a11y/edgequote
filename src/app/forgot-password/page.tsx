@@ -1,6 +1,6 @@
 import { ForgotPasswordForm } from '@/components/auth/ForgotPasswordForm'
 
-export const metadata = { title: 'Reset your password — EdgeQuote' }
+export const metadata = { title: 'Reset your password — EdgeHQ' }
 
 // ── Asking for a reset link ──────────────────────────────────────────────────
 // Outside every gate, by construction rather than by exception: the middleware

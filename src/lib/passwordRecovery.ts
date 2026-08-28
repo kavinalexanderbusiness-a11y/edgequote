@@ -134,7 +134,7 @@ export function readRecoveryFragment(hash: string): RecoveryFragment {
 //     POST /recover  fixture@…invalid→ 400 email_address_invalid
 //
 // Two requests sixty seconds apart therefore tell an attacker whether an address
-// is an EdgeQuote owner. That oracle lives in Supabase's endpoint, which is
+// is an EdgeHQ owner. That oracle lives in Supabase's endpoint, which is
 // reachable with the public anon key — no page of ours can close it. What we CAN
 // refuse to do is build a second one in our own UI, so every 4xx collapses into
 // the one neutral sentence. (The project-level fix is Supabase's CAPTCHA, which
@@ -174,7 +174,7 @@ export type RecoveryRequestOutcome =
  * ⚠️ This deliberately no longer classifies Supabase's own /recover. That
  * endpoint answers 200 for an unknown address, 429 for a known one asked twice
  * inside a minute, and 400 for a known one whose address the mailer rejects —
- * measured 2026-08-13 — so two requests a minute apart identify an EdgeQuote
+ * measured 2026-08-13 — so two requests a minute apart identify an EdgeHQ
  * owner. The browser no longer calls it at all.
  */
 export function classifyRecoverySend(status: number | null | undefined): RecoveryRequestOutcome {
@@ -187,7 +187,7 @@ export function classifyRecoverySend(status: number | null | undefined): Recover
  *  accepted. Never says "sent", never says "delivered", never repeats whether
  *  the address is known — and the address is echoed so a typo is visible. */
 export function acceptedMessage(email: string): string {
-  return `If ${email} has an EdgeQuote account, a link to choose a new password is on its way. It expires in an hour.`
+  return `If ${email} has an EdgeHQ account, a link to choose a new password is on its way. It expires in an hour.`
 }
 
 /** What we say when nothing was sent and we know it. No account is named. */

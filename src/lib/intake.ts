@@ -5,7 +5,7 @@ import { sanitizeSourceInput } from '@/lib/attribution'
 // ── Shared lead intake ───────────────────────────────────────────────────────
 // THE single server-side door for turning ANY external submission (website
 // contact / quote / booking forms, Formspree, a generic webhook, future
-// integrations) into a customer + property + lead inside EdgeQuote. Every source
+// integrations) into a customer + property + lead inside EdgeHQ. Every source
 // funnels through the SAME submit_website_lead pipeline (dedup customer by
 // phone→email→address, create/match property, write the lead, thread it into
 // Messages, notify the owner) — only the `source` (acquisition_source) differs.

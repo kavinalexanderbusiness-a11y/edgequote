@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 export const dynamic = 'force-dynamic'
 
 // POST /api/public/booking?token=<booking_token>   (token may also be in the body)
-// The website's primary booking path. EdgeQuote de-dupes the customer (returning
+// The website's primary booking path. EdgeHQ de-dupes the customer (returning
 // customers are recognised automatically), creates the property, and EITHER books a job
 // (when a real date + service were chosen) OR raises a 'sent' quote — then notifies the
 // owner in Messages. If anything here is unavailable, the site should fall back to the

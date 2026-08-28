@@ -9,7 +9,7 @@ import { putPending, allPending, dropPending, bumpPendingAttempts, sweepPending 
 // ── Background upload queue — ONE engine for "uploads that keep going" ────────────
 // A module-level external store (subscribe/emit, mirrors lib/toast) consumed by a
 // single <UploadQueueWidget/> mounted in the dashboard layout — so uploads continue
-// while you navigate anywhere in EdgeQuote, with progress shown in ONE place.
+// while you navigate anywhere in EdgeHQ, with progress shown in ONE place.
 //   • Optimistic: items appear instantly (local object-URL previews).
 //   • Parallel with a concurrency cap; retries failures with backoff.
 //   • Pauses on offline, RESUMES on reconnect — and now SURVIVES a restart: every

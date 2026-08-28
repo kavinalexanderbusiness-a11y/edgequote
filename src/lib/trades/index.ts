@@ -4,7 +4,7 @@ import { NEUTRAL_PACK } from './neutral'
 import { CATALOG_PACKS } from './catalog'
 
 // ── THE trade registry ────────────────────────────────────────────────────────
-// Every trade EdgeQuote knows how to seed. Code-defined on purpose — the same
+// Every trade EdgeHQ knows how to seed. Code-defined on purpose — the same
 // call lib/automation/rules.ts made for automation rules: inventing a trade
 // should be a reviewed change, not a row someone can type. Adding one is a pack
 // file + a registry line + CI green; it must never need a migration, because

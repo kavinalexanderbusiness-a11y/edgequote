@@ -230,7 +230,7 @@ export function flashRing(map: any, latLng: any, color = '#00C896') {
 // ── THE branded property pin ─────────────────────────────────────────────────
 // One implementation for every quoting/measuring map (QuoteMeasure modal and
 // the Measure & Price page), so the lot being quoted is always unmistakable:
-// an EdgeQuote-green teardrop pin (amber when the geocode is approximate) with
+// an EdgeHQ-green teardrop pin (amber when the geocode is approximate) with
 // a "Quoting this property" label, drawn above every polygon and vertex marker,
 // with an opening pulse that lands the eye on the right lot.
 
