@@ -1,8 +1,14 @@
 'use client'
 
+import { useState } from 'react'
 import { Select } from '@/components/ui/Select'
 import { PRICING_TERMS, unitLabel, type MeasurementType, type PriceBasis } from '@/lib/measurePricing'
 import { planSetProblem, PLAN_PROBLEM_MESSAGE, type PlanDraft } from '@/lib/servicePlans'
+
+/** Does this draft already carry a term? Drives whether the term fields are
+ *  shown for a plan the owner saved earlier — the disclosure below only has to
+ *  remember what was opened in THIS session. */
+const hasTerm = (d: PlanDraft) => !!(d.term_label.trim() || d.term_start || d.term_end)
 
 // ── "This service is measured by X, and these are the ways I sell it" ────────
 // THE configuration surface for Measure & Price, and deliberately the smallest
@@ -35,6 +41,9 @@ export function MeasurePricingEditor({
   onDraftsChange: (next: PlanDraft[]) => void
 }) {
   const measured = measuredBy && measuredBy !== 'none'
+  // Which plans have their term fields showing. Local and deliberately not
+  // persisted: it is a disclosure, not configuration.
+  const [termOpen, setTermOpen] = useState<Set<string>>(new Set())
   const problem = planSetProblem(drafts)
   const enabledCount = drafts.filter(d => d.enabled).length
   const unit = measured ? (unitLabel(measuredBy as MeasurementType) || 'unit') : 'unit'
@@ -42,7 +51,14 @@ export function MeasurePricingEditor({
   const patch = (term: string, changes: Partial<PlanDraft>) =>
     onDraftsChange(drafts.map(d => {
       if (d.term !== term) return d
-      return { ...d, ...changes }
+      const next = { ...d, ...changes }
+      // ⭐ An unmeasured service has no unit, so `per_unit` cannot mean anything
+      // for it — pricePlan() would find no measurement and report the plan
+      // unpriced forever. Coerced HERE rather than validated at save, so the
+      // stored row and the screen always agree, including for a service whose
+      // measurement type the owner has just switched off.
+      if (!measured) next.basis = 'flat'
+      return next
     }))
 
   // Only one plan may wear the badge — the DB enforces it with a partial unique
@@ -54,9 +70,13 @@ export function MeasurePricingEditor({
     <div className="rounded-xl border border-border bg-surface/30 p-4 space-y-3">
       <div className="flex items-baseline justify-between gap-3">
         <h3 className="text-xs font-semibold text-ink">
-          Measure &amp; Price <span className="font-normal text-ink-faint">· optional</span>
+          {/* Renamed: the block is no longer only about measuring. It answers two
+              independent questions — how this service is measured (if at all) and
+              how it is sold — and gating the second on the first is exactly the
+              bug fixed below. */}
+          Pricing plans <span className="font-normal text-ink-faint">· optional</span>
         </h3>
-        {measured && enabledCount > 0 && (
+        {enabledCount > 0 && (
           <span className="text-[11px] text-ink-faint">{enabledCount} plan{enabledCount === 1 ? '' : 's'}</span>
         )}
       </div>
@@ -75,8 +95,16 @@ export function MeasurePricingEditor({
         </p>
       </div>
 
-      {measured && (
-        <div className="space-y-2 pt-1">
+      {/* ⭐⭐ NOT GATED ON `measured` (Session 111). This block used to render only
+          for a measured service, so a business selling snow clearing at a flat
+          $70/visit, $240/month and $900/season — no trace involved — could not
+          configure a single one of those plans. It had to declare the service
+          measured to reach the editor, which is a lie told to a column to get at
+          a screen.
+          HOW A SERVICE IS MEASURED AND HOW IT IS SOLD ARE INDEPENDENT FACTS.
+          Measurement decides whether a PER-UNIT rate is available; it has no
+          bearing on whether a business offers a monthly price. */}
+      <div className="space-y-2 pt-1">
           <div>
             <p className="text-xs font-semibold text-ink">Ways you sell it</p>
             {/* ⛔⛔ The distinction the whole feature rests on, said where the
@@ -106,17 +134,23 @@ export function MeasurePricingEditor({
 
                 {d.enabled && (
                   <div className="mt-2 pl-[30px] flex flex-wrap items-end gap-2.5">
-                    <label className="flex flex-col gap-1">
-                      <span className="text-[11px] text-ink-muted">Price rule</span>
-                      <select
-                        value={d.basis}
-                        onChange={e => patch(t.key, { basis: e.target.value as PriceBasis })}
-                        className="h-11 bg-bg border border-border-strong rounded-lg px-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
-                      >
-                        <option value="per_unit">Per {unit}</option>
-                        <option value="flat">Flat price</option>
-                      </select>
-                    </label>
+                    {/* A per-unit rate needs a unit to multiply. An unmeasured
+                        service therefore has exactly one honest price rule, and
+                        the control says so rather than offering a choice that
+                        would produce a price of nothing × a rate. */}
+                    {measured ? (
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[11px] text-ink-muted">Price rule</span>
+                        <select
+                          value={d.basis}
+                          onChange={e => patch(t.key, { basis: e.target.value as PriceBasis })}
+                          className="h-11 bg-bg border border-border-strong rounded-lg px-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+                        >
+                          <option value="per_unit">Per {unit}</option>
+                          <option value="flat">Flat price</option>
+                        </select>
+                      </label>
+                    ) : null}
                     <label className="flex flex-col gap-1">
                       <span className="text-[11px] text-ink-muted">
                         {d.basis === 'per_unit' ? `$ per ${unit}` : `$ ${t.priceSuffix.replace('/', 'per ')}`}
@@ -158,8 +192,80 @@ export function MeasurePricingEditor({
                     <p className="basis-full text-[11px] text-ink-faint">
                       {d.basis === 'per_unit'
                         ? `Price = your rate × the measured ${unit}.`
-                        : `Price = this amount, whatever the measurement.`}
+                        : measured
+                          ? 'Price = this amount, whatever the measurement.'
+                          : 'Price = this amount.'}
                     </p>
+
+                    {/* ── What the customer reads, and the period it covers ────
+                        ⛔ NO PLACEHOLDER TEXT THAT COULD BE MISTAKEN FOR A
+                        DEFAULT. Both fields are empty until the owner types, and
+                        an empty field puts NOTHING on the quote. The product does
+                        not ship "Pay only when service occurs" — that is a claim
+                        about how a business operates, and only the business can
+                        make it. */}
+                    <label className="basis-full flex flex-col gap-1">
+                      <span className="text-[11px] text-ink-muted">
+                        What the customer reads <span className="text-ink-faint">· optional</span>
+                      </span>
+                      <input
+                        type="text"
+                        value={d.customer_note}
+                        onChange={e => patch(t.key, { customer_note: e.target.value })}
+                        maxLength={140}
+                        placeholder="Your own words for this plan"
+                        className="h-11 w-full bg-bg border border-border-strong rounded-lg px-2.5 text-base sm:text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+                      />
+                    </label>
+
+                    {/* The term is genuinely optional and most plans have none, so
+                        it stays out of the way until asked for — three date-ish
+                        fields on every plan row would be the "20 configuration
+                        steps" the brief is against. */}
+                    {termOpen.has(t.key) || hasTerm(d) ? (
+                      <div className="basis-full grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <label className="flex flex-col gap-1">
+                          <span className="text-[11px] text-ink-muted">Term name</span>
+                          <input
+                            type="text" value={d.term_label}
+                            onChange={e => patch(t.key, { term_label: e.target.value })}
+                            maxLength={60}
+                            placeholder="e.g. 2026/27 Season"
+                            className="h-11 w-full bg-bg border border-border-strong rounded-lg px-2.5 text-base sm:text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+                          />
+                        </label>
+                        <label className="flex flex-col gap-1">
+                          <span className="text-[11px] text-ink-muted">Starts</span>
+                          <input
+                            type="date" value={d.term_start}
+                            onChange={e => patch(t.key, { term_start: e.target.value })}
+                            className="h-11 w-full bg-bg border border-border-strong rounded-lg px-2.5 text-base sm:text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+                          />
+                        </label>
+                        <label className="flex flex-col gap-1">
+                          <span className="text-[11px] text-ink-muted">Ends</span>
+                          <input
+                            type="date" value={d.term_end}
+                            onChange={e => patch(t.key, { term_end: e.target.value })}
+                            className="h-11 w-full bg-bg border border-border-strong rounded-lg px-2.5 text-base sm:text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+                          />
+                        </label>
+                        <p className="sm:col-span-3 text-[11px] text-ink-faint">
+                          {/* ⛔ The line that keeps a commercial term from being read
+                              as a schedule. Dates here say what the price covers —
+                              they create no visits and no recurrence. */}
+                          The period this price covers. It doesn’t schedule any visits.
+                        </p>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setTermOpen(prev => new Set(prev).add(t.key))}
+                        className="basis-full text-left min-h-[40px] text-[11px] font-semibold text-accent-text hover:underline"
+                      >
+                        + Add a term (season or fixed period)
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -170,15 +276,16 @@ export function MeasurePricingEditor({
             <p className="text-[11px] text-amber-400">{PLAN_PROBLEM_MESSAGE[problem]}</p>
           )}
           {!problem && enabledCount === 0 && (
-            // Honest, not alarming: measuring without a plan is a legitimate
-            // half-configured state. The map will say "pricing not configured"
-            // rather than invent a number.
+            // Honest, not alarming: no plan is a legitimate half-configured
+            // state. Quotes fall back to this service's starting price, and the
+            // map says "pricing not configured" rather than inventing a number.
             <p className="text-[11px] text-ink-faint">
-              No plans yet — quotes can still measure this service, and will say pricing isn’t configured rather than show a price.
+              {measured
+                ? 'No plans yet — quotes can still measure this service, and will say pricing isn’t configured rather than show a price.'
+                : 'No plans yet — quotes for this service use its starting price above.'}
             </p>
           )}
         </div>
-      )}
     </div>
   )
 }

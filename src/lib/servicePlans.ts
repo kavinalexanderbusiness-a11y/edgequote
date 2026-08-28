@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ServicePricingPlanRow } from '@/types'
 import type { ServicePricingPlan, PricingTerm, PriceBasis } from '@/lib/measurePricing'
 import { PRICING_TERMS, isPricingTerm } from '@/lib/measurePricing'
+import type { OfferingPlan } from '@/lib/recurringOffering'
 
 // ── Reading and writing the ways a service is sold ───────────────────────────
 // The IO half of Measure & Price V2. lib/measurePricing stays PURE — it does the
@@ -54,8 +55,14 @@ export function plansByTemplate(rows: ServicePricingPlanRow[]): Map<string, Serv
   return m
 }
 
-/** DB rows → the pure engine's input shape. */
-export function toPricingPlans(rows: ServicePricingPlanRow[] | null | undefined): ServicePricingPlan[] {
+/**
+ * DB rows → the pure engine's input shape.
+ *
+ * Returns OfferingPlan (= ServicePricingPlan + the four presentation fields), a
+ * SUPERSET of what it used to return, so every existing caller is unchanged and
+ * lib/recurringOffering gets the owner's words without a second loader.
+ */
+export function toPricingPlans(rows: ServicePricingPlanRow[] | null | undefined): OfferingPlan[] {
   return (rows || [])
     .filter(r => isPricingTerm(r.term))
     .map(r => ({
@@ -66,8 +73,17 @@ export function toPricingPlans(rows: ServicePricingPlanRow[] | null | undefined)
       rate: Number(r.rate) || 0,
       is_recommended: !!r.is_recommended,
       sort_order: r.sort_order ?? 0,
+      // Blank is not a note. Normalised to null at the boundary so no reader
+      // downstream has to test for two flavours of absence.
+      customer_note: blankToNull(r.customer_note),
+      term_label: blankToNull(r.term_label),
+      term_start: blankToNull(r.term_start),
+      term_end: blankToNull(r.term_end),
     }))
 }
+
+const blankToNull = (v: string | null | undefined): string | null =>
+  String(v ?? '').trim() || null
 
 /** What the Price Book editor holds while the owner is still typing. */
 export interface PlanDraft {
@@ -78,6 +94,15 @@ export interface PlanDraft {
    *  not silently become a $0 plan. Mapped on save, refused when blank. */
   rate: string
   is_recommended: boolean
+  // ── What the customer reads, and the period the price covers (Session 111) ──
+  // Strings throughout, '' meaning "the owner wrote nothing", mapped to NULL on
+  // save. ⛔ Never seeded with example text: a placeholder that survives to a
+  // sent quote is a promise the owner never made.
+  customer_note: string
+  term_label: string
+  /** 'YYYY-MM-DD' from a date input, or '' when undated. */
+  term_start: string
+  term_end: string
 }
 
 /** One draft per term, seeded from whatever the owner has already saved. */
@@ -93,11 +118,15 @@ export function draftsFor(rows: ServicePricingPlanRow[] | null | undefined): Pla
       basis: (row?.basis as PriceBasis) ?? 'per_unit',
       rate: row ? String(row.rate) : '',
       is_recommended: !!row?.is_recommended,
+      customer_note: row?.customer_note ?? '',
+      term_label: row?.term_label ?? '',
+      term_start: row?.term_start ?? '',
+      term_end: row?.term_end ?? '',
     }
   })
 }
 
-export type PlanProblem = 'no_rate' | 'negative_rate' | 'many_recommended'
+export type PlanProblem = 'no_rate' | 'negative_rate' | 'many_recommended' | 'term_backwards'
 
 /**
  * Why this set of drafts cannot be saved, or null. Pure, so the editor's inline
@@ -113,6 +142,10 @@ export function planSetProblem(drafts: PlanDraft[]): PlanProblem | null {
     const n = Number(String(d.rate).trim())
     if (!String(d.rate).trim() || !Number.isFinite(n) || n === 0) return 'no_rate'
     if (n < 0) return 'negative_rate'
+    // The one rule about a term the app can honestly check, and the same one the
+    // DB constraint enforces — asked here so the owner reads a sentence while
+    // both dates are on screen, not a check_violation after tapping Save.
+    if (d.term_start && d.term_end && d.term_end < d.term_start) return 'term_backwards'
   }
   if (on.filter(d => d.is_recommended).length > 1) return 'many_recommended'
   return null
@@ -122,6 +155,7 @@ export const PLAN_PROBLEM_MESSAGE: Record<PlanProblem, string> = {
   no_rate: 'Give every plan you offer a rate — a plan with no rate can’t price anything, and storing zero would tell customers the work is free.',
   negative_rate: 'A rate can’t be negative.',
   many_recommended: 'Only one plan can be marked Recommended.',
+  term_backwards: 'A term can’t end before it starts.',
 }
 
 /**
@@ -163,6 +197,13 @@ export async function savePricingPlans(
       rate: Number(String(d.rate).trim()),
       is_recommended: !!d.is_recommended,
       sort_order: order.get(d.term) ?? 0,
+      // '' → NULL, so "the owner wrote nothing" is one value in the database and
+      // the CHECK constraints (which refuse an empty string) cannot be tripped by
+      // an untouched field.
+      customer_note: blankToNull(d.customer_note),
+      term_label: blankToNull(d.term_label),
+      term_start: blankToNull(d.term_start),
+      term_end: blankToNull(d.term_end),
     }))
   if (!rows.length) return
 

@@ -20,7 +20,8 @@ import {
   type PricedPlan, type MeasurementSnapshotV2,
 } from '@/lib/measurePricing'
 import { toPricingPlans } from '@/lib/servicePlans'
-import { MAX_QUOTE_OPTIONS, MIN_QUOTE_OPTIONS } from '@/lib/quoteOptions'
+import { offeringsFor, offerableForOptions, type Offering } from '@/lib/recurringOffering'
+import { MIN_QUOTE_OPTIONS } from '@/lib/quoteOptions'
 import { AUDIENCE_COPY } from '@/lib/noteScope'
 import { Textarea } from '@/components/ui/Textarea'
 import { DEFAULT_CREW_COST, crewCostPerHour as resolveCrewCost } from '@/lib/economics'
@@ -68,8 +69,13 @@ export interface MeasureApplyPayload {
   /** ⭐ Non-null ONLY when the owner pressed "Offer these plans" — the builder
    *  then writes quote_options rows and lets the CUSTOMER choose. Reusing Quote
    *  Options rather than inventing a second option-selection engine is the whole
-   *  point; `null` means "one price, chosen by me". */
-  offerPlans: PricedPlan[] | null
+   *  point; `null` means "one price, chosen by me".
+   *
+   *  ⭐ Offering, not PricedPlan (Session 111): an option the customer reads needs
+   *  the words the OWNER configured for it, and a PricedPlan carries only the
+   *  provenance string. Both doors to Quote Options now hand over the same shape
+   *  and both build their rows with offeringOptionRows(). */
+  offerPlans: Offering[] | null
   /** Edited in the modal, applied to the SAME two canonical quote fields the
    *  builder already owns. null when the owner didn't open the notes section. */
   notes: { customer: string; internal: string } | null
@@ -596,6 +602,13 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
     [enginePlans, measuredValue, measurementType],
   )
   const priced = pricedOnly(plansPriced)
+  // ⭐ THE SAME SEAM THE BUILDER PANEL USES. The map and the in-builder panel must
+  // produce identical options from identical plans, so neither names, prices nor
+  // describes an option itself — lib/recurringOffering does it once for both.
+  const offerings = useMemo(
+    () => offeringsFor(enginePlans, measuredValue, measurementType),
+    [enginePlans, measuredValue, measurementType],
+  )
   const noPriceReason = unpricedReason(template, enginePlans, measuredValue)
   // Land on the owner's recommended plan, but only among plans that actually
   // carry a number — defaulting to a priceless row would put an empty price in
@@ -604,7 +617,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
   // Quote Options is the existing engine for "customer picks one", and it refuses
   // fewer than two. So the second button only exists when there really is a choice.
   const canOfferOptions = priced.length >= MIN_QUOTE_OPTIONS
-  const offerable = priced.slice(0, MAX_QUOTE_OPTIONS)
+  const offerable = offerableForOptions(offerings)
 
   // Record auto vs accepted so the estimate self-calibrates (best-effort).
   //
@@ -659,7 +672,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
    * Apply ONE chosen plan. The measurement and the notes always travel; the money
    * only travels when a plan actually carries a number.
    */
-  function applyPlan(plan: PricedPlan | null, offer: PricedPlan[] | null) {
+  function applyPlan(plan: PricedPlan | null, offer: Offering[] | null) {
     recordMeasure()
     clearDraft()
     onApply({

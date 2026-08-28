@@ -39,6 +39,7 @@
     "verify:modules": "tsx scripts/verify-modules.ts",
     "verify:measure": "tsx scripts/verify-measure.ts",
     "verify:measure-price": "tsx scripts/verify-measure-price.ts",
+    "verify:recurring-quote-flow": "tsx scripts/verify-recurring-quote-flow.ts",
     "verify:measurement-rpc": "tsx scripts/verify-measurement-rpc.ts",
     "verify:navigation": "tsx scripts/verify-navigation.ts",
     "verify:grow": "tsx scripts/verify-grow.ts",

@@ -1825,6 +1825,21 @@ export interface ServicePricingPlanRow {
   rate: number
   is_recommended: boolean
   sort_order: number
+  // ── Commercial plan presentation (Session 111, migration 20260827120000) ────
+  // All owner-authored, all nullable, and NULL renders as NOTHING. ⛔ The product
+  // ships no default text: a sentence about how service is delivered is a
+  // promise, and only the business may make it.
+  /** The owner's own customer-facing line for this plan — becomes an option's
+   *  description. ⛔ Never the provenance string ("$0.05/sq ft × 1,392 sq ft"),
+   *  which is the owner's rationale for the number, not the customer's offer. */
+  customer_note?: string | null
+  /** Owner-named period this price covers, e.g. "2026/27 Winter Season". */
+  term_label?: string | null
+  /** First/last day this plan's price covers. Concrete dates, NOT recurring
+   *  anchors — business_settings.service_seasons stays the only definition of
+   *  when the business operates. ⛔ Neither date schedules anything. */
+  term_start?: string | null
+  term_end?: string | null
 }
 
 export interface ServiceTemplateFormValues {

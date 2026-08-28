@@ -28,6 +28,7 @@ import { scrollBehavior } from '@/lib/motion'
 import { listFormTemplates, type FormTemplate } from '@/lib/jobForms'
 import { MeasurePricingEditor } from '@/components/pricing/MeasurePricingEditor'
 import { loadPricingPlans, savePricingPlans, draftsFor, plansByTemplate, type PlanDraft } from '@/lib/servicePlans'
+import { startingPriceIsFallback } from '@/lib/recurringOffering'
 import type { MeasurementType } from '@/lib/measurePricing'
 import type { ServicePricingPlanRow } from '@/types'
 
@@ -85,6 +86,13 @@ export default function ServiceTemplatesPage() {
   // hang them off until it is inserted).
   const [measuredBy, setMeasuredBy] = useState<'' | MeasurementType>('')
   const [planDrafts, setPlanDrafts] = useState<PlanDraft[]>(draftsFor([]))
+  // ⭐ THE DEMOTION PREDICATE, asked through lib/recurringOffering so the editor
+  // and the guard share one definition of "canonical plans exist". Read off the
+  // DRAFTS, not the saved rows, so the Starting Price is relabelled the moment
+  // the owner ticks a plan — before saving, while they can still see why.
+  const plansConfigured = startingPriceIsFallback(
+    planDrafts.filter(d => d.enabled).map(d => ({ service_template_id: '', term: d.term, basis: d.basis, rate: Number(d.rate) || 0 })),
+  )
   const [allPlans, setAllPlans] = useState<Map<string, ServicePricingPlanRow[]>>(new Map())
 
   async function refreshPlans() {
@@ -343,12 +351,32 @@ export default function ServiceTemplatesPage() {
                     : 'Visits booked for this service carry no checklist.'}
                 </p>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+              {/* ── The starting price, and what it means once plans exist ────
+                  ⭐⭐ THE DEMOTION (Session 111). Four things in this codebase can
+                  produce a number for a service, and this field was one of them
+                  speaking at the same volume as the commercial plans below.
+                  lib/recurringOffering.PRICING_PRECEDENCE settles it: configured
+                  plans are the more specific configuration, so where they exist
+                  this figure is a DISPLAY HINT — the catalogue's "Starting from
+                  $65" — and not a quote input.
+                  ⛔ Nothing is deleted, hidden or migrated. The field keeps its
+                  value, keeps being editable, and goes straight back to pricing
+                  quotes the moment the plans are removed. It is relabelled, not
+                  taken away, because a service with no plans (which is every
+                  service in every existing install) is still priced by it. */}
+              <div className={cn('grid grid-cols-1 sm:grid-cols-2 gap-4 items-start',
+                plansConfigured && 'rounded-xl border border-border bg-surface/30 p-3')}>
                 <Input label={`${priceInputLabel(pdType)} *`} type="number" step={priceInputStep(pdType)} min="0"
                   error={errors.default_rate ? 'A price is required' : undefined}
                   {...register('default_rate', { required: true })} />
-                <div className="sm:pt-7">
+                <div className="sm:pt-7 space-y-1">
                   <p className="text-xs text-ink-muted">Shows as <span className="font-semibold text-accent-text">{formatServicePrice({ pricing_display_type: pdType, default_rate: Number(priceVal) || 0 })}</span></p>
+                  {plansConfigured && (
+                    <p className="text-[11px] text-ink-faint">
+                      Fallback. Your pricing plans below price this service’s quotes — this figure is
+                      only how it’s advertised in the catalogue.
+                    </p>
+                  )}
                 </div>
               </div>
               {/* ── Cost & margin ────────────────────────────────────────────

@@ -13,6 +13,10 @@ import { ServicePicker } from '@/components/ui/ServicePicker'
 import { useAutosave } from '@/hooks/useAutosave'
 import { AutosaveStatus, DraftRestoreBanner } from '@/components/ui/Autosave'
 import { QuoteMeasure } from '@/components/quotes/QuoteMeasure'
+import { ServiceOfferings } from '@/components/quotes/ServiceOfferings'
+import { offeringOptionRows, offeringsFor, noOfferingsReason } from '@/lib/recurringOffering'
+import { measurementTypeFor, formatMeasured } from '@/lib/measurePricing'
+import { toPricingPlans } from '@/lib/servicePlans'
 import { Select } from '@/components/ui/Select'
 import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
@@ -373,6 +377,16 @@ export function QuoteBuilder({
   // not just the direction (§15: the last of the three first-run dead ends).
   const [calcMsg, setCalcMsg] = useState<{ text: string; error?: boolean; settingsLink?: boolean } | null>(null)
   const [showMeasure, setShowMeasure] = useState(false)
+  // Which commercial term the owner has landed on for a single-price quote.
+  // ⛔ Held here, NOT written to the quote — a term is how the price was chosen,
+  // and the quote stores the price. Persisting the term would create a second
+  // fact about the money that nothing reads and that a later edit could
+  // contradict.
+  const [offeringTerm, setOfferingTerm] = useState<string | null>(null)
+  // Did THIS quote's options come from the service's plans? Only used to tell the
+  // owner what is already on the quote, so the panel stops re-offering an action
+  // they have taken. It is not a claim about provenance and is not persisted.
+  const [optionsFromPlans, setOptionsFromPlans] = useState(false)
   // Mobile-only: the desktop preview card is lg-only, so the phone needs a way in.
   const [showPreview, setShowPreview] = useState(false)
   // Derived from the quote being edited, not assumed. It was hardcoded `true`, so
@@ -1090,6 +1104,31 @@ export function QuoteBuilder({
     return () => { alive = false }
   }, [])
 
+  // ── What this service can be offered as (Session 111) ──────────────────────
+  // ⭐ Derived ONCE here and read by the offerings panel AND the pre-send
+  // preview. Both used to be candidates for computing it themselves, which is
+  // two chances for the screen the owner configures on and the screen they check
+  // before sending to disagree about what the quote offers.
+  const svcPlans = useMemo(
+    () => toPricingPlans(svcTemplate ? (pricingPlans.get(svcTemplate.id) ?? []) : []),
+    [svcTemplate, pricingPlans],
+  )
+  const svcMeasurementType = useMemo(() => measurementTypeFor(svcTemplate), [svcTemplate])
+  const svcOfferings = useMemo(
+    () => offeringsFor(svcPlans, Number(measuredSqft) || null, svcMeasurementType),
+    [svcPlans, measuredSqft, svcMeasurementType],
+  )
+  const svcOfferingsReason = useMemo(
+    () => noOfferingsReason(svcTemplate, svcPlans, Number(measuredSqft) || null),
+    [svcTemplate, svcPlans, measuredSqft],
+  )
+  // The offering the quote is currently priced at, for the pre-send preview. With
+  // options on, the customer has not chosen yet, so no single term is claimed.
+  const previewOffering = useMemo(
+    () => (optionsOn ? null : svcOfferings.find(o => o.term === offeringTerm) ?? null),
+    [optionsOn, svcOfferings, offeringTerm],
+  )
+
   // What an EXTRA line may pick from: active services only, plus whichever
   // template this line already points at, so editing an older quote never blanks
   // its own selection just because the service was retired since. The RAW list
@@ -1197,6 +1236,59 @@ export function QuoteBuilder({
   // laptop. Same JSX both places: one breakdown, no second copy to drift.
   const previewBreakdown = (
     <>
+      {/* ── What this quote is FOR (Session 111) ───────────────────────────────
+          The brief's pre-send check: service, property, measurement and term,
+          compactly, above the money. Every line renders only when it has
+          something to say — an empty row is worse than no row.
+          ⛔ INTERNAL NOTES ARE ABSENT BY CONSTRUCTION. This block reads
+          `notes` (the customer-facing field) and never `internal_notes`. The two
+          are separate columns with separate audiences (lib/noteScope), and the
+          preview is a rehearsal of what the customer receives. */}
+      {(watch('service_type') || address || previewOffering) && (
+        <div className="space-y-1.5 pb-3 border-b border-border">
+          {watch('service_type') && (
+            <div className="flex items-start justify-between gap-3 text-xs">
+              <span className="text-ink-faint shrink-0">Service</span>
+              <span className="text-ink font-medium text-right truncate">{watch('service_type')}</span>
+            </div>
+          )}
+          {address && (
+            <div className="flex items-start justify-between gap-3 text-xs">
+              <span className="text-ink-faint shrink-0">Property</span>
+              <span className="text-ink text-right truncate">{address}</span>
+            </div>
+          )}
+          {svcMeasurementType !== 'none' && Number(measuredSqft) > 0 && (
+            <div className="flex items-start justify-between gap-3 text-xs">
+              <span className="text-ink-faint shrink-0">Measured</span>
+              <span className="text-ink tabular-nums text-right">
+                {formatMeasured(Number(measuredSqft), svcMeasurementType)}
+              </span>
+            </div>
+          )}
+          {previewOffering && (
+            <div className="flex items-start justify-between gap-3 text-xs">
+              <span className="text-ink-faint shrink-0">Priced as</span>
+              <span className="text-ink text-right">{previewOffering.label}</span>
+            </div>
+          )}
+          {/* The term, only when the owner configured one. ⛔ Never inferred from
+              the word "seasonal" and never filled from a season's dates. */}
+          {previewOffering?.termText && (
+            <div className="flex items-start justify-between gap-3 text-xs">
+              <span className="text-ink-faint shrink-0">Term</span>
+              <span className="text-ink text-right">{previewOffering.termText}</span>
+            </div>
+          )}
+          {String(notes || '').trim() && (
+            <div className="flex items-start justify-between gap-3 text-xs">
+              <span className="text-ink-faint shrink-0">Customer notes</span>
+              <span className="text-ink text-right line-clamp-2">{String(notes)}</span>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Only when there ARE hours. `Number(hours).toFixed(1)` rendered unknown
           hours as "0.0 hrs · 1 crew" — a confident claim that the job takes no
           time, in the one place the owner checks their numbers, on a form whose
@@ -1587,6 +1679,53 @@ export function QuoteBuilder({
                   </span>
                 )}
               </div>
+
+              {/* ── The ways this service is sold (Session 111) ────────────────
+                  Renders ONLY for a service whose owner has configured pricing
+                  plans; every other service sees exactly the builder it saw
+                  before. This is the door that used to be inside the satellite
+                  modal — a service configured as NOT measured could not reach its
+                  own configured prices at all, which is the whole "assembling
+                  several unrelated pieces" complaint. */}
+              <ServiceOfferings
+                template={svcTemplate}
+                offerings={svcOfferings}
+                hasPlans={svcPlans.length > 0}
+                reason={svcOfferingsReason}
+                measurementType={svcMeasurementType}
+                measuredValue={Number(measuredSqft) || null}
+                selectedTerm={offeringTerm}
+                onSelectTerm={setOfferingTerm}
+                optionsApplied={optionsFromPlans}
+                onMeasure={() => {
+                  if (!address) { toast.error('Enter a service address first.'); return }
+                  setShowMeasure(true)
+                }}
+                onUseSingle={(o) => {
+                  // ⛔ Never written when the offering has no price — that state
+                  // is unreachable from the panel (a priceless row can't be
+                  // selected), and stamping a 0 here would be the exact bug the
+                  // whole null-is-unknown discipline exists to prevent.
+                  if (o.price == null) return
+                  setValue('has_options', false, { shouldDirty: true })
+                  setValue('options', [], { shouldDirty: true })
+                  setOptionsFromPlans(false)
+                  setValue('initial_price', o.price, { shouldDirty: true })
+                  markApplied()
+                  toast.success(`${o.label} — ${o.priceText}`)
+                }}
+                onOfferOptions={(list) => {
+                  // ⭐⭐ REUSING QUOTE OPTIONS, through the ONE seam that builds
+                  // the rows. The builder does not name, price or describe an
+                  // option itself — lib/recurringOffering does, so the map modal
+                  // and this panel cannot produce different options from the same
+                  // plans. Everything seeded here stays editable before sending.
+                  setValue('has_options', true, { shouldDirty: true })
+                  setValue('options', offeringOptionRows(list) as QuoteFormValues['options'], { shouldDirty: true })
+                  setOptionsFromPlans(true)
+                  toast.success(`${list.length} options added — edit them below before sending.`)
+                }}
+              />
 
               {/* A measured AREA — a core property attribute (powers pricing, labour
                   & future analytics). Auto-filled from a website/satellite measurement
@@ -2619,13 +2758,18 @@ export function QuoteBuilder({
               // The option NAME is the commercial term ("Monthly"), its price is
               // the plan's price, and `is_recommended` is the owner's own badge.
               if (sel.offerPlans?.length) {
+                // ⭐ ONE SEAM BUILDS THE ROWS. This used to map them inline, and
+                // wrote `description: p.basisText` — "$0.05/sq ft × 1,392 sq ft",
+                // the owner's rationale for the number — into a field the
+                // CUSTOMER reads on the quote, the portal and the PDF. The
+                // description is now the owner's own sentence, or nothing.
+                // It also mapped `price: p.price ?? 0`; offeringOptionRows types
+                // price as a number after filtering, so an unpriced plan cannot
+                // reach a customer as $0 even if a future caller forgets to
+                // filter.
                 setValue('has_options', true, { shouldDirty: true })
-                setValue('options', sel.offerPlans.map(p => ({
-                  name: p.label,
-                  description: p.basisText,
-                  price: p.price ?? 0,
-                  is_recommended: p.isRecommended,
-                })), { shouldDirty: true })
+                setValue('options', offeringOptionRows(sel.offerPlans) as QuoteFormValues['options'], { shouldDirty: true })
+                setOptionsFromPlans(true)
               } else if (sel.plan?.price != null) {
                 // One chosen plan → one price. ⛔ Never written when the plan has
                 // no price: an unconfigured plan must leave the field alone rather
