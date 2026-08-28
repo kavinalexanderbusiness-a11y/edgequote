@@ -186,7 +186,12 @@ console.log('\n── 2. ⛔⛔ A BILLING TERM IS NOT A VISIT SCHEDULE ──')
   check('the separation sentence exists and names both halves',
     /priced and billed/i.test(BILLING_VS_VISITS) && /scheduled separately/i.test(BILLING_VS_VISITS),
     BILLING_VS_VISITS)
-  check('the offerings panel shows it', CODE.panel.includes('BILLING_VS_VISITS'), 'panel must render the separation')
+  // ⚠️ RENDERED, not merely imported. This check read `.includes('BILLING_VS_VISITS')`
+  // and stayed green when the JSX was replaced with `{null}` — the import survived
+  // the mutation, so the assertion was about the import list, not the screen.
+  // Caught by mutate-recurring-quote-flow.mjs.
+  check('the offerings panel RENDERS it', /\{BILLING_VS_VISITS\}/.test(CODE.panel),
+    'panel must render the separation, not just import the constant')
   check('the Price Book editor says it where plans are configured',
     /doesn.{0,3}t schedule visits|recurrence still does that/i.test(CODE.editor),
     'the owner must read it while configuring')
@@ -212,6 +217,15 @@ console.log('\n── 3. ⭐⭐ UNKNOWN IS NOT ZERO ──')
   const rows = offeringOptionRows(out)
   eq('only priced offerings become customer options', rows.map(r => r.name), ['Seasonal'])
   check('no option is written at $0', !rows.some(r => Number(r.price) === 0), JSON.stringify(rows))
+  // ⚠️ The filter above makes a `?? 0` inside the row builder UNREACHABLE, so no
+  // input can prove it absent — and mutation testing found exactly that blind
+  // spot: swapping the cast for `o.price ?? 0` left every behavioural check
+  // green. The defence is defence-in-depth, so the assertion has to be
+  // structural: the row builder must have no zero-coercion to fall back on if a
+  // future caller forgets to filter.
+  check('the option row builder never coerces an unknown price to zero',
+    !/price:\s*o\.price\s*\?\?/.test(CODE.offering) && !/price:\s*[^,\n]*\|\|\s*0/.test(CODE.offering),
+    'a `?? 0` here is one forgotten filter away from quoting free work')
 
   // A per-unit plan with nothing measured is unknown, not free.
   const unmeasured = offeringsFor(MOW_LIKE, null, 'area')
