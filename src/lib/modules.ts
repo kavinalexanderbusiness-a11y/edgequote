@@ -73,6 +73,14 @@ export interface FeatureModule {
    *  typing "jobs" previously matched NOTHING, which is most of the reason
    *  "where do my jobs live?" had no answer. */
   keywords?: string
+  /** Navigation weight. Absent = a primary destination, always visible in the
+   *  sidebar. 'secondary' = shown behind its group's "More" disclosure — the
+   *  module keeps its full page, its ⌘K entry, its Marketplace listing and its
+   *  deep links; only its RESTING VISIBILITY changes. Nineteen always-visible
+   *  rows made every destination equally loud, which is the same as none of
+   *  them being loud; the eight an owner opens daily now carry the weight.
+   *  ⛔ This is presentation tier only — never gate data or routes on it. */
+  tier?: 'secondary'
 }
 
 export const FEATURE_MODULES: FeatureModule[] = [
@@ -95,7 +103,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
     permissions: ['jobs:read', 'jobs:write', 'customers:read', 'messages:send'],
     keywords: 'jobs visits calendar day plan route booked work' },
   { key: 'dispatch',   label: 'Dispatch',   href: '/dashboard/dispatch',   icon: Radio,
-    category: 'operations', version: 1, updatedAt: '2026-07-15', requires: ['schedule'],
+    category: 'operations', tier: 'secondary', version: 1, updatedAt: '2026-07-15', requires: ['schedule'],
     description: 'Crews, technicians and the day\'s routes on one board.',
     permissions: ['jobs:read', 'jobs:write', 'crews:read', 'crews:write', 'equipment:read', 'equipment:write'],
     keywords: 'crews stops route board today' },
@@ -105,7 +113,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
   // (rather than special-casing the sidebar) is what makes the sidebar, ⌘K and the
   // Modules manager all agree — they every one read this registry.
   { key: 'workforce',  label: 'Workforce',  href: '/dashboard/workforce',  icon: HardHat,
-    category: 'operations', version: 1, updatedAt: '2026-07-16', requires: ['dispatch'],
+    category: 'operations', tier: 'secondary', version: 1, updatedAt: '2026-07-16', requires: ['dispatch'],
     description: 'Your people: hours, pay, time off and what the crew costs.',
     whatsNew: 'Payroll, timesheets and time off now have a home of their own.',
     permissions: ['crews:read', 'crews:write', 'payroll:read', 'payroll:write'],
@@ -115,7 +123,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
   // manager agree. An owner looking for "who changed this" types "audit" or "who
   // changed" — both are keywords, because neither is in the label.
   { key: 'activity',   label: 'Activity',   href: '/dashboard/activity',   icon: History,
-    category: 'admin', version: 1, updatedAt: '2026-08-15',
+    category: 'admin', tier: 'secondary', version: 1, updatedAt: '2026-08-15',
     description: 'Who changed what, when — and what it was before.',
     whatsNew: 'Every meaningful change is now recorded, with the person who made it.',
     permissions: ['activity:read'],
@@ -131,12 +139,12 @@ export const FEATURE_MODULES: FeatureModule[] = [
   // four of the six rungs are derived from a quote's status, so without that
   // module the board could only ever show leads.
   { key: 'pipeline',   label: 'Pipeline',   href: '/dashboard/pipeline',   icon: Target,
-    category: 'customers', version: 1, updatedAt: '2026-08-13', featured: true, requires: ['customers', 'quotes'],
+    category: 'customers', tier: 'secondary', version: 1, updatedAt: '2026-08-13', featured: true, requires: ['customers', 'quotes'],
     description: 'Every lead and quote in flight, each with the one thing to do next.',
     permissions: ['customers:read', 'quotes:read', 'invoices:read', 'jobs:read', 'messages:read'],
     keywords: 'sales deals leads opportunities funnel stages next action follow up won lost' },
   { key: 'properties', label: 'Properties', href: '/dashboard/properties', icon: Home,
-    category: 'customers', version: 1, updatedAt: '2026-07-08', requires: ['customers'],
+    category: 'customers', tier: 'secondary', version: 1, updatedAt: '2026-07-08', requires: ['customers'],
     description: 'Sites and service locations, with measurements and notes.',
     permissions: ['properties:read', 'properties:write', 'customers:read'],
     keywords: 'sites addresses locations measurements' },
@@ -151,7 +159,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
     permissions: ['invoices:read', 'invoices:write', 'customers:read', 'messages:send'],
     keywords: 'billing bills receivables owed' },
   { key: 'payments',   label: 'Payments',   href: '/dashboard/payments',   icon: Wallet,
-    category: 'money', version: 1, updatedAt: '2026-07-15', requires: ['invoices'],
+    category: 'money', tier: 'secondary', version: 1, updatedAt: '2026-07-15', requires: ['invoices'],
     description: 'The money ledger — every payment, refund and dispute.',
     permissions: ['payments:read', 'payments:write', 'invoices:read'],
     keywords: 'money received refunds deposits' },
@@ -159,7 +167,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
   // the P&L reads the payments ledger for its top line, so Accounting without
   // Payments would report cost with no revenue to weigh it against.
   { key: 'accounting', label: 'Accounting', href: '/dashboard/accounting', icon: Calculator,
-    category: 'money', version: 1, updatedAt: '2026-07-16', requires: ['payments'],
+    category: 'money', tier: 'secondary', version: 1, updatedAt: '2026-07-16', requires: ['payments'],
     description: 'Expenses, vendors and what\'s actually left after the work.',
     permissions: ['expenses:read', 'expenses:write', 'payments:read'],
     keywords: 'expenses vendors profit p&l' },
@@ -169,7 +177,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
     permissions: ['messages:read', 'messages:send', 'customers:read'],
     keywords: 'inbox sms email texts leads conversations' },
   { key: 'equipment',  label: 'Equipment',  href: '/dashboard/equipment',  icon: Wrench,
-    category: 'operations', version: 1, updatedAt: '2026-07-15',
+    category: 'operations', tier: 'secondary', version: 1, updatedAt: '2026-07-15',
     description: 'The gear that does the work — tracking and upkeep.',
     permissions: ['equipment:read', 'equipment:write'],
     // ⌘K searched label + keywords, and this entry had none — so "mower",
@@ -183,7 +191,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
   // describe. It reads invoices and payments too, but degrades honestly without
   // them (invoiced and collected simply stay at zero, which is the truth).
   { key: 'sales',      label: 'Sales',      href: '/dashboard/sales',      icon: TrendingUp,
-    category: 'growth', version: 1, updatedAt: '2026-08-16', requires: ['quotes'],
+    category: 'growth', tier: 'secondary', version: 1, updatedAt: '2026-08-16', requires: ['quotes'],
     description: 'What you quoted, won, invoiced and actually collected — and which sources produced it.',
     whatsNew: 'Quoted, won, authorized, invoiced and collected are now five separate figures you can trace back to the quotes behind them.',
     permissions: ['quotes:read', 'invoices:read', 'payments:read', 'customers:read'],
@@ -207,7 +215,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
   // So it belongs in Setup — something you look in on, not something you run the
   // day from — and it now describes what it actually does: watch, and flag.
   { key: 'automation', label: 'Automation', href: '/dashboard/automation', icon: Bot,
-    category: 'admin', version: 1, updatedAt: '2026-08-09', requires: ['messages'],
+    category: 'admin', tier: 'secondary', version: 1, updatedAt: '2026-08-09', requires: ['messages'],
     description: 'Watches for customers due to re-book and flags them for you. It never messages anyone on its own.',
     permissions: ['automations:read', 'automations:write', 'messages:send', 'customers:read'],
     keywords: 'rules reminders follow up watch churn re-book suggestions' },
@@ -215,7 +223,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
   // Make", which is the answer to a question almost no owner is asking. The page
   // still holds all of it — the pitch just stops opening with it.
   { key: 'integrations', label: 'Integrations', href: '/dashboard/integrations', icon: Plug,
-    category: 'admin', version: 1, updatedAt: '2026-08-09',
+    category: 'admin', tier: 'secondary', version: 1, updatedAt: '2026-08-09',
     description: 'Connect other apps to EdgeQuote — plus a developer API, if yours needs one.',
     permissions: ['customers:read', 'quotes:read', 'jobs:read', 'invoices:read', 'payments:read', 'customers:write', 'webhooks:send'],
     keywords: 'api webhooks zapier make connect apps developer accounts' },

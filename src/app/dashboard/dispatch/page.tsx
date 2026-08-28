@@ -150,6 +150,15 @@ export default function DispatchPage() {
   const supabase = useMemo(() => createClient(), [])
   const [uid, setUid] = useState<string | null>(null)
   const [date, setDate] = useState<string>(todayISO)
+  // `?d=YYYY-MM-DD` — the Schedule day view hands its day across so the two
+  // lenses on the same day stay on the same day (same param name Schedule
+  // reads). Applied in a mount effect, not the initializer: the server renders
+  // today, and an initializer that read the URL would hydrate differently.
+  // Not useSearchParams — that demands a Suspense boundary for a one-shot read.
+  useEffect(() => {
+    const d = new URLSearchParams(window.location.search).get('d')
+    if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) setDate(d)
+  }, [])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [jobs, setJobs] = useState<Job[]>([])
@@ -1459,7 +1468,8 @@ export default function DispatchPage() {
   if (loading) {
     return (
       <div className="max-w-7xl space-y-6">
-        <PageHeader title="Dispatch" description="Crews, routes and the day's plan — one board." />
+        <PageHeader title="Dispatch" crumb={{ label: 'Schedule', href: '/dashboard/schedule' }}
+          description="Crews, routes and the day's plan — one board." />
         <SkeletonTiles count={4} />
         <SkeletonRows count={6} />
       </div>
@@ -1471,8 +1481,11 @@ export default function DispatchPage() {
       {/* Keyboard-move narration for screen readers. */}
       <div aria-live="polite" className="sr-only">{announce}</div>
 
+      {/* The crumb is the weld back to Schedule — the other lens on this same
+          day — carrying the day across so neither side loses its place. */}
       <PageHeader
         title="Dispatch"
+        crumb={{ label: 'Schedule', href: `/dashboard/schedule?d=${date}` }}
         description={`${dateLabel} · ${activeJobs.length} visit${activeJobs.length !== 1 ? 's' : ''}`}
         action={
           <div className="flex items-center gap-2">
@@ -1532,9 +1545,14 @@ export default function DispatchPage() {
             <Button variant="secondary" size="sm" onClick={() => setDate(todayISO())}>Today</Button>
           )}
         </div>
-        <div className="ml-auto flex items-center gap-1.5">
-          <FilterPill active={view === 'board'} onClick={() => setView('board')}><LayoutGrid className="w-3.5 h-3.5" /> Board</FilterPill>
-          <FilterPill active={view === 'map'} onClick={() => setView('map')}><MapIcon className="w-3.5 h-3.5" /> Map</FilterPill>
+        {/* flex-wrap: at 375–430px this group is wider than the viewport and
+            used to push the row sideways; wrapping keeps every control on
+            screen. min-h-[40px] on the two VIEW pills: they are the primary
+            lens switch, and FilterPill's resting 30px is a filter-row density,
+            not a thumb target. */}
+        <div className="ml-auto flex items-center gap-1.5 flex-wrap">
+          <FilterPill className="min-h-[40px]" active={view === 'board'} onClick={() => setView('board')}><LayoutGrid className="w-3.5 h-3.5" /> Board</FilterPill>
+          <FilterPill className="min-h-[40px]" active={view === 'map'} onClick={() => setView('map')}><MapIcon className="w-3.5 h-3.5" /> Map</FilterPill>
           <Button variant="ghost" size="sm" onClick={() => setActivityOpen(true)} aria-label="Today's activity" title="Today's activity">
             <Activity className="w-4 h-4" />
           </Button>

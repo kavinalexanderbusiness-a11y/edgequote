@@ -1,7 +1,9 @@
 'use client'
 
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { useModules } from '@/hooks/useModules'
 import { createClient } from '@/lib/supabase/client'
 import { AddonTemplate, Customer, Job, JobFormValues, JobLineItem, Quote, RecurrenceScope, RecurUnit } from '@/types'
 // UI defaults only (add-on quick-chips) — engines never import lib/trades; this
@@ -176,6 +178,10 @@ export default function SchedulePage() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [loading, setLoading] = useState(true)
+  // Whether the crew-board lens (Dispatch) exists for this business — the day
+  // toolbar offers it beside Month/Week/Day. Same registry the sidebar reads.
+  const { visible: visibleModules } = useModules()
+  const dispatchEnabled = visibleModules.some(m => m.key === 'dispatch')
   // Dispatcher-first: land on TODAY's day board everywhere — "where next / when
   // finished / am I behind" lives there, not in a passive month grid.
   const [view, setView] = useState<CalendarView>('day')
@@ -2929,19 +2935,35 @@ export default function SchedulePage() {
           <span className="text-base font-bold tracking-tight text-ink ml-2">{headingLabel}</span>
         </div>
         <div className="flex items-center gap-1 bg-bg-secondary border border-border rounded-xl p-1">
+          {/* min-h-[40px]: these are thumb targets on a phone, and .tap-target
+              can't help here — it is pointer:coarse-gated, so a narrow DESKTOP
+              window still got 32px buttons. Explicit height covers both. */}
           {viewButtons.map(v => (
             <button
               key={v}
               onClick={() => setView(v)}
               aria-pressed={view === v}
               className={cn(
-                'px-3 py-1.5 rounded-lg text-sm font-medium capitalize transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                'px-3 min-h-[40px] rounded-lg text-sm font-medium capitalize transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                 view === v ? 'bg-accent text-black' : 'text-ink-muted hover:text-ink'
               )}
             >
               {v}
             </button>
           ))}
+          {/* The crew board is the day seen by WHO — same visits, one more lens.
+              It lived a universe away (no link in either direction); now it sits
+              with the other lenses on the day, carrying the day along. Rendered
+              only when the Dispatch module is enabled, and only in day view —
+              on month/week there is no single day to hand over. */}
+          {view === 'day' && dispatchEnabled && (
+            <Link
+              href={`/dashboard/dispatch?d=${dayISO}`}
+              className="px-3 min-h-[40px] rounded-lg text-sm font-medium text-ink-muted hover:text-ink transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 flex items-center"
+            >
+              Crew board
+            </Link>
+          )}
         </div>
       </div>
 

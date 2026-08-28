@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState, useRef } from 'react'
-import { Settings, LogOut, Zap, Menu, X, Search, LifeBuoy, MessageSquare } from 'lucide-react'
+import { Settings, LogOut, Zap, Menu, X, Search, LifeBuoy, ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
@@ -101,6 +101,33 @@ export function Sidebar() {
   // Per-business module composition — ONE loader (useModules) shared with the
   // command palette and the Modules settings surface; live-updates on change.
   const { visible: navMain } = useModules()
+
+  // ── Progressive disclosure ──────────────────────────────────────────────────
+  // Which groups the owner has opened to show their `tier: 'secondary'` modules.
+  // Primary modules always render; secondaries sit one click behind their group
+  // heading. Manual opens persist (localStorage) so the sidebar respects how
+  // each owner works, and the group holding the CURRENT page is always forced
+  // open — the nav must never hide where you are.
+  //
+  // Starts collapsed on both server and client, then loads the saved state in an
+  // effect: the two renders must match or hydration warns.
+  const [openGroups, setOpenGroups] = useState<string[]>([])
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem('eq-nav-open')
+      if (raw) { const v = JSON.parse(raw); if (Array.isArray(v)) setOpenGroups(v.filter((x): x is string => typeof x === 'string')) }
+    } catch { /* ignore */ }
+  }, [])
+  function toggleGroup(cat: string) {
+    setOpenGroups(prev => {
+      const next = prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]
+      try { window.localStorage.setItem('eq-nav-open', JSON.stringify(next)) } catch { /* ignore */ }
+      return next
+    })
+  }
+  // The group whose SECONDARY module owns the current page — forced open.
+  const activeSecondaryGroup = navMain.find(m =>
+    m.tier === 'secondary' && pathname.startsWith(m.href))?.category
 
   // Uploaded logo + size from Branding settings (cached for the login screen).
   useEffect(() => {
@@ -200,21 +227,47 @@ export function Sidebar() {
           {/* Home first and ungrouped — it is not a category, it is where you land. */}
           {navMain.filter(m => m.href === '/dashboard').map(m => navLink(m, onNavigate))}
 
-          {/* …then the business, in the order you run it. Fifteen flat items read
-              as a pile of features; the same fifteen under headings read as
-              Operations / Customers / Money / Growth / Setup. The grouping is the
+          {/* …then the business, in the order you run it. The grouping is the
               registry's own `category` (lib/modules) rather than a second list
               here, so the sidebar and Settings → Features can never disagree
-              about where something belongs. */}
+              about where something belongs.
+
+              Within a group, `tier` decides RESTING VISIBILITY: primary modules
+              (the eight an owner opens daily) always render; secondary ones sit
+              behind the group heading, which becomes a disclosure when it has
+              anything to disclose. Nineteen always-on rows made every door
+              equally loud — the daily eight now carry the weight, and nothing
+              moved out of reach: one click on the heading, or ⌘K, still reaches
+              every module. */}
           {CATEGORY_ORDER.map(cat => {
             const items = navMain.filter(m => m.category === cat && m.href !== '/dashboard')
             if (items.length === 0) return null      // a module can be uninstalled
+            const primary = items.filter(m => m.tier !== 'secondary')
+            const secondary = items.filter(m => m.tier === 'secondary')
+            const open = secondary.length > 0 &&
+              (openGroups.includes(cat) || activeSecondaryGroup === cat)
+            const headingClass = 'px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint'
             return (
               <div key={cat} className="mt-3 first:mt-1">
-                <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">
-                  {MODULE_CATEGORIES[cat]}
-                </p>
-                <div className="flex flex-col gap-0.5">{items.map(m => navLink(m, onNavigate))}</div>
+                {secondary.length === 0 ? (
+                  <p className={headingClass}>{MODULE_CATEGORIES[cat]}</p>
+                ) : (
+                  <button
+                    onClick={() => toggleGroup(cat)}
+                    aria-expanded={open}
+                    aria-controls={`nav-group-${cat}`}
+                    className={cn(headingClass,
+                      'w-full flex items-center gap-1 text-left rounded transition-colors hover:text-ink-muted',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40')}
+                  >
+                    <span className="flex-1">{MODULE_CATEGORIES[cat]}</span>
+                    <ChevronDown className={cn('w-3 h-3 transition-transform', !open && '-rotate-90')} aria-hidden="true" />
+                  </button>
+                )}
+                <div id={`nav-group-${cat}`} className="flex flex-col gap-0.5">
+                  {primary.map(m => navLink(m, onNavigate))}
+                  {open && secondary.map(m => navLink(m, onNavigate))}
+                </div>
               </div>
             )
           })}
