@@ -3,7 +3,8 @@ import { createClient } from '@supabase/supabase-js'
 import { stripeEnabled, createSetupCheckoutSession } from '@/lib/stripe/config'
 import { ensureStripeCustomerId } from '@/lib/payments/cards'
 import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
-import { appOrigin, cleanOrigin } from '@/lib/appOrigin'
+import { appOrigin } from '@/lib/appOrigin'
+import { portalUrl } from '@/lib/portal'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -38,11 +39,17 @@ export async function POST(req: NextRequest) {
   if (!ensured.id) return NextResponse.json({ error: ensured.error || 'Could not start card setup.' }, { status: 502 })
   const stripeCustomerId = ensured.id
 
-  const origin = cleanOrigin(req.nextUrl?.origin) || appOrigin()
+  // ⚠️ WAS `cleanOrigin(req.nextUrl?.origin) || appOrigin()` — the REQUEST host
+  // first. That inverts lib/appOrigin's contract (configured, then request) and
+  // was the one customer-facing URL in the app built from where a request
+  // happened to land: a customer arriving on an alias or a retired hostname got
+  // a Stripe return address on THAT host. appOrigin(requestOrigin) keeps the
+  // local-dev and preview fallback while making the configured host win.
+  const origin = appOrigin(req.nextUrl?.origin)
   const result = await createSetupCheckoutSession({
     stripeCustomerId,
-    successUrl: `${origin}/portal/${token}?cardsaved=1`,
-    cancelUrl: `${origin}/portal/${token}`,
+    successUrl: portalUrl(token, origin, { cardsaved: 1 }),
+    cancelUrl: portalUrl(token, origin),
     metadata: { user_id: c.user_id, customer_id: c.id },
   })
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 502 })
