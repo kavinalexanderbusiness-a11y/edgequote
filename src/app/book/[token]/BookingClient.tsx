@@ -507,7 +507,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
               <Field label="Referral code" value={referralCode} onChange={setReferralCode} placeholder="e.g. JANE20" />
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Additional notes</label>
-                <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="Gate code, dog in the yard, problem areas…"
+                <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="Gate code, pets on site, problem areas…"
                   className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
               </div>
               <div className="flex flex-col gap-1.5">

@@ -4,11 +4,15 @@
 //
 // ⭐⭐ THE MEASURED STARTING POINT, because it explains every decision below:
 // **no table in this schema carries a fixture marker.** There is no `is_test`,
-// no `source`, no `origin`, no `seeded_by`. The only fixture concept that exists
-// is `verify_fixture_tenants`, and that marks a whole TENANT for the guard
-// scripts — its own comment says no trigger, policy or application path reads
-// it. It cannot answer "is this ROW inside the owner's real book a fixture?",
-// which is the question production hygiene actually has.
+// no `source`, no `origin`, no `seeded_by`.
+//
+// There IS a tenant-level verification marker used by scripts/ — verify:fixture-
+// isolation owns it and describes it. It is deliberately unusable here on two
+// counts: that guard forbids ANY application file from reading it (a marker that
+// changes app behaviour is a test bypass, and a test bypass is worth forging),
+// and it marks a whole TENANT, so it could not answer this question anyway. The
+// question here is "is this ROW inside the owner's real book a fixture?".
+// ⛔ Nothing in this module may consult it, by name or otherwise.
 //
 // So fixture-ness has to be recovered from what the fixture WRITERS already put
 // in the data. They were deliberate about it, which is what makes this possible:
@@ -77,9 +81,26 @@ export const FIXTURE_EXACT_MARKERS: readonly string[] = [
 export function isFixtureName(name: string | null | undefined): boolean {
   const n = String(name ?? '').trim().toLowerCase()
   if (!n) return false
-  if (FIXTURE_EXACT_MARKERS.includes(n)) return true
+  // ⭐ The guard sentence matches as a PREFIX, not only whole. Harnesses append
+  // to it ("…safe to delete accepted a quote"), and verify:production-hygiene
+  // caught exactly that case: an exact-only rule let those rows through. Nothing
+  // a person would type begins with this sentence, so the prefix reading is both
+  // safer and stricter.
+  if (FIXTURE_EXACT_MARKERS.some(m => n === m || n.startsWith(m))) return true
   // Anchored at the start. `includes()` would classify "Deck ZZ-Top Mural".
   return FIXTURE_PREFIXES.some(p => n.startsWith(p))
+}
+
+/**
+ * True when ANY of the identifying strings on a row is a fixture marker.
+ *
+ * ⭐ A quote is identifiable two ways — its NUMBER (guards tag them VERIFY-ADDONS,
+ * ZZ-S81) and its CUSTOMER NAME (“Automated guard fixture — safe to delete”) — and
+ * different harnesses set different ones. Asking both is what makes the rule work
+ * across every generation of fixture without a per-harness branch.
+ */
+export function isAnyFixtureName(...names: (string | null | undefined)[]): boolean {
+  return names.some(isFixtureName)
 }
 
 /** Convenience for the common shape: drop the fixtures out of a list of rows
@@ -184,7 +205,14 @@ export function catalogueSuspicions(row: PricedLike, opts?: { duplicateOfName?: 
     out.push({ code: 'duplicate_name', message: `Another service is also called “${opts.duplicateOfName}” — a customer could not tell them apart.`, blocksPublication: true })
   }
 
-  const rate = Number(row.default_rate)
+  // ⚠️⚠️ `Number(null)` is 0 and `Number('')` is 0 — both FINITE. Testing
+  // Number.isFinite alone therefore reported "no price at all" as a deliberate
+  // $0, which is the unknown-is-zero failure this codebase keeps meeting. The
+  // absence has to be checked BEFORE the coercion.
+  const rawRate = row.default_rate
+  const rate = rawRate === null || rawRate === undefined || String(rawRate).trim() === ''
+    ? Number.NaN
+    : Number(rawRate)
   if (!Number.isFinite(rate)) {
     out.push({ code: 'unknown_price', message: 'This service has no usable price, so a customer would see nothing where the price should be.', blocksPublication: true })
   } else if (rate <= 1) {
