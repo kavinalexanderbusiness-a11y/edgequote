@@ -116,6 +116,7 @@
     "verify:auth-session": "tsx scripts/verify-auth-session.ts",
     "verify:google-auth": "tsx scripts/verify-google-auth.ts",
     "verify:crew-access": "tsx scripts/verify-crew-access.ts",
+    "verify:client-privileges": "tsx scripts/verify-client-privileges.ts",
     "verify:public-edge": "tsx scripts/verify-public-edge.ts",
     "verify:tenant-boundary": "tsx scripts/verify-tenant-boundary.ts",
     "verify:crew-auth": "tsx scripts/verify-crew-auth.ts",
