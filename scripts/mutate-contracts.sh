@@ -235,9 +235,15 @@ mutate "an agreement preview that scrolls the whole page sideways" \
 # first version subtracted a day even after clamping an impossible anniversary,
 # so a one-month agreement starting Jan 31 ended on Feb 27. Section 5a EXECUTES
 # the function, which is the only reason it was ever found.
-mutate "the double-subtract that ended a Jan-31 term on Feb 27"   "term: 2026-01-31 + 1mo"   "$LIB"   "s/    target.setDate(0)/    target.setDate(0); target.setDate(target.getDate() - 1)/"
+mutate "the double-subtract that ended a Jan-31 term on Feb 27" \
+  "term: 2026-01-31 + 1mo" \
+  "$LIB" \
+  's/    target\.setDate\(0\)/    target.setDate(0); target.setDate(target.getDate() - 1)/'
 
-mutate "an impossible effective date silently shifted instead of refused"   "an impossible date is refused"   "$LIB"   "s/  if (toISODate(d) !== effective) return null//"
+mutate "an impossible effective date silently shifted instead of refused" \
+  "an impossible date is refused" \
+  "$LIB" \
+  's/  if \(toISODate\(d\) !== effective\) return null//'
 
 # ── Session 74 moving under us ──────────────────────────────────────────────
 # ⭐⭐ THE RISK OF BUILDING ON AN UNLANDED BRANCH. Each of these is a change S74
@@ -248,11 +254,25 @@ mutate "S74 dropping text/plain — the format contracts render to"   "S74 still
 
 mutate "S74 renaming requestSignature"   "S74 still exports requestSignature"   "$S74LIB"   "s/export async function requestSignature/export async function createSignatureRequest/"
 
-mutate "S74 dropping the DocumentView.current field sendContract reads"   "a DocumentView still exposes"   "$S74LIB"   "s/current: DocumentVersion | null/latest: DocumentVersion | null/"
+# ⚠️ THE PIPE MUST BE ESCAPED. Unescaped it is perl ALTERNATION, so this matched
+# "current: DocumentVersion " OR " null" and replaced something real but harmless
+# — the file changed (so the checksum guard was satisfied) while the intended
+# mutation never happened, and the check reported SURVIVED. A changed file is not
+# the same as the RIGHT change.
+mutate "S74 dropping the DocumentView.current field sendContract reads" \
+  "a DocumentView still exposes" \
+  "$S74LIB" \
+  's/current: DocumentVersion \| null/latest: DocumentVersion \| null/'
 
-mutate "S74 narrowing visibility so a contract can never reach the portal"   "S74 still allows customer visibility"   "$S74SCHEMA"   "s/visibility in ('internal', 'worker', 'customer')/visibility in ('internal', 'worker')/"
+mutate "S74 narrowing visibility so a contract can never reach the portal" \
+  "S74 still allows customer visibility" \
+  "$S74SCHEMA" \
+  "s/visibility in \('internal', 'worker', 'customer'\)/visibility in ('internal', 'worker')/"
 
-mutate "S74 widening the purpose vocabulary out from under the template"   "S74's purpose vocabulary is unchanged"   "$S74SCHEMA"   "s/purpose in ('work_authorization', 'customer_acknowledgement', 'completion_acknowledgement')/purpose in ('work_authorization')/"
+mutate "S74 widening the purpose vocabulary out from under the template" \
+  "S74's purpose vocabulary is unchanged" \
+  "$S74SCHEMA" \
+  "s/purpose in \('work_authorization', 'customer_acknowledgement', 'completion_acknowledgement'\)/purpose in ('work_authorization')/"
 
 mutate "S74 renaming the version column the contract pins"   "S74.document_signature_requests.version_id still exists"   "$S74SCHEMA"   "s/\"version_id\"   uuid not null,/\"doc_version_id\"   uuid not null,/"
 
