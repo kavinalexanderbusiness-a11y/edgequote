@@ -134,7 +134,7 @@ const QUOTES = [
   'issued_date', 'valid_until', 'sent_at',
   'hours', 'crew_size', 'rate', 'man_hours', 'measured_sqft',
   'travel_distance_km', 'travel_fee', 'subtotal', 'total',
-  'initial_price', 'accepted_price', 'selected_cadence', 'selected_option_id',
+  'initial_price', 'accepted_price', 'addons_total', 'selected_cadence', 'selected_option_id',
   'weekly_price', 'biweekly_price', 'monthly_price',
   'price_source', 'pricing_confidence', 'value_grade',
   'follow_up_count', 'last_followed_up_at', 'accepted_after_followup', 'notes',
@@ -149,6 +149,15 @@ const QUOTE_SERVICES = [
 const QUOTE_OPTIONS = [
   'id', 'created_at', 'updated_at', 'quote_id',
   'name', 'description', 'price', 'sort_order', 'is_recommended',
+]
+
+const QUOTE_ADDONS = [
+  'id', 'created_at', 'updated_at', 'quote_id',
+  'name', 'description', 'price', 'sort_order',
+  // ⭐ The three columns that answer "was this bought, and who said so?".
+  // is_selected is the only one that costs money; selected_via distinguishes the
+  // customer's own tick from the owner recording a decision taken by phone.
+  'is_selected', 'selected_via', 'selected_at',
 ]
 
 const VISITS = [
@@ -251,6 +260,11 @@ export const EXPORT_ENTITIES: ExportEntity[] = [
     key: 'quote_options', file: 'quote-options.csv', table: 'quote_options', label: 'Quote options',
     note: 'Good/better/best options offered on a quote. quotes.selected_option_id names the one chosen.',
     orderBy: 'id', select: QUOTE_OPTIONS, columns: cols(QUOTE_OPTIONS),
+  },
+  {
+    key: 'quote_addons', file: 'quote-addons.csv', table: 'quote_addons', label: 'Quote optional extras',
+    note: 'Optional extras offered on a quote, which the customer adds BEFORE approving — an extra ADDS to the price, where an option in quote-options.csv REPLACES it. is_selected marks the ones actually bought; quotes.addons_total is their sum and is already inside quotes.total. Extras agreed AFTER approval are not here — they are change orders.',
+    orderBy: 'id', select: QUOTE_ADDONS, columns: cols(QUOTE_ADDONS),
   },
   {
     key: 'recurring_jobs', file: 'recurring-jobs.csv', table: 'job_recurrences', label: 'Recurring jobs',

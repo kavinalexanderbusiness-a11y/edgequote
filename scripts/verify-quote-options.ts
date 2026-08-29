@@ -44,7 +44,7 @@
 // Section 5 needs no login and no fixture at all: it is pure refusal-probing
 // against anonymous callers, and it writes nothing by construction.
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import {
@@ -257,8 +257,13 @@ check('PDF — no subtotal row spans the alternatives',
   /!isOptionsQuote && \(\(lines && lines\.length > 1\)/.test(PDF))
 check('PDF — the grand total NAMES the single option it totals',
   /If you choose \$\{leading\.name\}|`If you choose/.test(PDF) && /Approved — \$\{chosen\.name\}|`Approved — /.test(PDF))
+// ⚠️ Re-expressed for the CURRENT call shape. renderQuoteBlob grew a fifth
+// argument (the optional extras, Session 113), so a regex anchored on `options)`
+// being the LAST argument went red while the rule it stands for — the customer's
+// own copy is built from the same options the owner's copy is — stayed true.
+// Assert the ARGUMENT is passed, not where it happens to sit in the list.
 check('PDF — the customer’s own copy carries the options too',
-  /renderQuoteBlob\([\s\S]{0,200}options\)/.test(read('src/lib/portalPdf.ts')))
+  /renderQuoteBlob\(portalQuoteToQuote\([\s\S]{0,200}?,\s*options\b/.test(read('src/lib/portalPdf.ts'))),
 
 check('PORTAL MODEL — options ride the DocItem, separate from lines and plans',
   /options\?: \{ id: string; name: string/.test(PORTAL_MODEL) && /selectedOptionId/.test(PORTAL_MODEL))
@@ -272,8 +277,20 @@ check('PORTAL — nothing is pre-selected, not even Recommended',
   'a pre-ticked option turns "I chose" into "I tapped"')
 check('PORTAL — Approve is refused until an option is named',
   /disabled=\{!approveReady\}/.test(BILLING))
+// ⚠️ Re-expressed for the CURRENT label. The button now also carries the
+// optional extras the customer ticked (Session 113), so its figure comes from
+// approvalTotal rather than from pickedOpt.amount directly. THE RULE IS
+// UNCHANGED and is what is asserted here: the button NAMES the chosen option,
+// and its figure is derived from that option — never from `d.amount`, which on
+// an unchosen options quote still carries the RECOMMENDED option and would show
+// one price while banking another.
+check('PORTAL — the button NAMES the chosen option',
+  /Approve \$\{pickedOpt \? pickedOpt\.name : ''\}/.test(BILLING))
 check('PORTAL — the button quotes the CHOSEN option, not the quote total',
-  /Approve \$\{pickedOpt\.name\} — \$\{formatCurrency\(pickedOpt\.amount\)\}/.test(BILLING))
+  /base: pickedOpt \? pickedOpt\.amount : d\.amount/.test(BILLING)
+  && /formatCurrency\(liveTotal\)/.test(BILLING)
+  && !/Approve — \$\{formatCurrency\(d\.amount\)\}/.test(BILLING),
+  'the figure must resolve through the PICKED option whenever one exists')
 check('PORTAL — the selection is passed to the canonical RPC',
   /p_option_id: chosenOpt\.id/.test(PORTAL_CLIENT))
 check('PORTAL — a stale option id is refused rather than approved as something else',
@@ -294,6 +311,17 @@ check('OWNER — a falsy RPC result is never reported as success',
 
 // ── 4. The schema is what enforces it, not the app ───────────────────────────
 console.log('\n═══ The database refuses what no screen should have to remember ═══')
+// ⭐ The APPLY PATH, resolved rather than remembered — the baseline is renamed
+// and re-versioned on every convergence. The archived RUN files below are
+// HISTORY (what was applied, once, in that shape) and stay pinned as history;
+// claims about what production runs TODAY must come from here.
+const CURRENT_SCHEMA_PATH = (() => {
+  const dir = 'supabase/migrations'
+  const f = readdirSync(join(process.cwd(), dir))
+    .filter(n => n.endsWith('_baseline.sql')).sort().pop()
+  return join(dir, f as string)
+})()
+
 const SQL = read('supabase/archive/run/RUN-2026-08-11-quote-options.sql')
 const SQL_CODE = SQL.split('\n').filter(l => !l.trim().startsWith('--')).join('\n')
 const SEL_SQL = read('supabase/archive/run/RUN-2026-08-11b-quote-options-selection.sql')
@@ -347,10 +375,27 @@ async function main() {
 
   // ── 5. Reachability: the core must not be callable by anyone ───────────────
   // This needs no login and no fixture, and it is the single most important live
-  // assertion in the file: quote_apply_option_choice authorises NOTHING. If
-  // PostgREST can reach it, any anonymous request that can guess two uuids can
-  // accept any quote in any tenant at any price.
-  const coreAsAnon = await anon.rpc('quote_apply_option_choice', { p_quote_id: GHOST, p_option_id: GHOST })
+  // assertion in the file: the choice core authorises NOTHING. If PostgREST can
+  // reach it, any anonymous request that can guess two uuids can accept any quote
+  // in any tenant at any price.
+  //
+  // ⚠️⚠️ THIS PROBE WAS VACUOUS AND IS NOW REAL. It used to call
+  // `quote_apply_option_choice`, which was DROPPED and replaced by
+  // `quote_apply_choice(quote, option, addon_ids[], via)` when optional extras
+  // landed. PostgREST answered "could not find the function" — which the regex
+  // below accepts as a refusal — so the check passed for a function that no
+  // longer existed while saying nothing at all about the one that did.
+  // ⭐ THE LESSON: a refusal-probe that accepts "no such function" as proof of
+  // safety must be re-aimed the moment the thing it probes is renamed, or it
+  // becomes the most confident dead check in the suite. The name is now asserted
+  // to EXIST first, so this cannot silently go hollow the same way twice.
+  const CORE = 'quote_apply_choice'
+  check(`the choice core ${CORE} still exists under that name`,
+    /CREATE OR REPLACE FUNCTION public\.quote_apply_choice\(/.test(read(CURRENT_SCHEMA_PATH)),
+    'if it was renamed again, the probe below would pass by finding nothing')
+  const coreAsAnon = await anon.rpc(CORE, {
+    p_quote_id: GHOST, p_option_id: GHOST, p_addon_ids: null, p_via: 'portal',
+  })
   check('an anonymous caller cannot reach the unauthorised core',
     coreAsAnon.error !== null && /permission denied|not find the function|does not exist/i.test(coreAsAnon.error?.message ?? ''),
     `got ${coreAsAnon.error ? coreAsAnon.error.message : `data=${JSON.stringify(coreAsAnon.data)}`} — the core carries no authorisation of its own`)

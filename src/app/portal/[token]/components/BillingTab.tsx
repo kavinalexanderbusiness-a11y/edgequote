@@ -766,14 +766,21 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
                 loading={actions.accepting === d.rawId}
               >
                 <Check className="w-4 h-4" />
+                {/* ⭐ The button NAMES what is being bought and quotes ONE figure.
+                    The name matters most on an options quote — the decision the
+                    customer just made was WHICH one, and a bare "Approve" throws
+                    that away at the moment of commitment. The figure is
+                    approvalTotal's: the chosen option (or the plain quote's
+                    total) plus every extra ticked, which is exactly what
+                    quote_apply_choice will bank. It moves as the boxes are
+                    ticked, so the button never names a price the customer has
+                    stopped agreeing to. ⛔ On an options quote it is derived from
+                    pickedOpt.amount, NEVER from d.amount — that still carries the
+                    recommended option, so quoting it would show one price and
+                    bank another. */}
                 {hasOpts && !pickedOpt
                   ? 'Choose an option above'
-                  /* ⭐ ONE figure, from approvalTotal — the option (or the plain
-                     quote's total) plus every extra ticked, which is exactly what
-                     quote_apply_choice will bank. It moves as the boxes are
-                     ticked, so the button never names a price the customer has
-                     stopped agreeing to. */
-                  : `Approve — ${formatCurrency(liveTotal)}`}
+                  : `Approve ${pickedOpt ? pickedOpt.name : ''}${pickedOpt && takenAddons.length ? ` + ${takenAddons.length} extra${takenAddons.length > 1 ? 's' : ''}` : ''}${!pickedOpt && takenAddons.length ? `+ ${takenAddons.length} extra${takenAddons.length > 1 ? 's' : ''} ` : ''} — ${formatCurrency(liveTotal)}`.replace(/\s+/g, ' ')}
               </Button>
               <p className="text-[11px] text-ink-faint mt-1.5">
                 {hasOpts && !pickedOpt
