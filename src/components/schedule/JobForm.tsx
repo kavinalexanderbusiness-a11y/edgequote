@@ -17,7 +17,7 @@ import { latestSavedRecommendation, savedPriceFor, recommendationIsStale, Cadenc
 import { servicePricingKind } from '@/lib/servicePricing'
 import {
   ServiceSeasons, DEFAULT_SEASONS, settingsToSeasons, serviceCategory, seasonForService,
-  seasonEndDateFor, estimateSeasonVisits, seasonLabel,
+  seasonEndDateFor, estimateSeasonVisits, seasonLabel, resolveSeriesSeason,
 } from '@/lib/seasons'
 import { WeeklyScheduler } from '@/components/schedule/WeeklyScheduler'
 import { SmartEstimateCard } from '@/components/labor/SmartEstimateCard'
@@ -80,6 +80,10 @@ interface JobFormProps {
    *  property of the series, not of the visit under the editor, so it resolves
    *  from here — every visit in a series then agrees on one season end. */
   seriesStartDate?: string
+  /** ⭐ The season this SERIES declares (job_recurrences.season_key). Absent
+   *  until that column lands — see supabase/proposals/. When present it is
+   *  authoritative and the service name is never consulted. */
+  seriesSeasonKey?: string | null
   allowAddAnother?: boolean
   suggestedPrice?: number // quote-derived per-visit price, shown as the price hint
   /** True when the visit under the editor is linked to a quote. Drives the
@@ -147,7 +151,7 @@ function presetToInterval(preset: RepeatPreset, customUnit: RecurUnit, customCou
 }
 
 
-export function JobForm({ customers, crews, technicians, defaultValues, excludeJobId, initialRecurrence, seriesStartDate, allowAddAnother, suggestedPrice, quoteLinked, initialMoreOpen, warnFor, onSubmit, onCancel, onDirtyChange, isEdit }: JobFormProps) {
+export function JobForm({ customers, crews, technicians, defaultValues, excludeJobId, initialRecurrence, seriesStartDate, seriesSeasonKey, allowAddAnother, suggestedPrice, quoteLinked, initialMoreOpen, warnFor, onSubmit, onCancel, onDirtyChange, isEdit }: JobFormProps) {
   const supabase = createClient()
   const [properties, setProperties] = useState<Property[]>([])
   const addAnotherRef = useRef(false)
@@ -291,7 +295,14 @@ export function JobForm({ customers, crews, technicians, defaultValues, excludeJ
   // ── Seasonal recurrence ──
   // The service's season (lawn/snow), if any, and the season-end date for the
   // series this visit belongs to.
-  const serviceSeason = seasonForService(serviceType, seasons)
+  // ⭐ THE DECLARATION WINS. resolveSeriesSeason reads the series' own
+  // season_key first and only falls back to the legacy name guess when no
+  // declaration exists — so renaming a service can never change when it runs.
+  // Until job_recurrences.season_key lands (see supabase/proposals/) there is no
+  // key to pass, so this resolves exactly as before for every live series; what
+  // changes is that the seam now exists and the guard pins declaration-wins.
+  const seasonResolution = resolveSeriesSeason({ seasonKey: seriesSeasonKey ?? null, serviceType }, seasons)
+  const serviceSeason = seasonResolution.season
   const category = serviceCategory(serviceType)
   // Season End is a property of the SERIES, so it resolves from the series'
   // start date — not from whichever visit happens to be open. An open-ended

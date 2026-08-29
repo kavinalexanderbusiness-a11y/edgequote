@@ -130,6 +130,135 @@ export function seasonForService(serviceType: string | null | undefined, seasons
   return null
 }
 
+// ── The season a SERIES belongs to — declared, not guessed ───────────────────
+// Session 110, after a production audit found recurring visits scheduled through
+// winter under a configured season.
+//
+// ⭐⭐ THE DEFECT WAS THE INPUT, NOT THE ARITHMETIC. Every function below this
+// point is correct. What was wrong is that the only way to ask "which season
+// governs this series?" was `seasonForService(NAME, seasons)` — a keyword guess
+// over the service's NAME. Measured on production 2026-08-29:
+//
+//   14 series named "…Mowing" / "Lawn Mowing"  → matched 'mow'/'lawn' → lawn
+//                                                season, end_date 2026-10-31 ✅
+//    1 series named "Bi-weekly"                → matched NOTHING → no season,
+//                                                no end_date, 24 future visits
+//                                                generated through to 2027-07-31
+//    1 series named "General Upkeep"           → matched NOTHING → no season
+//
+// Identical cadence, identical intent, opposite outcome — decided entirely by
+// what the owner happened to type. That is the bug: governance was accidental.
+//
+// ⛔ A NAME IS NOT A RELATIONSHIP. Renaming a service must never change when it
+// runs, and a business whose vocabulary we did not anticipate must not silently
+// lose its season. So a series DECLARES its season, and this resolver reads that
+// declaration.
+
+/**
+ * The season key meaning "this series is deliberately year-round".
+ *
+ * ⭐ Distinct from NULL, and the distinction is the whole point: NULL means
+ * NOBODY HAS SAID YET (a legacy row awaiting backfill), `'none'` means the owner
+ * looked at it and said no season applies. Collapsing them would make "not yet
+ * migrated" indistinguishable from "deliberately runs all year", and the only
+ * safe treatment of the first is the unsafe treatment of the second.
+ */
+export const SEASON_NONE = 'none'
+
+/** What a series says about its own season. `seasonKey` is the declaration. */
+export interface SeriesSeasonInput {
+  /** A key in business_settings.service_seasons, SEASON_NONE, or null/undefined
+   *  when the series predates the declaration and has not been backfilled. */
+  seasonKey?: string | null
+  /** ⚠️ LEGACY ONLY. Consulted solely when there is no declaration AND name
+   *  inference is still enabled. Never consulted when `seasonKey` is set. */
+  serviceType?: string | null
+}
+
+export interface SeasonResolution {
+  season: ServiceSeason | null
+  /** How the answer was reached — so a surface can tell the owner, and so the
+   *  guard can prove a declaration was not quietly overridden by a guess. */
+  source: 'declared' | 'declared-none' | 'inferred' | 'unknown'
+  /** The key that was declared, when one was. */
+  key: string | null
+}
+
+/**
+ * THE resolver. A series' season, from its DECLARATION.
+ *
+ * Order, and it is not negotiable:
+ *   1. an explicit `seasonKey` that names a configured season  → that season
+ *   2. `SEASON_NONE`                                           → no season, ON PURPOSE
+ *   3. no declaration, inference ALLOWED                       → the legacy guess
+ *   4. no declaration, inference DISABLED                      → unknown
+ *
+ * ⚠️ `allowNameInference` defaults TRUE and that is a migration decision, not an
+ * endorsement. Until `job_recurrences.season_key` exists and is backfilled, every
+ * live series would resolve to `unknown` without it — which would strip the
+ * season from the 14 series that currently work. Turning it off is the last step
+ * of the migration, not the first; the guard pins that a declaration ALWAYS wins
+ * regardless of the flag, which is the property that actually matters.
+ */
+export function resolveSeriesSeason(
+  input: SeriesSeasonInput,
+  seasons: ServiceSeasons,
+  opts?: { allowNameInference?: boolean },
+): SeasonResolution {
+  const key = input.seasonKey?.trim() || null
+  if (key === SEASON_NONE) return { season: null, source: 'declared-none', key }
+  if (key) {
+    const declared = seasons[key]
+    // ⛔ A key naming a season the business does not have is NOT quietly
+    // downgraded to a name guess. The owner said "this one"; answering with a
+    // different season inferred from a word in the title would be worse than
+    // admitting we cannot resolve it.
+    if (declared) return { season: declared, source: 'declared', key }
+    return { season: null, source: 'unknown', key }
+  }
+  const allow = opts?.allowNameInference !== false
+  if (!allow) return { season: null, source: 'unknown', key: null }
+  const inferred = seasonForService(input.serviceType, seasons)
+  return inferred
+    ? { season: inferred, source: 'inferred', key: null }
+    : { season: null, source: 'unknown', key: null }
+}
+
+/** The season keys an owner may choose, in a stable order. */
+export function seasonKeys(seasons: ServiceSeasons): string[] {
+  return Object.keys(seasons).sort()
+}
+
+/**
+ * Where a series must stop: the earlier of the owner's own end date and the end
+ * of the season that governs it.
+ *
+ * ⭐⭐ THE SEASON BOUND IS EXPRESSED AS AN END DATE, deliberately, because that
+ * is the representation Session 39 already established — "Season End has ONE
+ * representation: a plain `end_date` on `job_recurrences`". So the recurrence
+ * engine STAYS SEASON-UNAWARE: it keeps taking one end date and knows nothing
+ * about months. Teaching it seasons would be a second representation of the same
+ * fact, and the two would eventually disagree.
+ *
+ * Wrapping seasons (Nov 1 → Mar 31) and leap years need no special case here —
+ * `seasonEndDateFor` already handles both, including clamping Feb 29 into a
+ * non-leap year.
+ *
+ * ⛔ It only ever makes the horizon SHORTER. A season cannot extend a series past
+ * the date the owner typed.
+ */
+export function effectiveSeriesEnd(
+  startISO: string,
+  endDate: string | null | undefined,
+  season: ServiceSeason | null,
+): string | null {
+  const owner = endDate?.trim() || null
+  if (!season) return owner
+  const seasonEnd = seasonEndDateFor(startISO, season)
+  if (!owner) return seasonEnd
+  return seasonEnd < owner ? seasonEnd : owner
+}
+
 function pad(n: number): string { return String(n).padStart(2, '0') }
 
 // Clamp a stored day to a real day of that month IN THAT YEAR. The editor caps
