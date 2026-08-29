@@ -156,13 +156,25 @@ export function endDateFromTerm(
 ): string | null {
   if (openEnded || !effective || !termMonths || termMonths <= 0) return null
   const d = parseISODate(effective)
+  // ⚠️ A DATE THAT DOES NOT EXIST MUST NOT SILENTLY BECOME A DIFFERENT ONE.
+  // `new Date(2026, 1, 30)` is March 2nd, so '2026-02-30' would quietly produce a
+  // term measured from a day the owner never chose. Refuse instead.
+  if (toISODate(d) !== effective) return null
+
   const target = new Date(d.getFullYear(), d.getMonth() + termMonths, d.getDate())
-  // Month arithmetic overflows (Jan 31 + 1 month), so clamp back into the month
-  // the caller actually asked for rather than silently landing in the next one.
-  if (target.getDate() !== d.getDate()) target.setDate(0)
-  // A term runs UP TO the day before the anniversary: a 12-month agreement
-  // starting Jan 1 ends Dec 31, not Jan 1 of the next year.
-  target.setTime(target.getTime() - DAY_MS)
+  if (target.getDate() !== d.getDate()) {
+    // ⭐ THE ANNIVERSARY DOES NOT EXIST IN THAT MONTH (Jan 31 + 1 month). Clamping
+    // to the month's last day IS the end of the term — the day before it would be
+    // subtracting twice, and turned a one-month agreement from Jan 31 into one
+    // that ended Feb 27.
+    target.setDate(0)
+  } else {
+    // A term runs UP TO the day before the anniversary: a 12-month agreement
+    // starting Jan 1 ends Dec 31, not Jan 1 of the next year.
+    // setDate() rather than millisecond arithmetic, so a DST shift inside the
+    // term cannot move the answer.
+    target.setDate(target.getDate() - 1)
+  }
   return toISODate(target)
 }
 

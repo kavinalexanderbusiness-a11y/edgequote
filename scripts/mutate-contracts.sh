@@ -24,12 +24,19 @@ SCHEMA="supabase/migrations/29999999000000_contracts_v1_TEMP.sql"
 LIB="src/lib/contracts.ts"
 DETAIL="src/app/dashboard/contracts/[id]/page.tsx"
 LIST="src/app/dashboard/contracts/page.tsx"
+# Session 74's surface. The dependency-characterization mutations edit these to
+# simulate S74 changing before it lands — the exact risk of building on an
+# unlanded branch. They are RESTORED like everything else.
+S74LIB="src/lib/documents.ts"
+S74SCHEMA="supabase/migrations/20260824090000_documents_signatures_v1.sql"
 
 BACKUP_DIR="$(mktemp -d)"
 cp "$SCHEMA" "$BACKUP_DIR/schema.sql"
 cp "$LIB"    "$BACKUP_DIR/lib.ts"
 cp "$DETAIL" "$BACKUP_DIR/detail.tsx"
 cp "$LIST"   "$BACKUP_DIR/list.tsx"
+cp "$S74LIB"    "$BACKUP_DIR/s74lib.ts"
+cp "$S74SCHEMA" "$BACKUP_DIR/s74schema.sql"
 
 # ⭐ HIDE PGLITE FOR THE DURATION. The guard treats PGlite as an OPTIONAL
 # dependency and skips its behavioural half cleanly when absent, so moving the
@@ -45,6 +52,8 @@ restore() {
   cp "$BACKUP_DIR/lib.ts"     "$LIB"
   cp "$BACKUP_DIR/detail.tsx" "$DETAIL"
   cp "$BACKUP_DIR/list.tsx"   "$LIST"
+  cp "$BACKUP_DIR/s74lib.ts"    "$S74LIB"
+  cp "$BACKUP_DIR/s74schema.sql" "$S74SCHEMA"
 }
 cleanup() {
   restore
@@ -220,6 +229,32 @@ mutate "an agreement preview that scrolls the whole page sideways" \
   "scrolls inside its own box" \
   "$DETAIL" \
   "s/overflow-x-auto//"
+
+# ── Term arithmetic ─────────────────────────────────────────────────────────
+# ⭐⭐ THESE TWO ARE THE BUG THIS SESSION ACTUALLY SHIPPED AND THEN FIXED. The
+# first version subtracted a day even after clamping an impossible anniversary,
+# so a one-month agreement starting Jan 31 ended on Feb 27. Section 5a EXECUTES
+# the function, which is the only reason it was ever found.
+mutate "the double-subtract that ended a Jan-31 term on Feb 27"   "term: 2026-01-31 + 1mo"   "$LIB"   "s/    target.setDate(0)/    target.setDate(0); target.setDate(target.getDate() - 1)/"
+
+mutate "an impossible effective date silently shifted instead of refused"   "an impossible date is refused"   "$LIB"   "s/  if (toISODate(d) !== effective) return null//"
+
+# ── Session 74 moving under us ──────────────────────────────────────────────
+# ⭐⭐ THE RISK OF BUILDING ON AN UNLANDED BRANCH. Each of these is a change S74
+# could legitimately make before it merges, and each one breaks contracts at
+# RUNTIME rather than at compile time. If any survives, the dependency
+# characterization is decoration.
+mutate "S74 dropping text/plain — the format contracts render to"   "S74 still accepts text/plain"   "$S74LIB"   "s|'text/plain',||"
+
+mutate "S74 renaming requestSignature"   "S74 still exports requestSignature"   "$S74LIB"   "s/export async function requestSignature/export async function createSignatureRequest/"
+
+mutate "S74 dropping the DocumentView.current field sendContract reads"   "a DocumentView still exposes"   "$S74LIB"   "s/current: DocumentVersion | null/latest: DocumentVersion | null/"
+
+mutate "S74 narrowing visibility so a contract can never reach the portal"   "S74 still allows customer visibility"   "$S74SCHEMA"   "s/visibility in ('internal', 'worker', 'customer')/visibility in ('internal', 'worker')/"
+
+mutate "S74 widening the purpose vocabulary out from under the template"   "S74's purpose vocabulary is unchanged"   "$S74SCHEMA"   "s/purpose in ('work_authorization', 'customer_acknowledgement', 'completion_acknowledgement')/purpose in ('work_authorization')/"
+
+mutate "S74 renaming the version column the contract pins"   "S74.document_signature_requests.version_id still exists"   "$S74SCHEMA"   "s/\"version_id\"   uuid not null,/\"doc_version_id\"   uuid not null,/"
 
 echo ""
 echo "══ result ══════════════════════════════════════════════════════════════"

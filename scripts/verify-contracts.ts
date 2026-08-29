@@ -27,6 +27,9 @@ import { join } from 'node:path'
 import { baselineSql } from './lib/schema-source'
 import { splitStatements, loadPGlite, substitutePlatformStatements } from './lib/pg-sql'
 import { openFixtureTenant, isSkipped, fixtureResidue } from './lib/verify-fixture'
+// ⭐ Imported to be EXECUTED (section 5a), not merely read. Date maths is proven
+// by running it; everything else in this file is proven by reading the source.
+import { endDateFromTerm, isExpired, renewalState } from '../src/lib/contracts'
 
 const MIGRATIONS = join('supabase', 'migrations')
 const PRELUDE = join('scripts', 'schema', 'platform-prelude.sql')
@@ -143,6 +146,108 @@ check('the library never writes S74 signature tables directly',
 check('there is no second signature pad',
   !existsSync(join('src', 'components', 'contracts', 'SignaturePad.tsx')),
   'S74\'s SignaturePad is the only one')
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 2b · DEPENDENCY CHARACTERIZATION — what S83 borrows from Session 74
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// ⭐⭐ WHY THIS SECTION EXISTS. S83 is built on a branch that has NOT LANDED. S74
+// can still change before it merges, and the failure mode is silent: a renamed
+// export or a narrowed constant produces a contract that creates a document and
+// then cannot send it — at runtime, in front of an owner. Every borrowed symbol
+// and every borrowed column is therefore named HERE, so the day S74 moves, this
+// guard says exactly which borrowing broke instead of leaving it to a stack
+// trace. This is the whole reconciliation checklist, executable.
+console.log('\n══ 2b · dependency characterization (S74) ══════════════════════════════\n')
+
+const s74Lib = src(join('src', 'lib', 'documents.ts'))
+const s74Files = existsSync(MIGRATIONS)
+  ? readdirSync(MIGRATIONS).filter(f => /_documents_signatures_v1\.sql$/i.test(f)).sort()
+  : []
+const s74Schema = s74Files.length ? stripSql(src(join(MIGRATIONS, s74Files[0]))) : ''
+
+check('Session 74\'s library is present to depend on', !!s74Lib,
+  'src/lib/documents.ts is missing — S83 cannot be reconciled without it')
+check('Session 74\'s migration is present in the apply path', !!s74Schema,
+  'the contracts migration declares it as a hard precondition')
+
+// ── The functions S83 calls ────────────────────────────────────────────────
+for (const fn of ['uploadDocument', 'addVersion', 'requestSignature', 'signedDocumentUrl']) {
+  check(`S74 still exports ${fn}()`,
+    new RegExp(`export async function ${fn}\\b`).test(s74Lib),
+    `lib/contracts calls ${fn} — a rename here is a runtime break at send time`)
+}
+// ── The types S83 imports ──────────────────────────────────────────────────
+for (const t of ['DocumentVersion', 'DocumentSignature', 'SignaturePurpose']) {
+  check(`S74 still exports the ${t} type`,
+    new RegExp(`export (interface|type) ${t}\\b`).test(s74Lib))
+}
+for (const c of ['PURPOSE_STATEMENT', 'PURPOSE_LABEL', 'DOCUMENT_ACCEPT']) {
+  check(`S74 still exports ${c}`, new RegExp(`export const ${c}\\b`).test(s74Lib))
+}
+
+// ⭐⭐ THE MOST FRAGILE BORROWING IN THE WHOLE SESSION. The rendered agreement is
+// a text/plain File (contractFile). S74 refuses any mime outside DOCUMENT_ACCEPT
+// *before* upload, so dropping 'text/plain' from that list would not fail a type
+// check, would not fail a build, and would not fail until an owner pressed Send.
+check('S74 still accepts text/plain — the format contracts render to',
+  /'text\/plain'/.test(s74Lib),
+  'contractFile() builds a text/plain File; if S74 stops accepting it, Send breaks at runtime only')
+check('the contract renderer and S74\'s accept list agree',
+  /type: 'text\/plain'/.test(libCode),
+  'contractFile must declare a mime S74 will accept')
+
+// ── The uploadDocument option shape S83 passes ─────────────────────────────
+const uploadOpts = /export async function uploadDocument\([\s\S]*?\)\s*:/.exec(s74Lib)?.[0] ?? ''
+for (const key of ['userId', 'entity', 'file', 'name', 'category', 'visibility']) {
+  check(`uploadDocument still takes ${key}`, new RegExp(`\\b${key}\\b`).test(uploadOpts),
+    'lib/contracts.sendContract passes this key')
+}
+const reqOpts = /export async function requestSignature\([\s\S]*?\)\s*:/.exec(s74Lib)?.[0] ?? ''
+for (const key of ['documentId', 'versionId', 'customerId', 'statement', 'purpose', 'requestedBy']) {
+  check(`requestSignature still takes ${key}`, new RegExp(`\\b${key}\\b`).test(reqOpts))
+}
+// ⭐ sendContract reads `document.current` to learn the version it just made.
+check('a DocumentView still exposes `current`',
+  /current: DocumentVersion \| null/.test(s74Lib),
+  'sendContract pins the signature to up.document.current.id')
+
+// ── The columns S83's foreign keys and triggers reach into ─────────────────
+const s74Cols: [string, string, RegExp][] = [
+  ['documents', 'visibility', /"visibility"\s+text/],
+  ['documents', 'archived_at', /"archived_at"\s+timestamp/],
+  ['documents', 'customer_id', /"customer_id"\s+uuid/],
+  ['document_versions', 'version_no', /"version_no"\s+integer/],
+  ['document_versions', 'storage_path', /"storage_path"\s+text/],
+  ['document_signature_requests', 'version_id', /"version_id"\s+uuid/],
+  ['document_signatures', 'request_id', /"request_id"\s+uuid/],
+]
+for (const [table, col, re] of s74Cols) {
+  const block = new RegExp(`create table if not exists public\\.${table} \\(([\\s\\S]*?)\\n\\);`, 'i')
+    .exec(s74Schema)?.[1] ?? ''
+  check(`S74.${table}.${col} still exists`, !!block && re.test(block),
+    'a contracts FK or trigger reads this column')
+}
+// ⭐ 'customer' visibility is what makes a sent contract reachable in the portal.
+check('S74 still allows customer visibility',
+  /visibility in \('internal', 'worker', 'customer'\)/.test(s74Schema),
+  'sendContract files the artifact as customer-visible so S74\'s portal projection can show it')
+// ⭐ The purpose vocabulary S83 defaults into, unwidened.
+check('S74\'s purpose vocabulary is unchanged',
+  /purpose in \('work_authorization', 'customer_acknowledgement', 'completion_acknowledgement'\)/.test(s74Schema),
+  'contract_templates.purpose mirrors this list and must not drift from it')
+check('the contracts schema mirrors exactly that vocabulary',
+  (schema.match(/'work_authorization', 'customer_acknowledgement', 'completion_acknowledgement'/g) ?? []).length >= 1,
+  'two vocabularies that must agree should be checked against each other, not remembered')
+
+// ⭐ The welds S83 ADDS to S74's tables must name constraints that do not
+// already exist there — otherwise the migration fails on a duplicate name.
+for (const c of ['documents_user_id_id_key', 'document_versions_user_id_id_key',
+                 'document_signature_requests_user_id_id_key']) {
+  check(`${c} is added by S83, not already in S74`,
+    !new RegExp(c).test(s74Schema) && new RegExp(c).test(schema),
+    'if S74 adds this itself before landing, S83\'s guarded ALTER becomes a no-op — which is fine, but the guard must be updated to say so')
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 3 · SEPARATION — contract vs recurrence vs money
@@ -313,6 +418,73 @@ check('no audit call leaks a storage path, a signature or a template body',
   auditCalls.length > 0
   && !auditCalls.some(c => /storage_path|signature_path|\bbody\b|base64/i.test(c)),
   `audit DESCRIBES the mutation; contracts stays authoritative (${auditCalls.length} calls)`)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 5a · TERM ARITHMETIC — executed, not grepped
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// ⭐⭐ THE REST OF THIS FILE READS SOURCE; THIS SECTION RUNS IT. A term is a date
+// an owner will be held to, and date maths is where off-by-ones live: the first
+// version of endDateFromTerm subtracted a day even when the anniversary had
+// already been clamped, so a one-month agreement starting Jan 31 ended on
+// FEB 27. No amount of grepping the function would have found that.
+console.log('\n══ 5a · term arithmetic ════════════════════════════════════════════════\n')
+
+const term: [string, number, string | null, string][] = [
+  ['2026-01-01', 12, '2026-12-31', 'a calendar year ends the day before the anniversary'],
+  ['2026-01-31',  1, '2026-02-28', 'Jan 31 + 1mo clamps to the month end, and STOPS there'],
+  ['2026-01-31', 12, '2027-01-30', 'when the anniversary exists, the term ends the day before'],
+  ['2026-03-15',  6, '2026-09-14', 'mid-month, half a year'],
+  ['2026-12-01',  1, '2026-12-31', 'across a year boundary'],
+  ['2024-02-29', 12, '2025-02-28', 'a real leap day + 12 months'],
+]
+for (const [start, months, want, why] of term) {
+  const got = endDateFromTerm(start, months, false)
+  check(`term: ${start} + ${months}mo → ${want} (${why})`, got === want, `got ${got}`)
+}
+check('term: open-ended returns no end date at all',
+  endDateFromTerm('2026-01-01', 12, true) === null,
+  'open-ended must be NULL, never a far-future sentinel that later reads as a deadline')
+check('term: no months means the owner sets the date themselves',
+  endDateFromTerm('2026-01-01', null, false) === null)
+// ⚠️ A date that does not exist must not silently become a different one.
+check('term: an impossible date is refused, not shifted',
+  endDateFromTerm('2026-02-30', 12, false) === null,
+  'new Date(2026,1,30) is March 2nd — a term measured from a day nobody chose')
+
+// ── Expiry and renewal, executed against a fixed clock ─────────────────────
+const CLOCK = new Date(2026, 5, 15) // 2026-06-15, local
+const live = (end: string | null, notice: number | null = null) =>
+  ({ status: 'active' as const, end_date: end, renewal_notice_days: notice })
+
+check('expiry: a live agreement past its end date HAS expired',
+  isExpired({ status: 'active', end_date: '2026-06-14' }, CLOCK))
+check('expiry: an agreement ending TODAY has not expired yet',
+  !isExpired({ status: 'active', end_date: '2026-06-15' }, CLOCK),
+  'the last day of a term is still inside it')
+check('expiry: a draft never expires',
+  !isExpired({ status: 'draft', end_date: '2020-01-01' }, CLOCK),
+  'it was never in force')
+check('expiry: an open-ended agreement never expires',
+  !isExpired({ status: 'active', end_date: null }, CLOCK))
+check('expiry: a terminated contract keeps its own truer word',
+  !isExpired({ status: 'terminated', end_date: '2020-01-01' }, CLOCK))
+
+check('renewal: an open-ended agreement is never "expiring soon"',
+  renewalState(live(null), CLOCK).state === 'open_ended')
+check('renewal: outside the notice window there is nothing to say',
+  renewalState(live('2026-12-31', 30), CLOCK).state === 'none')
+check('renewal: inside the notice window it is expiring soon',
+  renewalState(live('2026-07-01', 30), CLOCK).state === 'expiring_soon')
+check('renewal: the notice window is the OWNER\'s number, not ours',
+  renewalState(live('2026-07-01', 5), CLOCK).state === 'none'
+  && renewalState(live('2026-07-01', 90), CLOCK).state === 'expiring_soon',
+  'a fixed window would override a policy the owner set deliberately')
+check('renewal: past the end date it reports expired, not expiring',
+  renewalState(live('2026-01-01', 30), CLOCK).state === 'expired')
+check('renewal: a contract that is not active raises nothing',
+  renewalState({ status: 'draft', end_date: '2026-06-16', renewal_notice_days: 30 }, CLOCK).state === 'none',
+  'a draft cannot be up for renewal')
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 5b · SURFACES — the portal boundary, and the phone
@@ -650,6 +822,45 @@ async function behaviour() {
   await refusedBy('8 · the signed VERSION cannot be deleted out from under it',
     `delete from public.document_versions where id = '${VER}'`,
     /has been signed and cannot be deleted|restrict|violates foreign key/i)
+
+  // ⭐⭐ AND THE WHOLE DOCUMENT, WHICH IS THE ROUTE ROUND IT. Deleting the
+  // document cascades to its versions in S74 — so without the RESTRICT on
+  // contracts.document_version_id, a signed contract would quietly lose the
+  // record of what was signed by deleting one level up. The refusal must survive
+  // the indirect path, not just the direct one.
+  await refusedBy('8 · deleting the DOCUMENT cannot orphan a signed contract',
+    `delete from public.documents where id = '${DOC}'`,
+    /has been signed and cannot be deleted|restrict|violates foreign key/i,
+    'the cascade to document_versions must be stopped by the contract that rests on it')
+
+  // ⭐⭐ THE OTHER DIRECTION: an OPTIONAL link disappearing must RELEASE, never
+  // destroy. A signed agreement outlives the thing it referenced — and it keeps
+  // the NAME it was made from, which is the S69 freeze pattern proven as
+  // behaviour rather than asserted as text.
+  //
+  // ⚠️ THE PARENT HERE IS DELIBERATELY contract_templates. PGlite cannot delete a
+  // job_recurrence, a service_template or a quote at all: every one of those
+  // cascades into `quotes`, and `quotes.total` is a GENERATED column, so the
+  // harness refuses with "replica identity must not contain unpublished
+  // generated columns". That is a harness limitation, not a product one. The
+  // contracts table is reached by the SAME ON DELETE SET NULL mechanism from
+  // every optional parent, so proving it on the one parent this database can
+  // delete proves the mechanism; the remaining FKs are pinned statically above.
+  await exec(`update public.contracts
+                 set template_id = 'cccccccc-0000-0000-0000-00000000000a',
+                     template_name = 'Service Agreement'
+               where id = 'd0000000-0000-0000-0000-000000000002'`)
+  const delTpl = await refuses(
+    `delete from public.contract_templates where id = 'cccccccc-0000-0000-0000-00000000000a'`)
+  check('deleting a template releases the link instead of taking contracts with it',
+    delTpl === '', `it was refused: ${delTpl.slice(0, 160)}`)
+  const survived = await db.query(
+    `select status, template_id, template_name from public.contracts
+      where id = 'd0000000-0000-0000-0000-000000000002'`) as any
+  check('5 · a deleted template leaves the contract standing, still naming it',
+    survived.rows[0]?.template_id === null
+    && survived.rows[0]?.template_name === 'Service Agreement',
+    `provenance must survive the template's deletion: ${JSON.stringify(survived.rows[0])}`)
 
   // ── PROOF 5 · a template edit never rewrites history ──────────────────────
   await exec(`update public.contract_templates
