@@ -1,21 +1,34 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- PROPOSAL — Explicit no-charge work, and an accept door that cannot approve
---            an unpriced quote.                          Session 114, P0 lane.
+-- Explicit no-charge work, and an accept door that cannot approve an unpriced
+-- quote.                                                  Session 114, P0 lane.
 --
--- ⛔⛔ THIS FILE IS NOT IN THE APPLY PATH AND HAS NOT BEEN APPLIED.
---     `supabase/proposals/` is deliberately outside `supabase/migrations/`
---     (verify:migrations rule 4 — the apply path is migrations/ only). Nothing
---     here has run against production. To ship it, the owner moves it to
---     `supabase/migrations/<14-digit>_no_charge_v1.sql` with a version taken
---     from the LIVE ledger AT APPLY TIME — never from this file.
+-- ⛔⛔ THE VERSION IN THIS FILENAME IS DELIBERATELY FAKE AND MUST BE REPLACED.
+--     `29999999000000` is the year 2999. It sorts after every real migration, so
+--     it can never land before the baseline by accident, and the filename says
+--     out loud that it is unfinished business. (Same device S83 used for
+--     contracts_v1_TEMP, for the same reason — this one is lower-case because
+--     verify:migrations requires snake_case, and weakening that guard to shout
+--     louder in a filename would have been the wrong trade.)
+--
+--     ⭐ S106 RE-VERSIONS THIS AT LANDING, from the LIVE LEDGER AT APPLY TIME —
+--     never from this file, and never from a number chosen while writing it.
+--     Two sessions have already been bitten by picking a version early: S76's
+--     `20260815120000` was ALREADY IN PRODUCTION as a different body.
 --
 -- ⚠️ ORDERING IS LOAD-BEARING (the S111 42703 lesson, learned the expensive way):
---     APPLY THIS BEFORE any build that WRITES these columns. Reads are already
---     safe — every consumer reaches the fields through `select('*')`, so an
---     unapplied database simply omits them and `isNoCharge()` answers false,
---     which is the correct reading of "no decision was recorded". It is the
---     WRITE that would fail 42703, and the only writer is the new "No charge"
---     action, which reports the missing migration rather than corrupting a save.
+--     APPLY THIS BEFORE deploying an app build that WRITES these columns. Reads
+--     are already safe — every consumer reaches the fields through `select('*')`,
+--     so an unapplied database simply omits them and `isNoCharge()` answers
+--     false, which is the correct reading of "no decision was recorded". It is
+--     the WRITE that fails 42703, and the only writer is the "No charge" action,
+--     which detects the missing column and says so rather than corrupting a save.
+--
+-- ⚠️ EXPECT verify:rebuild TO BE RED UNTIL THE CONTRACT IS RECAPTURED.
+--     The apply path will carry six columns, four constraints and a new function
+--     body that the committed contract does not. That red is not a defect — it
+--     is the from-zero rebuild proving this SQL applies cleanly. It clears at
+--     step 7 of the landing plan (`npm run schema:contract && schema:baseline`),
+--     after production has actually run it.
 --
 -- ── WHY THIS EXISTS ────────────────────────────────────────────────────────
 -- The app can currently express three of the four facts in the domain law:

@@ -11,17 +11,26 @@
 // pipeline and the invoice drafter, where it read as a real amount. A business
 // with ten unpriced visits saw a confident $0 and no hint the figure was fiction.
 //
-// ⭐ OFFLINE AND PURE BY CONSTRUCTION — grep this file for SUPABASE_URL /
-// SERVICE_ROLE / ANON_KEY / VERIFY_FIXTURE and you will find nothing, which is
-// what makes it RUN IN CI rather than skip there (the offline/live split that
-// hid a schema drift for days — see the S106 landing notes). It drives the real
-// production modules by importing them, and reads source text only where the
-// rule is structural and has no runtime surface.
+// ⭐ OFFLINE BY CONSTRUCTION — grep this file for SUPABASE_URL / SERVICE_ROLE /
+// ANON_KEY / VERIFY_FIXTURE and you will find nothing, which is what makes it
+// RUN IN CI rather than skip there (the offline/live split that hid a schema
+// drift for days — see the S106 landing notes). Sections 1–12 drive the real
+// production modules by importing them, and read source text only where the rule
+// is structural and has no runtime surface.
 //
-// ⛔ IT WRITES NOTHING AND READS NO DATABASE. There is no fixture to clean up
-// and no tenant it could touch.
+// ⭐⭐ SECTION 13 IS DIFFERENT AND IS THE MOST IMPORTANT PART. It builds this
+// repository's schema from ZERO in a disposable in-process Postgres (PGlite) and
+// calls the REAL `portal_accept_quote` / `quote_apply_choice` with no app code in
+// the path. Everything above proves what the SOURCE says; only that proves what
+// the DATABASE DOES — and the app is not the authority on acceptance, the
+// database is. It SKIPS loudly if PGlite is absent.
+//
+// ⛔ IT TOUCHES NO REAL DATABASE. The only database it opens is created empty in
+// memory and thrown away; there is no fixture to clean up and no tenant it could
+// reach.
 
 import { readFileSync } from 'node:fs'
+import { splitStatements, loadPGlite, substitutePlatformStatements } from './lib/pg-sql'
 import { join } from 'node:path'
 
 // The real engines. Imported, never re-described — a guard that restates the
@@ -395,29 +404,225 @@ const booking = read('src/app/book/[token]/BookingClient.tsx')
 check('the booking client records why its `?? 0` is safe',
   /THE LOAD-BEARING HALF IS THE `nullif` IN THE RPC/.test(booking))
 
-console.log('\n═══ 12 · The accept door — proposal, and what is NOT yet true ═══')
+console.log('\n═══ 12 · The accept-door migration — in the apply path, awaiting re-version ═══')
 
-// ⚠️ HONEST GAP, ASSERTED AS A GAP. The DB-level fix for `quote_apply_choice`
-// (an unpriced quote can currently be ACCEPTED with a NULL accepted_price) is
-// written but NOT APPLIED — it lives in supabase/proposals/, deliberately
-// outside the apply path. This section pins the proposal's existence and its
-// content so it cannot be quietly lost, and pins that the live baseline still
-// has the hole, so the day it IS applied this check fails loudly and tells the
-// next session to re-measure rather than assume.
-const proposal = read('supabase/proposals/no_charge_v1.sql')
-check('the no-charge proposal exists and is marked unapplied',
-  /THIS FILE IS NOT IN THE APPLY PATH AND HAS NOT BEEN APPLIED/.test(proposal))
-check('the proposal closes the accept hole',
-  /if not v_free and \(v_base is null or v_base <= 0\) then/.test(proposal))
-check('the proposal keeps quote_apply_choice\'s signature identical (no overload)',
-  /quote_apply_choice\(p_quote_id uuid, p_option_id uuid, p_addon_ids uuid\[\], p_via text\)/.test(proposal))
-check('the proposal is NOT in the apply path',
-  !require('node:fs').readdirSync(join(ROOT, 'supabase', 'migrations')).some((f: string) => /no_charge/.test(f)))
-check('the live baseline still carries the accept hole (proposal not yet applied)',
+// The DB fix is no longer a proposal: it is a MIGRATION CANDIDATE in
+// supabase/migrations/, so verify:rebuild applies it from zero and section 13
+// drives the resulting function. What this section pins is the paperwork around
+// it — the parts a from-zero rebuild cannot see.
+const migFiles = (require('node:fs') as typeof import('node:fs'))
+  .readdirSync(join(ROOT, 'supabase', 'migrations')).filter(f => f.endsWith('.sql'))
+const noChargeFile = migFiles.find(f => /no_charge/.test(f))
+check('the no-charge migration is IN the apply path', !!noChargeFile, migFiles.join(', '))
+
+const migration = read(join('supabase', 'migrations', noChargeFile ?? 'missing.sql'))
+check('it closes the accept hole',
+  /if not v_free and \(v_base is null or v_base <= 0\) then/.test(migration))
+// ⚠️ A `create or replace function` with a CHANGED signature creates an OVERLOAD
+// and leaves the old body callable WITH ITS GRANTS — the S121 trap, where anon
+// could still reach the un-hardened door. The argument list must stay identical.
+check('it keeps quote_apply_choice\'s signature identical (no overload)',
+  /quote_apply_choice\(p_quote_id uuid, p_option_id uuid, p_addon_ids uuid\[\], p_via text\)/.test(migration))
+
+// ⛔⛔ THE VERSION IS FAKE ON PURPOSE and S106 re-versions it at landing from the
+// LIVE ledger. Two sessions have been bitten by choosing a version early (S76's
+// was already in production as a different body), so the guard refuses to let a
+// year-2999 placeholder quietly become permanent — and refuses to let anyone
+// invent a real-looking one here either.
+check('its version is the deliberate 2999 placeholder, not a real timestamp',
+  /^29999999000000_/.test(noChargeFile ?? ''), noChargeFile)
+check('its filename says a re-version is required',
+  /temp_reversion_required/.test(noChargeFile ?? ''), noChargeFile)
+check('the file itself tells S106 to re-version from the live ledger',
+  /S106 RE-VERSIONS THIS AT LANDING, from the LIVE LEDGER AT APPLY TIME/.test(migration))
+check('it warns that the app must not be deployed before it is applied',
+  /APPLY THIS BEFORE deploying an app build that WRITES these columns/.test(migration))
+
+// ⭐ The baseline is a snapshot of what PRODUCTION has run, and production has
+// NOT run this yet — so the old body is still in there and that is correct. The
+// apply path supersedes it. Asserted so that "the baseline has the hole" is a
+// recorded fact rather than a surprise, and so the day production runs it and
+// the baseline is recaptured, this check fails and tells the next session to
+// re-measure instead of assuming.
+check('the committed baseline still carries the OLD body (production has not run it)',
   !/if not v_free and/.test(baseline),
-  'the proposal appears to be APPLIED — re-measure section 12 and update this guard')
+  'the baseline now has the fix — production applied it; recapture the contract and update this check')
 
-console.log(failures === 0
-  ? `\n✅ verify:unpriced-work — all checks passed\n`
-  : `\n❌ verify:unpriced-work — ${failures} check(s) failed\n`)
-process.exit(failures === 0 ? 0 : 1)
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n═══ 13 · THE DB ACCEPTANCE DOOR — behaviour, from an empty Postgres ═══')
+
+// ⭐⭐ THE SECTION THAT MATTERS MOST IN THIS FILE.
+//
+// Everything above proves what the SOURCE says. This proves what the DATABASE
+// DOES — by building the schema from zero out of this repository and calling the
+// real `quote_apply_choice` / `portal_accept_quote`, with no app code anywhere in
+// the path. That distinction is the whole point: the app-side gates can all be
+// correct and a quote can still be accepted through the portal, because the app
+// is not the authority. The database is.
+//
+// ⚠️ SKIPS clean when PGlite is absent (the pattern verify:audit-trail uses), and
+// says so loudly — a silent skip would let this become decoration.
+
+async function dbDoor() {
+  const pglite = await loadPGlite()
+  if (!pglite) {
+    console.log('  ⏭  SKIPPED — PGlite is not installed. This is THE behavioural proof:')
+    console.log('     npm i -D @electric-sql/pglite && npm run verify:unpriced-work')
+    return
+  }
+  const { PGlite, contribs } = pglite
+  const db = await PGlite.create({ extensions: contribs })
+
+  const apply = async (label: string, rawSql: string) => {
+    const { sql } = substitutePlatformStatements(rawSql)
+    const statements = splitStatements(sql)
+    let n = 0
+    try { for (const s of statements) { await db.exec(s + ';'); n++ } ; return true }
+    catch (e) {
+      fail(`applied ${label}`, `statement ${n + 1}/${statements.length}: ${String((e as Error).message).slice(0, 220)}\n      ` +
+        (statements[n] ?? '').replace(/\s+/g, ' ').slice(0, 200))
+      return false
+    }
+  }
+
+  if (!await apply('platform prelude', read(join('scripts', 'schema', 'platform-prelude.sql')))) return
+  const migDir = join(ROOT, 'supabase', 'migrations')
+  for (const f of (require('node:fs') as typeof import('node:fs')).readdirSync(migDir).filter(x => x.endsWith('.sql')).sort()) {
+    if (!await apply(f, readFileSync(join(migDir, f), 'utf8'))) return
+  }
+  ok('the schema — baseline + the no-charge migration — applies from ZERO')
+
+  const rows = async (sql: string, params: unknown[] = []) => (await db.query(sql, params)).rows as Record<string, unknown>[]
+  const one = async (sql: string, params: unknown[] = []) => (await rows(sql, params))[0]
+
+  // ⚠️⚠️ A HARNESS ACCOMMODATION, NOT A SCHEMA CHANGE — read before "fixing" it.
+  // PGlite 0.5.5 is PostgreSQL 18.3; PRODUCTION IS 17. PG18 refuses every UPDATE
+  // on a table that is in a publication with REPLICA IDENTITY FULL and carries
+  // GENERATED columns — and `quotes` is all three (`total` and `subtotal` are
+  // generated, and the baseline adds it to supabase_realtime with identity full
+  // so an UPDATE payload can carry the old row). The error is a flat
+  // "cannot update table quotes", which reads like a permissions bug and is not.
+  //
+  // S121 hit the same wall. Dropping the table from the publication in THIS
+  // disposable database changes nothing about the schema under test: the
+  // function body, the constraints and the grants are exactly what production
+  // will run. What it removes is a realtime replication detail that only exists
+  // to feed subscribers this test does not have.
+  // ⛔ Never do this to a real database.
+  await db.exec(`alter publication supabase_realtime drop table public."quotes"`)
+  await db.exec(`alter publication supabase_realtime drop table public."customers"`)
+
+  const OWNER = '00000000-0000-0000-0000-0000000c0001'
+  const CUST  = '00000000-0000-0000-0000-0000000c0002'
+  await db.exec(`insert into auth.users (id, email) values ('${OWNER}', 'owner@s114.test')`)
+  await db.exec(`insert into public.customers (id, user_id, name) values ('${CUST}', '${OWNER}', 'S114 Fixture')`)
+  const TOKEN = 's114-portal-token'
+  await db.exec(`insert into public.customer_portal_tokens (user_id, customer_id, token) values ('${OWNER}', '${CUST}', '${TOKEN}')`)
+
+  let seq = 0
+  /** Create a quote in a named price state and hand back its id. */
+  const mkQuote = async (opts: { price: number | null; free?: boolean; status?: string }) => {
+    seq++
+    // ⚠️ Hex only — a 'q' here is not a uuid, and Postgres says so at runtime
+    // rather than at authoring time.
+    const id = `00000000-0000-0000-0000-0000000d${String(seq).padStart(4, '0')}`
+    await db.query(
+      `insert into public.quotes (id, user_id, quote_number, customer_id, customer_name, address, service_type, initial_price, status,
+         no_charge_at, no_charge_reason, no_charge_by)
+       values ($1, $2, $3, $4, 'S114 Fixture', '1 Test Way', 'Service', $5, $6, $7, $8, $9)`,
+      [id, OWNER, `S114-${seq}`, CUST, opts.price, opts.status ?? 'sent',
+        opts.free ? new Date().toISOString() : null, opts.free ? 'Warranty redo' : null, opts.free ? OWNER : null])
+    return id
+  }
+  const statusOf = async (id: string) => String((await one(`select status from public.quotes where id = $1`, [id]))?.status)
+  const acceptedOf = async (id: string) => (await one(`select accepted_price from public.quotes where id = $1`, [id]))?.accepted_price
+  /** The REAL customer-portal door — token in, boolean out. No app code. */
+  const portalAccept = async (id: string, optionId: string | null = null) =>
+    (await one(`select public.portal_accept_quote($1, $2, $3, null) as ok`, [TOKEN, id, optionId]))?.ok
+
+  // ── A · a priced quote still works. Regression canary first. ───────────────
+  const priced = await mkQuote({ price: 240 })
+  eq('a PRICED quote is still accepted through the portal', await portalAccept(priced), true)
+  eq('… and lands as accepted', await statusOf(priced), 'accepted')
+  eq('… with a real accepted_price', Number(await acceptedOf(priced)), 240)
+
+  // ── B · THE HOLE. Unpriced, from the customer's own portal door. ───────────
+  const unpriced = await mkQuote({ price: null })
+  eq('⛔ an UNPRICED quote is REFUSED by the database', await portalAccept(unpriced), false)
+  eq('… and stays sent, not accepted', await statusOf(unpriced), 'sent')
+  eq('… and never gets an accepted_price', await acceptedOf(unpriced), null)
+
+  const zeroQuote = await mkQuote({ price: 0 })
+  eq('⛔ a $0 quote with no no-charge record is REFUSED', await portalAccept(zeroQuote), false)
+  eq('… and stays sent', await statusOf(zeroQuote), 'sent')
+
+  // ── C · explicitly free work is accepted — the half that makes it usable ───
+  const free = await mkQuote({ price: 0, free: true })
+  eq('an explicitly NO-CHARGE quote IS accepted', await portalAccept(free), true)
+  eq('… and lands as accepted', await statusOf(free), 'accepted')
+  eq('… with a KNOWN accepted_price of 0 (not null)', Number(await acceptedOf(free)), 0)
+
+  // ⛔ No charge is not Paid. The DB must not have invented a payment state.
+  const freeRow = await one(`select status, accepted_price, no_charge_reason from public.quotes where id = $1`, [free])
+  check('no-charge acceptance does NOT mark the quote paid',
+    freeRow?.status === 'accepted', `status = ${freeRow?.status}`)
+  check('the no-charge REASON survives acceptance',
+    String(freeRow?.no_charge_reason ?? '') === 'Warranty redo', String(freeRow?.no_charge_reason))
+
+  // ── D · options ───────────────────────────────────────────────────────────
+  // A quote offering alternatives cannot be approved without naming one, and an
+  // all-zero option set carries no price, so naming one must not authorise it.
+  const withOpts = await mkQuote({ price: null })
+  await db.query(`insert into public.quote_options (quote_id, user_id, name, price, sort_order)
+                  values ($1,$2,'Basic',0,0), ($1,$2,'Full',0,1)`, [withOpts, OWNER])
+  const zeroOpt = await one(`select id from public.quote_options where quote_id = $1 and name = 'Full'`, [withOpts])
+  eq('⛔ naming an ALL-ZERO option does not authorise the quote',
+    await portalAccept(withOpts, String(zeroOpt?.id)), false)
+  eq('… and it stays sent', await statusOf(withOpts), 'sent')
+
+  const mixed = await mkQuote({ price: null })
+  await db.query(`insert into public.quote_options (quote_id, user_id, name, price, sort_order)
+                  values ($1,$2,'Included',0,0), ($1,$2,'Full',500,1)`, [mixed, OWNER])
+  const goodOpt = await one(`select id from public.quote_options where quote_id = $1 and name = 'Full'`, [mixed])
+  eq('a PRICED option is accepted', await portalAccept(mixed, String(goodOpt?.id)), true)
+  eq('… and snapshots that option\'s price', Number(await acceptedOf(mixed)), 500)
+
+  // ── E · the all-three-or-none constraint is the DATABASE's, not the app's ──
+  let refused = false
+  try {
+    await db.query(`insert into public.quotes (user_id, quote_number, customer_name, address, service_type, status, no_charge_at)
+                    values ($1,'S114-partial','X','1 Test Way','Service','draft', now())`, [OWNER])
+  } catch { refused = true }
+  check('⛔ a HALF-WRITTEN no-charge record is refused by a CHECK constraint', refused,
+    'a timestamp with no reason and no actor was accepted')
+
+  let blankRefused = false
+  try {
+    await db.query(`insert into public.quotes (user_id, quote_number, customer_name, address, service_type, status,
+                      no_charge_at, no_charge_reason, no_charge_by)
+                    values ($1,'S114-blank','X','1 Test Way','Service','draft', now(), '   ', $1)`, [OWNER])
+  } catch { blankRefused = true }
+  check('⛔ a BLANK no-charge reason is refused by the database', blankRefused)
+
+  // ── F · a foreign tenant's token cannot approve anything ──────────────────
+  // The tenancy statement was already there; re-asserted because this lane
+  // changed the function body and a rewrite is exactly when one gets dropped.
+  const OTHER = '00000000-0000-0000-0000-0000000c0009'
+  await db.exec(`insert into auth.users (id, email) values ('${OTHER}', 'other@s114.test')`)
+  const foreign = await mkQuote({ price: 300 })
+  await db.query(`update public.quotes set user_id = $1, customer_id = null where id = $2`, [OTHER, foreign])
+  eq('⛔ another tenant\'s quote is still refused', await portalAccept(foreign), false)
+
+  await db.close?.()
+}
+
+// ⚠️ NOT top-level await — tsx transforms this file to CJS, where top-level await
+// is a build error. Same shape verify-audit-trail uses for its PGlite half.
+dbDoor()
+  .catch(e => fail('the DB acceptance proof ran', String((e as Error).message).slice(0, 300)))
+  .then(() => {
+    console.log(failures === 0
+      ? `\n✅ verify:unpriced-work — all checks passed\n`
+      : `\n❌ verify:unpriced-work — ${failures} check(s) failed\n`)
+    process.exit(failures === 0 ? 0 : 1)
+  })
