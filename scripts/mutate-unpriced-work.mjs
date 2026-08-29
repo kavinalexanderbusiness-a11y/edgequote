@@ -64,11 +64,24 @@ console.log('   ✓ green\n')
 
 let caught = 0, missed = 0, broken = 0
 
-/** Apply one mutation, run the guard, restore. */
+// ⚠️⚠️ CRLF. Git is configured to check these files out with CRLF line endings,
+// so a multi-line pattern written with "\n" here matches NOTHING on disk — and a
+// mutation that does not apply reports as a stale pattern, which is exactly what
+// happened on the first run of this file (3 BROKEN). Patterns are therefore
+// escaped into a regex where every newline accepts an optional carriage return.
+//
+// ⭐ It also replaces EVERY occurrence, not the first. `String.replace(string, …)`
+// replaces one — and the blank-price save rule appears at THREE sites in the
+// schedule page, so mutating one left two intact and the guard stayed green. That
+// was a real MISS, and it was a miss caused by the harness, not by the guard.
+const escapeToRegex = (s) =>
+  new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\n/g, '\\r?\\n'), 'g')
+
+/** Apply one mutation everywhere it appears, run the guard, restore. */
 function mutate(name, file, from, to) {
   const path = file
   const before = readFileSync(path, 'utf8')
-  const after = before.replace(from, to)
+  const after = before.replace(escapeToRegex(from), () => to)
   if (after === before) {
     broken++
     console.log(`  ⚠ BROKEN MUTATION  ${name}`)

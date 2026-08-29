@@ -309,8 +309,16 @@ check('editing a visit does not render a NULL price as 0',
 check('editing a visit seeds a NULL price BLANK',
   /price:\s*editing\.price\s*\?\?\s*BLANK_NUMERIC_FIELD/.test(schedule))
 // The save path is what makes BLANK safe — it must keep turning blank into NULL.
-check('the save path still writes NULL for a blank price',
-  /Number\(values\.price\)\s*>\s*0\s*\?\s*Number\(values\.price\)\s*:\s*null/.test(schedule))
+// ⚠️⚠️ EVERY site, not "at least one". This check originally used `.test()`, which
+// is satisfied by a single surviving occurrence — and mutation testing found the
+// hole: the rule appears at THREE save sites in this page, and breaking one left
+// the guard green. Count both shapes instead, and require zero of the bad one.
+{
+  const good = (schedule.match(/Number\(values\.price\)\s*>\s*0\s*\?\s*Number\(values\.price\)\s*:\s*null/g) ?? []).length
+  const bad = (schedule.match(/Number\(values\.price\)\s*>\s*0\s*\?\s*Number\(values\.price\)\s*:\s*0\b/g) ?? []).length
+  check('every job save path writes NULL (never 0) for a blank price',
+    good >= 3 && bad === 0, `${good} correct, ${bad} writing 0`)
+}
 
 // ⭐ ONE sentinel, not two. A second local copy is how the fix drifted out of
 // QuoteBuilder once already (the 2026-07-26 replay).
