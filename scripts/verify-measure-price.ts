@@ -383,6 +383,22 @@ check('the customer branch never renders the diagnostic',
   !customerBranch.includes('unavailable.detail'),
   'detail is owner-only; verify:measure-price is the thing that keeps it that way')
 
+// ── The same rule, one surface over: what reaches a QUOTE OPTION ─────────────
+// ⛔⛔ basisText is the owner's pricing rationale — "$0.05/sq ft × 1,392 sq ft",
+// "No rate configured for this plan". QuoteOption.description is customer-facing:
+// the portal's BillingTab renders it and so does the PDF. The builder wrote one
+// into the other, publishing the arithmetic behind the quote — and, for a plan
+// with no rate, an internal error string — to the customer.
+const builderSrc = stripComments(read('src/components/quotes/QuoteBuilder.tsx'))
+check('basisText never becomes a customer-facing option description',
+  !/description:\s*[a-zA-Z_$][\w$]*\.basisText/.test(builderSrc),
+  'QuoteOption.description reaches the portal and the PDF; basisText is owner-only rationale')
+// And the money half: an unpriced plan must be FILTERED, never coerced. The
+// single-plan branch already refuses to "stamp a 0"; the options branch did it.
+check('an unpriced plan never becomes a $0 option',
+  !/price:\s*[a-zA-Z_$][\w$]*\.price\s*\?\?\s*0/.test(builderSrc),
+  'p.price ?? 0 turns "no price configured" into a $0 the customer can accept — filter on price != null instead')
+
 console.log(failures === 0
   ? '\n✅ measure & price is honest: the Price Book decides, and an unknown price stays unknown\n'
   : `\n❌ ${failures} check${failures === 1 ? '' : 's'} failed\n`)
