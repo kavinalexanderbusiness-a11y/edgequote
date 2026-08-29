@@ -13,6 +13,7 @@
 
 import { buildServicePlans, type ServicePlan } from '@/lib/recurrence'
 import { jobVisitValue } from '@/lib/invoicing'
+import { sortedAddons } from '@/lib/quoteAddons'
 import { settingsToSeasons } from '@/lib/seasons'
 // THE balance engine (lib/payments/ledger) — the same call the owner's customer
 // page, the invoice-reminder cron and ReceiptPDF make. The portal used to re-derive
@@ -57,13 +58,20 @@ export interface PortalQuoteService { service_type: string; quantity: number; un
  *  price IS the whole job for whoever picks it, and the database refuses a quote
  *  carrying both kinds of row. */
 export interface PortalQuoteOption { id: string; name: string; description: string | null; price: number; sort_order: number; is_recommended: boolean }
+// One optional extra, as get_portal_data's nested `addons` array returns it.
+// ⛔ The projection carries exactly these six fields. It does NOT carry
+// `selected_via`/`selected_at` — those are the business's provenance record, not
+// the customer's business — and quote_addons has no internal-note column at all,
+// so the description here is customer-safe BY CONSTRUCTION rather than by a
+// filter somebody has to remember to keep.
+export interface PortalQuoteAddon { id: string; name: string; description: string | null; price: number; sort_order: number; is_selected: boolean }
 // `accepted_price` is the consent snapshot (selected option + travel) — the
 // scheduling deposit derives from it, never from a total an edit could move.
 // `deposit_type`/`deposit_value` is the scheduling-deposit RULE; readiness is
 // derived from the ledger by lib/payments/depositGate, never stored anywhere.
 // `preferred_*` is the customer's own scheduling REQUEST — a preference, never
 // an appointment — echoed back so a reload keeps what they told us.
-export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null; options?: PortalQuoteOption[] | null; selected_option_id?: string | null; accepted_price?: number | null; deposit_type?: string | null; deposit_value?: number | null; preferred_date?: string | null; preferred_date_2?: string | null; preferred_timing?: string | null; preferred_note?: string | null }
+export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null; options?: PortalQuoteOption[] | null; addons?: PortalQuoteAddon[] | null; selected_option_id?: string | null; accepted_price?: number | null; deposit_type?: string | null; deposit_value?: number | null; preferred_date?: string | null; preferred_date_2?: string | null; preferred_timing?: string | null; preferred_note?: string | null }
 // `property_id` null is the HONEST answer for an invoice spanning several properties —
 // never infer one, or a combined invoice prints one address as if it were the whole bill.
 export interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; property_id?: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null; amount_paid?: number | null; deposit_amount?: number | null; deposit_requested_at?: string | null }
@@ -691,6 +699,26 @@ export interface DocItem { id: string; rawId: string; kind: DocKind; number: str
    *  still open — which is the fact the Approve button is gated on. */
   selectedOptionId?: string | null
   /**
+   * ⭐ OPTIONAL EXTRAS — the FOURTH list on this row, and the one that ADDS.
+   *
+   * ⛔ Four lists now live here and a reader must never confuse them:
+   *   `lines`       ADD UP to `amount`. Scope the owner decided.
+   *   `planOptions` ongoing per-visit rates for LATER. Not selectable at all.
+   *   `options`     mutually exclusive versions of the job. Exactly ONE is bought.
+   *   `addons`      optional extras. ZERO OR MORE are bought, and each one ADDS
+   *                 to whatever else was chosen.
+   *
+   * `amount` is never their total and no caller sums them into it: while the
+   * quote is undecided nothing is selected, so `quotes.addons_total` is 0 and
+   * `amount` (the generated `quotes.total`) is unchanged by their existence.
+   * Once the customer approves, the database moves both — the row's figure comes
+   * back from the server, never from arithmetic here.
+   *
+   * ⛔ An extra is NOT a change order. This list is only ever populated while the
+   * quote is still open, or as the frozen record of what was offered and taken.
+   */
+  addons?: { id: string; name: string; description: string | null; amount: number; isSelected: boolean }[]
+  /**
    * The SCHEDULING-DEPOSIT gate, present only on a quote that requires one and
    * has been approved (or scheduled). Every figure is lib/payments/depositGate's
    * answer over the same ledger rows the charge route reads — the row can never
@@ -788,6 +816,20 @@ export function buildDocItems(opts: {
     // Travel is added to EACH option independently (never once to a total): it is
     // payable whichever one they choose, and it is how the approval RPC computes
     // accepted_price, so the button and the receipt agree by construction.
+    // ── The optional extras ──────────────────────────────────────────────────
+    // ⛔ TRAVEL IS NOT ADDED HERE, and the contrast with the options below is the
+    // whole point. Travel is payable once, whichever option they choose, so each
+    // option row states option+travel — the all-in figure for that choice. An
+    // extra is not a choice OF the job, it is an addition TO it, so its figure is
+    // what it ADDS. Putting travel on both would charge it twice in the one place
+    // the customer does the arithmetic themselves.
+    const qAddons = sortedAddons(qq.addons || [])
+    const addons = qAddons.length > 0
+      ? qAddons.map(a => ({
+          id: a.id, name: a.name, description: a.description,
+          amount: Number(a.price), isSelected: !!a.is_selected,
+        }))
+      : undefined
     const qOpts = sortedOptions(qq.options || [])
     const options = qOpts.length > 0
       ? qOpts.map(o => ({
@@ -850,7 +892,7 @@ export function buildDocItems(opts: {
       amountNote: gstPct > 0 ? `+ GST (${gstPct}%) — added on your invoice` : undefined, balance: 0,
       payAmount: 0, payIsDeposit: false,
       filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(qq), lines, planOptions,
-      options, selectedOptionId: qq.selected_option_id ?? null,
+      options, addons, selectedOptionId: qq.selected_option_id ?? null,
       schedulingDeposit, preference, canEditPreference: qq.status === 'accepted',
       // Identity, not decoration: the address tells a landlord which of their six
       // quotes this is. It never becomes the row's title — service_type is the

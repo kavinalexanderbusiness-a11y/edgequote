@@ -12,6 +12,7 @@ import {
   MapPin, MessageSquare, Receipt, Search, ShieldCheck, Wallet,
 } from 'lucide-react'
 import { cn, formatCurrency, formatDate, localTodayISO } from '@/lib/utils'
+import { approvalTotal } from '@/lib/quoteAddons'
 import { Button } from '@/components/ui/Button'
 import { dueSoonLabel, invoiceDepositNote, invoiceDepositPaidNote, invoicePaymentNote, messageAboutDoc, NO_PROPERTY, quoteJourney, showDocFilters, type DocItem, type DocKind } from '../model'
 import {
@@ -280,6 +281,37 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
   // stays disabled, saying what to do, until they actually choose.
   const [picked, setPicked] = useState<string | null>(null)
   const pickedOpt = picked ? opts.find(o => o.id === picked) ?? null : null
+  // ── Optional extras ────────────────────────────────────────────────────────
+  // ⭐ NOTHING IS PRE-TICKED HERE EITHER, and for a sharper reason than the
+  // options above. A pre-ticked ALTERNATIVE at least still has to be approved as
+  // one price the customer reads. A pre-ticked EXTRA is money added to a bill by
+  // whoever wrote the quote, collected from someone who did not notice a box —
+  // which is why the owner's editor has no control to tick one, and why the only
+  // writers of `is_selected` are the two doors into quote_apply_choice.
+  const addons = d.addons ?? []
+  const hasAddonsOffered = addons.length > 0
+  const [pickedAddons, setPickedAddons] = useState<string[]>([])
+  const toggleAddon = (addonId: string) =>
+    setPickedAddons(prev => prev.includes(addonId) ? prev.filter(x => x !== addonId) : [...prev, addonId])
+  const takenAddons = addons.filter(a => pickedAddons.includes(a.id))
+  // Extras that were actually bought, on a decided quote — the frozen record.
+  const boughtAddons = addons.filter(a => a.isSelected)
+  // ⭐ ONE money path: lib/quoteAddons.approvalTotal, the same function the
+  // owner's record-a-choice dialog reads and the same arithmetic
+  // quote_apply_choice performs when it writes accepted_price. `d.amount` on an
+  // ordinary quote is the generated `quotes.total` (base + travel), so it is the
+  // base here and travel must NOT be added again; on an options quote the chosen
+  // option's `amount` already includes travel for the same reason. Either way the
+  // extras are added to a figure that is already all-in, which is why `travel` is
+  // 0 in both calls. ⛔ Never re-derive the base by adding travel to something.
+  // `amount` here is the DocItem field name (what this row costs the customer);
+  // approvalTotal speaks the DB row's vocabulary (`price`). One rename at the
+  // boundary, so neither side has to learn the other's spelling.
+  const liveTotal = approvalTotal({
+    base: pickedOpt ? pickedOpt.amount : d.amount,
+    travel: 0,
+    addons: takenAddons.map(a => ({ name: a.name, price: a.amount })),
+  })
   // A quote that offers alternatives is only approvable once one is named — the
   // same rule the database enforces (portal_accept_quote refuses an options quote
   // with no choice), stated here as a disabled button rather than a failed call.
@@ -494,6 +526,89 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
           </div>
         </div>
       )}
+      {/* ── Optional extras ──────────────────────────────────────────────────
+          ⭐ ONE COLUMN, at every width — same reasoning as the options list, and
+          the same restraint. No pre-tick, no "most popular", no crossed-out
+          anchor price, no countdown. A checkbox, a name, what it adds, and what
+          it gets you.
+
+          ⛔ Read-only the moment the quote is no longer 'sent'. After approval
+          these rows are the record — quote_addons_write_guard would refuse a
+          write anyway, and a tickable box that cannot do anything is worse than
+          none. Extra work after this point is a change order, which has its own
+          card on this screen and its own approval. */}
+      {hasAddonsOffered && (
+        <div className="mt-3 pt-3 border-t border-border/60">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">
+            {canAccept ? 'Want to add anything?' : 'Optional extras'}
+          </p>
+          <p className="text-[11px] text-ink-muted mt-0.5 mb-2">
+            {canAccept
+              ? 'Completely optional. Nothing here is added unless you tick it, and you can approve without any of them.'
+              : boughtAddons.length
+                ? 'These are the extras you added. Anything not ticked wasn’t ordered and wasn’t charged.'
+                : 'These were offered as optional extras. None were added, so none were charged.'}
+          </p>
+          <div className="space-y-2">
+            {addons.map(a => {
+              const isPicked = canAccept && pickedAddons.includes(a.id)
+              const wasBought = !canAccept && a.isSelected
+              const wasDeclined = !canAccept && !a.isSelected
+              const Wrapper = canAccept ? 'button' : 'div'
+              return (
+                <Wrapper
+                  key={a.id}
+                  {...(canAccept
+                    ? { type: 'button' as const, onClick: () => toggleAddon(a.id), 'aria-pressed': isPicked }
+                    : {})}
+                  className={cn(
+                    'w-full text-left rounded-xl border p-3 transition-colors',
+                    canAccept && 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
+                    wasBought ? 'border-emerald-500/40 bg-emerald-500/[0.07]'
+                      : wasDeclined ? 'border-border bg-bg-tertiary/30 opacity-70'
+                      : isPicked ? 'border-accent bg-accent/[0.08] ring-1 ring-accent/40'
+                      : 'border-border bg-bg-tertiary/40 hover:border-border-strong',
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex items-start gap-2">
+                      {canAccept && (
+                        // A real checkbox look — SQUARE, where the options above
+                        // are round. The shape is the difference between "pick
+                        // one of these" and "pick any of these", and it is doing
+                        // that work before a single word is read.
+                        <span className={cn('mt-0.5 w-4 h-4 rounded-[5px] border-2 shrink-0 flex items-center justify-center',
+                          isPicked ? 'border-accent bg-accent' : 'border-border-strong')} aria-hidden>
+                          {isPicked && <Check className="w-3 h-3 text-bg-primary" strokeWidth={3.5} />}
+                        </span>
+                      )}
+                      {wasBought && <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" aria-hidden />}
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-ink">{a.name}</p>
+                        {wasBought && (
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400">You added this</span>
+                        )}
+                        {wasDeclined && (
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">Not added</span>
+                        )}
+                      </div>
+                    </div>
+                    {/* "+" is not decoration: it is the one character that
+                        separates this list from the alternatives above, where
+                        each figure REPLACES the price. */}
+                    <span className={cn('text-sm font-bold shrink-0 tabular-nums', wasDeclined ? 'text-ink-muted' : 'text-ink')}>
+                      +{formatCurrency(a.amount)}
+                    </span>
+                  </div>
+                  {a.description && (
+                    <p className="text-xs text-ink-muted mt-1.5 whitespace-pre-wrap leading-relaxed">{a.description}</p>
+                  )}
+                </Wrapper>
+              )
+            })}
+          </div>
+        </div>
+      )}
       {/* The additive breakdown — these add up to the figure above. */}
       {d.lines && d.lines.length > 0 && (
         <div className="mt-3 pt-2.5 border-t border-border/60 space-y-1">
@@ -647,18 +762,30 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
               <Button
                 className="w-full sm:w-auto"
                 disabled={!approveReady}
-                onClick={() => actions.accept(d.rawId, picked ?? undefined)}
+                onClick={() => actions.accept(d.rawId, picked ?? undefined, pickedAddons)}
                 loading={actions.accepting === d.rawId}
               >
                 <Check className="w-4 h-4" />
-                {hasOpts
-                  ? (pickedOpt ? `Approve ${pickedOpt.name} — ${formatCurrency(pickedOpt.amount)}` : 'Choose an option above')
-                  : `Approve — ${formatCurrency(d.amount)}`}
+                {hasOpts && !pickedOpt
+                  ? 'Choose an option above'
+                  /* ⭐ ONE figure, from approvalTotal — the option (or the plain
+                     quote's total) plus every extra ticked, which is exactly what
+                     quote_apply_choice will bank. It moves as the boxes are
+                     ticked, so the button never names a price the customer has
+                     stopped agreeing to. */
+                  : `Approve — ${formatCurrency(liveTotal)}`}
               </Button>
               <p className="text-[11px] text-ink-faint mt-1.5">
                 {hasOpts && !pickedOpt
                   ? 'Pick the option you want, then approve it.'
-                  : 'You’ll confirm on the next step — we’ll then reach out to schedule.'}
+                  : takenAddons.length
+                    /* Say what the figure is MADE OF at the moment of
+                       commitment. "$5,730" alone leaves the customer to work out
+                       whether the box they ticked is in there. */
+                    ? `${pickedOpt ? pickedOpt.name : 'Your quote'} plus ${takenAddons.map(a => a.name).join(', ')}. You’ll confirm on the next step — we’ll then reach out to schedule.`
+                    : hasAddonsOffered
+                      ? 'No extras added — that’s completely fine. You’ll confirm on the next step, then we’ll reach out to schedule.'
+                      : 'You’ll confirm on the next step — we’ll then reach out to schedule.'}
               </p>
             </>
           )}

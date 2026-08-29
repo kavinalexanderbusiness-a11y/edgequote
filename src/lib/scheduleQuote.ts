@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Quote, QuoteService } from '@/types'
 import { splitServices, serviceLineTotals } from '@/lib/quoteServices'
+import { quoteAddonJobLines } from '@/lib/quoteAddons'
 import { addLineItems } from '@/lib/jobPricing'
 import { toast } from '@/lib/toast'
 import { localTodayISO } from '@/lib/utils'
@@ -12,6 +13,15 @@ import { localTodayISO } from '@/lib/utils'
 // job_line_items, price = primary net when extras exist, quote bumped
 // accepted→scheduled. Anything less silently drops crew time and revenue the
 // customer already approved.
+//
+// ⭐⭐ TWO different things are called "extras" in this file and they must not be
+// confused. The ADDITIONAL SERVICE LINES (quote_services rows 1+) are scope the
+// OWNER wrote. The OPTIONAL EXTRAS (quote_addons, is_selected) are scope the
+// CUSTOMER chose before approving. They arrive here by different routes and mean
+// different things — but they become the same kind of row on the job, because
+// once the work is booked "who asked for this?" stops mattering to the crew and
+// to the bill. One rail, one engine (lib/jobPricing.addLineItems), one place the
+// invoice conversion has to look.
 export async function scheduleQuoteAsJob(
   supabase: SupabaseClient,
   userId: string,
@@ -37,6 +47,22 @@ export async function scheduleQuoteAsJob(
       .eq('quote_id', quote.id).order('sort_order')
     services = (data as QuoteService[]) || []
   }
+
+  // ── The optional extras the customer bought ──────────────────────────────
+  // ⭐⭐ WHY THEY MUST BECOME ROWS. `quotes.addons_total` already puts them in the
+  // quote's total and in `accepted_price`, so the MONEY is right the moment they
+  // are approved. But a total is not a scope: the invoice conversion itemises
+  // `job_line_items`, so without this the bill would print one lump under the
+  // primary service's name and its rows would sum to less than its own amount.
+  // That exact defect was found on this seam once already.
+  //
+  // ⛔ SELECTED only. An extra the customer declined is on the record as offered
+  // and must never become work — and it cannot change now, because
+  // quote_addons_write_guard froze every row on this quote at approval.
+  const { data: addonData } = await supabase
+    .from('quote_addons').select('name, price, sort_order, is_selected')
+    .eq('quote_id', quote.id).order('sort_order')
+  const addonLines = quoteAddonJobLines(addonData as { name: string; price: number; sort_order: number; is_selected: boolean }[] | null)
 
   // Multi-service: the visit covers every line, so the job's duration includes
   // the additional services' estimated minutes (primary = hours×60 as before).
@@ -75,6 +101,13 @@ export async function scheduleQuoteAsJob(
     // Multi-service quotes: the job's base value is the PRIMARY line only; the
     // extras become job_line_items below. quote.initial_price caches primary +
     // extras, so leaving price null would double-count once add-ons exist.
+    // ⛔ The optional extras are deliberately NOT folded in here. `price` is the
+    // job's BASE value; the extras are line items beneath it, and jobVisitValue +
+    // buildInvoiceLineItems add the two. Putting them in both places would bill
+    // every bought extra twice — and on a quote with no additional service lines
+    // `price` is left null so the value derives from `quotes.initial_price`,
+    // which excludes addons_total by construction. Either way the base and the
+    // extras stay separate exactly once.
     ...(extraLines.length && primaryLine ? { price: serviceLineTotals(primaryLine).net } : {}),
   }).select('id').single()
   if (error || !newJob) return { jobId: null, error: error?.message || 'unknown error' }
@@ -89,6 +122,20 @@ export async function scheduleQuoteAsJob(
   // and the quote was already advanced below. The job is real; only its extras are
   // missing. Report that on its own channel and let the caller's success path run.
   try {
+    // ⛔ recurring: false. An optional extra is taken ONCE, on this job. A
+    // recurring line would bill a one-time extra on every visit of the plan
+    // forever — the single worst thing this seam could do to a customer, and the
+    // reason quoteAddonJobLines exists rather than an inline map.
+    for (const a of addonLines) {
+      await addLineItems(supabase, {
+        userId,
+        targetJobIds: [newJob.id as string],
+        description: a.description,
+        amount: a.amount,
+        serviceType: a.description,
+        recurring: false,
+      })
+    }
     for (const s of extraLines) {
       const qty = Number(s.quantity) > 0 ? Number(s.quantity) : 1
       await addLineItems(supabase, {
@@ -103,7 +150,7 @@ export async function scheduleQuoteAsJob(
   } catch (e) {
     // Was silent before (the insert error was swallowed), which quietly under-billed
     // a multi-service quote — the base landed, the extras didn't, nobody knew.
-    toast.error(`Scheduled, but the extra services couldn’t be added${e instanceof Error ? `: ${e.message}` : ''}. Add them from the visit.`)
+    toast.error(`Scheduled, but the extra ${addonLines.length ? "items" : "services"} couldn’t be added${e instanceof Error ? `: ${e.message}` : ''}. Add them from the visit.`)
   }
 
   if (quote.status === 'accepted') {

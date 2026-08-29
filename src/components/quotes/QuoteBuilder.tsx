@@ -34,7 +34,6 @@ import { MATERIAL_SUGGESTIONS, emptyMaterialLine } from '@/lib/quoteMaterials'
 import { QuoteOptionsEditor } from '@/components/quotes/QuoteOptionsEditor'
 import { QuoteAddonsEditor } from '@/components/quotes/QuoteAddonsEditor'
 import { addonProblemMessage, addonSetProblem, hasAddons } from '@/lib/quoteAddons'
-import { addonProblemMessage, addonSetProblem } from '@/lib/quoteAddons'
 import {
   EXAMPLE_OPTION_NAMES, OPTIONS_VS_LINES_MESSAGE, headlineOptionPrice, optionProblemMessage,
   optionSetProblem, optionsConflictWithLines, recommendedOption,
@@ -518,9 +517,6 @@ export function QuoteBuilder({
   const watchedOptions = watch('options') || []
   // Extras are never a mode: watched unconditionally, because they compose with
   // an options quote and a plain one alike.
-  const watchedAddons = watch('addons') || []
-  // Extras are never a mode: watched unconditionally, rendered whenever the
-  // quote has any (or the owner opens the section to add one).
   const watchedAddons = watch('addons') || []
   const optionsLocked = !!optionsLockedName
   // Disclosure only — never a mode flag. It reveals the editor on a quote that

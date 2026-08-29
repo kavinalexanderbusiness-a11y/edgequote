@@ -1,4 +1,4 @@
-import type { Quote, QuoteService, QuoteOption, Invoice, BusinessSettings, QuoteLineKind } from '@/types'
+import type { Quote, QuoteService, QuoteOption, QuoteAddon, Invoice, BusinessSettings, QuoteLineKind } from '@/types'
 
 // ── Portal PDF bridge ────────────────────────────────────────────────────────
 // The portal renders the SAME quote/invoice PDFs as the dashboard. We map the
@@ -22,6 +22,15 @@ export interface PortalQuoteOption {
   sort_order: number; is_recommended: boolean
 }
 
+// One optional extra, as get_portal_data's nested `addons` array returns it.
+// The customer's own copy of their quote has to show the same extras table the
+// owner's copy does — including which ones they took — or the document they keep
+// says something different from the one that was sent.
+export interface PortalQuoteAddon {
+  id: string; name: string; description: string | null; price: number
+  sort_order: number; is_selected: boolean
+}
+
 export interface PortalPdfQuote {
   quote_number: string; service_type: string; address: string; total: number
   initial_price: number | null; subtotal: number | null
@@ -33,6 +42,11 @@ export interface PortalPdfQuote {
   // quote has to show the same options table the owner's copy does, or the
   // document they keep says something different from the one that was sent.
   options?: PortalQuoteOption[] | null
+  addons?: PortalQuoteAddon[] | null
+  // ⭐ Σ of the SELECTED extras, straight off the projection. `total` above is
+  // GENERATED over it, so the two arrive already consistent — and the document
+  // reads BOTH from the payload rather than re-deriving either.
+  addons_total?: number | null
   selected_option_id?: string | null
 }
 export interface PortalPdfInvoice {
@@ -91,6 +105,26 @@ function portalQuoteToQuote(q: PortalPdfQuote, customerName: string): Quote {
     // render an already-decided quote as though the choice were still open —
     // "Choose One Option" on a document for a job that is already booked.
     selected_option_id: q.selected_option_id ?? null,
+    // Without this the customer's own PDF would print a grand total that already
+    // includes their extras (it is the generated `total`) over a page with no
+    // line explaining the difference — the exact "the copy they keep says
+    // something different from the one that was sent" failure this file exists
+    // to prevent.
+    //
+    // ⚠️⚠️ RECONSTRUCTED, and it is the one figure on this bridge that is.
+    // `get_portal_data` projects the add-on ROWS but not `quotes.addons_total`,
+    // and widening that projection is a migration — out of scope for a slice that
+    // needed no schema. So the column is rebuilt from the same two facts the
+    // trigger itself sums (`is_selected`, `price`) on the very rows this document
+    // is about to print, which is why the table and this line cannot disagree
+    // with each other. They CAN in principle disagree with the server, so
+    // verify:quote-addons asserts Σ selected prices === quotes.addons_total
+    // live. ⭐ The proper fix is one more column in the portal projection, the
+    // next time this seam earns a migration.
+    // ⛔ Never let this expression spread: on every other surface
+    // `quotes.addons_total` is a real column and reading it is the only correct
+    // thing to do.
+    addons_total: num(q.addons_total ?? null) || (q.addons || []).reduce((sum, a) => sum + (a.is_selected ? num(a.price) : 0), 0),
   } as unknown as Quote
 }
 
@@ -167,7 +201,25 @@ export async function renderPortalQuoteBlob(q: PortalPdfQuote, customerName: str
         is_recommended: !!o.is_recommended,
       }))
     : undefined
-  return renderQuoteBlob(portalQuoteToQuote(q, customerName), portalBusinessToSettings(b), services, options)
+  // The optional extras, same pipeline, same reason: the copy the customer
+  // downloads has to be the copy that was sent — including which extras they
+  // took, because that copy is their receipt for the ones they didn't.
+  const addons: QuoteAddon[] | undefined = q.addons?.length
+    ? q.addons.map(a => ({
+        id: a.id, created_at: q.created_at, updated_at: q.created_at,
+        quote_id: '', user_id: '',
+        name: a.name, description: a.description,
+        price: num(a.price), sort_order: Number(a.sort_order) || 0,
+        is_selected: !!a.is_selected,
+        // ⛔ The portal projection deliberately does NOT carry selected_via /
+        // selected_at — those are the business's provenance record, not the
+        // customer's business, and the document never prints them. Null here is
+        // "not projected", not "not selected"; `is_selected` above is the fact
+        // the document reads.
+        selected_via: null, selected_at: null,
+      }))
+    : undefined
+  return renderQuoteBlob(portalQuoteToQuote(q, customerName), portalBusinessToSettings(b), services, options, addons)
 }
 // A payment row as the portal sees it — enough for the receipt document.
 export interface PortalPdfPayment {

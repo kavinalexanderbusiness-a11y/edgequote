@@ -7,6 +7,7 @@ import { confirm as confirmDialog } from '@/lib/confirm'
 import { ConfirmHost } from '@/components/ui/ConfirmHost'
 import { cn, formatCurrency, localTodayISO } from '@/lib/utils'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
+import { approvalTotal } from '@/lib/quoteAddons'
 // THE scheduling-deposit rule (lib/payments/depositGate) — the approve dialog and
 // success banner name the exact ask the charge route will make, from one engine.
 import { requiredDeposit } from '@/lib/payments/depositGate'
@@ -320,7 +321,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
 
   function photoUrl(path: string) { return supabase.storage.from('job-photos').getPublicUrl(path).data.publicUrl }
 
-  async function accept(qid: string, optionId?: string) {
+  async function accept(qid: string, optionId?: string, addonIds?: string[]) {
     if (accepting) return // double-click guard
     // Approving commits the customer to a quote value — never ask someone to
     // approve an amount without showing it, and always say that approving isn't
@@ -371,6 +372,25 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     // If the named option is no longer on this quote (the owner revised it while
     // the tab sat open), stop — approving "whatever is there now" would record
     // consent to something the customer never read.
+    // ── Which optional extras ─────────────────────────────────────────────────
+    // Re-resolved against the FRESH payload for exactly the reason the option is
+    // below: a tab left open can be quoting extras the owner has since removed or
+    // re-priced, and an id from that stale render deserves no more trust than a
+    // stale price. Resolving through the refetched rows means the dialog names
+    // what is on the quote NOW — and the RPC then refuses anything that still
+    // does not belong to it, so a tampered id is a refusal on the server, not
+    // something this screen is the last line of defence against.
+    //
+    // ⛔ An id that no longer resolves is DROPPED, not fatal — and the asymmetry
+    // with the option below is deliberate. An option is the whole price: if the
+    // one they picked is gone, approving "whatever is there now" would record
+    // consent to a different job, so that stops. An extra is additive and
+    // optional: dropping one can only ever mean the customer is charged LESS
+    // than they ticked, never more, and the confirm dialog enumerates exactly
+    // what is being approved before they commit. Blocking the whole approval
+    // because a $95 extra was withdrawn would be the worse answer.
+    const freshAddons = q?.addons ?? []
+    const takenAddons = freshAddons.filter(a => (addonIds ?? []).includes(a.id))
     const freshOpts = q?.options ?? []
     const chosenOpt = optionId ? freshOpts.find(o => o.id === optionId) ?? null : null
     if (optionId && !chosenOpt) {
@@ -392,9 +412,17 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     // business records. `q.total` still carries the recommended option at this
     // moment (nobody has chosen yet), and quoting it here would show one price
     // and bank another.
-    const amount = chosenOpt
-      ? Number(chosenOpt.price) + (Number(q?.travel_fee) || 0)
-      : Number(q?.total) || 0
+    // ⭐ ONE money path, through lib/quoteAddons.approvalTotal — the identical
+    // arithmetic quote_apply_choice performs when it writes accepted_price
+    // ((chosen option ?? base) + travel + Σ selected extras) — so the number in
+    // this dialog is the number the business records. `q.total` still carries the
+    // recommended option at this moment (nobody has chosen yet), and quoting it
+    // here would show one price and bank another.
+    const amount = approvalTotal({
+      base: chosenOpt ? chosenOpt.price : (Number(q?.total) || 0),
+      travel: chosenOpt ? (Number(q?.travel_fee) || 0) : 0,
+      addons: takenAddons,
+    })
     // The dialog's whole job is stating what the customer commits to, so it must
     // match the doc row one tap beneath it:
     // • every plan price is PER VISIT (model.ts's own doc-row comment calls the
@@ -418,10 +446,22 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     // On an options quote the dialog must name the OPTION, not the service: the
     // whole decision the customer just made was which one, and confirming
     // "Landscape rebuild for $5,550" would echo back the part they didn't choose.
-    const what = chosenOpt
-      ? `the ${chosenOpt.name} option${svc ? ` of ${svc}` : ''} for ${formatCurrency(amount)}`
+    // The extras are named, never folded into the figure silently: the customer
+    // ticked boxes on a list and the confirmation has to show that list back, or
+    // the one screen whose job is stating what they are committing to has hidden
+    // part of it.
+    const extrasPhrase = takenAddons.length
+      ? `${takenAddons.map(a => `${a.name} (+${formatCurrency(Number(a.price))})`).join(', ')}`
+      : null
+    const base = chosenOpt
+      ? `the ${chosenOpt.name} option${svc ? ` of ${svc}` : ''}`
       : svc
-        ? `${lineCount > 1 ? `${svc} + ${lineCount - 1} more service${lineCount > 2 ? 's' : ''}` : svc} for ${formatCurrency(amount)}`
+        ? `${lineCount > 1 ? `${svc} + ${lineCount - 1} more service${lineCount > 2 ? 's' : ''}` : svc}`
+        : null
+    const what = base
+      ? `${base}${extrasPhrase ? `, plus ${extrasPhrase},` : ''} for ${formatCurrency(amount)}`
+      : extrasPhrase
+        ? `this quote plus ${extrasPhrase}, for ${formatCurrency(amount)}`
         : formatCurrency(amount)
     // The scheduling deposit THIS approval will call for — the engine's own
     // figure over the amount being consented to (for an options quote, the
@@ -442,6 +482,13 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
         chosenOpt && freshOpts.length > 1
           ? `The other ${freshOpts.length - 1} option${freshOpts.length > 2 ? 's aren’t' : ' isn’t'} ordered and won’t be charged.`
           : null,
+        // Same fear, the other list: "am I being charged for the extras I left
+        // unticked?" is answered here rather than left to be discovered on a
+        // bill. Silence when none were offered — a sentence about extras on a
+        // quote that has none is noise.
+        freshAddons.length > takenAddons.length
+          ? `The ${freshAddons.length - takenAddons.length} optional extra${freshAddons.length - takenAddons.length > 1 ? 's you didn’t add aren’t' : ' you didn’t add isn’t'} ordered and won’t be charged.`
+          : null,
         plan,
         depositAsk > 0
           ? `Approving doesn't charge you. A ${formatCurrency(depositAsk)} deposit is asked for next to secure your booking — we'll confirm your date once it's received.`
@@ -455,7 +502,15 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     // The third argument is omitted, not null-defaulted, on an ordinary quote —
     // portal_accept_quote's plain path is reached exactly as it always was.
     const { data: ok } = await supabase.rpc('portal_accept_quote', {
-      p_token: token, p_quote_id: qid, ...(chosenOpt ? { p_option_id: chosenOpt.id } : {}),
+      // ⭐ The extras go through the SAME door and the SAME core as the option.
+      // p_addon_ids is sent only when something was ticked, so an ordinary quote
+      // reaches portal_accept_quote's plain two-argument path exactly as it
+      // always has. The core sets is_selected for EVERY extra on the quote — not
+      // just these — so an extra the customer unticked stops being selected, and
+      // a suggestion could never be billed because nobody said no loudly enough.
+      p_token: token, p_quote_id: qid,
+      ...(chosenOpt ? { p_option_id: chosenOpt.id } : {}),
+      ...(takenAddons.length ? { p_addon_ids: takenAddons.map(a => a.id) } : {}),
     })
     if (ok) {
       // Carry the CHOICE into the optimistic patch, not just the status. Without

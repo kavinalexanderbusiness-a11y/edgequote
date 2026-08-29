@@ -3,9 +3,10 @@
 import {
   Document, Page, Text, View, Image, StyleSheet, pdf,
 } from '@react-pdf/renderer'
-import type { Quote, QuoteService, QuoteOption, BusinessSettings } from '@/types'
+import type { Quote, QuoteService, QuoteOption, QuoteAddon, BusinessSettings } from '@/types'
 import { serviceLineTotals } from '@/lib/quoteServices'
 import { activeOption, hasOptions, sortedOptions } from '@/lib/quoteOptions'
+import { hasAddons, selectedAddons, sortedAddons } from '@/lib/quoteAddons'
 import { pdfLogoUrl } from '@/lib/photos'
 
 const COLORS = {
@@ -101,9 +102,18 @@ interface QuotePDFProps {
   // quote.selected_option_id; before they choose it is null and the document
   // leads with the recommended one.
   options?: QuoteOption[]
+  // ── Optional extras (quote_addons) ────────────────────────────────────────
+  // ⭐ NOT mutually exclusive with anything, unlike `options` above — an extra
+  // ADDS to whatever the customer approves, so it prints beneath either an
+  // options table or an ordinary line-item table.
+  // ⛔ It is NOT part of the alternatives, and the document must never let the
+  // two be read as one list: the options table says "pick one of these", the
+  // extras table says "add any of these", and each carries the sentence that
+  // says so directly above it.
+  addons?: QuoteAddon[]
 }
 
-export function QuoteDocument({ quote, settings, services, options }: QuotePDFProps) {
+export function QuoteDocument({ quote, settings, services, options, addons }: QuotePDFProps) {
   // ⭐ THE rule this document must never break: a page that shows three prices
   // must not print a number equal to their sum, and must not let the reader
   // construct one. So when options exist the line-item table is REPLACED (not
@@ -136,6 +146,27 @@ export function QuoteDocument({ quote, settings, services, options }: QuotePDFPr
   // travel now folds into the FIRST-VISIT line's displayed amount (the fee is
   // already inside quote.total, so every displayed row still sums to the grand
   // total); an itemized travel row renders only when the owner opted to show it.
+  // ── The optional extras ──────────────────────────────────────────────────
+  // ⭐⭐ THIS TABLE IS NOT OPTIONAL ONCE ANY EXTRA IS TAKEN. `quotes.total` is
+  // GENERATED over addons_total, so the grand total at the foot of this page
+  // ALREADY includes every selected extra. Printing the total without the rows
+  // that make it up would hand the customer a document whose lines do not
+  // reconcile to its own bottom line — which is the specific failure this whole
+  // seam has produced once before, on the invoice conversion.
+  //
+  // Before any decision nothing is selected, addons_total is 0, and the grand
+  // total is unchanged by their existence — so the pre-acceptance document shows
+  // them as an OFFER that is explicitly not in the total. After the decision the
+  // taken ones are in it and the untaken ones are still listed, dimmed and
+  // labelled, because "what were we offered?" is a fair question and "was I
+  // charged for it?" must have a visible answer.
+  const allAddons = sortedAddons(addons)
+  const takenAddons = selectedAddons(allAddons)
+  const quoteHasAddons = hasAddons(allAddons)
+  // ⛔ Read from the COLUMN, never re-summed here. The database owns this figure
+  // (trigger quote_addons_sync_total) and `total` is generated over it; a second
+  // sum in this document is how the paper and the record start disagreeing.
+  const addonsTotal = Number(quote.addons_total) || 0
   const travelFee = Number(quote.travel_fee) || 0
   const shownTravel = quote.show_travel_separately ? travelFee : 0
   const rolledTravel = quote.show_travel_separately ? 0 : travelFee
@@ -342,6 +373,55 @@ export function QuoteDocument({ quote, settings, services, options }: QuotePDFPr
         </>
         )}
 
+        {/* ── Optional extras ───────────────────────────────────────────────
+            Its own table, its own heading, its own sentence — never rows inside
+            the table above. Above it the customer is reading either "these add
+            up to your price" (line items) or "pick exactly one of these"
+            (options); an extra is neither, and a row that borrowed either
+            table's meaning would be read wrong. */}
+        {quoteHasAddons ? (
+          <>
+            <Text style={[styles.sectionTitle, { marginTop: 14 }]}>
+              {takenAddons.length > 0 ? 'Optional Extras' : 'Optional Extras — Add Any You Want'}
+            </Text>
+            <Text style={[styles.muted, { marginBottom: 6 }]}>
+              {takenAddons.length > 0
+                ? 'These are additions you chose. Anything marked Not added was not ordered and is not charged.'
+                : 'Completely optional additions to the job above. Nothing here is included in the total below unless you ask for it — you can approve without any of them.'}
+            </Text>
+            <View style={styles.table}>
+              <View style={styles.tableHead} fixed>
+                <Text style={[styles.th, styles.cellDesc]}>Extra</Text>
+                <Text style={[styles.th, styles.cellQty]}>{takenAddons.length > 0 ? 'Status' : ''}</Text>
+                <Text style={[styles.th, styles.cellAmt]}>Adds</Text>
+              </View>
+              {allAddons.map(a => {
+                const taken = !!a.is_selected
+                // Only ever "Not added" once SOMETHING was taken. Before any
+                // decision every row is equally un-taken, and stamping six rows
+                // "Not added" would read as six refusals the customer never made.
+                const declined = takenAddons.length > 0 && !taken
+                return (
+                  <View key={a.id} style={styles.tableRow} wrap={false}>
+                    <View style={styles.cellDesc}>
+                      <Text style={[styles.td, taken ? { fontFamily: 'Helvetica-Bold' } : {}]}>{a.name}</Text>
+                      {a.description ? <Text style={styles.muted}>{a.description}</Text> : null}
+                    </View>
+                    <Text style={[styles.td, styles.cellQty, declined ? { color: COLORS.faint } : {}]}>
+                      {taken ? 'Added' : declined ? 'Not added' : ''}
+                    </Text>
+                    {/* "+" is the one character separating this column from the
+                        options table's, where each figure REPLACES the price. */}
+                    <Text style={[styles.td, styles.cellAmt, declined ? { color: COLORS.faint } : {}]}>
+                      +{money(Number(a.price) || 0)}
+                    </Text>
+                  </View>
+                )
+              })}
+            </View>
+          </>
+        ) : null}
+
         {/* Totals — the subtotal row only earns its place when it differs from
             the single line above it (multi-service or a travel fee); otherwise a
             one-service quote printed the same number three rows in a row. */}
@@ -366,6 +446,15 @@ export function QuoteDocument({ quote, settings, services, options }: QuotePDFPr
               <Text style={styles.totalValue}>{money(shownTravel)}</Text>
             </View>
           ) : null}
+          {/* The extras' contribution to the number below it. Present only when
+              something was actually taken — a 0 row on an undecided quote would
+              suggest the offer had been declined. ⛔ The COLUMN, not a re-sum. */}
+          {addonsTotal > 0 ? (
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Optional extras added</Text>
+              <Text style={styles.totalValue}>{money(addonsTotal)}</Text>
+            </View>
+          ) : null}
           <View style={styles.grandRow}>
             {/* "Quote Total" unless maintenance options follow — then "First Visit
                 Total" is the honest headline. Never "invoice" on a quote.
@@ -380,6 +469,14 @@ export function QuoteDocument({ quote, settings, services, options }: QuotePDFPr
             </Text>
             <Text style={styles.grandValue}>{money(quote.total)}</Text>
           </View>
+          {/* The extras are NOT in this figure yet — say so directly beneath it,
+              because a customer looking at an "Optional Extras" table and a grand
+              total two inches apart will otherwise wonder which way it went. */}
+          {quoteHasAddons && addonsTotal === 0 ? (
+            <Text style={[styles.muted, { textAlign: 'right', marginTop: 3 }]}>
+              Optional extras are not included above — add any you want when you approve.
+            </Text>
+          ) : null}
           {/* Said in words directly beneath the only big number on the page. */}
           {isOptionsQuote && !chosen ? (
             <Text style={[styles.muted, { textAlign: 'right', marginTop: 3 }]}>
@@ -473,6 +570,7 @@ export function QuoteDocument({ quote, settings, services, options }: QuotePDFPr
 // heavy @react-pdf library only loads when the user actually opens a PDF.
 export async function renderQuoteBlob(
   quote: Quote, settings: BusinessSettings | null, services?: QuoteService[], options?: QuoteOption[],
+  addons?: QuoteAddon[],
 ): Promise<Blob> {
-  return pdf(<QuoteDocument quote={quote} settings={settings} services={services} options={options} />).toBlob()
+  return pdf(<QuoteDocument quote={quote} settings={settings} services={services} options={options} addons={addons} />).toBlob()
 }

@@ -537,7 +537,10 @@ export default function QuoteDetailPage() {
     setPdfLoading(true)
     try {
       const { renderQuoteBlob } = await import('@/components/quotes/QuotePDF')
-      const blob = await renderQuoteBlob(quote, settings, services, options)
+      // The extras ride the same call. Omitting them would send the customer a
+      // document whose grand total (GENERATED over addons_total) already carries
+      // money that nothing on the page explains.
+      const blob = await renderQuoteBlob(quote, settings, services, options, addons)
       const url = URL.createObjectURL(blob)
       // Hand the file directly to the device. On desktop this downloads the
       // PDF; on iOS it opens the PDF viewer / share sheet. Avoids the
@@ -1820,10 +1823,100 @@ export default function QuoteDetailPage() {
                 <span className="text-ink font-medium tabular-nums">{formatCurrency(Number(quote.initial_price ?? 0))}</span>
               </div>
             )}
+            {/* ── Optional extras ──────────────────────────────────────────────
+                ⭐ ADDITIVE, and rendered as such — the opposite of the options
+                list above it, which must never show a subtotal. These rows really
+                do add to the quote, so they sit between the scope breakdown and
+                the total they contribute to, and the ones the customer TOOK are
+                the only ones that count. The un-taken rows stay visible on a
+                decided quote because "what did we offer them?" is a question the
+                owner asks after the fact — but they are dimmed and labelled, so
+                nothing here can read as work that was ordered. */}
+            {addons.length > 0 && (() => {
+              const decided = addonsFrozen(quote.status)
+              const taken = selectedAddons(addons)
+              const basis = addonValueBasis(addons)
+              return (
+                <div id="eq-quote-addons" className="pt-3 border-t border-border space-y-2 scroll-mt-24">
+                  <p className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide">
+                    {decided ? 'Optional extras — what they took' : 'Optional extras — the customer adds these'}
+                  </p>
+                  {sortedAddons(addons).map(a => {
+                    const wasTaken = !!a.is_selected
+                    const isPicked = pickedAddons.includes(a.id)
+                    // Tickable only while the decision is still open. After it, these
+                    // are history: quote_addons_write_guard would refuse the write
+                    // anyway, and offering a control that cannot work is worse than
+                    // offering none.
+                    const pickable = !decided && !quote.selected_option_id
+                    return (
+                      <div key={a.id}
+                        className={`rounded-xl border p-3 ${wasTaken ? 'border-emerald-500/40 bg-emerald-500/[0.06]'
+                          : decided ? 'border-border bg-bg-secondary/40 opacity-70'
+                          : isPicked ? 'border-accent bg-accent/[0.06]' : 'border-border bg-bg-secondary'}`}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex items-start gap-2">
+                            {pickable && (
+                              <input
+                                type="checkbox" checked={isPicked} onChange={() => toggleAddon(a.id)}
+                                aria-label={`They also took ${a.name}`}
+                                className="mt-0.5 w-4 h-4 shrink-0 accent-accent tap-target cursor-pointer"
+                              />
+                            )}
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-ink">
+                                {a.name}
+                                {wasTaken && <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-400">Taken</span>}
+                                {decided && !wasTaken && <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">Not taken</span>}
+                              </p>
+                              {a.description && <p className="text-xs text-ink-muted mt-0.5 whitespace-pre-wrap">{a.description}</p>}
+                            </div>
+                          </div>
+                          <span className={`text-sm font-semibold shrink-0 tabular-nums ${decided && !wasTaken ? 'text-ink-muted' : 'text-ink'}`}>
+                            +{formatCurrency(Number(a.price) || 0)}
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {/* ⭐ THE reporting sentence — offered, or taken. Derived from
+                      the selection state that already exists, never a second
+                      stored column, and never a sum presented as the quote's
+                      price: the number that moved is quotes.addons_total, which
+                      the GENERATED total below already carries. */}
+                  {basis && (
+                    <p className="text-[11px] text-ink-faint pt-0.5">
+                      {addonValueBasisLabel(basis, addons.length, taken.length)}
+                      {basis === 'offered' && !decided && ' — worth nothing to this quote until they pick one.'}
+                      {basis === 'offered' && decided && ' — none were ordered, so none were charged.'}
+                    </p>
+                  )}
+                  {!decided && !quote.selected_option_id && (
+                    <p className="text-[11px] text-ink-faint">
+                      Tick anything they asked for on the phone, then use{' '}
+                      <span className="text-ink-muted font-medium">{options.length > 0 ? 'They chose …' : 'Won'}</span>{' '}
+                      above. Afterwards these are frozen — further work goes on a change order.
+                    </p>
+                  )}
+                </div>
+              )
+            })()}
             {quote.travel_fee > 0 && (
               <div className="flex justify-between text-sm">
                 <span className="text-ink-muted">Travel Fee {quote.show_travel_separately ? '(shown to customer)' : '(included in total)'}</span>
                 <span className="text-ink font-medium tabular-nums">{formatCurrency(quote.travel_fee)}</span>
+              </div>
+            )}
+            {/* The extras' contribution, stated as its own row — `total` below is
+                GENERATED over addons_total, so without this line an accepted quote
+                showed a headline larger than the rows above it and nothing said
+                why. ⛔ Read from the COLUMN, never re-summed here: the database
+                owns this figure (trigger quote_addons_sync_total) and a second
+                sum in React is how the two start disagreeing. */}
+            {Number(quote.addons_total) > 0 && (
+              <div className="flex justify-between text-sm">
+                <span className="text-ink-muted">Optional extras taken</span>
+                <span className="text-ink font-medium tabular-nums">{formatCurrency(Number(quote.addons_total))}</span>
               </div>
             )}
             <div className="flex justify-between items-center pt-2 border-t border-border">
