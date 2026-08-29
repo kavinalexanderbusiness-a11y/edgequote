@@ -8,6 +8,7 @@ import { confirm as confirmDialog } from '@/lib/confirm'
 import { QuoteStatus, STATUS_LABELS, STATUS_COLORS } from '@/types'
 import { markSentPatch, isSystemAdvancedQuoteStatus, QUOTE_STATUS_MEANING } from '@/lib/quoteStatus'
 import { markWonPatch } from '@/lib/followup'
+import { quotePriceState, moneyDoorBlock, type NoChargeRecord } from '@/lib/pricingState'
 import { askLostReason } from '@/lib/lostReason'
 import { localTodayISO } from '@/lib/utils'
 import { ChevronDown, Loader2 } from 'lucide-react'
@@ -26,13 +27,17 @@ interface Props {
   /** The price on the document, snapshotted if this control marks the quote won.
    *  Absent → the snapshot records null rather than a guess (see markWonPatch). */
   total?: number | null
+  /** The quote's no-charge decision, if it has one. Absent behaves as "not free",
+   *  which is what a caller that doesn't track it means — and is why an unpriced
+   *  quote cannot be marked won through this control. */
+  noCharge?: NoChargeRecord | null
   /** Only to address the lost-reason question by name ("Why did Dana say no?").
    *  Absent simply drops the name from the title. */
   customerName?: string
   onChanged?: (s: QuoteStatus) => void
 }
 
-export function QuoteStatusControl({ quoteId, status, followUpCount, sentAt, validUntil, total, customerName, onChanged }: Props) {
+export function QuoteStatusControl({ quoteId, status, followUpCount, sentAt, validUntil, total, noCharge, customerName, onChanged }: Props) {
   const supabase = createClient()
   const [current, setCurrent] = useState<QuoteStatus>(status)
   const [saving, setSaving] = useState(false)
@@ -91,6 +96,18 @@ export function QuoteStatusControl({ quoteId, status, followUpCount, sentAt, val
         destructive: true,
       })
       if (!ok) return   // controlled select snaps back to `current` on its own
+    }
+    // ── The money doors, from the one engine that owns them ─────────────────
+    // 'accepted' says a customer authorised this price, and 'paid' and
+    // 'completed' say money moved against it. None of those sentences can be
+    // true of a quote nobody has priced — recording one puts a $0 win into the
+    // pipeline, booked revenue and every Growth recommendation downstream.
+    // Refused HERE as well as at the send door, because this control can move a
+    // DRAFT straight to accepted without it ever being sent.
+    // ⭐ A no-charge quote passes: that is a known price of zero, on the record.
+    if (s === 'accepted' || s === 'completed' || s === 'paid') {
+      const block = moneyDoorBlock(quotePriceState({ total, ...(noCharge ?? {}) }), 'won')
+      if (block) { toast.error(block); return }   // select snaps back on its own
     }
     // A declined quote is lost — confirm before committing the transition.
     if (s === 'declined' && current !== 'declined') {

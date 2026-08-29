@@ -19,8 +19,8 @@ export interface AutoInvoiceResult {
 // half the app (geo, optimizer, weather, labor, profitability…) can import
 // WITHOUT dragging this whole invoice engine into its bundle. Re-exported here
 // so every existing `from '@/lib/invoicing'` call site keeps working unchanged.
-import { effectiveFreq, quoteVisitAmount, jobVisitValue } from '@/lib/visitValue'
-export { effectiveFreq, quoteVisitAmount, jobVisitValue }
+import { effectiveFreq, quoteVisitAmount, jobVisitValue, quoteVisitAmountOrNull, jobVisitValueOrNull } from '@/lib/visitValue'
+export { effectiveFreq, quoteVisitAmount, jobVisitValue, quoteVisitAmountOrNull, jobVisitValueOrNull }
 
 // Human label for the base service line on an invoice/breakdown ("Weekly Mowing").
 function serviceLineLabel(serviceType: string | null | undefined, freq: string | null, isInitial: boolean): string {

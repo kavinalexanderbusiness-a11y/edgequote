@@ -27,6 +27,7 @@ import { SaveAsBundleDialog } from '@/components/quotes/SaveAsBundleDialog'
 import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { nextInvoiceNumber } from '@/lib/invoicing'
 import { isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil, markSentPatch, sendBlockedReason, sendBlockedLabel, DEFAULT_QUOTE_VALID_DAYS } from '@/lib/quoteStatus'
+import { quotePriceState, moneyDoorBlock } from '@/lib/pricingState'
 import { toast } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
@@ -887,6 +888,12 @@ export default function QuoteDetailPage() {
       document.getElementById('eq-quote-options')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       return
     }
+    // ⛔ "Won" asserts a customer authorised a PRICE. On an unpriced quote there
+    // is no price to have authorised, and the win would enter the pipeline,
+    // booked revenue and Growth as a $0 sale — the exact silent-zero this lane
+    // exists to stop. Same engine as the send door and the status picker.
+    const wonBlock = moneyDoorBlock(quotePriceState(quote), 'won')
+    if (wonBlock) { toast.error(wonBlock); return }
     setActionBusy(true)
     try {
       // Snapshot what was bought (Pricing v2 Phase 0). `total` is the number on the
