@@ -8,6 +8,45 @@
 -- ledger, after S74's own migration is applied. Re-stamp before landing.
 -- This file has NEVER been applied to production.
 --
+-- ── RECONCILIATION RUNBOOK ─────────────────────────────────────────────────
+-- Owner-accepted parked state: branch session83/contracts @ c32b5f78.
+--
+--   1. Fetch latest origin/main.
+--   2. Confirm S74 landed BY ARTIFACT, never by branch name:
+--        git cat-file -e origin/main:supabase/migrations/20260824090000_documents_signatures_v1.sql
+--      Then run verify:contracts section 2b — 40 checks pin every symbol and
+--      column this session borrows from S74, so a pre-landing change in S74
+--      names itself instead of surfacing as a stack trace.
+--   3. Reconcile S83 onto the exact latest origin/main.
+--   4. ⚠️ ONE CONFLICT IS EXPECTED, and only one:
+--        src/app/dashboard/customers/[id]/page.tsx
+--      Cause: S83 inserts <CustomerContracts> beside S74's <DocumentsPanel>,
+--      and main has since added <PreferredChannelCard> in that same region.
+--      RESOLVE INTENTIONALLY — keep all three, in this order:
+--        Timeline -> Contracts -> Documents -> CommsHealth -> PreferredChannel
+--      ⚠️ THIS PREDICTION IS A SNAPSHOT (measured against main @ fc31857f;
+--      main moved to b41b9e54 within the hour). Re-measure at landing — it
+--      costs nothing and touches no worktree:
+--        git merge-tree --write-tree --merge-base=<S74 tip> origin/main \
+--                       origin/session83/contracts
+--   5. ⚠️ AFTER REBASING, CHECK THIS FILE IS STILL UNDER supabase/migrations/.
+--      A rebase has previously relocated SQL into supabase/archive/ledger/,
+--      which is NEVER applied — the change would land looking healthy and do
+--      nothing at all.
+--   6. Inspect the LIVE ledger; assign a fresh version above the highest
+--      applied one AND above S74's 20260824090000. Rename off _TEMP —
+--      verify:contracts fails while the marker is present, by design.
+--   7. Prove a from-zero rebuild.
+--   8. verify:contracts   (read the EXIT CODE; never pipe through `tail`)
+--   9. bash scripts/mutate-contracts.sh
+--  10. tsc --noEmit
+--  11. next lint
+--  12. next build
+--  13. Browser proof at desktop / 375 / 390 / 430.
+--  14. Push READY FOR SESSION 106 LANDING. ⛔ Do not merge main.
+--
+-- ⛔ Section 0 below already refuses to apply before S74. Do not weaken it.
+--
 -- ═══════════════════════════════════════════════════════════════════════════
 -- WHAT THIS OWNS, AND WHAT IT DELIBERATELY DOES NOT
 --
