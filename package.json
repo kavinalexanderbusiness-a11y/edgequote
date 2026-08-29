@@ -121,6 +121,7 @@
     "verify:tenant-boundary": "tsx scripts/verify-tenant-boundary.ts",
     "verify:crew-auth": "tsx scripts/verify-crew-auth.ts",
     "verify:worker-access": "tsx scripts/verify-worker-access.ts",
+    "verify:customer-links": "tsx scripts/verify-customer-links.ts",
     "verify:crew-invite": "tsx scripts/verify-crew-invite.ts",
     "verify:crew-messages": "tsx scripts/verify-crew-messages.ts",
     "verify:deposit": "tsx scripts/verify-deposit.ts",

@@ -98,13 +98,59 @@ export async function rotatePortalToken(supabase: SupabaseClient, userId: string
   return ensurePortalToken(supabase, userId, customerId)
 }
 
-// Build the absolute portal URL. ALWAYS needs a real origin so links sent by SMS/
-// email work — pass the request origin from API routes (most reliable); falls back
-// to the browser origin (client) or NEXT_PUBLIC_APP_URL. If none resolve we return
-// a relative path rather than a silently-broken "//portal/…".
-export function portalUrl(token: string, base?: string): string {
+/**
+ * Query values a portal link may carry.
+ *
+ * ⭐ EVERY customer-facing view this product has — a quote, an invoice, a
+ * receipt, a payment result, a saved card — is a VIEW OF THE PORTAL reached by
+ * a query parameter on this one path, not a route of its own. That is why the
+ * production message history contains exactly one link shape. Anything that
+ * needs to point a customer at one of those views belongs here, so the shape
+ * stays one shape.
+ */
+export type PortalLinkParams = Record<string, string | number | boolean | null | undefined>
+
+/**
+ * THE customer link. Absolute, canonical, token intact.
+ *
+ * ORIGIN, in order: an explicit `base` the caller trusts, then the browser's own
+ * origin on the client, then `appOrigin()` — the configured value. Server code
+ * that has a request should pass `appOrigin(req.origin)` rather than the raw
+ * request origin, so a customer who arrives on an alias or retired hostname is
+ * still sent a link on the canonical one. A link is not a redirect: it gets
+ * stored, forwarded and re-opened months later, so it must name the host we
+ * intend to be reachable at, not the one this particular request happened to
+ * land on.
+ *
+ * ⭐ THE TOKEN IS ENCODED. Every one of the 69 tokens in production is already
+ * URL-safe (measured: the only non-alphanumeric character in use is `-`), so
+ * this changes no existing link — which is exactly why it is safe to add. What
+ * it closes is the shape where a token containing `/`, `?` or `#` would silently
+ * become a different path, a different resource, or a lost credential.
+ *
+ * If no origin resolves at all we return a RELATIVE path rather than a
+ * silently-broken "//portal/…", which a browser reads as protocol-relative and
+ * would send to a host named by the token.
+ */
+export function portalUrl(token: string, base?: string, params?: PortalLinkParams): string {
   const origin = cleanOrigin(base)
     || (typeof window !== 'undefined' ? window.location.origin : '')
     || appOrigin()
-  return `${origin}/portal/${token}`
+  const path = `/portal/${encodeURIComponent(token)}`
+  const qs = portalQuery(params)
+  return `${origin}${path}${qs}`
+}
+
+/** The query half, so "?paid=1" is spelled once rather than at each call site. */
+function portalQuery(params?: PortalLinkParams): string {
+  if (!params) return ''
+  const usp = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) {
+    // Absent is absent. An empty value would put a bare `?k=` on a customer's
+    // link, which reads as a broken link even when it works.
+    if (v === undefined || v === null || v === '') continue
+    usp.set(k, String(v))
+  }
+  const s = usp.toString()
+  return s ? `?${s}` : ''
 }
