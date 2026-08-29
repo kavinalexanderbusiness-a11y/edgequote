@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { appOrigin, cleanOrigin } from '@/lib/appOrigin'
+import { appOrigin, cleanOrigin, isUsableOrigin } from '@/lib/appOrigin'
 
 // Owner-side helper: get (or mint) the magic-link token for a customer's portal.
 // EXISTING tokens are always reused, so links you've already sent keep working
@@ -133,9 +133,25 @@ export type PortalLinkParams = Record<string, string | number | boolean | null |
  * would send to a host named by the token.
  */
 export function portalUrl(token: string, base?: string, params?: PortalLinkParams): string {
-  const origin = cleanOrigin(base)
-    || (typeof window !== 'undefined' ? window.location.origin : '')
-    || appOrigin()
+  // ⛔ A BASE IS NOT A STRING WE CONCATENATE. cleanOrigin tidies a value; it does
+  // not judge one, so `//evil.example` or `javascript:alert(1)` used to sail
+  // through and become the front of a link posted to a customer's phone.
+  // isUsableOrigin is the question cleaning cannot answer, and it is asked of
+  // every candidate — including the configured one — before anything is built.
+  // ⭐ THE PARSED ORIGIN, not the string. `https://evil.example\@app.edgehq.ca`
+  // is a perfectly valid https URL — isUsableOrigin says so, correctly — but
+  // concatenating it kept the backslash authority in a link a customer reads,
+  // which is the shape a look-alike link is built from. Taking `.origin` throws
+  // away everything that is not scheme+host+port, so whatever a caller hands
+  // over, what comes back is an origin and a path this module chose.
+  const usable = (v: string) => {
+    const c = cleanOrigin(v)
+    if (!isUsableOrigin(c)) return ''
+    try { return new URL(c).origin } catch { return '' }
+  }
+  const origin = usable(cleanOrigin(base))
+    || usable(typeof window !== 'undefined' ? window.location.origin : '')
+    || usable(appOrigin())
   const path = `/portal/${encodeURIComponent(token)}`
   const qs = portalQuery(params)
   return `${origin}${path}${qs}`

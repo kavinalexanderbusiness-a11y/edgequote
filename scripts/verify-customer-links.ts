@@ -50,10 +50,27 @@ const eq = (n: string, a: unknown, b: unknown) =>
 const ROOT = join(__dirname, '..')
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8')
 
-/** ⚠️ LINE comments first, and `[^\n\r]` not `.` — `.` does not match `\r`, so a
- *  CRLF checkout leaves every line comment half-stripped and the block pass then
- *  swallows real code. */
-const strip = (s: string) => s.replace(/\/\/[^\n\r]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '')
+/**
+ * Comments out, code in.
+ *
+ * ⚠️⚠️ `://` IS NOT A COMMENT, and this guard is the reason to say so out loud:
+ * a naive line-comment strip deletes from the `//` of `"https://app.example"`
+ * to end of line, which silently removes the very hostname a scan is hunting
+ * for. Mutation testing caught exactly that — a retired host pasted into a route
+ * as a string literal scanned CLEAN. So schemes are masked first and restored
+ * after. (Same family as the false block-comment open that ate 83% of a file in
+ * another guard's stripper.)
+ *
+ * ⚠️ LINE comments before block comments, and `[^\n\r]` rather than `.` — `.`
+ * does not match `\r`, so a CRLF checkout would leave every line comment
+ * half-stripped and the block pass would then swallow real code.
+ */
+const SCHEME_MASK = 'SCHEME'
+const strip = (s: string) => s
+  .replace(/:\/\//g, SCHEME_MASK)
+  .replace(/\/\/[^\n\r]*/g, '')
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .split(SCHEME_MASK).join('://')
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const e of readdirSync(join(ROOT, dir))) {
@@ -162,6 +179,42 @@ console.log('\n▸ 2 · the token survives the builder, exactly')
   // be read by a browser as a URL whose HOST is "portal".
   const u = portalUrl(TOKEN, '')
   check('with no origin the link is relative, never //host', !u.startsWith('//'), u)
+}
+
+{
+  // ⛔ A HOSTILE `base`. The builder's origin argument comes from server code
+  // today, but a link is the one thing in this product that gets stored and
+  // re-opened later — so a base that is not a usable origin must not be able to
+  // send a customer somewhere else. cleanOrigin is what refuses it.
+  // ⭐ What this can and cannot promise, stated exactly. portalUrl cannot know
+  // that a host is hostile — that is what the callers-use-appOrigin rule in §1
+  // is for. What it CAN promise is that whatever it is handed, the result is a
+  // well-formed link whose origin is a bare scheme+host+port and whose path is
+  // exactly /portal/<token>: no protocol-relative link, no `javascript:`, and
+  // no authority trickery smuggled into the part a customer reads.
+  // ⭐ THE CONTRACT, stated so it can fail: a customer link is EITHER an absolute
+  // http(s) URL or a relative /portal/ path. Nothing else is a link you can put
+  // in a text message. This is what keeps the scheme check load-bearing —
+  // without it a `javascript:` base yields the literal origin "null" and an
+  // `ftp:` base yields an ftp link, neither of which any other assertion here
+  // would notice.
+  for (const odd of ['javascript:alert(1)', 'ftp://files.example', 'data:text/html,x', 'mailto:a@b.c']) {
+    const u = portalUrl(TOKEN, odd)
+    check(`a non-web scheme never reaches a customer link (${odd.slice(0, 22)})`,
+      u === `/portal/${TOKEN}` || /^https?:\/\//i.test(u), u)
+  }
+
+  for (const hostile of ['//evil.example', 'https://evil.example\\@app.edgehq.ca', 'javascript:alert(1)', 'https://a.example/../..']) {
+    const u = portalUrl(TOKEN, hostile)
+    check(`never protocol-relative or a script URL (${hostile.slice(0, 26)})`,
+      !u.startsWith('//') && !/^javascript:/i.test(u), u)
+    if (/^https?:/i.test(u)) {
+      const p = new URL(u)
+      eq(`…the path stays /portal/<token> (${hostile.slice(0, 20)})`, p.pathname, `/portal/${TOKEN}`)
+      check(`…and the origin is a bare origin (${hostile.slice(0, 20)})`,
+        u === `${p.origin}/portal/${TOKEN}`, u)
+    }
+  }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -318,10 +371,20 @@ console.log('\n▸ 6 · ⛔ the redirect grants nothing')
 // ═════════════════════════════════════════════════════════════════════════════
 console.log('\n▸ 7 · machine callers are never redirected')
 
+// ⚠️⚠️ THE CONTENT, then the behaviour. Iterating the list alone is a VACUOUS
+// test: empty the array and the loop body never runs, so every assertion
+// disappears and the guard reports green while a POSTed Stripe webhook is being
+// 307'd into the void. Mutation testing found exactly that. Name the prefixes.
+eq('the exempt prefixes are the two machine surfaces, explicitly',
+  [...CANONICAL_EXEMPT_PREFIXES].sort(), ['/api/', '/monitoring'])
 for (const p of CANONICAL_EXEMPT_PREFIXES) {
   eq(`${p}… is exempt (a webhook does not follow 307s)`,
     canonicalRedirectTarget(legacyInput('app.edgepropertyservicesyyc.ca', `${p}stripe/webhook`)), null)
 }
+eq('a webhook path is exempt by NAME, not merely by iteration',
+  canonicalRedirectTarget(legacyInput('app.edgepropertyservicesyyc.ca', '/api/stripe/webhook')), null)
+eq('…and so is the monitoring tunnel',
+  canonicalRedirectTarget(legacyInput('app.edgepropertyservicesyyc.ca', '/monitoring')), null)
 for (const m of ['POST', 'PUT', 'PATCH', 'DELETE']) {
   eq(`a ${m} is never redirected`,
     canonicalRedirectTarget(legacyInput('app.edgepropertyservicesyyc.ca', '/portal/x', '', { method: m })), null)
