@@ -145,6 +145,7 @@
     "verify:day-plan": "tsx scripts/verify-day-plan.ts",
     "verify:day-sequence": "tsx scripts/verify-day-sequence.ts",
     "verify:pinned-route": "tsx scripts/verify-pinned-route.ts",
+    "verify:route-pins": "tsx scripts/verify-route-pins.ts",
     "verify:dashboard-v2": "tsx scripts/verify-dashboard-v2.ts",
     "verify:day-actions": "tsx scripts/verify-day-actions.ts",
     "verify:availability": "tsx scripts/verify-availability.ts",
