@@ -454,7 +454,12 @@ check('term: an impossible date is refused, not shifted',
 
 // ── Expiry and renewal, executed against a fixed clock ─────────────────────
 const CLOCK = new Date(2026, 5, 15) // 2026-06-15, local
-const live = (end: string | null, notice: number | null = null) =>
+// ⚠️⚠️ DELIBERATELY NOT NAMED "live". There is an async live() below that runs
+// the fixture-tenant half, and a const of that name here shadows it for the
+// whole of main() — so `await live()` would call THIS two-argument helper with
+// no arguments, section 7 would silently stop running, and the suite would stay
+// green while proving one fewer thing. tsc caught it; the passing run did not.
+const activeFor = (end: string | null, notice: number | null = null) =>
   ({ status: 'active' as const, end_date: end, renewal_notice_days: notice })
 
 check('expiry: a live agreement past its end date HAS expired',
@@ -471,17 +476,17 @@ check('expiry: a terminated contract keeps its own truer word',
   !isExpired({ status: 'terminated', end_date: '2020-01-01' }, CLOCK))
 
 check('renewal: an open-ended agreement is never "expiring soon"',
-  renewalState(live(null), CLOCK).state === 'open_ended')
+  renewalState(activeFor(null), CLOCK).state === 'open_ended')
 check('renewal: outside the notice window there is nothing to say',
-  renewalState(live('2026-12-31', 30), CLOCK).state === 'none')
+  renewalState(activeFor('2026-12-31', 30), CLOCK).state === 'none')
 check('renewal: inside the notice window it is expiring soon',
-  renewalState(live('2026-07-01', 30), CLOCK).state === 'expiring_soon')
+  renewalState(activeFor('2026-07-01', 30), CLOCK).state === 'expiring_soon')
 check('renewal: the notice window is the OWNER\'s number, not ours',
-  renewalState(live('2026-07-01', 5), CLOCK).state === 'none'
-  && renewalState(live('2026-07-01', 90), CLOCK).state === 'expiring_soon',
+  renewalState(activeFor('2026-07-01', 5), CLOCK).state === 'none'
+  && renewalState(activeFor('2026-07-01', 90), CLOCK).state === 'expiring_soon',
   'a fixed window would override a policy the owner set deliberately')
 check('renewal: past the end date it reports expired, not expiring',
-  renewalState(live('2026-01-01', 30), CLOCK).state === 'expired')
+  renewalState(activeFor('2026-01-01', 30), CLOCK).state === 'expired')
 check('renewal: a contract that is not active raises nothing',
   renewalState({ status: 'draft', end_date: '2026-06-16', renewal_notice_days: 30 }, CLOCK).state === 'none',
   'a draft cannot be up for renewal')
