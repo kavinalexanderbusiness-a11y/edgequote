@@ -59,39 +59,65 @@ const applyPath = readdirSync(MIG).filter(f => f.endsWith('.sql')).sort()
   // explanation and report the fix as the defect.
   .split('\n').filter(l => !l.trimStart().startsWith('--')).join('\n')
 
+// ⚠️⚠️ ASSERT THE STATE, NOT THE REVOKE. The first version of this guard looked
+// for `REVOKE … FROM authenticated` in the apply path, and went red the moment
+// the migration was absorbed: production ran it, the baseline was regenerated,
+// and the file moved to archive/ledger/ — which is never applied. A migration has
+// two lives, and a guard that recognises only the first one fails on the very
+// convergence that proves the fix landed.
+//
+// What must hold in EITHER life is the same, and it is a property of the whole
+// apply path: nothing in it grants a DDL privilege to a browser-facing role.
+// Before absorption the REVOKE produces that; after it, the generated baseline
+// simply emits `grant INSERT, SELECT, UPDATE, DELETE, MAINTAIN … to anon`, with
+// no TRUNCATE to remove. One rule, both spellings.
+const statements = applyPath.split(';')
 for (const role of CLIENT_ROLES) {
-  // One revoke may name several privileges, so match a statement that reaches
-  // this role and check the privileges inside it rather than demanding a
-  // particular spelling or ordering.
-  const stmts = applyPath.split(';').filter(s =>
-    /\brevoke\b/i.test(s) && /\ball tables in schema public\b/i.test(s) && new RegExp(`\\b${role}\\b`).test(s))
-  const named = stmts.join(' ').toLowerCase()
   for (const priv of DDL_PRIVS) {
-    check(`${role} is revoked ${priv.toUpperCase()} on all tables in public`,
-      stmts.length > 0 && named.includes(priv),
-      `no REVOKE … ON ALL TABLES IN SCHEMA public FROM ${role} naming ${priv}`)
+    // Any GRANT that reaches this role and names this privilege, whether on a
+    // table or as a default for future ones.
+    const offenders = statements.filter(s =>
+      /\bgrant\b/i.test(s) && new RegExp(`\\bto\\s+[^;]*\\b${role}\\b`, 'i').test(s) &&
+      (new RegExp(`\\b${priv}\\b`, 'i').test(s) || /\bgrant\s+all\b/i.test(s)))
+    check(`nothing in the apply path grants ${role} ${priv.toUpperCase()}`,
+      offenders.length === 0,
+      `${offenders.length} statement(s), e.g. ${offenders[0]?.trim().replace(/\s+/g, ' ').slice(0, 150)}`)
   }
-  // The default privileges are the reason this recurs: fix only the existing
-  // tables and the next migration re-grants everything on its new one.
-  const defaults = applyPath.split(';').filter(s =>
-    /alter\s+default\s+privileges/i.test(s) && /\brevoke\b/i.test(s) && new RegExp(`\\b${role}\\b`).test(s))
-  const defNamed = defaults.join(' ').toLowerCase()
+  // The default privileges are why this recurs: correct only the existing tables
+  // and the next `create table` re-grants everything on its new one.
+  const tableDefaults = statements.filter(s =>
+    /alter\s+default\s+privileges/i.test(s) && /\bon\s+tables\b/i.test(s) &&
+    new RegExp(`\\b${role}\\b`).test(s))
+  const bad = tableDefaults.filter(s => DDL_PRIVS.some(p => new RegExp(`\\b${p}\\b`, 'i').test(s)) || /\bgrant\s+all\b/i.test(s))
   check(`future tables will not grant ${role} these privileges`,
-    defaults.length > 0 && DDL_PRIVS.every(p => defNamed.includes(p)),
-    'ALTER DEFAULT PRIVILEGES … REVOKE must cover truncate, trigger and references')
-  // Production carries default ACLs from BOTH grantors; fixing one leaves the
-  // other still handing them out on every new table.
-  check(`…for both the postgres and supabase_admin grantors (${role})`,
-    /for\s+role\s+postgres/i.test(defaults.join(' ')) && /for\s+role\s+supabase_admin/i.test(defaults.join(' ')),
-    'default ACLs exist for both roles in this project; revoking one is half a fix')
+    tableDefaults.length > 0 && bad.length === 0,
+    tableDefaults.length === 0
+      ? 'no ALTER DEFAULT PRIVILEGES … ON TABLES for this role in the apply path at all'
+      : `${bad.length} default-privilege statement(s) still hand out a DDL privilege`)
 }
 
-// ⭐ The other direction: this must not become an argument for removing CRUD.
-const revokedCrud = applyPath.split(';').filter(s =>
-  /\brevoke\b/i.test(s) && /all tables in schema public/i.test(s) &&
-  /\b(select|insert|update|delete)\b/i.test(s) && /\b(anon|authenticated)\b/i.test(s))
-check('CRUD is never revoked wholesale from the client roles', revokedCrud.length === 0,
-  `a blanket REVOKE of row operations would break every screen:\n     ${revokedCrud.join('\n     ').slice(0, 300)}`)
+// ⭐ THE OTHER DIRECTION. This guard must never become an argument for removing
+// row access: an apply path that granted the client roles nothing would satisfy
+// every check above and break every screen in the product.
+for (const role of CLIENT_ROLES) {
+  const crud = statements.filter(s =>
+    /\bgrant\b/i.test(s) && new RegExp(`\\bto\\s+[^;]*\\b${role}\\b`, 'i').test(s) &&
+    /\b(select|insert|update|delete)\b/i.test(s))
+  check(`${role} still holds row access somewhere in the apply path (${crud.length} grant(s))`,
+    crud.length > 0,
+    'revoking CRUD from a client role would break every screen — this is not that fix')
+}
+
+// ⛔ THE RESIDUAL, pinned so it cannot be forgotten. `postgres` is not superuser
+// on Supabase and cannot alter `supabase_admin`'s default privileges (42501), so
+// that second default ACL still hands out arwdDxtm for any table supabase_admin
+// itself creates in `public`. Every table this project creates is created by
+// postgres, so the reachable half is the one that governs us — but the entry is
+// real and closing it needs a superuser.
+console.log('  ⛔ RESIDUAL: supabase_admin\'s default privileges in `public` still include')
+console.log('     TRUNCATE/TRIGGER/REFERENCES for anon and authenticated. postgres cannot')
+console.log('     change them (not superuser, not a member, 42501 measured). Needs the')
+console.log('     Supabase dashboard or support. Only affects tables supabase_admin creates.')
 
 // ── 2. Live ──────────────────────────────────────────────────────────────────
 console.log('\n── production agrees (live) ──')

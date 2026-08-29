@@ -42,12 +42,6 @@
  ],
  "default_acls": [
   {
-   "acl": "{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
-   "role": "postgres",
-   "schema": "public",
-   "objtype": "r"
-  },
-  {
    "acl": "{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
    "role": "postgres",
    "schema": "public",
@@ -184,6 +178,12 @@
    "role": "supabase_admin",
    "schema": "graphql",
    "objtype": "S"
+  },
+  {
+   "acl": "{postgres=arwdDxtm/postgres,anon=arwdm/postgres,authenticated=arwdm/postgres,service_role=arwdDxtm/postgres}",
+   "role": "postgres",
+   "schema": "public",
+   "objtype": "r"
   }
  ],
  "role_settings": [
