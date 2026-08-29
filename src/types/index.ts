@@ -1279,6 +1279,14 @@ export interface Quote {
   // record for good. ⛔ Not the same question as selected_cadence below: that is
   // WHICH SCHEDULE, this is WHICH SCOPE.
   selected_option_id: string | null
+  // ⭐⭐ Σ of the SELECTED optional extras (quote_addons). Written ONLY by the
+  // trigger quote_addons_sync_total — app code reads it and never writes it —
+  // and `total` above is GENERATED over it (initial_price + travel_fee +
+  // addons_total), which is why the invoice conversion, job costing, the deposit
+  // engine and pipeline reporting all stayed correct without a line of change.
+  // ⛔ Not the same question as an OPTION: an option REPLACES initial_price, an
+  // extra ADDS here. See lib/quoteAddons.
+  addons_total: number
   selected_cadence: 'one_time' | 'weekly' | 'biweekly' | 'monthly' | null
   follow_up_count_at_acceptance: number | null
   // ── Deposit-gated scheduling ───────────────────────────────────────────────
@@ -1397,6 +1405,58 @@ export interface QuoteOptionInput {
   is_recommended: boolean
 }
 
+// ── One optional extra the customer may add before approving ─────────────────
+// ⭐ ORTHOGONAL to everything above. A QuoteOption REPLACES the price and its
+// siblings are mutually exclusive; a QuoteService ADDS to the price and is scope
+// the owner decided; a QuoteAddon ADDS to the price and is scope THE CUSTOMER
+// decides, before they approve. A quote may carry options AND extras, or lines
+// AND extras — the shape guard only refuses options beside lines, never extras
+// beside either.
+//
+// ⛔ NOT a ChangeOrder. The line between them is ACCEPTANCE and the database
+// draws it: quote_addons_write_guard refuses every write once the quote leaves
+// draft/sent, so extra scope after approval has exactly one home. See
+// lib/quoteAddons and lib/changeOrders.
+export interface QuoteAddon {
+  id: string
+  created_at: string
+  updated_at: string
+  quote_id: string
+  user_id: string
+  /** What the customer is choosing — "Gutter guards", "Haul away the debris". */
+  name: string
+  /** ⭐ CUSTOMER-VISIBLE. What taking this gets them, in the owner's words.
+   *  It is projected by get_portal_data and printed on the PDF, so it is a
+   *  customer-safe field and never a place for an internal note. */
+  description: string | null
+  /** What this extra ADDS. Never a component of anything else. */
+  price: number
+  sort_order: number
+  /** ⭐⭐ THE only fact on this row that costs money — it drives the trigger that
+   *  writes quotes.addons_total. Written ONLY by quote_apply_choice, through its
+   *  two doors (portal_accept_quote / owner_select_quote_option). The builder
+   *  never writes it: an owner pre-ticking an extra would put money nobody
+   *  agreed to into the quote's headline figure. */
+  is_selected: boolean
+  /** Who chose it. A CHECK pins the trio (selected ⇒ via + at, unselected ⇒
+   *  both null), and the database fills it — app code only ever says selected. */
+  selected_via: 'default' | 'portal' | 'owner' | null
+  selected_at: string | null
+}
+
+/** An extra as the builder form holds it. Saved by delete-and-reinsert (the same
+ *  shape quote_options uses), so `id` is carried only to render a stable key and
+ *  to tell an existing row from a new one — never written back.
+ *  ⛔ Carries NO `is_selected`: see QuoteAddon.is_selected and
+ *  lib/quoteAddons.addonRowsFor for why the builder must not be able to. */
+export interface QuoteAddonInput {
+  /** Present only for an extra already on the quote; blank for a new row. */
+  id?: string
+  name: string
+  description: string
+  price: number
+}
+
 export interface QuoteFormValues {
   customer_id: string
   customer_name: string
@@ -1462,6 +1522,15 @@ export interface QuoteFormValues {
   // a service line ADDS to it. The database refuses a quote holding both.
   has_options: boolean
   options: QuoteOptionInput[]
+  // ── Optional extras the customer may add before approving ─────────────────
+  // ⭐ NO `has_addons` switch, deliberately, and the asymmetry with `has_options`
+  // above is the point: options need a declared intent because turning them off
+  // must not lose the typing of a set that is mutually exclusive with the line
+  // items. An empty extras list simply IS "no extras" — a flag would only create
+  // a state where extras are typed, saved and invisible.
+  // ⛔ NOT mutually exclusive with anything: extras compose with options AND
+  // with service lines, because an extra always ADDS.
+  addons: QuoteAddonInput[]
   // ── Scheduling deposit (deposit-gated scheduling) ─────────────────────────
   // The owner's per-quote rule: require this much collected before the booking
   // is secured. '' = off (the default — a normal quote gains no extra step).

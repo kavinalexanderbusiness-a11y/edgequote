@@ -4,12 +4,16 @@ import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { Quote, Customer, QuoteFormValues, QuoteService, QuoteOption, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, STATUS_LABELS, PAYMENT_METHODS } from '@/types'
+import { Quote, Customer, QuoteFormValues, QuoteService, QuoteOption, QuoteAddon, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, STATUS_LABELS, PAYMENT_METHODS } from '@/types'
 import { sumServiceLines, serviceLineTotals, splitServices, recentTemplateIdsFrom } from '@/lib/quoteServices'
 import {
   activeOption, headlineOptionPrice, optionRowsFor, optionValueBasis, optionValueBasisLabel,
   sortedOptions,
 } from '@/lib/quoteOptions'
+import {
+  addonIdsFor, addonRowsFor, addonValueBasis, addonValueBasisLabel, addonsFrozen,
+  approvalTotal, selectedAddons, sortedAddons,
+} from '@/lib/quoteAddons'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { HistoryPanel } from '@/components/audit/HistoryPanel'
@@ -58,6 +62,10 @@ export default function QuoteDetailPage() {
   // choice, which is every quote until an owner turns the switch on. MUTUALLY
   // EXCLUSIVE with `services` — the database refuses a quote holding both.
   const [options, setOptions] = useState<QuoteOption[]>([])
+  // The optional extras (quote_addons). ⭐ NOT mutually exclusive with anything:
+  // an extra ADDS to whatever the customer approves, so it rides alongside
+  // options AND alongside service lines. Empty on every quote that offers none.
+  const [addons, setAddons] = useState<QuoteAddon[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [templates, setTemplates] = useState<ServiceTemplate[]>([])
   // Same picker, same ranking as the create door — a service list that reorders
@@ -131,11 +139,13 @@ export default function QuoteDetailPage() {
       // Local session read — no auth round-trip before the batch below.
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
-      const [qRes, svcRes, optRes, cRes, tRes, tierRes, sRes, invRes, recentRes, bundleRes] = await Promise.all([
+      const [qRes, svcRes, optRes, addonRes, cRes, tRes, tierRes, sRes, invRes, recentRes, bundleRes] = await Promise.all([
         supabase.from('quotes').select('*').eq('id', id).eq('user_id', user!.id).single(),
         supabase.from('quote_services').select('*').eq('quote_id', id).order('sort_order'),
         // The owner's own order, which is the order the customer saw.
         supabase.from('quote_options').select('*').eq('quote_id', id).order('sort_order'),
+        // Same: the owner's order is the order the customer saw.
+        supabase.from('quote_addons').select('*').eq('quote_id', id).order('sort_order'),
         supabase.from('customers').select('*, properties(id, address, city, province, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
         supabase.from('service_templates').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('travel_fee_tiers').select('*').eq('user_id', user!.id).order('sort_order'),
@@ -159,6 +169,7 @@ export default function QuoteDetailPage() {
       setQuote(qRes.data)
       setServices((svcRes.data as QuoteService[]) || []) // error/absent table → [] (legacy)
       setOptions((optRes.data as QuoteOption[]) || [])
+      setAddons((addonRes.data as QuoteAddon[]) || [])
       setCustomers(cRes.data || [])
       setTemplates(tRes.data || [])
       setRecentTemplateIds(recentTemplateIdsFrom(recentRes.data))
@@ -264,6 +275,18 @@ export default function QuoteDetailPage() {
     // single-service field one line up.
     const optionRows = optionsOn ? optionRowsFor(values.options || [], id, user!.id) : []
     const optionHeadline = optionsOn ? headlineOptionPrice(optionRows) : null
+
+    // ── The optional extras ──────────────────────────────────────────────────
+    // ⭐⭐ FROZEN BY THE DATABASE, not by this page. quote_addons_write_guard
+    // refuses every insert/update/delete once the quote leaves draft/sent, so a
+    // decided quote's extras are the record of what was offered and what was
+    // bought. Asking the shared predicate here means the save simply SKIPS them
+    // — the alternative is a delete that raises, an owner who saved a price
+    // change watching a check_violation, and (if the delete ever did land) the
+    // silent destruction of the evidence for a bill the customer already agreed
+    // to. Same rule, two places, one definition (lib/quoteAddons.addonsFrozen).
+    const extrasFrozen = addonsFrozen(quote?.status)
+    const addonRows = extrasFrozen ? [] : addonRowsFor(values.addons || [], id, user!.id)
 
     // ADR-002: provenance moves WITH the price. Editing a quote re-uses the engine
     // surface (QuoteBuilder), so a re-applied recommendation — or a hand override —
@@ -390,6 +413,34 @@ export default function QuoteDetailPage() {
           setOptions((optRows as QuoteOption[]) || [])
         } else {
           setOptions([])
+        }
+      }
+
+      // ── The extras, same clear-and-reinsert, same honesty about it ─────────
+      // Skipped entirely once the choice is settled (extrasFrozen above). Note
+      // this runs on EVERY quote, not only options quotes: extras compose with
+      // both shapes, so gating it on `optionsSettled` would leave a plain
+      // quote's extras unsaved.
+      if (!extrasFrozen) {
+        const delAddon = await supabase.from('quote_addons').delete().eq('quote_id', id)
+        if (delAddon.error) {
+          toast.error('Saved the quote, but its optional extras could not be updated: ' + delAddon.error.message + ' — press Save again.')
+          return false
+        }
+        if (addonRows.length && u2) {
+          const { data: addonBack, error: addonErr } = await supabase.from('quote_addons')
+            .insert(addonRows.map(r => ({ ...r, user_id: u2.id }))).select('*')
+          if (addonErr) {
+            // The delete landed, so the quote genuinely offers no extras now. Say
+            // that rather than let the screen keep showing rows the customer's
+            // portal would no longer render.
+            setAddons([])
+            toast.error('Saved the quote, but its optional extras were lost mid-save: ' + addonErr.message + ' — press Save again to restore them.')
+            return false
+          }
+          setAddons((addonBack as QuoteAddon[]) || [])
+        } else {
+          setAddons([])
         }
       }
 
@@ -837,26 +888,59 @@ export default function QuoteDetailPage() {
   // is exactly how the owner's screen and the customer's screen would otherwise
   // start disagreeing about what was bought.
   const [choosing, setChoosing] = useState<string | null>(null)
+  // ── "…and they also want the gutter guards" ────────────────────────────────
+  // The owner's working set while they record a decision taken off-screen (a
+  // phone call). NOTHING IS PRE-TICKED: an extra is only ever selected because a
+  // person said yes to it, and the owner ticking one on the customer's behalf is
+  // still a person saying so — but it must be an act, not a default they failed
+  // to notice. Cleared by the page reload that follows a successful choice.
+  const [pickedAddons, setPickedAddons] = useState<string[]>([])
+  const toggleAddon = (addonId: string) =>
+    setPickedAddons(prev => prev.includes(addonId) ? prev.filter(x => x !== addonId) : [...prev, addonId])
   async function acceptOptionForCustomer(optionId: string) {
     if (!quote || choosing) return
     const opt = options.find(o => o.id === optionId)
     if (!opt) return
-    const priced = Number(opt.price) + (Number(quote.travel_fee) || 0)
+    // ⭐ ONE money path, and it is lib/quoteAddons.approvalTotal — the same
+    // function the portal's confirm dialog reads, stating exactly what
+    // quote_apply_choice is about to write to accepted_price:
+    // (chosen option ?? base) + travel + Σ selected extras. The dialog cannot
+    // quote one figure while the database banks another.
+    const takenAddons = sortedAddons(addons).filter(a => pickedAddons.includes(a.id))
+    const priced = approvalTotal({ base: opt.price, travel: quote.travel_fee, addons: takenAddons })
+    // Say what is happening to the EXTRAS at the moment of commitment, in both
+    // directions. Recording a win with none ticked is a legitimate outcome — but
+    // it is also what an owner who forgot the picker does, and it freezes them
+    // unbought, so the silence gets a sentence too.
+    const extrasLine = takenAddons.length
+      ? ` Plus ${takenAddons.map(a => a.name).join(', ')} — the ${takenAddons.length === 1 ? 'extra' : 'extras'} they added.`
+      : addons.length
+        ? ` No optional extras are being recorded — if they asked for one, tick it before approving.`
+        : ''
     const ok = await confirmDialog({
       title: `Record ${opt.name} as the customer’s choice?`,
-      message: `This approves ${quote.quote_number} at ${formatCurrency(priced)} on ${quote.customer_name}’s behalf — the same as if they had approved it in their portal. The other options stay on the record as what was offered, and this can’t be swapped afterwards without sending a revised quote.`,
+      message: `This approves ${quote.quote_number} at ${formatCurrency(priced)} on ${quote.customer_name}’s behalf — the same as if they had approved it in their portal.${extrasLine} The other options stay on the record as what was offered, and this can’t be swapped afterwards without sending a revised quote.`,
       confirmLabel: `Approve ${opt.name} — ${formatCurrency(priced)}`,
     })
     if (!ok) return
     setChoosing(optionId)
     try {
       const { data: applied, error } = await supabase.rpc('owner_select_quote_option', {
-        p_quote_id: quote.id, p_option_id: optionId,
+        // ⭐ The extras ride the SAME door and the SAME core. The RPC refuses an
+        // id that does not resolve through THIS quote — a refusal, never a silent
+        // drop — so "which extras belong to this quote" is a database fact here
+        // rather than something this screen remembered to check.
+        p_quote_id: quote.id, p_option_id: optionId, p_addon_ids: addonIdsFor(takenAddons),
       })
       // ⚠️ A falsy result is a REFUSAL, not a success with nothing to show, and it
       // must never be reported as one. Re-read the row and let the database say
       // what happened rather than assuming either way.
       const { data: fresh } = await supabase.from('quotes').select('*').eq('id', quote.id).single()
+      // The extras' own rows moved too (quote_apply_choice sets is_selected for
+      // EVERY add-on on the quote, not just the chosen ones). Re-read them, or the
+      // panel below would keep rendering the pre-decision picture.
+      const { data: freshAddons } = await supabase.from('quote_addons').select('*').eq('quote_id', quote.id).order('sort_order')
+      if (freshAddons) setAddons(freshAddons as QuoteAddon[])
       if (error || !applied) {
         if (fresh && (fresh as Quote).selected_option_id === optionId) {
           setQuote(fresh as Quote)   // it landed (another tab, a retry) — say the true thing
@@ -875,6 +959,50 @@ export default function QuoteDetailPage() {
     } finally { setChoosing(null) }
   }
 
+  // ── "They said yes — and they took the gutter guards" ──────────────────────
+  // The plain-quote twin of acceptOptionForCustomer, and deliberately NOT a
+  // second implementation of it: both call owner_select_quote_option, which is
+  // one of the two doors into quote_apply_choice. The only difference is that
+  // p_option_id is null, which the core accepts precisely when the quote offers
+  // no alternatives. There is no arrangement of this page in which a win is
+  // recorded by two different engines.
+  async function recordPlainWinWithAddons() {
+    if (!quote || actionBusy) return
+    const takenAddons = sortedAddons(addons).filter(a => pickedAddons.includes(a.id))
+    // `initial_price`, not `total`: total is GENERATED over addons_total, and no
+    // extra is selected yet, so the two agree today — but reading the generated
+    // column here would silently start double-counting the moment anything else
+    // lands in it. State the base explicitly, exactly as the core does.
+    const priced = approvalTotal({ base: quote.initial_price, travel: quote.travel_fee, addons: takenAddons })
+    const ok = await confirmDialog({
+      title: `Mark ${quote.quote_number} as won at ${formatCurrency(priced)}?`,
+      message: takenAddons.length
+        ? `This records ${quote.customer_name} as having approved the quote plus ${takenAddons.map(a => a.name).join(', ')}. The extras they didn't take stay on the record as what was offered, and none of it can be changed afterwards without a change order.`
+        : `This records ${quote.customer_name} as having approved the quote with NONE of the ${addons.length} optional extra${addons.length === 1 ? '' : 's'} taken. If they asked for one, tick it first — afterwards it can only be added on a change order.`,
+      confirmLabel: `Mark won — ${formatCurrency(priced)}`,
+    })
+    if (!ok) return
+    setActionBusy(true)
+    try {
+      const { data: applied, error } = await supabase.rpc('owner_select_quote_option', {
+        p_quote_id: quote.id, p_option_id: null, p_addon_ids: addonIdsFor(takenAddons),
+      })
+      // Same contract as the options door: a falsy result is a REFUSAL, and the
+      // server is asked what actually happened rather than guessed at.
+      const { data: fresh } = await supabase.from('quotes').select('*').eq('id', quote.id).single()
+      const { data: freshAddons } = await supabase.from('quote_addons').select('*').eq('quote_id', quote.id).order('sort_order')
+      if (freshAddons) setAddons(freshAddons as QuoteAddon[])
+      if (fresh) setQuote(fresh as Quote)
+      if (error || !applied) {
+        toast.error((fresh as Quote | null)?.status === 'accepted'
+          ? 'This quote is already approved.'
+          : 'Could not record that — check your connection and try again.')
+        return
+      }
+      toast.success(`Marked as won at ${formatCurrency(priced)} — schedule the job to lock it in.`)
+    } finally { setActionBusy(false) }
+  }
+
   async function markWon() {
     if (!quote || actionBusy) return
     // ⛔ An options quote cannot be "won" without saying WHICH option. Accepting
@@ -887,6 +1015,16 @@ export default function QuoteDetailPage() {
       document.getElementById('eq-quote-options')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       return
     }
+    // ── A plain quote that offers extras ──────────────────────────────────────
+    // ⛔ The patch path below CANNOT record which extras were taken: it writes
+    // status and accepted_price directly and never touches quote_addons, so a
+    // customer who said "yes, and add the gutter guards" would be recorded as
+    // having bought the base quote — and the extras would then be FROZEN unbought
+    // by the write guard, with no way back except a revised quote. So when this
+    // quote offers extras, "Won" goes through the same core the options door and
+    // the portal use, with p_option_id null (quote_apply_choice only insists on an
+    // option when the quote actually offers alternatives).
+    if (addons.length > 0) { await recordPlainWinWithAddons(); return }
     setActionBusy(true)
     try {
       // Snapshot what was bought (Pricing v2 Phase 0). `total` is the number on the
@@ -1032,6 +1170,14 @@ export default function QuoteDetailPage() {
             id: o.id, name: o.name, description: o.description || '',
             price: Number(o.price) || 0, is_recommended: !!o.is_recommended,
           })),
+          // The extras, in the owner's saved order. ⛔ `is_selected` is NOT
+          // carried into the form: the form has nowhere to put it, on purpose —
+          // the builder must not be able to tick an extra on the customer's
+          // behalf (lib/quoteAddons.addonRowsFor).
+          addons: sortedAddons(addons).map(a => ({
+            id: a.id, name: a.name, description: a.description || '',
+            price: Number(a.price) || 0,
+          })),
           // The scheduling-deposit rule survives the edit round-trip. '' = none.
           deposit_type: (quote.deposit_type ?? '') as '' | 'percent' | 'fixed',
           deposit_value: Number(quote.deposit_value) || 0,
@@ -1039,6 +1185,11 @@ export default function QuoteDetailPage() {
         // Non-null ⇒ the editor goes read-only and handleUpdate leaves the rows
         // alone. What was approved is not silently rewritten.
         optionsLockedName={activeOption(options, quote.selected_option_id)?.name ?? null}
+        // The DATABASE has frozen these rows (quote_addons_write_guard); this
+        // just makes the editor say so while they are still on screen, instead of
+        // letting the owner retype a price into a check_violation.
+        addonsFrozen={addonsFrozen(quote.status)}
+        addonsTakenNames={selectedAddons(addons).map(a => a.name)}
         onSubmit={handleUpdate}
         isEdit
         autosaveKey={`quote:${quote.id}`}

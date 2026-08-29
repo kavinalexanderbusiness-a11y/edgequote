@@ -32,6 +32,9 @@ import { bundleScope, templateIndex } from '@/lib/serviceBundles'
 import { confirm } from '@/lib/confirm'
 import { MATERIAL_SUGGESTIONS, emptyMaterialLine } from '@/lib/quoteMaterials'
 import { QuoteOptionsEditor } from '@/components/quotes/QuoteOptionsEditor'
+import { QuoteAddonsEditor } from '@/components/quotes/QuoteAddonsEditor'
+import { addonProblemMessage, addonSetProblem, hasAddons } from '@/lib/quoteAddons'
+import { addonProblemMessage, addonSetProblem } from '@/lib/quoteAddons'
 import {
   EXAMPLE_OPTION_NAMES, OPTIONS_VS_LINES_MESSAGE, headlineOptionPrice, optionProblemMessage,
   optionSetProblem, optionsConflictWithLines, recommendedOption,
@@ -84,6 +87,15 @@ interface QuoteBuilderProps {
    *  approved row can't be deleted (ON DELETE RESTRICT) and rewriting the others
    *  would change what the record says the customer was shown. */
   optionsLockedName?: string | null
+  /** The customer has decided, so the DATABASE has frozen this quote's optional
+   *  extras (quote_addons_write_guard refuses every write once the quote leaves
+   *  draft/sent). Present → the extras editor goes read-only and states which
+   *  ones were taken, instead of letting the owner retype a price into a
+   *  check_violation. ⛔ Further scope after this point is a CHANGE ORDER. */
+  addonsFrozen?: boolean
+  /** The names of the extras the customer actually took — the record, so the
+   *  frozen panel can say it rather than show six equal-looking rows. */
+  addonsTakenNames?: string[]
   /** Where Cancel goes. The EDIT flow is a same-route state toggle (the detail
       page flips `editing`), so its Cancel must return to the quote VIEW — the
       default router.back() pops history right out of the quote (or the app
@@ -122,7 +134,7 @@ type PitchCadence = 'one_time' | 'weekly' | 'biweekly'
 
 export function QuoteBuilder({
   customers, templates, recentTemplateIds, tiers, settings, defaultCustomerId, defaultPropertyId, defaultValues, onSubmit, isEdit,
-  autosaveKey, autosaveBaselineUpdatedAt, optionsLockedName, onCancel,
+  autosaveKey, autosaveBaselineUpdatedAt, optionsLockedName, addonsFrozen, addonsTakenNames, onCancel,
 }: QuoteBuilderProps) {
   const router = useRouter()
   // One workday, in minutes, for THIS business — the same figure the calendar's
@@ -191,6 +203,11 @@ export function QuoteBuilder({
         // every existing quote and every new plain one behaves byte-identically.
         has_options: false,
         options: [],
+        // ⭐ No switch, deliberately (see QuoteFormValues.addons): an empty list
+        // IS "no extras", so a plain quote stays byte-identical and the save
+        // paths write no rows. Extras compose with options AND with service
+        // lines, so this default sits outside the options fork entirely.
+        addons: [],
         // Scheduling deposit OFF by default — a normal quote gains no extra
         // step, no fake deposit state, nothing. '' = no rule (both columns null).
         deposit_type: '',
@@ -312,6 +329,14 @@ export function QuoteBuilder({
         const p = optionSetProblem(v.options || [])
         if (p) { toast.error(optionProblemMessage(p)); return }
       }
+      // ── Optional extras: BLOCK, for the same reason ───────────────────────
+      // Outside the has_options fork on purpose — extras ride alongside options
+      // AND alongside line items, so gating this on the switch would let a bad
+      // set through on every plain quote. The DB refuses each of these (cap 6,
+      // non-blank name, price >= 0), so a warning here would only be an
+      // invitation to watch a constraint violation.
+      const ap = addonSetProblem(v.addons || [])
+      if (ap) { toast.error(addonProblemMessage(ap)); return }
       // Warn-never-block on a $0 first-visit total. Saving it is LEGAL (a
       // weekly-only pitch deliberately has no first-visit price) — but it saves
       // as a quote that Send/PDF/invoice will hard-block one screen later as
@@ -491,7 +516,17 @@ export function QuoteBuilder({
   // so switching off doesn't discard what they typed (see QuoteFormValues).
   const optionsOn = !!watch('has_options')
   const watchedOptions = watch('options') || []
+  // Extras are never a mode: watched unconditionally, because they compose with
+  // an options quote and a plain one alike.
+  const watchedAddons = watch('addons') || []
+  // Extras are never a mode: watched unconditionally, rendered whenever the
+  // quote has any (or the owner opens the section to add one).
+  const watchedAddons = watch('addons') || []
   const optionsLocked = !!optionsLockedName
+  // Disclosure only — never a mode flag. It reveals the editor on a quote that
+  // has no extras yet; a quote that HAS them renders the editor regardless, so
+  // this can never hide saved rows (which is what a has_addons switch would).
+  const [addonsOpen, setAddonsOpen] = useState(hasAddons(watch('addons')))
   // ⭐ The ONE money rule, asked of the ONE engine — never re-derived here. This
   // is the same figure `initial_price` is saved as and the same one the approval
   // RPC would set: the recommended option, else the first. Nothing sums.
@@ -1877,6 +1912,38 @@ export function QuoteBuilder({
               <PriceGuardrailNote guardrails={priceGuardrails} />
               </>
               )}
+
+              {/* ── Optional extras ───────────────────────────────────────────
+                  ⭐ OUTSIDE the options fork, and that placement IS the feature.
+                  An OPTION replaces the price, so it is mutually exclusive with
+                  the single-price field above and with the line items below. An
+                  EXTRA adds to whatever the customer approves, so it composes
+                  with both — a Budget/Standard/Premium quote can offer gutter
+                  guards, and so can a plain one. Rendering it inside either
+                  branch would make "extras" mean two different things.
+
+                  Disclosed, not always-on: an owner who has never offered an
+                  extra sees one line and a button, not six empty fields. Once
+                  rows exist the section is OPEN, because a saved extra nobody
+                  can see is how a quote goes out offering work the owner has
+                  forgotten they priced. */}
+              <div className="pt-1">
+                {(watchedAddons.length > 0 || addonsOpen) ? (
+                  <QuoteAddonsEditor
+                    addons={watchedAddons}
+                    onChange={next => setValue('addons', next, { shouldDirty: true })}
+                    baseTotal={effectiveTotal}
+                    frozen={!!addonsFrozen}
+                    takenNames={addonsTakenNames}
+                  />
+                ) : !addonsFrozen ? (
+                  <button type="button" onClick={() => setAddonsOpen(true)}
+                    className="text-left text-xs text-ink-muted rounded px-1 -mx-1 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                    <span className="font-medium text-ink">Offer optional extras</span> — things the customer can add
+                    to whatever they approve, priced separately. Nothing is charged unless they pick it.
+                  </button>
+                ) : null}
+              </div>
 
             </CardBody>
           </Card>
