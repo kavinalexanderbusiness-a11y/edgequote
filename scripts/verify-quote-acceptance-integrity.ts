@@ -285,6 +285,90 @@ const portalClient = read('src/app/portal/[token]/PortalClient.tsx')
 check('the portal passes the acknowledgement as given, never coerced to true',
   /p_terms_ack: !!termsAck/.test(portalClient))
 
+// ── ⭐⭐ THE DOWNSTREAM GATES — one seam, asked everywhere that ACTS ─────────
+// A stale acceptance must not authorize current work. These pin every acting
+// path to the SAME engine: a second fingerprint comparison anywhere is a second
+// answer waiting to disagree, which is why the assertions check both that the
+// gate is called AND that nobody re-derived it locally.
+console.log('\n═══ Stale acceptance cannot authorize current work ═══')
+
+const schedule = read('src/lib/scheduleQuote.ts')
+check('SCHEDULING — the quote→job engine asks the acceptance gate',
+  /acceptanceBlock\(/.test(schedule) && /loadAcceptanceState\(/.test(schedule))
+// ⭐ Inside the engine, not in its callers: this function exists because
+// "schedule this quote" was implemented twice and the copies disagreed.
+check('SCHEDULING — …inside the engine, so no caller can forget it',
+  /export async function scheduleQuoteAsJob[\s\S]{0,2400}?acceptanceBlock\(/.test(schedule))
+check('SCHEDULING — …and a FAILED read blocks rather than proceeding',
+  /if \(accErr\)[\s\S]{0,200}return \{ jobId: null/.test(schedule))
+
+check('INVOICING — the quote→invoice conversion asks the same gate',
+  /handleConvertToInvoice[\s\S]{0,1200}?acceptanceBlock\(/.test(quotePage))
+check('INVOICING — …and a failed read blocks there too',
+  /if \(accErr\) \{ toast\.error\('Could not check this quote’s acceptance record, so nothing was invoiced/.test(quotePage))
+
+const depositRoute = read('src/app/api/portal/quote-deposit/route.ts')
+// The route has no user session (a token proves the customer), so it must use
+// the DATABASE half of the seam rather than the tenancy-asserting state RPC.
+check('DEPOSIT — the portal charge route asks the database gate',
+  /quote_acceptance_is_current/.test(depositRoute))
+check('DEPOSIT — …and treats anything but an explicit true as blocking',
+  /stillCurrent !== true/.test(depositRoute))
+check('DEPOSIT — …refusing the charge rather than quoting a figure off changed terms',
+  /paused its deposit/.test(depositRoute))
+
+const portalModel = read('src/app/portal/[token]/model.ts')
+// ⭐ The customer-facing half: an accepted quote shows the CONSENTED figure, not
+// whatever the owner has since edited the total to.
+check('PORTAL — an accepted quote shows the figure the customer accepted',
+  /amount: acceptedFigure \?\?/.test(portalModel))
+check('PORTAL — …and says so plainly when the document has moved since',
+  /priceMovedSinceAccepted/.test(portalModel) && /updated quote to look over/.test(portalModel))
+
+// ⛔ ONE SEAM. If a second file starts comparing fingerprints itself, the answers
+// diverge — so the comparison is allowed in exactly two places: the pure engine
+// that defines it, and the migration that is its database twin.
+{
+  const offenders = ['src/lib/scheduleQuote.ts', 'src/app/dashboard/quotes/[id]/page.tsx',
+    'src/app/api/portal/quote-deposit/route.ts', 'src/app/portal/[token]/model.ts',
+    'src/lib/payments/depositGate.ts', 'src/lib/sales/analytics.ts']
+    .filter(f => /document_fingerprint|quote_material_fingerprint/.test(read(f)))
+  check('MUTATION — no consumer re-derives the fingerprint for itself',
+    offenders.length === 0, `re-derived in: ${offenders.join(', ')}`)
+}
+
+// Revenue surfaces report the AUTHORIZED figure, not the drifted total. Both
+// already preferred accepted_price; this pins it, because accepted_price is now
+// write-once through the acceptance window and is therefore the authorized one.
+check('REVENUE — won-value reads the consent snapshot before the live total',
+  /isWon\(q\.status\) && q\.accepted_price != null/.test(read('src/lib/sales/analytics.ts')))
+check('DEPOSIT BASIS — the ask is taken of the consented figure',
+  /const accepted = round2\(Number\(q\.accepted_price\) \|\| 0\)/.test(read('src/lib/payments/depositGate.ts')))
+
+console.log('\n═══ Revising an agreement, and overriding a label ═══')
+check('REVISE — an accepted quote offers "Revise quote", not a quiet Edit',
+  /hasCurrentValidAcceptance\(acceptance\) \? 'Revise quote' : 'Edit'/.test(quotePage))
+check('REVISE — …behind a confirm that says the acceptance is preserved',
+  /beginRevision/.test(quotePage) && /stays on the record permanently/.test(quotePage))
+check('REVISE — …and that changed terms stop being approved',
+  /can’t be scheduled or invoiced until they accept it again/.test(quotePage))
+// ⛔ Revising is NOT a change order — that is post-acceptance ADDITIONAL work,
+// hangs off a job, and belongs to Session 51's engine.
+check('REVISE — …and does not reach for change orders',
+  !/changeOrder/i.test(quotePage.slice(quotePage.indexOf('async function beginRevision'), quotePage.indexOf('async function beginRevision') + 1400)))
+
+const override = read('src/components/quotes/OverrideStatusDialog.tsx')
+check('OVERRIDE — lives behind Advanced, not in the everyday pill',
+  /Advanced/.test(quotePage) && /OverrideStatusDialog/.test(quotePage))
+check('OVERRIDE — cannot be submitted without a reason',
+  /reason\.trim\(\)\.length > 0/.test(override))
+check('OVERRIDE — says explicitly that it is NOT a customer acceptance',
+  /This does not record a customer acceptance/.test(override))
+check('OVERRIDE — …and points at the door that is',
+  /Record customer acceptance/.test(override))
+check('OVERRIDE — cannot set draft or sent (those have real doors)',
+  /OVERRIDABLE_STATUSES: QuoteStatus\[\] = \['accepted', 'scheduled', 'completed', 'paid', 'declined'\]/.test(override))
+
 const phrase = read('src/lib/audit/phrase.ts')
 check('the audit feed has a separate action for an owner-recorded acceptance',
   /quote_acceptance_recorded/.test(phrase))
@@ -527,8 +611,13 @@ async function behaviour() {
   await asService()
   check('…leaving no row and no status change',
     (await acceptanceOf(q4.id)).length === 0 && (await quoteRow(q4.id)).status === 'sent')
-  const legacyDoor = await one(`select public.owner_select_quote_option($1) as ok`, [q4.id])
-  check('MUTATION — the OLD owner door refuses rather than mis-attributing', legacyDoor.ok === false)
+  // ── The strict door refuses a reasonless call ─────────────────────────────
+  // Explicit casts because BOTH arities now exist (the 3-arg is a deploy-window
+  // shim), and an under-specified call is ambiguous — which is itself the proof
+  // that the shim is really there.
+  const strictNoReason = await one(
+    `select public.owner_select_quote_option($1::uuid, null::uuid, null::uuid[], null::text, null::text) as ok`, [q4.id])
+  check('MUTATION — the strict owner door refuses a reasonless call', strictNoReason.ok === false)
 
   // ⛔ MUTATION — the impersonating row is not constructible at all, even by the
   // service role writing straight to the table.
@@ -812,6 +901,202 @@ async function behaviour() {
   // breaking it would be the loudest possible regression from this change.
   check('…while the customer’s own portal door is still reachable anonymously',
     !(await refusedFor('anon', `select public.portal_accept_quote('nope', $1, null, null, true)`, [q1.id], null)))
+
+  // ── 3j · THE DEPLOY WINDOW — an OLD client against the NEW schema ─────────
+  //
+  // ⭐⭐ THE COMPATIBILITY SEAM IS THE DEFAULT VALUE, NOT A SECOND FUNCTION.
+  // An earlier cut kept the old arities as shims; Postgres refused to call
+  // either, because `(text,uuid,uuid,uuid[])` matches the 4-arg exactly AND the
+  // 5-arg with p_terms_ack defaulted, with nothing to break the tie
+  // (42725 "function is not unique"). PostgREST resolves by parameter NAME and
+  // lands in the same ambiguity. The shim would not have softened the deploy
+  // window — it would have broken every call in it.
+  //
+  // So the old arities are dropped, and these checks simulate exactly what a
+  // pre-deploy client does: OMIT the new argument. First: the two arities really
+  // are gone, so nothing ambiguous survives to be resolved at random.
+  console.log('\n─── A client deployed before the app ships ───')
+  const arities = await rows(
+    `select p.proname, pg_get_function_identity_arguments(p.oid) as args
+       from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.proname in ('portal_accept_quote','owner_select_quote_option')
+      order by p.proname`)
+  check('exactly ONE signature survives per acceptance door — no ambiguous overload',
+    arities.length === 2, arities.map(a => `${a.proname}(${a.args})`).join(' | '))
+  const sig = (n: string) => arities.find(a => a.proname === n)?.args ?? '<missing>'
+  // (pg_get_function_identity_arguments includes the parameter NAMES, so these
+  // assert the named argument a pre-deploy client omits — which is the thing
+  // that actually decides the deploy window's behaviour.)
+  check('…the portal door is the one that takes the terms acknowledgement',
+    /p_terms_ack\s+boolean/.test(sig('portal_accept_quote')), sig('portal_accept_quote'))
+  check('…and the owner door is the one that takes a reason',
+    /p_reason\s+text/.test(sig('owner_select_quote_option')), sig('owner_select_quote_option'))
+
+  const shimQ = await makeQuote()
+  await asCustomer()
+  // An old client omits p_terms_ack entirely. The tenant HAS terms, so the
+  // default (false) must make this refuse rather than record a fiction.
+  const shimTerms = await refused(
+    `select public.portal_accept_quote(p_token => 'tok-dana', p_quote_id => $1::uuid)`, [shimQ.id])
+  check('MUTATION — an old client omitting p_terms_ack cannot bypass the tick: it FAILS CLOSED',
+    shimTerms !== null && /scope and terms/.test(shimTerms), shimTerms ?? 'it went through')
+  await asService()
+  check('…leaving no evidence and no status change',
+    (await acceptanceOf(shimQ.id)).length === 0 && (await quoteRow(shimQ.id)).status === 'sent')
+
+  // …and where the tenant has NO terms, the very same old call still works —
+  // which is what makes this a compatibility seam rather than an outage.
+  await asService()
+  await db.exec(`update public.business_settings set terms_text = null where user_id = '${OWNER}'`)
+  await asCustomer()
+  const shimOk = await one(
+    `select public.portal_accept_quote(p_token => 'tok-dana', p_quote_id => $1::uuid) as ok`, [shimQ.id])
+  check('a pre-deploy client still works where there is nothing to acknowledge', shimOk.ok === true)
+  await asService()
+  const shimEv = (await acceptanceOf(shimQ.id))[0]
+  check('…and it still writes full evidence, not a lesser row',
+    shimEv?.kind === 'customer' && shimEv?.source === 'portal' && Number(shimEv?.accepted_amount) === 5550)
+  check('…recording honestly that nothing was required to be acknowledged',
+    shimEv?.terms_required === false && shimEv?.terms_acknowledged === false)
+
+  // The owner's old call omits p_reason → null → refused. Owner-side, visible,
+  // and it lasts exactly as long as the app rollout. It must NOT be softened by
+  // defaulting the reason: a default reason is a fabricated reason.
+  const shimQ2 = await makeQuote()
+  await asOwner()
+  const shimOwner = await one(
+    `select public.owner_select_quote_option(p_quote_id => $1::uuid) as ok`, [shimQ2.id])
+  check('MUTATION — an old owner client omitting p_reason is REFUSED, not defaulted',
+    shimOwner.ok === false)
+  await asService()
+  check('…and records nothing at all', (await acceptanceOf(shimQ2.id)).length === 0)
+  // Restore the tenant's terms for the sections below.
+  await db.exec(`update public.business_settings set terms_text = 'Payment due in 7 days. No cancellations.' where user_id = '${OWNER}'`)
+
+  // ── 3k · THE LEGACY BACKFILL ──────────────────────────────────────────────
+  // ⭐⭐ Without this the gate answers "not authorized" for the whole existing
+  // book on the first deploy. Proved by building a quote in the OLD shape — an
+  // accepted row with no evidence, exactly what production is full of — and
+  // re-running the migration's backfill statement over it.
+  console.log('\n─── The book that was accepted before evidence existed ───')
+  await asService()
+  const legacyQ = await makeQuote({ status: `'accepted'`, accepted_price: '5550' })
+  check('a pre-existing accepted quote starts with NO evidence', (await acceptanceOf(legacyQ.id)).length === 0)
+  const gateBefore = await one(`select public.quote_acceptance_is_current($1) as ok`, [legacyQ.id])
+  check('…and would therefore be refused scheduling and invoicing', gateBefore.ok === false)
+
+  // Re-run just the backfill from the migration file — the same statement, not a
+  // paraphrase of it, so the guard cannot pass against a backfill that differs.
+  const migSql = read(MIGRATION)
+  // ⚠️ lastIndexOf, not indexOf: quote_record_acceptance() contains the SAME
+  // opening line, and grabbing that one lifts a fragment of a plpgsql body
+  // instead of the backfill ("syntax error at or near into" — which is how this
+  // was caught).
+  const backfill = migSql.slice(migSql.lastIndexOf('insert into public.quote_acceptances ('))
+  const backfillStmt = backfill.slice(0, backfill.indexOf(';') + 1)
+  check('the backfill statement was located in the migration', /legacy_unrecorded/.test(backfillStmt))
+  await db.exec(backfillStmt)
+  const legacyEv = (await acceptanceOf(legacyQ.id))[0]
+  check('the backfill gives it evidence', !!legacyEv)
+  check('…named honestly: legacy_unrecorded, by the system, from the migration',
+    legacyEv?.kind === 'legacy_unrecorded' && legacyEv?.actor_type === 'system' && legacyEv?.source === 'migration')
+  check('…claiming NO actor and NO reason, because none was ever recorded',
+    legacyEv?.actor_id === null && legacyEv?.on_behalf_reason === null)
+  // ⭐ It must never claim the customer agreed to terms they may never have seen.
+  check('MUTATION — …and asserting NO terms acknowledgement',
+    legacyEv?.terms_required === false && legacyEv?.terms_acknowledged === false && legacyEv?.terms_text === null)
+  check('…carrying the amount the old row already claimed', Number(legacyEv?.accepted_amount) === 5550)
+  const gateAfter = await one(`select public.quote_acceptance_is_current($1) as ok`, [legacyQ.id])
+  check('…so the existing book keeps working', gateAfter.ok === true)
+  // …but only for the terms as they stood. It is not a blank cheque.
+  await asOwner()
+  await db.exec(`update public.quotes set initial_price = 9000 where id = '${legacyQ.id}'`)
+  const gateAfterEdit = await one(`select public.quote_acceptance_is_current($1) as ok`, [legacyQ.id])
+  check('MUTATION — a legacy acceptance still goes stale when the deal changes', gateAfterEdit.ok === false)
+  await asService()
+  const rerun = await db.query(backfillStmt)
+  check('the backfill is idempotent — re-running adds nothing', (await acceptanceOf(legacyQ.id)).length === 1,
+    `${(await acceptanceOf(legacyQ.id)).length} rows after re-run (${(rerun as any).affectedRows ?? '?'} inserted)`)
+
+  // ── 3l · THE GATE, which is the whole point of the fingerprint ────────────
+  console.log('\n─── Stale acceptance does not authorize current work ───')
+  const gateQ = await makeQuote()
+  await asCustomer()
+  await one(`select public.portal_accept_quote('tok-dana', $1, null, null, true)`, [gateQ.id])
+  await asService()
+  check('a fresh acceptance authorizes the current terms',
+    (await one(`select public.quote_acceptance_is_current($1) as ok`, [gateQ.id])).ok === true)
+  await asOwner()
+  await db.exec(`update public.quotes set initial_price = 7000 where id = '${gateQ.id}'`)
+  check('MUTATION — a price rise revokes the authorization immediately',
+    (await one(`select public.quote_acceptance_is_current($1) as ok`, [gateQ.id])).ok === false)
+  check('…while the quote still READS accepted (nothing is un-done silently)',
+    (await quoteRow(gateQ.id)).status === 'accepted')
+  check('…and the evidence still says what was actually agreed',
+    Number((await acceptanceOf(gateQ.id))[0].accepted_amount) === 5550)
+  await db.exec(`update public.quotes set initial_price = 5400 where id = '${gateQ.id}'`)
+  check('…and putting the deal back restores the authorization',
+    (await one(`select public.quote_acceptance_is_current($1) as ok`, [gateQ.id])).ok === true)
+
+  // ⭐ TERMS ARE CONSULTED BY THE GATE, not merely stored beside it.
+  await asOwner()
+  await db.exec(`update public.business_settings set terms_text = 'Brand new terms, never shown to anyone.' where user_id = '${OWNER}'`)
+  check('MUTATION — moving the TERMS revokes the authorization too',
+    (await one(`select public.quote_acceptance_is_current($1) as ok`, [gateQ.id])).ok === false)
+  await asService()
+  check('…and the exact agreed terms are still on the record, unchanged',
+    /Payment due in 7 days/.test((await acceptanceOf(gateQ.id))[0].terms_text ?? ''))
+  await db.exec(`update public.business_settings set terms_text = 'Payment due in 7 days. No cancellations.' where user_id = '${OWNER}'`)
+  check('…restoring the terms restores it',
+    (await one(`select public.quote_acceptance_is_current($1) as ok`, [gateQ.id])).ok === true)
+
+  // A quote nobody ever accepted is not authorized by its status alone.
+  const bareQ = await makeQuote({ status: `'accepted'` })
+  check('MUTATION — status alone never authorizes anything',
+    (await one(`select public.quote_acceptance_is_current($1) as ok`, [bareQ.id])).ok === false)
+
+  // ⛔ The gate is SECURITY DEFINER and resolves a quote by id, so a signed-in
+  // caller must not be able to probe another tenant's quotes with it. `false` is
+  // indistinguishable from "not current", so nothing leaks either way.
+  await asOther()
+  check('MUTATION — another tenant cannot probe acceptance currency by quote id',
+    (await one(`select public.quote_acceptance_is_current($1) as ok`, [gateQ.id])).ok === false)
+  await asOwner()
+  check('…while the real owner still gets the true answer',
+    (await one(`select public.quote_acceptance_is_current($1) as ok`, [gateQ.id])).ok === true)
+
+  // ── 3m · THE ADMINISTRATIVE OVERRIDE DOOR ─────────────────────────────────
+  console.log('\n─── Overriding a status is not accepting a quote ───')
+  const ovQ = await makeQuote()
+  await asOwner()
+  check('MUTATION — an override with no reason is refused',
+    (await one(`select public.owner_override_quote_status($1, 'accepted', null) as ok`, [ovQ.id])).ok === false)
+  check('MUTATION — …and a blank reason is refused, not trimmed into silence',
+    (await one(`select public.owner_override_quote_status($1, 'accepted', '   ') as ok`, [ovQ.id])).ok === false)
+  check('MUTATION — …and it cannot be used to send a quote (that has its own door)',
+    (await one(`select public.owner_override_quote_status($1, 'sent', 'because') as ok`, [ovQ.id])).ok === false)
+  const ovOk = await one(
+    `select public.owner_override_quote_status($1, 'accepted', 'Signed paperwork in the office, pre-dates EdgeHQ') as ok`, [ovQ.id])
+  check('an override with a stated reason is allowed', ovOk.ok === true)
+  await asService()
+  check('…it moved the label', (await quoteRow(ovQ.id)).status === 'accepted')
+  // ⭐⭐ THE LINE. A label moved; no authority was created.
+  check('MUTATION — …and created NO acceptance evidence', (await acceptanceOf(ovQ.id)).length === 0)
+  check('MUTATION — …so it still does not authorize scheduling or invoicing',
+    (await one(`select public.quote_acceptance_is_current($1) as ok`, [ovQ.id])).ok === false)
+  const ovAudit = await one(
+    `select * from public.audit_events where entity_id = $1 order by seq desc limit 1`, [ovQ.id])
+  check('…the audit row names it an override', ovAudit?.action === 'quote_status_overridden', ovAudit?.action)
+  check('…and carries the owner’s own words for why',
+    /pre-dates EdgeHQ/.test(JSON.stringify(ovAudit?.after ?? {})), JSON.stringify(ovAudit?.after))
+  // The reason must not leak onto the NEXT status change in the same session.
+  await asOwner()
+  await db.exec(`update public.quotes set status = 'declined' where id = '${ovQ.id}'`)
+  await asService()
+  const nextAudit = await one(
+    `select * from public.audit_events where entity_id = $1 order by seq desc limit 1`, [ovQ.id])
+  check('MUTATION — the override reason does not leak onto a later, unrelated change',
+    !/override_reason/.test(JSON.stringify(nextAudit?.after ?? {})), JSON.stringify(nextAudit?.after))
 
   // ── 3i · The migration says what it is ────────────────────────────────────
   const mig = read(MIGRATION)

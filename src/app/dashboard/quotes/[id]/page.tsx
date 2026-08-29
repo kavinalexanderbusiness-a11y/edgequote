@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { Quote, Customer, QuoteFormValues, QuoteService, QuoteOption, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, STATUS_LABELS, PAYMENT_METHODS } from '@/types'
+import { Quote, Customer, QuoteFormValues, QuoteService, QuoteOption, QuoteStatus, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, STATUS_LABELS, PAYMENT_METHODS } from '@/types'
 import { sumServiceLines, serviceLineTotals, splitServices, recentTemplateIdsFrom } from '@/lib/quoteServices'
 import {
   activeOption, headlineOptionPrice, optionRowsFor, optionValueBasis, optionValueBasisLabel,
@@ -37,9 +37,12 @@ import { isWon } from '@/lib/salesStage'
 // and the words for it — read here, never restated.
 import {
   acceptanceStanding, acceptanceSentence, reapprovalSentence, materialChanges,
-  isUnevidencedAcceptance, type AcceptanceState,
+  isUnevidencedAcceptance, acceptanceBlock, acceptanceBlockLabel,
+  hasCurrentValidAcceptance, type AcceptanceState,
 } from '@/lib/quoteAcceptance'
+import { loadAcceptanceState, loadAcceptanceHistory, type AcceptanceHistoryRow } from '@/lib/quoteAcceptanceData'
 import { RecordAcceptanceDialog } from '@/components/quotes/RecordAcceptanceDialog'
+import { OverrideStatusDialog } from '@/components/quotes/OverrideStatusDialog'
 import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { servicePricingKind } from '@/lib/servicePricing'
@@ -52,7 +55,7 @@ import {
   schedulingPreferenceLine, stampDepositOverride, type GateLedgerRow,
 } from '@/lib/payments/depositGate'
 import { recordDeposit } from '@/lib/payments/ledger'
-import { AlertTriangle, Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Camera, Globe, CalendarClock, Layers, Lock, Wallet, CheckCircle2 } from 'lucide-react'
+import { AlertTriangle, Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Camera, Globe, CalendarClock, Layers, Lock, Wallet, CheckCircle2, ShieldAlert } from 'lucide-react'
 import { AUDIENCE_COPY } from '@/lib/noteScope'
 
 export default function QuoteDetailPage() {
@@ -666,6 +669,20 @@ export default function QuoteDetailPage() {
     if (!quote) return
     // A $0 invoice can never be paid — it would sit stuck until cancelled.
     if (!(Number(quote.total) > 0)) { toast.error('Set a price on this quote before invoicing it.'); return }
+    // ── ⭐⭐ THE ACCEPTANCE GATE (Session 121) ────────────────────────────────
+    // Billing is the sharpest end of "acting on the commercial terms", and this
+    // conversion writes `amount: quote.total` — the CURRENT total. Before the
+    // gate, an owner could accept at $5,550, raise the price to $6,075, press
+    // Convert, and send the customer a bill for a number they never agreed to,
+    // with the quote still reading Accepted the whole way through.
+    //
+    // Same engine as scheduling and the deposit ask; a failed read BLOCKS.
+    {
+      const { state, error: accErr } = await loadAcceptanceState(supabase, quote.id)
+      if (accErr) { toast.error('Could not check this quote’s acceptance record, so nothing was invoiced. Check your connection and try again.'); return }
+      const block = acceptanceBlock(quote.status, state)
+      if (block) { toast.error(acceptanceBlockLabel(block, 'invoicing')); return }
+    }
     setConverting(true)
     // One invoice per quote — the completed-job auto-draft stamps quote_id too, so
     // this catches BOTH a prior manual convert and an auto-draft. Without it,
@@ -883,6 +900,56 @@ export default function QuoteDetailPage() {
   function openRecordAcceptance(optionId?: string) {
     setPresetOptionId(optionId ?? null)
     setShowRecordAcceptance(true)
+  }
+
+  // ── "Revise quote" — editing an agreement, said out loud ───────────────────
+  // ⛔ NOT a change order. A change order is ADDITIONAL work agreed on top of a
+  // deal that still stands (lib/changeOrders, and it hangs off a JOB). This is
+  // the other thing: the deal itself is being restated, so the standing
+  // acceptance stops authorizing it and the customer has to say yes again.
+  //
+  // ⭐ The editor underneath is the SAME editor. That is the smallest correct
+  // architecture precisely BECAUSE the ledger is immutable: the version they
+  // agreed to is already preserved as evidence, so the working document is free
+  // to move. Copying the quote into a "revision" row would mint a second
+  // lifecycle to keep in sync for no gain the ledger doesn't already give.
+  async function beginRevision() {
+    if (!quote) return
+    const ok = await confirmDialog({
+      title: `Revise ${quote.quote_number}?`,
+      message:
+        `${acceptanceSentence(quote.status, acceptance)} That acceptance stays on the record permanently — revising never erases it. ` +
+        `But if you change the price, the scope, the option or the terms, this quote stops being approved at the new figure: ` +
+        `it will show “Changes require reapproval”, and it can’t be scheduled or invoiced until they accept it again.`,
+      confirmLabel: 'Revise the quote',
+    })
+    if (!ok) return
+    setEditing(true)
+  }
+
+  // ── The administrative override, under Advanced ────────────────────────────
+  // ⭐⭐ CHANGING A STATUS IS NOT ACCEPTANCE. Repairing a stuck row is a real
+  // need — a quote that was paid in cash months ago, a row imported wrong — so
+  // the door exists. It just isn't the same door, doesn't live in the everyday
+  // dropdown, and cannot manufacture consent: owner_override_quote_status writes
+  // NO acceptance evidence, so an overridden quote still fails the gate and
+  // still cannot be scheduled or invoiced on that basis.
+  const [showOverride, setShowOverride] = useState(false)
+  async function overrideStatus(next: QuoteStatus, reason: string): Promise<boolean> {
+    if (!quote) return false
+    const { data, error } = await supabase.rpc('owner_override_quote_status', {
+      p_quote_id: quote.id, p_status: next, p_reason: reason,
+    })
+    // A falsy result is a REFUSAL — the same contract every other RPC on this
+    // page uses. Never report one as done.
+    if (error || data !== true) {
+      toast.error(error?.message || 'Could not override the status — check your connection and try again.')
+      return false
+    }
+    setQuote(q => q ? { ...q, status: next } : q)
+    await refreshAcceptance(quote.id)
+    toast.success(`Status overridden to ${STATUS_LABELS[next]} — recorded with your reason.`)
+    return true
   }
 
   // After the acceptance lands, both the quote row and the ledger have moved —
@@ -1122,8 +1189,21 @@ export default function QuoteDetailPage() {
               <FileText className="w-3.5 h-3.5" /> Convert to invoice
             </Button>
           ) : null}
-          <Button onClick={() => setEditing(true)} variant="ghost" size="sm">
-            <Edit2 className="w-3.5 h-3.5" /> Edit
+          {/* ── ⭐⭐ EDIT vs REVISE (Session 121) ─────────────────────────────
+              A quote with a live acceptance is not a document you edit — it is
+              an agreement you replace. Presenting the same quiet "Edit" for both
+              is what let a $5,550 approved quote become a $6,075 approved quote
+              with nothing on screen marking the moment.
+              So: same editor underneath (the immutable ledger is what preserves
+              the agreed version, which is exactly why the current quote model
+              can stay mutable), different NAME and a confirm that says what is
+              about to become true. */}
+          <Button
+            onClick={() => hasCurrentValidAcceptance(acceptance) ? beginRevision() : setEditing(true)}
+            variant="ghost"
+            size="sm"
+          >
+            <Edit2 className="w-3.5 h-3.5" /> {hasCurrentValidAcceptance(acceptance) ? 'Revise quote' : 'Edit'}
           </Button>
           {/* Save the SCOPE for reuse — distinct from Duplicate, which copies
               this whole quote (customer and all) once. Hidden on an options
@@ -1880,6 +1960,33 @@ export default function QuoteDetailPage() {
         termsText={settings?.terms_text ?? null}
         selectedAddonsTotal={selectedAddonsTotal}
         onRecorded={afterAcceptanceRecorded}
+      />
+
+      {/* Advanced → Override status. Deliberately the LAST thing on the page and
+          the quietest control on it: an owner looking for it will find it, and an
+          owner not looking for it will never meet it by accident — which is how
+          the old status dropdown turned a repair tool into the acceptance door. */}
+      <details className="rounded-xl border border-border bg-bg-tertiary/30">
+        <summary className="cursor-pointer select-none px-4 py-3 text-xs font-semibold uppercase tracking-wide text-ink-muted hover:text-ink">
+          Advanced
+        </summary>
+        <div className="px-4 pb-4 pt-1 space-y-2">
+          <p className="text-xs text-ink-muted">
+            Repairing a row that is already wrong. Overriding a status moves the label only —
+            it never records that a customer accepted anything, and it never lets a quote be
+            scheduled or invoiced on that basis.
+          </p>
+          <Button variant="secondary" size="sm" onClick={() => setShowOverride(true)}>
+            <ShieldAlert className="w-3.5 h-3.5" /> Override status
+          </Button>
+        </div>
+      </details>
+      <OverrideStatusDialog
+        open={showOverride}
+        onClose={() => setShowOverride(false)}
+        quoteNumber={quote.quote_number}
+        currentStatus={quote.status}
+        onOverride={overrideStatus}
       />
     </div>
   )

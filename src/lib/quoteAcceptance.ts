@@ -40,10 +40,24 @@ import type { QuoteStatus } from '@/types'
 
 // ── What kind of acceptance ──────────────────────────────────────────────────
 
-/** The two ways consent is genuinely obtained. An override is neither. */
-export type AcceptanceKind = 'customer' | 'owner_on_behalf'
+/**
+ * The two ways consent is genuinely obtained — plus one that is neither, and
+ * says so.
+ *
+ * ⭐ `legacy_unrecorded` is the BACKFILL kind. Every quote already sitting at
+ * accepted/scheduled/completed/paid when this shipped was accepted before any
+ * evidence existed, and the migration writes one row per quote saying exactly
+ * that: a deal exists, and who accepted it, when, and against which terms was
+ * never recorded. Without it the gate below would answer "not authorized" for
+ * the entire existing book on the first deploy.
+ *
+ * ⛔ It authorizes the terms AS THEY STOOD AT BACKFILL — and no further. From
+ * that moment a material change flags reapproval exactly like a real one. It is
+ * never rendered as somebody having consented; see acceptanceSentence.
+ */
+export type AcceptanceKind = 'customer' | 'owner_on_behalf' | 'legacy_unrecorded'
 /** The door it came through. Passed by the door that knows; never inferred. */
-export type AcceptanceSource = 'portal' | 'dashboard'
+export type AcceptanceSource = 'portal' | 'dashboard' | 'migration'
 
 /** Where an owner-recorded decision actually reached them. */
 export type OnBehalfReason = 'phone' | 'email' | 'text_message' | 'in_person' | 'written' | 'other'
@@ -139,6 +153,67 @@ export function acceptanceStanding(s: AcceptanceState | null | undefined): Accep
  */
 export function isUnevidencedAcceptance(status: QuoteStatus | string, s: AcceptanceState | null | undefined): boolean {
   return isAcceptedOrBeyond(status) && !s?.accepted
+}
+
+// ── ⭐⭐ THE GATE — asked once, by everything that acts ───────────────────────
+//
+// "May I act on this quote's commercial terms right now?" Scheduling a job,
+// converting to an invoice and asking for a deposit are the same question in
+// three costumes, and before this each answered it by reading `quotes.status`.
+// Status is not evidence: it survives the edit that invalidated the consent
+// behind it, which is precisely how a customer ends up billed for a number they
+// never agreed to.
+//
+// ⛔ DO NOT RE-DERIVE THIS. Every acting path calls this one function (or its
+// database twin, quote_acceptance_is_current) — a second fingerprint comparison
+// somewhere else is a second answer waiting to disagree.
+
+/** Does a live, un-drifted acceptance authorize this quote's CURRENT terms? */
+export function hasCurrentValidAcceptance(s: AcceptanceState | null | undefined): boolean {
+  return acceptanceStanding(s) === 'standing'
+}
+
+/**
+ * Why acting on the terms is refused — null when it is not.
+ *
+ * The two reasons are NOT interchangeable to a human, which is the whole reason
+ * this returns a reason rather than a boolean: "nobody accepted this" and "they
+ * accepted a different deal" call for completely different next actions.
+ */
+export type AuthorizationBlock = 'never_accepted' | 'pending_reapproval'
+
+export function acceptanceBlock(
+  status: QuoteStatus | string,
+  s: AcceptanceState | null | undefined,
+): AuthorizationBlock | null {
+  if (hasCurrentValidAcceptance(s)) return null
+  return s?.accepted ? 'pending_reapproval' : 'never_accepted'
+  // ⚠️ `status` is deliberately UNUSED for the verdict and kept in the signature
+  // so no caller can pass the ledger alone and think status still counts for
+  // something. It is the input that used to be trusted; it is now the input that
+  // proves nothing.
+}
+
+/** What to tell the owner, and what to do about it. */
+export function acceptanceBlockLabel(b: AuthorizationBlock, action = 'this'): string {
+  return b === 'never_accepted'
+    ? `No customer acceptance is on record for this quote, so ${action} can’t go ahead yet. Record how they accepted it first.`
+    : `This quote has changed since it was accepted, so ${action} can’t go ahead on the old approval. Send it again and record the new acceptance.`
+}
+
+/**
+ * ⭐ THE AUTHORIZED FIGURE — the amount consented to, taken from the LEDGER and
+ * never from the live row.
+ *
+ * When the acceptance is current these agree by construction (a moved price
+ * moves the fingerprint), so reading the ledger costs nothing. When it is NOT
+ * current they disagree, and that gap is exactly the money an invoice would
+ * otherwise bill against an approval that never covered it.
+ */
+export function authorizedAmount(s: AcceptanceState | null | undefined): number | null {
+  if (!s?.accepted || s.accepted_amount == null) return null
+  const n = Number(s.accepted_amount)
+  return Number.isFinite(n) ? n : null
 }
 
 /** Statuses that all assert, downstream, that a deal was struck. */
@@ -295,6 +370,14 @@ export function acceptanceSentence(status: QuoteStatus | string, s: AcceptanceSt
   if (!isAcceptedOrBeyond(status) && !s?.accepted) return 'Not accepted yet.'
   if (!s?.accepted) {
     return 'Marked accepted by hand — no customer acceptance is on record for this quote.'
+  }
+  // ⛔ A BACKFILLED ROW NAMES NOBODY, because nobody was recorded. It says a deal
+  // exists and that the product was not keeping evidence when it was struck —
+  // which is a fact about US, not an accusation about the customer, and not a
+  // claim that anyone consented in any particular way.
+  if (s.kind === 'legacy_unrecorded') {
+    const amt = s.accepted_amount == null ? '' : ` at ${formatMoney(s.accepted_amount)}`
+    return `Accepted${amt} before EdgeHQ started keeping acceptance records — who accepted it, and when, was never captured.`
   }
   // ⭐ The two sentences differ in their SUBJECT, which is the whole point. One
   // says the customer acted; the other says the business recorded that they did,

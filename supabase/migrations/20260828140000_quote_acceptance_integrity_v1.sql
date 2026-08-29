@@ -49,7 +49,17 @@
 -- therefore DERIVED — the live document's fingerprint against the standing
 -- acceptance's — and never stored, exactly as `expired` is derived in
 -- lib/quoteStatus and deposit readiness is derived from the ledger. There is no
--- second lifecycle to keep in sync and nothing to backfill.
+-- second lifecycle to keep in sync.
+--
+-- ⛔⛔ THREE THINGS IN HERE ARE LANDING-CRITICAL AND EASY TO MISS:
+--   §6b  quote_acceptance_is_current() is THE gate every acting path asks —
+--        scheduling, invoicing and the deposit ask. Status authorizes nothing.
+--   §8c  the old RPC arities are DROPPED, and the compatibility seam for
+--        already-deployed clients is the DEFAULT VALUES on the survivors. A
+--        shim function is not just unnecessary, it is uncallable — see the note.
+--   §11  every quote ALREADY at accepted/scheduled/completed/paid is backfilled
+--        with kind='legacy_unrecorded'. Without it, the gate §6b installs
+--        answers "not authorized" for the entire existing book on day one.
 -- ═══════════════════════════════════════════════════════════════════════════
 
 -- ── 1 · The material fingerprint ───────────────────────────────────────────
@@ -270,15 +280,15 @@ alter table public.quote_acceptances
 
 alter table public.quote_acceptances
   add constraint quote_acceptances_kind_check
-  check (kind = any (array['customer'::text, 'owner_on_behalf'::text]));
+  check (kind = any (array['customer'::text, 'owner_on_behalf'::text, 'legacy_unrecorded'::text]));
 
 alter table public.quote_acceptances
   add constraint quote_acceptances_source_check
-  check (source = any (array['portal'::text, 'dashboard'::text]));
+  check (source = any (array['portal'::text, 'dashboard'::text, 'migration'::text]));
 
 alter table public.quote_acceptances
   add constraint quote_acceptances_actor_type_check
-  check (actor_type = any (array['customer'::text, 'owner'::text]));
+  check (actor_type = any (array['customer'::text, 'owner'::text, 'system'::text]));
 
 alter table public.quote_acceptances
   add constraint quote_acceptances_amount_check
@@ -305,6 +315,17 @@ alter table public.quote_acceptances
       when 'customer' then
         actor_type = 'customer' and source = 'portal'
         and on_behalf_reason is null and on_behalf_note is null
+      -- ⭐ THE BACKFILL SHAPE, and it is welded shut just as hard. A legacy row
+      -- can ONLY come from the migration, can ONLY be attributed to the system,
+      -- and can never carry a reason — because there is no reason to carry: the
+      -- product was not recording one. It is a statement that a deal exists and
+      -- that WHO ACCEPTED IT IS UNKNOWN, and no surface may render it as consent
+      -- from a named person.
+      when 'legacy_unrecorded' then
+        actor_type = 'system' and source = 'migration'
+        and actor_id is null
+        and on_behalf_reason is null and on_behalf_note is null
+        and not terms_required and not terms_acknowledged
       else false
     end
   );
@@ -635,6 +656,68 @@ $function$;
 revoke all on function public.quote_acceptance_state(uuid) from public, anon, authenticated, service_role;
 grant execute on function public.quote_acceptance_state(uuid) to authenticated;
 
+-- ── 6b · THE ONE QUESTION EVERY ACTING PATH ASKS ───────────────────────────
+-- ⭐⭐ "May I act on this quote's commercial terms right now?" Scheduling a job,
+-- converting to an invoice and asking for a deposit are all the same question
+-- wearing different clothes, and before this they each answered it themselves by
+-- reading `status`. Status is not evidence: it survives the edit that invalidated
+-- the consent behind it.
+--
+-- FALSE means one of two different things, and the caller is told which by
+-- quote_acceptance_state: nobody ever accepted, or somebody did and the deal has
+-- moved since. Both block; they do not read alike to a human.
+--
+-- ⛔ NOT a security boundary — it is a TRUTH boundary. Tenancy is still each
+-- door's own job; this answers "is the consent current", nothing else.
+create or replace function public.quote_acceptance_is_current(p_quote_id uuid)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path to 'public'
+as $function$
+declare v_a public.quote_acceptances; v_tenant uuid;
+begin
+  select q.user_id into v_tenant from public.quotes q where q.id = p_quote_id;
+  if v_tenant is null then return false; end if;
+  -- ⛔ A SIGNED-IN CALLER MAY ONLY ASK ABOUT THEIR OWN QUOTES. This is
+  -- SECURITY DEFINER and resolves a quote BY ID, so without this an authenticated
+  -- user could probe another tenant's quote ids and learn which of them carry a
+  -- live acceptance. Answering `false` — indistinguishable from "not current" —
+  -- leaks nothing at all.
+  -- ⭐ auth.uid() IS NULL is the server path, not a hole: the portal's deposit
+  -- route has no JWT (a token proves the customer, and the route has already
+  -- matched the quote to that token) and is the reason service_role is granted
+  -- execute. anon is granted nothing here.
+  if auth.uid() is not null and auth.uid() is distinct from v_tenant then return false; end if;
+  select * into v_a from public.quote_acceptances
+   where quote_id = p_quote_id order by seq desc limit 1;
+  -- No evidence at all: a status somebody typed is not an acceptance.
+  if not found then return false; end if;
+  if public.quote_material_fingerprint(p_quote_id) is distinct from v_a.document_fingerprint then
+    return false;
+  end if;
+  if v_a.terms_required
+     and public.quote_terms_fingerprint(v_tenant) is distinct from v_a.terms_fingerprint then
+    return false;
+  end if;
+  return true;
+end;
+$function$;
+
+comment on function public.quote_acceptance_is_current(uuid) is
+  'THE gate: does a live, un-drifted acceptance authorize this quote''s CURRENT commercial terms? False when nothing ever accepted it, when a material fact changed since, or when the tenant''s terms moved. Mirrored (never re-derived) by hasCurrentValidAcceptance() in src/lib/quoteAcceptance.';
+
+revoke all on function public.quote_acceptance_is_current(uuid) from public, anon, authenticated, service_role;
+grant execute on function public.quote_acceptance_is_current(uuid) to authenticated;
+-- ⭐ service_role too, and ONLY this function of the set. The portal's deposit
+-- route runs with no user session — it proves the customer with a token, not a
+-- JWT — so it cannot call quote_acceptance_state (which asserts auth.uid() =
+-- tenant). This one answers a boolean about consent currency and leaks no
+-- evidence, which is exactly why it was written without a tenancy assertion.
+-- ⛔ anon is NOT granted: a customer must never be able to probe quote ids.
+grant execute on function public.quote_acceptance_is_current(uuid) to service_role;
+
 -- ── 7 · The consent snapshot has exactly one writer ────────────────────────
 -- quote_apply_choice is unchanged in every rule it already enforced. The one
 -- addition is the transaction-local marker that lets the protection trigger in
@@ -779,23 +862,23 @@ create trigger trg_quotes_protect_consent_snapshot
 
 -- ── 8 · The doors ──────────────────────────────────────────────────────────
 --
--- ⛔⛔ THE TWO DROPS BELOW ARE LOAD-BEARING AND ARE THE ONLY DESTRUCTIVE
--- STATEMENTS IN THIS MIGRATION. `create or replace function` with a NEW
--- PARAMETER creates an OVERLOAD; it does not replace anything. Without these
--- drops both old signatures survive, keep their grants, and are still callable:
+-- ⛔⛔ `create or replace function` WITH A NEW PARAMETER CREATES AN OVERLOAD; it
+-- does not replace anything. Left alone, both old signatures survive, keep their
+-- grants, and stay callable:
 --
---   portal_accept_quote(text, uuid, uuid, uuid[])          granted to ANON, and
---     it has no p_terms_ack — so the terms acknowledgement is bypassable by any
---     caller who simply omits the argument.
---   owner_select_quote_option(uuid, uuid, uuid[])          granted to authenticated,
---     with no reason — the exact mis-attributing door this session exists to close.
+--   portal_accept_quote(text, uuid, uuid, uuid[])   granted to ANON, and with no
+--     p_terms_ack — so the terms acknowledgement is bypassable by any caller who
+--     simply omits the argument.
+--   owner_select_quote_option(uuid, uuid, uuid[])   granted to authenticated,
+--     with no reason — the mis-attributing door this session exists to close.
 --
--- Both were found by verify:quote-acceptance-integrity failing, not by reading:
--- the guard called the 3-argument owner door and Postgres answered "function is
--- not unique". They drop FUNCTIONS, never data, and each is replaced in the same
--- transaction by a strictly stricter version of itself.
-drop function if exists public.portal_accept_quote(text, uuid, uuid, uuid[]);
-drop function if exists public.owner_select_quote_option(uuid, uuid, uuid[]);
+-- Found by verify:quote-acceptance-integrity failing, not by reading: the guard
+-- called the 3-argument owner door and Postgres answered "function is not unique".
+--
+-- They are retired in §8c-drop below, and the DEFAULTS on the surviving
+-- functions — not a second function — are what carry the clients deployed
+-- before the app ships. §8c-drop explains why a shim function is not merely
+-- unnecessary here but impossible.
 
 -- 8a · THE CUSTOMER'S DOOR. Unchanged in what it proves (a token names a
 -- customer; the quote must be that customer's and still 'sent'). It now also
@@ -916,6 +999,47 @@ revoke all on function public.owner_select_quote_option(uuid, uuid, uuid[], text
   from public, anon, authenticated, service_role;
 grant execute on function public.owner_select_quote_option(uuid, uuid, uuid[], text, text) to authenticated;
 
+-- ── 8c-drop · RETIRE THE OLD ARITIES — the DEFAULTS are the seam ───────────
+--
+-- ⭐⭐ MEASURED, NOT ASSUMED: TWO OVERLOADS THAT DIFFER ONLY BY A DEFAULTED
+-- TRAILING PARAMETER ARE UNCALLABLE. An earlier cut of this migration kept the
+-- old arities as separate shim functions. Postgres refuses every call to either:
+--
+--     ERROR 42725: function public.portal_accept_quote(text, uuid, uuid, uuid[])
+--                  is not unique
+--     HINT: Could not choose a best candidate function.
+--
+-- because `(text, uuid, uuid, uuid[])` matches the 4-argument function exactly
+-- AND matches the 5-argument one with p_terms_ack defaulted, and nothing breaks
+-- the tie. PostgREST resolves RPCs by parameter NAME, so it lands in the same
+-- ambiguity: the shim would not have degraded the deploy window, it would have
+-- broken it outright, for old and new clients alike. Caught by
+-- verify:quote-acceptance-integrity refusing to call its own shim.
+--
+-- ⭐ SO THE COMPATIBILITY SEAM IS THE DEFAULT VALUE, not a second function —
+-- which is simpler, and is the thing that was going to do the work anyway:
+--
+--   portal_accept_quote(…, p_terms_ack boolean DEFAULT false)
+--     A pre-deploy client omits the argument and gets `false`. A tenant with no
+--     terms is completely unaffected. A tenant WITH terms refuses — which is
+--     correct and is the only safe answer: the alternative is recording an
+--     acknowledgement the customer never made. FAILS CLOSED, and heals the
+--     moment the new app is serving.
+--
+--   owner_select_quote_option(…, p_reason text DEFAULT null)
+--     A pre-deploy client omits it, gets null, and is refused (returns false →
+--     the owner sees "could not record that choice"). Owner-side only, visible,
+--     and it lasts as long as the app rollout does. It CANNOT be softened by
+--     defaulting the reason to 'other': a default reason is a fabricated reason,
+--     which is the exact defect this session exists to remove.
+--
+-- ⛔ These two drops are therefore load-bearing and are the only destructive
+-- statements in this migration. They drop FUNCTIONS, never data, and each is
+-- replaced in the same transaction by a strictly stricter version of itself
+-- whose defaults carry the old callers.
+drop function if exists public.portal_accept_quote(text, uuid, uuid, uuid[]);
+drop function if exists public.owner_select_quote_option(uuid, uuid, uuid[]);
+
 -- ── 8d · "What kind of accepted is this?", asked in ONE place ──────────────
 -- Both the audit trigger and the notification trigger need the same answer, and
 -- two copies of this lookup is exactly how they would start disagreeing about
@@ -989,6 +1113,7 @@ as $function$
 declare
   v_action text;
   v_kind text;
+  v_reason text;
 begin
   if tg_op = 'INSERT' then
     perform public.audit_log(new.user_id, 'quote_created', 'quote', new.id,
@@ -1027,6 +1152,11 @@ begin
         else 'quote_status_changed'
       end;
     end if;
+    -- ⭐ An OVERRIDE carries the owner's own words for why. Set transaction-locally
+    -- by owner_override_quote_status and read here, so the reason rides the ONE
+    -- audit row this trigger already writes — rather than a second audit table,
+    -- or a second row saying the same thing twice.
+    v_reason := nullif(coalesce(current_setting('app.quote_status_override_reason', true), ''), '');
     perform public.audit_log(new.user_id, v_action, 'quote', new.id,
       new.quote_number, new.customer_id,
       jsonb_build_object('status', old.status),
@@ -1035,6 +1165,8 @@ begin
              jsonb_build_object('accepted_price', new.accepted_price,
                                 'selected_cadence', new.selected_cadence,
                                 'acceptance_kind', v_kind)
+           else '{}'::jsonb end
+        || case when v_reason is not null then jsonb_build_object('override_reason', v_reason)
            else '{}'::jsonb end);
   end if;
 
@@ -1051,3 +1183,157 @@ begin
   return null;
 end;
 $function$;
+
+-- ── 11 · THE BACKFILL — without this the existing book stops working ───────
+--
+-- ⛔⛔ THIS IS A LANDING BLOCKER, NOT A NICETY. Every quote already sitting at
+-- 'accepted' / 'scheduled' / 'completed' / 'paid' in production was accepted
+-- before any evidence existed. The moment quote_acceptance_is_current() becomes
+-- the gate on scheduling, invoicing and deposits, every one of those quotes
+-- answers FALSE — because there is no ledger row — and the entire existing book
+-- becomes unschedulable and unbillable in one deploy.
+--
+-- ⭐ SO THE HONEST FIX IS TO SAY WHAT IS TRUE, NOT TO EXEMPT THEM. A third kind,
+-- `legacy_unrecorded`, means precisely: "a deal exists here, and WHO accepted it,
+-- WHEN, and against WHICH terms was never recorded, because the product was not
+-- recording it." That is a different fact from a customer accepting and a
+-- different fact from an owner recording one, and the shape CHECK welds it shut
+-- so it can never be rendered as either: actor_type='system', source='migration',
+-- no actor id, no reason, and terms_required=false — because nothing was
+-- acknowledged and pretending otherwise would be the very forgery this table
+-- exists to prevent.
+--
+-- ⭐ accepted_at is the quote's own updated_at, and it is a BEST GUESS. It is
+-- the closest thing the row carries to "when this was decided" — and it is only
+-- ever an upper bound, because a later edit moved it. The kind says the
+-- provenance is unknown; nothing downstream should read this timestamp as
+-- precise, and no UI presents it as one.
+--
+-- ⭐ THE FINGERPRINT IS TAKEN AS THE QUOTE STANDS TODAY. That is the point: a
+-- backfilled quote starts life NOT needing reapproval (nothing has changed since
+-- we started watching), and from this migration forward any material change to
+-- it flags reapproval exactly like a freshly accepted one. Fingerprinting some
+-- imagined original would invent drift that never happened and demand reapproval
+-- across the whole book on day one.
+--
+-- Idempotent by construction: `where not exists`, so re-running is a no-op, and
+-- a quote that has since been accepted properly is never given a legacy row.
+insert into public.quote_acceptances (
+  user_id, quote_id, customer_id, seq, accepted_at,
+  kind, source, actor_type, actor_id, actor_label,
+  accepted_amount, selected_option_id,
+  document, document_fingerprint,
+  terms_required, terms_acknowledged, terms_text, terms_fingerprint
+)
+select
+  q.user_id, q.id, q.customer_id, 1, coalesce(q.updated_at, q.created_at),
+  'legacy_unrecorded', 'migration', 'system', null,
+  'Recorded before EdgeHQ kept acceptance evidence',
+  -- The authorized amount is whatever the row already claims: accepted_price if
+  -- something snapshotted one, else the current total. Both are the best the old
+  -- model could offer, and neither is invented here.
+  round(coalesce(q.accepted_price, q.total, 0)::numeric, 2),
+  q.selected_option_id,
+  jsonb_build_object(
+    'quote_number',   q.quote_number,
+    'customer_name',  q.customer_name,
+    'address',        q.address,
+    'service_type',   q.service_type,
+    'notes',          q.notes,
+    'initial_price',  q.initial_price,
+    'travel_fee',     q.travel_fee,
+    'total',          q.total,
+    'valid_until',    q.valid_until,
+    'deposit_type',   q.deposit_type,
+    'deposit_value',  q.deposit_value,
+    'plan_prices',    jsonb_build_object('weekly', q.weekly_price,
+                                         'biweekly', q.biweekly_price,
+                                         'monthly', q.monthly_price),
+    'option',         (select jsonb_build_object('id', o.id, 'name', o.name,
+                                                 'description', o.description, 'price', o.price)
+                         from public.quote_options o
+                        where o.id = q.selected_option_id and o.quote_id = q.id),
+    'options_offered', coalesce((select jsonb_agg(jsonb_build_object('id', o.id, 'name', o.name, 'price', o.price)
+                                                  order by o.sort_order, o.id)
+                                   from public.quote_options o where o.quote_id = q.id), '[]'::jsonb),
+    'addons',          coalesce((select jsonb_agg(jsonb_build_object('id', a.id, 'name', a.name, 'price', a.price)
+                                                  order by a.sort_order, a.id)
+                                   from public.quote_addons a where a.quote_id = q.id and a.is_selected), '[]'::jsonb),
+    'services',        coalesce((select jsonb_agg(jsonb_build_object(
+                                   'service_type', s.service_type, 'quantity', s.quantity, 'unit', s.unit,
+                                   'unit_price', s.unit_price, 'discount_type', s.discount_type,
+                                   'discount_value', s.discount_value, 'notes', s.notes, 'kind', s.kind)
+                                   order by s.sort_order, s.id)
+                                  from public.quote_services s where s.quote_id = q.id), '[]'::jsonb),
+    'backfilled',      true
+  ),
+  public.quote_material_fingerprint(q.id),
+  -- ⛔ NOTHING WAS ACKNOWLEDGED. Stamping the tenant's CURRENT terms here would
+  -- assert these customers agreed to text they may never have seen — and would
+  -- then quietly go stale the next time the owner edits Settings, demanding
+  -- reapproval across the whole book for a promise nobody ever made.
+  false, false, null, null
+from public.quotes q
+where q.status in ('accepted', 'scheduled', 'completed', 'paid')
+  and not exists (select 1 from public.quote_acceptances a where a.quote_id = q.id);
+
+-- ── 12 · THE ADMINISTRATIVE OVERRIDE, made a door instead of a side effect ──
+--
+-- ⭐⭐ CHANGING A STATUS IS NOT ACCEPTANCE, and this is the function that makes
+-- that structurally true rather than merely documented. It moves the label, it
+-- demands the owner's own words for why, and it writes NO acceptance evidence —
+-- so a quote overridden to 'accepted' still answers FALSE to
+-- quote_acceptance_is_current, and scheduling, invoicing and the deposit ask all
+-- still refuse it. The label moves; the authority does not.
+--
+-- ⛔ IT CANNOT REACH quote_acceptances. There is no insert here, and the table
+-- has no INSERT policy or grant for any client role — the only writer is
+-- quote_record_acceptance, which this never calls. That is the guarantee, not
+-- this comment.
+--
+-- ⭐ THE REASON RIDES THE EXISTING AUDIT ROW. audit_quotes() already emits one
+-- event per status change; this sets a transaction-local GUC that trigger reads,
+-- so the reason lands in that row's `after` payload as `override_reason`. No
+-- second audit table, no second row, no duplicate infrastructure.
+--
+-- ⛔ It deliberately CANNOT set 'draft' or 'sent'. Those are ordinary lifecycle
+-- moves with their own doors (markSentPatch stamps the expiry clock and the
+-- chase anchor); routing them through an "override" would teach an owner that
+-- sending a quote is an emergency action.
+create or replace function public.owner_override_quote_status(
+  p_quote_id uuid,
+  p_status text,
+  p_reason text
+) returns boolean
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+declare v_uid uuid := auth.uid(); v_current text;
+begin
+  if v_uid is null then return false; end if;
+  -- ⛔ A reason is not optional. An override with no stated cause is
+  -- indistinguishable, a month later, from a mistake — which is the state this
+  -- whole session exists to stop the record being in.
+  if p_reason is null or btrim(p_reason) = '' then return false; end if;
+  if p_status is null or p_status not in ('accepted', 'scheduled', 'completed', 'paid', 'declined') then
+    return false;
+  end if;
+
+  select status into v_current from public.quotes where id = p_quote_id and user_id = v_uid;
+  if v_current is null then return false; end if;
+  if v_current = p_status then return false; end if;   -- nothing to override
+
+  perform set_config('app.quote_status_override_reason', btrim(p_reason), true);
+  update public.quotes set status = p_status where id = p_quote_id and user_id = v_uid;
+  perform set_config('app.quote_status_override_reason', '', true);
+  return true;
+end;
+$function$;
+
+comment on function public.owner_override_quote_status(uuid, text, text) is
+  'Administrative status override. Moves quotes.status and records the owner''s stated reason on the audit row audit_quotes() already writes. ⛔ Writes NO acceptance evidence: an overridden quote still fails quote_acceptance_is_current(), so scheduling, invoicing and the deposit ask keep refusing it. Changing a label is not obtaining consent.';
+
+revoke all on function public.owner_override_quote_status(uuid, text, text)
+  from public, anon, authenticated, service_role;
+grant execute on function public.owner_override_quote_status(uuid, text, text) to authenticated;
