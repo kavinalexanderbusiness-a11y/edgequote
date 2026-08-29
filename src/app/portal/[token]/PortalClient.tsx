@@ -320,7 +320,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
 
   function photoUrl(path: string) { return supabase.storage.from('job-photos').getPublicUrl(path).data.publicUrl }
 
-  async function accept(qid: string, optionId?: string) {
+  async function accept(qid: string, optionId?: string, termsAck?: boolean) {
     if (accepting) return // double-click guard
     // Approving commits the customer to a quote value — never ask someone to
     // approve an amount without showing it, and always say that approving isn't
@@ -452,10 +452,16 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     if (!confirmed) return
     setAccepting(qid)
     setActionError(null)
-    // The third argument is omitted, not null-defaulted, on an ordinary quote —
+    // The option argument is omitted, not null-defaulted, on an ordinary quote —
     // portal_accept_quote's plain path is reached exactly as it always was.
+    //
+    // ⭐ p_terms_ack is passed AS GIVEN, never coerced to true. The RPC refuses an
+    // acceptance when the business has terms and this is false, and that refusal
+    // is the point: an acknowledgement the customer did not make is worth less
+    // than no acknowledgement at all, because it looks like one.
     const { data: ok } = await supabase.rpc('portal_accept_quote', {
       p_token: token, p_quote_id: qid, ...(chosenOpt ? { p_option_id: chosenOpt.id } : {}),
+      p_terms_ack: !!termsAck,
     })
     if (ok) {
       // Carry the CHOICE into the optimistic patch, not just the status. Without

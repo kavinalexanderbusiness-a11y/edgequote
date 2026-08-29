@@ -90,6 +90,11 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
     ? view.docItems.find(d => d.rawId === topAction.focusDocId) || null
     : null
   const oneQuoteId = oneQuoteDoc && !(oneQuoteDoc.options?.length) ? oneQuoteDoc.rawId : null
+  // Does this business have terms the customer must acknowledge? Read from the
+  // same field the Billing row renders and the acceptance record snapshots — one
+  // source, so the shortcut and the full row cannot disagree about whether there
+  // is anything to agree to.
+  const hasTerms = !!(view.data.business?.terms_text ?? '').trim()
   const oneInvoice = topAction?.kind === 'pay' && topAction.focusDocId
     ? view.docItems.find(d => d.rawId === topAction.focusDocId) || null
     : null
@@ -268,12 +273,18 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
               <span className="text-xs font-semibold text-amber-400 shrink-0">Review →</span>
             </div>
           </button>
-          {oneQuoteId && (
+          {/* ⭐ The one-tap accept is offered ONLY when there is nothing to
+              acknowledge (Session 121). When the business has terms, accepting
+              from here would mean ticking a box the customer was never shown —
+              so this shortcut steps aside and the card above takes them to the
+              Billing row, where the terms are rendered in full above the button.
+              A shortcut that skips the thing being agreed to is not a shortcut. */}
+          {oneQuoteId && !hasTerms && (
             <div className="px-4 pb-4">
-              <Button className="w-full" onClick={() => actions.accept(oneQuoteId)} loading={actions.accepting === oneQuoteId}>
-                <Check className="w-4 h-4" /> Approve — {formatCurrency(awaiting[0].amount)}
+              <Button className="w-full" onClick={() => actions.accept(oneQuoteId, undefined, true)} loading={actions.accepting === oneQuoteId}>
+                <Check className="w-4 h-4" /> Accept — {formatCurrency(awaiting[0].amount)}
               </Button>
-              <p className="text-[11px] text-ink-faint mt-1.5 text-center">Nothing is charged when you approve.</p>
+              <p className="text-[11px] text-ink-faint mt-1.5 text-center">Nothing is charged when you accept.</p>
             </div>
           )}
         </div>
