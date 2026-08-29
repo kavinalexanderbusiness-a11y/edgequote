@@ -1132,5 +1132,12 @@
   "sql_md5": null,
   "version": "20260826120000",
   "stmt_count": 0
+ },
+ {
+  "name": "revoke_client_ddl_privileges",
+  "sql_len": 6030,
+  "sql_md5": "d6e74fe3a3bf727c95bb04d2fa932eb6",
+  "version": "20260828120000",
+  "stmt_count": 1
  }
 ]
