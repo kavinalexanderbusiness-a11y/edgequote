@@ -2618,12 +2618,33 @@ export function QuoteBuilder({
               // chooses, through the engine that already exists for exactly that.
               // The option NAME is the commercial term ("Monthly"), its price is
               // the plan's price, and `is_recommended` is the owner's own badge.
-              if (sel.offerPlans?.length) {
+              // ⛔⛔ `basisText` IS NOT A CUSTOMER SENTENCE. It is the owner's
+              // pricing rationale — "$0.05/sq ft × 1,392 sq ft", "No rate
+              // configured for this plan", "…— measure to price" — and
+              // QuoteOption.description is documented as "what this tier includes,
+              // in the owner's words", rendered in the PORTAL (BillingTab) and on
+              // the PDF. Writing it here published the arithmetic behind the
+              // quote, and on an unconfigured plan published an internal error
+              // string, to the customer. The rationale still shows where it
+              // belongs: on the owner's own measure panel.
+              //
+              // No description is written at all. The option already says what it
+              // is — `name` is the commercial term ("Monthly") and the price is the
+              // price — so the honest thing is to leave the owner's field for the
+              // owner's words rather than fill it with machine text.
+              const offerable = sel.offerPlans?.filter(p => p.price != null) ?? []
+              if (offerable.length) {
                 setValue('has_options', true, { shouldDirty: true })
-                setValue('options', sel.offerPlans.map(p => ({
+                setValue('options', offerable.map(p => ({
                   name: p.label,
-                  description: p.basisText,
-                  price: p.price ?? 0,
+                  description: '',
+                  // ⛔ Filtered above, never coerced. `price ?? 0` turned a plan
+                  // with NO price into a $0 option the customer could accept — the
+                  // exact thing the single-plan branch below refuses to do. It was
+                  // unreachable today only because the caller happened to pass
+                  // pricedOnly(); an invariant that lives three files away in
+                  // somebody else's call site is not an invariant.
+                  price: p.price as number,
                   is_recommended: p.isRecommended,
                 })), { shouldDirty: true })
               } else if (sel.plan?.price != null) {
