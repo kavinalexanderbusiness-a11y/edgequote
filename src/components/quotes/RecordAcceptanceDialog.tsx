@@ -142,7 +142,7 @@ export function RecordAcceptanceDialog({
       <p className="text-sm text-ink-muted">
         This records that <span className="text-ink font-medium">{customerName}</span> accepted{' '}
         {quoteNumber} — and that <span className="text-ink font-medium">you</span> wrote it down for them.
-        The record will always say so; it will never read as if they approved it in their portal.
+        The record will always say so; it will never read as if they accepted it in their portal.
       </p>
 
       {options.length > 0 && (
@@ -155,7 +155,11 @@ export function RecordAcceptanceDialog({
             {options.map(o => (
               <label
                 key={o.id}
-                className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 cursor-pointer transition-colors ${
+                // min-h-[44px]: measured at 42px on 375/390/430 by
+                // scripts/s121-acceptance-cdp.mjs. This row IS the control — the
+                // radio inside it is 13px and is reached by tapping the label —
+                // so the label is what has to clear the touch minimum.
+                className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 min-h-[44px] cursor-pointer transition-colors ${
                   optionId === o.id ? 'border-accent/50 bg-accent/10' : 'border-border bg-surface hover:border-border-strong'}`}
               >
                 <input
