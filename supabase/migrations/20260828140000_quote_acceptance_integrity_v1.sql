@@ -217,22 +217,41 @@ alter table public.quote_acceptances
 alter table public.quote_acceptances
   add constraint quote_acceptances_quote_seq_unique unique (quote_id, seq);
 
+-- The target half of this table's own tenant weld (supersedes_id, below). Same
+-- shape quotes/customers/jobs already carry so a child can reference (owner, id)
+-- as one fact rather than two independently-correct ones.
+alter table public.quote_acceptances
+  add constraint quote_acceptances_user_id_unique unique (user_id, id);
+
 alter table public.quote_acceptances
   add constraint quote_acceptances_user_id_fkey
   foreign key (user_id) references auth.users(id) on delete cascade;
 
+-- ⭐⭐ TENANT WELDS, NOT PLAIN FOREIGN KEYS. A single-column quote_id FK would
+-- say "this names a real quote" and stay silent about whose. Every writer here
+-- is SECURITY DEFINER and therefore escapes RLS, which is exactly the shape that
+-- turns an unwelded tenant relation into an exploitable one — so the composite
+-- makes "an acceptance filed against another tenant's quote" unrepresentable
+-- instead of merely unreached. Same shape change_orders already carries.
+-- (verify:tenant-weld failed on the single-column versions of these; the guard
+-- was right and this is the fix, not a raised threshold.)
+--
 -- CASCADE, not RESTRICT. Deleting a quote is already a deliberate, audited act
 -- (audit_events keeps its own row and holds no FK to quotes), and the quote
 -- list's bulk delete must not fail an entire batch because one row in it was
 -- accepted. What this table refuses is the OTHER deletion — erasing the evidence
 -- while keeping the quote. See the append-only trigger.
 alter table public.quote_acceptances
-  add constraint quote_acceptances_quote_id_fkey
-  foreign key (quote_id) references public.quotes(id) on delete cascade;
+  add constraint quote_acceptances_quote_same_owner
+  foreign key (user_id, quote_id) references public.quotes(user_id, id) on delete cascade;
 
+-- SET NULL on the customer column ONLY: a bare `on delete set null` across a
+-- composite would null the TENANT too, quietly orphaning the evidence out of the
+-- book it belongs to.
 alter table public.quote_acceptances
-  add constraint quote_acceptances_customer_id_fkey
-  foreign key (customer_id) references public.customers(id) on delete set null;
+  add constraint quote_acceptances_customer_same_owner
+  foreign key (user_id, customer_id) references public.customers(user_id, id)
+  on delete set null (customer_id);
 
 -- The composite FK the quotes table already uses for its own selection: an
 -- option is resolved THROUGH its quote, so "an option belonging to a different
@@ -242,9 +261,12 @@ alter table public.quote_acceptances
   foreign key (selected_option_id, quote_id) references public.quote_options(id, quote_id)
   on delete restrict;
 
+-- Welded to its own tenant for the same reason, and RESTRICT because the row it
+-- points at is evidence that may not be deleted while anything still cites it.
 alter table public.quote_acceptances
-  add constraint quote_acceptances_supersedes_fkey
-  foreign key (supersedes_id) references public.quote_acceptances(id) on delete restrict;
+  add constraint quote_acceptances_supersedes_same_owner
+  foreign key (user_id, supersedes_id) references public.quote_acceptances(user_id, id)
+  on delete restrict;
 
 alter table public.quote_acceptances
   add constraint quote_acceptances_kind_check

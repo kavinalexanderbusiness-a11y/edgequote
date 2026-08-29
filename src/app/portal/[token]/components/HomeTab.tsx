@@ -202,8 +202,8 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
                   </p>
                   <p className="text-xs text-ink-muted">
                     {depositGate.collected > 0
-                      ? `${formatCurrency(depositGate.collected)} of ${formatCurrency(depositGate.required)} received — your quote is approved`
-                      : 'Your quote is approved — your timing is confirmed once the deposit is received'}
+                      ? `${formatCurrency(depositGate.collected)} of ${formatCurrency(depositGate.required)} received — your quote is accepted`
+                      : 'Your quote is accepted — your timing is confirmed once the deposit is received'}
                   </p>
                 </div>
               </div>
@@ -255,9 +255,9 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
                       // this line says what there IS to do instead of asserting
                       // the recommended option as the figure.
                       ? (awaiting[0].options?.length
-                        ? `${awaiting[0].options.length} options — pick one and approve it`
-                        : `${formatCurrency(awaiting[0].amount)} — review and approve when you're ready`)
-                      : `Review and approve when you're ready`}
+                        ? `${awaiting[0].options.length} options — pick one and accept it`
+                        : `${formatCurrency(awaiting[0].amount)} — review and accept when you're ready`)
+                      : `Review and accept when you're ready`}
                   </p>
                   {/* The quote's OWN expiry, or nothing. This used to print issue-date +
                       30 days as fact — inventing a deadline for the 2 in 3 live quotes
@@ -338,7 +338,7 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
         ) : approvedPending ? (
           <div>
             <p className="text-sm font-semibold text-ink flex items-center gap-1.5">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" /> Your quote has been approved.
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" /> Your quote has been accepted.
             </p>
             {/* This is the screen someone stares at for days after saying yes. "Will contact
                 you shortly" gives them nothing to do but wonder — tell them where the answer
