@@ -273,7 +273,13 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
               <Button className="w-full" onClick={() => actions.accept(oneQuoteId)} loading={actions.accepting === oneQuoteId}>
                 <Check className="w-4 h-4" /> Approve — {formatCurrency(awaiting[0].amount)}
               </Button>
-              <p className="text-[11px] text-ink-faint mt-1.5 text-center">Nothing is charged when you approve.</p>
+              {/* ⭐ The model's ONE payment-timing sentence, not this card's own.
+                  It used to read "Nothing is charged when you approve." on every
+                  quote — true of the tap, materially false on a quote whose very
+                  next screen asks for a deposit. Same string the Billing card and
+                  the approval dialog use, so the customer cannot be told two
+                  different things about their own money in two taps. */}
+              <p className="text-[11px] text-ink-faint mt-1.5 text-center">{oneQuoteDoc?.paymentTimingLine}</p>
             </div>
           )}
         </div>
