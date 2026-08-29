@@ -18,6 +18,7 @@ import { invoiceBalance, displayInvoiceStatus, collectedBetween, dayBoundsIso } 
 import type { ReachCustomer } from '@/lib/comms/reach'
 import { computeLeadsNeedingResponse, type LeadConvRow, type LeadQuoteRow } from '@/lib/leadResponse'
 import { loadWeatherImpact, type WeatherImpactReport } from '@/lib/weatherImpact'
+import { sumQuoteAmounts } from '@/lib/pricingState'
 import { settingsToSeasons } from '@/lib/seasons'
 import { localTodayISO } from '@/lib/utils'
 import { computePriorities, type Priority } from '@/lib/dashboard/priorities'
@@ -337,7 +338,8 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   // same status the conversion figure treats as decided-pending, so the two
   // can't drift apart.
   const quotesOut = quotes.filter(q => q.status === 'sent')
-  const quotesOutTotal = quotesOut.reduce((s, q) => s + Number(q.total || 0), 0)
+  // Unknowns EXCLUDED, not counted as zero (lib/pricingState is the one summer).
+  const quotesOutTotal = sumQuoteAmounts(quotesOut).total
   // Both sides of the comparison are the SAME to-date window, one month apart:
   // [monthStart, today] vs [lastMonthStart, same day of last month]. Review
   // caught the first cut comparing month-to-date against the FULL last month —

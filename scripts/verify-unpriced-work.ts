@@ -32,7 +32,7 @@ import {
 import {
   isNoCharge, isPartialNoCharge, quotePriceState, jobPriceState,
   quoteAmountOrNull, jobAmountOrNull, passesMoneyDoor, moneyDoorBlock,
-  amountText, excludedNote, PRICE_STATE_LABEL, PRICE_STATE_MEANING,
+  amountText, excludedNote, sumQuoteAmounts, PRICE_STATE_LABEL, PRICE_STATE_MEANING,
   UNKNOWN_AMOUNT_TEXT, BLANK_NUMERIC_FIELD, MONEY_DOORS,
 } from '../src/lib/pricingState'
 import { optionSetProblem, optionProblemMessage, optionRowsFor } from '../src/lib/quoteOptions'
@@ -215,6 +215,52 @@ check('one excluded record is named', /1 record/.test(excludedNote(1) as string)
 check('several excluded records are named', /3 visits/.test(excludedNote(3, 'visit') as string))
 check('the note says they were EXCLUDED, not counted',
   /exclud/i.test(excludedNote(2) as string), excludedNote(2) as string)
+
+console.log('\n═══ 8b · One summer, and it hands back what it left out ═══')
+
+const roll = sumQuoteAmounts([
+  { total: 100 }, { total: 250 },
+  { total: null },                       // unpriced — excluded
+  { total: 0 },                          // a bare zero is ALSO unpriced
+  { total: 0, ...FREE },                 // explicitly free — a real 0, counted
+])
+eq('only known amounts are summed', roll.total, 350)
+eq('unpriced records are counted as excluded', roll.unknown, 2)
+eq('free work IS counted (it is a known zero)', roll.counted, 3)
+// ⚠️ `eq` is Object.is — it compares object IDENTITY, so comparing a rollup to an
+// object literal would fail for a CORRECT result. Compare the fields.
+const emptyRoll = sumQuoteAmounts([])
+check('an empty set is a clean zero',
+  emptyRoll.total === 0 && emptyRoll.unknown === 0 && emptyRoll.counted === 0,
+  JSON.stringify(emptyRoll))
+// ⭐ The divisor rule — the second half of the bug. An average must divide by
+// what was summed, not by the size of the input.
+check('counted is the honest divisor, not the input length',
+  roll.counted !== 5 && roll.total / roll.counted > 100)
+
+// ⛔ THE NINE COPIES. `reduce((s, q) => s + Number(q.total || 0), 0)` appeared in
+// nine files, each silently adding a zero per unpriced quote. If one comes back,
+// a figure starts lying again — so the EXPRESSION is banned outright.
+{
+  const { readdirSync, statSync } = require('node:fs') as typeof import('node:fs')
+  // ⚠️ Grep the CODE, not the file. Half this repo's fix-comments quote the
+  // expression they removed — including the ones this lane just wrote — so a raw
+  // `git grep` reports its own documentation as a violation. Comments are
+  // stripped first, then the remaining source is searched.
+  const walk = (dir: string, out: string[] = []): string[] => {
+    for (const e of readdirSync(dir)) {
+      const p = join(dir, e)
+      if (statSync(p).isDirectory()) walk(p, out)
+      else if (/\.(ts|tsx)$/.test(p)) out.push(p)
+    }
+    return out
+  }
+  const offenders = walk(join(ROOT, 'src'))
+    .filter(p => /\+\s*Number\([a-z]+\.total\s*\|\|\s*0\)/.test(stripComments(readFileSync(p, 'utf8'))))
+    .map(p => p.slice(ROOT.length + 1))
+  check('no file sums quote totals with a `|| 0` fallback any more', offenders.length === 0,
+    offenders.join(' · '))
+}
 
 console.log('\n═══ 9 · Structural — the fallbacks cannot come back ═══')
 

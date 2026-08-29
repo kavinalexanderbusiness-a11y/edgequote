@@ -194,6 +194,38 @@ export function excludedNote(unknownCount: number, noun = 'record'): string | nu
   return `${unknownCount} ${noun}${unknownCount === 1 ? '' : 's'} not priced yet — excluded`
 }
 
+// ── Summing a set of records ─────────────────────────────────────────────────
+// ⭐⭐ THE REPLACEMENT FOR `reduce((s, q) => s + Number(q.total || 0), 0)`, which
+// this codebase had NINE copies of — dashboard priorities, the weekly review,
+// business intelligence, suggestions, the customer page. Every one of them added
+// a silent zero for each unpriced quote, so nine different figures were wrong in
+// the same way and none of them said so.
+//
+// It returns the count alongside the total ON PURPOSE: a caller cannot take the
+// money without also being handed the number of records it had to leave out.
+// That is what makes `excludedNote` cheap to render and hard to forget.
+
+export interface AmountRollup {
+  /** The sum of every KNOWN amount. Free work contributes its real 0. */
+  total: number
+  /** How many records had no price and were therefore excluded. */
+  unknown: number
+  /** How many records were actually summed. Use THIS as an average's divisor —
+   *  dividing a priced-only total by the full count is the second half of the
+   *  same bug. */
+  counted: number
+}
+
+export function sumQuoteAmounts(quotes: readonly (PriceableQuote | null | undefined)[]): AmountRollup {
+  let total = 0, unknown = 0, counted = 0
+  for (const q of quotes) {
+    const a = quoteAmountOrNull(q)
+    if (a == null) { unknown++; continue }
+    total += a; counted++
+  }
+  return { total, unknown, counted }
+}
+
 // ── Gates ────────────────────────────────────────────────────────────────────
 // The narrow universal rule, in one sentence: UNPRICED WORK MAY BE DRAFTED,
 // SCHEDULED AND DONE — IT MAY NOT BE AUTHORISED, BILLED, OR COUNTED AS MONEY.
