@@ -62,12 +62,38 @@ alter default privileges for role postgres in schema public
 -- proven, and the guard that proves the repo can rebuild production would go red
 -- on the very change meant to harden it. Caught by running the from-zero proof
 -- BEFORE applying anything to production, which is the point of running it.
+-- ⚠️⚠️ AND `supabase_admin`'s DEFAULTS CANNOT BE CHANGED FROM HERE. Measured:
+-- the role this runs as is `postgres`, which is NOT a superuser on Supabase
+-- (rolsuper = false) and is not a member of `supabase_admin` — `set role
+-- supabase_admin` is refused, and so is altering its default privileges:
+--     ERROR 42501: permission denied to change default privileges
+-- Written unconditionally that error aborts the WHOLE migration, taking the
+-- reachable half down with it. Attempted and caught rather than assumed.
+--
+-- ⚖️ WHAT THAT LEAVES. A default ACL only applies to tables created BY that role.
+-- Every table in this schema is created by migrations running as `postgres`, so
+-- the `postgres` defaults above are the ones that govern this application's
+-- tables — that half is the one that matters and it IS applied. The
+-- `supabase_admin` entry would only bite for a table supabase_admin itself
+-- creates in `public`, which is Supabase-managed territory, not ours.
+--
+-- ⛔ RESIDUAL, recorded rather than hidden: closing that second entry needs a
+-- superuser (Supabase dashboard or support). Until it is closed, a table created
+-- in `public` BY supabase_admin would still inherit arwdDxtm.
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'supabase_admin') then
-    execute 'alter default privileges for role supabase_admin in schema public'
-         || ' revoke truncate, trigger, references on tables from anon';
-    execute 'alter default privileges for role supabase_admin in schema public'
-         || ' revoke truncate, trigger, references on tables from authenticated';
+    begin
+      execute 'alter default privileges for role supabase_admin in schema public'
+           || ' revoke truncate, trigger, references on tables from anon';
+      execute 'alter default privileges for role supabase_admin in schema public'
+           || ' revoke truncate, trigger, references on tables from authenticated';
+      raise notice 'supabase_admin default privileges corrected';
+    exception when insufficient_privilege then
+      -- Not a failure of this migration: the reachable half is done, and the
+      -- residual is named in the comment above and pinned by
+      -- verify:client-privileges so it cannot be forgotten.
+      raise notice 'supabase_admin default privileges NOT changed (insufficient privilege) — residual, see migration header';
+    end;
   end if;
 end $$;
