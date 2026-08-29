@@ -399,6 +399,16 @@ async function main() {
     await db.exec(`delete from public.route_pins where job_id='${JA}';`)
     eq('unpin removes exactly one', await pinCount(`where date='${D1}'`), 1)
     eq('…and the other survives', await pinCount(`where job_id='${JA2}'`), 1)
+
+    // ⭐ The ESTIMATE leg of the same rule. It has its OWN partial index, so it
+    // needs its own test — testing only the visit left route_pins_item_unique
+    // completely unguarded, which is exactly what the mutation run found.
+    await db.exec(`update public.schedule_items set scheduled_date='${D1}' where id='${EA}';`)
+    await accepted('an estimate can be pinned',
+      `insert into public.route_pins (user_id, date, "position", schedule_item_id) values ('${A}','${D1}',6,'${EA}');`)
+    await refused('…and an ESTIMATE cannot be pinned twice either',
+      `insert into public.route_pins (user_id, date, "position", schedule_item_id) values ('${A}','${D1}',7,'${EA}');`,
+      /duplicate key|unique/i)
   }
 
   // ═════════════════════════════════════════════════════════════════════════
