@@ -97,6 +97,11 @@ const MUST_SURVIVE = [
   'Lawn Mowing', 'Window Cleaning', 'Snow Removal', 'Gutter Guards', 'Spring Cleanup',
   'Zachary Zimmerman', 'Zoe Zhang', 'ZZ Top Tribute Band Venue Clean',
   'Verification Services Inc', 'Verify Home Inspections',
+  // ⭐ The adversarial half of the SELF_IDENTIFYING conjunction. Each of these
+  // carries ONE of the two halves and must survive; a keyword rule would hide
+  // a real electrician's and a real plumber's core service.
+  'Light Fixture Installation', 'Fixture Repair', 'Plumbing Fixture Replacement',
+  'Fixture Swap', 'Delete Me Later', 'Please Delete Me',
 ]
 for (const name of MUST_SURVIVE) {
   check(`“${name}” is NOT classified as fixture data`, !isFixtureName(name),
@@ -106,6 +111,19 @@ check('a blank or missing name is not evidence of anything',
   !isFixtureName('') && !isFixtureName(null) && !isFixtureName(undefined) && !isFixtureName('   '))
 // ⭐ Anchoring is what makes MUST_SURVIVE possible. An `includes()` rule would
 // classify "ZZ Top Tribute Band Venue Clean" and "Verify Home Inspections".
+// ⭐⭐ The production case this rule was written for. `S61 FIELD FIXTURE — DELETE
+// ME (A)` was a LIVE, ACTIVE technician counting toward capacity, and the
+// anchored prefixes missed it entirely.
+check('⭐⭐ a self-identifying fixture row is classified wherever the marker sits',
+  isFixtureName('S61 FIELD FIXTURE — DELETE ME (A)')
+  && isFixtureName('S61 FIELD FIXTURE - DELETE ME (B)')
+  && isFixtureName('some fixture, delete me'),
+  'this exact name was active in production and my anchored rule did not see it')
+check('⛔ …and it needs BOTH halves, so neither word acts alone',
+  !isFixtureName('Light Fixture Installation')
+  && !isFixtureName('Fixture Repair')
+  && !isFixtureName('Delete Me Later'),
+  'a keyword rule here would hide a real electrician’s core service')
 check('⭐ the prefixes are ANCHORED at the start, never substring-matched',
   !isFixtureName('Deck ZZ-Top Mural') && !isFixtureName('Please verify-check the meter')
   && isFixtureName('ZZ-anything'),
@@ -225,10 +243,34 @@ check('⛔ lib/fixtureData contains no delete, no update, no supabase client',
 // NO error, so “0 fixture rows” would be indistinguishable from “invisible”. That
 // is a false all-clear on the exact surface the report exists to audit.
 const REPORT = read('scripts/hygiene-report.ts')
-check('⛔ the cleanup report REFUSES to run without a key that can actually see rows',
-  /const CAN_SEE_ROWS = !!serviceKey/.test(strip(REPORT))
-  && /if \(!CAN_SEE_ROWS\) \{[\s\S]{0,900}?process\.exit\(3\)/.test(strip(REPORT)),
+// ⚠️ Re-expressed for the CURRENT shape: the report gained an OWNER-SESSION read
+// path (least privilege — RLS keeps it to that tenant) beside the service-role
+// one, so the old single-boolean spelling is gone. THE RULE IS UNCHANGED and is
+// what is asserted: anonymous is not a read path, and the script exits rather
+// than counting rows it could never have seen.
+check('⛔ the cleanup report REFUSES to run with no authorized read path',
+  /type AuthPath = 'owner' \| 'service_role' \| 'none'/.test(strip(REPORT))
+  && /if \(authPath === 'none'\) \{[\s\S]{0,1200}?process\.exit\(3\)/.test(strip(REPORT)),
   'an empty RLS-filtered read must never print as “nothing to clean up”')
+check('⛔ …and a FAILED owner sign-in also refuses, instead of falling back to anon',
+  /signInWithPassword[\s\S]{0,600}?if \(authErr \|\| !session\?\.user\) \{[\s\S]{0,600}?process\.exit\(3\)/.test(strip(REPORT)),
+  'a sign-in that silently failed would leave an anonymous client behind and every zero would be the false all-clear again')
+// ⭐ Asserted over what the script PRINTS, not over where a secret is mentioned.
+// The password is necessarily named once — it is passed to signInWithPassword.
+// What must never happen is a secret reaching an output line.
+const printed = [...strip(REPORT).matchAll(/\b(?:line|console\.log|console\.error)\(([\s\S]*?)\)\n/g)].map(m => m[1])
+check('the printed-output extractor found the report’s real output lines',
+  printed.length >= 15, `found ${printed.length}`)
+// ⚠️ The rule is about the VALUE, not the NAME. The report legitimately tells an
+// operator which environment variable to set — that string is help text, and a
+// rule that forbade it would push the script toward being unhelpful about its own
+// requirements. What must never happen is a secret being INTERPOLATED into
+// output, so only `${…}` expressions are inspected.
+const SECRETS = /\b(ownerPassword|ownerEmail|serviceKey|anonKey|key)\b/
+const interpolated = printed.flatMap(p => [...p.matchAll(/\$\{([^}]*)\}/g)].map(m => m[1]))
+check('⛔ no credential is ever INTERPOLATED into output — only an identity suffix',
+  interpolated.every(x => !SECRETS.test(x)) && /slice\(-6\)/.test(strip(REPORT)),
+  `offending: ${interpolated.filter(x => SECRETS.test(x)).join(' · ')} — credentials are used, never echoed`)
 check('…and it says WHY, so the operator fixes the credential rather than trusting the zero',
   /would mean “invisible”, not “clean”|false all-clear/.test(REPORT))
 check('the cleanup reporter is read-only too',

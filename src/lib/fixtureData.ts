@@ -68,6 +68,33 @@ export const FIXTURE_EXACT_MARKERS: readonly string[] = [
 ]
 
 /**
+ * ⭐⭐ SELF-IDENTIFYING ROWS — the marker that is not a prefix.
+ *
+ * FOUND IN LIVE PRODUCTION, and it is why this exists rather than being
+ * imagined: `S61 FIELD FIXTURE — DELETE ME (A)` was an ACTIVE technician,
+ * counting toward workforce capacity. The anchored prefixes above miss it
+ * completely — the name begins "S61", not "ZZ-" — so the rule that was meant to
+ * remove fixture workers from capacity would have left the only one that
+ * actually existed.
+ *
+ * ⛔ THE RULE IS A CONJUNCTION, NOT A KEYWORD, and that is what keeps it Tier 1.
+ * A name qualifies only when it says BOTH that it is a fixture AND that it is
+ * disposable. Neither half acts alone:
+ *
+ *   "Light Fixture Installation"  → real electrical service. NOT classified.
+ *   "Fixture Repair"              → real service. NOT classified.
+ *   "Delete Me Later"             → odd, but no fixture claim. NOT classified.
+ *   "S61 FIELD FIXTURE — DELETE ME (A)"  → both. Classified.
+ *
+ * Whoever wrote "DELETE ME" into a production row was leaving an instruction.
+ * Requiring the word "fixture" beside it is what stops that instruction being
+ * read into a name that merely contains one of the two words.
+ */
+const SELF_IDENTIFYING = [
+  { needs: 'fixture', and: 'delete me' },
+] as const
+
+/**
  * ⭐⭐ THE predicate. True only for Tier 1 — a row a machine created and labelled.
  *
  * ⛔ It takes the NAME, not the row, deliberately: every entity on this seam
@@ -87,6 +114,9 @@ export function isFixtureName(name: string | null | undefined): boolean {
   // a person would type begins with this sentence, so the prefix reading is both
   // safer and stricter.
   if (FIXTURE_EXACT_MARKERS.some(m => n === m || n.startsWith(m))) return true
+  // ⭐ The conjunction rule — position-independent BECAUSE both halves must be
+  // present. See SELF_IDENTIFYING for why a single keyword would be unsafe here.
+  if (SELF_IDENTIFYING.some(r => n.includes(r.needs) && n.includes(r.and))) return true
   // Anchored at the start. `includes()` would classify "Deck ZZ-Top Mural".
   return FIXTURE_PREFIXES.some(p => n.startsWith(p))
 }

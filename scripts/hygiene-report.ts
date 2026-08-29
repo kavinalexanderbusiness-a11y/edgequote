@@ -21,26 +21,43 @@ import {
   recommendedAction, type CleanupCandidate,
 } from '../src/lib/fixtureData'
 import { publicationState } from '../src/lib/servicePublication'
+import { formatServicePrice } from '../src/lib/servicePricing'
 import { loadEnvLocal } from './lib/verify-fixture'
 
 loadEnvLocal()
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-const key = serviceKey || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-// ⭐⭐ WHICH KEY IS IN USE CHANGES WHAT "ZERO ROWS" MEANS, and that distinction is
-// the difference between a report and a lie.
+const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+const ownerEmail = process.env.PORTAL_RPC_OWNER_EMAIL
+const ownerPassword = process.env.PORTAL_RPC_OWNER_PASSWORD
+
+// ⭐⭐ WHAT "ZERO ROWS" MEANS DEPENDS ENTIRELY ON WHO IS ASKING, and that
+// distinction is the difference between a report and a lie.
 //
-// Every table below is RLS-protected. Read with the ANON key, PostgREST returns
-// `{ data: [], error: null }` — a successful request that saw nothing, because
-// the policy matched no rows. There is no error to notice. So a report that
-// prints "None — nothing matches a fixture marker" after an anon read is
-// asserting the catalogue is clean when the truth is that it was never visible.
+// Every table below is RLS-protected. Read as an ANONYMOUS caller, PostgREST
+// returns `{ data: [], error: null }` — a SUCCESSFUL request that saw nothing,
+// because the policy matched no rows. There is no error to notice. A report that
+// then prints "None — nothing matches a fixture marker" is asserting the
+// catalogue is clean when the truth is that it was never visible. That is a
+// false all-clear on exactly the surface this report exists to audit, and it is
+// what this script did on its first run.
 //
-// That is a FALSE ALL-CLEAR on exactly the surface this session exists to audit,
-// and this codebase has met that shape before: an existence claim over live data
-// is a coin flip unless the reader can prove it could have seen a row.
-const CAN_SEE_ROWS = !!serviceKey
+// ── The two authorized read paths, in order of LEAST PRIVILEGE ──────────────
+//   1. OWNER SESSION (preferred). A normal sign-in; RLS scopes every read to
+//      that owner's own tenant, which is precisely the book being audited. It
+//      can see rows, and it can see NOTHING it should not. Read-only by intent —
+//      this file contains no write of any kind, asserted by the guard.
+//   2. SERVICE ROLE. Bypasses RLS entirely. Only needed to audit a tenant the
+//      operator cannot sign in as. Strictly more power than this job requires.
+//
+// ⛔ Anonymous is NOT a path. It is the state in which the answer is unknowable,
+// and the script refuses rather than guessing.
+type AuthPath = 'owner' | 'service_role' | 'none'
+const authPath: AuthPath = ownerEmail && ownerPassword && anonKey ? 'owner'
+  : serviceKey ? 'service_role'
+  : 'none'
+const key = authPath === 'service_role' ? serviceKey! : anonKey
 
 function line(s = '') { console.log(s) }
 function head(s: string) { line(''); line(`═══ ${s} ${'═'.repeat(Math.max(0, 66 - s.length))}`) }
@@ -71,38 +88,135 @@ async function main() {
   line('║  PRODUCTION HYGIENE — CLEANUP CANDIDATES                              ║')
   line('║  READ-ONLY. Nothing below has been changed. Nothing will be.          ║')
   line('╚══════════════════════════════════════════════════════════════════════╝')
-  if (!CAN_SEE_ROWS) {
+  if (authPath === 'none') {
     line('')
-    line('⛔⛔ CANNOT AUDIT — no SUPABASE_SERVICE_ROLE_KEY, so this is running as ANON.')
+    line('⛔⛔ CANNOT AUDIT — no authorized read path, so this would be running as ANON.')
     line('    Every table below is RLS-protected. An anon read returns an EMPTY list')
     line('    with NO error, so "0 rows" here would mean "invisible", not "clean" —')
     line('    and printing it as clean would be a false all-clear on the exact')
     line('    surface this report exists to audit.')
     line('')
-    line('    Re-run with SUPABASE_SERVICE_ROLE_KEY set, or as the owner, to get a')
-    line('    real inventory. Nothing was changed either way.')
+    line('    Provide EITHER an owner sign-in (PORTAL_RPC_OWNER_EMAIL/PASSWORD,')
+    line('    preferred — RLS keeps it to that tenant) OR SUPABASE_SERVICE_ROLE_KEY.')
+    line('    Nothing was changed either way.')
     line('')
     process.exit(3)
   }
 
+  // ⭐ Prove the session before trusting a single count. A sign-in that silently
+  // failed would leave an anonymous client behind and every "0" below would be
+  // the false all-clear again, wearing a different hat.
+  if (authPath === 'owner') {
+    const { data: session, error: authErr } = await sb.auth.signInWithPassword({
+      email: ownerEmail!, password: ownerPassword!,
+    })
+    if (authErr || !session?.user) {
+      line('')
+      line(`⛔⛔ CANNOT AUDIT — the owner sign-in failed: ${authErr?.message ?? 'no session'}`)
+      line('    Refusing to continue as an anonymous reader, because every count')
+      line('    would then be an empty RLS result rather than a real zero.')
+      line('')
+      process.exit(3)
+    }
+    // ⛔ Identity is confirmed by a SUFFIX, never printed in full, and the
+    // credentials themselves are never echoed anywhere in this file.
+    line('')
+    line(`  Read path: OWNER SESSION (RLS-scoped to this tenant). uid …${String(session.user.id).slice(-6)}`)
+  } else {
+    line('')
+    line('  Read path: SERVICE ROLE (RLS bypassed — more power than this job needs).')
+  }
+  line('  ⛔ READ-ONLY: this script performs no insert, update, upsert or delete.')
+
   const candidates: CleanupCandidate[] = []
 
   // ── Services ───────────────────────────────────────────────────────────────
-  head('SERVICE CATALOGUE')
+  head('SERVICE CATALOGUE — PUBLICATION INVENTORY')
+  // ⚠️ `published_at` may not exist yet: migration 20260829120000 is deliberately
+  // unapplied until S106 owns the cutover. Probe for it rather than assume, so
+  // this report works on BOTH sides of that apply and says which side it is on.
+  const probe = await sb.from('service_templates').select('published_at').limit(1)
+  const HAS_PUBLISHED_AT = !(probe.error && /published_at/.test(probe.error.message))
+  const cols = 'id, user_id, name, category, default_rate, pricing_display_type, is_active, sort_order'
   const { data: svcData, error: svcErr } = await sb
     .from('service_templates')
-    .select('id, user_id, name, category, default_rate, is_active, sort_order')
+    .select(HAS_PUBLISHED_AT ? cols + ', published_at' : cols)
     .order('sort_order')
   if (svcErr) {
     line(`  ⚠️  could not read service_templates: ${svcErr.message}`)
   } else {
-    const services = (svcData ?? []) as Array<{
+    // ⚠️ Cast through `unknown`: the select list is chosen at runtime (the
+    // published_at probe above), so supabase-js cannot infer a row type and
+    // widens to its error shape. The runtime columns are exactly the two literals.
+    const services = (svcData ?? []) as unknown as Array<{
       id: string; user_id: string; name: string; category: string
-      default_rate: number; is_active: boolean; sort_order: number
+      default_rate: number; pricing_display_type: string; is_active: boolean
+      sort_order: number; published_at?: string | null
     }>
     const dups = duplicateNameSet(services.map(s => s.name))
+    line('')
     line(`  ${services.length} service(s) read.`)
+    line(HAS_PUBLISHED_AT
+      ? '  published_at EXISTS — publication state below is the real one.'
+      : '  ⚠️  published_at does NOT exist yet (migration unapplied). CURRENT EXPOSURE is')
+    if (!HAS_PUBLISHED_AT) {
+      line('      therefore governed by is_active ALONE: every active service is on the')
+      line('      public website and in every customer portal RIGHT NOW.')
+    }
 
+    // ── The inventory the landing decision is made from ────────────────────
+    // One row per service, with the recommendation stated as a RECOMMENDATION.
+    // ⛔ Two rules are absolute here and are why this is a report and not a script:
+    //   1. A Tier-1 fixture is NEVER recommended for publication.
+    //   2. A Tier-2 warning ($0/$1, duplicate, placeholder, odd wording) is
+    //      REVIEW — it is never silently decided in either direction.
+    line('')
+    line('  ID                                    ACTIVE  EXPOSED  PRICE        T1  RECOMMEND      NAME')
+    line('  ' + '─'.repeat(108))
+    const publishList: string[] = []
+    const reviewList: Array<{ id: string; name: string; why: string }> = []
+    for (const s of services) {
+      const fixture = isFixtureName(s.name)
+      const suspicions = catalogueSuspicions(s, {
+        duplicateOfName: dups.has(String(s.name ?? '').trim().toLowerCase()) ? s.name : null,
+      })
+      // CURRENT exposure, on the database as it stands right now.
+      const exposedNow = HAS_PUBLISHED_AT
+        ? (s.is_active && !!s.published_at)
+        : s.is_active
+      const price = formatServicePrice({
+        pricing_display_type: s.pricing_display_type as never,
+        default_rate: Number(s.default_rate),
+      })
+      // ⛔ Tier 1 first, and it can never be overridden by anything below it.
+      let rec: 'PUBLISH' | 'KEEP INTERNAL' | 'REVIEW'
+      let why = ''
+      if (fixture) { rec = 'KEEP INTERNAL'; why = 'Tier-1 fixture marker — never auto-published' }
+      else if (!s.is_active) { rec = 'KEEP INTERNAL'; why = 'inactive' }
+      else if (suspicions.length) { rec = 'REVIEW'; why = suspicions.map(x => x.code).join('+') }
+      else { rec = 'PUBLISH'; why = 'clean' }
+
+      if (rec === 'PUBLISH') publishList.push(s.id)
+      if (rec === 'REVIEW') reviewList.push({ id: s.id, name: s.name, why: suspicions.map(x => x.message).join(' · ') })
+
+      line(`  ${s.id}  ${(s.is_active ? 'yes' : 'no').padEnd(6)}  ${(exposedNow ? 'YES' : 'no').padEnd(7)}  ${price.padEnd(11)}  ${(fixture ? 'Y' : '·').padEnd(2)}  ${rec.padEnd(13)}  ${s.name}`)
+      if (rec === 'REVIEW' && exposedNow) line('        ⚠️  CURRENTLY VISIBLE TO CUSTOMERS with the warning above.')
+    }
+
+    head('INITIAL PUBLICATION LIST (proposed — nothing applied)')
+    line(`  PUBLISH  ${publishList.length} service(s):`)
+    for (const id of publishList) line(`    ${id}`)
+    line('')
+    line(`  REVIEW   ${reviewList.length} service(s) — a person decides, not this script:`)
+    for (const r of reviewList) { line(`    ${r.id}  ${r.name}`); line(`        ${r.why}`) }
+    line('')
+    line('  ⭐ The cutover publishes ONLY the explicit ids above, by id:')
+    line('       update public.service_templates set published_at = now()')
+    line("        where user_id = <owner> and id in (<the PUBLISH ids>);")
+    line('  ⛔ NEVER a broad set-published_at-over-is_active statement — that is the')
+    line('     statement that would republish the fixtures this whole lane removes.')
+
+    head('SERVICE QUALITY DETAIL')
     for (const s of services) {
       const suspicions = catalogueSuspicions(s, {
         duplicateOfName: dups.has(String(s.name ?? '').trim().toLowerCase()) ? s.name : null,
@@ -237,8 +351,10 @@ async function main() {
     }
   }
 
+  if (authPath === 'owner') await sb.auth.signOut({ scope: 'local' }).catch(() => {})
+
   head('WHAT HAPPENS NEXT')
-  line(`  Read with the SERVICE ROLE key, so a zero here means zero — not "invisible".`)
+  line(`  Read via ${authPath === 'owner' ? 'an OWNER SESSION' : 'the SERVICE ROLE'}, so a zero here means zero — not "invisible".`)
   line('  ⛔ Nothing above has been changed, and this script cannot change it.')
   line('  Deleting production rows needs an explicit decision on a specific list.')
   line('  Prefer ARCHIVE/DEACTIVATE: the row leaves every live surface and the')
