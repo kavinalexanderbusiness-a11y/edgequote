@@ -226,6 +226,58 @@ export function sumQuoteAmounts(quotes: readonly (PriceableQuote | null | undefi
   return { total, unknown, counted }
 }
 
+// ── Reading the records that already exist ───────────────────────────────────
+// ⛔⛔ CLASSIFICATION ONLY. Nothing here writes, and nothing that consumes it may
+// write either. Every $0 row in production was created by a system that could
+// not tell "free" from "unpriced", so the app CANNOT now decide which one any
+// given row meant — only a human who was there can. Rewriting them automatically
+// would replace an honest unknown with a confident guess, which is the exact
+// failure this whole lane is about.
+//
+// So the output is three buckets and a recommended question, never a patch.
+
+export type LegacyZeroClass =
+  /** Carries a complete no-charge record. Nothing to do. */
+  | 'legitimate_free'
+  /** Strong evidence nobody priced it: no money anywhere near the record. */
+  | 'likely_unpriced'
+  /** Evidence points both ways, or there is not enough of it. Ask a human. */
+  | 'ambiguous'
+
+export interface LegacyZeroInput extends NoChargeRecord {
+  /** The stored amount: 0 or null (a priced row is not a candidate at all). */
+  amount?: number | null
+  /** Was the work actually delivered? Completed $0 work is the costly case. */
+  completed?: boolean
+  /** Does an invoice exist against it? An invoice for $0 is a deliberate act far
+   *  more often than a blank price field is. */
+  hasInvoice?: boolean
+  /** Did any payment land against it? Money proves it was never free. */
+  hasPayment?: boolean
+  /** Free text an owner wrote — the only place a pre-migration "no charge"
+   *  decision could have been recorded, because there was no column for it. */
+  note?: string | null
+}
+
+/** Words an owner actually uses when they meant "free". Matched on the OWNER's
+ *  own note, never inferred from the amount. Deliberately narrow: a false
+ *  'legitimate_free' is worse than an 'ambiguous', because it closes a question
+ *  that should have been asked. */
+const FREE_PHRASES = /\b(no charge|free of charge|comp(?:ed|limentary)?|goodwill|warranty|on us|gratis|write[- ]?off|redo|make[- ]?good)\b/i
+
+export function classifyLegacyZero(r: LegacyZeroInput): { klass: LegacyZeroClass; why: string } {
+  if (isNoCharge(r)) return { klass: 'legitimate_free', why: 'Has a complete no-charge record (reason, actor, timestamp).' }
+  if (isPartialNoCharge(r)) return { klass: 'ambiguous', why: 'A no-charge record was started but is incomplete — someone meant something here.' }
+  // Money against a $0 record is a contradiction, not a free job.
+  if (r.hasPayment) return { klass: 'ambiguous', why: 'A payment exists against a record with no price — the amounts disagree.' }
+  if (r.note && FREE_PHRASES.test(r.note)) {
+    return { klass: 'ambiguous', why: 'The note reads as deliberate free work, but nobody recorded who decided it or when.' }
+  }
+  if (r.hasInvoice) return { klass: 'ambiguous', why: 'It was invoiced at $0 — deliberate more often than blank, but not recorded as such.' }
+  if (r.completed) return { klass: 'likely_unpriced', why: 'Work was completed and no price, invoice, payment or note exists anywhere against it.' }
+  return { klass: 'likely_unpriced', why: 'No price, and no evidence anyone decided it was free.' }
+}
+
 // ── Gates ────────────────────────────────────────────────────────────────────
 // The narrow universal rule, in one sentence: UNPRICED WORK MAY BE DRAFTED,
 // SCHEDULED AND DONE — IT MAY NOT BE AUTHORISED, BILLED, OR COUNTED AS MONEY.

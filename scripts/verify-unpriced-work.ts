@@ -32,7 +32,7 @@ import {
 import {
   isNoCharge, isPartialNoCharge, quotePriceState, jobPriceState,
   quoteAmountOrNull, jobAmountOrNull, passesMoneyDoor, moneyDoorBlock,
-  amountText, excludedNote, sumQuoteAmounts, PRICE_STATE_LABEL, PRICE_STATE_MEANING,
+  amountText, excludedNote, sumQuoteAmounts, classifyLegacyZero, PRICE_STATE_LABEL, PRICE_STATE_MEANING,
   UNKNOWN_AMOUNT_TEXT, BLANK_NUMERIC_FIELD, MONEY_DOORS,
 } from '../src/lib/pricingState'
 import { optionSetProblem, optionProblemMessage, optionRowsFor } from '../src/lib/quoteOptions'
@@ -261,6 +261,34 @@ check('counted is the honest divisor, not the input length',
   check('no file sums quote totals with a `|| 0` fallback any more', offenders.length === 0,
     offenders.join(' · '))
 }
+
+console.log('\n═══ 8c · Historical records are CLASSIFIED, never rewritten ═══')
+
+const cls = (i: Parameters<typeof classifyLegacyZero>[0]) => classifyLegacyZero(i).klass
+eq('a complete no-charge record is legitimate free', cls({ amount: 0, ...FREE }), 'legitimate_free')
+eq('a completed $0 visit with no evidence is likely unpriced',
+  cls({ amount: 0, completed: true }), 'likely_unpriced')
+eq('a bare $0 with nothing around it is likely unpriced', cls({ amount: 0 }), 'likely_unpriced')
+// ⭐ Everything that hints at intent WITHOUT recording it lands in ambiguous —
+// the bucket that means "ask a human", not "assume".
+eq('a half-written no-charge record is ambiguous',
+  cls({ amount: 0, no_charge_at: FREE.no_charge_at }), 'ambiguous')
+eq('a payment against a $0 record is ambiguous', cls({ amount: 0, hasPayment: true }), 'ambiguous')
+eq('a $0 invoice is ambiguous, not free', cls({ amount: 0, hasInvoice: true }), 'ambiguous')
+eq('an owner note reading "no charge" is ambiguous, not free',
+  cls({ amount: 0, completed: true, note: 'No charge - warranty redo' }), 'ambiguous')
+eq('an unrelated note does not make it ambiguous',
+  cls({ amount: 0, completed: true, note: 'Gate code 4412' }), 'likely_unpriced')
+// ⛔ The safety property: the classifier NEVER promotes a row to free on
+// evidence weaker than a complete record. A false 'legitimate_free' closes a
+// question that should have been asked.
+check('nothing but a complete record is ever classified free',
+  [{ amount: 0, hasInvoice: true }, { amount: 0, hasPayment: true },
+   { amount: 0, note: 'comped' }, { amount: 0, no_charge_reason: 'goodwill' }]
+    .every(i => cls(i) !== 'legitimate_free'))
+check('every classification carries a reason a human can act on',
+  [{ amount: 0 }, { amount: 0, ...FREE }, { amount: 0, hasInvoice: true }]
+    .every(i => classifyLegacyZero(i).why.length > 25))
 
 console.log('\n═══ 9 · Structural — the fallbacks cannot come back ═══')
 
