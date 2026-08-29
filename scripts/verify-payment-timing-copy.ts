@@ -266,9 +266,16 @@ console.log('\n■ 3. No surface composes its own payment-timing sentence')
   check('Quote PDF contains no payment arithmetic (the deposit-documents rule)',
     !/deposit_value\s*[/*]|\*\s*0?\.\d/.test(pdf))
   // Ours is the statement of record; the owner's free text sits BELOW it.
+  //
+  // ⚠️ Compare the RENDER SITES, not the bare identifiers. `pdfTimingLine` also
+  // appears in the import at the top of the file, so an indexOf on the bare name
+  // always won — the check passed against a document that printed the timing
+  // BELOW the terms, and mutation #18 proved it could not fail.
+  const timingAt = pdf.indexOf('{pdfTimingLine(timing)}')
+  const termsAt = pdf.indexOf('{settings.terms_text}')
   check('canonical timing prints ABOVE the owner\'s free-text Terms',
-    pdf.indexOf('pdfTimingLine') < pdf.indexOf('terms_text'),
-    'terms_text is an ungoverned third source — it must not lead')
+    timingAt > 0 && termsAt > 0 && timingAt < termsAt,
+    `terms_text is an ungoverned third source — it must not lead (timing@${timingAt}, terms@${termsAt})`)
 
   const bridge = stripComments(read('src/lib/portalPdf.ts'))
   check('portal PDF bridge carries the deposit rule to the customer\'s own copy',
