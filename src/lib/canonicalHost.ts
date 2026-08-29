@@ -62,6 +62,42 @@ export const CANONICAL_EXEMPT_PREFIXES = ['/api/', '/monitoring'] as const
  * deleting it. A preview deploy redirected to production is a preview deploy you
  * can no longer test; a dev machine redirected to production is worse.
  */
+/**
+ * Hostnames this product used to live on, and that real customers still hold
+ * links to.
+ *
+ * ⭐ EVIDENCE, not recollection. Measured 2026-08-28 by reading every URL in all
+ * 236 rows of `messages.body` on production: 21 sent messages point at
+ * `app.edgepropertyservicesyyc.ca`, all of them the SAME shape,
+ * `/portal/<token>`. Two more point at the apex `edgehq.ca`, which is attached
+ * and already canonicalises correctly. No other retired host, and no other path
+ * shape, has ever been sent.
+ *
+ * ⚠️ THIS LIST CHANGES NOTHING AT RUNTIME, and that is the point.
+ * `canonicalRedirectTarget` already moves EVERY non-canonical host, so a retired
+ * one needs no special case — a special case is exactly how you end up with two
+ * rules that disagree. The list exists so the guard can drive these specific,
+ * historically-real hostnames through the real rule and prove a legacy link
+ * still lands on its resource with its token intact, and so that reintroducing
+ * one into a link builder is a test failure rather than a discovery.
+ *
+ * ⛔ A host here is NOT trusted, NOT redirected differently, and NEVER a source
+ * for a destination — the destination is always the configured origin.
+ */
+export const RETIRED_APP_HOSTS = [
+  // Measured in production message history (21 links).
+  'app.edgepropertyservicesyyc.ca',
+  // Same retired family. No sent link was found on the bare apex, but it is the
+  // parent of a host that WAS used, so naming it keeps it out of link builders.
+  'edgepropertyservicesyyc.ca',
+] as const
+
+/** Is this a hostname the product has retired? Comparison-normalised. */
+export function isRetiredAppHost(host: string | null | undefined): boolean {
+  const bare = normalizeHost(host)
+  return RETIRED_APP_HOSTS.some(h => bare === h)
+}
+
 export function isFixedHost(host: string): boolean {
   if (!host) return true
   const bare = host.replace(/:\d+$/, '')

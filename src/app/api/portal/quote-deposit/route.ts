@@ -4,6 +4,7 @@ import { createQuoteDepositCheckoutSession, stripeEnabled } from '@/lib/stripe/c
 import { schedulingGate, type GateLedgerRow } from '@/lib/payments/depositGate'
 import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
 import { appOrigin } from '@/lib/appOrigin'
+import { portalUrl } from '@/lib/portal'
 
 export const dynamic = 'force-dynamic'
 
@@ -80,10 +81,11 @@ export async function POST(req: NextRequest) {
   if (gate.required <= 0) return NextResponse.json({ error: 'This quote doesn’t require a deposit.' }, { status: 409 })
   if (gate.outstanding <= 0) return NextResponse.json({ error: 'This deposit is already paid — nothing more is needed.' }, { status: 409 })
 
+  // ⭐ ONE seam — see /api/portal/pay.
   const base = appOrigin()
   const result = await createQuoteDepositCheckoutSession(quote, {
-    successUrl: `${base}/portal/${token}?paid=1`,
-    cancelUrl: `${base}/portal/${token}`,
+    successUrl: portalUrl(token, base, { paid: 1 }),
+    cancelUrl: portalUrl(token, base),
     chargeCents: Math.round(gate.outstanding * 100),
     chargeLabel: `Deposit — Quote ${quote.quote_number}`,
   })

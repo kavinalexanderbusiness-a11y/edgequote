@@ -125,7 +125,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   const customers = (rows as { customer_id: string; customer_name: string | null; owner_id: string }[]) ?? []
 
-  const origin = cleanOrigin(req.nextUrl?.origin) || appOrigin()
+  // ⚠️⚠️ PUBLIC, UNAUTHENTICATED, and it sends a live portal token to a
+  // customer. Building that link from the request origin means the host half of
+  // a credential-bearing URL was decided by whoever made the request. Configured
+  // origin wins; the request remains only a dev/preview fallback.
+  const origin = appOrigin(req.nextUrl?.origin)
   const links: PortalLink[] = []
   for (const c of customers) {
     // Respect a withdrawn portal. ensurePortalToken only looks for a LIVE token

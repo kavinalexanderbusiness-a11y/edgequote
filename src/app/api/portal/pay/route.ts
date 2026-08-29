@@ -5,6 +5,7 @@ import { ensureStripeCustomerId, type CardCustomer } from '@/lib/payments/cards'
 import { depositChargeAmount } from '@/lib/payments/deposit'
 import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
 import { appOrigin } from '@/lib/appOrigin'
+import { portalUrl } from '@/lib/portal'
 
 export const dynamic = 'force-dynamic'
 
@@ -117,10 +118,13 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // ⭐ ONE seam. The return address a customer lands on after paying is the
+  // same builder every emailed portal link uses — so the host, the path and the
+  // token can never be spelled two ways.
   const base = appOrigin()
   const result = await createInvoiceCheckoutSession(invoice, {
-    successUrl: `${base}/portal/${token}?paid=1`,
-    cancelUrl: `${base}/portal/${token}`,
+    successUrl: portalUrl(token, base, { paid: 1 }),
+    cancelUrl: portalUrl(token, base),
     chargeCents: Math.round(charge.amount * 100),
     // Stripe's page is where the customer decides the smaller number is right —
     // name the charge as the deposit it is, or $2,000 against a $4,000 invoice
