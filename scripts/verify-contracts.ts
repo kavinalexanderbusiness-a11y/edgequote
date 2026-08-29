@@ -233,9 +233,17 @@ check('S74 still allows customer visibility',
   /visibility in \('internal', 'worker', 'customer'\)/.test(s74Schema),
   'sendContract files the artifact as customer-visible so S74\'s portal projection can show it')
 // ⭐ The purpose vocabulary S83 defaults into, unwidened.
-check('S74\'s purpose vocabulary is unchanged',
-  /purpose in \('work_authorization', 'customer_acknowledgement', 'completion_acknowledgement'\)/.test(s74Schema),
-  'contract_templates.purpose mirrors this list and must not drift from it')
+//
+// ⚠️ COUNT THEM, DO NOT JUST FIND ONE. S74 carries this list TWICE — on the
+// request and again on the signature — and a mutation that changed only the
+// first left the second matching, so the guard passed while the vocabulary had
+// already drifted. "At least one occurrence still looks right" is not the claim
+// being made here; "both still agree" is.
+const s74PurposeLists = (s74Schema.match(
+  /purpose in \('work_authorization', 'customer_acknowledgement', 'completion_acknowledgement'\)/g) ?? []).length
+check('S74\'s purpose vocabulary is unchanged, on BOTH tables',
+  s74PurposeLists === 2,
+  `contract_templates.purpose mirrors this list and must not drift from it — found ${s74PurposeLists} of the expected 2`)
 check('the contracts schema mirrors exactly that vocabulary',
   (schema.match(/'work_authorization', 'customer_acknowledgement', 'completion_acknowledgement'/g) ?? []).length >= 1,
   'two vocabularies that must agree should be checked against each other, not remembered')
@@ -532,6 +540,21 @@ check('10 · no portal file queries the contracts tables',
 check('10 · no contracts API route is exposed under the portal',
   !existsSync(join('src', 'app', 'api', 'portal', 'contracts')),
   'signing goes through Session 74\'s existing portal door')
+// ⛔ AND S83 DOES NOT REWRITE S74'S PROJECTION. The customer-facing view of a
+// document is Session 74's function; widening it here is how internal commercial
+// metadata would reach a portal without anyone deciding to send it.
+check('10 · the contracts migration does not redefine any portal function',
+  !/create or replace function public\.portal_/i.test(schema),
+  'portal_get_documents belongs to Session 74 and already returns no storage path')
+// ⭐ What the customer legitimately sees of a contract is exactly two fields —
+// the document NAME (the contract title) and its CATEGORY (the type). Both are
+// things they must be able to read. Nothing else crosses.
+check('10 · sendContract passes only the title and type to the customer-visible document',
+  /name: opts\.contract\.title/.test(libCode)
+  && /category: opts\.contract\.contract_type/.test(libCode)
+  && !/termination_reason|renewal_notice_days|template_id/.test(
+    libCode.slice(libCode.indexOf('uploadDocument(sb, {'), libCode.indexOf('if (up.error'))),
+  'a contract carries internal metadata that has no business in the portal')
 
 // ── Mobile: 375 / 390 / 430 ────────────────────────────────────────────────
 // ⭐ The rule this codebase settled on: a phone stacks, it does not scroll
