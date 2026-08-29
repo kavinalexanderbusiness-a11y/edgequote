@@ -36,7 +36,17 @@ const ACTIONS: Record<string, ActionMeta> = {
   // sales
   quote_created: { label: 'Created quote', category: 'sales' },
   quote_sent: { label: 'Sent quote', category: 'sales' },
-  quote_accepted: { label: 'Approved quote', category: 'sales' },
+  // ⭐ THREE EVENTS, THREE ROWS (Session 121). These used to be one action —
+  // 'quote_accepted' — emitted on every transition into 'accepted', so a portal
+  // approval, an owner recording a phone call, and an owner correcting a stuck
+  // row all read identically in the feed. audit_quotes() now picks between them
+  // by asking the acceptance ledger what actually happened.
+  quote_accepted: { label: 'Accepted quote', category: 'sales' },
+  quote_acceptance_recorded: { label: 'Recorded the customer’s acceptance', category: 'sales' },
+  // ⚠️ Deliberately dull, and deliberately not the word "accepted". Nobody
+  // consented; a label was changed. Saying anything warmer here is the exact lie
+  // this session exists to remove.
+  quote_status_overridden: { label: 'Set quote to Accepted by hand', category: 'sales' },
   quote_declined: { label: 'Declined quote', category: 'sales' },
   quote_scheduled: { label: 'Scheduled quote', category: 'sales' },
   quote_completed: { label: 'Quote completed', category: 'sales' },

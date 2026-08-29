@@ -4,6 +4,8 @@ import { splitServices, serviceLineTotals } from '@/lib/quoteServices'
 import { addLineItems } from '@/lib/jobPricing'
 import { toast } from '@/lib/toast'
 import { localTodayISO } from '@/lib/utils'
+import { acceptanceBlock, acceptanceBlockLabel, isAcceptedOrBeyond } from '@/lib/quoteAcceptance'
+import { loadAcceptanceState } from '@/lib/quoteAcceptanceData'
 
 // ── Quote → scheduled job (ONE engine) ───────────────────────────────────────
 // Every "schedule this quote" entry point (the quote page's Schedule button and
@@ -18,6 +20,32 @@ export async function scheduleQuoteAsJob(
   quote: Quote,
   opts?: { date?: string; services?: QuoteService[] },
 ): Promise<{ jobId: string | null; error: string | null }> {
+  // ── ⭐⭐ THE ACCEPTANCE GATE (Session 121) ──────────────────────────────────
+  // Booking work is ACTING ON THE COMMERCIAL TERMS: it puts crew time against a
+  // price, and the invoice that follows bills it. So it asks the one question —
+  // lib/quoteAcceptance.acceptanceBlock, the same question the invoice
+  // conversion and the deposit ask now put — rather than trusting `status`,
+  // which survives the edit that invalidated the consent behind it.
+  //
+  // ⛔ THE CHECK LIVES INSIDE THE ENGINE, not in its two callers. This function
+  // exists because "schedule this quote" was implemented twice and the copies
+  // disagreed; a gate bolted onto the callers would repeat that mistake with
+  // higher stakes.
+  //
+  // Only for a quote that CLAIMS a deal. A draft or sent quote scheduled from
+  // the day board is an estimate visit, not work sold, and has no acceptance to
+  // be stale.
+  if (isAcceptedOrBeyond(quote.status)) {
+    const { state, error: accErr } = await loadAcceptanceState(supabase, quote.id)
+    // ⚠️ A FAILED READ BLOCKS. "We couldn't check" is not "go ahead" — booking
+    // work because a network call failed is worse than making the owner retry.
+    if (accErr) {
+      return { jobId: null, error: 'Could not check this quote’s acceptance record, so nothing was scheduled. Check your connection and try again.' }
+    }
+    const block = acceptanceBlock(quote.status, state)
+    if (block) return { jobId: null, error: acceptanceBlockLabel(block, 'scheduling') }
+  }
+
   // The quote's property, else the customer's primary.
   let propertyId: string | null = quote.property_id
   if (!propertyId && quote.customer_id) {

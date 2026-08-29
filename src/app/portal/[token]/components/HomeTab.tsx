@@ -90,6 +90,11 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
     ? view.docItems.find(d => d.rawId === topAction.focusDocId) || null
     : null
   const oneQuoteId = oneQuoteDoc && !(oneQuoteDoc.options?.length) ? oneQuoteDoc.rawId : null
+  // Does this business have terms the customer must acknowledge? Read from the
+  // same field the Billing row renders and the acceptance record snapshots — one
+  // source, so the shortcut and the full row cannot disagree about whether there
+  // is anything to agree to.
+  const hasTerms = !!(view.data.business?.terms_text ?? '').trim()
   const oneInvoice = topAction?.kind === 'pay' && topAction.focusDocId
     ? view.docItems.find(d => d.rawId === topAction.focusDocId) || null
     : null
@@ -197,8 +202,8 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
                   </p>
                   <p className="text-xs text-ink-muted">
                     {depositGate.collected > 0
-                      ? `${formatCurrency(depositGate.collected)} of ${formatCurrency(depositGate.required)} received — your quote is approved`
-                      : 'Your quote is approved — your timing is confirmed once the deposit is received'}
+                      ? `${formatCurrency(depositGate.collected)} of ${formatCurrency(depositGate.required)} received — your quote is accepted`
+                      : 'Your quote is accepted — your timing is confirmed once the deposit is received'}
                   </p>
                 </div>
               </div>
@@ -250,9 +255,9 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
                       // this line says what there IS to do instead of asserting
                       // the recommended option as the figure.
                       ? (awaiting[0].options?.length
-                        ? `${awaiting[0].options.length} options — pick one and approve it`
-                        : `${formatCurrency(awaiting[0].amount)} — review and approve when you're ready`)
-                      : `Review and approve when you're ready`}
+                        ? `${awaiting[0].options.length} options — pick one and accept it`
+                        : `${formatCurrency(awaiting[0].amount)} — review and accept when you're ready`)
+                      : `Review and accept when you're ready`}
                   </p>
                   {/* The quote's OWN expiry, or nothing. This used to print issue-date +
                       30 days as fact — inventing a deadline for the 2 in 3 live quotes
@@ -268,12 +273,18 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
               <span className="text-xs font-semibold text-amber-400 shrink-0">Review →</span>
             </div>
           </button>
-          {oneQuoteId && (
+          {/* ⭐ The one-tap accept is offered ONLY when there is nothing to
+              acknowledge (Session 121). When the business has terms, accepting
+              from here would mean ticking a box the customer was never shown —
+              so this shortcut steps aside and the card above takes them to the
+              Billing row, where the terms are rendered in full above the button.
+              A shortcut that skips the thing being agreed to is not a shortcut. */}
+          {oneQuoteId && !hasTerms && (
             <div className="px-4 pb-4">
-              <Button className="w-full" onClick={() => actions.accept(oneQuoteId)} loading={actions.accepting === oneQuoteId}>
-                <Check className="w-4 h-4" /> Approve — {formatCurrency(awaiting[0].amount)}
+              <Button className="w-full" onClick={() => actions.accept(oneQuoteId, undefined, true)} loading={actions.accepting === oneQuoteId}>
+                <Check className="w-4 h-4" /> Accept — {formatCurrency(awaiting[0].amount)}
               </Button>
-              <p className="text-[11px] text-ink-faint mt-1.5 text-center">Nothing is charged when you approve.</p>
+              <p className="text-[11px] text-ink-faint mt-1.5 text-center">Nothing is charged when you accept.</p>
             </div>
           )}
         </div>
@@ -327,7 +338,7 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
         ) : approvedPending ? (
           <div>
             <p className="text-sm font-semibold text-ink flex items-center gap-1.5">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" /> Your quote has been approved.
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" /> Your quote has been accepted.
             </p>
             {/* This is the screen someone stares at for days after saying yes. "Will contact
                 you shortly" gives them nothing to do but wonder — tell them where the answer

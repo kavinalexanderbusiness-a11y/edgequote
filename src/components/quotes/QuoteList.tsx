@@ -493,8 +493,8 @@ export function QuoteList({ quotes, onDelete, reachById, onNotesSaved }: QuoteLi
                         leave an existing one alone, and the total so a status flip to
                         Accepted snapshots what was bought rather than nothing. */}
                     <td className="px-3 sm:px-5 py-3.5" onClick={e => e.stopPropagation()}>
-                      <QuoteStatusControl quoteId={q.id} status={q.status} followUpCount={q.follow_up_count}
-                        sentAt={q.sent_at} validUntil={q.valid_until} total={q.total}
+                      <QuoteStatusControl quoteId={q.id} status={q.status}
+                        sentAt={q.sent_at} validUntil={q.valid_until}
                         customerName={q.customer_name} />
                     </td>
                     <td className="px-3 sm:px-5 py-3.5 text-ink-faint hidden lg:table-cell">{formatDate(q.created_at)}</td>
