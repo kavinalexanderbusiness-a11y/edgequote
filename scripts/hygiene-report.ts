@@ -26,7 +26,21 @@ import { loadEnvLocal } from './lib/verify-fixture'
 loadEnvLocal()
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+const key = serviceKey || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+// ⭐⭐ WHICH KEY IS IN USE CHANGES WHAT "ZERO ROWS" MEANS, and that distinction is
+// the difference between a report and a lie.
+//
+// Every table below is RLS-protected. Read with the ANON key, PostgREST returns
+// `{ data: [], error: null }` — a successful request that saw nothing, because
+// the policy matched no rows. There is no error to notice. So a report that
+// prints "None — nothing matches a fixture marker" after an anon read is
+// asserting the catalogue is clean when the truth is that it was never visible.
+//
+// That is a FALSE ALL-CLEAR on exactly the surface this session exists to audit,
+// and this codebase has met that shape before: an existence claim over live data
+// is a coin flip unless the reader can prove it could have seen a row.
+const CAN_SEE_ROWS = !!serviceKey
 
 function line(s = '') { console.log(s) }
 function head(s: string) { line(''); line(`═══ ${s} ${'═'.repeat(Math.max(0, 66 - s.length))}`) }
@@ -57,6 +71,19 @@ async function main() {
   line('║  PRODUCTION HYGIENE — CLEANUP CANDIDATES                              ║')
   line('║  READ-ONLY. Nothing below has been changed. Nothing will be.          ║')
   line('╚══════════════════════════════════════════════════════════════════════╝')
+  if (!CAN_SEE_ROWS) {
+    line('')
+    line('⛔⛔ CANNOT AUDIT — no SUPABASE_SERVICE_ROLE_KEY, so this is running as ANON.')
+    line('    Every table below is RLS-protected. An anon read returns an EMPTY list')
+    line('    with NO error, so "0 rows" here would mean "invisible", not "clean" —')
+    line('    and printing it as clean would be a false all-clear on the exact')
+    line('    surface this report exists to audit.')
+    line('')
+    line('    Re-run with SUPABASE_SERVICE_ROLE_KEY set, or as the owner, to get a')
+    line('    real inventory. Nothing was changed either way.')
+    line('')
+    process.exit(3)
+  }
 
   const candidates: CleanupCandidate[] = []
 
@@ -211,6 +238,7 @@ async function main() {
   }
 
   head('WHAT HAPPENS NEXT')
+  line(`  Read with the SERVICE ROLE key, so a zero here means zero — not "invisible".`)
   line('  ⛔ Nothing above has been changed, and this script cannot change it.')
   line('  Deleting production rows needs an explicit decision on a specific list.')
   line('  Prefer ARCHIVE/DEACTIVATE: the row leaves every live surface and the')

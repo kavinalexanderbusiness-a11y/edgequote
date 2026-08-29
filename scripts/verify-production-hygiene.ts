@@ -220,6 +220,17 @@ check('an UNREFERENCED row prefers archive, then deactivate, then delete',
 check('⛔ lib/fixtureData contains no delete, no update, no supabase client',
   !/\.delete\(|\.update\(|createClient|from\(/.test(strip(read('src/lib/fixtureData.ts'))),
   'the classification engine must be pure — a rule that can act is a rule that can act by accident')
+// ⭐⭐ The report must REFUSE rather than report a clean book it could not see.
+// Every table it reads is RLS-protected; an anon read returns an empty list with
+// NO error, so “0 fixture rows” would be indistinguishable from “invisible”. That
+// is a false all-clear on the exact surface the report exists to audit.
+const REPORT = read('scripts/hygiene-report.ts')
+check('⛔ the cleanup report REFUSES to run without a key that can actually see rows',
+  /const CAN_SEE_ROWS = !!serviceKey/.test(strip(REPORT))
+  && /if \(!CAN_SEE_ROWS\) \{[\s\S]{0,900}?process\.exit\(3\)/.test(strip(REPORT)),
+  'an empty RLS-filtered read must never print as “nothing to clean up”')
+check('…and it says WHY, so the operator fixes the credential rather than trusting the zero',
+  /would mean “invisible”, not “clean”|false all-clear/.test(REPORT))
 check('the cleanup reporter is read-only too',
   !/\.delete\(|\.update\(|\.insert\(|\.upsert\(/.test(strip(read('scripts/hygiene-report.ts'))),
   'it produces candidates for a human; it must not be able to enact them')
