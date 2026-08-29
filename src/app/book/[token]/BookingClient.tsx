@@ -12,7 +12,9 @@ import { Button } from '@/components/ui/Button'
 import { formatCurrency, cn } from '@/lib/utils'
 import { Leaf, Loader2, Undo2, Trash2, Check, ArrowRight, ArrowLeft, Ruler, CheckCircle2, Phone, Mail, Camera, MapPin, X } from 'lucide-react'
 
-const STEP_LABELS: Record<string, string> = { address: 'Your address', measure: 'Confirm lawn size', plan: 'Choose a plan', contact: 'Your details' }
+// ⭐ Platform copy: geometry, not trade. "Confirm lawn size" was shown to every
+// tenant's customers, including the ones who do not sell lawn care.
+const STEP_LABELS: Record<string, string> = { address: 'Your address', measure: 'Confirm the area', plan: 'Choose a plan', contact: 'Your details' }
 
 // ── Public instant-quote + booking funnel ───────────────────────────────────
 // No login. A prospect enters their address, traces their lawn on satellite for
@@ -216,7 +218,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
         ;(gmap.current as { addListener: (e: string, cb: (ev: { latLng: unknown }) => void) => void }).addListener('click', (ev: { latLng: unknown }) => {
           pts.current.push(ev.latLng); redraw(); recompute()
         })
-      } catch { if (!cancelled) setMapErr('Map could not load — enter your approximate lawn size instead.') }
+      } catch { if (!cancelled) setMapErr('Map could not load — enter the approximate area instead.') }
     })()
     // Google can also reject the key AFTER the loader resolved (referrer /
     // billing / API errors announce themselves only via gm_authFailure). Same
@@ -225,7 +227,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
     const unwatch = onMapsUnavailable(u => {
       if (cancelled) return
       setMapsDown(u)
-      setMapErr('Map could not load — enter your approximate lawn size instead.')
+      setMapErr('Map could not load — enter the approximate area instead.')
     })
     return () => { cancelled = true; unwatch() }
   }, [step, parsed, showTracer])
@@ -358,7 +360,9 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
           {biz.logo_url ? <img src={biz.logo_url} alt="" className="h-10 w-auto object-contain" /> : <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center"><Leaf className="w-5 h-5 text-accent-text" /></div>}
           <div className="min-w-0">
             <p className="text-base font-bold text-ink truncate tracking-tight">{biz.company_name || 'Get an instant quote'}</p>
-            <p className="text-xs text-ink-muted">Instant lawn-care quote · book in minutes</p>
+            {/* The BUSINESS names the trade, through its own catalogue. The
+                platform says what the page does. */}
+            <p className="text-xs text-ink-muted">Instant quote · book in minutes</p>
           </div>
         </div>
 
@@ -376,7 +380,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
 
         {/* STEP: address */}
         {step === 'address' && (
-          <Section title="Where's your lawn?" sub="Enter your address to get an instant price.">
+          <Section title="Where is the property?" sub="Enter your address to get an instant price.">
             <AddressAutocomplete label="Property address" value={addressText} onChange={setAddressText} bookingToken={token}
               onSelect={p => { setParsed(p); setAddressText(p.formatted); setAutoResult(undefined); setShowTracer(false); setSqft(0) }} placeholder="Start typing your address…" />
             <Button size="lg" className="w-full mt-4" disabled={!parsed?.lat} onClick={() => setStep('measure')}>
@@ -389,7 +393,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
         {step === 'measure' && (
           <Section title="Confirm your property" sub="Here's what we found — check the photo, confirm the size, and you're one tap from your price.">
             {measuring ? (
-              <div className="py-12 text-center text-sm text-ink-muted flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Measuring your lawn from satellite…</div>
+              <div className="py-12 text-center text-sm text-ink-muted flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Measuring the area from satellite…</div>
             ) : !showTracer && autoResult ? (
               <div className="space-y-3">
                 {/* The property, from above — confirmation that we're quoting the right home */}
@@ -402,11 +406,11 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
                 </div>
                 <div className="rounded-card border border-accent/30 bg-accent/5 px-4 py-4">
                   <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm text-ink-muted flex items-center gap-2"><Ruler className="w-4 h-4 text-accent-text" /> Estimated lawn size</span>
+                    <span className="text-sm text-ink-muted flex items-center gap-2"><Ruler className="w-4 h-4 text-accent-text" /> Estimated area</span>
                     <ConfidenceBadge confidence={autoResult.confidence} />
                   </div>
                   <div className="flex items-end gap-2 mt-2">
-                    <input type="number" inputMode="numeric" value={sqft || ''} onChange={e => setSqft(Number(e.target.value) || 0)} aria-label="Lawn size in square feet"
+                    <input type="number" inputMode="numeric" value={sqft || ''} onChange={e => setSqft(Number(e.target.value) || 0)} aria-label="Measured area in square feet"
                       className="w-32 bg-bg-tertiary border border-border-strong rounded-xl px-3 py-2 text-xl font-bold text-ink tabular-nums outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
                     <span className="text-sm text-ink-muted pb-2">sq ft</span>
                   </div>
@@ -420,7 +424,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
                   ? <MapUnavailable unavailable={mapsDown} audience="customer" />
                   : <p className="text-sm text-amber-400">{mapErr}</p>}
                 <label className="flex flex-col gap-1.5">
-                  <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Approximate lawn size (sq ft)</span>
+                  <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Approximate area (sq ft)</span>
                   <input type="number" inputMode="numeric" autoFocus value={manualSqft} onChange={e => { setManualSqft(e.target.value); setSqft(Number(e.target.value) || 0) }}
                     placeholder="e.g. 3000" className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
                 </label>
@@ -429,7 +433,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
             ) : mapErr === 'manual' ? (
               <div className="space-y-3">
                 <label className="flex flex-col gap-1.5">
-                  <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Approximate lawn size (sq ft)</span>
+                  <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Approximate area (sq ft)</span>
                   <input type="number" inputMode="numeric" autoFocus value={manualSqft} onChange={e => { setManualSqft(e.target.value); setSqft(Number(e.target.value) || 0) }}
                     placeholder="e.g. 3000" className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
                 </label>
@@ -459,7 +463,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
 
         {/* STEP: plan */}
         {step === 'plan' && (
-          <Section title="Your instant quote" sub={`${sqft.toLocaleString()} sq ft lawn · choose how often you'd like service.`}>
+          <Section title="Your instant quote" sub={`${sqft.toLocaleString()} sq ft · choose how often you'd like service.`}>
             <div className="space-y-2">
               {plans.map(p => (
                 <button key={p.key} onClick={() => setPlan(p)}
@@ -510,7 +514,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
                 <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Photos <span className="font-normal text-ink-faint normal-case">(optional)</span></label>
                 <p className="text-[11px] text-ink-faint -mt-0.5">Show us gates, slopes, or problem areas so we can quote accurately. Up to 6.</p>
                 <label className={cn('inline-flex items-center gap-1.5 text-xs font-medium w-fit rounded-md focus-within:ring-2 focus-within:ring-accent/50', photoUrls.length >= 6 ? 'text-ink-faint cursor-not-allowed' : 'text-accent-text cursor-pointer')}>
-                  {uploadingPhotos ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />} {uploadingPhotos ? 'Uploading…' : photoUrls.length >= 6 ? 'Maximum 6 photos added' : 'Add photos of your lawn'}
+                  {uploadingPhotos ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />} {uploadingPhotos ? 'Uploading…' : photoUrls.length >= 6 ? 'Maximum 6 photos added' : 'Add photos of the property'}
                   <input type="file" accept="image/*" multiple onChange={addPhotos} className="sr-only" disabled={uploadingPhotos || photoUrls.length >= 6} />
                 </label>
                 {photoUrls.length > 0 && (
@@ -518,7 +522,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
                     {photoUrls.map(u => (
                       <div key={u} className="relative w-14 h-14 rounded-lg overflow-hidden border border-border-strong">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={u} alt="Lawn photo" className="w-full h-full object-cover" />
+                        <img src={u} alt="Property photo" className="w-full h-full object-cover" />
                         <button type="button" onClick={() => removePhoto(u)} aria-label="Remove photo"
                           className="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-black/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><X className="w-3 h-3" /></button>
                       </div>
@@ -590,7 +594,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
             <div className="rounded-card border border-border bg-bg-secondary divide-y divide-border text-sm">
               {(parsed?.formatted || parsed?.address) && <SummaryRow label="Address" value={parsed.formatted || parsed.address || ''} />}
               {plan && <SummaryRow label="Plan" value={`${plan.label} · ${formatCurrency(plan.price)}${plan.key !== 'one_time' ? '/visit' : ''}`} />}
-              {sqft > 0 && <SummaryRow label="Lawn size" value={`~${sqft.toLocaleString()} sq ft`} />}
+              {sqft > 0 && <SummaryRow label="Measured area" value={`~${sqft.toLocaleString()} sq ft`} />}
               {quoteNumber && <SummaryRow label="Confirmation #" value={quoteNumber} />}
             </div>
             {/* A confirmation now really goes out (api/booking/notify sends the customer

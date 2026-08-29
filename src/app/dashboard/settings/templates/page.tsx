@@ -18,11 +18,16 @@ import { Banner } from '@/components/ui/Banner'
 import { Toggle } from '@/components/ui/Toggle'
 import { useForm } from 'react-hook-form'
 import { formatServicePrice, priceInputLabel, priceInputStep, costBasisLabel } from '@/lib/servicePricing'
+import {
+  PUBLICATION_LABEL, PUBLICATION_MEANING, publicationState, publishBlockedReason, publishPatch,
+} from '@/lib/servicePublication'
+import { catalogueSuspicions, duplicateNameSet, isFixtureName } from '@/lib/fixtureData'
 import { totalUnitCost, marginPct, markupPct, unitProfit, marginTone, formatPct } from '@/lib/margin'
 import { toneText } from '@/lib/tone'
 import { formatCurrency, cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
-import { Plus, Edit2, Trash2, X, Star } from 'lucide-react'
+import { confirm as confirmDialog } from '@/lib/confirm'
+import { Plus, Edit2, Trash2, X, Star, Globe, Lock, AlertTriangle, FlaskConical } from 'lucide-react'
 import { ServiceBundles } from '@/components/settings/ServiceBundles'
 import { scrollBehavior } from '@/lib/motion'
 import { listFormTemplates, type FormTemplate } from '@/lib/jobForms'
@@ -211,6 +216,48 @@ export default function ServiceTemplatesPage() {
     refresh()
   }
 
+  // ── Publish / unpublish ────────────────────────────────────────────────────
+  // ⭐ The ONE writer of published_at in the application. It goes through
+  // publishPatch so no call site invents its own shape, and it deliberately does
+  // NOT touch is_active: publishing an inactive service would switch it on as a
+  // side effect nobody asked for.
+  //
+  // ⛔ Publishing is CONFIRMED, unpublishing is not. Making something visible on
+  // the open internet is the direction that cannot be quietly undone — the
+  // catalogue is edge-cached for five minutes, so a mistaken publish is public
+  // for longer than the click that caused it. Taking something down needs no
+  // ceremony.
+  async function togglePublished(t: ServiceTemplate) {
+    const state = publicationState(t)
+    if (state === 'inactive') {
+      toast.error(`"${t.name}" is switched off — turn it on before publishing it.`)
+      return
+    }
+    const next = state !== 'published'
+    if (next) {
+      const blocked = publishBlockedReason(catalogueSuspicions(t, { duplicateOfName: dupNames.has(t.name.trim().toLowerCase()) ? t.name : null }))
+      if (blocked) { toast.error(blocked); return }
+      const ok = await confirmDialog({
+        title: `Publish "${t.name}" to customers?`,
+        message: `It will appear on your booking site and in every customer's portal at ${formatServicePrice(t)}. Anyone with your booking link can see it — you can unpublish it at any time, though the public page may take a few minutes to catch up.`,
+        confirmLabel: 'Publish to customers',
+      })
+      if (!ok) return
+    }
+    const { error } = await supabase.from('service_templates').update(publishPatch(next)).eq('id', t.id)
+    if (error) {
+      // ⚠️ 42703 = the column does not exist ⇒ migration 20260829120000 has not
+      // been applied to this database. Say the useful thing rather than "could
+      // not update", which sends the owner looking at the service.
+      toast.error(/column .*published_at/i.test(error.message)
+        ? 'Publishing is not available on this database yet — the service-publication migration has not been applied.'
+        : `Could not ${next ? 'publish' : 'unpublish'} "${t.name}".`)
+      return
+    }
+    toast.success(next ? `"${t.name}" is live for customers.` : `"${t.name}" is internal again — customers can no longer see it.`)
+    refresh()
+  }
+
   async function toggleFavorite(t: ServiceTemplate) {
     const { error } = await supabase.from('service_templates').update({ is_favorite: !t.is_favorite }).eq('id', t.id)
     if (error) { toast.error('Could not update the favorite.'); return }
@@ -230,6 +277,11 @@ export default function ServiceTemplatesPage() {
       refresh()
     })
   }
+
+  // Names a customer could not tell apart. Computed ONCE over the whole
+  // catalogue rather than per row — duplication is a property of the SET, and
+  // asking it row-by-row would be quadratic and would miss the pair.
+  const dupNames = duplicateNameSet(templates.map(t => t.name))
 
   const grouped = templates.reduce<Record<string, ServiceTemplate[]>>((acc, t) => {
     (acc[t.category] ||= []).push(t)
@@ -460,9 +512,52 @@ export default function ServiceTemplatesPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className={`text-sm font-medium ${t.is_active ? 'text-ink' : 'text-ink-faint line-through'}`}>{t.name}</span>
-                        {!t.is_active && <span className="text-[10px] uppercase tracking-wide text-ink-faint bg-ink-faint/10 px-2 py-0.5 rounded-full">Inactive</span>}
+                        {/* ⭐ THE state, in one badge, on every row. Before this the
+                            catalogue showed only Active/Inactive — and "Active"
+                            was silently also "on the public website", which is
+                            the defect this page now has to make visible. */}
+                        {(() => {
+                          const state = publicationState(t)
+                          if (state === 'inactive') return <span className="text-[10px] uppercase tracking-wide text-ink-faint bg-ink-faint/10 px-2 py-0.5 rounded-full">Inactive</span>
+                          if (state === 'published') return (
+                            <span className="text-[10px] uppercase tracking-wide text-accent-text bg-accent/10 px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+                              <Globe className="w-2.5 h-2.5" aria-hidden /> Published
+                            </span>
+                          )
+                          return (
+                            <span className="text-[10px] uppercase tracking-wide text-ink-muted bg-ink-faint/10 px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+                              <Lock className="w-2.5 h-2.5" aria-hidden /> Internal
+                            </span>
+                          )
+                        })()}
+                        {/* A machine-written fixture row, named as such. It is
+                            excluded from customers and from every count by
+                            lib/fixtureData — saying so here is what stops the
+                            owner hunting for why their numbers moved. */}
+                        {isFixtureName(t.name) && (
+                          <span className="text-[10px] uppercase tracking-wide text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+                            <FlaskConical className="w-2.5 h-2.5" aria-hidden /> Test data
+                          </span>
+                        )}
                       </div>
                       {t.default_description && <p className="text-xs text-ink-muted truncate mt-0.5">{t.default_description}</p>}
+                      {/* ⛔ FLAGGED, never fixed. "Do not silently rewrite
+                          legitimate owner prices" — a $1 service might be a real
+                          call-out fee, so the only safe move is to say so and
+                          let the owner answer. One line, the first problem
+                          only: a row wearing four warnings is a row nobody
+                          reads. */}
+                      {(() => {
+                        const s = catalogueSuspicions(t, { duplicateOfName: dupNames.has(t.name.trim().toLowerCase()) ? t.name : null })
+                          .filter(x => x.code !== 'inactive')
+                        if (!s.length) return null
+                        return (
+                          <p className="text-[11px] text-amber-400 mt-0.5 flex items-start gap-1 leading-snug">
+                            <AlertTriangle className="w-3 h-3 shrink-0 mt-px" aria-hidden />
+                            <span className="min-w-0">{s[0].message}{s.length > 1 ? ` (+${s.length - 1} more)` : ''}</span>
+                          </p>
+                        )
+                      })()}
                     </div>
                     {/* Margin, only where a cost is known. Services with no cost
                         show nothing at all — the whole catalogue reading "100%"
@@ -484,6 +579,18 @@ export default function ServiceTemplatesPage() {
                       onClick={e => { e.stopPropagation(); toggleFavorite(t) }}
                       className={t.is_favorite ? 'text-amber-400 hover:text-amber-300' : 'text-ink-faint hover:text-ink-muted'}>
                       <Star className={cn('w-4 h-4', t.is_favorite && 'fill-current')} />
+                    </Button>
+                    {/* Publish sits BEFORE the active switch, because it is the
+                        one an owner now has to think about. Its own tap target,
+                        its own label, never a bare icon: "is this on my website?"
+                        must be answerable and changeable in the same place. */}
+                    <Button variant="ghost" size="sm"
+                      aria-pressed={publicationState(t) === 'published'}
+                      aria-label={publicationState(t) === 'published' ? `Unpublish ${t.name}` : `Publish ${t.name} to customers`}
+                      title={PUBLICATION_MEANING[publicationState(t)]}
+                      onClick={e => { e.stopPropagation(); togglePublished(t) }}
+                      className={publicationState(t) === 'published' ? 'text-accent-text hover:text-accent' : 'text-ink-faint hover:text-ink-muted'}>
+                      {publicationState(t) === 'published' ? <Globe className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
                     </Button>
                     <span onClick={e => e.stopPropagation()}><Toggle checked={t.is_active} onChange={() => toggleActive(t)} /></span>
                     <Button variant="ghost" size="sm" aria-label="Edit service" title="Edit" onClick={e => { e.stopPropagation(); openEdit(t) }}><Edit2 className="w-4 h-4" /></Button>
