@@ -521,6 +521,38 @@ check('the file itself tells S106 to re-version from the live ledger',
 check('it warns that the app must not be deployed before it is applied',
   /APPLY THIS BEFORE deploying an app build that WRITES these columns/.test(migration))
 
+// ⭐⭐ A STRUCTURAL ASSERTION, and it has to be one — mutation testing proved
+// behaviour cannot reach this.
+//
+// Each no-charge function guards tenancy TWICE: the opening SELECT filters on
+// `user_id = auth.uid()` and returns false when nothing comes back, and every
+// UPDATE repeats the predicate. Because the SELECT already refuses, deleting the
+// predicate from an UPDATE changes NO observable behaviour — the second lock on
+// a door the first lock already shut. So no input can prove it absent, and the
+// cross-tenant behavioural test above stays green while it is gone.
+//
+// That is exactly the case S111 hit ("a defence-in-depth guard unreachable behind
+// the filter above it has to be a structural assertion"), and the reason it is
+// worth keeping rather than deleting: SECURITY DEFINER bypasses RLS, so if a
+// later edit relaxes the SELECT, the UPDATE's predicate is all that stands
+// between this door and another business's rows.
+{
+  const bodies = migration.split(/create or replace function/i).slice(1)
+    .filter(b => /_set_no_charge/.test(b))
+  check('both no-charge doors exist in the migration', bodies.length === 2, `found ${bodies.length}`)
+  for (const b of bodies) {
+    const name = (/public\.(\w+)/.exec(b) ?? [])[1] ?? '(unknown)'
+    const updates = b.match(/update public\.(?:quotes|jobs)[\s\S]*?;/g) ?? []
+    check(`${name}: every UPDATE keeps its tenancy predicate`,
+      updates.length >= 2 && updates.every(u => /user_id = v_uid/.test(u)),
+      `${updates.length} update(s), ${updates.filter(u => !/user_id = v_uid/.test(u)).length} unguarded`)
+    check(`${name}: the opening lookup is tenant-scoped too`,
+      /where id = p_\w+ and user_id = v_uid/.test(b))
+    check(`${name}: the actor comes from auth.uid(), not a parameter`,
+      /v_uid := auth\.uid\(\)/.test(b) && !/p_actor|p_by\b/.test(b))
+  }
+}
+
 // ⭐ The baseline is a snapshot of what PRODUCTION has run, and production has
 // NOT run this yet — so the old body is still in there and that is correct. The
 // apply path supersedes it. Asserted so that "the baseline has the hole" is a
