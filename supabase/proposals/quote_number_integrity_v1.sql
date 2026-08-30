@@ -644,9 +644,16 @@ begin
     raise exception 'quote_number_integrity: % existing quote(s) are not in the claim registry — history is not protected', v_unclaimed;
   end if;
 
+  -- ⚠️ SCOPED TO public.quotes. `pg_trigger.tgname` is unique per TABLE, not per
+  -- database, so an unscoped lookup would be satisfied by a same-named trigger on
+  -- some other table — an assertion that passes for the wrong reason is worse
+  -- than no assertion.
   select count(*) into v_missing
     from (values ('quotes_claim_document_number'), ('quotes_release_document_number')) t(n)
-   where not exists (select 1 from pg_trigger g where g.tgname = t.n and not g.tgisinternal);
+   where not exists (select 1 from pg_trigger g
+                      where g.tgname = t.n
+                        and g.tgrelid = 'public.quotes'::regclass
+                        and not g.tgisinternal);
   if v_missing > 0 then
     raise exception 'quote_number_integrity: % claim trigger(s) missing — new quotes are not protected', v_missing;
   end if;
