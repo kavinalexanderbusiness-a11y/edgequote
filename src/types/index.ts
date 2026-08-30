@@ -1953,14 +1953,21 @@ export const SERVICE_CATEGORIES = [
 // values are unchanged, and this is the one place the wording lives so every
 // surface says the same thing.
 //
-// `accepted` reads "Approved" because that is literally what the row records: the
-// customer consenting. portal_accept_quote sets status='accepted' and snapshots
-// accepted_price at the instant of consent. "Accepted" is the database's word for
-// it; "Approved" is the owner's.
+// ⭐ ONE WORD FOR THE QUOTE'S OWN STATE (Session 121). This pill said "Approved",
+// four dashboard banners said "Accepted", the quote page's own action and toast
+// said "Won", and the portal button said "Approve" — four words for one event, on
+// screens an owner reads side by side. The word is ACCEPTED everywhere the
+// QUOTE's state is shown, and it matches the database's own value so the label
+// and the row can never drift apart.
+//
+// ⭐ "Won" survives and is NOT a synonym: lib/salesStage's ladder describes a
+// DEAL, not a document, and a deal can be won before any quote exists. Renaming
+// that rung would erase a distinction the pipeline deliberately makes.
+// See lib/quoteAcceptance for the full ruling.
 export const STATUS_LABELS: Record<QuoteStatus, string> = {
   draft: 'Draft',
   sent: 'Sent',
-  accepted: 'Approved',
+  accepted: 'Accepted',
   scheduled: 'Scheduled',
   completed: 'Completed',
   paid: 'Paid',

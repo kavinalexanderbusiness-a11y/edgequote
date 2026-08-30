@@ -1139,5 +1139,12 @@
   "sql_md5": "d6e74fe3a3bf727c95bb04d2fa932eb6",
   "version": "20260828120000",
   "stmt_count": 1
+ },
+ {
+  "name": "quote_acceptance_integrity_v1",
+  "sql_len": 69027,
+  "sql_md5": "efe4a5053fe731ee3a39f86ca08913a1",
+  "version": "20260828140000",
+  "stmt_count": 1
  }
 ]

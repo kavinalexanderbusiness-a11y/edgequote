@@ -2550,6 +2550,16 @@
   "with_check": null
  },
  {
+  "cmd": "SELECT",
+  "qual": "(auth.uid() = user_id)",
+  "roles": "{public}",
+  "tablename": "quote_acceptances",
+  "permissive": "PERMISSIVE",
+  "policyname": "quote_acceptances: select own",
+  "schemaname": "public",
+  "with_check": null
+ },
+ {
   "cmd": "DELETE",
   "qual": "((auth.uid() = user_id) AND (EXISTS ( SELECT 1\n   FROM quotes q\n  WHERE ((q.id = quote_addons.quote_id) AND (q.user_id = auth.uid()) AND (q.status = ANY (ARRAY['draft'::text, 'sent'::text]))))))",
   "roles": "{public}",

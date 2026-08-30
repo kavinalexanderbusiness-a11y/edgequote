@@ -138,6 +138,7 @@
     "verify:customer-comms": "tsx scripts/verify-customer-comms.ts",
     "verify:portal-contact": "tsx scripts/verify-portal-contact.ts",
     "verify:quote-options": "tsx scripts/verify-quote-options.ts",
+    "verify:quote-acceptance-integrity": "tsx scripts/verify-quote-acceptance-integrity.ts",
     "verify:quote-pdf": "tsx scripts/verify-quote-pdf.ts",
     "verify:attribution": "tsx scripts/verify-attribution.ts",
     "verify:service-bundles": "tsx scripts/verify-service-bundles.ts",

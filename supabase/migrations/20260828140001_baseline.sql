@@ -8,8 +8,8 @@
 --
 -- This file is the ONE starting point for a database. Applying it to an empty
 -- Postgres 17 database produces the production schema contract:
---   115 tables · 153 functions · 134 triggers · 373 policies
---   628 constraints · 293 standalone indexes · 7 storage buckets
+--   116 tables · 164 functions · 137 triggers · 374 policies
+--   645 constraints · 296 standalone indexes · 7 storage buckets
 --
 -- IT DOES NOT RESTORE DATA. Not one row. Rebuilding a working production system
 -- is: this file, THEN a backup restore, THEN storage objects, THEN env config.
@@ -1343,6 +1343,31 @@ create table if not exists public."push_subscriptions" (
   "created_at" timestamp with time zone default now() not null,
   "last_seen_at" timestamp with time zone default now() not null
 );
+create table if not exists public."quote_acceptances" (
+  "id" uuid default extensions.uuid_generate_v4() not null,
+  "created_at" timestamp with time zone default now() not null,
+  "user_id" uuid not null,
+  "quote_id" uuid not null,
+  "customer_id" uuid,
+  "seq" integer not null,
+  "accepted_at" timestamp with time zone default now() not null,
+  "kind" text not null,
+  "source" text not null,
+  "actor_type" text not null,
+  "actor_id" uuid,
+  "actor_label" text,
+  "on_behalf_reason" text,
+  "on_behalf_note" text,
+  "accepted_amount" numeric(10,2) not null,
+  "selected_option_id" uuid,
+  "document" jsonb not null,
+  "document_fingerprint" text not null,
+  "terms_required" boolean default false not null,
+  "terms_acknowledged" boolean default false not null,
+  "terms_text" text,
+  "terms_fingerprint" text,
+  "supersedes_id" uuid
+);
 create table if not exists public."quote_addons" (
   "id" uuid default extensions.uuid_generate_v4() not null,
   "created_at" timestamp with time zone default now() not null,
@@ -1854,7 +1879,7 @@ create table if not exists public."worker_availability" (
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 3 · FUNCTIONS
--- 153 application functions, verbatim from pg_get_functiondef.
+-- 164 application functions, verbatim from pg_get_functiondef.
 -- Emitted BEFORE constraints: a CHECK constraint can call one, and the dependency
 -- is resolved when the constraint is added.
 -- SECURITY DEFINER + `set search_path` is not decoration here: these functions are
@@ -2393,6 +2418,8 @@ CREATE OR REPLACE FUNCTION public.audit_quotes()
 AS $function$
 declare
   v_action text;
+  v_kind text;
+  v_reason text;
 begin
   if tg_op = 'INSERT' then
     perform public.audit_log(new.user_id, 'quote_created', 'quote', new.id,
@@ -2411,27 +2438,46 @@ begin
   end if;
 
   if new.status is distinct from old.status then
-    v_action := case new.status
-      when 'sent'      then 'quote_sent'
-      when 'accepted'  then 'quote_accepted'
-      when 'declined'  then 'quote_declined'
-      when 'scheduled' then 'quote_scheduled'
-      when 'completed' then 'quote_completed'
-      when 'paid'      then 'quote_paid'
-      else 'quote_status_changed'
-    end;
+    if new.status = 'accepted' then
+      -- ⭐ THREE EVENTS, THREE ACTIONS, ONE READER. 'quote_status_overridden' is
+      -- the honest name for "someone set this to accepted and no customer said
+      -- yes". quote_acceptance_kind_now is shared with the notification trigger
+      -- so the feed and the bell can never describe one event two ways.
+      v_kind := public.quote_acceptance_kind_now(new.id);
+      v_action := case v_kind
+        when 'customer' then 'quote_accepted'
+        when 'owner_on_behalf' then 'quote_acceptance_recorded'
+        else 'quote_status_overridden' end;
+    else
+      v_action := case new.status
+        when 'sent'      then 'quote_sent'
+        when 'declined'  then 'quote_declined'
+        when 'scheduled' then 'quote_scheduled'
+        when 'completed' then 'quote_completed'
+        when 'paid'      then 'quote_paid'
+        else 'quote_status_changed'
+      end;
+    end if;
+    -- ⭐ An OVERRIDE carries the owner's own words for why. Set transaction-locally
+    -- by owner_override_quote_status and read here, so the reason rides the ONE
+    -- audit row this trigger already writes — rather than a second audit table,
+    -- or a second row saying the same thing twice.
+    v_reason := nullif(coalesce(current_setting('app.quote_status_override_reason', true), ''), '');
     perform public.audit_log(new.user_id, v_action, 'quote', new.id,
       new.quote_number, new.customer_id,
       jsonb_build_object('status', old.status),
       jsonb_build_object('status', new.status)
         || case when new.status = 'accepted' then
              jsonb_build_object('accepted_price', new.accepted_price,
-                                'selected_cadence', new.selected_cadence)
+                                'selected_cadence', new.selected_cadence,
+                                'acceptance_kind', v_kind)
+           else '{}'::jsonb end
+        || case when v_reason is not null then jsonb_build_object('override_reason', v_reason)
            else '{}'::jsonb end);
   end if;
 
-  -- Price edits. `total` is GENERATED from initial_price + travel_fee â€” the
-  -- one money path â€” so before/after quote the generated figure, not the parts.
+  -- Price edits. `total` is GENERATED from initial_price + travel_fee — the one
+  -- money path — so before/after quote the generated figure, not the parts.
   if (new.initial_price is distinct from old.initial_price
       or new.travel_fee is distinct from old.travel_fee) then
     perform public.audit_log(new.user_id, 'quote_price_changed', 'quote', new.id,
@@ -5446,16 +5492,25 @@ CREATE OR REPLACE FUNCTION public.notify_quote_accepted()
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
+declare v_kind text; v_title text;
 begin
   if new.status = 'accepted' and old.status is distinct from 'accepted' then
+    v_kind := public.quote_acceptance_kind_now(new.id);
+    v_title := case v_kind
+      when 'customer' then coalesce(nullif(new.customer_name,''), 'A customer') || ' accepted a quote'
+      when 'owner_on_behalf' then 'You recorded ' || coalesce(nullif(new.customer_name,''), 'a customer') || '''s acceptance'
+      -- No evidence: an administrative status change. Naming the customer here
+      -- would put words in their mouth, in the owner's own notification bell.
+      else 'Quote marked accepted — no customer acceptance on record'
+    end;
     insert into public.notifications (user_id, type, title, body, customer_id, entity_type, entity_id, amount, href)
-    values (new.user_id, 'quote_accepted',
-      coalesce(nullif(new.customer_name,''), 'A customer') || ' accepted a quote',
+    values (new.user_id, 'quote_accepted', v_title,
       'Quote ' || coalesce(new.quote_number, '') || ' · $' || trim(to_char(coalesce(new.total,0), 'FM999990D00')),
       new.customer_id, 'quote', new.id, new.total, '/dashboard/quotes/' || new.id);
   end if;
   return new;
-end; $function$;
+end;
+$function$;
 
 CREATE OR REPLACE FUNCTION public.notify_review_received()
  RETURNS trigger
@@ -5497,41 +5552,90 @@ begin
   return null;
 end; $function$;
 
-CREATE OR REPLACE FUNCTION public.owner_select_quote_option(p_quote_id uuid, p_option_id uuid DEFAULT NULL::uuid, p_addon_ids uuid[] DEFAULT NULL::uuid[])
+CREATE OR REPLACE FUNCTION public.owner_override_quote_status(p_quote_id uuid, p_status text, p_reason text)
  RETURNS boolean
  LANGUAGE plpgsql
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
+declare v_uid uuid := auth.uid(); v_current text;
 begin
-  -- Stated rather than implied: a guard whose safety depends on a NULL
-  -- comparison behaving is the shape that failed open in the measurement RPC.
-  if auth.uid() is null then return false; end if;
-  if not exists (
-    select 1 from public.quotes where id = p_quote_id and user_id = auth.uid()
-  ) then
+  if v_uid is null then return false; end if;
+  -- ⛔ A reason is not optional. An override with no stated cause is
+  -- indistinguishable, a month later, from a mistake — which is the state this
+  -- whole session exists to stop the record being in.
+  if p_reason is null or btrim(p_reason) = '' then return false; end if;
+  if p_status is null or p_status not in ('accepted', 'scheduled', 'completed', 'paid', 'declined') then
     return false;
   end if;
-  return public.quote_apply_choice(p_quote_id, p_option_id, p_addon_ids, 'owner');
-end $function$;
 
-CREATE OR REPLACE FUNCTION public.portal_accept_quote(p_token text, p_quote_id uuid, p_option_id uuid DEFAULT NULL::uuid, p_addon_ids uuid[] DEFAULT NULL::uuid[])
+  select status into v_current from public.quotes where id = p_quote_id and user_id = v_uid;
+  if v_current is null then return false; end if;
+  if v_current = p_status then return false; end if;   -- nothing to override
+
+  perform set_config('app.quote_status_override_reason', btrim(p_reason), true);
+  update public.quotes set status = p_status where id = p_quote_id and user_id = v_uid;
+  perform set_config('app.quote_status_override_reason', '', true);
+  return true;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.owner_record_customer_acceptance(p_quote_id uuid, p_reason text, p_option_id uuid DEFAULT NULL::uuid, p_addon_ids uuid[] DEFAULT NULL::uuid[], p_note text DEFAULT NULL::text)
+ RETURNS uuid
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_uid uuid := auth.uid(); v_label text;
+begin
+  if v_uid is null then return null; end if;
+  if p_reason is null or btrim(p_reason) = '' then return null; end if;
+  if not exists (select 1 from public.quotes where id = p_quote_id and user_id = v_uid) then
+    return null;
+  end if;
+  if not public.quote_apply_choice(p_quote_id, p_option_id, p_addon_ids, 'owner') then
+    return null;
+  end if;
+  select coalesce(nullif(btrim(b.owner_name), ''), nullif(btrim(b.company_name), ''))
+    into v_label from public.business_settings b where b.user_id = v_uid limit 1;
+  -- ⭐ The terms acknowledgement is TRUE by a different route here, and the row
+  -- says which route: the owner is attesting the customer agreed, and
+  -- kind='owner_on_behalf' + on_behalf_reason is exactly that attestation. It is
+  -- never presented later as the customer having ticked a box.
+  return public.quote_record_acceptance(
+    p_quote_id, 'owner_on_behalf', 'dashboard', v_uid, v_label,
+    btrim(p_reason), p_note, true);
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.owner_select_quote_option(p_quote_id uuid, p_option_id uuid DEFAULT NULL::uuid, p_addon_ids uuid[] DEFAULT NULL::uuid[], p_reason text DEFAULT NULL::text, p_note text DEFAULT NULL::text)
  RETURNS boolean
  LANGUAGE plpgsql
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-declare v_customer uuid; v_user uuid;
 begin
-  select customer_id, user_id into v_customer, v_user from public.customer_portal_tokens
-   where token = p_token and not revoked;
+  if auth.uid() is null then return false; end if;
+  if p_reason is null or btrim(p_reason) = '' then return false; end if;
+  return public.owner_record_customer_acceptance(
+    p_quote_id, p_reason, p_option_id, p_addon_ids, p_note) is not null;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.portal_accept_quote(p_token text, p_quote_id uuid, p_option_id uuid DEFAULT NULL::uuid, p_addon_ids uuid[] DEFAULT NULL::uuid[], p_terms_ack boolean DEFAULT false)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_customer uuid; v_user uuid; v_name text;
+begin
+  select t.customer_id, t.user_id into v_customer, v_user
+    from public.customer_portal_tokens t where t.token = p_token and not t.revoked;
   if v_customer is null then return false; end if;
 
-  -- This door proves the quote is this token's customer's and still out for
-  -- approval. Which OPTION and which EXTRAS belong to the quote is the core's
-  -- question — a token proves WHICH CUSTOMER, never WHICH ROW.
-  -- ⛔ 'sent' only: a draft is the owner's unfinished document and is never
-  -- shown to a customer, so it can never be approved from here.
+  -- ⛔ 'sent' only: a draft is the owner's unfinished document and is never shown
+  -- to a customer, so it can never be approved from here.
   if not exists (
     select 1 from public.quotes
      where id = p_quote_id and customer_id = v_customer and user_id = v_user and status = 'sent'
@@ -5539,8 +5643,16 @@ begin
     return false;
   end if;
 
-  return public.quote_apply_choice(p_quote_id, p_option_id, p_addon_ids, 'portal');
-end $function$;
+  if not public.quote_apply_choice(p_quote_id, p_option_id, p_addon_ids, 'portal') then
+    return false;
+  end if;
+
+  select c.name into v_name from public.customers c where c.id = v_customer and c.user_id = v_user;
+  perform public.quote_record_acceptance(
+    p_quote_id, 'customer', 'portal', v_customer, v_name, null, null, coalesce(p_terms_ack, false));
+  return true;
+end;
+$function$;
 
 CREATE OR REPLACE FUNCTION public.portal_add_contact(p_token text, p_phone text DEFAULT NULL::text, p_email text DEFAULT NULL::text)
  RETURNS jsonb
@@ -6071,6 +6183,151 @@ begin
   return new;
 end; $function$;
 
+CREATE OR REPLACE FUNCTION public.quote_acceptance_is_current(p_quote_id uuid)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_a public.quote_acceptances; v_tenant uuid;
+begin
+  select q.user_id into v_tenant from public.quotes q where q.id = p_quote_id;
+  if v_tenant is null then return false; end if;
+  -- ⛔ A SIGNED-IN CALLER MAY ONLY ASK ABOUT THEIR OWN QUOTES. This is
+  -- SECURITY DEFINER and resolves a quote BY ID, so without this an authenticated
+  -- user could probe another tenant's quote ids and learn which of them carry a
+  -- live acceptance. Answering `false` — indistinguishable from "not current" —
+  -- leaks nothing at all.
+  -- ⭐ auth.uid() IS NULL is the server path, not a hole: the portal's deposit
+  -- route has no JWT (a token proves the customer, and the route has already
+  -- matched the quote to that token) and is the reason service_role is granted
+  -- execute. anon is granted nothing here.
+  if auth.uid() is not null and auth.uid() is distinct from v_tenant then return false; end if;
+  select * into v_a from public.quote_acceptances
+   where quote_id = p_quote_id order by seq desc limit 1;
+  -- No evidence at all: a status somebody typed is not an acceptance.
+  if not found then return false; end if;
+  if public.quote_material_fingerprint(p_quote_id) is distinct from v_a.document_fingerprint then
+    return false;
+  end if;
+  if v_a.terms_required
+     and public.quote_terms_fingerprint(v_tenant) is distinct from v_a.terms_fingerprint then
+    return false;
+  end if;
+  return true;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.quote_acceptance_kind_now(p_quote_id uuid)
+ RETURNS text
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_marker text; v_kind text;
+begin
+  v_marker := nullif(coalesce(current_setting('app.quote_acceptance_kind', true), ''), '');
+  if v_marker in ('customer', 'owner_on_behalf') then return v_marker; end if;
+  select a.kind into v_kind from public.quote_acceptances a
+   where a.quote_id = p_quote_id order by a.seq desc limit 1;
+  return v_kind;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.quote_acceptance_state(p_quote_id uuid)
+ RETURNS TABLE(accepted boolean, acceptance_id uuid, acceptance_seq integer, accepted_at timestamp with time zone, kind text, source text, actor_label text, on_behalf_reason text, accepted_amount numeric, selected_option_id uuid, document jsonb, terms_acknowledged boolean, needs_reapproval boolean, terms_changed boolean)
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_a public.quote_acceptances; v_tenant uuid;
+begin
+  select q.user_id into v_tenant from public.quotes q where q.id = p_quote_id;
+  if v_tenant is null then return; end if;
+  -- ⛔ Tenancy is asserted HERE, not left to the caller. This function is
+  -- SECURITY DEFINER, so without it any signed-in user could read any tenant's
+  -- acceptance evidence by quote id.
+  if auth.uid() is distinct from v_tenant then return; end if;
+
+  select * into v_a from public.quote_acceptances
+   where quote_id = p_quote_id order by seq desc limit 1;
+  if not found then
+    return query select false, null::uuid, null::integer, null::timestamptz, null::text, null::text,
+                        null::text, null::text, null::numeric, null::uuid, null::jsonb,
+                        false, false, false;
+    return;
+  end if;
+
+  return query select
+    true, v_a.id, v_a.seq, v_a.accepted_at, v_a.kind, v_a.source, v_a.actor_label,
+    v_a.on_behalf_reason, v_a.accepted_amount, v_a.selected_option_id, v_a.document,
+    v_a.terms_acknowledged,
+    -- ⭐⭐ THE REAPPROVAL RULE, in one expression. Not a stored flag and not a
+    -- column anyone can forget to set: the document either still fingerprints
+    -- the way it did when they said yes, or it does not.
+    public.quote_material_fingerprint(p_quote_id) is distinct from v_a.document_fingerprint,
+    v_a.terms_required
+      and public.quote_terms_fingerprint(v_tenant) is distinct from v_a.terms_fingerprint;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.quote_acceptances_append_only()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public'
+AS $function$
+begin
+  if tg_op = 'DELETE' then
+    if not exists (select 1 from public.quotes q where q.id = old.quote_id) then
+      return old;   -- the quote is going; its evidence goes with it
+    end if;
+    raise exception
+      'quote_acceptances is append-only: acceptance evidence cannot be deleted while its quote exists.'
+      using errcode = 'check_violation';
+  end if;
+  raise exception
+    'quote_acceptances is append-only: an acceptance cannot be % once recorded — record a REAPPROVAL instead.',
+    lower(tg_op)
+    using errcode = 'check_violation';
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.quote_acceptances_assign_seq()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public'
+AS $function$
+declare v_prev public.quote_acceptances;
+begin
+  if new.seq is null then
+    select coalesce(max(a.seq), 0) + 1 into new.seq
+      from public.quote_acceptances a where a.quote_id = new.quote_id;
+  end if;
+
+  -- A reapproval must point at a REAL earlier acceptance OF THIS QUOTE. Pointing
+  -- at another quote's acceptance would let one customer's consent stand as the
+  -- ancestor of another's.
+  if new.supersedes_id is not null then
+    select * into v_prev from public.quote_acceptances p where p.id = new.supersedes_id;
+    if not found or v_prev.quote_id <> new.quote_id then
+      raise exception 'supersedes_id must name an earlier acceptance of the same quote'
+        using errcode = 'foreign_key_violation';
+    end if;
+    if v_prev.seq >= new.seq then
+      raise exception 'an acceptance may only supersede an EARLIER one (seq % cannot supersede seq %)',
+        new.seq, v_prev.seq using errcode = 'check_violation';
+    end if;
+  elsif exists (select 1 from public.quote_acceptances a where a.quote_id = new.quote_id) then
+    -- ⭐ HISTORY CANNOT BE FORKED. A second acceptance that does not say what it
+    -- replaces would leave two unrelated "current" consents on one quote and no
+    -- rule for choosing between them.
+    raise exception 'this quote already has an acceptance — a reapproval must set supersedes_id'
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end;
+$function$;
+
 CREATE OR REPLACE FUNCTION public.quote_addons_sync_total()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -6145,7 +6402,9 @@ begin
   if p_via is null or p_via not in ('portal', 'owner') then return false; end if;
 
   -- 'draft' or 'sent' = NOT YET DECIDED. Anything else means a choice already
-  -- stands, and re-deciding would silently rewrite the approved price.
+  -- stands, and re-deciding would silently rewrite the approved price. A
+  -- REAPPROVAL therefore travels the same road as the first one: the owner sends
+  -- the revised quote again, which returns it to 'sent'.
   select q.status, coalesce(q.travel_fee, 0), coalesce(q.follow_up_count, 0), q.initial_price
     into v_status, v_travel, v_follow, v_base
     from public.quotes q
@@ -6189,6 +6448,25 @@ begin
   select coalesce(sum(price), 0) into v_addons
     from public.quote_addons where quote_id = p_quote_id and is_selected;
 
+  -- ⭐ The marker. Transaction-local (`true`), set by in-database code, in the
+  -- same transaction as the write it authorises. Nothing a PostgREST caller can
+  -- send reaches it, and it is gone the moment this transaction ends.
+  perform set_config('app.quote_consent_writer', p_quote_id::text, true);
+
+  -- ⭐⭐ AND THE KIND, FOR THE TRIGGERS THAT FIRE BEFORE THE LEDGER ROW EXISTS.
+  -- ⚠️ This is an ORDERING TRAP the behavioural guard caught and reading did not:
+  -- the doors update the quote FIRST and write the acceptance SECOND, so
+  -- audit_quotes() and notify_quote_accepted() — AFTER ROW triggers on that
+  -- update — run while the ledger is still empty. Reading the ledger alone, they
+  -- called a genuine owner-recorded acceptance an administrative override.
+  --
+  -- p_via is not an inference: it is passed in by the door that knows, and this
+  -- function already refuses every value but the two. Same shape as the
+  -- app.audit_context GUC the audit engine already honours — transaction-local,
+  -- settable only by in-database code, unreachable from any PostgREST request.
+  perform set_config('app.quote_acceptance_kind',
+    case p_via when 'portal' then 'customer' else 'owner_on_behalf' end, true);
+
   update public.quotes
      set status = 'accepted',
          selected_option_id = coalesce(p_option_id, selected_option_id),
@@ -6200,8 +6478,66 @@ begin
          accepted_after_followup = v_follow > 0,
          follow_up_count_at_acceptance = v_follow
    where id = p_quote_id and status in ('draft', 'sent');
+
+  -- Both markers cleared the moment the write they authorise is done. An AFTER
+  -- ROW trigger fires at the END of the UPDATE statement above, so it has
+  -- already read them; anything that happens later in this transaction must not
+  -- inherit them.
+  perform set_config('app.quote_consent_writer', '', true);
+  perform set_config('app.quote_acceptance_kind', '', true);
   return found;
 end $function$;
+
+CREATE OR REPLACE FUNCTION public.quote_material_fingerprint(p_quote_id uuid)
+ RETURNS text
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  select md5(
+    coalesce((
+      select concat_ws('|',
+        'q',
+        coalesce(q.initial_price, 0)::text,
+        coalesce(q.travel_fee, 0)::text,
+        coalesce(q.addons_total, 0)::text,
+        coalesce(q.weekly_price, 0)::text,
+        coalesce(q.biweekly_price, 0)::text,
+        coalesce(q.monthly_price, 0)::text,
+        coalesce(q.deposit_type, ''),
+        coalesce(q.deposit_value, 0)::text,
+        coalesce(btrim(q.service_type), ''),
+        coalesce(btrim(q.address), ''),
+        coalesce(btrim(q.notes), ''),
+        coalesce(q.selected_option_id::text, '')
+      ) from public.quotes q where q.id = p_quote_id
+    ), '')
+    -- Ordered by the owner's own sort, then by id so two rows sharing a sort
+    -- order cannot make the fingerprint flap between reads. A fingerprint that
+    -- changed when nothing changed would demand reapproval at random, which is
+    -- the fastest way to teach an owner to ignore the banner.
+    || coalesce((
+      select string_agg(concat_ws('|', 's', s.service_type, s.quantity::text, coalesce(s.unit, ''),
+                                  s.unit_price::text, coalesce(s.discount_type, ''),
+                                  coalesce(s.discount_value, 0)::text, coalesce(btrim(s.notes), ''), s.kind),
+                        E'\n' order by s.sort_order, s.id)
+        from public.quote_services s where s.quote_id = p_quote_id
+    ), '')
+    || coalesce((
+      select string_agg(concat_ws('|', 'o', o.id::text, o.name, coalesce(btrim(o.description), ''), o.price::text),
+                        E'\n' order by o.sort_order, o.id)
+        from public.quote_options o where o.quote_id = p_quote_id
+    ), '')
+    -- is_selected is IN the fingerprint deliberately: silently ticking an extra
+    -- on a quote the customer already approved is the cheapest way there is to
+    -- add money to a deal, and it must un-approve the quote like any price move.
+    || coalesce((
+      select string_agg(concat_ws('|', 'a', a.id::text, a.name, a.price::text, a.is_selected::text),
+                        E'\n' order by a.sort_order, a.id)
+        from public.quote_addons a where a.quote_id = p_quote_id
+    ), '')
+  );
+$function$;
 
 CREATE OR REPLACE FUNCTION public.quote_options_shape_guard()
  RETURNS trigger
@@ -6228,6 +6564,162 @@ begin
   end if;
   return null;
 end $function$;
+
+CREATE OR REPLACE FUNCTION public.quote_record_acceptance(p_quote_id uuid, p_kind text, p_source text, p_actor_id uuid, p_actor_label text, p_reason text, p_note text, p_terms_ack boolean)
+ RETURNS uuid
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_q public.quotes;
+  v_prev public.quote_acceptances;
+  v_opt public.quote_options;
+  v_addons jsonb;
+  v_addon_total numeric(10,2);
+  v_amount numeric(10,2);
+  v_terms text;
+  v_terms_required boolean;
+  v_id uuid;
+begin
+  select * into v_q from public.quotes where id = p_quote_id;
+  if not found then return null; end if;
+
+  select * into v_prev from public.quote_acceptances
+   where quote_id = p_quote_id order by seq desc limit 1;
+
+  -- ⭐ AN OPTIONS QUOTE CANNOT BE ACCEPTED WITHOUT NAMING ONE. That rule lived
+  -- in quote_apply_choice and in one React handler; the plain status dropdown
+  -- reached neither. Stating it HERE puts it on every path that can ever record
+  -- consent, which is the only place it is safe.
+  if v_q.selected_option_id is null
+     and exists (select 1 from public.quote_options where quote_id = p_quote_id) then
+    raise exception 'this quote offers options — the accepted one must be named'
+      using errcode = 'check_violation';
+  end if;
+
+  if v_q.selected_option_id is not null then
+    select * into v_opt from public.quote_options
+     where id = v_q.selected_option_id and quote_id = p_quote_id;
+    if not found then
+      raise exception 'the selected option does not belong to this quote'
+        using errcode = 'check_violation';
+    end if;
+  end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object('id', a.id, 'name', a.name, 'price', a.price)
+                            order by a.sort_order, a.id), '[]'::jsonb),
+         coalesce(sum(a.price), 0)
+    into v_addons, v_addon_total
+    from public.quote_addons a where a.quote_id = p_quote_id and a.is_selected;
+
+  -- ⭐ THE AUTHORIZED VALUE, computed from the parts and never read off `total`.
+  -- `total` is a GENERATED column over the OLD row inside the same statement
+  -- that sets the choice, which is exactly how a pre-choice price gets recorded
+  -- as consent (the trap quote_apply_choice already names).
+  v_amount := coalesce(v_opt.price, v_q.initial_price, 0)
+              + coalesce(v_q.travel_fee, 0) + v_addon_total;
+
+  select btrim(coalesce(b.terms_text, '')) into v_terms
+    from public.business_settings b where b.user_id = v_q.user_id limit 1;
+  v_terms := nullif(coalesce(v_terms, ''), '');
+  -- Terms are REQUIRED exactly when the business has any. "Nothing to agree to"
+  -- and "agreed to nothing" are different facts and neither is recorded as the
+  -- other: terms_required is what tells them apart forever afterwards.
+  v_terms_required := v_terms is not null;
+
+  if v_terms_required and not coalesce(p_terms_ack, false) then
+    raise exception 'the quoted scope and terms must be acknowledged before acceptance can be recorded'
+      using errcode = 'check_violation';
+  end if;
+
+  insert into public.quote_acceptances (
+    user_id, quote_id, customer_id, accepted_at,
+    kind, source, actor_type, actor_id, actor_label,
+    on_behalf_reason, on_behalf_note,
+    accepted_amount, selected_option_id,
+    document, document_fingerprint,
+    terms_required, terms_acknowledged, terms_text, terms_fingerprint,
+    supersedes_id
+  ) values (
+    v_q.user_id, p_quote_id, v_q.customer_id, now(),
+    p_kind, p_source,
+    case when p_kind = 'customer' then 'customer' else 'owner' end,
+    p_actor_id, nullif(btrim(coalesce(p_actor_label, '')), ''),
+    case when p_kind = 'owner_on_behalf' then btrim(p_reason) else null end,
+    case when p_kind = 'owner_on_behalf' then nullif(btrim(coalesce(p_note, '')), '') else null end,
+    v_amount, v_q.selected_option_id,
+    jsonb_build_object(
+      'quote_number',    v_q.quote_number,
+      'customer_name',   v_q.customer_name,
+      'address',         v_q.address,
+      'service_type',    v_q.service_type,
+      'notes',           v_q.notes,
+      'initial_price',   v_q.initial_price,
+      'travel_fee',      v_q.travel_fee,
+      'total',           v_q.total,
+      'valid_until',     v_q.valid_until,
+      'deposit_type',    v_q.deposit_type,
+      'deposit_value',   v_q.deposit_value,
+      'plan_prices',     jsonb_build_object('weekly', v_q.weekly_price,
+                                            'biweekly', v_q.biweekly_price,
+                                            'monthly', v_q.monthly_price),
+      'option',          case when v_opt.id is null then null else
+                           jsonb_build_object('id', v_opt.id, 'name', v_opt.name,
+                                              'description', v_opt.description, 'price', v_opt.price) end,
+      'options_offered', coalesce((select jsonb_agg(jsonb_build_object('id', o.id, 'name', o.name, 'price', o.price)
+                                                    order by o.sort_order, o.id)
+                                     from public.quote_options o where o.quote_id = p_quote_id), '[]'::jsonb),
+      'addons',          v_addons,
+      'services',        coalesce((select jsonb_agg(jsonb_build_object(
+                                     'service_type', s.service_type, 'quantity', s.quantity, 'unit', s.unit,
+                                     'unit_price', s.unit_price, 'discount_type', s.discount_type,
+                                     'discount_value', s.discount_value, 'notes', s.notes, 'kind', s.kind)
+                                     order by s.sort_order, s.id)
+                                    from public.quote_services s where s.quote_id = p_quote_id), '[]'::jsonb)
+    ),
+    public.quote_material_fingerprint(p_quote_id),
+    v_terms_required,
+    v_terms_required and coalesce(p_terms_ack, false),
+    v_terms,
+    case when v_terms_required then public.quote_terms_fingerprint(v_q.user_id) else null end,
+    v_prev.id
+  ) returning id into v_id;
+
+  return v_id;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.quote_terms_fingerprint(p_tenant uuid)
+ RETURNS text
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  select md5(coalesce((select btrim(coalesce(b.terms_text, '')) from public.business_settings b
+                        where b.user_id = p_tenant limit 1), ''));
+$function$;
+
+CREATE OR REPLACE FUNCTION public.quotes_protect_consent_snapshot()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public'
+AS $function$
+begin
+  if coalesce(current_setting('app.quote_consent_writer', true), '') = new.id::text then
+    return new;
+  end if;
+  if new.accepted_price is distinct from old.accepted_price then
+    raise exception 'accepted_price records what the customer agreed to and is written only when an acceptance is recorded'
+      using errcode = 'check_violation';
+  end if;
+  if new.selected_option_id is distinct from old.selected_option_id then
+    raise exception 'the accepted option is written only when an acceptance is recorded — send a revised quote to change it'
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end;
+$function$;
 
 CREATE OR REPLACE FUNCTION public.recompute_equipment_service()
  RETURNS trigger
@@ -7266,7 +7758,7 @@ end $function$;
 -- tenant attaching a child row to another tenant's parent. Do not "simplify".
 -- ══════════════════════════════════════════════════════════════════════════
 
--- primary keys (115)
+-- primary keys (116)
 alter table public."api_keys" add constraint "api_keys_pkey" PRIMARY KEY (id);
 alter table public."audit_events" add constraint "audit_events_pkey" PRIMARY KEY (id);
 alter table public."automation_runs" add constraint "automation_runs_pkey" PRIMARY KEY (id);
@@ -7350,6 +7842,7 @@ alter table public."purchase_order_items" add constraint "purchase_order_items_p
 alter table public."purchase_orders" add constraint "purchase_orders_pkey" PRIMARY KEY (id);
 alter table public."push_config" add constraint "push_config_pkey" PRIMARY KEY (id);
 alter table public."push_subscriptions" add constraint "push_subscriptions_pkey" PRIMARY KEY (id);
+alter table public."quote_acceptances" add constraint "quote_acceptances_pkey" PRIMARY KEY (id);
 alter table public."quote_addons" add constraint "quote_addons_pkey" PRIMARY KEY (id);
 alter table public."quote_options" add constraint "quote_options_pkey" PRIMARY KEY (id);
 alter table public."quote_outcomes" add constraint "quote_outcomes_pkey" PRIMARY KEY (id);
@@ -7383,7 +7876,7 @@ alter table public."webhook_endpoints" add constraint "webhook_endpoints_pkey" P
 alter table public."website_leads" add constraint "website_leads_pkey" PRIMARY KEY (id);
 alter table public."worker_availability" add constraint "worker_availability_pkey" PRIMARY KEY (id);
 
--- unique (53)
+-- unique (55)
 alter table public."api_keys" add constraint "api_keys_key_hash_key" UNIQUE (key_hash);
 alter table public."beta_invites" add constraint "beta_invites_token_hash_key" UNIQUE (token_hash);
 alter table public."business_settings" add constraint "business_settings_user_id_key" UNIQUE (user_id);
@@ -7423,6 +7916,8 @@ alter table public."property_measurements" add constraint "property_measurements
 alter table public."property_twin" add constraint "property_twin_user_id_property_id_key" UNIQUE (user_id, property_id);
 alter table public."publish_jobs" add constraint "publish_jobs_idempotency_key_key" UNIQUE (idempotency_key);
 alter table public."push_subscriptions" add constraint "push_subscriptions_user_id_endpoint_key" UNIQUE (user_id, endpoint);
+alter table public."quote_acceptances" add constraint "quote_acceptances_quote_seq_unique" UNIQUE (quote_id, seq);
+alter table public."quote_acceptances" add constraint "quote_acceptances_user_id_unique" UNIQUE (user_id, id);
 alter table public."quote_addons" add constraint "quote_addons_id_quote_unique" UNIQUE (id, quote_id);
 alter table public."quote_options" add constraint "quote_options_id_quote_unique" UNIQUE (id, quote_id);
 alter table public."quote_outcomes" add constraint "quote_outcomes_user_id_quote_id_key" UNIQUE (user_id, quote_id);
@@ -7438,7 +7933,7 @@ alter table public."suggestion_dismissals" add constraint "suggestion_dismissals
 alter table public."technicians" add constraint "technicians_id_user_key" UNIQUE (id, user_id);
 alter table public."worker_availability" add constraint "worker_availability_one_per_weekday" UNIQUE (technician_id, weekday);
 
--- check (197)
+-- check (206)
 alter table public."audit_events" add constraint "audit_events_action_check" CHECK (((char_length(action) >= 1) AND (char_length(action) <= 64)));
 alter table public."audit_events" add constraint "audit_events_actor_type_check" CHECK ((actor_type = ANY (ARRAY['owner'::text, 'worker'::text, 'customer'::text, 'system'::text])));
 alter table public."audit_events" add constraint "audit_events_entity_type_check" CHECK (((char_length(entity_type) >= 1) AND (char_length(entity_type) <= 32)));
@@ -7582,6 +8077,21 @@ alter table public."publish_jobs" add constraint "publish_jobs_mode_check" CHECK
 alter table public."publish_jobs" add constraint "publish_jobs_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'scheduled'::text, 'queued'::text, 'publishing'::text, 'published'::text, 'failed'::text, 'canceled'::text])));
 alter table public."purchase_orders" add constraint "purchase_orders_status_check" CHECK ((status = ANY (ARRAY['draft'::text, 'ordered'::text, 'cancelled'::text])));
 alter table public."push_config" add constraint "push_config_singleton" CHECK ((id = 1));
+alter table public."quote_acceptances" add constraint "quote_acceptances_actor_type_check" CHECK ((actor_type = ANY (ARRAY['customer'::text, 'owner'::text, 'system'::text])));
+alter table public."quote_acceptances" add constraint "quote_acceptances_amount_check" CHECK ((accepted_amount >= (0)::numeric));
+alter table public."quote_acceptances" add constraint "quote_acceptances_fingerprint_check" CHECK ((btrim(document_fingerprint) <> ''::text));
+alter table public."quote_acceptances" add constraint "quote_acceptances_kind_check" CHECK ((kind = ANY (ARRAY['customer'::text, 'owner_on_behalf'::text, 'legacy_unrecorded'::text])));
+alter table public."quote_acceptances" add constraint "quote_acceptances_on_behalf_shape_check" CHECK (
+CASE kind
+    WHEN 'owner_on_behalf'::text THEN ((actor_type = 'owner'::text) AND (source = 'dashboard'::text) AND (on_behalf_reason IS NOT NULL) AND (btrim(on_behalf_reason) <> ''::text))
+    WHEN 'customer'::text THEN ((actor_type = 'customer'::text) AND (source = 'portal'::text) AND (on_behalf_reason IS NULL) AND (on_behalf_note IS NULL))
+    WHEN 'legacy_unrecorded'::text THEN ((actor_type = 'system'::text) AND (source = 'migration'::text) AND (actor_id IS NULL) AND (on_behalf_reason IS NULL) AND (on_behalf_note IS NULL) AND (NOT terms_required) AND (NOT terms_acknowledged))
+    ELSE false
+END);
+alter table public."quote_acceptances" add constraint "quote_acceptances_reason_check" CHECK (((on_behalf_reason IS NULL) OR (on_behalf_reason = ANY (ARRAY['phone'::text, 'email'::text, 'text_message'::text, 'in_person'::text, 'written'::text, 'other'::text]))));
+alter table public."quote_acceptances" add constraint "quote_acceptances_seq_check" CHECK ((seq >= 1));
+alter table public."quote_acceptances" add constraint "quote_acceptances_source_check" CHECK ((source = ANY (ARRAY['portal'::text, 'dashboard'::text, 'migration'::text])));
+alter table public."quote_acceptances" add constraint "quote_acceptances_terms_check" CHECK (((NOT terms_required) OR (terms_acknowledged AND (terms_fingerprint IS NOT NULL) AND (terms_text IS NOT NULL))));
 alter table public."quote_addons" add constraint "quote_addons_name_check" CHECK ((btrim(name) <> ''::text));
 alter table public."quote_addons" add constraint "quote_addons_price_check" CHECK ((price >= (0)::numeric));
 alter table public."quote_addons" add constraint "quote_addons_selection_check" CHECK (((is_selected AND (selected_via IS NOT NULL) AND (selected_at IS NOT NULL)) OR ((NOT is_selected) AND (selected_via IS NULL) AND (selected_at IS NULL))));
@@ -7637,7 +8147,7 @@ alter table public."webhook_endpoints" add constraint "webhook_endpoints_source_
 alter table public."worker_availability" add constraint "worker_availability_weekday_range" CHECK (((weekday >= 0) AND (weekday <= 6)));
 alter table public."worker_availability" add constraint "worker_availability_window" CHECK (((available AND (start_time IS NOT NULL) AND (end_time IS NOT NULL) AND (end_time > start_time)) OR ((NOT available) AND (start_time IS NULL) AND (end_time IS NULL))));
 
--- foreign keys (263)
+-- foreign keys (268)
 alter table public."api_keys" add constraint "api_keys_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."audit_events" add constraint "audit_events_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."automation_runs" add constraint "automation_runs_signal_id_fkey" FOREIGN KEY (signal_id) REFERENCES automation_signals(id) ON DELETE SET NULL;
@@ -7828,6 +8338,11 @@ alter table public."purchase_order_items" add constraint "purchase_order_items_u
 alter table public."purchase_orders" add constraint "purchase_orders_supplier_id_fkey" FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE RESTRICT;
 alter table public."purchase_orders" add constraint "purchase_orders_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."push_subscriptions" add constraint "push_subscriptions_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table public."quote_acceptances" add constraint "quote_acceptances_customer_same_owner" FOREIGN KEY (user_id, customer_id) REFERENCES customers(user_id, id) ON DELETE SET NULL (customer_id);
+alter table public."quote_acceptances" add constraint "quote_acceptances_quote_same_owner" FOREIGN KEY (user_id, quote_id) REFERENCES quotes(user_id, id) ON DELETE CASCADE;
+alter table public."quote_acceptances" add constraint "quote_acceptances_selected_option_fkey" FOREIGN KEY (selected_option_id, quote_id) REFERENCES quote_options(id, quote_id) ON DELETE RESTRICT;
+alter table public."quote_acceptances" add constraint "quote_acceptances_supersedes_same_owner" FOREIGN KEY (user_id, supersedes_id) REFERENCES quote_acceptances(user_id, id) ON DELETE RESTRICT;
+alter table public."quote_acceptances" add constraint "quote_acceptances_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."quote_addons" add constraint "quote_addons_quote_fkey" FOREIGN KEY (user_id, quote_id) REFERENCES quotes(user_id, id) ON DELETE CASCADE;
 alter table public."quote_addons" add constraint "quote_addons_user_id_fkey" FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 alter table public."quote_options" add constraint "quote_options_quote_id_fkey" FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE;
@@ -7905,7 +8420,7 @@ alter table public."worker_availability" add constraint "worker_availability_use
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 5 · TRIGGERS
--- 134 triggers, including the two DEFERRABLE constraint triggers that
+-- 137 triggers, including the two DEFERRABLE constraint triggers that
 -- enforce quote-option/quote-service shape at commit time.
 -- ══════════════════════════════════════════════════════════════════════════
 
@@ -8109,6 +8624,10 @@ drop trigger if exists "pto_entries_updated_at" on public."pto_entries";
 CREATE TRIGGER pto_entries_updated_at BEFORE UPDATE ON public.pto_entries FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 drop trigger if exists "trg_publish_jobs_updated" on public."publish_jobs";
 CREATE TRIGGER trg_publish_jobs_updated BEFORE UPDATE ON public.publish_jobs FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+drop trigger if exists "trg_quote_acceptances_append_only" on public."quote_acceptances";
+CREATE TRIGGER trg_quote_acceptances_append_only BEFORE DELETE OR UPDATE ON public.quote_acceptances FOR EACH ROW EXECUTE FUNCTION quote_acceptances_append_only();
+drop trigger if exists "trg_quote_acceptances_assign_seq" on public."quote_acceptances";
+CREATE TRIGGER trg_quote_acceptances_assign_seq BEFORE INSERT ON public.quote_acceptances FOR EACH ROW EXECUTE FUNCTION quote_acceptances_assign_seq();
 drop trigger if exists "quote_addons_total_trg" on public."quote_addons";
 CREATE TRIGGER quote_addons_total_trg AFTER INSERT OR DELETE OR UPDATE ON public.quote_addons FOR EACH ROW EXECUTE FUNCTION quote_addons_sync_total();
 drop trigger if exists "quote_addons_write_trg" on public."quote_addons";
@@ -8129,6 +8648,8 @@ drop trigger if exists "trg_integration_capture" on public."quotes";
 CREATE TRIGGER trg_integration_capture AFTER INSERT OR UPDATE OF status ON public.quotes FOR EACH ROW EXECUTE FUNCTION capture_integration_event();
 drop trigger if exists "trg_notify_quote_accepted" on public."quotes";
 CREATE TRIGGER trg_notify_quote_accepted AFTER UPDATE OF status ON public.quotes FOR EACH ROW EXECUTE FUNCTION notify_quote_accepted();
+drop trigger if exists "trg_quotes_protect_consent_snapshot" on public."quotes";
+CREATE TRIGGER trg_quotes_protect_consent_snapshot BEFORE UPDATE OF accepted_price, selected_option_id ON public.quotes FOR EACH ROW EXECUTE FUNCTION quotes_protect_consent_snapshot();
 drop trigger if exists "trg_referrals_updated" on public."referrals";
 CREATE TRIGGER trg_referrals_updated BEFORE UPDATE ON public.referrals FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 drop trigger if exists "trg_report_schedules_updated_at" on public."report_schedules";
@@ -8180,7 +8701,7 @@ CREATE TRIGGER worker_availability_updated_at BEFORE UPDATE ON public.worker_ava
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 6 · INDEXES
--- 293 standalone indexes. Constraint-backing indexes are omitted on purpose —
+-- 296 standalone indexes. Constraint-backing indexes are omitted on purpose —
 -- section 4 already created them; declaring both would fail or duplicate.
 -- The partial UNIQUE indexes are correctness, not speed: they are what stops a
 -- second open shift per technician and a duplicate invoice number.
@@ -8400,6 +8921,9 @@ create index if not exists purchase_order_items_po_idx ON public.purchase_order_
 create index if not exists purchase_orders_supplier_idx ON public.purchase_orders USING btree (supplier_id) WHERE (supplier_id IS NOT NULL);
 create index if not exists purchase_orders_user_idx ON public.purchase_orders USING btree (user_id, created_at DESC);
 create index if not exists push_subscriptions_user_idx ON public.push_subscriptions USING btree (user_id);
+create index if not exists quote_acceptances_customer_idx ON public.quote_acceptances USING btree (customer_id, accepted_at DESC);
+create index if not exists quote_acceptances_quote_idx ON public.quote_acceptances USING btree (quote_id, seq DESC);
+create index if not exists quote_acceptances_user_idx ON public.quote_acceptances USING btree (user_id, accepted_at DESC);
 create index if not exists quote_addons_quote_idx ON public.quote_addons USING btree (quote_id, sort_order);
 create index if not exists quote_addons_user_idx ON public.quote_addons USING btree (user_id);
 create unique index if not exists quote_options_one_recommended ON public.quote_options USING btree (quote_id) WHERE is_recommended;
@@ -8482,7 +9006,7 @@ create index if not exists worker_availability_user_idx ON public.worker_availab
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 7 · ROW LEVEL SECURITY
--- RLS enabled on all 115 tables, then 373 policies.
+-- RLS enabled on all 116 tables, then 374 policies.
 -- Every table carries RLS. The tenant boundary audit found the holes were always
 -- RLS being OFF, never a policy being wrong — so enabling is emitted for every
 -- table unconditionally, before any policy.
@@ -8571,6 +9095,7 @@ alter table public."purchase_order_items" enable row level security;
 alter table public."purchase_orders" enable row level security;
 alter table public."push_config" enable row level security;
 alter table public."push_subscriptions" enable row level security;
+alter table public."quote_acceptances" enable row level security;
 alter table public."quote_addons" enable row level security;
 alter table public."quote_options" enable row level security;
 alter table public."quote_outcomes" enable row level security;
@@ -9388,6 +9913,9 @@ create policy "push_subs: select own" on public."push_subscriptions" as permissi
 drop policy if exists "push_subs: update own" on public."push_subscriptions";
 create policy "push_subs: update own" on public."push_subscriptions" as permissive for update to public
   using ((auth.uid() = user_id));
+drop policy if exists "quote_acceptances: select own" on public."quote_acceptances";
+create policy "quote_acceptances: select own" on public."quote_acceptances" as permissive for select to public
+  using ((auth.uid() = user_id));
 drop policy if exists "quote_addons: delete own" on public."quote_addons";
 create policy "quote_addons: delete own" on public."quote_addons" as permissive for delete to public
   using (((auth.uid() = user_id) AND (EXISTS ( SELECT 1
@@ -10088,6 +10616,8 @@ revoke all on table public."push_subscriptions" from public, anon, authenticated
 grant INSERT, SELECT, UPDATE, DELETE, MAINTAIN on table public."push_subscriptions" to anon;
 grant INSERT, SELECT, UPDATE, DELETE, MAINTAIN on table public."push_subscriptions" to authenticated;
 grant ALL on table public."push_subscriptions" to service_role;
+revoke all on table public."quote_acceptances" from public, anon, authenticated, service_role;
+grant SELECT on table public."quote_acceptances" to authenticated;
 revoke all on table public."quote_addons" from public, anon, authenticated, service_role;
 grant INSERT, SELECT, UPDATE, DELETE, MAINTAIN on table public."quote_addons" to authenticated;
 grant ALL on table public."quote_addons" to service_role;
@@ -10503,11 +11033,15 @@ revoke all on function public."notify_review_received"() from public, anon, auth
 grant execute on function public."notify_review_received"() to service_role;
 revoke all on function public."nudge_webhook_deliveries"() from public, anon, authenticated, service_role;
 grant execute on function public."nudge_webhook_deliveries"() to service_role;
-revoke all on function public."owner_select_quote_option"(p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[]) from public, anon, authenticated, service_role;
-grant execute on function public."owner_select_quote_option"(p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[]) to authenticated;
-revoke all on function public."portal_accept_quote"(p_token text, p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[]) from public, anon, authenticated, service_role;
-grant execute on function public."portal_accept_quote"(p_token text, p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[]) to anon;
-grant execute on function public."portal_accept_quote"(p_token text, p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[]) to authenticated;
+revoke all on function public."owner_override_quote_status"(p_quote_id uuid, p_status text, p_reason text) from public, anon, authenticated, service_role;
+grant execute on function public."owner_override_quote_status"(p_quote_id uuid, p_status text, p_reason text) to authenticated;
+revoke all on function public."owner_record_customer_acceptance"(p_quote_id uuid, p_reason text, p_option_id uuid, p_addon_ids uuid[], p_note text) from public, anon, authenticated, service_role;
+grant execute on function public."owner_record_customer_acceptance"(p_quote_id uuid, p_reason text, p_option_id uuid, p_addon_ids uuid[], p_note text) to authenticated;
+revoke all on function public."owner_select_quote_option"(p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[], p_reason text, p_note text) from public, anon, authenticated, service_role;
+grant execute on function public."owner_select_quote_option"(p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[], p_reason text, p_note text) to authenticated;
+revoke all on function public."portal_accept_quote"(p_token text, p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[], p_terms_ack boolean) from public, anon, authenticated, service_role;
+grant execute on function public."portal_accept_quote"(p_token text, p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[], p_terms_ack boolean) to anon;
+grant execute on function public."portal_accept_quote"(p_token text, p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[], p_terms_ack boolean) to authenticated;
 revoke all on function public."portal_add_contact"(p_token text, p_phone text, p_email text) from public, anon, authenticated, service_role;
 grant execute on function public."portal_add_contact"(p_token text, p_phone text, p_email text) to anon;
 grant execute on function public."portal_add_contact"(p_token text, p_phone text, p_email text) to authenticated;
@@ -10602,6 +11136,26 @@ grant execute on function public."public_services"(p_token text) to authenticate
 grant execute on function public."public_services"(p_token text) to service_role;
 revoke all on function public."push_dispatch"() from public, anon, authenticated, service_role;
 grant execute on function public."push_dispatch"() to service_role;
+revoke all on function public."quote_acceptance_is_current"(p_quote_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."quote_acceptance_is_current"(p_quote_id uuid) to authenticated;
+grant execute on function public."quote_acceptance_is_current"(p_quote_id uuid) to service_role;
+revoke all on function public."quote_acceptance_kind_now"(p_quote_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."quote_acceptance_kind_now"(p_quote_id uuid) to public;
+grant execute on function public."quote_acceptance_kind_now"(p_quote_id uuid) to anon;
+grant execute on function public."quote_acceptance_kind_now"(p_quote_id uuid) to authenticated;
+grant execute on function public."quote_acceptance_kind_now"(p_quote_id uuid) to service_role;
+revoke all on function public."quote_acceptance_state"(p_quote_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."quote_acceptance_state"(p_quote_id uuid) to authenticated;
+revoke all on function public."quote_acceptances_append_only"() from public, anon, authenticated, service_role;
+grant execute on function public."quote_acceptances_append_only"() to public;
+grant execute on function public."quote_acceptances_append_only"() to anon;
+grant execute on function public."quote_acceptances_append_only"() to authenticated;
+grant execute on function public."quote_acceptances_append_only"() to service_role;
+revoke all on function public."quote_acceptances_assign_seq"() from public, anon, authenticated, service_role;
+grant execute on function public."quote_acceptances_assign_seq"() to public;
+grant execute on function public."quote_acceptances_assign_seq"() to anon;
+grant execute on function public."quote_acceptances_assign_seq"() to authenticated;
+grant execute on function public."quote_acceptances_assign_seq"() to service_role;
 revoke all on function public."quote_addons_sync_total"() from public, anon, authenticated, service_role;
 grant execute on function public."quote_addons_sync_total"() to public;
 grant execute on function public."quote_addons_sync_total"() to anon;
@@ -10613,11 +11167,27 @@ grant execute on function public."quote_addons_write_guard"() to anon;
 grant execute on function public."quote_addons_write_guard"() to authenticated;
 grant execute on function public."quote_addons_write_guard"() to service_role;
 revoke all on function public."quote_apply_choice"(p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[], p_via text) from public, anon, authenticated, service_role;
+revoke all on function public."quote_material_fingerprint"(p_quote_id uuid) from public, anon, authenticated, service_role;
+grant execute on function public."quote_material_fingerprint"(p_quote_id uuid) to public;
+grant execute on function public."quote_material_fingerprint"(p_quote_id uuid) to anon;
+grant execute on function public."quote_material_fingerprint"(p_quote_id uuid) to authenticated;
+grant execute on function public."quote_material_fingerprint"(p_quote_id uuid) to service_role;
 revoke all on function public."quote_options_shape_guard"() from public, anon, authenticated, service_role;
 grant execute on function public."quote_options_shape_guard"() to public;
 grant execute on function public."quote_options_shape_guard"() to anon;
 grant execute on function public."quote_options_shape_guard"() to authenticated;
 grant execute on function public."quote_options_shape_guard"() to service_role;
+revoke all on function public."quote_record_acceptance"(p_quote_id uuid, p_kind text, p_source text, p_actor_id uuid, p_actor_label text, p_reason text, p_note text, p_terms_ack boolean) from public, anon, authenticated, service_role;
+revoke all on function public."quote_terms_fingerprint"(p_tenant uuid) from public, anon, authenticated, service_role;
+grant execute on function public."quote_terms_fingerprint"(p_tenant uuid) to public;
+grant execute on function public."quote_terms_fingerprint"(p_tenant uuid) to anon;
+grant execute on function public."quote_terms_fingerprint"(p_tenant uuid) to authenticated;
+grant execute on function public."quote_terms_fingerprint"(p_tenant uuid) to service_role;
+revoke all on function public."quotes_protect_consent_snapshot"() from public, anon, authenticated, service_role;
+grant execute on function public."quotes_protect_consent_snapshot"() to public;
+grant execute on function public."quotes_protect_consent_snapshot"() to anon;
+grant execute on function public."quotes_protect_consent_snapshot"() to authenticated;
+grant execute on function public."quotes_protect_consent_snapshot"() to service_role;
 revoke all on function public."recompute_equipment_service"() from public, anon, authenticated, service_role;
 grant execute on function public."recompute_equipment_service"() to service_role;
 revoke all on function public."recompute_invoice_paid"() from public, anon, authenticated, service_role;
@@ -10718,6 +11288,7 @@ comment on table public."portal_access_requests" is 'Abuse ledger for the public
 comment on table public."property_measurement_events" is 'Append-only history for property_measurements, written by trigger. No UPDATE/DELETE policy — history cannot be rewritten. Distinct from `measurements` (the lawn auto-vs-accepted accuracy log that trains neighbourhood ratios).';
 comment on table public."property_measurements" is 'THE typed measurement ledger (Measurement Engine V2). One row per (property, kind). Unit follows kind by CHECK. Legacy properties.lawn_sqft/fence_length/mulch_area/rock_area are DERIVED from here by trigger for existing pricing/portal readers — drop them once Quote V2 reads this table.';
 comment on table public."purchase_order_items" is 'PO lines. qty_received is intentionally absent — it is derived from part_movements linked by purchase_order_item_id, so stock and receipts cannot drift apart.';
+comment on table public."quote_acceptances" is 'Append-only evidence of quote acceptance: WHAT was accepted (an immutable document snapshot + fingerprint), BY WHOM (kind/actor/source), for HOW MUCH (accepted_amount), WHEN, and against WHICH terms. Never updated; never deleted while its quote exists. A reapproval after a commercial change appends a new row with supersedes_id set. NOT a signature store — S74 documents/signatures and S83 contracts own signatures; nothing here mints or verifies one.';
 comment on table public."quote_options" is 'Mutually exclusive alternatives for one quote (Budget/Recommended/Premium). NOT additive: quotes.initial_price always equals ONE option price - the recommended one before the customer chooses, the selected one after. Cannot coexist with quote_services rows.';
 comment on table public."report_schedules" is 'Scheduled report cadences per owner. last_period_to is the idempotency key: the cron sends a closed period exactly once, however often it runs.';
 comment on table public."schedule_items" is 'Non-job calendar entries: estimate / callback / appointment / task / reminder. A row here is NEVER work — labour, revenue, invoicing, recurrence, work sessions, proof-of-work and review eligibility all read public.jobs, so completing an estimate appointment cannot reach any of them. type=''estimate'' is the scheduled visit that produces a quote (Session 79); converted_quote_id is the quote it is about, whether that quote existed first or was written afterwards.';
@@ -10791,6 +11362,11 @@ comment on column public."payments"."quote_id" is 'The quote/booking a PRE-INVOI
 comment on column public."properties"."internal_notes" is 'Private to the owner and crew: never returned by get_portal_data and never rendered in the customer portal. Home for access and site facts about the PLACE (gate side, dog, shut-off/controller location, parking). Customer-facing property notes stay in `notes`; private notes about the PERSON stay in customers.notes.';
 comment on column public."property_measurement_events"."seq" is 'Monotonic tiebreaker. ORDER BY seq — created_at can tie at microsecond resolution.';
 comment on column public."pto_entries"."status" is 'requested = a worker asked and the owner has not decided; approved = counts against planning availability (every pre-existing row: the owner booked it); declined = kept as a record, never subtracts availability and never blocks a later booking.';
+comment on column public."quote_acceptances"."document" is 'The quote as accepted: quote_number, service_type, address, notes, the line items, the option chosen (its own name and price, copied not referenced), every selected add-on, the plan prices and the deposit ask. Copied so later edits — or deleting an option row — cannot rewrite what was agreed.';
+comment on column public."quote_acceptances"."document_fingerprint" is 'quote_material_fingerprint() at the instant of consent, compared against the live value to decide whether the quote still stands accepted. This is why reapproval is DERIVED and never stored.';
+comment on column public."quote_acceptances"."kind" is 'customer = the customer decided, through their own portal door. owner_on_behalf = staff recorded a decision the customer made elsewhere, and on_behalf_reason says where. An ADMINISTRATIVE STATUS OVERRIDE is neither and produces NO row here — it is an audit event only.';
+comment on column public."quote_acceptances"."supersedes_id" is 'The acceptance this one replaces after a commercial change. The superseded row is never modified — history is appended to, never rewritten.';
+comment on column public."quote_acceptances"."terms_text" is 'The exact business_settings.terms_text the customer was shown. Snapshotted because that field is tenant-level and unversioned: editing it would otherwise retroactively change what every past acceptance appears to have agreed to.';
 comment on column public."quote_services"."kind" is 'What this line IS: service (labour you perform) or material (goods you supply). A material line is an ESTIMATE ON THE QUOTE — quantity x unit_price, same arithmetic, same discount engine. It never reserves, allocates or deducts stock, and carries no cost: see RUN-2026-07-16-quote-materials.sql.';
 comment on column public."quote_services"."service_type" is 'The line''s display name. For kind=service, the service performed; for kind=material, the material supplied ("Mulch"). Historical name — not a claim that the line is a service.';
 comment on column public."quotes"."accepted_price" is 'SNAPSHOT of what the customer agreed to pay, captured at acceptance. Deliberately a copy, not a reference to total: editing a quote afterwards must never rewrite what was agreed. NULL = accepted before this column existed, or accepted by a path that does not know. Never guess it.';
@@ -10835,9 +11411,13 @@ comment on function public."crew_set_completion_record"(p_job_id uuid, p_summary
 comment on function public."find_portal_access_customers"(p_email text) is 'Portal-link recovery lookup. Normalises both sides (lower+trim). NOT executable by anon/authenticated — service-role only, or the public anon key becomes a customer-existence oracle.';
 comment on function public."is_verify_fixture_tenant"() is 'True when the CALLER is a verification fixture tenant. Answers only about auth.uid(); takes no arguments so it cannot be used to enumerate or probe. Consulted by scripts/ only — no trigger, policy or application path reads it.';
 comment on function public."job_session_minutes"(p_job_id uuid) is 'Sum of a job''s work-session minutes. NULL when it has none (unknown, not zero).';
+comment on function public."owner_override_quote_status"(p_quote_id uuid, p_status text, p_reason text) is 'Administrative status override. Moves quotes.status and records the owner''s stated reason on the audit row audit_quotes() already writes. ⛔ Writes NO acceptance evidence: an overridden quote still fails quote_acceptance_is_current(), so scheduling, invoicing and the deposit ask keep refusing it. Changing a label is not obtaining consent.';
 comment on function public."portal_add_contact"(p_token text, p_phone text, p_email text) is 'Portal self-service: fill a MISSING customer phone/email from a valid portal token. Fills only - never overwrites a populated field (an email change is an identity change). Never touches sms_opt_in/email_opt_in/message_prefs. Refuses a value another customer of the same owner already holds. Returns the row state read back after the write.';
 comment on function public."portal_request_photos_ok"(p text[]) is 'Validator for service_requests.photos: at most 6 elements, each a booking-uploads path of the shape portal/<uuid>/<uuid>.<ext>. Used by a CHECK constraint, so it holds no matter which door writes.';
 comment on function public."portal_set_scheduling_preference"(p_token text, p_quote_id uuid, p_date date, p_date_2 date, p_timing text, p_note text) is 'THE writer of a customer''s scheduling preference. Token proves the customer; quote must be theirs and ''accepted''. A preference is a request — it never creates, moves, or implies a visit. All-null clears it.';
+comment on function public."quote_acceptance_is_current"(p_quote_id uuid) is 'THE gate: does a live, un-drifted acceptance authorize this quote''s CURRENT commercial terms? False when nothing ever accepted it, when a material fact changed since, or when the tenant''s terms moved. Mirrored (never re-derived) by hasCurrentValidAcceptance() in src/lib/quoteAcceptance.';
+comment on function public."quote_acceptance_kind_now"(p_quote_id uuid) is 'Which kind of acceptance is being (or was) recorded for this quote: customer, owner_on_behalf, or NULL meaning an administrative status change with no acceptance behind it. Reads the doors'' in-flight marker first because the AFTER UPDATE triggers on quotes fire BEFORE the acceptance row is inserted.';
+comment on function public."quote_material_fingerprint"(p_quote_id uuid) is 'THE definition of a commercial change to a quote: price, plan prices, deposit ask, scope (service_type/address/notes), the chosen option, and every quote_services / quote_options / quote_addons row including which extras are selected. Deliberately EXCLUDES internal_notes, the measurement columns, property/customer repairs, follow-up counters and scheduling preferences — those are corrections, not new terms. Read by quote_acceptance_state() to decide reapproval; mirrored, never re-derived, by src/lib/quoteAcceptance.';
 comment on function public."schema_contract"() is 'Full catalogue snapshot for npm run schema:contract. SERVICE_ROLE ONLY — it returns every RLS predicate and SECURITY DEFINER body, i.e. the product''s authorization logic. Use schema_fingerprint() (hashes only) for anything that merely needs to detect change.';
 comment on function public."schema_fingerprint"() is 'Counts + md5 per schema section, for npm run verify:schema. Returns NO names and NO data — only shape hashes, so it is safe to expose to any signed-in caller. The instrument that makes repo-vs-production drift visible; before it existed, 30 migrations reached production with no repo file and nothing reported it.';
 

@@ -18,12 +18,17 @@ import { buildVisitICS, type CalendarVisit, type JourneyStep, type LiveStatus, t
 
 export interface PortalActions {
   token: string
-  /** Approve a quote (confirm dialog + portal_accept_quote).
+  /** Accept a quote (confirm dialog + portal_accept_quote).
    *  `optionId` names WHICH alternative, on a quote that offers a choice. It is
    *  required for those and absent for every ordinary quote — the RPC refuses an
-   *  options quote with no choice, so passing nothing there is a failed approval,
-   *  not a default. */
-  accept: (quoteId: string, optionId?: string) => void
+   *  options quote with no choice, so passing nothing there is a failed
+   *  acceptance, not a default.
+   *  `termsAck` is the customer's tick against the business's terms. It is
+   *  required exactly when the business HAS terms, and the RPC refuses without
+   *  it — the tick and the exact text agreed to are both stored on the
+   *  acceptance record (Session 121). ⛔ It is an acknowledgement, never a
+   *  signature: Sessions 74/83 own those. */
+  accept: (quoteId: string, optionId?: string, termsAck?: boolean) => void
   accepting: string | null
   /** Start Stripe checkout for one invoice (POST /api/portal/pay). */
   pay: (invoiceId: string) => void
