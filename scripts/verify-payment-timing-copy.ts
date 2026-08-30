@@ -409,6 +409,16 @@ console.log('\n■ 5. terms_text — detected, blocked, NEVER obeyed and NEVER r
       'No payment is due until the work is complete.'],
     ['deposit quote + "100% due on completion"', GATED,
       '100% is due on completion.'],
+    // ⭐⭐ THE LIVE ONE. This is verbatim from production business_settings, on a
+    // tenant that has four deposit-gated quotes — the original audit's defect,
+    // sitting in real data. The first version of this detector did NOT catch it:
+    // it demanded a totality word ("in full", "100%") that real owners don't
+    // write, and "unless" was in the hedge list. Measuring against the real rows
+    // is the only reason it is here.
+    ['deposit quote + the LIVE production terms', GATED,
+      '• Payment due upon completion unless otherwise agreed.\n• Quotes valid for 30 days.'],
+    ['deposit quote + bare "payment is due on completion"', GATED,
+      'Payment is due on completion of the work.'],
     ['deposit quote + "no upfront payment"', GATED,
       'There is no upfront payment for any of our services.'],
     ['NO-deposit quote + "a 50% deposit is required"', NONE,

@@ -29,6 +29,7 @@ supabase/.temp/
 .inbox-harness/
 
 # CDP investigation output (screenshots / measurements)
+screens/
 search-*.png
 search-cdp-*.txt
 .chrome-search-*/

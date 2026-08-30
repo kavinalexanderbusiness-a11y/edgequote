@@ -58,7 +58,16 @@ export interface TermsTimingConflict {
   configured: PaymentTiming['mode']
 }
 
-const HEDGE = /\b(may|might|could|can be|possibly|sometimes|often|typically|usually|generally|optional|at our discretion|some (jobs|projects|work)|certain (jobs|projects)|larger (jobs|projects)|depending on|if required|where required|unless)\b/i
+// A hedge is language that tells the customer a deposit MIGHT be wanted — it
+// leaves them informed, so it is not a contradiction.
+//
+// ⚠️ "unless" was here and has been REMOVED, because it does the opposite. The
+// live production terms read "Payment due upon completion **unless otherwise
+// agreed**" on a tenant with four deposit-gated quotes — and that clause tells
+// the customer nothing at all. It protects the owner while leaving the reader
+// with "payment on completion", which is precisely the belief the deposit
+// request then contradicts. A hedge has to hedge TOWARD disclosure to count.
+const HEDGE = /\b(may|might|could|can be|possibly|sometimes|often|typically|usually|generally|optional|at our discretion|some (jobs|projects|work)|certain (jobs|projects)|larger (jobs|projects)|depending on|if required|where required)\b/i
 
 /**
  * "The balance is due on completion" is the TRUE second half of a deposit
@@ -78,6 +87,23 @@ const TOTAL_AFTER_WORK = new RegExp(
   + '[^.!?]{0,60}?'
   + '\\b(upon|on|after|following|once)\\b[^.!?]{0,30}?'
   + '\\b(completion|complete|completed|the work is done|work is finished|the job is done|finish)\\b', 'i')
+
+/**
+ * Bare "payment is due on completion" — no totality word, no mention of a
+ * deposit, no scope to the balance.
+ *
+ * ⚠️ This pattern exists because the LIVE production terms are exactly this
+ * sentence, and the first version of this detector walked straight past them:
+ * TOTAL_AFTER_WORK demanded a totality word ("in full", "100%"), and real owners
+ * do not write like that. Measuring against the real rows is what found it — the
+ * hand-written corpus had agreed with itself perfectly.
+ *
+ * Safe against the honest readings because it runs AFTER the two guards that
+ * matter: a sentence scoped to the balance is skipped by REMAINDER, and terms
+ * that document the deposit properly return before we get here.
+ */
+const BARE_PAYMENT_AFTER_WORK =
+  /\bpayments?\b[^.!?]{0,25}?\b(due|payable|owing|collected)\b[^.!?]{0,25}?\b(upon|on|after|following|once)\b[^.!?]{0,25}?\b(completion|complete|completed|the work is done|the job is done|finish)/i
 
 /** An explicit denial that any money is wanted before the work. */
 const NO_MONEY_UPFRONT = [
@@ -143,7 +169,8 @@ export function detectTermsTimingConflict(
       if (HEDGE.test(s)) continue
       // A sentence about the REMAINDER is the truthful half of a deposit quote.
       if (REMAINDER.test(s)) continue
-      if (NO_MONEY_UPFRONT.some(re => re.test(s)) || TOTAL_AFTER_WORK.test(s)) {
+      if (NO_MONEY_UPFRONT.some(re => re.test(s)) || TOTAL_AFTER_WORK.test(s)
+        || BARE_PAYMENT_AFTER_WORK.test(s)) {
         return { claim: 'no_money_before_work', sentence: s, configured: timing.mode }
       }
     }
