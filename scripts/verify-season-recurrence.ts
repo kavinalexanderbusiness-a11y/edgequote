@@ -277,8 +277,16 @@ console.log('\n▸ 6 · the shape of the model')
     'the editor does not distinguish "needs selection" from year-round')
   check('…and says what happens if it is left unset',
     /nothing stops it from repeating out of\s+season/.test(jfRaw))
-  check('the declaration travels with the series',
-    /seasonKey: seasonKeyChoice \|\| null/.test(jf))
+  // ⚠️ Anchored on the PAYLOAD, not on the expression. `seasonKey:
+  // seasonKeyChoice || null` appears twice — once resolving the season for the
+  // form, once emitting it to the caller — so a loose match stayed green while
+  // the emit was deleted. Mutation testing found exactly that. The trailing
+  // comma is what distinguishes the object property from the call argument.
+  check('the declaration travels with the series to the caller',
+    /seasonKey: seasonKeyChoice \|\| null,/.test(jf),
+    'the recurrence payload no longer carries the declaration')
+  check('…and it is emitted alongside the other end rules',
+    /endCount:[\s\S]{0,400}?seasonKey: seasonKeyChoice/.test(jf))
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
