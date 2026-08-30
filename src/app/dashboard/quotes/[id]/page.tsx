@@ -28,6 +28,8 @@ import { formatCurrency, formatDate, applyOvergrowth, localTodayISO } from '@/li
 import { allocateQuoteNumber, QUOTE_NUMBER_FAILED } from '@/lib/quoteNumber'
 import { nextInvoiceNumber } from '@/lib/invoicing'
 import { isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil, markSentPatch, sendBlockedReason, sendBlockedLabel, DEFAULT_QUOTE_VALID_DAYS } from '@/lib/quoteStatus'
+import { quotePriceState, PRICE_STATE_LABEL } from '@/lib/pricingState'
+import { markQuoteNoCharge, noChargeReasonProblem, NO_CHARGE_REASON_MAX } from '@/lib/noChargeAction'
 import { toast } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
@@ -877,6 +879,12 @@ export default function QuoteDetailPage() {
   // One guard for the follow-up / won / lost actions so a double-tap can't double
   // a follow-up count or fire the status change twice.
   const [actionBusy, setActionBusy] = useState(false)
+  // The No charge disclosure. Closed by default: free work is the exception, and
+  // a reason box sitting open beside a price field invites filling it in to make
+  // the warning go away.
+  const [noChargeOpen, setNoChargeOpen] = useState(false)
+  const [noChargeReason, setNoChargeReason] = useState('')
+  const [noChargeBusy, setNoChargeBusy] = useState(false)
   async function logFollowUp() {
     if (!quote || actionBusy) return
     setActionBusy(true)
@@ -1117,7 +1125,11 @@ export default function QuoteDetailPage() {
           the same anatomy as every other detail page. */}
       <DetailHeader
         title={quote.quote_number}
-        description={`${statusPhrase} · Created ${formatDate(quote.created_at)}`}
+        // ⭐ A no-charge quote SAYS SO, everywhere it is read. The whole point of
+        // recording the decision is that the reader never has to guess what a
+        // zero meant — so the price state travels with the status, and a free
+        // quote can never be mistaken for an unpriced one (or for a paid one).
+        description={`${statusPhrase} · ${PRICE_STATE_LABEL[quotePriceState(quote)]} · Created ${formatDate(quote.created_at)}`}
         action={
         <div className="flex flex-wrap items-center gap-2 lg:justify-end">
           {/* Owner-side PDF action. Honest label: this downloads the PDF to YOUR
@@ -1523,15 +1535,66 @@ export default function QuoteDetailPage() {
                 Blocked → the button becomes the FIX ("Add a price"), which opens the
                 editor right here: one tap instead of hunting for Edit. */}
             {sendBlock === 'no_price' ? (
-              <Button variant="secondary" onClick={() => setEditing(true)}>
-                <Edit2 className="w-4 h-4" /> Add a price
-              </Button>
+              // ⭐ TWO ways out, because the refusal names two. Offering only
+              // "Add a price" is what taught owners to type a number they had
+              // not decided on — which is how the manufactured zeros got into
+              // the book in the first place.
+              <div className="flex items-center gap-2 shrink-0">
+                <Button variant="secondary" onClick={() => setEditing(true)}>
+                  <Edit2 className="w-4 h-4" /> Add a price
+                </Button>
+                <Button variant="ghost" onClick={() => setNoChargeOpen(v => !v)}>
+                  No charge
+                </Button>
+              </div>
             ) : (
               <Button variant={quote.status === 'draft' || quote.status === 'sent' ? 'primary' : 'secondary'} onClick={() => setShowMessage(true)}>
                 <MessageSquare className="w-4 h-4" /> {quote.status === 'draft' || quote.status === 'sent' ? 'Send quote' : 'Resend quote'}
               </Button>
             )}
           </CardBody>
+          {/* ── The No charge decision ────────────────────────────────────────
+              An EXPLICIT action with a reason attached, never an inference from
+              a $0. The reason, the actor and the timestamp are written together
+              by one RPC (the actor comes from the session, so it cannot be
+              passed in or forged), and the whole thing lands in the audit trail.
+              ⛔ Nothing here writes the columns directly. */}
+          {noChargeOpen && sendBlock === 'no_price' && (
+            <div className="px-4 pb-4 -mt-1 flex flex-col gap-2 border-t border-border pt-3">
+              <label htmlFor="eq-no-charge-reason" className="text-xs font-semibold text-ink">
+                Why is this free? It goes on the record.
+              </label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input id="eq-no-charge-reason" value={noChargeReason}
+                  onChange={e => setNoChargeReason(e.target.value)}
+                  maxLength={NO_CHARGE_REASON_MAX}
+                  placeholder="Warranty redo · goodwill · included in another job"
+                  className="flex-1 rounded-lg bg-surface border border-border px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" />
+                <Button variant="primary" disabled={noChargeBusy}
+                  onClick={async () => {
+                    const problem = noChargeReasonProblem(noChargeReason)
+                    if (problem) { toast.error(problem); return }
+                    setNoChargeBusy(true)
+                    try {
+                      const r = await markQuoteNoCharge(supabase, quote.id, noChargeReason)
+                      if (!r.ok) { toast.error(r.error || 'Could not mark this No charge.'); return }
+                      // Re-read rather than patching locally: the timestamp and
+                      // the actor were decided by the DATABASE, and guessing them
+                      // here is how a screen comes to disagree with its own row.
+                      const { data } = await supabase.from('quotes').select('*').eq('id', quote.id).single()
+                      if (data) setQuote(data as typeof quote)
+                      setNoChargeOpen(false); setNoChargeReason('')
+                      toast.success('Marked No charge — it can be sent and approved as free work.')
+                    } finally { setNoChargeBusy(false) }
+                  }}>
+                  Mark No charge
+                </Button>
+              </div>
+              <p className="text-[11px] text-ink-faint">
+                This is different from a $0 price: it records that someone decided this is free, who, and when.
+              </p>
+            </div>
+          )}
           {/* vars.address is the quote's OWN address — the same string QuotePDF prints,
               so the message and the document it links to name the same place. Deliberately
               NOT the customer's primary property: borrowing that is what made six of a

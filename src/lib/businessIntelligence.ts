@@ -15,6 +15,7 @@ import {
   ProfitJob, ProfitContext, ProfitQuote, RecInfo,
   jobValue, neighborhoodProfitability, dayProfitability, monthlyTrends, neighborhoodKey, MonthTrend, Grade,
 } from '@/lib/profitability'
+import { sumQuoteAmounts } from '@/lib/pricingState'
 
 // ── Business Intelligence engine (Growth) ───────────────────────────────────────
 // The owner's single source of truth: how is the business performing and where to
@@ -402,7 +403,12 @@ export function computeBI(inp: BIInput): BIReport {
   const wl = analyzeWinLoss(wlQuotes, quoteOutcomes, hoodOf)
   // Decided = answered either way — THE rule (lib/salesStage), not a local array.
   const decidedQuotes = quotes.filter(q => isWon(q.status) || isLost(q.status))
-  const avgQuoteValue = decidedQuotes.length ? round(decidedQuotes.reduce((s, q) => s + Number(q.total || 0), 0) / decidedQuotes.length) : 0
+  // ⭐ Divide by what was actually SUMMED (`counted`), not by the full set.
+  // Dividing a priced-only total by a count that includes unpriced quotes is the
+  // second half of the silent-zero bug: it drags every average down by exactly
+  // the proportion of work nobody has priced yet.
+  const decidedRollup = sumQuoteAmounts(decidedQuotes)
+  const avgQuoteValue = decidedRollup.counted ? round(decidedRollup.total / decidedRollup.counted) : 0
   // Win rate by service type.
   const svcWL: Record<string, { won: number; dec: number }> = {}
   for (const q of quotes) {

@@ -39,6 +39,7 @@ import type { JobRecurrence, Crew, Technician } from '@/types'
 import { loadCrews, loadTechnicians } from '@/lib/crews'
 import { assigneeOf, sameAssignee } from '@/lib/crewAssignment'
 import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts, uncompleteJob } from '@/lib/invoicing'
+import { BLANK_NUMERIC_FIELD } from '@/lib/pricingState'
 import { queueOrRun, isNetworkError } from '@/lib/offline/outbox'
 // THE completion stamp. Every door on this page that moves a visit to
 // "completed" writes the same three fields through it — see lib/jobStatus.
@@ -1452,6 +1453,7 @@ export default function SchedulePage() {
       const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, ...fields, ...perVisit })
       if (res.created) draftInvoiceToast(res.invoiceNumber, `Draft invoice ${res.invoiceNumber} created from the completed job.`)
       else if (res.reason === 'exists') setBanner('That job already has an invoice.')
+      else if (res.reason === 'no-charge') setBanner('Done — marked No charge, so no invoice was drafted. Nothing to bill.')
       else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
     }
 
@@ -2006,7 +2008,8 @@ export default function SchedulePage() {
           if (error) throw new Error(error.message)
           const res = await createDraftInvoiceForCompletedJob(supabase, completed)
           if (res.created) draftInvoiceToast(res.invoiceNumber, `Draft invoice ${res.invoiceNumber} created.`)
-          else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
+          else if (res.reason === 'no-charge') setBanner('Done — marked No charge, so no invoice was drafted. Nothing to bill.')
+      else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
           // A failed draft used to say NOTHING, which is indistinguishable from the success
           // banner you scrolled past — the visit leaves the un-invoiced queue and the money
           // is never billed, with no trace pointing at it. ('exists' stays quiet: an invoice
@@ -2154,7 +2157,8 @@ export default function SchedulePage() {
             // replay already drafts from it, so both doors bill the same amount.
             const res = await createDraftInvoiceForCompletedJob(supabase, completed)
             if (res.created) draftInvoiceToast(res.invoiceNumber, `Saved — draft invoice ${res.invoiceNumber} created.`)
-            else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
+            else if (res.reason === 'no-charge') setBanner('Done — marked No charge, so no invoice was drafted. Nothing to bill.')
+      else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
             // The quick-edit sheet completes a job through the same transition as the Complete
             // button, which DOES report this (completeJob below). Without it a failed draft leaves
             // the visit out of the un-invoiced queue and it is never billed, with no trace.
@@ -3141,7 +3145,13 @@ export default function SchedulePage() {
                 status: editing.status,
                 notes: editing.notes || '',
                 actual_minutes: editing.actual_minutes || 0,
-                price: editing.price ?? 0,
+                // ⛔ WAS `editing.price ?? 0`. A visit whose price is NULL — the
+                // normal state of every visit in a quote-linked series — opened
+                // its editor showing "0", so the owner read "this visit is worth
+                // nothing" where the row actually says "follow the quote". Blank
+                // is what NULL means here, and the save turns blank back into
+                // NULL, so the round-trip is now lossless.
+                price: editing.price ?? BLANK_NUMERIC_FIELD,
                 crew_id: editing.crew_id ?? null,
                 technician_id: editing.technician_id ?? null,
               } : (quotePrefill ?? customerPrefill ?? { scheduled_date: formDate })}

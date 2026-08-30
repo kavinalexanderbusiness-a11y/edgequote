@@ -103,15 +103,26 @@ export function isSelected(selectedId: string | null | undefined): boolean {
 }
 
 export type OptionProblem =
-  | 'too_few' | 'too_many' | 'unnamed' | 'no_price' | 'duplicate_name' | 'many_recommended'
+  | 'too_few' | 'too_many' | 'unnamed' | 'no_price' | 'all_unpriced' | 'duplicate_name' | 'many_recommended'
 
 /**
  * Why this set of options cannot be saved yet, or null when it can. Pure, so
  * the builder's inline message and the guard's assertions come from one rule.
  *
- * Prices of zero are allowed on purpose: "included" and "no charge" are real
- * tiers. It is the QUOTE having no price that is blocked, and that is
- * sendBlockedReason's job — one gate, where it already lives.
+ * A SINGLE zero is allowed on purpose: "included" and "no charge" are real tiers
+ * ALONGSIDE priced ones ("Basic — included, Plus — $40, Full — $90").
+ *
+ * ⭐⭐ EVERY option at zero is a different fact, and it used to pass. A set where
+ * nothing carries a price is not a menu of choices — it is an unpriced quote
+ * wearing three names, and it reached the customer as "$0.00 / $0.00 / $0.00".
+ * The whole-set case is caught HERE rather than at the send door because this is
+ * where the fields are still on screen; the send door still refuses it too
+ * (`quotePriceState` → 'unpriced'), which is belt and braces on the path that
+ * actually reaches a customer.
+ *
+ * ⛔ This is NOT a claim that free work is illegal. A genuinely free job is
+ * recorded with a no-charge decision (lib/pricingState) — a reason, an actor and
+ * a timestamp — not by typing 0 into every box and hoping the reader guesses.
  */
 export function optionSetProblem(options: OptionLike[] | null | undefined): OptionProblem | null {
   const list = options || []
@@ -119,6 +130,7 @@ export function optionSetProblem(options: OptionLike[] | null | undefined): Opti
   if (list.length > MAX_QUOTE_OPTIONS) return 'too_many'
   if (list.some(o => !String(o.name ?? '').trim())) return 'unnamed'
   if (list.some(o => !Number.isFinite(Number(o.price)) || Number(o.price) < 0)) return 'no_price'
+  if (list.every(o => Number(o.price) === 0)) return 'all_unpriced'
   const names = list.map(o => String(o.name).trim().toLowerCase())
   if (new Set(names).size !== names.length) return 'duplicate_name'
   if (list.filter(o => o.is_recommended).length > 1) return 'many_recommended'
@@ -133,6 +145,7 @@ export function optionProblemMessage(p: OptionProblem): string {
     case 'too_many': return `A quote can offer at most ${MAX_QUOTE_OPTIONS} options.`
     case 'unnamed': return 'Give every option a name — that’s what the customer picks between.'
     case 'no_price': return 'Give every option a price.'
+    case 'all_unpriced': return 'None of these options has a price — the customer would see $0.00 for every choice. Price at least one, or mark the quote No charge.'
     case 'duplicate_name': return 'Two options share a name — the customer couldn’t tell them apart.'
     case 'many_recommended': return 'Only one option can be marked Recommended.'
   }
@@ -151,10 +164,26 @@ export function optionRowsFor(
     user_id: userId,
     name: String(o.name).trim(),
     description: String(o.description ?? '').trim() || null,
-    price: Number(o.price) || 0,
+    // ⛔ WAS `Number(o.price) || 0`. That is the manufactured zero: a blank input
+    // is `''`, `Number('')` is 0, and the row saved as a real $0.00 price the
+    // customer then read as an offer. There is no coercion here any more — the
+    // value is a number or this function refuses to build a row for it, and
+    // `optionSetProblem` (which every caller runs first) is what turns that into
+    // a sentence while the fields are still on screen. An option that reaches
+    // here non-numeric is a programming error, not an owner's typo.
+    price: priceOrThrow(o.price, String(o.name).trim()),
     sort_order: i,
     is_recommended: !!o.is_recommended,
   }))
+}
+
+/** A finite, non-negative option price, or a loud failure. Never a fallback. */
+function priceOrThrow(raw: unknown, name: string): number {
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < 0) {
+    throw new Error(`Option "${name}" has no usable price — run optionSetProblem() before saving.`)
+  }
+  return n
 }
 
 /** A duplicate of an option, ready to become the next tier — same scope text to
