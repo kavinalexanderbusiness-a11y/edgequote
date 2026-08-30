@@ -117,6 +117,16 @@ console.log('\n── 2. ⭐⭐ A CADENCE IS DECLARED, NEVER INFERRED ──')
     'a constant named "the default season length" invites annualizing what has not earned it')
   check('visitsPerSeason can return null',
     /function visitsPerSeason\([^)]*\):\s*number\s*\|\s*null/.test(CODE.engine), '')
+  // ⚠️ The SIGNATURE is not the behaviour. Mutation testing put
+  // `return c ? SEASON_VISITS[c] : SEASON_VISITS.biweekly` back and the
+  // signature check stayed green. Assert the FALLBACK ARM is null.
+  const vpsBody = CODE.engine.slice(CODE.engine.indexOf('function visitsPerSeason'))
+  check('…and its undeclared arm returns null, not a default season',
+    /return c \? SEASON_VISITS\[c\] : null/.test(vpsBody.slice(0, 220)),
+    vpsBody.slice(0, 200))
+  check('no SEASON_VISITS fallback survives anywhere in the engine',
+    !/:\s*SEASON_VISITS\.\w+/.test(CODE.engine) && !/\?\?\s*SEASON_VISITS/.test(CODE.engine),
+    'a default multiplier is how an unearned year gets claimed')
 }
 
 console.log('\n── 3. ⭐⭐ ONE-OFF WORK IS NEVER ANNUALIZED ──')
@@ -216,7 +226,16 @@ console.log('\n── 6. ⭐⭐ WEAK EVIDENCE SHOWS A SENTENCE, NOT A DOLLAR ─
   eq(`${MIN_VISITS_FOR_CONFIDENT} are confident`, solid.strength, 'confident')
 
   // ⛔ The UI must render the sentence, and must not print a confident $0.
-  check('the page renders the insufficient label', CODE.page.includes('INSUFFICIENT_LABEL'), '')
+  // ⚠️ An IMPORT is not a RENDER — the same trap twice in two sessions. Assert
+  // the identifier appears inside JSX braces, not merely in the import list.
+  check('the page RENDERS the insufficient label', /\{INSUFFICIENT_LABEL\}/.test(CODE.page), '')
+  // ⚠️ And this one is unreachable by construction — `assessEvidence` already
+  // returns `annual: null` whenever strength is insufficient — so no input can
+  // prove the guard clause present. Defence-in-depth has to be asserted
+  // structurally or not at all.
+  check('mayShowAnnual refuses insufficient evidence in its own right',
+    /strength !== 'insufficient'/.test(CODE.evidence.slice(CODE.evidence.indexOf('export function mayShowAnnual'), CODE.evidence.indexOf('export function mayShowAnnual') + 220)),
+    'the belt as well as the braces: a later refactor may make this reachable')
   check('the money figure is CONDITIONAL on the value being positive',
     /o\.expectedValue\s*>\s*0\s*\?/.test(CODE.page),
     'an unconditional +$0/yr reads as "this customer is worth nothing"')
@@ -242,8 +261,15 @@ console.log('\n── 7. ⭐ THE TRANSPARENCY CONTRACT ──')
 
   check('every exclusion reason has owner-facing copy',
     Object.values(EXCLUSION_COPY).every(v => typeof v === 'string' && v.length > 3), '')
-  check('the page renders the evidence block', CODE.page.includes('evidenceSummary'), 'the owner must be able to see what a figure is based on')
-  check('and the spread caveat when the sample is skewed', CODE.page.includes('evidence.skew'), '')
+  // ⚠️ Rendered, not imported. Emptying the <p> left the import in place and this
+  // check green until mutation testing said otherwise.
+  check('the page RENDERS the evidence summary',
+    /\{evidenceSummary\(o\.evidence\)\}/.test(CODE.page),
+    'the owner must be able to see what a figure is based on')
+  check('and the spread caveat when the sample is skewed',
+    /\{o\.evidence\.skew/.test(CODE.page), '')
+  check('and the reason when there is no figure',
+    /\{insufficientReason\(o\.evidence\)\}/.test(CODE.page), '')
 }
 
 console.log('\n── 8. The REAL engine, end to end ──')
@@ -327,6 +353,25 @@ console.log('\n── 8. The REAL engine, end to end ──')
   check('the top action is a QUANTIFIED one',
     !report.summary.topAction || report.summary.topAction.expectedValue > 0,
     JSON.stringify(report.summary.topAction?.expectedValue))
+
+  // ⚠️ The check above passes trivially while ANY quantified opportunity exists,
+  // because rankValue is expectedValue × weights and an unquantified one is 0 —
+  // so it always sorts last. Mutation testing put `topAction: ranked[0]` back and
+  // nothing went red. The case that actually distinguishes them is a book with
+  // NOTHING quantifiable: then ranked[0] IS unquantified, and a revenue screen
+  // must headline nothing rather than headline a blank figure.
+  const weakOnly = computeRevenueIntel({
+    jobs: jobs.filter(j => j.customer_id !== 'A'),
+    pctx: { quotesById: { q1: q } as never, recById: recurrences, base: null, today },
+    customers: customers.filter(c => c.id !== 'A'),
+    properties: [], recurrences, invoices: [], lineItems: [], jobCustomerById: {},
+    seasons: DEFAULT_SEASONS, capacityHours: 8, preferredDays: [1, 2, 3, 4, 5], today,
+  })
+  check('a book with nothing quantifiable still produces recommendations',
+    weakOnly.opportunities.length > 0, 'the ACTIONS are still good advice')
+  eq('…but its headline is zero', weakOnly.summary.totalOpportunity, 0)
+  eq('…and it headlines NO top action at all', weakOnly.summary.topAction, null)
+  eq('…and says every one of them went unquantified', weakOnly.summary.quantified, 0)
   check('every opportunity carries its evidence',
     report.opportunities.every(o => o.evidence && typeof o.evidence.sampleSize === 'number'), '')
 
