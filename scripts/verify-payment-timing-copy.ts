@@ -47,7 +47,7 @@ import { requiredDeposit, type GateQuote } from '../src/lib/payments/depositGate
 // business over words that were fine.
 import {
   detectTermsTimingConflict, termsConflictExplanation, classifyTermsPaymentClaim,
-  termsClaimConflicts, termsFingerprint, TERMS_CLASSIFIER_VERSION,
+  termsClaimConflicts, termsFingerprint, TERMS_CLASSIFIER_VERSION, termsClaimPatch,
 } from '../src/lib/payments/termsTimingConflict'
 import { md5 } from '../src/lib/md5'
 import { sendBlockedReason, sendBlockedLabel } from '../src/lib/quoteStatus'
@@ -591,8 +591,15 @@ console.log('\n■ 6. ONE classifier, a quote-independent claim, and a version')
   check('Settings writes the classification in the SAME upsert as the terms',
     /\.\.\.termsClaimPatch\(values\.terms_text\)/.test(settings)
     && /\.upsert\(\{[\s\S]*?termsClaimPatch/.test(settings))
+  // ⚠️ Asserted on the RETURNED OBJECT, not by slicing the source. The previous
+  // form matched `/export function termsClaimPatch[\s\S]*?\n}/`, and this
+  // function's return TYPE is a multi-line object literal — so `\n}` closed on
+  // the type annotation and the check never saw the body at all. Mutation #47
+  // added `terms_text` to the returned object and the guard stayed green.
   check('termsClaimPatch returns the classification ONLY — never terms_text',
-    !/terms_text\s*:/.test(/export function termsClaimPatch[\s\S]*?\n}/.exec(code)?.[0] ?? ''))
+    JSON.stringify(Object.keys(termsClaimPatch('Payment due upon completion.')).sort())
+      === JSON.stringify(['terms_payment_claim', 'terms_payment_claim_fingerprint', 'terms_payment_claim_version']),
+    `keys: ${Object.keys(termsClaimPatch('x')).join(', ')}`)
 
   // ── The SQL gate ──────────────────────────────────────────────────────────
   check('the gate lives in quote_record_acceptance — the one evidence seam',
