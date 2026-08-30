@@ -129,9 +129,13 @@ check('no part of the proposal reads xmax',
 
 // ── The barrier ────────────────────────────────────────────────────────────
 // ⭐⭐ THE REGISTRY IS THE BARRIER, and the thing that makes it cover HISTORY.
+// ⚠️⚠️ ANCHOR THE TABLE NAME. `public\.document_number_claims` with nothing after
+// it also matches `public.document_number_claims_unused` — so a mutation that
+// renamed the table out of existence left this check green and SURVIVED. An
+// existence check on an identifier has to end the identifier.
 check('a claim registry exists, keyed on (tenant, kind, number)',
-  /create table if not exists public\.document_number_claims/i.test(pSchema)
-  && /primary key \(user_id, kind, number\)/i.test(pSchema),
+  /create table if not exists public\.document_number_claims\s*\(/i.test(pSchema)
+  && /constraint document_number_claims_pkey primary key \(user_id, kind, number\)/i.test(pSchema),
   'a counter alone is a convention — only a claimed-number registry can refuse a number history already used')
 check('the registry is seeded from DISTINCT historical numbers',
   /insert into public\.document_number_claims[\s\S]{0,300}select distinct[\s\S]{0,200}from public\.quotes/i.test(pSchema),
@@ -564,8 +568,21 @@ async function behaviour() {
     /already been used by this business/i.test(backdated),
     `created_at is caller-supplied, so a barrier keyed on it is a barrier with a door: ${backdated.slice(0, 200) || 'IT SUCCEEDED'}`)
 
-  // ⭐ A malformed legacy number belongs to no year series, so no counter can
-  // ever protect it. The registry claims the literal string, which can.
+  // ⭐⭐ A MALFORMED NUMBER THAT PREDATES THE CUTOVER. `EPS-0099` was written
+  // further up this file, BEFORE the proposal was applied, and it carries no year
+  // segment — so no counter in any year can describe it and the seeding statement
+  // in §4 deliberately skips it. The ONLY thing that can protect it is the claim
+  // registry's seed, which claims the literal string.
+  // ⚠️ This distinction is load-bearing and was found by a mutation: the check
+  // below it (EPS-0077, written AFTER apply) is protected by the TRIGGER, so a
+  // mutation that broke the SEED's coverage of malformed numbers survived against
+  // it. Two numbers, because they are defended by two different mechanisms.
+  const legacyReuse = await refuses(mkQuote(A, 'EPS-0099', '11111111-1111-1111-1111-111111111111'))
+  check('BARRIER · a malformed number that predates the cutover is claimed by the SEED',
+    /already been used by this business/i.test(legacyReuse),
+    `EPS-0099 belongs to no year series, so only the registry seed can hold it: ${legacyReuse.slice(0, 200) || 'IT SUCCEEDED'}`)
+
+  // ⭐ And one written AFTER the cutover is claimed by the TRIGGER.
   await exec(mkQuote(A, 'EPS-0077', '11111111-1111-1111-1111-111111111111'))
   const malformedReuse = await refuses(mkQuote(A, 'EPS-0077', '11111111-1111-1111-1111-111111111111'))
   check('BARRIER · a malformed legacy number is protected too',

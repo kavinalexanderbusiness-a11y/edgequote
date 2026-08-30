@@ -115,6 +115,10 @@ echo "  ── the barrier: history, and the future ──"
 # ⭐⭐ 1 · THE CLAIM REGISTRY REMOVED ENTIRELY. This is the rule the whole
 # revision exists for: without it only the partial index defends, and the partial
 # index cannot see a pre-cutover row.
+# ⚠️ This mutation SURVIVED on its first run and the guard was wrong, not the
+# mutation: the existence check matched `public.document_number_claims` as a
+# PREFIX, so a table renamed to `…_claims_unused` still satisfied it. The check
+# now ends the identifier.
 mutate static "the claim registry removed" \
   "a claim registry exists, keyed on (tenant, kind, number)" \
   "$PROPOSAL" \
@@ -144,8 +148,13 @@ mutate full "history unclaimed AND the apply-time assertion silenced" \
 #     ⚠️ Length, not a regex: a regex here has to survive bash, perl and SQL
 #     quoting, and the one that does not survive mutates nothing while looking
 #     like it worked. EPS-0002 is 8 characters; EPS-2026-0008 is 13.
+#     ⚠️ THE EXPECTATION NAMES THE SEED'S CHECK, NOT THE TRIGGER'S. This mutation
+#     first survived against "a malformed legacy number is protected too", because
+#     that check writes its number AFTER the proposal is applied — so the TRIGGER
+#     claims it and breaking the SEED changes nothing. The guard now tests a
+#     malformed number written BEFORE the cutover as well, and this points there.
 mutate full "malformed legacy numbers left unclaimed" \
-  "a malformed legacy number is protected too" \
+  "a malformed number that predates the cutover is claimed by the SEED" \
   "$PROPOSAL" \
   's/   where q\.quote_number is not null\n  on conflict \(user_id, kind, number\) do nothing;/   where q.quote_number is not null and length(q.quote_number) > 9\n  on conflict (user_id, kind, number) do nothing;/; s/raise exception .quote_number_integrity: % existing quote\(s\) are not in the claim registry — history is not protected., v_unclaimed;/raise notice '"'"'silenced'"'"';/'
 
