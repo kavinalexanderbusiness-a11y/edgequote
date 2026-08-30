@@ -40,3 +40,7 @@ scripts/.s*-fixture.json
 
 # Session 121 acceptance-surface harness output (scripts/s121-acceptance-harness.tsx)
 .s121/
+
+# Browser-proof harness output (scenes, screenshots, throwaway Chrome profiles)
+.s112b/
+.s121/
