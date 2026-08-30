@@ -106,11 +106,12 @@ await sleep(2500) // acceptance state loads after the quote
 
 const btns = () => evaluate(`(() => {
   const t = [...document.querySelectorAll('button')].map(b => (b.textContent || '').trim())
-  return { current: t.some(x => x === 'Current PDF'), accepted: t.some(x => x === 'Accepted version'),
+  return { current: t.some(x => x === 'Current PDF'),
+           label: t.find(x => x === 'Accepted version' || x === 'Historical record') ?? null,
            bare: t.some(x => x === 'Open PDF') }
 })()`)
 let b = await btns()
-check('the detail offers "Accepted version"', b.accepted === true, JSON.stringify(b))
+check(`the detail offers the evidence artifact (${b.label ?? 'none'})`, b.label !== null, JSON.stringify(b))
 check('…and the current artifact is relabelled "Current PDF"', b.current === true && b.bare === false, JSON.stringify(b))
 
 // Hook URL.createObjectURL, click, and require a real PDF-sized blob.
@@ -120,8 +121,8 @@ await evaluate(`(() => {
   URL.createObjectURL = (b) => { try { window.__s112blobs.push({ size: b?.size ?? 0, type: b?.type ?? '' }) } catch {} return orig(b) }
   return true
 })()`)
-await evaluate(`[...document.querySelectorAll('button')].find(b => (b.textContent || '').trim() === 'Accepted version')?.click()`)
-check('clicking "Accepted version" produces a real document',
+await evaluate(`[...document.querySelectorAll('button')].find(b => ['Accepted version','Historical record'].includes((b.textContent || '').trim()))?.click()`)
+check('clicking the evidence artifact produces a real document',
   await until(`(window.__s112blobs || []).some(b => b.size > 3000)`, 'accepted blob rendered', 120),
   'no blob URL of PDF size was created')
 
@@ -133,7 +134,7 @@ for (const w of [375, 390, 430]) {
   await setWidth(w, true)
   await sleep(1500)
   b = await btns()
-  check(`${w}: both artifacts offered, labelled apart`, b.accepted === true && b.current === true, JSON.stringify(b))
+  check(`${w}: both artifacts offered, labelled apart (${b.label})`, b.label !== null && b.current === true, JSON.stringify(b))
   const ov = await evaluate(`(() => { const m = document.querySelector('main'); return m ? Math.max(0, m.scrollWidth - m.clientWidth) : 0 })()`)
   check(`${w}: the detail does not scroll sideways`, ov === 0, `main overflows by ${ov}px`)
 }
