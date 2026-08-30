@@ -93,7 +93,8 @@ import { Button } from '@/components/ui/Button'
 import { FieldStopBar } from '@/components/schedule/FieldStopBar'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Skeleton, SkeletonRows } from '@/components/ui/Skeleton'
-import { cn, minutesBetween, localTodayISO, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, minutesBetween, formatCurrency, formatDate } from '@/lib/utils'
+import { useTenantTime } from '@/components/layout/TenantTimeProvider'
 // THE scheduling gate — this door must agree with the quote page's Schedule
 // button about whether a deposit-gated booking may book (lib/payments/depositGate).
 import { gateBlocksScheduling, loadQuoteDepositRows, schedulingGate, stampDepositOverride } from '@/lib/payments/depositGate'
@@ -157,6 +158,14 @@ function recFromRow(r: JobRecurrence): Recurrence {
 
 export default function SchedulePage() {
   const supabase = createClient()
+  // ── ⭐⭐ THE BUSINESS'S DAY (Session 121) ──────────────────────────────────
+  // This page called `localTodayISO()`, which on the CLIENT reads the DEVICE's
+  // zone — an owner's phone still set to another province, or a laptop that
+  // travelled. The Dashboard renders on the SERVER, where the same helper is
+  // UTC. So "today" here and "today" there were routinely different days, and
+  // the board's missed-jobs cut-off moved with whichever machine was looking.
+  // One clock now, the tenant's, shared by every dashboard surface.
+  const { todayISO: tenantToday } = useTenantTime()
   // Learned drive speed — feeds the proactive optimizer suggestions below.
   const [travel, setTravel] = useState<TravelModel>(DEFAULT_TRAVEL_MODEL)
   useEffect(() => { loadTravelModel(supabase).then(setTravel) }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -444,7 +453,7 @@ export default function SchedulePage() {
   // Past-due visits still open — the same derivation the dashboard's "Resolve missed
   // jobs" count uses (isMissed), so the board's card and that count can't disagree.
   // The Day Ops board only renders the viewed day, so these were otherwise invisible.
-  const missedJobs = useMemo(() => jobs.filter(j => isMissed(j, localTodayISO())), [jobs])
+  const missedJobs = useMemo(() => jobs.filter(j => isMissed(j, tenantToday)), [jobs, tenantToday])
 
   // Auto-propose optimization after a job is added (review-first — NEVER auto-
   // applies). CONTEXT-AWARE escalation, anchored on the new job's date:
@@ -734,7 +743,7 @@ export default function SchedulePage() {
       // Field window — today ± a week, what a contractor actually works out of.
       // Bounded by date so a 200-job/week book stays well inside quota instead of
       // serializing the whole year.
-      const from = shiftDate(localTodayISO(), -1), to = shiftDate(localTodayISO(), 7)
+      const from = shiftDate(tenantToday, -1), to = shiftDate(tenantToday, 7)
       fieldJobs = loadedJobs.filter(j => j.scheduled_date >= from && j.scheduled_date <= to)
       const addons = await listLineItemsByJob(supabase, user!.id, loadedJobs.map(j => j.id))
       setAddonsByJobId(addons)
@@ -2954,7 +2963,7 @@ export default function SchedulePage() {
       {!loading && missedJobs.length > 0 && (
         <MissedJobsCard
           jobs={missedJobs}
-          today={localTodayISO()}
+          today={tenantToday}
           onBringToToday={(job) => moveJobToDate(job, new Date())}
           onComplete={(job) => { void completeJob(job) }}
           onOpen={(job) => setEditing(job)}
