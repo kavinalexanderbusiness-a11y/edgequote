@@ -101,9 +101,12 @@ check('the database owns allocation',
 check('allocation is ONE statement — insert … on conflict … returning',
   /insert into public\.document_number_counters[\s\S]{0,400}on conflict \(user_id, kind, prefix, year\) do update[\s\S]{0,300}returning/i.test(pSchema),
   'a separate read is the window this whole session exists to close')
+// ⚠️ SCOPE THIS TO THE FUNCTION BODY. Slicing to end-of-file swept in section 7,
+// whose own apply-time assertion quotes the very string being searched for — so
+// the check failed against a proposal that was entirely correct.
+const allocBody = /create or replace function public\.allocate_quote_number[\s\S]*?\$function\$;/i.exec(pSchema)?.[0] ?? ''
 check('the allocator never scans quotes for a maximum',
-  !/max\s*\([^)]*quote_number/i.test(
-    pSchema.slice(pSchema.indexOf('function public.allocate_quote_number'))),
+  !!allocBody && !/\bmax\s*\(/i.test(allocBody),
   'MAX()+1 inside the allocator would reintroduce the defect behind a new name')
 check('allocation is scoped to tenant + prefix + year',
   /primary key \(user_id, kind, prefix, year\)/i.test(pSchema),
@@ -168,10 +171,23 @@ check('the browser generator is gone from lib/utils',
 const inserters = appFiles.filter(f => /from\('quotes'\)[\s\S]{0,40}\.insert/.test(stripTs(src(f))))
 for (const f of inserters) {
   const code = stripTs(src(f))
-  // A restore path re-inserts a whole row it already had, including its original
-  // number — that is not an allocation and must not call the allocator.
-  const isRestore = /toast\.undo\(/.test(code) && !/quote_number:/.test(code)
-  const allocates = /allocateQuoteNumber\(/.test(code)
+  // ⭐ CLASSIFY BY THE INSERT ITSELF, NOT BY A NEARBY TOAST. A RESTORE re-inserts
+  // a row object it already held (`.insert(insertable)`) and keeps the number the
+  // quote was issued. An ALLOCATION builds a fresh object literal and must ask
+  // the database for a number. An earlier version of this check keyed off
+  // `toast.undo(` appearing anywhere in the file, which misfiled two real
+  // allocation doors as restores — the guard was wrong, not the code.
+  // ⭐ THE RULE, STATED DIRECTLY: if a door SETS quote_number, it must have asked
+  // the database for it. A restore never sets one — it re-inserts a row object it
+  // already held, so the number travels with the row untouched.
+  //
+  // Two earlier versions of this got it wrong by inferring intent from context: a
+  // nearby `toast.undo(`, then the shape of the insert argument. Both misfiled
+  // real allocation doors (pricing-recovery builds its row in a variable and IS
+  // an allocation). What matters is whether the code names the column.
+  const setsQuoteNumber = /\bquote_number\s*[,:]/.test(code) || /\bquote_number\s*=/.test(code)
+  const isRestore = !setsQuoteNumber
+  const allocates = /allocateQuoteNumbers?\(/.test(code)
   check(`${f.replace(/\\/g, '/')} ${isRestore ? 'restores without allocating' : 'uses the canonical allocator'}`,
     isRestore ? !allocates : allocates,
     isRestore ? 'a restore keeps the number the quote already had'
@@ -186,14 +202,26 @@ for (const fn of dbDoors) {
   const body = new RegExp(`CREATE OR REPLACE FUNCTION public\\.${fn}\\(([\\s\\S]*?)\\$function\\$;`, 'i')
     .exec(baseline)?.[0] ?? ''
   check(`${fn}() still exists to be re-routed`, !!body)
-  // The proposal must replace it with a call to the allocator.
-  const replaced = new RegExp(`create or replace function public\\.${fn}\\(`, 'i').test(pSchema)
-  check(`${fn}() is re-routed through the allocator`, replaced,
+  // ⭐ The proposal re-routes these by replacing the allocation lines INSIDE the
+  // live definition (pg_get_functiondef → replace → execute) rather than pasting
+  // a new body, so a change that lands in them meanwhile is not silently
+  // discarded. Assert that technique — and that it REFUSES when the text it
+  // expects has gone.
+  const named = new RegExp(`p\\.proname = '${fn}'`).test(pSchema)
+  const refuses = new RegExp(`${fn}\\(\\) no longer contains the expected MAX`).test(proposal)
+  check(`${fn}() is re-routed through the allocator`, named && refuses,
     'a public booking door that keeps its own MAX()+1 is a second allocator')
 }
+// ⚠️ The proposal's own apply-time guard QUOTES the forbidden pattern in order to
+// refuse it, so strip string literals before asserting the pattern is absent.
+// Otherwise the file fails for containing the check that protects it.
+const sqlWithoutLiterals = pSchema.replace(/'[^']*'/g, "''")
 check('the proposal leaves no MAX()+1 quote allocation behind',
-  !/max\(\(?regexp_match\(quote_number/i.test(pSchema),
+  !/max\(\(?regexp_match\(quote_number/i.test(sqlWithoutLiterals),
   'the SQL scan is the database half of the same defect')
+check('the proposal REFUSES to apply if a MAX()+1 allocator survives anywhere',
+  /still allocate quote numbers with MAX\(\)\+1/.test(proposal),
+  'an apply that leaves a second allocator running is worse than one that stops')
 check('the proposal contains no hardcoded EPS allocation',
   !/'EPS-'\s*\|\|/i.test(pSchema),
   'one tenant\'s initials must not be minted for every business')
@@ -307,7 +335,11 @@ async function behaviour() {
   check('RACE · a malformed legacy number splits the two allocators apart',
     Number(dbMax2.rows[0].next) === 8 && browserNext2 === 100,
     `SQL says ${dbMax2.rows[0].next}, browser says ${browserNext2} — production holds exactly such numbers (EPS-0002, EPS-0009)`)
-  await exec(`delete from public.quotes where quote_number = 'EPS-0099'`)
+  // ⚠️ THE ROW STAYS. PGlite cannot DELETE from `quotes` at all — `quotes.total`
+  // is a GENERATED column, so it refuses with "replica identity must not contain
+  // unpublished generated columns". Harmless here: EPS-0099 has no year segment,
+  // so the seeding regex below excludes it and the series is unaffected — which
+  // is itself the behaviour worth having, since production holds two such rows.
 
   // ══ THE REPLACEMENT ════════════════════════════════════════════════════════
   if (!await applyFile('quote_number_integrity_v1.sql (proposal)', src(PROPOSAL))) return
@@ -337,15 +369,54 @@ async function behaviour() {
   console.log('       for what a single-connection harness can and cannot prove.')
 
   // Tenant isolation.
+  // ⭐ Capture A's counter BEFORE touching B rather than predicting it. The
+  // hardcoded expectation here was off by one (101 allocations from a seed of 8
+  // leaves 109, not 108) and failed against behaviour that was correct — the
+  // claim being made is "B did not move A", so measure A on both sides.
+  const aBefore = Number((await q(
+    `select next_value from public.document_number_counters
+      where user_id='${A}' and prefix='EPS' and year=${YEAR}`)).rows[0].next_value)
   const bFirst = await alloc(B)
   check('TENANT · tenant B gets its OWN prefix, not tenant A\'s initials',
     bFirst.startsWith('JWC-'), `got ${bFirst} — expected initials of "Jones Window Cleaning"`)
   check('TENANT · tenant B starts its own series at 0001',
     bFirst === `JWC-${YEAR}-0001`, `got ${bFirst}`)
-  const aCounter = await q(`select next_value from public.document_number_counters where user_id='${A}' and prefix='EPS'`)
+  const aAfter = Number((await q(
+    `select next_value from public.document_number_counters
+      where user_id='${A}' and prefix='EPS' and year=${YEAR}`)).rows[0].next_value)
   check('TENANT · allocating for B did not advance A\'s counter',
-    Number(aCounter.rows[0].next_value) === 108,
-    `A's counter moved to ${aCounter.rows[0]?.next_value}`)
+    aAfter === aBefore,
+    `A's counter moved ${aBefore} → ${aAfter} because another tenant allocated`)
+
+  // ⛔⛔ THE TENANT BOUNDARY, EXERCISED. A signed-in caller must not be able to
+  // allocate against another business's counter. auth.uid() reads the request's
+  // JWT claims, so setting them is how a real signed-in session is simulated.
+  // ⚠️⚠️ `SET LOCAL` OUTSIDE A TRANSACTION IS A NO-OP. The first version of this
+  // used it, auth.uid() stayed null, the boundary check was never reached, and
+  // the cross-tenant call "succeeded" — which reads exactly like a security hole
+  // in the product rather than a bug in the test. Session-level SET, reset after.
+  const asUser = async (uid: string, sql: string): Promise<string> => {
+    try {
+      // ⚠️ The harness's auth.uid() reads `request.jwt.claim.sub` (singular
+      // "claim"), not the JSON `request.jwt.claims` blob Supabase uses in
+      // production. Setting the wrong GUC leaves auth.uid() null, the boundary
+      // check unreached, and the cross-tenant call looking like it succeeded.
+      await db.exec(`set request.jwt.claim.sub = '${uid}';`)
+      await db.exec(sql)
+      return ''
+    } catch (e: any) { return String(e?.message ?? 'error') }
+    finally { try { await db.exec(`set request.jwt.claim.sub = ''`) } catch { /* ignore */ } }
+  }
+  const crossTenant = await asUser(A, `select public.allocate_quote_number('${B}')`)
+  check('TENANT · a signed-in caller cannot allocate for another business',
+    /cannot allocate a number for another business/i.test(crossTenant),
+    `expected a refusal naming the boundary; got: ${crossTenant.slice(0, 160) || 'IT SUCCEEDED'}`)
+  const ownTenant = await asUser(A, `select public.allocate_quote_number('${A}')`)
+  check('TENANT · but may allocate for itself',
+    ownTenant === '', `it was refused: ${ownTenant.slice(0, 160)}`)
+
+  // The quote that the first allocation was for — written as the app would.
+  await exec(mkQuote(A, `EPS-${YEAR}-0008`, '11111111-1111-1111-1111-111111111111'))
 
   // Two tenants may legitimately hold the same display number.
   await exec(mkQuote(B, `EPS-${YEAR}-0008`, '22222222-2222-2222-2222-222222222222'))
@@ -356,7 +427,6 @@ async function behaviour() {
     'uniqueness is per tenant; a global unique would couple unrelated businesses')
 
   // ── THE BARRIER ──────────────────────────────────────────────────────────
-  await refuses(`delete from public.quotes where user_id='${B}' and quote_number='EPS-${YEAR}-0008'`)
   const dupMsg = await refuses(mkQuote(A, `EPS-${YEAR}-0008`, '11111111-1111-1111-1111-111111111111'))
   check('BARRIER · a duplicate within one tenant is refused by the database',
     /quotes_user_qnum_new_unique|duplicate key/i.test(dupMsg),

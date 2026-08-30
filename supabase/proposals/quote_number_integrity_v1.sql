@@ -360,9 +360,14 @@ begin
   execute v_new;
 
   -- ⛔ NOTHING may still scan quotes for a maximum.
+  -- ⚠️ prokind = 'f' is NOT optional: pg_proc also lists aggregates and window
+  -- functions, and pg_get_functiondef() raises on those ("array_agg is an
+  -- aggregate function"), which would abort this migration for a reason that has
+  -- nothing to do with quote numbers.
   select count(*) into v_hits
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public'
+     and p.prokind = 'f'
      and pg_get_functiondef(p.oid) ilike '%max((regexp_match(quote_number%';
   if v_hits > 0 then
     raise exception 'quote_number_integrity: % function(s) still allocate quote numbers with MAX()+1', v_hits;
