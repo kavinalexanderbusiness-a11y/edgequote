@@ -78,6 +78,21 @@ async function main() {
   console.log(`\n  job_recurrences.season_key column: ${hasSeasonKey ? 'PRESENT' : 'NOT APPLIED YET (all series undeclared)'}`)
 
   const jobs = await get('jobs?select=id,recurrence_id,service_type,title,scheduled_date,status,customers(name)&recurrence_id=not.is.null&order=scheduled_date.asc&limit=5000')
+
+  // ⭐⭐ THE CUSTOMER COMES FROM THE RECURRENCE, NOT FROM ITS JOBS.
+  // ⚠️⚠️ This is a fixed bug, and it mattered. The report used to read the name
+  // as `jobsOfThisSeries[0].customers.name`, so a series with ZERO generated
+  // jobs — which is exactly what a brand-new or fully-cleaned series looks like
+  // — rendered as "(no customer)" and was reported to the owner as an ORPHAN.
+  // `job_recurrences.customer_id` was already being SELECTED and then never
+  // used. A real customer disappeared behind a join.
+  const custIds = [...new Set(recs.map((r: any) => r.customer_id).filter(Boolean))]
+  const custById = new Map<string, string>()
+  for (let i = 0; i < custIds.length; i += 50) {
+    const batch = custIds.slice(i, i + 50)
+    const rows = await get(`customers?select=id,name&id=in.(${batch.join(',')})`)
+    for (const c of (Array.isArray(rows) ? rows : [])) custById.set(c.id, c.name)
+  }
   const byRec = new Map<string, any[]>()
   for (const j of jobs) {
     const a = byRec.get(j.recurrence_id) ?? []; a.push(j); byRec.set(j.recurrence_id, a)
@@ -145,12 +160,43 @@ async function main() {
     }
 
     rows.push({
-      id: r.id, who: js[0]?.customers?.name ?? '(no customer)', service: svc || '(unnamed)',
+      id: r.id,
+      // Authority order: the recurrence's OWN customer, then a job's join, then
+      // an honest statement of which fact is missing — never a bare "(no
+      // customer)" that conflates "no customer_id" with "no jobs to read it from".
+      who: (r.customer_id ? custById.get(r.customer_id) : undefined)
+        ?? js[0]?.customers?.name
+        ?? (r.customer_id ? `(customer ${String(r.customer_id).slice(0, 8)} — name unreadable)` : '(no customer_id on the series)'),
+      // A series with no visits yet has no service NAME anywhere — say that,
+      // rather than "(unnamed)", which reads like corrupt data.
+      service: svc || (js.length === 0 ? '(no visits generated yet)' : '(unnamed)'),
       cadence: `${r.freq ?? '?'}/${r.interval_unit ?? '?'}/${r.interval_count ?? '?'}`,
       start: r.start_date, end: r.end_date, existingKey,
       suggested: suggestedKey, confidence, verdict, why, invalid, removable,
     })
     void runtime
+  }
+
+  // ── 0 · INTEGRITY: nothing may look orphaned because of a read bug ────────
+  // ⛔ A row that HAS a customer_id must never be presented to the owner as
+  // having no customer. That is not a cosmetic complaint: an "orphan" reads as
+  // a dead row nobody needs to decide about, and this report is what the owner
+  // uses to decide. One such row was mis-reported exactly this way.
+  {
+    const misread = rows.filter(r => {
+      const rec = recs.find((x: any) => x.id === r.id)
+      return rec?.customer_id && /no customer|unreadable/.test(r.who)
+    })
+    if (misread.length) {
+      console.log('\n⛔ RECONCILIATION INTEGRITY FAILURE')
+      console.log(`   ${misread.length} series carry a customer_id but could not be named:`)
+      for (const m of misread) console.log(`     ${m.id} → "${m.who}"`)
+      console.log('   The projection is wrong; the classification below cannot be trusted.')
+      process.exitCode = 1
+    } else {
+      const withCust = rows.filter(r => recs.find((x: any) => x.id === r.id)?.customer_id).length
+      console.log(`\n  ✓ integrity: all ${withCust} series carrying a customer_id are named`)
+    }
   }
 
   // ── 1 · the classification the migration needs ────────────────────────────

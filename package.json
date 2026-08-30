@@ -34,6 +34,7 @@
     "verify:ai-surface": "tsx scripts/verify-ai-surface.ts",
     "verify:offline-uncomplete": "tsx scripts/verify-offline-uncomplete.ts",
     "verify:seasons": "tsx scripts/verify-seasons.ts",
+    "verify:season-cutover": "tsx scripts/verify-season-cutover.ts",
     "verify:season-recurrence": "tsx scripts/verify-season-recurrence.ts",
     "verify:season-end": "tsx scripts/verify-season-end.ts",
     "season:audit": "tsx scripts/season-end-audit.ts",

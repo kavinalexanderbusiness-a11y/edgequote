@@ -352,6 +352,35 @@ console.log('\n▸ 7 · the reconciliation report is READ-ONLY')
     'the read-only report can write')
   check('…and it uses the product\'s own engine rather than a copy',
     /from '\.\.\/src\/lib\/seasons'/.test(read('scripts/season-reconcile.ts')))
+
+  // ⛔⛔ A SERIES WITH A CUSTOMER MUST NEVER READ AS AN ORPHAN.
+  // ⚠️ This is a fixed bug with teeth: the customer was read as
+  // `jobsOfThisSeries[0].customers.name`, so a series with ZERO generated jobs
+  // rendered as "(no customer)" — and an orphan reads to the owner as a dead
+  // row nobody needs to decide about. One real customer was mis-reported that
+  // way. `job_recurrences.customer_id` was being selected and then ignored.
+  check('⛔ the customer is read from the RECURRENCE, not through its jobs',
+    /custById\.get\(r\.customer_id\)/.test(rec),
+    'the report reads the customer through the jobs join again — a series with no '
+    + 'visits will render as an orphan')
+  check('…with the jobs join only as a fallback',
+    rec.indexOf('custById.get(r.customer_id)') < rec.indexOf('js[0]?.customers?.name'),
+    'the jobs join takes precedence over the series\' own customer')
+  check('…and the customer names are actually fetched for those ids',
+    /customers\?select=id,name&id=in\./.test(rec))
+  check('⛔ and the report FAILS if any row with a customer_id cannot be named',
+    /RECONCILIATION INTEGRITY FAILURE/.test(rec) && /process\.exitCode = 1/.test(rec),
+    'a projection bug would be reported as an orphan instead of as a failure')
+  // Negative control.
+  check('[negative control] the jobs-join read would be caught',
+    /js\[0\]\?\.customers\?\.name/.test('who: js[0]?.customers?.name ?? "(no customer)"'))
+
+  // ⛔ The owner's evidence for THIS decision must not become a product rule.
+  const NO_QUOTE_RULE = /quotes?\b[\s\S]{0,80}(season|infer|classif)/i
+  check('⛔ the report never infers a season from quote history',
+    !NO_QUOTE_RULE.test(rec),
+    'quote history has become a classification input — it was owner evidence for '
+    + 'three specific decisions, not a rule')
   // Negative control.
   check('[negative control] a write would be caught', /\.update\(/.test('x.update({a:1})'))
 }
