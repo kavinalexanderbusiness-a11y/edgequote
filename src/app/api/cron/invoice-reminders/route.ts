@@ -9,7 +9,8 @@ import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { dueForAutoReminder, resolveReminderPolicy, type ReminderPolicy, type RemindableInvoice } from '@/lib/payments/dunning'
 import { invoiceBalance } from '@/lib/payments/ledger'
 import { depositChargeAmount } from '@/lib/payments/deposit'
-import { formatCurrency, localTodayISO } from '@/lib/utils'
+import { formatCurrency } from '@/lib/utils'
+import { loadTenantZones, todayForTenant } from '@/lib/tenantTimeServer'
 
 export const dynamic = 'force-dynamic'
 // Each reminder costs up to two sequential provider round-trips, so the platform
@@ -70,7 +71,19 @@ async function handler(req: NextRequest) {
     return NextResponse.json({ ok: true, skipped: true, note: 'Set SUPABASE_SERVICE_ROLE_KEY to enable scheduled sends.' })
   }
   const supabase = client
-  const today = localTodayISO()
+  // ── ⭐⭐ EACH OWNER'S OWN DATE (Session 121) ───────────────────────────────
+  // This was `localTodayISO()` — one date, from the SERVER's UTC clock, applied
+  // to every tenant's invoices. "Overdue" is a date comparison, so a sweep that
+  // runs when UTC has already rolled over chases a customer the day BEFORE the
+  // invoice is actually late for the business that issued it. This route fires
+  // at 18:00 UTC, which is noon in Alberta, so it is not biting today — and it
+  // would the moment a tenant sits east of the server's clock.
+  //
+  // One read for the whole sweep; the date is then per ROW, from that invoice's
+  // own owner.
+  const zones = await loadTenantZones(supabase)
+  const now = new Date()
+  const todayFor = (userId: string) => todayForTenant(zones, userId, now)
 
   // Only invoices that can still owe money. 'overdue' is then decided by the
   // ledger, not by this query — the filter is just to keep the scan small.
@@ -113,7 +126,7 @@ async function handler(req: NextRequest) {
     sort: (a, b) => (a.due_date || '').localeCompare(b.due_date || ''),
     loadContext: bizInfo,
     enabled: ctx => ctx.automations.invoice_reminder,                       // owner hasn't switched it on
-    due: (inv, ctx) => dueForAutoReminder(inv, ctx.fees, today, ctx.policy), // ledger decides overdue; policy decides cadence
+    due: (inv, ctx) => dueForAutoReminder(inv, ctx.fees, todayFor(inv.user_id), ctx.policy), // ledger decides overdue; policy decides cadence — against THIS owner's date
     // Compare-and-swap on the exact reminder_count we read, re-asserting that the
     // invoice is still chaseable in the same statement. Two overlapping runs both
     // see it as due, but only one UPDATE can match. Moving last_reminded_at also
