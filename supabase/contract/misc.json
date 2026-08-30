@@ -125,14 +125,8 @@
   }
  ],
  "pg_version": "PostgreSQL 17.6 on aarch64-unknown-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit",
- "captured_at": "2026-08-26 18:48:11.520494+00",
+ "captured_at": "2026-08-29 03:35:08.687444+00",
  "default_acls": [
-  {
-   "acl": "{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
-   "role": "postgres",
-   "schema": "public",
-   "objtype": "r"
-  },
   {
    "acl": "{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
    "role": "postgres",
@@ -270,9 +264,15 @@
    "role": "supabase_admin",
    "schema": "graphql",
    "objtype": "S"
+  },
+  {
+   "acl": "{postgres=arwdDxtm/postgres,anon=arwdm/postgres,authenticated=arwdm/postgres,service_role=arwdDxtm/postgres}",
+   "role": "postgres",
+   "schema": "public",
+   "objtype": "r"
   }
  ],
- "latest_migration": "20260826120000",
+ "latest_migration": "20260828140000",
  "publication_tables": [
   "public.content_pieces",
   "public.conversations",

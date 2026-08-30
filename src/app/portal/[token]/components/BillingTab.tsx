@@ -20,6 +20,9 @@ import {
 } from './shared'
 import { PaymentsSection } from './PaymentsSection'
 import { ChangeBreakdown, PendingChangeCard } from './ChangesCard'
+// The acceptance engine's own words, so the customer's screen and the owner's
+// screen describe the same act identically (Session 121).
+import { TERMS_ACK_LABEL, acceptBlockedLabel } from '@/lib/quoteAcceptance'
 
 const KIND_META: Record<DocKind, { label: string; icon: typeof FileText; tone: string }> = {
   quote: { label: 'Quote', icon: FileText, tone: 'text-accent-text border-accent/25 bg-accent/10' },
@@ -246,12 +249,12 @@ function RecordsHub({ view, actions, initialCat, focusDocId }: TabProps & { init
                 )}
                 <span className="text-xs text-ink-faint tabular-nums ml-auto shrink-0">{g.items.length}</span>
               </div>
-              {g.items.map(d => <DocRow key={d.id} d={d} actions={actions} focus={!!focusDocId && d.rawId === focusDocId} />)}
+              {g.items.map(d => <DocRow key={d.id} d={d} actions={actions} termsText={view.data.business?.terms_text ?? null} focus={!!focusDocId && d.rawId === focusDocId} />)}
             </div>
           ))}
         </div>
       ) : (
-        <div className="space-y-3">{filtered.map(d => <DocRow key={d.id} d={d} actions={actions} focus={!!focusDocId && d.rawId === focusDocId} />)}</div>
+        <div className="space-y-3">{filtered.map(d => <DocRow key={d.id} d={d} actions={actions} termsText={view.data.business?.terms_text ?? null} focus={!!focusDocId && d.rawId === focusDocId} />)}</div>
       )}
     </div>
   )
@@ -262,7 +265,7 @@ function RecordsHub({ view, actions, initialCat, focusDocId }: TabProps & { init
 // status, never a second lifecycle engine; declined/expired answer null and
 // get no rail — a rail promises forward motion those rows don't have). ───────
 
-function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; focus?: boolean }) {
+function DocRow({ d, actions, termsText, focus }: { d: DocItem; actions: PortalActions; termsText: string | null; focus?: boolean }) {
   const m = KIND_META[d.kind]
   // The one action each document actually needs, right on the row: a sent quote
   // can be accepted; an invoice with a balance can be paid.
@@ -283,7 +286,19 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
   // A quote that offers alternatives is only approvable once one is named — the
   // same rule the database enforces (portal_accept_quote refuses an options quote
   // with no choice), stated here as a disabled button rather than a failed call.
-  const approveReady = !hasOpts || !!pickedOpt
+  // ── The terms acknowledgement (Session 121) ────────────────────────────────
+  // ⛔ NOT A SIGNATURE, and it must never grow into one — Sessions 74/83 own
+  // those. It is a record that a specific block of text was shown and agreed to,
+  // and the EXACT text is stored with the acceptance, because terms_text is a
+  // single tenant-level field with no version: editing it in Settings tomorrow
+  // would otherwise silently rewrite what every past customer appears to have
+  // agreed to.
+  //
+  // Required exactly when the business HAS terms. Nothing to agree to is not the
+  // same fact as agreeing to nothing, and the record distinguishes them.
+  const needsTerms = !!(termsText ?? '').trim()
+  const [termsAck, setTermsAck] = useState(false)
+  const approveReady = (!hasOpts || !!pickedOpt) && (!needsTerms || termsAck)
   const isExpired = d.kind === 'quote' && d.status === 'expired'
   // `!actions.paymentPending`: while a just-completed checkout is still being
   // confirmed, this row's balance is the PRE-payment one and a second Pay tap
@@ -648,6 +663,25 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
         <div className="mt-3">
           {canAccept && (
             <>
+              {/* The terms sit ABOVE the button, in full and scrollable — not
+                  behind a link, and not summarised. The tick is the evidence, and
+                  evidence of agreeing to something nobody could read on the way
+                  past is not evidence of much. */}
+              {needsTerms && (
+                <div className="mb-3 rounded-xl border border-border bg-bg-tertiary/40 px-3.5 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Scope &amp; terms</p>
+                  <p className="text-xs text-ink-muted whitespace-pre-wrap mt-1.5 max-h-40 overflow-y-auto">{termsText}</p>
+                  <label className="flex items-start gap-2.5 mt-3 cursor-pointer min-h-[44px] items-center">
+                    <input
+                      type="checkbox"
+                      checked={termsAck}
+                      onChange={e => setTermsAck(e.target.checked)}
+                      className="mt-0.5 w-4 h-4 accent-[var(--accent)] shrink-0"
+                    />
+                    <span className="text-xs text-ink">{TERMS_ACK_LABEL}</span>
+                  </label>
+                </div>
+              )}
               {/* The button quotes the CHOSEN option's figure, which is the same
                   `option + travel` the approval RPC snapshots as accepted_price —
                   so what it says and what gets recorded are one number. Disabled
@@ -656,18 +690,20 @@ function DocRow({ d, actions, focus }: { d: DocItem; actions: PortalActions; foc
               <Button
                 className="w-full sm:w-auto"
                 disabled={!approveReady}
-                onClick={() => actions.accept(d.rawId, picked ?? undefined)}
+                onClick={() => actions.accept(d.rawId, picked ?? undefined, termsAck)}
                 loading={actions.accepting === d.rawId}
               >
                 <Check className="w-4 h-4" />
                 {hasOpts
-                  ? (pickedOpt ? `Approve ${pickedOpt.name} — ${formatCurrency(pickedOpt.amount)}` : 'Choose an option above')
-                  : `Approve — ${formatCurrency(d.amount)}`}
+                  ? (pickedOpt ? `Accept ${pickedOpt.name} — ${formatCurrency(pickedOpt.amount)}` : 'Choose an option above')
+                  : `Accept — ${formatCurrency(d.amount)}`}
               </Button>
               <p className="text-[11px] text-ink-faint mt-1.5">
                 {hasOpts && !pickedOpt
-                  ? 'Pick the option you want, then approve it.'
-                  : 'You’ll confirm on the next step — we’ll then reach out to schedule.'}
+                  ? 'Pick the option you want, then accept it.'
+                  : needsTerms && !termsAck
+                    ? acceptBlockedLabel('terms_not_acknowledged')
+                    : 'You’ll confirm on the next step — we’ll then reach out to schedule.'}
               </p>
             </>
           )}

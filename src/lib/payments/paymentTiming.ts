@@ -121,7 +121,7 @@ function askPhrase(t: PaymentTiming): string {
  */
 export function quoteTimingLine(t: PaymentTiming): string {
   if (!t.requiresDepositBeforeScheduling) {
-    return 'Nothing is charged when you approve — you’ll get an invoice once the work is done.'
+    return 'Nothing is charged when you accept — you’ll get an invoice once the work is done.'
   }
   const ask = t.depositAmount == null
     ? `A ${t.depositPercent}% deposit of the option you choose`
@@ -139,12 +139,12 @@ export function quoteTimingLine(t: PaymentTiming): string {
  */
 export function approvalTimingLine(t: PaymentTiming): string {
   if (!t.requiresDepositBeforeScheduling) {
-    return 'Approving doesn’t charge you — we’ll confirm a date with you first, and you’ll only get an invoice after the work is done.'
+    return 'Accepting doesn’t charge you — we’ll confirm a date with you first, and you’ll only get an invoice after the work is done.'
   }
   const ask = t.depositAmount != null && t.depositAmount > 0
     ? `A ${formatCurrency(t.depositAmount)} deposit`
     : `A ${t.depositPercent}% deposit`
-  return `Approving doesn’t charge you. ${ask} is asked for next to secure your booking — we’ll confirm your date once it’s received.`
+  return `Accepting doesn’t charge you. ${ask} is asked for next to secure your booking — we’ll confirm your date once it’s received.`
 }
 
 /**

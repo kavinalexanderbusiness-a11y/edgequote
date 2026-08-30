@@ -324,7 +324,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
 
   function photoUrl(path: string) { return supabase.storage.from('job-photos').getPublicUrl(path).data.publicUrl }
 
-  async function accept(qid: string, optionId?: string) {
+  async function accept(qid: string, optionId?: string, termsAck?: boolean) {
     if (accepting) return // double-click guard
     // Approving commits the customer to a quote value — never ask someone to
     // approve an amount without showing it, and always say that approving isn't
@@ -349,10 +349,10 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     }
     if (q.status !== 'sent') {
       // Someone (or something) moved it while this tab watched the old state:
-      // already approved in another tab, or withdrawn by the business.
+      // already accepted in another tab, or withdrawn by the business.
       setActionError(q.status === 'accepted'
-        ? 'This quote is already approved — nothing more to do.'
-        : 'This quote is no longer open for approval — message us below and we’ll sort it out.')
+        ? 'This quote is already accepted — nothing more to do.'
+        : 'This quote is no longer open for acceptance — message us below and we’ll sort it out.')
       return
     }
     // Expiry is judged AT CLICK TIME, not at page load. The render path already
@@ -363,7 +363,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     // the DATE passing, not the data changing), so re-running the one shared
     // engine against TODAY closes the gap without touching any RPC.
     if (q && displayQuoteStatus({ status: q.status as QuoteStatus, valid_until: q.valid_until }, localTodayISO()) === 'expired') {
-      setActionError('This quote has expired, so it can no longer be approved from here — message us below and we’ll refresh the price for you.')
+      setActionError('This quote has expired, so it can no longer be accepted from here — message us below and we’ll refresh the price for you.')
       // Re-derive the view so the button and label catch up with today.
       setData(d => d ? { ...d } : d)
       return
@@ -385,7 +385,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       // The button is disabled until one is picked, so this is a stale tab or a
       // replayed request — and the RPC would refuse it anyway. Say the useful
       // thing rather than let a silent false become "we couldn't record it".
-      setActionError('This quote has a few options — please pick the one you want, then approve it.')
+      setActionError('This quote has a few options — please pick the one you want, then accept it.')
       return
     }
 
@@ -444,9 +444,15 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     }
     const depositAsk = requiredDeposit(consented)
     const confirmed = await confirmDialog({
-      title: chosenOpt ? `Approve ${chosenOpt.name} — ${formatCurrency(amount)}?` : `Approve ${formatCurrency(amount)}?`,
+      // ⭐ ONE WORD, BOTH SIDES OF THE GLASS (Session 121). This dialog said
+      // "Approve", the status pill said "Approved", the owner's own screen said
+      // "Won", and four dashboard banners said "Accepted". The quote's state is
+      // ACCEPTED everywhere now — including here, at the moment of commitment,
+      // which is the one place the customer and the business must be using the
+      // same word for the same act.
+      title: chosenOpt ? `Accept ${chosenOpt.name} — ${formatCurrency(amount)}?` : `Accept ${formatCurrency(amount)}?`,
       message: [
-        `You're approving ${what}${gst > 0 ? `, plus GST (${gst}%) added on your invoice` : ''}.`,
+        `You're accepting ${what}${gst > 0 ? `, plus GST (${gst}%) added on your invoice` : ''}.`,
         // Say what happens to the ones they didn't pick, at the moment of
         // commitment — "am I signing up for all three?" is the fear this whole
         // screen exists to answer, and it deserves answering here too.
@@ -459,15 +465,21 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
         // being correct in one file was never the problem.
         approvalTimingLine(paymentTiming(consented)),
       ].filter(Boolean).join(' '),
-      confirmLabel: chosenOpt ? `Approve ${chosenOpt.name}` : `Approve ${formatCurrency(amount)}`,
+      confirmLabel: chosenOpt ? `Accept ${chosenOpt.name}` : `Accept ${formatCurrency(amount)}`,
     })
     if (!confirmed) return
     setAccepting(qid)
     setActionError(null)
-    // The third argument is omitted, not null-defaulted, on an ordinary quote —
+    // The option argument is omitted, not null-defaulted, on an ordinary quote —
     // portal_accept_quote's plain path is reached exactly as it always was.
+    //
+    // ⭐ p_terms_ack is passed AS GIVEN, never coerced to true. The RPC refuses an
+    // acceptance when the business has terms and this is false, and that refusal
+    // is the point: an acknowledgement the customer did not make is worth less
+    // than no acknowledgement at all, because it looks like one.
     const { data: ok } = await supabase.rpc('portal_accept_quote', {
       p_token: token, p_quote_id: qid, ...(chosenOpt ? { p_option_id: chosenOpt.id } : {}),
+      p_terms_ack: !!termsAck,
     })
     if (ok) {
       // Carry the CHOICE into the optimistic patch, not just the status. Without
@@ -502,7 +514,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
         setJustAccepted(true)
         setActionError(null)
       } else {
-        setActionError('We couldn’t record your approval — please try again, or reply to any message from us and we’ll take care of it.')
+        setActionError('We couldn’t record your acceptance — please try again, or reply to any message from us and we’ll take care of it.')
       }
     }
     setAccepting(null)
@@ -873,7 +885,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
                   approval and a booked date, name that step instead of promising
                   there's nothing left to do. */}
               <span className="flex items-start gap-2"><CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>Quote approved — thank you!{' '}
+                <span>Quote accepted — thank you!{' '}
                   <span className="font-normal">
                     {acceptedDepositAsk != null
                       ? <>Next step: pay the {formatCurrency(acceptedDepositAsk)} deposit below to secure your booking — your preferred timing is confirmed once it&rsquo;s received.</>

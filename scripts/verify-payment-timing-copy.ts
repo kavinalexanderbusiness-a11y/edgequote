@@ -123,7 +123,7 @@ console.log('\n■ 2. THE contradiction detector — and proof it can fail')
   // "invoiced once the work is done" (about the REMAINDER), and that is not a
   // contradiction — it is the second half of the truth. What makes a claim false
   // is promising nothing-before-work while saying nothing about the deposit.
-  const NOTHING_BEFORE_WORK = /nothing is charged when you approve|only get an invoice after the work|nothing is due yet|no (payment|deposit) is (due|required)/i
+  const NOTHING_BEFORE_WORK = /nothing is charged when you (approve|accept)|only get an invoice after the work|nothing is due yet|no (payment|deposit) is (due|required)/i
   const MENTIONS_DEPOSIT = /deposit/i
   const promisesNothingBeforeWork = (s: string) => NOTHING_BEFORE_WORK.test(s) && !MENTIONS_DEPOSIT.test(s)
   const asksForDeposit = (s: string) => MENTIONS_DEPOSIT.test(s)
@@ -134,11 +134,11 @@ console.log('\n■ 2. THE contradiction detector — and proof it can fail')
   // check below it is worthless.
   const SHIPPED_DEFECTS: [string, string][] = [
     ['portal quote card (model.ts explain)',
-      'Nothing is charged when you approve — you’ll get an invoice once the work is done.'],
+      'Nothing is charged when you accept — you’ll get an invoice once the work is done.'],
     ['portal Home approve caption (HomeTab.tsx)',
-      'Nothing is charged when you approve.'],
+      'Nothing is charged when you accept.'],
     ['approval dialog, ungated branch (PortalClient.tsx)',
-      'Approving doesn’t charge you — we’ll confirm a date with you first, and you’ll only get an invoice after the work is done.'],
+      'Accepting doesn’t charge you — we’ll confirm a date with you first, and you’ll only get an invoice after the work is done.'],
   ]
   for (const [where, bad] of SHIPPED_DEFECTS) {
     check(`MUTATION — the shipped copy is caught: ${where}`, promisesNothingBeforeWork(bad),
@@ -239,7 +239,7 @@ console.log('\n■ 3. No surface composes its own payment-timing sentence')
   check('portal model imports THE timing engine',
     /from '@\/lib\/payments\/paymentTiming'/.test(model))
   check('portal model no longer asserts "Nothing is charged when you approve"',
-    !/Nothing is charged when you approve/i.test(model),
+    !/Nothing is charged when you (approve|accept)/i.test(model),
     'the production defect, verbatim, is back in model.ts')
   check('portal model derives the quote card line',
     /quoteTimingLine\(timing\)/.test(model))
@@ -251,13 +251,13 @@ console.log('\n■ 3. No surface composes its own payment-timing sentence')
 
   const home = stripComments(read('src/app/portal/[token]/components/HomeTab.tsx'))
   check('Home renders the model\'s line, not its own',
-    /paymentTimingLine\}/.test(home) && !/Nothing is charged when you approve/i.test(home))
+    /paymentTimingLine\}/.test(home) && !/Nothing is charged when you (approve|accept)/i.test(home))
 
   const client = stripComments(read('src/app/portal/[token]/PortalClient.tsx'))
   check('approval dialog renders approvalTimingLine',
     /approvalTimingLine\(paymentTiming\(/.test(client))
   check('approval dialog holds no private timing branch',
-    !/Approving doesn.t charge you/i.test(client),
+    !/(Approving|Accepting) doesn.t charge you/i.test(client),
     'the dialog is composing its own sentence again')
   check('the dialog\'s figure and its words read the SAME quote object',
     /const consented = \{/.test(client) && /requiredDeposit\(consented\)/.test(client)

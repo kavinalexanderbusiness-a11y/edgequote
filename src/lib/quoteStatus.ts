@@ -173,7 +173,11 @@ export function isSystemAdvancedQuoteStatus(s: QuoteStatus): boolean {
 export const QUOTE_STATUS_MEANING: Record<QuoteStatus, string> = {
   draft: 'Still being prepared — the customer hasn’t seen it',
   sent: 'With the customer — waiting on their answer',
-  accepted: 'The customer approved this price',
+  // ⚠️ "The customer approved this price" was a CLAIM this status could not
+  // support: nothing distinguished a portal approval from an owner picking
+  // Accepted out of a dropdown. The status now means what it can prove — a deal
+  // was struck — and lib/quoteAcceptance says who struck it, or says nobody did.
+  accepted: 'A deal was struck — see the acceptance record for who accepted it',
   declined: 'The customer said no',
   scheduled: 'Set automatically when the work is booked',
   completed: 'Set automatically when the work is done',

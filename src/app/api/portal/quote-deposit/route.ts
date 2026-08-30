@@ -4,6 +4,7 @@ import { createQuoteDepositCheckoutSession, stripeEnabled } from '@/lib/stripe/c
 import { schedulingGate, type GateLedgerRow } from '@/lib/payments/depositGate'
 import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
 import { appOrigin } from '@/lib/appOrigin'
+import { portalUrl } from '@/lib/portal'
 
 export const dynamic = 'force-dynamic'
 
@@ -67,7 +68,30 @@ export async function POST(req: NextRequest) {
   // there is nothing to secure; 'scheduled' stays payable because an owner who
   // scheduled on an override is still owed the money they explicitly deferred.
   if (quote.status !== 'accepted' && quote.status !== 'scheduled') {
-    return NextResponse.json({ error: 'This quote isn’t approved yet — approve it first, then pay the deposit.' }, { status: 409 })
+    return NextResponse.json({ error: 'This quote isn’t accepted yet — accept it first, then pay the deposit.' }, { status: 409 })
+  }
+
+  // ── ⭐⭐ THE ACCEPTANCE GATE (Session 121) ─────────────────────────────────
+  // Asking a customer for money is acting on the commercial terms, so it asks
+  // the same question scheduling and invoicing do — through the DATABASE's half
+  // of the seam (quote_acceptance_is_current), because this route has no user
+  // session and cannot call the tenancy-asserting state RPC.
+  //
+  // The status check above is NOT this check. Status says a deal was struck
+  // once; it says nothing about whether the deal on screen is still the one that
+  // was agreed. Before this, an owner could accept a $5,550 quote with a 20%
+  // deposit, raise it to $6,075, and the portal would charge a deposit computed
+  // off the new figure against the old consent.
+  //
+  // ⚠️ A FAILED CHECK BLOCKS. `data !== true` covers both false and an errored
+  // call — charging a card because a truth query failed is not a trade we make.
+  const { data: stillCurrent, error: curErr } = await admin
+    .rpc('quote_acceptance_is_current', { p_quote_id: quote.id })
+  if (curErr) return NextResponse.json({ error: 'We couldn’t start the payment — please try again in a moment.' }, { status: 502 })
+  if (stillCurrent !== true) {
+    return NextResponse.json({
+      error: 'This quote has changed since it was accepted, so we’ve paused its deposit. Please message us and we’ll send you the updated quote to look over.',
+    }, { status: 409 })
   }
 
   const { data: payRows, error: payErr } = await admin.from('payments')
@@ -80,10 +104,11 @@ export async function POST(req: NextRequest) {
   if (gate.required <= 0) return NextResponse.json({ error: 'This quote doesn’t require a deposit.' }, { status: 409 })
   if (gate.outstanding <= 0) return NextResponse.json({ error: 'This deposit is already paid — nothing more is needed.' }, { status: 409 })
 
+  // ⭐ ONE seam — see /api/portal/pay.
   const base = appOrigin()
   const result = await createQuoteDepositCheckoutSession(quote, {
-    successUrl: `${base}/portal/${token}?paid=1`,
-    cancelUrl: `${base}/portal/${token}`,
+    successUrl: portalUrl(token, base, { paid: 1 }),
+    cancelUrl: portalUrl(token, base),
     chargeCents: Math.round(gate.outstanding * 100),
     chargeLabel: `Deposit — Quote ${quote.quote_number}`,
   })

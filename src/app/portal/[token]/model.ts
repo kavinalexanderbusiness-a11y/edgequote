@@ -38,6 +38,7 @@ import { sortedOptions } from '@/lib/quoteOptions'
 // "$5,500 + $575 = $6,075" is one calculation with two audiences, not two.
 import { authorizedValue } from '@/lib/changeOrders'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
+import { isAcceptedOrBeyond } from '@/lib/quoteAcceptance'
 import { formatCurrency, parseLocalDate } from '@/lib/utils'
 // THE request engine (lib/portalRequests) — the same module the owner's request
 // card reads. The kinds, the media contract and the "a request is an ask, not an
@@ -865,6 +866,11 @@ export function buildDocItems(opts: {
     ].filter((s): s is string => !!s)
     // THE shared expiry engine — the same call the owner's screens make.
     const display = displayQuoteStatus({ status: qq.status as QuoteStatus, valid_until: qq.valid_until }, todayISO)
+    // The consented figure, and whether the document has moved away from it.
+    // Both derived here, once, so the amount and the note can never disagree.
+    const acceptedFigure = isAcceptedOrBeyond(qq.status) ? (Number(qq.accepted_price) || null) : null
+    const priceMovedSinceAccepted =
+      acceptedFigure != null && Math.abs(acceptedFigure - (Number(qq.total) || 0)) > 0.005
     const expired = display === 'expired'
     // ── The scheduling-deposit gate ──────────────────────────────────────────
     // THE engine's answer (lib/payments/depositGate — the same call the charge
@@ -889,8 +895,33 @@ export function buildDocItems(opts: {
       id: 'q' + qq.id, rawId: qq.id, kind: 'quote' as const, number: qq.quote_number, title: qq.service_type || 'Quote',
       date: qq.issued_date || qq.created_at, status: display, expiredOn: expired ? qq.valid_until || undefined : undefined,
       validUntil: qq.valid_until,
-      amount: Number(qq.total) || 0,
-      amountNote: gstPct > 0 ? `+ GST (${gstPct}%) — added on your invoice` : undefined, balance: 0,
+      // ── ⭐⭐ WHAT AN ACCEPTED QUOTE IS WORTH, TO THE PERSON WHO ACCEPTED IT ──
+      // (Session 121.) This read `total` for every quote, including accepted
+      // ones — so an owner who raised the price after acceptance changed the
+      // number on the customer's own screen, under a badge still reading
+      // Accepted. The customer had no way to know the figure had moved, and no
+      // way to tell which one they had agreed to.
+      //
+      // Once accepted, the figure shown is the CONSENT SNAPSHOT. `accepted_price`
+      // is written only inside the database's acceptance window
+      // (quote_apply_choice; nothing else may set it), so it IS the authorized
+      // amount — no new payload field and no extra round trip.
+      //
+      // ⚠️ `?? total` is the LEGACY path, not a fallback for convenience: quotes
+      // accepted before this feature existed may carry no snapshot, and for them
+      // the current total is genuinely the best the record can offer.
+      // Un-accepted quotes are untouched — `total` is the offer.
+      amount: acceptedFigure ?? (Number(qq.total) || 0),
+      // ⭐ And when the two DISAGREE, say so rather than quietly showing the old
+      // number beside new work. The customer is told a revision is coming; they
+      // are never shown a price they have not agreed to as though they had.
+      amountNote: [
+        priceMovedSinceAccepted
+          ? 'This is the price you accepted — we’ve made changes since and will send you an updated quote to look over.'
+          : null,
+        gstPct > 0 ? `+ GST (${gstPct}%) — added on your invoice` : null,
+      ].filter(Boolean).join(' · ') || undefined,
+      balance: 0,
       payAmount: 0, payIsDeposit: false,
       filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(qq), lines, planOptions,
       options, selectedOptionId: qq.selected_option_id ?? null,
