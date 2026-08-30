@@ -1146,5 +1146,12 @@
   "sql_md5": "efe4a5053fe731ee3a39f86ca08913a1",
   "version": "20260828140000",
   "stmt_count": 1
+ },
+ {
+  "name": "no_charge_v1",
+  "sql_len": 22933,
+  "sql_md5": "7aa9b94aa57bec35c8fd19e6b0e4dfca",
+  "version": "20260830120000",
+  "stmt_count": 1
  }
 ]
