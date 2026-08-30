@@ -15,8 +15,8 @@
 // business now gets a real season with a real end date. Deterministic, no network,
 // no API key — runs in CI beside the other verifiers.
 
-import { seasonEndDateFor, settingsToSeasons, DEFAULT_SEASONS, DEFAULT_LAWN_SEASON, DEFAULT_SNOW_SEASON, type ServiceSeasons, resolveSeriesSeason } from '../src/lib/seasons'
-import { serviceCategory } from '../src/lib/legacySeasonInference'
+import { seasonEndDateFor, settingsToSeasons, DEFAULT_SEASONS, DEFAULT_LAWN_SEASON, DEFAULT_SNOW_SEASON, type ServiceSeasons } from '../src/lib/seasons'
+import { serviceCategory, bridgeSeasonForSeries } from '../src/lib/legacySeasonInference'
 
 let failures = 0
 const ok = (name: string) => console.log(`  ✓ ${name}`)
@@ -28,18 +28,18 @@ console.log('\nLawn business (default seasons) — nothing may change:')
 {
   const S = DEFAULT_SEASONS
   check('"Weekly Mowing" → lawn season',
-    resolveSeriesSeason({ seasonKey: null }, S).season /* ⛔ declaration-only: no name is read (S110) */ === S.lawn)
+    bridgeSeasonForSeries(null, 'Weekly Mowing', S) === S.lawn)
   check('"Fertilization" → lawn season',
-    resolveSeriesSeason({ seasonKey: null }, S).season /* ⛔ declaration-only: no name is read (S110) */ === S.lawn)
+    bridgeSeasonForSeries(null, 'Fertilization', S) === S.lawn)
   check('"Snow Removal" → snow season',
-    resolveSeriesSeason({ seasonKey: null }, S).season /* ⛔ declaration-only: no name is read (S110) */ === S.snow)
+    bridgeSeasonForSeries(null, 'Snow Removal', S) === S.snow)
   check('"Snow Plowing" → snow season',
-    resolveSeriesSeason({ seasonKey: null }, S).season /* ⛔ declaration-only: no name is read (S110) */ === S.snow)
+    bridgeSeasonForSeries(null, 'Snow Plowing', S) === S.snow)
   check('snow-before-lawn priority preserved ("Lawn & Snow Combo" → snow)',
-    resolveSeriesSeason({ seasonKey: null }, S).season /* ⛔ declaration-only: no name is read (S110) */ === S.snow,
-    `got ${JSON.stringify(resolveSeriesSeason({ seasonKey: null }, S).season /* ⛔ declaration-only: no name is read (S110) */)}`)
+    bridgeSeasonForSeries(null, 'Lawn & Snow Combo', S) === S.snow,
+    `got ${JSON.stringify(bridgeSeasonForSeries(null, 'Lawn & Snow Combo', S))}`)
   check('unrelated service → no season (year-round)',
-    resolveSeriesSeason({ seasonKey: null }, S).season /* ⛔ declaration-only: no name is read (S110) */ === null)
+    bridgeSeasonForSeries(null, 'One-off Cleanup', S) === null)
   check('serviceCategory unchanged: "Weekly Mowing" → lawn',
     serviceCategory('Weekly Mowing') === 'lawn')
   check('serviceCategory unchanged: "Snow Removal" → snow',
@@ -65,17 +65,17 @@ console.log('\nPool business (owner-defined pool season) — the fix:')
     !!S.pool && S.pool.startMonth === 5,
     `pool = ${JSON.stringify(S.pool)}`)
   check('"Pool Opening" → pool season (was null → year-round → false "lapsed")',
-    resolveSeriesSeason({ seasonKey: null }, S).season /* ⛔ declaration-only: no name is read (S110) */ === S.pool,
-    `got ${JSON.stringify(resolveSeriesSeason({ seasonKey: null }, S).season /* ⛔ declaration-only: no name is read (S110) */)}`)
+    bridgeSeasonForSeries(null, 'Pool Opening', S) === S.pool,
+    `got ${JSON.stringify(bridgeSeasonForSeries(null, 'Pool Opening', S))}`)
   check('"Weekly Pool Cleaning" → pool season',
-    resolveSeriesSeason({ seasonKey: null }, S).season /* ⛔ declaration-only: no name is read (S110) */ === S.pool)
+    bridgeSeasonForSeries(null, 'Weekly Pool Cleaning', S) === S.pool)
   check('pool season has a real END date (May 1 start → Sep 30)',
     seasonEndDateFor('2026-05-01', S.pool) === '2026-09-30',
     seasonEndDateFor('2026-05-01', S.pool))
   // The pool business may ALSO leave the lawn/snow defaults in place; they must not
   // hijack a pool service, and a lawn service must still resolve if they offer one.
   check('a pool business still resolves "Weekly Mowing" → lawn (defaults intact)',
-    resolveSeriesSeason({ seasonKey: null }, S).season /* ⛔ declaration-only: no name is read (S110) */ === S.lawn)
+    bridgeSeasonForSeries(null, 'Weekly Mowing', S) === S.lawn)
 }
 
 // ── 3. YEAR-ROUND TRADE — genuinely no season (must NOT invent one) ───────────
@@ -84,9 +84,9 @@ console.log('\nPool business (owner-defined pool season) — the fix:')
 console.log('\nYear-round trade (plumber, no season defined) — must stay seasonless:')
 {
   const S = DEFAULT_SEASONS
-  check('"Drain Cleaning" → no season', resolveSeriesSeason({ seasonKey: null }, S).season /* ⛔ declaration-only: no name is read (S110) */ === null)
-  check('"Water Heater Install" → no season', resolveSeriesSeason({ seasonKey: null }, S).season /* ⛔ declaration-only: no name is read (S110) */ === null)
-  check('"Panel Upgrade" → no season', resolveSeriesSeason({ seasonKey: null }, S).season /* ⛔ declaration-only: no name is read (S110) */ === null)
+  check('"Drain Cleaning" → no season', bridgeSeasonForSeries(null, 'Drain Cleaning', S) === null)
+  check('"Water Heater Install" → no season', bridgeSeasonForSeries(null, 'Water Heater Install', S) === null)
+  check('"Panel Upgrade" → no season', bridgeSeasonForSeries(null, 'Panel Upgrade', S) === null)
 }
 
 // ── 4. LEGACY DATA — stored seasons predating `match` ─────────────────────────
@@ -96,8 +96,8 @@ console.log('\nLegacy stored seasons (no match arrays) — identical to defaults
 {
   const legacy = { lawn: { startMonth: 4, startDay: 15, endMonth: 10, endDay: 31 }, snow: { startMonth: 11, startDay: 1, endMonth: 3, endDay: 31 } }
   const S: ServiceSeasons = settingsToSeasons(legacy)
-  check('"Weekly Mowing" → lawn (fallback hint path)', resolveSeriesSeason({ seasonKey: null }, S).season /* ⛔ declaration-only: no name is read (S110) */ === S.lawn)
-  check('"Snow Removal" → snow (fallback hint path)', resolveSeriesSeason({ seasonKey: null }, S).season /* ⛔ declaration-only: no name is read (S110) */ === S.snow)
+  check('"Weekly Mowing" → lawn (fallback hint path)', bridgeSeasonForSeries(null, 'Weekly Mowing', S) === S.lawn)
+  check('"Snow Removal" → snow (fallback hint path)', bridgeSeasonForSeries(null, 'Snow Removal', S) === S.snow)
   check('garbage input → safe defaults', settingsToSeasons(null).lawn.startMonth === 4)
 }
 
@@ -111,8 +111,8 @@ console.log('\nOverlapping custom seasons — same winner before and after a sav
   // Same seasons, two insertion orders (pre-save vs post-jsonb-roundtrip).
   const orderOne = settingsToSeasons({ lawn: DEFAULT_LAWN_SEASON, snow: DEFAULT_SNOW_SEASON, 'custom-2': a, 'custom-1': b })
   const orderTwo = settingsToSeasons({ lawn: DEFAULT_LAWN_SEASON, snow: DEFAULT_SNOW_SEASON, 'custom-1': b, 'custom-2': a })
-  const w1 = resolveSeriesSeason({ seasonKey: null }, orderOne).season /* ⛔ declaration-only: no name is read (S110) */
-  const w2 = resolveSeriesSeason({ seasonKey: null }, orderTwo).season /* ⛔ declaration-only: no name is read (S110) */
+  const w1 = bridgeSeasonForSeries(null, 'Spring Spray Treatment', orderOne)
+  const w2 = bridgeSeasonForSeries(null, 'Spring Spray Treatment', orderTwo)
   check('winner is identical regardless of object key order',
     w1?.label === w2?.label && w1?.label === 'Sprinkler',
     `orderOne → ${w1?.label}, orderTwo → ${w2?.label} (sorted keys: custom-1 first)`)

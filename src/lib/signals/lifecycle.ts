@@ -1,4 +1,5 @@
-import { isWithinSeason, ServiceSeasons, resolveSeriesSeason } from '@/lib/seasons'
+import { isWithinSeason, ServiceSeasons } from '@/lib/seasons'
+import { bridgeSeasonForSeries } from '@/lib/legacySeasonInference'
 import { CHURN_RATIO_HIGH, CHURN_RATIO_WARN, RANOUT_URGENT_CADENCES, RANOUT_URGENT_MIN_DAYS } from './constants'
 
 // ── Lifecycle — THE "where is this customer in their life" engine ────────────
@@ -27,7 +28,7 @@ export function isSeasonallyDormant(
   seasons: ServiceSeasons,
   today: string,
 ): boolean {
-  const season = resolveSeriesSeason({ seasonKey: null }, seasons).season /* ⛔ declaration-only: no name is read (S110) */
+  const season = bridgeSeasonForSeries(null, serviceType, seasons)
   return !!season && !isWithinSeason(today, season)
 }
 

@@ -330,8 +330,15 @@ function run() {
     // hints of its own, AND it actually imports the real one.
     check('no-type', 'it re-lists no service-name hints of its own',
       /'mow'|'fertiliz'|'aerat'|'grass'|LAWN_HINTS|SNOW_HINTS/.test(code), false)
-    check('no-type', '➜ because it imports serviceCategory from lib/seasons',
-      /import\s*\{[^}]*\bserviceCategory\b[^}]*\}\s*from\s*'@\/lib\/seasons'/.test(code), true)
+    // ⚠️ RE-POINTED, NOT RELAXED (Session 110). The CONTRACT is unchanged —
+    // businessShape must borrow the shared categoriser rather than re-listing
+    // trade words of its own, which the assertion above still proves. Only the
+    // categoriser's HOME moved: serviceCategory now lives in
+    // lib/legacySeasonInference, quarantined alongside the keyword lists,
+    // because grouping services by trade is not the same question as deciding
+    // when a series runs — and the season answer must come from a declaration.
+    check('no-type', '➜ because it imports serviceCategory from the shared categoriser',
+      /import\s*\{[^}]*\bserviceCategory\b[^}]*\}\s*from\s*'@\/lib\/(seasons|legacySeasonInference)'/.test(code), true)
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

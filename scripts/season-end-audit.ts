@@ -20,7 +20,8 @@
 // series whose end sits in a LATER season than its own start is reported.
 import { createClient } from '@supabase/supabase-js'
 import { config } from 'dotenv'
-import { settingsToSeasons, seasonEndDateFor, resolveSeriesSeason } from '../src/lib/seasons'
+import { settingsToSeasons, seasonEndDateFor } from '../src/lib/seasons'
+import { bridgeSeasonForSeries } from '../src/lib/legacySeasonInference'
 
 config({ path: '.env.local' })
 
@@ -51,7 +52,7 @@ async function main() {
         .select('scheduled_date, status, service_type').eq('recurrence_id', r.id).order('scheduled_date')
       const visits = (js ?? []) as { scheduled_date: string; status: string; service_type: string | null }[]
       if (!visits.length) continue
-      const season = resolveSeriesSeason({ seasonKey: null }, seasons).season /* ⛔ declaration-only: no name is read (S110) */
+      const season = bridgeSeasonForSeries(null, visits.find(v => v.service_type)?.service_type ?? null, seasons)
       if (!season) continue
       const correct = seasonEndDateFor(r.start_date, season)
       // Only a LATER-season end is the fingerprint. An earlier hand-typed date

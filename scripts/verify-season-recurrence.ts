@@ -29,11 +29,8 @@
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import {
-  resolveSeriesSeason, effectiveSeriesEnd, seasonEndDateFor, isWithinSeason,
-  settingsToSeasons, seasonKeys, SEASON_NONE, DEFAULT_SEASONS,
-  type ServiceSeason, type ServiceSeasons,
-} from '../src/lib/seasons'
+import { resolveSeriesSeason, effectiveSeriesEnd, seasonEndDateFor, isWithinSeason, settingsToSeasons, seasonKeys, SEASON_NONE, DEFAULT_SEASONS, type ServiceSeason, type ServiceSeasons } from '../src/lib/seasons'
+import { bridgeSeasonForSeries, SEASON_DECLARATIONS_COMPLETE } from '../src/lib/legacySeasonInference'
 import { generateOccurrences } from '../src/lib/recurrence'
 
 let failures = 0
@@ -110,9 +107,43 @@ console.log('\n▸ 2 · "no season" is a DECISION, not an absence')
 }
 
 {
-  // ⛔⛔ THERE IS NO INFERENCE LEFT AT RUNTIME. Not a disabled branch, not a
-  // flag — the resolver has no parameter for a service name and no code path
-  // that reads one. An undeclared series answers `unknown`, always.
+  // ── THE MIGRATION BRIDGE, and the exact shape of its retirement ───────────
+  // ⭐⭐ A DECLARATION ALWAYS WINS, through the bridge as much as through the
+  // resolver. This is the property that makes a rename harmless TODAY, before
+  // the column has landed and before the flag flips.
+  eq('the bridge honours a declaration over any name',
+    bridgeSeasonForSeries('lawn', 'Snow Removal', SEASONS), LAWN)
+  eq('…including a contradicting one, in the other direction',
+    bridgeSeasonForSeries('snow', 'Weekly Mowing', SEASONS), SNOW)
+  eq('…and SEASON_NONE means no season, whatever the name says',
+    bridgeSeasonForSeries(SEASON_NONE, 'Weekly Mowing', SEASONS), null)
+  eq('…renaming a DECLARED series changes nothing',
+    bridgeSeasonForSeries('pool', 'Anything At All', SEASONS),
+    bridgeSeasonForSeries('pool', 'Pool Opening', SEASONS))
+
+  // Only an UNDECLARED series may fall back, and only while the book is
+  // mid-migration. This is the one behaviour the flag governs.
+  eq('an undeclared series still falls back while declarations are incomplete',
+    bridgeSeasonForSeries(null, 'Weekly Mowing', SEASONS),
+    SEASON_DECLARATIONS_COMPLETE ? null : LAWN)
+  eq('…and an unmatched name gets nothing either way',
+    bridgeSeasonForSeries(null, 'Bi-weekly', SEASONS), null)
+
+  const leg = strip(read('src/lib/legacySeasonInference.ts'))
+  check('the flag is FALSE while the column is unapplied',
+    /SEASON_DECLARATIONS_COMPLETE = false/.test(leg) && SEASON_DECLARATIONS_COMPLETE === false,
+    'the migration flag no longer reflects the un-migrated book')
+  // ⛔ THE RETIREMENT IS ONE LINE, and it is structurally ahead of the guess.
+  check('⛔ flipping the flag removes the fallback entirely',
+    /if \(SEASON_DECLARATIONS_COMPLETE\) return null\s*\n\s*const key = inferSeasonKeyFromName/.test(leg),
+    'the flag no longer short-circuits the keyword guess')
+  check('…and a declaration is resolved BEFORE the flag is even consulted',
+    leg.indexOf("if (declared.source !== 'unknown') return declared.season")
+      < leg.indexOf('if (SEASON_DECLARATIONS_COMPLETE)'),
+    'the guess can run ahead of a declaration')
+
+  // ⛔⛔ THE RESOLVER ITSELF NEVER SEES A NAME. Not a flag, not a branch — no
+  // parameter. That is what makes "a rename cannot move a season" structural.
   const undeclared = resolveSeriesSeason({ seasonKey: null }, SEASONS)
   eq('an undeclared series never resolves to a season', undeclared.season, null)
   eq('…and never claims a source it did not use', undeclared.source, 'unknown')
@@ -244,9 +275,14 @@ console.log('\n▸ 6 · the shape of the model')
   walk('src')
   const reaching = SRC.filter(f => f !== 'src/lib/legacySeasonInference.ts')
     .filter(f => /\b(seasonForService|inferSeasonKeyFromName)\b/.test(strip(read(f))))
-  eq('⛔ NO file under src/ resolves a season from a name', reaching, [])
-  check('[negative control] a reintroduced call would be caught',
-    /\b(seasonForService|inferSeasonKeyFromName)\b/.test('const s = seasonForService(x, y)'))
+  eq('⛔ NO file under src/ calls the keyword guess directly — only the bridge may', reaching, [])
+  // ⚠️ The control must exercise the matcher on what it is HUNTING (a direct
+  // call to the guess), not on what it PERMITS (the bridge). An earlier version
+  // tested the permitted form and so proved nothing.
+  check('[negative control] a direct call to the guess would be caught',
+    /\binferSeasonKeyFromName\b/.test('const k = inferSeasonKeyFromName(x, y)'))
+  check('[negative control] …and the bridge is NOT flagged',
+    !/\binferSeasonKeyFromName\b/.test('const s = bridgeSeasonForSeries(null, x, y)'))
   check('⛔ the resolver has no industry keyword of its own',
     !/\b(mow|snow|plow|pool|pest|lawn)\b/i.test(src.split('export function resolveSeriesSeason')[1]?.split('export function seasonKeys')[0] ?? ''),
     'resolveSeriesSeason names a trade')

@@ -31,7 +31,51 @@
 // under src/ imports the resolver, so the quarantine is enforced rather than
 // requested.
 
-import type { ServiceSeasons } from '@/lib/seasons'
+import { resolveSeriesSeason, type ServiceSeason, type ServiceSeasons } from '@/lib/seasons'
+
+/**
+ * ⭐⭐ THE ONE SWITCH. False while the book still contains series that have not
+ * declared a season; true once every series has one.
+ *
+ * ⚠️ IT IS FALSE ON PURPOSE, AND FLIPPING IT IS THE LAST STEP OF THE MIGRATION,
+ * NOT THE FIRST. `job_recurrences.season_key` is proposed, not applied
+ * (supabase/proposals/), so today NO series has a declaration. Removing the
+ * bridge before the column lands does not make the product correct — it makes
+ * 17 live series seasonless at once, which silently costs real behaviour:
+ * "a snow customer in July is dormant, not lost" stops being true, renewals
+ * lose the season that gives a plan its ending, and off-season customers
+ * re-enter the chase queue.
+ *
+ * ⭐ What is ALREADY structural, flag or no flag: `resolveSeriesSeason` has no
+ * parameter a service name can arrive through, so a DECLARED season can never
+ * be overridden by a rename. The flag only governs what happens for a series
+ * that has declared NOTHING.
+ *
+ * S106: flip this to `true` in the same change that completes the backfill.
+ * verify:season-recurrence proves the end state — with it true, nothing infers.
+ */
+export const SEASON_DECLARATIONS_COMPLETE = false
+
+/**
+ * THE only runtime path that may consult a service name, and only while
+ * declarations are incomplete.
+ *
+ * A declaration ALWAYS wins — that is `resolveSeriesSeason`, unchanged and
+ * name-free. This adds exactly one behaviour: while the book is mid-migration,
+ * an UNDECLARED series falls back to the legacy guess so the product does not
+ * regress under owners who have not been asked yet.
+ */
+export function bridgeSeasonForSeries(
+  seasonKey: string | null | undefined,
+  serviceType: string | null | undefined,
+  seasons: ServiceSeasons,
+): ServiceSeason | null {
+  const declared = resolveSeriesSeason({ seasonKey: seasonKey ?? null }, seasons)
+  if (declared.source !== 'unknown') return declared.season
+  if (SEASON_DECLARATIONS_COMPLETE) return null
+  const key = inferSeasonKeyFromName(serviceType, seasons)
+  return key ? (seasons[key] ?? null) : null
+}
 
 // Hints match at a WORD START (prefix), so "Weekly Mowing", "Monthly Lawn Care"
 // and "Fertilization" read as lawn, and "Snow Removal/Blowing/Clearing" as snow.
