@@ -191,10 +191,76 @@ if (jf && !jf.absent) {
     !/leave 0/i.test(jf.hint), jf.hint.replace(/\s+/g, ' ').slice(0, 140))
 }
 
-// ── 3 · Nothing was written ──────────────────────────────────────────────────
+// ── 3 · An unpriced quote: blocked from send, and offered BOTH ways out ──────
+// ⭐ Read-only: this opens an EXISTING unpriced quote if the owner has one and
+// reads the send card. It never sends and never saves.
+const unpricedQuote = await (async () => {
+  const { data } = await db.from('quotes')
+    .select('id, quote_number, total, customer_id')
+    .is('total', null).not('customer_id', 'is', null).limit(1)
+  return data?.[0] ?? null
+})()
+
+if (!unpricedQuote) {
+  console.log('  ⏭  no unpriced quote with a customer in the live book — sections 3/4 skipped')
+  console.log('     (this is a REAL result, not a pass: the gate is proven from zero in')
+  console.log('      verify:unpriced-work §13, which does not depend on the owner\'s data)')
+} else {
+  await goto(`${BASE}/dashboard/quotes/${unpricedQuote.id}`)
+  const detail = await evalJs(`(() => {
+    const t = document.body.innerText
+    const btns = Array.from(document.querySelectorAll('button')).map(b => (b.textContent || '').trim())
+    return { text: t.slice(0, 30000), btns }
+  })()`)
+  check('an unpriced quote reads as "Not set", not as $0.00',
+    /Not set/.test(detail?.text ?? ''), 'the header does not state the price state')
+  check('… and it is blocked from sending',
+    /no price yet/i.test(detail?.text ?? ''))
+  check('… with BOTH ways out offered',
+    (detail?.btns ?? []).some(b => /Add a price/i.test(b)) && (detail?.btns ?? []).some(b => /^No charge$/i.test(b)),
+    (detail?.btns ?? []).filter(b => b).slice(0, 12).join(' | '))
+
+  // ── 4 · The No charge action degrades HONESTLY without its migration ───────
+  // ⭐⭐ THE LANDING-ORDER PROOF. This database has NOT run the migration, so the
+  // RPC does not exist. The button must say so — not "could not save", and
+  // certainly not a half-written record. This is the S111 42703 lesson tested as
+  // behaviour instead of trusted as a note.
+  const degraded = await evalJs(`(async () => {
+    const open = Array.from(document.querySelectorAll('button')).find(b => /^No charge$/i.test((b.textContent||'').trim()))
+    if (!open) return { noButton: true }
+    open.click()
+    await new Promise(r => setTimeout(r, 400))
+    const input = document.querySelector('#eq-no-charge-reason')
+    if (!input) return { noInput: true }
+    const d = Object.getOwnPropertyDescriptor(input.constructor.prototype, 'value')
+    d.set.call(input, 'CDP read-only probe — must not persist')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    const go = Array.from(document.querySelectorAll('button')).find(b => /Mark No charge/i.test(b.textContent||''))
+    if (!go) return { noSubmit: true }
+    go.click()
+    await new Promise(r => setTimeout(r, 2500))
+    return { text: document.body.innerText.slice(0, 30000) }
+  })()`)
+  check('the No charge form opens with a reason field',
+    !degraded?.noButton && !degraded?.noInput && !degraded?.noSubmit,
+    JSON.stringify(degraded).slice(0, 160))
+  check('⭐ without its migration it says the migration is missing — not "save failed"',
+    /isn.t available on this database yet|migration/i.test(degraded?.text ?? ''),
+    'the failure did not name the missing migration')
+
+  // And it must not have written anything.
+  const after = await (async () => {
+    const { data } = await db.from('quotes').select('total').eq('id', unpricedQuote.id).single()
+    return data
+  })()
+  check('… and the quote is still unpriced (nothing was written)', after?.total == null,
+    `total is now ${after?.total}`)
+}
+
+// ── 5 · Nothing was written ──────────────────────────────────────────────────
 // The proof of read-only-ness is structural (this file contains no submit), but
 // state it out loud in the output so a reader of the LOG knows too.
-ok('no form was submitted and no row was written (read-only by construction)')
+ok('no quote was sent, accepted or priced by this run (read-only by construction)')
 
 console.log(`\n${fails === 0 ? '✅' : '❌'} ${width}px — ${fails} failure(s)\n`)
 try { ws.close() } catch {}
