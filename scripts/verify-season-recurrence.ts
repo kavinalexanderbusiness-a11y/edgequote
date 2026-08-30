@@ -130,9 +130,13 @@ console.log('\n▸ 2 · "no season" is a DECISION, not an absence')
     bridgeSeasonForSeries(null, 'Bi-weekly', SEASONS), null)
 
   const leg = strip(read('src/lib/legacySeasonInference.ts'))
-  check('the flag is FALSE while the column is unapplied',
-    /SEASON_DECLARATIONS_COMPLETE = false/.test(leg) && SEASON_DECLARATIONS_COMPLETE === false,
-    'the migration flag no longer reflects the un-migrated book')
+  // ⚠️ Tolerates the `: boolean` annotation. The annotation is deliberate (a
+  // literal type would make the end state untestable), and an assertion that
+  // breaks on it would be pinning the spelling rather than the switch. WHETHER
+  // the value is right for the book is section 9's live half, not this one.
+  check('the completion flag exists and is a single named switch',
+    /export const SEASON_DECLARATIONS_COMPLETE(\s*:\s*boolean)?\s*=\s*(true|false)/.test(leg),
+    'the transition switch is gone or is no longer a single constant')
   // ⛔ THE RETIREMENT IS ONE LINE, and it is structurally ahead of the guess.
   check('⛔ flipping the flag removes the fallback entirely',
     /if \(SEASON_DECLARATIONS_COMPLETE\) return null\s*\n\s*const key = inferSeasonKeyFromName/.test(leg),
@@ -341,9 +345,111 @@ console.log('\n▸ 7 · the reconciliation report is READ-ONLY')
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-console.log('')
-if (failures) {
-  console.log(`✗ season-recurrence: ${failures} rule${failures === 1 ? '' : 's'} broken`)
-  process.exit(1)
+console.log('\n▸ 9 · the transition can END — the flag cannot sit false unnoticed')
+
+// ── Offline half: the two states are internally consistent ──────────────────
+{
+  const leg = strip(read('src/lib/legacySeasonInference.ts'))
+  if (SEASON_DECLARATIONS_COMPLETE) {
+    // END STATE. The guess must be unreachable, not merely unused.
+    eq('⛔ with declarations COMPLETE, an undeclared series gets NOTHING',
+      bridgeSeasonForSeries(null, 'Weekly Mowing', SEASONS), null)
+    eq('…and an undeclared series with any name gets nothing',
+      bridgeSeasonForSeries(null, 'Snow Removal', SEASONS), null)
+    check('…and a declaration still resolves',
+      bridgeSeasonForSeries('lawn', 'anything', SEASONS) === LAWN)
+  } else {
+    // TRANSITIONAL. The bridge exists, and its retirement is one line.
+    check('the bridge is transitional and says so',
+      /SEASON_DECLARATIONS_COMPLETE/.test(leg) && /return null/.test(leg))
+    eq('…and while incomplete an undeclared series still falls back',
+      bridgeSeasonForSeries(null, 'Weekly Mowing', SEASONS), LAWN)
+  }
 }
-console.log('✓ season-recurrence: every rule holds')
+
+// ── Live half: the flag and the BOOK must agree ─────────────────────────────
+// ⭐⭐ THIS IS THE RATCHET. Two failure directions, both fatal:
+//   • every series declared, flag still false  → the transition silently never
+//     ended, and the keyword guess lives on forever. THE point of this section.
+//   • series still undeclared, flag already true → flipping early strips the
+//     season from every un-migrated series at once.
+async function liveTransitionCheck() {
+  const envPath = join(ROOT, '.env.local')
+  let env: Record<string, string> = {}
+  try {
+    env = Object.fromEntries(readFileSync(envPath, 'utf8').split(/\r?\n/)
+      .filter(l => l && !l.startsWith('#') && l.includes('='))
+      .map(l => [l.slice(0, l.indexOf('=')).trim(), l.slice(l.indexOf('=') + 1).trim()]))
+  } catch { /* reported below */ }
+  const url = env.NEXT_PUBLIC_SUPABASE_URL, anon = env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  const email = env.PORTAL_RPC_OWNER_EMAIL, pw = env.PORTAL_RPC_OWNER_PASSWORD
+  if (!url || !anon || !email || !pw) {
+    // ⚠️ NOT a pass. Reported as a live gap so nobody reads a green run as
+    // proof the ratchet held — it was not attempted. (CI carries placeholder
+    // credentials, exactly like verify:schema.)
+    console.log('  ⚠ LIVE HALF NOT ATTEMPTED — no owner credentials in .env.local.')
+    console.log('    The flag/book agreement is unproven here. Run locally before landing.')
+    return
+  }
+  let token = ''
+  try {
+    const a = await (await fetch(`${url}/auth/v1/token?grant_type=password`, {
+      method: 'POST', headers: { apikey: anon, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: pw }),
+    })).json()
+    token = a.access_token ?? ''
+  } catch { /* reported below */ }
+  if (!token) { console.log('  ⚠ LIVE HALF NOT ATTEMPTED — could not authenticate.'); return }
+  const H = { apikey: anon, Authorization: `Bearer ${token}` }
+
+  // Does the column exist yet? A 400 means the migration has not been applied.
+  const probe = await fetch(`${url}/rest/v1/job_recurrences?select=id,season_key&limit=1`, { headers: H })
+  const columnExists = probe.ok
+  if (!columnExists) {
+    check('⛔ the flag is FALSE while season_key does not exist', SEASON_DECLARATIONS_COMPLETE === false,
+      'declarations cannot be complete when the column has not been applied — flipping the flag now '
+      + 'would strip the season from every live series at once')
+    console.log('    (job_recurrences.season_key is not applied yet — the migration has not started)')
+    return
+  }
+
+  // ⭐ ACTIVE series only. A series whose visits are all in the past cannot
+  // generate anything, so it cannot schedule out of season; blocking the whole
+  // transition on dead rows would make the ratchet impossible to satisfy.
+  const rows = await (await fetch(
+    `${url}/rest/v1/job_recurrences?select=id,season_key,end_date&limit=2000`, { headers: H })).json()
+  const today = new Date().toISOString().slice(0, 10)
+  const active = (Array.isArray(rows) ? rows : []).filter((r: any) => !r.end_date || r.end_date >= today)
+  const undeclared = active.filter((r: any) => !r.season_key || !String(r.season_key).trim())
+
+  console.log(`    live book: ${active.length} active series, ${undeclared.length} still undeclared`)
+  if (undeclared.length === 0) {
+    // ⭐⭐ DECLARATIONS ARE COMPLETE. The flag MUST be true, or the transition
+    // has quietly never ended.
+    check('⛔ declarations are COMPLETE, so the flag must be true',
+      SEASON_DECLARATIONS_COMPLETE === true,
+      'every active series has declared a season, but SEASON_DECLARATIONS_COMPLETE is still false — '
+      + 'flip it in lib/legacySeasonInference so the keyword guess stops being reachable')
+    check('⛔ …and no active series may resolve to unknown',
+      undeclared.length === 0, `${undeclared.length} undeclared`)
+  } else {
+    check('⛔ series are still undeclared, so the flag must be false',
+      SEASON_DECLARATIONS_COMPLETE === false,
+      `${undeclared.length} active series have no declaration; flipping the flag strips their season`)
+    console.log(`    ⏸ transition PAUSED, legitimately — ${undeclared.length} series await an owner decision.`)
+    console.log('       npx tsx scripts/season-reconcile.ts names them and lists the choices.')
+  }
+}
+
+// ⚠️ No top-level await: this file is transformed to CJS, where it is a syntax
+// error. The summary runs inside the chain so the live half is always counted.
+liveTransitionCheck()
+  .catch(e => { failures++; console.log(`  ✗ the live transition check threw\n      ${String(e?.message ?? e).slice(0, 200)}`) })
+  .then(() => {
+    console.log('')
+    if (failures) {
+      console.log(`✗ season-recurrence: ${failures} rule${failures === 1 ? '' : 's'} broken`)
+      process.exit(1)
+    }
+    console.log('✓ season-recurrence: every rule holds')
+  })

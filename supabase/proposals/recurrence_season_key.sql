@@ -10,11 +10,11 @@
 -- available answer is a KEYWORD GUESS over the service's name
 -- (lib/seasons.seasonForService), and on production that produced:
 --
---   14 series named "…Mowing"/"Lawn Mowing" → matched → lawn season, bounded ✅
---    1 series named "Bi-weekly"             → matched nothing → NO season, NO
---                                             end_date, 24 future visits
---                                             generated to 2027-07-31
---    1 series named "General Upkeep"        → matched nothing → NO season
+--   14 series whose names hit a keyword → matched → a season, correctly bounded ✅
+--    1 series whose name hit nothing    → NO season, NO end_date, and a full
+--                                         year of visits generated through
+--                                         winter into the following summer
+--    2 more whose names hit nothing     → NO season
 --
 -- Identical cadence, identical intent, opposite outcome — decided by a name.
 -- ⛔ A NAME IS NOT A RELATIONSHIP. Renaming a service must not change when it
@@ -66,21 +66,23 @@
 -- `npx tsx scripts/season-reconcile.ts` prints this and writes nothing:
 --
 --   AUTO-SAFE     14   a keyword matched AND no future visit falls outside the
---                      suggested season ⇒ safe to backfill in step 3
---   OWNER REVIEW   3   no keyword matched ⇒ a human declares the season
---                        • Sajjan       "Bi-weekly"      25 future visits,
---                          2026-09-05 → 2027-07-31, NO end date. Declared
---                          'lawn', 12 would be out of season (12 removable).
---                        • Sarah Brown  "General Upkeep" 4 future visits,
---                          already bounded by end_date 2026-10-31.
---                        • an orphan series with no customer and no service name
+--                      suggested season ⇒ backfilled by section 3
+--   OWNER REVIEW   3   no keyword matched ⇒ a human declares the season.
+--                      One has an unbounded horizon and future visits that
+--                      would fall outside any season it could be assigned;
+--                      one is already bounded by its own end_date; one is an
+--                      orphan row with no customer and no service name.
 --   YEAR-ROUND     0   no series has completed work spanning every season
 --
--- ⛔ NOTHING HERE DELETES OR EDITS A VISIT. The 12 out-of-season visits on
--- Sajjan's series stay until Kavin approves a specific action, taken in-product
--- under Session 39's rules — only a SCHEDULED, uninvoiced, non-anchor visit
--- strictly past the end may ever be removed. History is never traded for a rule
--- change.
+-- ⛔ NO CUSTOMER OR SERVICE NAME APPEARS ANYWHERE IN THIS MIGRATION, and that is
+-- deliberate: a migration that names rows is a migration that only works on one
+-- book, and the classification is a DATA RULE, not a list. The report
+-- (scripts/season-reconcile.ts) names them for the human; the SQL never does.
+--
+-- ⛔ NOTHING HERE DELETES OR EDITS A VISIT. Out-of-season visits stay until
+-- Kavin approves a specific action, taken in-product under Session 39's rules —
+-- only a SCHEDULED, uninvoiced, non-anchor visit strictly past the end may ever
+-- be removed. History is never traded for a rule change.
 --
 -- ── STEPS ──────────────────────────────────────────────────────────────────
 -- 1. Apply section 1 (column, constraint, index). Additive and reversible.
@@ -149,25 +151,102 @@ create index if not exists job_recurrences_user_season_idx
 -- human to accept or correct. ⛔ It must never become a runtime rule again —
 -- that is the defect being repaired.
 
--- ── 3 · BACKFILL — only after the report has been reviewed ──────────────────
--- Commented out deliberately. Uncomment when the owner has confirmed the
--- suggestions, and set the unclassifiable rows by hand afterwards.
+
+-- ── 3 · AUTO-SAFE BACKFILL — a DATA RULE, not a list of rows ────────────────
+-- Run AFTER the report in section 2 has been read.
 --
---   update public.job_recurrences r
---      set season_key = s.suggested
---     from (
---       select r2.id,
---              case
---                when coalesce(j.service_type, j.title) ~* '\m(snow|ice|plow|plough|salt|shovel)' then 'snow'
---                when coalesce(j.service_type, j.title) ~* '\m(mow|lawn|fertiliz|fertilis|grass|aerat|trim|edge)' then 'lawn'
---              end as suggested
---         from public.job_recurrences r2
---         left join public.jobs j on j.recurrence_id = r2.id
---        group by r2.id, coalesce(j.service_type, j.title)
---     ) s
---    where s.id = r.id
---      and s.suggested is not null
---      and r.season_key is null;
+-- ⭐ A row is AUTO-SAFE when BOTH hold, and neither mentions a customer or a
+-- service by name:
+--     (a) the legacy keyword lists produce exactly one season for its service
+--         name — the same suggestion the app used to act on silently; and
+--     (b) NO future active visit of that series falls outside that season, so
+--         declaring it changes nothing that is already on the calendar.
 --
--- Rows still NULL after that are the ones the keyword could not classify. They
--- are set by a human, in the product, one at a time.
+-- (b) is what makes this safe rather than merely convenient. A row that would
+-- strand real visits is left NULL on purpose and becomes an OWNER REVIEW row.
+--
+-- ⛔ IT SETS season_key AND NOTHING ELSE. No end_date is written, no visit is
+-- touched. Bounding a series to its season is a separate, owner-visible action.
+--
+-- ⛔ IT IS PAUSABLE. Rows it cannot classify stay NULL, the application keeps
+-- working through the transitional bridge, and the completion flag stays false
+-- until a human resolves them. That is a supported resting state, not a failure.
+with seasons as (
+  -- Each configured season as (key, start_md, end_md) — month*100+day anchors,
+  -- read from the owner's own settings. Nothing about seasons is hardcoded.
+  select b.user_id,
+         s.key                                                as season_key,
+         (s.value->>'startMonth')::int * 100 + (s.value->>'startDay')::int as start_md,
+         (s.value->>'endMonth')::int   * 100 + (s.value->>'endDay')::int   as end_md
+    from public.business_settings b
+    cross join lateral jsonb_each(coalesce(b.service_seasons, '{}'::jsonb)) as s(key, value)
+   where s.value ? 'startMonth' and s.value ? 'endMonth'
+),
+series_service as (
+  -- The service name a series is known by — the same value the app reads.
+  select r.id, r.user_id,
+         min(coalesce(j.service_type, j.title)) as service_name
+    from public.job_recurrences r
+    left join public.jobs j on j.recurrence_id = r.id
+   where r.season_key is null
+   group by r.id, r.user_id
+),
+suggested as (
+  -- (a) the legacy keyword suggestion, reproduced ONCE, here, as a proposal.
+  -- ⚠️ Word-start matching, exactly as the app's lists did: 'ice' inside
+  -- "serv·ice" once classified every service as snow.
+  select ss.id, ss.user_id,
+         case
+           when ss.service_name ~* '\m(snow|ice|plow|plough|salt|shovel)'                    then 'snow'
+           when ss.service_name ~* '\m(mow|lawn|fertiliz|fertilis|grass|aerat|trim|edge)'    then 'lawn'
+         end as season_key
+    from series_service ss
+),
+offending as (
+  -- (b) future active visits that would fall OUTSIDE the suggested season.
+  -- The CASE handles a season that wraps the new year (e.g. Nov 1 → Mar 31).
+  select sg.id, count(*) as n
+    from suggested sg
+    join seasons se on se.user_id = sg.user_id and se.season_key = sg.season_key
+    join public.jobs j on j.recurrence_id = sg.id
+   where sg.season_key is not null
+     and j.scheduled_date > current_date
+     and j.status <> 'cancelled'
+     and not (
+       case when se.start_md <= se.end_md
+            then (extract(month from j.scheduled_date)::int * 100
+                  + extract(day from j.scheduled_date)::int) between se.start_md and se.end_md
+            else (extract(month from j.scheduled_date)::int * 100
+                  + extract(day from j.scheduled_date)::int) >= se.start_md
+              or (extract(month from j.scheduled_date)::int * 100
+                  + extract(day from j.scheduled_date)::int) <= se.end_md
+       end
+     )
+   group by sg.id
+)
+update public.job_recurrences r
+   set season_key = sg.season_key
+  from suggested sg
+  left join offending o on o.id = sg.id
+ where r.id = sg.id
+   and r.season_key is null
+   and sg.season_key is not null
+   and coalesce(o.n, 0) = 0;
+
+-- ── 4 · WHAT REMAINS, and how the transition ends ──────────────────────────
+-- After section 3, any row still NULL is one no rule could classify. Show them:
+--
+--   select r.id, r.start_date, r.end_date
+--     from public.job_recurrences r
+--    where r.season_key is null
+--      and (r.end_date is null or r.end_date >= current_date);
+--
+-- Each is declared BY A HUMAN, in the product, using the Season control on the
+-- series editor — a configured season, or 'none' for genuinely year-round.
+--
+-- ⭐⭐ THE TRANSITION ENDS WHEN THAT SET IS EMPTY. At that point flip
+-- SEASON_DECLARATIONS_COMPLETE to true in src/lib/legacySeasonInference.ts, and
+-- the keyword guess becomes unreachable at runtime.
+-- ⚠️ verify:season-recurrence §9 FAILS if the set is empty and the flag is still
+-- false, so the transition cannot quietly never end. It also fails if the flag
+-- is flipped while rows remain undeclared.

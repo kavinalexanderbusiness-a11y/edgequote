@@ -54,7 +54,11 @@ import { resolveSeriesSeason, type ServiceSeason, type ServiceSeasons } from '@/
  * S106: flip this to `true` in the same change that completes the backfill.
  * verify:season-recurrence proves the end state — with it true, nothing infers.
  */
-export const SEASON_DECLARATIONS_COMPLETE = false
+// ⚠️ Typed `boolean`, not inferred as the literal `false`. A literal type makes
+// every "what happens when this is true" check a compile error, which would mean
+// the END STATE could never be asserted — the guard would be unable to test the
+// half of the transition that actually matters.
+export const SEASON_DECLARATIONS_COMPLETE: boolean = false
 
 /**
  * THE only runtime path that may consult a service name, and only while
