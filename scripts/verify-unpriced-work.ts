@@ -525,12 +525,24 @@ console.log('\n═══ 12 · The accept-door migration — in the apply path, 
 // supabase/migrations/, so verify:rebuild applies it from zero and section 13
 // drives the resulting function. What this section pins is the paperwork around
 // it — the parts a from-zero rebuild cannot see.
-const migFiles = (require('node:fs') as typeof import('node:fs'))
-  .readdirSync(join(ROOT, 'supabase', 'migrations')).filter(f => f.endsWith('.sql'))
-const noChargeFile = migFiles.find(f => /no_charge/.test(f))
-check('the no-charge migration is IN the apply path', !!noChargeFile, migFiles.join(', '))
+// ⚠️⚠️ A MIGRATION HAS TWO LIVES: its own file while in flight, and the generated
+// BASELINE once production has run it — at which point the file moves to
+// supabase/archive/ledger/, which is never applied. Looking only in migrations/
+// made this go red on the very convergence that proves the fix landed. That is
+// the SIXTH guard in this repo to hit the same trap, so it now looks in both and
+// reports which life the migration is in instead of asserting one of them.
+const nodefs = (require('node:fs') as typeof import('node:fs'))
+const listSql = (d: string) => nodefs.existsSync(d) ? nodefs.readdirSync(d).filter(f => f.endsWith('.sql')).sort() : []
+const migFiles = listSql(join(ROOT, 'supabase', 'migrations'))
+const inFlight = migFiles.find(f => /no_charge/.test(f))
+const absorbed = listSql(join(ROOT, 'supabase', 'archive', 'ledger')).find(f => /no_charge/.test(f))
+const noChargeFile = inFlight ?? absorbed
+check('the no-charge migration is reachable (in flight, or absorbed into the baseline)',
+  !!noChargeFile, 'migrations: ' + migFiles.join(', '))
 
-const migration = read(join('supabase', 'migrations', noChargeFile ?? 'missing.sql'))
+const migration = inFlight
+  ? read(join('supabase', 'migrations', inFlight))
+  : read(join('supabase', 'archive', 'ledger', absorbed ?? 'missing.sql'))
 check('it closes the accept hole',
   /if not v_free and \(v_base is null or v_base <= 0\) then/.test(migration))
 // ⚠️ A `create or replace function` with a CHANGED signature creates an OVERLOAD
@@ -554,10 +566,17 @@ check('it keeps quote_apply_choice\'s signature identical (no overload)',
 check('the 2999 placeholder is gone — re-versioned at landing',
   !/^29999999000000_/.test(noChargeFile ?? '') && !/temp_reversion_required/.test(noChargeFile ?? ''),
   noChargeFile)
-check('…and its version is a real timestamp sorting after the baseline',
-  /^\d{14}_/.test(noChargeFile ?? '') &&
-  (noChargeFile ?? '').slice(0, 14) > (migFiles.find(f => /_baseline\.sql$/.test(f)) ?? '').slice(0, 14),
-  `${noChargeFile} vs baseline ${migFiles.find(f => /_baseline\.sql$/.test(f))}`)
+// ⚠️ The ordering rule only means something WHILE THE MIGRATION IS IN FLIGHT. Once
+// absorbed it necessarily sorts BEFORE the baseline, because the baseline is
+// generated afterwards and named for a later instant — so demanding "after the
+// baseline" post-absorption asserts something that can never be true again.
+check('…and its version is a real 14-digit timestamp, not an invented label',
+  /^\d{14}_/.test(noChargeFile ?? ''), noChargeFile)
+if (inFlight) {
+  check('…and, while in flight, it sorts AFTER the baseline so a rebuild replays it last',
+    inFlight.slice(0, 14) > (migFiles.find(f => /_baseline\.sql$/.test(f)) ?? '').slice(0, 14),
+    `${inFlight} vs baseline ${migFiles.find(f => /_baseline\.sql$/.test(f))}`)
+}
 check('the file itself tells S106 to re-version from the live ledger',
   /S106 RE-VERSIONS THIS AT LANDING, from the LIVE LEDGER AT APPLY TIME/.test(migration))
 check('it warns that the app must not be deployed before it is applied',
@@ -601,9 +620,16 @@ check('it warns that the app must not be deployed before it is applied',
 // recorded fact rather than a surprise, and so the day production runs it and
 // the baseline is recaptured, this check fails and tells the next session to
 // re-measure instead of assuming.
-check('the committed baseline still carries the OLD body (production has not run it)',
-  !/if not v_free and/.test(baseline),
-  'the baseline now has the fix — production applied it; recapture the contract and update this check')
+// ⭐ RE-MEASURED, 2026-08-30 — and this check did exactly what it was built to do.
+// It said: the day production runs this and the baseline is recaptured, fail, and
+// tell the next session to re-measure rather than assume. Production ran it
+// (20260830120000, applied by S106 with the live body md5 verified unchanged
+// first), the contract was recaptured and the baseline regenerated. So the
+// assertion INVERTS: the baseline must now CARRY the fix, and a baseline that
+// went back to the old body would mean the fix had been reverted underneath us.
+check('the recaptured baseline now carries the unpriced gate (production has run it)',
+  /if not v_free and/.test(baseline),
+  'the baseline lacks the gate — production may have been reverted, or the contract was recaptured from the wrong database')
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log('\n═══ 13 · THE DB ACCEPTANCE DOOR — behaviour, from an empty Postgres ═══')
