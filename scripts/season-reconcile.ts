@@ -173,8 +173,40 @@ async function main() {
 
   // ── 2 · the invalid future occurrences, named ─────────────────────────────
   console.log('\n════ 2 · INVALID FUTURE OCCURRENCES ════')
+
+  // ⚠️ A series with NO suggestion has nothing to be "invalid" against — which
+  // is precisely how the defect hid. An unbounded, ungoverned series is the
+  // thing the audit found, so it is reported FIRST and on its own terms: its
+  // real horizon, and what each configured season would imply if declared.
+  const ungoverned = rows.filter(r => !r.suggested && r.invalid.length === 0)
+    .map(r => ({ r, future: (byRec.get(r.id) ?? []).filter((j: any) => j.scheduled_date > today && j.status !== 'cancelled') }))
+    .filter(x => x.future.length > 0)
+
+  for (const { r, future } of ungoverned) {
+    const last = future[future.length - 1]?.scheduled_date
+    console.log(`\n  ⛔ UNGOVERNED — ${r.who} — "${r.service}"  [series ${r.id.slice(0, 8)}]`)
+    console.log(`    cadence ${r.cadence} · start ${r.start} · end_date ${r.end ?? 'NONE'}`)
+    console.log(`    ${future.length} future visit(s), ${future[0]?.scheduled_date} → ${last}`)
+    console.log(r.end
+      ? `    no season declared; bounded only by the end date ${r.end}, which nothing re-derives.`
+      : `    no season declared and NO end date ⇒ nothing bounds this series at all.`)
+    for (const k of Object.keys(seasons).sort()) {
+      const out = future.filter((j: any) => !isWithinSeason(j.scheduled_date, seasons[k]))
+      const removable = out.filter((j: any) => j.status === 'scheduled' && j.id !== (byRec.get(r.id) ?? [])[0]?.id)
+      const effEnd = effectiveSeriesEnd(r.start, r.end, seasons[k])
+      console.log(`      if declared "${k}" ${seasonLabel(seasons[k])}: end_date → ${effEnd}, `
+        + `${out.length} visit(s) out of season (${removable.length} removable under S39 rules)`)
+    }
+    console.log(`      if declared "${SEASON_NONE}" (year-round): nothing is out of season; the series still needs an end date or it regenerates forever.`)
+    console.log(`    PROPOSED ACTION — owner chooses:`)
+    console.log(`      keep       → declare a season, leave every existing visit where it is`)
+    console.log(`      remove     → declare a season, set the end date, remove only the removable visits`)
+    console.log(`      regenerate → declare a season, set the end date, re-plan within season`)
+    console.log(`    ⛔ NOTHING is removed without Kavin's explicit approval.`)
+  }
+
   const affected = rows.filter(r => r.invalid.length > 0)
-  if (!affected.length) console.log('  none under the suggested seasons.')
+  if (!affected.length && !ungoverned.length) console.log('  none under the suggested seasons.')
   for (const r of affected) {
     const seasonKey = r.suggested!
     const season = seasons[seasonKey]

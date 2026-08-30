@@ -254,10 +254,31 @@ console.log('\n▸ 6 · the shape of the model')
 }
 
 {
-  const jf = strip(read('src/components/schedule/JobForm.tsx'))
+  const jfRaw = read('src/components/schedule/JobForm.tsx')
+  const jf = strip(jfRaw)
   check('the job form resolves from the declaration, not the name',
     /resolveSeriesSeason\(\{\s*seasonKey/.test(jf),
     'JobForm still asks seasonForService directly')
+
+  // ── Point 3: the canonical fact is a CONTROL, not a hidden column ─────────
+  check('the series editor offers a Season control',
+    /<Select label="Season"/.test(jfRaw), 'no Season selector is rendered')
+  check('…listing every configured season',
+    /seasonKeys\(seasons\)\.map/.test(jf), 'the selector does not enumerate configured seasons')
+  check('…offering Year-round explicitly',
+    /value: SEASON_NONE, label: 'Year-round/.test(jfRaw))
+  check('…and offering "Needs selection" as a real option',
+    /label: 'Needs selection'/.test(jfRaw))
+  // ⛔ THE ONE THAT MATTERS: unknown must be SURFACED, never rendered as
+  // year-round. A series nobody declared is how winter visits happened.
+  check('⛔ an undeclared series is surfaced, not silently year-round',
+    /seasonNeedsSelection\s*=\s*seasonResolution\.source === 'unknown'/.test(jf)
+    && /\{seasonNeedsSelection && \(/.test(jfRaw),
+    'the editor does not distinguish "needs selection" from year-round')
+  check('…and says what happens if it is left unset',
+    /nothing stops it from repeating out of\s+season/.test(jfRaw))
+  check('the declaration travels with the series',
+    /seasonKey: seasonKeyChoice \|\| null/.test(jf))
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

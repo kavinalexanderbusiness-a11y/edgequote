@@ -15,7 +15,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { recurrenceLabel, recurrenceToUi, reseedRepeatUi, OPEN_ENDED_HORIZON, type RepeatPreset, type EndMode } from '@/lib/recurrence'
 import { latestSavedRecommendation, savedPriceFor, recommendationIsStale, CadenceKey } from '@/lib/pricing'
 import { servicePricingKind } from '@/lib/servicePricing'
-import { ServiceSeasons, DEFAULT_SEASONS, settingsToSeasons, seasonEndDateFor, estimateSeasonVisits, seasonLabel, resolveSeriesSeason } from '@/lib/seasons'
+import { ServiceSeasons, DEFAULT_SEASONS, settingsToSeasons, seasonEndDateFor, estimateSeasonVisits, seasonLabel, resolveSeriesSeason, seasonKeys, SEASON_NONE } from '@/lib/seasons'
 import { serviceCategory } from '@/lib/legacySeasonInference'
 import { WeeklyScheduler } from '@/components/schedule/WeeklyScheduler'
 import { SmartEstimateCard } from '@/components/labor/SmartEstimateCard'
@@ -57,6 +57,17 @@ export interface Recurrence {
   // nobody has spoken. Absent on rows hydrated from the database (recFromRow),
   // so an untouched save can never end a schedule. See planRecurrenceRemoval.
   repeatAsserted?: boolean
+  /**
+   * ⭐ WHICH SEASON governs this series — the owner's declaration, read from the
+   * Season control. `null` means "not declared", which is a real, visible state
+   * ("Needs selection") and is deliberately NOT the same as year-round
+   * (`SEASON_NONE`).
+   *
+   * ⚠️ A caller may READ this today but must not WRITE it: the column
+   * `job_recurrences.season_key` is proposed, not applied (supabase/proposals/).
+   * It travels here so the save path is ready the moment the column lands.
+   */
+  seasonKey?: string | null
 }
 
 export interface SuggestionMeta {
@@ -299,8 +310,17 @@ export function JobForm({ customers, crews, technicians, defaultValues, excludeJ
   // Until job_recurrences.season_key lands (see supabase/proposals/) there is no
   // key to pass, so this resolves exactly as before for every live series; what
   // changes is that the seam now exists and the guard pins declaration-wins.
-  const seasonResolution = resolveSeriesSeason({ seasonKey: seriesSeasonKey ?? null }, seasons)
+  // ⭐ THE DECLARATION IS A CONTROL, not a hidden column. The owner picks the
+  // season here; nothing infers it from the service name. Seeded from the
+  // series' stored key, empty when the series has never declared one.
+  const [seasonKeyChoice, setSeasonKeyChoice] = useState<string>(seriesSeasonKey ?? '')
+  useEffect(() => { setSeasonKeyChoice(seriesSeasonKey ?? '') }, [seriesSeasonKey])
+  const seasonResolution = resolveSeriesSeason({ seasonKey: seasonKeyChoice || null }, seasons)
   const serviceSeason = seasonResolution.season
+  // ⚠️ UNKNOWN IS NOT YEAR-ROUND. An undeclared series must say so out loud —
+  // rendering it as "no season" is exactly how a series ran through winter
+  // without anybody choosing that.
+  const seasonNeedsSelection = seasonResolution.source === 'unknown'
   const category = serviceCategory(serviceType)
   // Season End is a property of the SERIES, so it resolves from the series'
   // start date — not from whichever visit happens to be open. An open-ended
@@ -418,6 +438,10 @@ export function JobForm({ customers, crews, technicians, defaultValues, excludeJ
       // so the recurrence engine needs no season awareness).
       endDate: endMode === 'season' ? seasonEndDate : (endMode === 'on' && endDate ? endDate : null),
       endCount: endMode === 'after' ? Math.max(1, endCount) : null,
+      // ⭐ The declaration travels with the series. Persisting it waits on
+      // job_recurrences.season_key (supabase/proposals/); until then a caller
+      // may read it but must not write a column that does not exist.
+      seasonKey: seasonKeyChoice || null,
       endAsserted: endTouched.current,
     }
   }
@@ -1019,6 +1043,31 @@ export function JobForm({ customers, crews, technicians, defaultValues, excludeJ
 
           {preset !== 'none' && (
             <>
+              {/* ⭐ WHICH SEASON GOVERNS THIS SERIES — declared, never guessed.
+                  Shown whenever a series is being configured, because a season
+                  that only exists in a column is a season the owner cannot
+                  check. "Needs selection" is a real state and is never silently
+                  treated as year-round. */}
+              <Select label="Season" value={seasonKeyChoice}
+                onChange={(e) => { setRecDirty(true); setSeasonKeyChoice(e.target.value) }}
+                options={[
+                  { value: '', label: 'Needs selection' },
+                  ...seasonKeys(seasons).map(k => ({
+                    value: k,
+                    label: `${seasons[k].label ?? k} · ${seasonLabel(seasons[k])}`,
+                  })),
+                  { value: SEASON_NONE, label: 'Year-round (no season)' },
+                ]} />
+              {seasonNeedsSelection && (
+                <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 flex items-start gap-2">
+                  <CalendarRange className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <p className="text-xs text-amber-200">
+                    No season is set for this series, so nothing stops it from repeating out of
+                    season. Choose the season it runs in, or <span className="font-semibold">Year-round</span> if
+                    it genuinely runs all year.
+                  </p>
+                </div>
+              )}
               <Select label="Ends" value={endMode}
                 onChange={(e) => { markEndTouched(); setEndMode(e.target.value as EndMode) }}
                 options={[

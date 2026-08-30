@@ -50,23 +50,46 @@
 -- "runs all year", and the only safe treatment of the first is the unsafe
 -- treatment of the second.
 --
--- ── ADOPTING THIS ──────────────────────────────────────────────────────────
--- 1. Copy to supabase/migrations/<14-digit>_recurrence_season_key.sql, taking
---    the version AT APPLY TIME from the live ledger.
--- 2. Run the BACKFILL REPORT below FIRST (it selects, it does not write) and
---    have the owner confirm the suggested keys. The suggestion uses the legacy
---    name inference ONCE, as a proposal a human accepts — never as a runtime
---    rule. `npx tsx scripts/season-reconcile.ts` prints the same picture.
--- 3. Only then run the backfill UPDATE, and set the two ungoverned series by
---    hand — "Bi-weekly" and "General Upkeep" are exactly the rows a keyword
---    cannot classify, which is the whole point.
--- 4. Flip lib/seasons name inference off (`allowNameInference: false`) once no
---    NULL season_key remains. verify:season-recurrence already proves a
---    declaration resolves with inference disabled.
--- ⛔ Do NOT delete out-of-season visits as part of this migration. Session 39's
---    rule stands: history is never traded for a rule change, and only
---    `scheduled`, uninvoiced, non-anchor visits strictly past the end may ever
---    be removed — through the product, with the owner looking at it.
+-- ── LANDING-READY. Version assigned by S106 from the LIVE ledger. ──────────
+-- ⛔ Deliberately unversioned here. S106 copies this to
+--    supabase/migrations/<14-digit>_recurrence_season_key.sql, taking the
+--    version AT APPLY TIME from the live ledger.
+--
+-- ⚠️⚠️ SCHEMA FIRST, THEN APP. The application on branch
+-- session110/recurrence-season-repair has NO runtime name inference left:
+-- resolveSeriesSeason takes only a key, and there is no parameter a service
+-- name could arrive through. Until this column exists and is backfilled, every
+-- series resolves 'unknown' and the 14 currently-governed series lose their
+-- seasonal signal. Land this migration WITH that code, never after it.
+--
+-- ── THE LIVE CLASSIFICATION (measured 2026-08-30, read-only) ───────────────
+-- `npx tsx scripts/season-reconcile.ts` prints this and writes nothing:
+--
+--   AUTO-SAFE     14   a keyword matched AND no future visit falls outside the
+--                      suggested season ⇒ safe to backfill in step 3
+--   OWNER REVIEW   3   no keyword matched ⇒ a human declares the season
+--                        • Sajjan       "Bi-weekly"      25 future visits,
+--                          2026-09-05 → 2027-07-31, NO end date. Declared
+--                          'lawn', 12 would be out of season (12 removable).
+--                        • Sarah Brown  "General Upkeep" 4 future visits,
+--                          already bounded by end_date 2026-10-31.
+--                        • an orphan series with no customer and no service name
+--   YEAR-ROUND     0   no series has completed work spanning every season
+--
+-- ⛔ NOTHING HERE DELETES OR EDITS A VISIT. The 12 out-of-season visits on
+-- Sajjan's series stay until Kavin approves a specific action, taken in-product
+-- under Session 39's rules — only a SCHEDULED, uninvoiced, non-anchor visit
+-- strictly past the end may ever be removed. History is never traded for a rule
+-- change.
+--
+-- ── STEPS ──────────────────────────────────────────────────────────────────
+-- 1. Apply section 1 (column, constraint, index). Additive and reversible.
+-- 2. Run the reconciliation report; the owner reads it.
+-- 3. Apply the AUTO-SAFE backfill in section 3 for the 14 matched series.
+-- 4. The owner declares the 3 OWNER REVIEW series in-product, using the Season
+--    control on the series editor (Year-round is an explicit choice there).
+-- 5. When no NULL season_key remains the app is already correct — there is no
+--    inference flag left to turn off, because there is no inference left.
 -- ═══════════════════════════════════════════════════════════════════════════
 
 set search_path to public, extensions;
