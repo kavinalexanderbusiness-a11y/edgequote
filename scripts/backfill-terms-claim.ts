@@ -55,7 +55,7 @@ async function main() {
     const fresh = current === claim
       && r.terms_payment_claim_fingerprint === fp
       && r.terms_payment_claim_version === TERMS_CLASSIFIER_VERSION
-    const sentence = termsClaimSentence(r.terms_text, claim)
+    const sentence = termsClaimSentence(r.terms_text)
     console.log(`tenant ${r.user_id}`)
     console.log(`  terms        : ${r.terms_text === null ? 'NULL' : r.terms_text.trim().length + ' chars'}`)
     console.log(`  fingerprint  : ${fp}`)

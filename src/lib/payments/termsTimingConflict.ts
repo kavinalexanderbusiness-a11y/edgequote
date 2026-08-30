@@ -209,48 +209,56 @@ export function termsSentences(termsText: string | null | undefined): string[] {
  *    completion are ordinary and correct, and the second sentence is about the
  *    remainder. This is the single most important false-positive guard.
  */
-export function classifyTermsPaymentClaim(termsText: string | null | undefined): TermsPaymentClaim {
+export function classifyTerms(termsText: string | null | undefined): {
+  claim: TermsPaymentClaim
+  /** The sentence that carries the claim, VERBATIM. Null only for `no_claim`. */
+  sentence: string | null
+} {
   const sentences = termsSentences(termsText)
-  if (sentences.length === 0) return 'no_claim'
-  let upfront = false
-  let noUpfront = false
-  let afterWork = false
+  if (sentences.length === 0) return { claim: 'no_claim', sentence: null }
+  let upfront: string | null = null
+  let noUpfront: string | null = null
+  let afterWork: string | null = null
   for (const s of sentences) {
     // A hedge leaves the customer informed that a deposit MIGHT be wanted, so it
     // asserts nothing this gate should act on.
     if (HEDGE.test(s)) continue
-    if (MONEY_UPFRONT.some(re => re.test(s))) { upfront = true; continue }
+    if (MONEY_UPFRONT.some(re => re.test(s))) { upfront ??= s; continue }
     // Explicit denial of any up-front money.
-    if (NO_MONEY_UPFRONT.some(re => re.test(s))) { noUpfront = true; continue }
+    if (NO_MONEY_UPFRONT.some(re => re.test(s))) { noUpfront ??= s; continue }
     // A sentence scoped to the REMAINDER is the truthful second half of a
     // deposit quote and never a claim that nothing precedes the work.
     if (REMAINDER.test(s)) continue
-    if (TOTAL_AFTER_WORK.test(s) || BARE_PAYMENT_AFTER_WORK.test(s)) afterWork = true
+    if (TOTAL_AFTER_WORK.test(s) || BARE_PAYMENT_AFTER_WORK.test(s)) afterWork ??= s
   }
-  if (upfront && noUpfront) return 'ambiguous'
-  if (upfront) return 'money_before_work'
-  if (noUpfront || afterWork) return 'no_money_before_work'
-  return 'no_claim'
+  if (upfront && noUpfront) return { claim: 'ambiguous', sentence: upfront }
+  if (upfront) return { claim: 'money_before_work', sentence: upfront }
+  if (noUpfront || afterWork) {
+    return { claim: 'no_money_before_work', sentence: (noUpfront ?? afterWork) as string }
+  }
+  return { claim: 'no_claim', sentence: null }
 }
 
 /**
- * The FIRST sentence that carries the claim — quoted back to the owner verbatim
- * so they can find the words themselves. Never edited, never normalised.
+ * ⚠️⚠️ ONE TRAVERSAL, ON PURPOSE. The verdict and the sentence that evidences it
+ * are produced together and can never disagree.
+ *
+ * They used to be two functions, each re-walking the sentences with its own copy
+ * of the hedge and remainder guards — and the duplicates MASKED each other. A
+ * mutation that removed the classifier's hedge guard left the locator's in
+ * place, so the claim came back `no_money_before_work` while the locator refused
+ * to name a sentence, and `detectTermsTimingConflict` — which needed both —
+ * returned "no conflict". A contradiction would have been silently dropped, and
+ * the send gate would have failed OPEN. The mutation matrix found it; reading
+ * the code did not.
  */
-export function termsClaimSentence(
-  termsText: string | null | undefined, claim: TermsPaymentClaim,
-): string | null {
-  for (const s of termsSentences(termsText)) {
-    if (HEDGE.test(s)) continue
-    if (claim === 'money_before_work' && MONEY_UPFRONT.some(re => re.test(s))) return s
-    if (claim === 'no_money_before_work') {
-      if (NO_MONEY_UPFRONT.some(re => re.test(s))) return s
-      if (!REMAINDER.test(s) && (TOTAL_AFTER_WORK.test(s) || BARE_PAYMENT_AFTER_WORK.test(s))) return s
-    }
-    if (claim === 'ambiguous'
-      && (MONEY_UPFRONT.some(re => re.test(s)) || NO_MONEY_UPFRONT.some(re => re.test(s)))) return s
-  }
-  return null
+export function classifyTermsPaymentClaim(termsText: string | null | undefined): TermsPaymentClaim {
+  return classifyTerms(termsText).claim
+}
+
+/** The sentence carrying the claim, VERBATIM — never edited, never normalised. */
+export function termsClaimSentence(termsText: string | null | undefined): string | null {
+  return classifyTerms(termsText).sentence
 }
 
 /**
@@ -284,12 +292,14 @@ export function termsClaimConflicts(
 export function detectTermsTimingConflict(
   quote: GateQuote, termsText: string | null | undefined,
 ): TermsTimingConflict | null {
-  const claim = classifyTermsPaymentClaim(termsText)
+  const { claim, sentence } = classifyTerms(termsText)
   const timing = paymentTiming(quote)
   if (!termsClaimConflicts(timing, claim)) return null
-  const sentence = termsClaimSentence(termsText, claim)
-  if (!sentence) return null
-  return { claim: claim as TermsClaim, sentence, configured: timing.mode }
+  // ⛔ A conflicting claim ALWAYS has a sentence — they come from one traversal —
+  // so this is a type narrowing, not a silent escape hatch. It must never become
+  // "no sentence, therefore no conflict": that is exactly the fail-open the two
+  // masked hedge guards used to create.
+  return { claim: claim as TermsClaim, sentence: sentence as string, configured: timing.mode }
 }
 
 /**
