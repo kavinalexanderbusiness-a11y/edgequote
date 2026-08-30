@@ -138,19 +138,60 @@ check('⛔ quality problems are SHOWN, never auto-corrected',
 
 // ── 4. The SQL on the apply path ─────────────────────────────────────────────
 console.log('\n═══ The database is the gate — the app only explains it ═══')
+// ⭐⭐ A MIGRATION HAS TWO LIVES, so this section asserts the STATE, never the
+// statement. While in flight it is its own file under supabase/migrations/;
+// once production has run it the file moves to supabase/archive/ledger/ and the
+// generated baseline carries its effect instead. A guard that demanded the file
+// stay in migrations/ would go red on the day the migration SUCCEEDED — which is
+// exactly what happened here — and the honest fix is not to move the file back
+// but to ask the question that is true in both lives:
+//
+//   ⛔ IS THE PUBLICATION BOUNDARY ON THE APPLY PATH?
+//
+// In flight that means the migration file. After archiving it means the
+// baseline, because the baseline IS the apply path. Either way a from-zero
+// rebuild ends with both customer-facing doors gated on published_at, and that
+// is the only thing this check ever really cared about.
 const MIGRATIONS = 'supabase/migrations'
+const ARCHIVE = 'supabase/archive/ledger'
 const files = readdirSync(join(process.cwd(), MIGRATIONS))
 const pubFile = files.find(f => f.includes('service_publication'))
-const SQL = pubFile ? read(join(MIGRATIONS, pubFile)) : ''
+const archivedFile = readdirSync(join(process.cwd(), ARCHIVE)).find(f => f.includes('service_publication'))
+const inFlight = !!pubFile
+const SQL = pubFile ? read(join(MIGRATIONS, pubFile))
+  : archivedFile ? read(join(ARCHIVE, archivedFile)) : ''
 const baselineFile = files.filter(f => f.endsWith('_baseline.sql')).sort().pop()
 const BASELINE = baselineFile ? read(join(MIGRATIONS, baselineFile)) : ''
 
-check('the migration is on the APPLY PATH, not in archive',
-  !!pubFile && SQL.length > 1000,
-  'supabase/archive/ is never applied — a migration there is a migration that does not exist')
-check('it sorts after the live ledger floor',
-  !!pubFile && pubFile.slice(0, 14) > '20260828120001',
-  `${pubFile} must sort after the current baseline or a from-zero rebuild replays it in the wrong order`)
+// The STATE. Written so it cannot pass by accident: the column must exist on the
+// table AND both doors must carry the predicate, in whichever file is applied.
+const applyPath = inFlight ? SQL + '\n' + BASELINE : BASELINE
+// ⚠️ Scoped to service_templates' OWN definition. Three tables in this schema
+// carry a `published_at` (the marketing content ones), so an unscoped match
+// would pass on somebody else's column and prove nothing about the catalogue.
+const svcTableIdx = BASELINE.search(/create table[^;]{0,200}"service_templates"/i)
+const svcTable = svcTableIdx < 0 ? '' : BASELINE.slice(svcTableIdx, BASELINE.indexOf(');', svcTableIdx))
+check('⭐⭐ the publication BOUNDARY is on the apply path (file in flight, baseline after)',
+  SQL.length > 1000
+  && (inFlight
+    ? /published_at\s+timestamptz/i.test(SQL)
+    : /"published_at"\s+timestamp with time zone/i.test(svcTable))
+  && /public_services[\s\S]{0,1600}?published_at is not null/.test(applyPath)
+  && /get_portal_data[\s\S]{0,12000}?published_at is not null/.test(applyPath),
+  inFlight
+    ? 'supabase/archive/ is never applied — a migration there is a migration that does not exist'
+    : 'the migration is archived, so the BASELINE must now carry the column and both gated doors')
+// Ordering only means something while the file is still applied in its own
+// right. Once archived the baseline supersedes it and there is nothing to sort.
+if (inFlight) {
+  check('it sorts after the live ledger floor',
+    pubFile!.slice(0, 14) > '20260828120001',
+    `${pubFile} must sort after the current baseline or a from-zero rebuild replays it in the wrong order`)
+} else {
+  check('…and the archived file is still readable, so the rules below still have a subject',
+    !!archivedFile && SQL.length > 1000,
+    'the archived ledger is the record of what production actually ran')
+}
 // ⚠️ Scoped to the ALTER STATEMENT, not to the whole file. `[^;]*` spans lines,
 // and this migration is full of `published_at is not null` PREDICATES — the very
 // clauses that make the feature work. A file-wide match would have failed on its
@@ -195,9 +236,28 @@ check('⛔ NON-DESTRUCTIVE: no drop, no delete, no truncate anywhere in it',
   'drop trigger/policy would be replacement, but a dropped COLUMN or a deleted ROW is data loss')
 
 // The defect must actually exist in what shipped, or this whole file guards air.
-check('the shipped baseline really did gate the public door on is_active alone',
-  /from public\.service_templates where user_id = v_user and is_active = true\)/.test(BASELINE),
-  'if this stops matching, the baseline has converged and this assertion should be retired deliberately')
+//
+// ⭐⭐ RETIRED DELIBERATELY, exactly as the original note instructed. This used to
+// read the baseline for the DEFECT — `... and is_active = true)` with no
+// publication predicate — to prove the fix was not written for a problem that
+// never existed. Production has now run the migration and the baseline has been
+// regenerated from production, so the defect is GONE from the baseline and the
+// old assertion could only fail. Leaving it would have meant one of two
+// dishonest moves: reverting the baseline, or deleting the evidence question.
+//
+// The question is still worth asking, so it is asked of the artefact that
+// permanently records what production ran — supabase/archive/ledger/. That file
+// is the ledger of history and does not converge, so this now reads the same
+// truth in a place where it stays true, and asserts the CURRENT state as its
+// other half: the door is gated now, and it demonstrably was not before.
+check('⭐ the defect was real: the archived ledger records the door being widened',
+  SQL.includes('and published_at is not null')
+  && /is_active[\s\S]{0,40}published_at is not null/.test(SQL),
+  'the archived migration is the permanent record that this door once had no publication predicate')
+check('…and the baseline now shows the door CLOSED, not the old open one',
+  !/from public\.service_templates\s+where user_id = v_user and is_active = true\)/.test(BASELINE)
+  && /where user_id = v_user and is_active = true and published_at is not null/.test(BASELINE),
+  'the public door must be gated in the regenerated baseline — this is the converged state the retired check was waiting for')
 
 // ── 5. LIVE — the real public door, attacked anonymously ─────────────────────
 async function main() {

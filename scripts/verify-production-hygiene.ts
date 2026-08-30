@@ -315,11 +315,23 @@ console.log('\n═══ …and neither does the database ═══')
 const MIGRATIONS = 'supabase/migrations'
 const baselineFile = readdirSync(join(process.cwd(), MIGRATIONS)).filter(f => f.endsWith('_baseline.sql')).sort().pop()
 const BASELINE = baselineFile ? read(join(MIGRATIONS, baselineFile)) : ''
+// ⭐⭐ TWO LIVES. In flight the migration is its own file under
+// supabase/migrations/; once production has run it the file moves to
+// supabase/archive/ledger/ and the baseline carries its effect. Read whichever
+// exists, and assert the STATE — the boundary is on the apply path — rather than
+// the statement, which inverts the day the migration succeeds.
+const ARCHIVE = 'supabase/archive/ledger'
 const pubMigration = readdirSync(join(process.cwd(), MIGRATIONS)).find(f => f.includes('service_publication'))
-const PUBSQL = pubMigration ? read(join(MIGRATIONS, pubMigration)) : ''
+const pubArchived = readdirSync(join(process.cwd(), ARCHIVE)).find(f => f.includes('service_publication'))
+const PUBSQL = pubMigration ? read(join(MIGRATIONS, pubMigration))
+  : pubArchived ? read(join(ARCHIVE, pubArchived)) : ''
 
-check('the publication migration is on the APPLY PATH', !!pubMigration && PUBSQL.length > 1000,
-  'supabase/archive is not the apply path — a migration there never runs')
+check('the publication boundary is on the APPLY PATH',
+  PUBSQL.length > 1000
+  && (!!pubMigration || /where user_id = v_user and is_active and published_at is not null/.test(BASELINE)),
+  pubMigration
+    ? 'supabase/archive is not the apply path — a migration there never runs'
+    : 'the migration is archived, so the BASELINE must carry the gated doors')
 check('⭐ book_service’s hardcoded trade fallback is replaced by a configured one',
   /coalesce\(v_service, v_fallback_service\)/.test(PUBSQL)
   && /from public\.service_templates[\s\S]{0,200}?published_at is not null[\s\S]{0,120}?order by sort_order/.test(PUBSQL),
@@ -328,11 +340,25 @@ check('…falling back to a neutral noun only when the catalogue offers nothing'
   /coalesce\(v_fallback_service, ''Service''\)|coalesce\(v_fallback_service, 'Service'\)/.test(PUBSQL))
 check('…and it PROVES the trade word is gone before committing',
   /position\('Lawn Mowing' in v_src\) > 0 then[\s\S]{0,120}?raise exception/.test(PUBSQL))
-// The baseline still carries the OLD body — that is history, and correct. What
-// must be true is that the migration replacing it exists and is verified above.
-check('the defect really was in the shipped baseline (this is not a fix for nothing)',
-  /coalesce\(v_service,'Lawn Mowing'\)/.test(BASELINE),
-  'if this stops matching, the baseline has converged and this assertion should be retired deliberately')
+// ⭐⭐ RETIRED DELIBERATELY, as the original note instructed. This read the
+// baseline for the DEFECT — `coalesce(v_service,'Lawn Mowing')` — to prove the
+// fix was not written for a problem nobody had. Production has now run the
+// migration and the baseline was regenerated FROM production, so the hardcoded
+// trade is gone and the old assertion could only fail. The two dishonest ways to
+// get it green would be reverting the baseline or deleting the question.
+//
+// The question survives, asked of the artefact that keeps history: the archived
+// ledger records the transform refusing to commit unless the trade word was
+// gone, which is only meaningful if it was there. The other half asserts the
+// converged state — the trade word is now absent from what actually ships.
+check('⭐ the defect was real: the archived ledger records removing a hardcoded trade',
+  /position\('Lawn Mowing' in v_src\)/.test(PUBSQL)
+  && /'coalesce\(v_service,''Lawn Mowing''\)'/.test(PUBSQL),
+  'the archived migration is the permanent record that one tenant’s trade was stamped on every tenant’s quote')
+check('…and the shipped baseline no longer stamps a trade on anyone',
+  !/coalesce\(v_service,'Lawn Mowing'\)/.test(BASELINE)
+  && /coalesce\(v_service, v_fallback_service\)/.test(BASELINE),
+  'the converged state the retired check was waiting for: configuration, not a hardcoded word')
 
 console.log('\n── Summary ────────────────────────────────────────────────────')
 console.log(failures === 0

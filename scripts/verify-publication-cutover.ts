@@ -54,8 +54,16 @@ async function main() {
   console.log('\n═══ Building the schema FROM ZERO, in memory ═══')
   const files = existsSync(MIGRATIONS) ? readdirSync(MIGRATIONS).filter(f => f.endsWith('.sql')).sort() : []
   check('the apply path carries migrations', files.length > 0)
-  check('⭐ the publication migration is IN the apply order, not beside it',
-    files.some(f => f.includes('service_publication')),
+  // ⭐⭐ A migration has two lives: its own file while in flight, then the
+  // generated baseline once production has run it and the file is archived.
+  // This asked for the FILE, so it went red on the day the migration succeeded.
+  // What it actually needs is that the apply path — whatever shape it is in —
+  // carries the publication boundary. Everything below then proves the resulting
+  // database behaves correctly, which is the real subject anyway.
+  const applySrc = files.map(f => readFileSync(join(MIGRATIONS, f), 'utf8')).join('\n')
+  check('⭐ the apply path carries the publication boundary (own file in flight, baseline after)',
+    files.some(f => f.includes('service_publication'))
+    || /where user_id = v_user and is_active and published_at is not null/.test(applySrc),
     `apply order: ${files.join(', ')}`)
 
   let applied = 0

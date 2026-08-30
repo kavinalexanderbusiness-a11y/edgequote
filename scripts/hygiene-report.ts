@@ -132,9 +132,10 @@ async function main() {
 
   // ── Services ───────────────────────────────────────────────────────────────
   head('SERVICE CATALOGUE — PUBLICATION INVENTORY')
-  // ⚠️ `published_at` may not exist yet: migration 20260830130000 is deliberately
-  // unapplied until S106 owns the cutover. Probe for it rather than assume, so
-  // this report works on BOTH sides of that apply and says which side it is on.
+  // ⚠️ `published_at` may not exist on whatever database this runs against:
+  // migration 20260830130000 IS applied to production, but a fresh, older or
+  // second-tenant environment can predate it. Probe rather than assume, so this
+  // report works on BOTH sides of that apply and says which side it is on.
   const probe = await sb.from('service_templates').select('published_at').limit(1)
   const HAS_PUBLISHED_AT = !(probe.error && /published_at/.test(probe.error.message))
   const cols = 'id, user_id, name, category, default_rate, pricing_display_type, is_active, sort_order'
