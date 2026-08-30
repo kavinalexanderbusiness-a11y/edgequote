@@ -38,7 +38,7 @@ const STATUS  = 'src/lib/quoteStatus.ts'
 const BUILDER = 'src/components/quotes/QuoteBuilder.tsx'
 const JOBFORM = 'src/components/schedule/JobForm.tsx'
 const SCHED   = 'src/app/dashboard/schedule/page.tsx'
-const MIGRATION = 'supabase/migrations/29999999000000_no_charge_v1_temp_reversion_required.sql'
+const MIGRATION = 'supabase/migrations/20260830120000_no_charge_v1.sql'
 
 const sh = (cmd) => execSync(cmd, { encoding: 'utf8' }).trim()
 

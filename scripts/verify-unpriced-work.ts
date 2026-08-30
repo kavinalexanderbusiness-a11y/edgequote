@@ -544,10 +544,20 @@ check('it keeps quote_apply_choice\'s signature identical (no overload)',
 // was already in production as a different body), so the guard refuses to let a
 // year-2999 placeholder quietly become permanent — and refuses to let anyone
 // invent a real-looking one here either.
-check('its version is the deliberate 2999 placeholder, not a real timestamp',
-  /^29999999000000_/.test(noChargeFile ?? ''), noChargeFile)
-check('its filename says a re-version is required',
-  /temp_reversion_required/.test(noChargeFile ?? ''), noChargeFile)
+// ⭐ LANDED (S106, 2026-08-30). The tripwire above did exactly its job: it refused
+// to let the year-2999 placeholder quietly become permanent, and refused to let
+// anyone invent a real-looking version early. At landing the rule INVERTS rather
+// than disappears — the placeholder must now be GONE, and the version must be a
+// real 14-digit timestamp taken from the LIVE ledger at apply time
+// (20260830120000, verified free immediately before applying) that sorts after
+// the baseline so a from-zero rebuild replays it in the right order.
+check('the 2999 placeholder is gone — re-versioned at landing',
+  !/^29999999000000_/.test(noChargeFile ?? '') && !/temp_reversion_required/.test(noChargeFile ?? ''),
+  noChargeFile)
+check('…and its version is a real timestamp sorting after the baseline',
+  /^\d{14}_/.test(noChargeFile ?? '') &&
+  (noChargeFile ?? '').slice(0, 14) > (migFiles.find(f => /_baseline\.sql$/.test(f)) ?? '').slice(0, 14),
+  `${noChargeFile} vs baseline ${migFiles.find(f => /_baseline\.sql$/.test(f))}`)
 check('the file itself tells S106 to re-version from the live ledger',
   /S106 RE-VERSIONS THIS AT LANDING, from the LIVE LEDGER AT APPLY TIME/.test(migration))
 check('it warns that the app must not be deployed before it is applied',
