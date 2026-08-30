@@ -33,7 +33,7 @@ import { sortedOptions } from '@/lib/quoteOptions'
 // "$5,500 + $575 = $6,075" is one calculation with two audiences, not two.
 import { authorizedValue } from '@/lib/changeOrders'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
-import { isAcceptedOrBeyond } from '@/lib/quoteAcceptance'
+import { isAcceptedOrBeyond, type AcceptedDocument } from '@/lib/quoteAcceptance'
 import { formatCurrency, parseLocalDate } from '@/lib/utils'
 // THE request engine (lib/portalRequests) — the same module the owner's request
 // card reads. The kinds, the media contract and the "a request is an ask, not an
@@ -64,7 +64,27 @@ export interface PortalQuoteOption { id: string; name: string; description: stri
 // derived from the ledger by lib/payments/depositGate, never stored anywhere.
 // `preferred_*` is the customer's own scheduling REQUEST — a preference, never
 // an appointment — echoed back so a reload keeps what they told us.
-export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null; options?: PortalQuoteOption[] | null; selected_option_id?: string | null; accepted_price?: number | null; deposit_type?: string | null; deposit_value?: number | null; preferred_date?: string | null; preferred_date_2?: string | null; preferred_timing?: string | null; preferred_note?: string | null }
+export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null; options?: PortalQuoteOption[] | null; selected_option_id?: string | null; accepted_price?: number | null; deposit_type?: string | null; deposit_value?: number | null; preferred_date?: string | null; preferred_date_2?: string | null; preferred_timing?: string | null; preferred_note?: string | null; acceptance?: PortalQuoteAcceptance | null }
+
+/**
+ * The acceptance-ledger projection get_portal_data attaches to a quote
+ * (Session 112 · accepted-document-truth): what was accepted, when, the
+ * immutable `document` snapshot it was accepted AS, and whether the live quote
+ * has drifted from it (`needs_reapproval` — derived by fingerprint in the
+ * database at read time, never stored). Optional end to end: a payload from
+ * before the projection shipped simply has none, and every consumer degrades
+ * to the pre-ledger behaviour.
+ */
+export interface PortalQuoteAcceptance {
+  accepted_at: string
+  kind: 'customer' | 'owner_on_behalf' | 'legacy_unrecorded'
+  accepted_amount: number | string | null
+  selected_option_id: string | null
+  document: AcceptedDocument
+  terms_acknowledged: boolean
+  terms_text: string | null
+  needs_reapproval: boolean
+}
 // `property_id` null is the HONEST answer for an invoice spanning several properties —
 // never infer one, or a combined invoice prints one address as if it were the whole bill.
 export interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; property_id?: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null; amount_paid?: number | null; deposit_amount?: number | null; deposit_requested_at?: string | null }
@@ -659,6 +679,16 @@ export function buildVisitChanges(
 // is what removes the Accept button (canAccept tests 'sent') with no second
 // expiry check anywhere in the render path to forget or contradict.
 export interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; expiredOn?: string; validUntil?: string | null; dueDate?: string | null; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>
+  /**
+   * ⭐ The ACCEPTED VERSION of a quote (Session 112 · accepted-document-truth) —
+   * present whenever an acceptance record exists in the payload. Its blob is
+   * rendered from the immutable ledger snapshot, never the live row. On an
+   * accepted quote the ROW's own download already IS this document; the field
+   * still matters there (the date line), and on a re-sent revision it is the
+   * separate, labelled artifact beside the update being offered.
+   * `needsReapproval` is the database's fingerprint verdict.
+   */
+  acceptedVersion?: { at: string; amount: number | null; needsReapproval: boolean; filename: string; getBlob: () => Promise<Blob> }
   /** Additive breakdown — these SUM to `amount`. The scope being approved. */
   lines?: { label: string; amount: number }[]
   /**
@@ -726,6 +756,9 @@ export interface DocItem { id: string; rawId: string; kind: DocKind; number: str
 export interface DocBlobRenderers {
   quote: (q: PortalQuote) => Promise<Blob>
   invoice: (i: PortalInvoice) => Promise<Blob>
+  /** The ACCEPTED VERSION — rendered from the acceptance snapshot, never the
+   *  live row (lib/acceptedDocument feeds the same PDF pipeline). */
+  acceptedQuote: (q: PortalQuote, a: PortalQuoteAcceptance) => Promise<Blob>
 }
 
 export function buildDocItems(opts: {
@@ -828,6 +861,15 @@ export function buildDocItems(opts: {
     const acceptedFigure = isAcceptedOrBeyond(qq.status) ? (Number(qq.accepted_price) || null) : null
     const priceMovedSinceAccepted =
       acceptedFigure != null && Math.abs(acceptedFigure - (Number(qq.total) || 0)) > 0.005
+    // ── The acceptance record, when the payload carries it (Session 112) ────
+    // `needs_reapproval` is the DATABASE's fingerprint verdict — it catches a
+    // changed scope, address, deposit rule or terms, not only a moved price.
+    // The S121 price-only comparison stays as the degraded answer for payloads
+    // from before the projection shipped.
+    const acc = qq.acceptance ?? null
+    const driftedSinceAccepted = acc
+      ? acc.needs_reapproval && isAcceptedOrBeyond(qq.status)
+      : priceMovedSinceAccepted
     const expired = display === 'expired'
     // ── The scheduling-deposit gate ──────────────────────────────────────────
     // THE engine's answer (lib/payments/depositGate — the same call the charge
@@ -873,14 +915,35 @@ export function buildDocItems(opts: {
       // number beside new work. The customer is told a revision is coming; they
       // are never shown a price they have not agreed to as though they had.
       amountNote: [
-        priceMovedSinceAccepted
+        driftedSinceAccepted
           ? 'This is the price you accepted — we’ve made changes since and will send you an updated quote to look over.'
           : null,
         gstPct > 0 ? `+ GST (${gstPct}%) — added on your invoice` : null,
       ].filter(Boolean).join(' · ') || undefined,
       balance: 0,
       payAmount: 0, payIsDeposit: false,
-      filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(qq), lines, planOptions,
+      // ── WHICH DOCUMENT THE ROW HANDS OVER (Session 112) ──────────────────
+      // Once accepted, the customer's download IS the accepted snapshot —
+      // rendered from quote_acceptances.document, never the live row an owner
+      // may since have edited. While the quote is instead OPEN for approval
+      // (sent — a first offer, or a revision after changes), the download is
+      // the live document being offered, which is the thing they are deciding
+      // on; their previously-accepted version, when one exists, rides beside
+      // it as `acceptedVersion` so the two are separate, labelled artifacts.
+      // No acceptance in the payload = the pre-ledger behaviour, unchanged.
+      filename: acc && isAcceptedOrBeyond(qq.status)
+        ? `${qq.quote_number}-accepted.pdf` : `${qq.quote_number}.pdf`,
+      getBlob: acc && isAcceptedOrBeyond(qq.status)
+        ? () => renderers.acceptedQuote(qq, acc)
+        : () => renderers.quote(qq),
+      acceptedVersion: acc ? {
+        at: acc.accepted_at,
+        amount: acc.accepted_amount == null ? null : Number(acc.accepted_amount) || null,
+        needsReapproval: driftedSinceAccepted,
+        filename: `${qq.quote_number}-accepted.pdf`,
+        getBlob: () => renderers.acceptedQuote(qq, acc),
+      } : undefined,
+      lines, planOptions,
       options, selectedOptionId: qq.selected_option_id ?? null,
       schedulingDeposit, preference, canEditPreference: qq.status === 'accepted',
       // Identity, not decoration: the address tells a landlord which of their six

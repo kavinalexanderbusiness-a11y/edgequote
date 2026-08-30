@@ -34,6 +34,7 @@ const TODAY = '2026-07-18'
 const renderers: DocBlobRenderers = {
   quote: async () => new Blob(['q']),
   invoice: async () => new Blob(['i']),
+  acceptedQuote: async () => new Blob(['a']),
 }
 
 const PROP_A: PortalProperty = { id: 'prop-a', address: '12 Main St SW', city: 'Calgary', province: 'AB', postal_code: null, lawn_sqft: 4200, fence_length: 120, neighborhood: 'Aspen', is_primary: true }

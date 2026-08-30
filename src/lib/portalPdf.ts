@@ -169,6 +169,40 @@ export async function renderPortalQuoteBlob(q: PortalPdfQuote, customerName: str
     : undefined
   return renderQuoteBlob(portalQuoteToQuote(q, customerName), portalBusinessToSettings(b), services, options)
 }
+
+// ── The ACCEPTED VERSION, customer side (Session 112 · accepted-document-truth) ─
+// Fed from the acceptance projection get_portal_data attaches to the quote —
+// the immutable `document` snapshot and the exact terms text agreed — through
+// lib/acceptedDocument into the SAME renderQuoteBlob pipeline, with the
+// accepted stamp set. ⛔ Not one material figure here comes from the live quote
+// row: `q` supplies only presentation facts (id, created_at, issued_date) the
+// snapshot deliberately does not carry.
+export interface PortalPdfAcceptance {
+  accepted_at: string
+  accepted_amount?: number | string | null
+  selected_option_id: string | null
+  document: import('@/lib/quoteAcceptance').AcceptedDocument
+  terms_text: string | null
+}
+
+export async function renderPortalAcceptedQuoteBlob(
+  q: Pick<PortalPdfQuote, 'created_at' | 'issued_date'> & { id?: string },
+  acc: PortalPdfAcceptance,
+  b: PortalPdfBusiness | null,
+): Promise<Blob> {
+  const [{ renderQuoteBlob }, { acceptedRenderInput }] = await Promise.all([
+    import('@/components/quotes/QuotePDF'),
+    import('@/lib/acceptedDocument'),
+  ])
+  const input = acceptedRenderInput({
+    document: acc.document,
+    acceptedAt: acc.accepted_at,
+    selectedOptionId: acc.selected_option_id,
+    termsText: acc.terms_text,
+    presentation: { quoteId: q.id ?? '', createdAt: q.created_at, issuedDate: q.issued_date },
+  })
+  return renderQuoteBlob(input.quote, portalBusinessToSettings(b), input.services, input.options, input.accepted)
+}
 // A payment row as the portal sees it — enough for the receipt document.
 export interface PortalPdfPayment {
   id: string; amount: number; provider: string; method?: string | null

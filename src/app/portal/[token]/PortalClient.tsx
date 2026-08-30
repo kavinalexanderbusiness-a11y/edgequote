@@ -11,7 +11,7 @@ import { displayQuoteStatus } from '@/lib/quoteStatus'
 // success banner name the exact ask the charge route will make, from one engine.
 import { requiredDeposit } from '@/lib/payments/depositGate'
 import type { QuoteStatus } from '@/types'
-import { renderPortalInvoiceBlob, renderPortalQuoteBlob } from '@/lib/portalPdf'
+import { renderPortalInvoiceBlob, renderPortalQuoteBlob, renderPortalAcceptedQuoteBlob } from '@/lib/portalPdf'
 import { REQUEST_PHOTO_BUCKET, requestPhotoExt, requestPhotoPath } from '@/lib/portalRequests'
 import {
   buildPortalView, contactGap, normalizePortal, parsePortalDeepLink, primaryPortalAction,
@@ -704,6 +704,9 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     return buildPortalView(data, localTodayISO(), {
       quote: (qq) => renderPortalQuoteBlob(qq, data.customer.name, data.business),
       invoice: (ii) => renderPortalInvoiceBlob(ii, data.customer.name, fallbackAddress, data.business),
+      // The accepted version: rendered from the ledger snapshot in the payload,
+      // never the live row — see lib/portalPdf and lib/acceptedDocument.
+      acceptedQuote: (qq, a) => renderPortalAcceptedQuoteBlob(qq, a, data.business),
     }, markInvoiceViewed)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data])

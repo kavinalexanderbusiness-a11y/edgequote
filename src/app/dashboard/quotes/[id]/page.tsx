@@ -78,6 +78,7 @@ export default function QuoteDetailPage() {
   const [editing, setEditing] = useState(false)
   const [loading, setLoading] = useState(true)
   const [pdfLoading, setPdfLoading] = useState(false)
+  const [acceptedPdfLoading, setAcceptedPdfLoading] = useState(false)
   const [scheduling, setScheduling] = useState(false)
   const [converting, setConverting] = useState(false)
   const [duplicating, setDuplicating] = useState(false)
@@ -546,6 +547,54 @@ export default function QuoteDetailPage() {
       return false
     } finally {
       setPdfLoading(false)
+    }
+  }
+
+  // ── The accepted version (Session 112 · accepted-document-truth) ────────────
+  // Renders the PDF from quote_acceptances.document — the immutable snapshot of
+  // what was actually accepted — through the SAME renderQuoteBlob pipeline, with
+  // the accepted band naming it. Never from the live row: that is what
+  // handleOpenPdf above renders, and after an edit the two are DIFFERENT
+  // documents that must never wear each other's label.
+  async function handleOpenAcceptedPdf() {
+    if (!quote || !acceptance?.accepted || !acceptance.document) return
+    setAcceptedPdfLoading(true)
+    try {
+      const [{ renderQuoteBlob }, { acceptedRenderInput }] = await Promise.all([
+        import('@/components/quotes/QuotePDF'),
+        import('@/lib/acceptedDocument'),
+      ])
+      // The EXACT terms text agreed lives on the acceptance row (RLS grants the
+      // owner SELECT on their own evidence). quote_acceptance_state doesn't
+      // project it, so read it here — from the LEDGER, never from live settings.
+      // A failed read renders NO terms rather than borrowing today's text.
+      const { data: termsRow } = await supabase
+        .from('quote_acceptances')
+        .select('terms_text, terms_acknowledged')
+        .eq('quote_id', quote.id)
+        .order('seq', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      const input = acceptedRenderInput({
+        document: acceptance.document,
+        acceptedAt: acceptance.accepted_at ?? quote.created_at,
+        selectedOptionId: acceptance.selected_option_id,
+        termsText: (termsRow as { terms_text: string | null } | null)?.terms_text ?? null,
+        presentation: { quoteId: quote.id, createdAt: quote.created_at, issuedDate: quote.issued_date },
+      })
+      const blob = await renderQuoteBlob(input.quote, settings, input.services, input.options, input.accepted)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${quote.quote_number}-accepted.pdf`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 10000)
+    } catch {
+      toast.error('Could not generate the accepted-version PDF. Please try again.')
+    } finally {
+      setAcceptedPdfLoading(false)
     }
   }
 
@@ -1131,8 +1180,21 @@ export default function QuoteDetailPage() {
               <FileDown className="w-3.5 h-3.5" /> Download &amp; mark sent
             </Button>
           ) : (
-            <Button onClick={handleOpenPdf} variant="secondary" size="sm" loading={pdfLoading}>
-              <FileDown className="w-3.5 h-3.5" /> Open PDF
+            <Button onClick={handleOpenPdf} variant="secondary" size="sm" loading={pdfLoading}
+              title={acceptance?.accepted ? 'The quote as it stands NOW — after any edits since acceptance' : undefined}>
+              <FileDown className="w-3.5 h-3.5" /> {acceptance?.accepted ? 'Current PDF' : 'Open PDF'}
+            </Button>
+          )}
+          {/* ── The accepted version (Session 112 · accepted-document-truth) ──
+              Only once an acceptance record exists: the immutable document the
+              customer said yes to, rendered from the ledger snapshot. Sits
+              beside the current PDF so the two are visibly DIFFERENT artifacts
+              — the current one is relabelled "Current PDF" the moment this
+              appears, so neither can pass for the other. */}
+          {acceptance?.accepted && acceptance.document && (
+            <Button onClick={handleOpenAcceptedPdf} variant="secondary" size="sm" loading={acceptedPdfLoading}
+              title={`The exact document accepted${acceptance.accepted_at ? ' on ' + formatDate(acceptance.accepted_at) : ''} — later edits are not in it`}>
+              <FileDown className="w-3.5 h-3.5" /> Accepted version
             </Button>
           )}
           {/* The other direction of the estimate/quote link: a quote the owner

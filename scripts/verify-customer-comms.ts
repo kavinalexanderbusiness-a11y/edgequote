@@ -46,7 +46,7 @@ const ROOT = join(__dirname, '..')
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8')
 
 const business = { gst_percent: 0 } as unknown as PortalData['business']
-const renderers = { quote: async () => new Blob(), invoice: async () => new Blob() }
+const renderers = { quote: async () => new Blob(), invoice: async () => new Blob(), acceptedQuote: async () => new Blob() }
 const TODAY = '2026-08-10'
 
 function quote(over: Partial<PortalQuote>): PortalQuote {

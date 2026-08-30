@@ -56,6 +56,9 @@ const styles = StyleSheet.create({
   notesBox: { marginTop: 24, backgroundColor: COLORS.bgSoft, borderRadius: 6, padding: 14 },
   termsBox: { marginTop: 18 },
   termsText: { fontSize: 8, color: COLORS.muted, lineHeight: 1.5 },
+  acceptedBand: { backgroundColor: '#E9FBF4', borderWidth: 1, borderColor: COLORS.green, borderRadius: 6, padding: 12, marginBottom: 24 },
+  acceptedBandTitle: { fontSize: 9, color: '#0B7A5C', fontFamily: 'Helvetica-Bold', letterSpacing: 0.6, marginBottom: 3 },
+  acceptedBandText: { fontSize: 8, color: '#0B7A5C', lineHeight: 1.5 },
 
   footer: { position: 'absolute', bottom: 28, left: 44, right: 44, borderTopWidth: 1, borderTopColor: COLORS.line, paddingTop: 10, flexDirection: 'row', justifyContent: 'space-between' },
   footerText: { fontSize: 8, color: COLORS.faint },
@@ -101,9 +104,23 @@ interface QuotePDFProps {
   // quote.selected_option_id; before they choose it is null and the document
   // leads with the recommended one.
   options?: QuoteOption[]
+  // ── The accepted-version stamp (Session 112 · accepted-document-truth) ────
+  // Present ONLY when this render is fed from quote_acceptances.document (via
+  // lib/acceptedDocument) — its presence is what makes the paper say so. It
+  // changes three things and nothing else:
+  //   · a band under the header naming this the ACCEPTED VERSION, dated from
+  //     the ledger's accepted_at;
+  //   · Terms print `accepted.termsText` — the EXACT text stored with the
+  //     acceptance — never the live settings text, and never a fallback to it
+  //     (null = nothing was agreed = no terms box);
+  //   · the crew/hours estimate labels are suppressed ('—'): the snapshot
+  //     never held them, and an accepted document must not gain a live guess.
+  // ⛔ A render of the CURRENT quote must never pass this. The guard pins both
+  // directions.
+  accepted?: { at: string; termsText: string | null }
 }
 
-export function QuoteDocument({ quote, settings, services, options }: QuotePDFProps) {
+export function QuoteDocument({ quote, settings, services, options, accepted }: QuotePDFProps) {
   // ⭐ THE rule this document must never break: a page that shows three prices
   // must not print a number equal to their sum, and must not let the reader
   // construct one. So when options exist the line-item table is REPLACED (not
@@ -207,6 +224,22 @@ export function QuoteDocument({ quote, settings, services, options }: QuotePDFPr
           </View>
         </View>
 
+        {/* ── The accepted-version band ─────────────────────────────────────
+            Renders ONLY on a snapshot-fed document. Names what this paper IS —
+            the version that was accepted, on the ledger's date — and says
+            plainly that later edits are not in it. A current/draft render never
+            carries this band, so the two documents can never be mistaken for
+            one another. */}
+        {accepted ? (
+          <View style={styles.acceptedBand}>
+            <Text style={styles.acceptedBandTitle}>ACCEPTED VERSION — {dateStr(accepted.at)}</Text>
+            <Text style={styles.acceptedBandText}>
+              This document is the version accepted on {dateStr(accepted.at)}. Any changes made to the
+              quote after that date are not reflected here and would need a fresh approval.
+            </Text>
+          </View>
+        ) : null}
+
         {/* Bill to + service */}
         <View style={styles.twoCol}>
           <View style={styles.col}>
@@ -302,7 +335,9 @@ export function QuoteDocument({ quote, settings, services, options }: QuotePDFPr
             // displayed rows still sum to the grand total.
             lines.map(s => {
               const t = serviceLineTotals(s)
-              const qtyLabel = Number(s.quantity) > 1 ? `${s.quantity} ${s.unit && s.unit !== 'each' ? s.unit + ' ' : ''}× ${money(s.unit_price)}` : s.sort_order === 0 ? `${quote.crew_size} crew · ${quote.hours} hrs` : '—'
+              // On an accepted render the crew/hours estimate is suppressed: the
+              // snapshot never held it, and this paper must not gain a live guess.
+              const qtyLabel = Number(s.quantity) > 1 ? `${s.quantity} ${s.unit && s.unit !== 'each' ? s.unit + ' ' : ''}× ${money(s.unit_price)}` : s.sort_order === 0 && !accepted ? `${quote.crew_size} crew · ${quote.hours} hrs` : '—'
               const amount = t.net + (s.sort_order === 0 ? rolledTravel : 0)
               return (
                 <View key={s.id} style={styles.tableRow} wrap={false}>
@@ -324,7 +359,8 @@ export function QuoteDocument({ quote, settings, services, options }: QuotePDFPr
                 <Text style={styles.td}>{quote.service_type}</Text>
                 <Text style={styles.muted}>First visit{rolledTravel > 0 ? ' · includes travel' : ''}</Text>
               </View>
-              <Text style={[styles.td, styles.cellQty]}>{quote.crew_size} crew · {quote.hours} hrs</Text>
+              {/* Accepted render: no live crew/hours estimate — see qtyLabel above. */}
+              <Text style={[styles.td, styles.cellQty]}>{accepted ? '—' : `${quote.crew_size} crew · ${quote.hours} hrs`}</Text>
               <Text style={[styles.td, styles.cellAmt]}>{money(initialPrice + rolledTravel)}</Text>
             </View>
           )}
@@ -444,12 +480,20 @@ export function QuoteDocument({ quote, settings, services, options }: QuotePDFPr
         ) : null}
 
         {/* Terms */}
-        {settings?.terms_text ? (
-          <View style={styles.termsBox}>
-            <Text style={styles.sectionTitle}>Terms &amp; Conditions</Text>
-            <Text style={styles.termsText}>{settings.terms_text}</Text>
-          </View>
-        ) : null}
+        {/* ⭐ On an accepted-version render, terms come from the acceptance ROW —
+            the exact text stored when the customer agreed — and NEVER fall back
+            to live settings: business_settings.terms_text is unversioned, so an
+            edit tomorrow must not rewrite what was agreed. Null accepted terms =
+            nothing was agreed = no box. A current render keeps reading settings. */}
+        {(() => {
+          const termsText = accepted ? accepted.termsText : settings?.terms_text
+          return termsText ? (
+            <View style={styles.termsBox}>
+              <Text style={styles.sectionTitle}>Terms &amp; Conditions</Text>
+              <Text style={styles.termsText}>{termsText}</Text>
+            </View>
+          ) : null
+        })()}
 
         {/* Footer */}
         <View style={styles.footer} fixed>
@@ -473,6 +517,7 @@ export function QuoteDocument({ quote, settings, services, options }: QuotePDFPr
 // heavy @react-pdf library only loads when the user actually opens a PDF.
 export async function renderQuoteBlob(
   quote: Quote, settings: BusinessSettings | null, services?: QuoteService[], options?: QuoteOption[],
+  accepted?: { at: string; termsText: string | null },
 ): Promise<Blob> {
-  return pdf(<QuoteDocument quote={quote} settings={settings} services={services} options={options} />).toBlob()
+  return pdf(<QuoteDocument quote={quote} settings={settings} services={services} options={options} accepted={accepted} />).toBlob()
 }

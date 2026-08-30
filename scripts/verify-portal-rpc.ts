@@ -67,7 +67,7 @@ type UncoveredStatus = Exclude<InvoiceStatus, CoveredStatus | 'draft'>
 const _everyStatusIsAccountedFor: UncoveredStatus[] = []
 void _everyStatusIsAccountedFor
 
-const renderers: DocBlobRenderers = { quote: async () => new Blob(['q']), invoice: async () => new Blob(['i']) }
+const renderers: DocBlobRenderers = { quote: async () => new Blob(['q']), invoice: async () => new Blob(['i']), acceptedQuote: async () => new Blob(['a']) }
 
 // ── The invariant, proven WITHOUT depending on today's book ──────────────────
 //

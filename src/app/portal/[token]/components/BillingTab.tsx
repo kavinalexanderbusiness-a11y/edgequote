@@ -336,6 +336,14 @@ function DocRow({ d, actions, termsText, focus }: { d: DocItem; actions: PortalA
                 answer. Kind, number and date beneath it are short and fixed. */}
             <p className="text-sm font-semibold text-ink tracking-tight">{d.title}</p>
             <p className="text-xs text-ink-muted">{m.label} · {d.number} · {formatDate(d.date)}</p>
+            {/* An UPDATED quote must announce itself as one, at the top — not
+                leave the customer to notice that a document they already
+                accepted is somehow asking for approval again. */}
+            {d.kind === 'quote' && d.status === 'sent' && d.acceptedVersion && (
+              <p className="text-xs mt-0.5 text-amber-400 font-medium">
+                Updated quote — replaces the version you accepted {formatDate(d.acceptedVersion.at)} once you approve it
+              </p>
+            )}
             {/* When it's due — the row showed only the ISSUE date, so "am I late?" was
                 unanswerable from the one screen built to answer it. Now a soon-due
                 bill also says how soon (and raises its voice for today/tomorrow), so
@@ -730,6 +738,38 @@ function DocRow({ d, actions, termsText, focus }: { d: DocItem; actions: PortalA
         <MessageSquare className="w-3.5 h-3.5" /> Question about this {m.label.toLowerCase()}?
       </button>
       <DocActions filename={d.filename} getBlob={d.getBlob} />
+      {/* ── The accepted version, named (Session 112 · accepted-document-truth) ──
+          Three states, three different sentences — never one label doing the
+          work of two documents:
+          · ACCEPTED and unchanged: the row's own download IS the accepted
+            version, and this line says so, dated from the ledger.
+          · ACCEPTED but changed since (needsReapproval): same download — the
+            snapshot, which is what still stands for the customer — and the
+            row's amber note above already says an update is coming.
+          · RE-SENT for approval (canAccept + a prior acceptance): the row now
+            offers the UPDATED quote; the previously-accepted version becomes a
+            separate, labelled artifact here with its own download, so approving
+            the new one is a comparison, not a leap of faith. */}
+      {d.acceptedVersion && !canAccept && (
+        <p className="text-[11px] text-ink-faint mt-2 flex items-center gap-1">
+          <Check className="w-3 h-3 text-emerald-400 shrink-0" aria-hidden />
+          Accepted {formatDate(d.acceptedVersion.at)} — your download above is that accepted version.
+        </p>
+      )}
+      {d.acceptedVersion && canAccept && (
+        <div className="mt-3 rounded-lg border border-border bg-bg-tertiary p-3">
+          <p className="text-xs font-semibold text-ink flex items-center gap-1.5">
+            <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" aria-hidden />
+            Your previously accepted version
+          </p>
+          <p className="text-[11px] text-ink-muted mt-0.5 tabular-nums">
+            Accepted {formatDate(d.acceptedVersion.at)}
+            {d.acceptedVersion.amount != null ? ` · ${formatCurrency(d.acceptedVersion.amount)}` : ''} —
+            unchanged by the update above, which needs your approval before anything replaces it.
+          </p>
+          <DocActions filename={d.acceptedVersion.filename} getBlob={d.acceptedVersion.getBlob} />
+        </div>
+      )}
     </div>
   )
 }
