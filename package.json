@@ -149,6 +149,7 @@
     "verify:change-orders": "tsx scripts/verify-change-orders.ts",
     "verify:deposit-scheduling": "tsx scripts/verify-deposit-scheduling.ts",
     "verify:payment-timing-copy": "tsx scripts/verify-payment-timing-copy.ts",
+    "verify:acceptance-contradiction": "tsx scripts/verify-acceptance-contradiction.ts",
     "verify:day-fit": "tsx scripts/verify-day-fit.ts",
     "verify:day-plan": "tsx scripts/verify-day-plan.ts",
     "verify:day-sequence": "tsx scripts/verify-day-sequence.ts",

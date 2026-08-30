@@ -32,8 +32,9 @@
 //
 // Pure: no network, no DB, no fixtures, no writes anywhere.
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import {
   paymentTiming, quoteTimingLine, approvalTimingLine, approvedTimingLine,
   depositCreditLine, pdfTimingLine,
@@ -44,7 +45,11 @@ import { requiredDeposit, type GateQuote } from '../src/lib/payments/depositGate
 // feeds, exercised over a corpus of real conflicts AND a corpus of harmless
 // wording: this gate BLOCKS a send, so a false positive stops an owner doing
 // business over words that were fine.
-import { detectTermsTimingConflict, termsConflictExplanation } from '../src/lib/payments/termsTimingConflict'
+import {
+  detectTermsTimingConflict, termsConflictExplanation, classifyTermsPaymentClaim,
+  termsClaimConflicts, termsFingerprint, TERMS_CLASSIFIER_VERSION,
+} from '../src/lib/payments/termsTimingConflict'
+import { md5 } from '../src/lib/md5'
 import { sendBlockedReason, sendBlockedLabel } from '../src/lib/quoteStatus'
 
 let failures = 0
@@ -364,10 +369,22 @@ console.log('\n■ 5. terms_text — detected, blocked, NEVER obeyed and NEVER r
   }
   // The detector reads them, and that is the ONLY place that may.
   const det = read('src/lib/payments/termsTimingConflict.ts')
-  check('the detector never rewrites, normalises or returns edited terms',
-    !/\.replace\(\s*\/(?!\\r)/.test(stripComments(det).replace(/termsSentences[\s\S]*?\n}/, ''))
-    && /sentence: s\b/.test(det),
-    'the offending sentence must be returned VERBATIM')
+  // ⚠️ RE-POINTED (S122 continuation). This used to grep for `.replace(` outside
+  // a hand-excised `termsSentences` body — a structural pin on the file's LAYOUT,
+  // which the classifier refactor invalidated while the invariant it cared about
+  // held perfectly. The invariant is BEHAVIOURAL: whatever sentence comes back
+  // must be a verbatim substring of the terms that went in. Proven below over
+  // the whole conflict corpus, and stated once here over prose designed to be
+  // mangled by any normaliser (case, spacing, punctuation, unicode quotes).
+  {
+    const gnarly = 'PAYMENT   in Full is due  Upon Completion — “no exceptions”.'
+    const c = detectTermsTimingConflict(PCT_ACCEPTED, gnarly)
+    check('the detector returns the offending sentence VERBATIM, never normalised',
+      !!c && gnarly.includes(c.sentence),
+      c ? `returned "${c.sentence}"` : 'no conflict detected on an unambiguous contradiction')
+  }
+  check('…and exposes no writer that could edit the owner\'s terms',
+    !/export function \w*(rewrite|normalise|normalize|fix|correct|suggest)\w*/i.test(det))
   check('the detector derives the configuration from paymentTiming, not its own rules',
     /from '@\/lib\/payments\/paymentTiming'/.test(det) && /paymentTiming\(quote\)/.test(det))
 
@@ -503,6 +520,133 @@ console.log('\n■ 5. terms_text — detected, blocked, NEVER obeyed and NEVER r
   check('the explanation never proposes replacement wording',
     !/(change it to|use this|replace with|suggested wording|we.ve updated)/i.test(
       termsConflictExplanation({ claim: 'no_money_before_work', sentence: 'x', configured: 'deposit_before_scheduling' })))
+}
+
+console.log('\n■ 6. ONE classifier, a quote-independent claim, and a version')
+{
+  const det = read('src/lib/payments/termsTimingConflict.ts')
+  const code = stripComments(det)
+
+  // The claim describes THE TERMS. A state meaning "compatible" would be a
+  // category error: compatibility is a property of a (terms, quote) PAIR and
+  // would be wrong for the very next quote.
+  const union = /export type TermsPaymentClaim =([\s\S]*?)\n\n/.exec(code)?.[1] ?? ''
+  for (const st of ['no_claim', 'no_money_before_work', 'money_before_work', 'ambiguous', 'unclassified']) {
+    check(`claim state exists: ${st}`, union.includes(`'${st}'`), `union was: ${union.trim()}`)
+  }
+  check('no quote-relative state leaked into the claim vocabulary',
+    !/'(clean|compatible|ok|valid|fine)'/.test(union))
+
+  // Quote-independence, proven by BEHAVIOUR: the same terms classify identically
+  // no matter which quote is asked about — the property the stored column relies on.
+  const T = 'Payment due upon completion unless otherwise agreed.'
+  check('the classifier never consults a quote',
+    classifyTermsPaymentClaim(T) === classifyTermsPaymentClaim(T)
+    && classifyTermsPaymentClaim(T) === 'no_money_before_work')
+  check('classifier: an explicit deposit requirement', classifyTermsPaymentClaim('A 50% deposit is required before we schedule.') === 'money_before_work')
+  check('classifier: silence is no_claim', classifyTermsPaymentClaim('We accept cash, cheque and e-transfer.') === 'no_claim')
+  check('classifier: empty terms are no_claim', classifyTermsPaymentClaim('') === 'no_claim' && classifyTermsPaymentClaim(null) === 'no_claim')
+  check('classifier: BOTH directions asserted is ambiguous',
+    classifyTermsPaymentClaim('A 50% deposit is required before we book. No deposit is required for any job.') === 'ambiguous')
+  check('classifier: a hedge asserts nothing', classifyTermsPaymentClaim('A deposit may be required for larger projects.') === 'no_claim')
+  check('classifier: the balance sentence is not a claim about the total',
+    classifyTermsPaymentClaim('The remaining balance is due in full upon completion.') === 'no_claim')
+
+  // The detector is now a COMPARISON over the classifier — not a second search.
+  check('detectTermsTimingConflict derives from the classifier',
+    /classifyTermsPaymentClaim\(termsText\)/.test(code) && /termsClaimConflicts\(timing, claim\)/.test(code))
+  check('BOTH directions are enforced by the comparison',
+    termsClaimConflicts(paymentTiming(PCT_ACCEPTED), 'no_money_before_work')
+    && termsClaimConflicts(paymentTiming(NONE), 'money_before_work')
+    && !termsClaimConflicts(paymentTiming(PCT_ACCEPTED), 'money_before_work')
+    && !termsClaimConflicts(paymentTiming(NONE), 'no_money_before_work')
+    && !termsClaimConflicts(paymentTiming(PCT_ACCEPTED), 'no_claim')
+    && !termsClaimConflicts(paymentTiming(NONE), 'no_claim'))
+
+  // ── The fingerprint must equal the database's own function ────────────────
+  const sql = read('supabase/proposals/RUN-S122-terms-payment-claim.sql')
+  const baseline = read('supabase/migrations/' + (readdirSync(join(ROOT, 'supabase/migrations'))
+    .filter(f => f.endsWith('_baseline.sql')).sort().pop() as string))
+  const fpDef = /CREATE OR REPLACE FUNCTION public\.quote_terms_fingerprint[\s\S]*?\$function\$([\s\S]*?)\$function\$/.exec(baseline)?.[1] ?? ''
+  check('the DB fingerprint is md5 of the TRIMMED terms',
+    /md5\(/.test(fpDef) && /btrim\(coalesce\(b\.terms_text, ''\)\)/.test(fpDef), fpDef.trim().slice(0, 120))
+  check('…and the TS fingerprint computes the identical thing',
+    termsFingerprint('  Payment due upon completion.  ') === md5('Payment due upon completion.')
+    && termsFingerprint(null) === md5(''))
+  check('md5 agrees with node:crypto (empty, unicode, every block boundary)',
+    ['', 'a', 'abc', 'x'.repeat(55), 'x'.repeat(56), 'x'.repeat(57), 'x'.repeat(64),
+      'x'.repeat(119), 'x'.repeat(120), 'café ☕ — ünïcode “quotes”', T]
+      .every(s => md5(s) === createHash('md5').update(s, 'utf8').digest('hex')))
+
+  // ── The version is real and the DB expects the same one ───────────────────
+  check('a classifier version exists and is a positive integer',
+    Number.isInteger(TERMS_CLASSIFIER_VERSION) && TERMS_CLASSIFIER_VERSION >= 1)
+  const sqlVer = /coalesce\(v_claim_ver, 0\) <> (\d+)/.exec(sql)?.[1]
+  check('the DB gate expects EXACTLY the TS classifier version',
+    sqlVer !== undefined && Number(sqlVer) === TERMS_CLASSIFIER_VERSION,
+    `SQL expects ${sqlVer}, TS is ${TERMS_CLASSIFIER_VERSION}`)
+
+  // ── The settings save is atomic and never rewrites ────────────────────────
+  const settings = stripComments(read('src/app/dashboard/settings/page.tsx'))
+  check('Settings writes the classification in the SAME upsert as the terms',
+    /\.\.\.termsClaimPatch\(values\.terms_text\)/.test(settings)
+    && /\.upsert\(\{[\s\S]*?termsClaimPatch/.test(settings))
+  check('termsClaimPatch returns the classification ONLY — never terms_text',
+    !/terms_text\s*:/.test(/export function termsClaimPatch[\s\S]*?\n}/.exec(code)?.[0] ?? ''))
+
+  // ── The SQL gate ──────────────────────────────────────────────────────────
+  check('the gate lives in quote_record_acceptance — the one evidence seam',
+    /proname = 'quote_record_acceptance'/.test(sql))
+  check('the gate is an ANCHOR PATCH over the LIVE definition, not a restated body',
+    /pg_get_functiondef/.test(sql) && /expected exactly 1 — refusing to patch/.test(sql)
+    && !/CREATE OR REPLACE FUNCTION public\.quote_record_acceptance/.test(sql),
+    'restating the body would silently revert S121 or S114')
+  check('the gate compares the stored fingerprint against the LIVE one',
+    /v_claim_fp is distinct from v_live_fp/.test(sql) && /quote_terms_fingerprint\(v_q\.user_id\)/.test(sql))
+  check('the gate fails closed on unclassified and ambiguous',
+    /v_claim is null/.test(sql) && /v_claim = ''ambiguous''/.test(sql))
+  check('the gate enforces BOTH directions',
+    /v_requires_deposit and v_claim = ''no_money_before_work''/.test(sql)
+    && /not v_requires_deposit and v_claim = ''money_before_work''/.test(sql))
+  check('the gate reads no-charge safely (S114): a $0 quote requires no deposit',
+    /coalesce\(v_amount, 0\) > 0/.test(sql))
+  check('⛔ SQL contains NO regex payment interpretation',
+    !/~\*|regexp_matches\(v_terms|similar to/i.test(sql.replace(/regexp_matches\(v_src[^)]*\)/g, '')),
+    'a second rule set in SQL would drift from the classifier')
+  check('⛔ SQL never writes terms_text',
+    !/set\s+terms_text|update public\.business_settings\s+set[\s\S]{0,200}terms_text\s*=/i.test(sql))
+  check('the invalidation trigger exists and is SECONDARY to the fingerprint',
+    /business_settings_invalidate_terms_claim/.test(sql)
+    && /is distinct from md5\(btrim\(coalesce\(new\.terms_text/.test(sql))
+  check('unclassified is not storable (CHECK omits it)',
+    /check \(terms_payment_claim is null or terms_payment_claim in/.test(sql)
+    && !/'unclassified'\)/.test(sql.split('business_settings_terms_payment_claim_check')[1]?.slice(0, 300) ?? ''))
+  check('the candidate is OUTSIDE supabase/migrations (S106 picks the version)',
+    !existsSync(join(ROOT, 'supabase/migrations/RUN-S122-terms-payment-claim.sql')))
+
+  // ── S121 / S114 preserved ─────────────────────────────────────────────────
+  check('S121 preserved: owner_override_quote_status still records NO evidence',
+    !/owner_override_quote_status[\s\S]{0,400}quote_record_acceptance/.test(baseline))
+  check('S121 preserved: the gate does not touch the evidence-kind vocabulary',
+    !/owner_on_behalf|legacy_unrecorded/.test(sql))
+  check('S114 preserved: the send gate still runs the money door first',
+    /passesMoneyDoor\(quotePriceState\(q\)\)/.test(stripComments(read('src/lib/quoteStatus.ts'))))
+
+  // ── The backfill ──────────────────────────────────────────────────────────
+  const bf = stripComments(read('scripts/backfill-terms-claim.ts'))
+  check('the backfill uses the canonical TS classifier',
+    /classifyTermsPaymentClaim|termsClaimPatch/.test(bf) && !/~\*/.test(bf))
+  check('the backfill REPORTS before it writes, and report-only is the default',
+    /REPORT ONLY/.test(bf) && /--apply/.test(bf))
+  check('the backfill reports tenant, fingerprint, claim and version',
+    /tenant \$\{r\.user_id\}/.test(bf) && /fingerprint/.test(bf)
+    && /claim {8}:/.test(bf) && /version {6}:/.test(bf))
+  // ⚠️ Asserts the WRITE, not the presence of the word: the backfill must READ
+  // terms_text (it classifies it) and declares it in its row type. The invariant
+  // is that the update payload is the classification and nothing else.
+  check('⛔ the backfill never writes terms_text',
+    /\.update\(patch\)/.test(bf) && /const patch = termsClaimPatch\(r\.terms_text\)/.test(bf)
+    && !/\.update\(\{[^}]*terms_text/.test(bf) && !/\.upsert\(/.test(bf))
 }
 
 console.log(failures > 0 ? `\n✗ ${failures} FAILURE(S)` : '\n✓ all payment-timing-copy checks passed')
