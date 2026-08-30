@@ -124,15 +124,48 @@ unconstrained: an owner who typed *"Payment due upon completion"* into it years
 ago has that sentence printed on every quote, including a 50%-deposit quote,
 where it flatly contradicts the configuration.
 
-- **Done here:** the canonical timing line is printed **above** the Terms block
-  on the Quote PDF, so ours is the statement of record and the owner's text
-  reads as supplementary.
-- **Still open (recommended, not built — needs an owner decision):** warn the
-  owner in Settings when `terms_text` contains payment-timing language, the way
-  the builder already warns on other conflicts. It cannot be auto-corrected —
-  it is the owner's own legal text — so the honest fix is to surface the
-  conflict, not to rewrite or suppress it. Deliberately out of P0 scope: it is a
-  new owner-facing surface, not a copy contradiction we authored.
+- **Done:** the canonical timing line is printed **above** the Terms block on
+  the Quote PDF, so ours is the statement of record and the owner's text reads
+  as supplementary.
+- **Done — the send is now BLOCKED.** See below.
+
+### The terms gate
+
+`lib/payments/termsTimingConflict` detects a **clear** contradiction between the
+quote's configured timing and the owner's terms, and
+`quoteStatus.sendBlockedReason` refuses the send — a third block reason beside
+`no_price` and `no_customer`, wired to every door: the message composer, the
+bulk send, and the PDF path (the worst case, because that document prints the
+canonical timing line *and* the terms on one page).
+
+This became urgent when acceptance started requiring the terms: the customer is
+shown them and must agree before accepting, so a contradiction is no longer a
+cosmetic inconsistency — it is **consent to the wrong thing**.
+
+Three rules hold the design:
+
+1. **terms_text never drives payment behaviour.** It is prose we detect a
+   contradiction in and refuse to send; it is never an input to what is owed,
+   when, or how much. Guarded across both deposit engines, the ledger, and all
+   three charge routes.
+2. **The terms are never rewritten.** They are the owner's own words, likely
+   their legal wording. The offending sentence is quoted back verbatim, both
+   readings are named, both doors are offered (deposit rule / Settings), and the
+   owner is told plainly that nothing was changed. There is no "send anyway".
+3. **Precision over recall**, because this blocks a send. Three false-positive
+   guards — hedges, remainder-vs-total, and terms that already document the
+   deposit correctly — plus a harmless corpus covering balance wording, Net-30,
+   payment methods, cancellation, warranty and non-refundable deposits.
+
+⭐⭐ **Measured against production before being believed.** The first version of
+the detector caught **0 of 114** real quotes — on a tenant whose terms read
+*"Payment due upon completion unless otherwise agreed"* and which has four
+deposit-gated quotes. Two reasons: `TOTAL_AFTER_WORK` demanded a totality word
+("in full", "100%") that real owners don't write, and `unless` sat in the hedge
+list. A hedge earns its exemption by telling the customer a deposit *might* be
+wanted; "unless otherwise agreed" tells them nothing and protects only the
+owner. Both fixed; now **4 of 114** blocked — exactly the deposit-gated ones.
+Re-measure with `npx tsx scripts/terms-conflict-measure.ts` (read-only).
 
 ---
 
