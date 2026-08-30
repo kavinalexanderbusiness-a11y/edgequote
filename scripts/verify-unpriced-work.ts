@@ -382,10 +382,14 @@ check('the status picker gates accepted/completed/paid',
 check('the status picker asks the same engine',
   /moneyDoorBlock\(quotePriceState\(/.test(statusControl))
 
-// The invoice door already refused, and must keep refusing.
-const invoicing = stripComments(read('src/lib/invoicing.ts'))
-check('the invoice drafter still refuses a $0 amount',
-  /if \(!\(amount > 0\)\) return \{ created: false, reason: 'no-amount' \}/.test(invoicing))
+// The invoice door already refused, and must keep refusing. ⚠️ This pinned the
+// single-line form and went red when the refusal grew a second reason
+// ('no-charge'). The RULE is "an amount that is not > 0 never drafts", which is
+// what is asserted now — the shape of the statement was never the point.
+const invoicing = stripComments(read('src/lib/invoicing.ts')).replace(/\s+/g, ' ')
+check('the invoice drafter still refuses any amount that is not > 0',
+  /if \(!\(amount > 0\)\) \{ return \{ created: false, reason:/.test(invoicing),
+  'the $0 refusal changed shape — re-read it before assuming it still refuses')
 
 console.log('\n═══ 10b · The No charge action, and what may write the decision ═══')
 
