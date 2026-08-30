@@ -46,6 +46,37 @@ jobs:
       # Next telemetry adds latency and noise to every CI run.
       NEXT_TELEMETRY_DISABLED: '1'
 
+      # ⭐⭐ THE REAL POSTGRES verify:quote-number-concurrency RACES AGAINST.
+      # That guard proves the quote-number allocator serialises 100 SIMULTANEOUS
+      # callers — a claim about PostgreSQL under contention, which can only be
+      # proven by putting PostgreSQL under contention. It falls back to a
+      # disposable `embedded-postgres` server when this is unset (that is how it
+      # runs on a developer machine), but on CI a service container is the
+      # deterministic path: no binary download, no initdb locale surprises, and
+      # a DIFFERENT major version from the one developers run locally, so the
+      # allocator is exercised on two of them rather than one.
+      # ⛔ These are throwaway credentials for a container that exists for the
+      # length of this job and holds nothing but a rebuilt-from-zero schema.
+      QUOTE_NUMBER_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
+
+    # ⚠️ max_connections defaults to 100; the guard opens 100 racing callers PLUS
+    # an admin connection, so one short is a failed race for a reason that has
+    # nothing to do with quote numbers.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --name qnum-postgres
+        ports:
+          - 5432:5432
+
     steps:
       - uses: actions/checkout@v4
 
@@ -70,6 +101,23 @@ jobs:
       # bug worth failing on — it means someone hand-edited a dependency.
       - name: Install
         run: npm ci
+
+      # ⚠️ GitHub Actions service containers accept no `command:`, so the only way
+      # to change a postgres.conf setting is to set it and bounce the container.
+      # Without this the 100-way race in verify:quote-number-concurrency dies on
+      # "sorry, too many clients already" — a red CI run that says nothing about
+      # quote numbers. The guard asserts the ceiling up front for exactly this
+      # reason, so a regression here fails with the real explanation.
+      - name: Raise max_connections on the service Postgres
+        run: |
+          docker exec qnum-postgres psql -U postgres -c "alter system set max_connections = 200"
+          docker restart qnum-postgres
+          for i in $(seq 1 30); do
+            docker exec qnum-postgres pg_isready -U postgres && exit 0
+            sleep 2
+          done
+          echo "service postgres did not come back after the restart" >&2
+          exit 1
 
       # Typecheck FIRST. It is the fastest of the three and catches the most, so a
       # broken branch fails in ~30s instead of after a full build.
