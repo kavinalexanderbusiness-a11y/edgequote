@@ -43,4 +43,6 @@ scripts/.s*-fixture.json
 
 # Browser-proof harness output (scenes, screenshots, throwaway Chrome profiles)
 .s112b/
-.s121/
+
+# Session 121 timezone/weather harness output (scripts/s121-weather-harness.tsx)
+.s121tz/

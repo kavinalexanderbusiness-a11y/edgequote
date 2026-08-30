@@ -15,6 +15,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { recurrenceLabel, recurrenceToUi, reseedRepeatUi, OPEN_ENDED_HORIZON, type RepeatPreset, type EndMode } from '@/lib/recurrence'
 import { latestSavedRecommendation, savedPriceFor, recommendationIsStale, CadenceKey } from '@/lib/pricing'
 import { servicePricingKind } from '@/lib/servicePricing'
+import { BLANK_NUMERIC_FIELD as BLANK, UNKNOWN_AMOUNT_TEXT } from '@/lib/pricingState'
 import {
   ServiceSeasons, DEFAULT_SEASONS, settingsToSeasons, serviceCategory, seasonForService,
   seasonEndDateFor, estimateSeasonVisits, seasonLabel,
@@ -186,7 +187,14 @@ export function JobForm({ customers, crews, technicians, defaultValues, excludeJ
         status: 'scheduled',
         notes: '',
         actual_minutes: 0,
-        price: 0,
+        // ⛔ WAS `price: 0`. Add Job opened with "$0" already typed into the
+        // money field — so the fastest path through the form (accept the
+        // defaults) produced a visit asserting it is worth nothing, and the
+        // owner had no way to tell that apart from one they had actually priced
+        // at zero. BLANK renders empty and the save path already turns a blank
+        // into NULL, which on `jobs` correctly means "no job-level price".
+        // Same constant and the same reasoning as QuoteBuilder's money fields.
+        price: BLANK,
         crew_id: null,
         technician_id: null,
         ...defaultValues,
@@ -616,10 +624,16 @@ export function JobForm({ customers, crews, technicians, defaultValues, excludeJ
 
   const priceBlock = (
     <div>
+      {/* ⛔ The hint used to say "leave 0", which taught the owner that zero was
+          the way to say "I haven't decided" — and the save then wrote NULL
+          anyway. Two different sentences for one action, one of which was
+          untrue. It now says LEAVE IT BLANK, which is what the field does and
+          what the row records. */}
       <Input label="Price ($/visit)" type="number" step="5" min="0"
+        placeholder={UNKNOWN_AMOUNT_TEXT}
         hint={measuredPrice && measuredPrice > 0
           ? `Measured property: ${formatCurrency(measuredPrice)} ${cadenceForInterval === 'one_time' ? 'one-time' : cadenceForInterval} recommended.`
-          : suggestedPrice ? `Leave 0 to use the linked quote (${formatCurrency(suggestedPrice)}). Type to override.` : 'Per-visit price — leave 0 if a linked quote sets it.'}
+          : suggestedPrice ? `Leave blank to use the linked quote (${formatCurrency(suggestedPrice)}). Type to override.` : 'Per-visit price — leave blank if a linked quote sets it, or if it is not priced yet.'}
         {...register('price', { min: 0 })} />
       {measuredPrice != null && measuredPrice > 0 && (
         <button type="button" onClick={() => setValue('price', measuredPrice)}

@@ -15,8 +15,11 @@ import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
 import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { formatCurrency, cn } from '@/lib/utils'
 import { CloudRain, Droplets, Wind, Clock, DollarSign, Users, AlertTriangle, ArrowRight, MapPin, Thermometer, CalendarOff, Sun } from 'lucide-react'
-
-const dayLabel = (iso: string, today: string) => iso === today ? 'Today' : format(parseISO(iso + 'T00:00:00'), 'EEE MMM d')
+// THE tenant clock and THE day labeller. This page used to derive "today"
+// itself, from UTC (`new Date().toISOString().slice(0,10)`), while the engine
+// beside it used the device's zone — see the note above the two day cards.
+import { useTenantTime } from '@/components/layout/TenantTimeProvider'
+import { forecastDayLabel, forecastDayFullLabel, rejectionLine } from '@/lib/weatherTruth'
 
 // Green / Yellow / Red traffic-light styling, shared by the score badge and bars.
 const LEVEL_STYLE: Record<WeatherLevel, { dot: string; text: string; bar: string; ring: string }> = {
@@ -40,7 +43,11 @@ export default function WeatherPage() {
   const router = useRouter()
   const [r, setR] = useState<WeatherImpactReport | null>(null)
   const [loading, setLoading] = useState(true)
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  // ⛔ WAS: `new Date().toISOString().slice(0, 10)` — plain UTC. From about
+  // 17:00 in Alberta that is already tomorrow, so the page's idea of "today" and
+  // the engine's (which read the device's zone) diverged for the whole evening.
+  // ONE clock now, the business's, shared with every other dashboard surface.
+  const { todayISO: today } = useTenantTime()
 
   useEffect(() => { (async () => { setLoading(true); try { setR(await loadWeatherImpact(supabase)) } finally { setLoading(false) } })() }, [supabase])
 
@@ -124,10 +131,19 @@ export default function WeatherPage() {
         </Card>
       )}
 
-      {/* Today / tomorrow */}
+      {/* ── ⭐⭐ THE TWO NEAREST DAYS (Session 121) ──────────────────────────
+          This used to hard-code the first card's label as "Today" while the
+          second computed its own from a DIFFERENT clock — the engine used the
+          device's date, the page used UTC. Every evening in Alberta those two
+          disagreed and BOTH cards rendered "Today", for different days.
+
+          ⛔ No label is passed in any more. Each card asks the one engine for
+          its own words, from the one tenant date, so "Today" can attach to
+          exactly one date by construction rather than by two comparisons
+          happening to agree. */}
       <div className="grid grid-cols-2 gap-3">
-        {r.today && <WeatherCard f={r.today} label="Today" />}
-        {r.tomorrow && <WeatherCard f={r.tomorrow} label={dayLabel(r.tomorrow.date, today)} />}
+        {r.today && <WeatherCard f={r.today} todayISO={today} />}
+        {r.tomorrow && <WeatherCard f={r.tomorrow} todayISO={today} />}
       </div>
 
       {/* 7-day outlook — rain %, wind, temp, severe, with a work-score colour */}
@@ -141,7 +157,19 @@ export default function WeatherPage() {
                 <span className="text-[10px] text-ink-faint tabular-nums">{f.precipProbability}%</span>
                 <div className={cn('w-full rounded-t', LEVEL_STYLE[lvl].bar)} style={{ height: `${Math.max(4, f.precipProbability)}%` }} title={`${f.label} · ${f.precipMm}mm · wind ${f.windKph} km/h`} />
                 <span className="text-base leading-none">{f.emoji}</span>
-                <span className="text-[10px] text-ink-faint truncate w-full text-center">{f.date === today ? 'Now' : format(parseISO(f.date + 'T00:00:00'), 'EEE')}</span>
+                {/* ⛔ "Now" is gone, on purpose. It compared against the page's
+                    UTC date, so every evening it sat on TOMORROW's column — a
+                    word about this instant, pointing at a different day. These
+                    are DAYS; the one that is today says "Today".
+                    ⭐ And every other column carries its date. "Fri" alone is
+                    indistinguishable from next Friday, on the strip an owner
+                    uses to decide where to move a rained-out job. */}
+                <span className="text-[10px] text-ink-faint truncate w-full text-center leading-tight">
+                  {forecastDayLabel(f.date, today).short}
+                </span>
+                <span className="text-[9px] text-ink-faint/70 truncate w-full text-center tabular-nums">
+                  {forecastDayLabel(f.date, today).dated}
+                </span>
               </div>
             )
           })}
@@ -199,11 +227,19 @@ export default function WeatherPage() {
   )
 }
 
-function WeatherCard({ f, label }: { f: DayForecast; label: string }) {
+// ⛔ TAKES A DATE, NOT A LABEL. A card that can be told what day it is can be
+// told the wrong one — which is exactly how two cards both came to say "Today".
+// It is handed the tenant's today and works out its own words.
+function WeatherCard({ f, todayISO }: { f: DayForecast; todayISO: string }) {
+  const d = forecastDayLabel(f.date, todayISO)
   return (
     <Card className={cn('p-4', LEVEL_STYLE[weatherScore(f).level].ring)}>
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">{label}</p>
+        {/* The relative word AND the actual date, always. "Tomorrow" alone is
+            fine on the day you read it and wrong on the tab you left open. */}
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
+          {d.label} <span className="text-ink-faint/70 normal-case">· {d.dated}</span>
+        </p>
         <ScoreBadge f={f} />
       </div>
       <div className="flex items-center gap-3 mt-1">
@@ -226,7 +262,7 @@ function RiskRow({ d, today }: { d: DayImpact; today: string }) {
         <div className="min-w-0">
           <p className="text-sm font-bold text-ink flex items-center gap-1.5 flex-wrap">
             <span className="text-lg leading-none">{d.forecast.emoji}</span>
-            {dayLabel(d.date, today)} — {d.forecast.label}
+            {forecastDayFullLabel(d.date, today)} — {d.forecast.label}
             <ScoreBadge f={d.forecast} />
           </p>
           <p className="text-[11px] text-ink-muted mt-0.5">{d.forecast.precipProbability}% rain · {d.forecast.precipMm}mm · wind {d.forecast.windKph} km/h · {d.jobs} job{d.jobs !== 1 ? 's' : ''} · {d.laborHours}h · {formatCurrency(d.revenue)} · {d.customers} customer{d.customers !== 1 ? 's' : ''}</p>
@@ -243,11 +279,39 @@ function RiskRow({ d, today }: { d: DayImpact; today: string }) {
         <Mini label="Booked" value={`${d.laborHours}h`} />
         <Mini label="Capacity" value={`${d.capacityHours}h`} />
         <Mini label="Utilization" value={`${d.utilizationPct}%`} tone={d.overbooked ? 'text-red-400' : undefined} />
-        <Mini label="Best dry day" value={d.recommendedDay ? format(parseISO(d.recommendedDay + 'T00:00:00'), 'EEE d') : '—'} tone="text-emerald-400" />
+        <Mini label="Best dry day" value={d.recommendedDay ? forecastDayFullLabel(d.recommendedDay, today) : '—'} tone="text-emerald-400" />
       </div>
       <p className={cn('text-[11px] mt-2 flex items-center gap-1.5', d.recommendedOverbooks ? 'text-amber-400' : 'text-ink-muted')}>
         {d.recommendedOverbooks && <AlertTriangle className="w-3 h-3 shrink-0" />}{d.recommendedNote}
       </p>
+
+      {/* ── ⭐⭐ WHY NOT SATURDAY? (Session 121) ─────────────────────────────
+          The strip above shows a sunny Saturday; the recommendation skips it and
+          names Thursday. Nothing on this page ever explained that, and the only
+          sentence it could offer — "No dry work day in range" — is a claim about
+          the FORECAST, which the owner can see is false. The commonest real
+          reason was never weather at all: Saturday is not one of their working
+          days.
+
+          Only DRY rejections are listed. A rainy day needs no explanation; the
+          strip already shows the rain, and listing it would bury the two reasons
+          the owner can actually change in about ten seconds. */}
+      {d.rejections.length > 0 && (
+        <details className="mt-2 group">
+          <summary className="cursor-pointer select-none text-[11px] text-ink-faint hover:text-ink-muted list-none min-h-[44px] flex items-center gap-1.5">
+            <Sun className="w-3 h-3 shrink-0" />
+            Why not the other dry days? ({d.rejections.length})
+          </summary>
+          <ul className="mt-1.5 space-y-1 pl-4">
+            {d.rejections.map(e => (
+              <li key={e.date} className="text-[11px] text-ink-muted">{rejectionLine(e, today)}</li>
+            ))}
+          </ul>
+          <p className="text-[10px] text-ink-faint mt-1.5 pl-4">
+            Working days and daily capacity come from Settings; a blocked day is cleared from the schedule calendar.
+          </p>
+        </details>
+      )}
     </Card>
   )
 }

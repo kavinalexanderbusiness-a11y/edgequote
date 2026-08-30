@@ -43,13 +43,18 @@ interface MeasureDraft {
 // Everything the builder needs to fill the quote's pricing structure in one tap.
 export interface MeasureApplyPayload {
   cadence: CadenceKey
-  price: number       // the selected cadence's per-visit price
-  oneTime: number
-  weekly: number
-  biweekly: number
-  monthly: number
+  // ⭐ `number | null` on the four money fields. lib/measurePricing returns
+  // `price: null` for a plan with no rate configured ("measure to price"), and
+  // this payload used to spend that null on a 0 — which the builder then wrote
+  // into the quote as a real price of nothing. Unknown travels the whole way to
+  // the field now, where it renders blank.
+  price: number | null       // the selected cadence's per-visit price
+  oneTime: number | null
+  weekly: number | null
+  biweekly: number | null
+  monthly: number | null
   totalSqft: number
-  suggested: number   // one-time + travel (pricing-analysis provenance)
+  suggested: number | null   // one-time + travel (pricing-analysis provenance); null when unpriced
   // ADR-002 · the derived state that priced these numbers. THIS BOUNDARY WAS THE LEAK:
   // gradedProspectPricing ALWAYS prices with the grade, then the payload dropped it, so
   // the builder received a grade-curved price with no way to know a grade was involved
@@ -666,10 +671,15 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
       // The cadence engine's fields stay at their neutral values — this path is
       // not the lawn cadence engine and must not pretend to be. The builder reads
       // `plan`/`offerPlans` here, not `cadence`.
-      cadence: 'one_time', price: plan?.price ?? 0,
-      oneTime: plan?.price ?? 0, weekly: 0, biweekly: 0, monthly: 0,
+      // ⛔ WAS `?? 0` on all three. A plan with no configured rate arrived at the
+      // builder as a $0 price. It now arrives as "not priced", which is what
+      // measurePricing said in the first place.
+      cadence: 'one_time', price: plan?.price ?? null,
+      oneTime: plan?.price ?? null, weekly: null, biweekly: null, monthly: null,
       totalSqft,
-      suggested: (plan?.price ?? 0) + Number(travelFee || 0),
+      // The provenance figure is only meaningful when there IS a price to add
+      // travel to. Unknown + travel is not "just the travel fee".
+      suggested: plan?.price == null ? null : plan.price + Number(travelFee || 0),
       valueGrade: null, nearbyCount: nearby,
       measurement: snapshotNow(offer ? null : plan),
       plan: offer ? null : plan,

@@ -1953,6 +1953,20 @@
   "convalidated": true
  },
  {
+  "def": "CHECK (((num_nonnulls(no_charge_at, no_charge_reason, no_charge_by) = ANY (ARRAY[0, 3])) AND ((no_charge_reason IS NULL) OR (btrim(no_charge_reason) <> ''::text))))",
+  "tbl": "jobs",
+  "conname": "jobs_no_charge_complete_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((no_charge_reason IS NULL) OR ((char_length(no_charge_reason) >= 3) AND (char_length(no_charge_reason) <= 500))))",
+  "tbl": "jobs",
+  "conname": "jobs_no_charge_reason_len_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
   "def": "CHECK (((crew_id IS NULL) OR (technician_id IS NULL)))",
   "tbl": "jobs",
   "conname": "jobs_one_assignee",
@@ -3510,6 +3524,20 @@
   "def": "CHECK (((nearby_count IS NULL) OR (nearby_count >= 0)))",
   "tbl": "quotes",
   "conname": "quotes_nearby_count_nonneg",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((num_nonnulls(no_charge_at, no_charge_reason, no_charge_by) = ANY (ARRAY[0, 3])) AND ((no_charge_reason IS NULL) OR (btrim(no_charge_reason) <> ''::text))))",
+  "tbl": "quotes",
+  "conname": "quotes_no_charge_complete_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((no_charge_reason IS NULL) OR ((char_length(no_charge_reason) >= 3) AND (char_length(no_charge_reason) <= 500))))",
+  "tbl": "quotes",
+  "conname": "quotes_no_charge_reason_len_check",
   "contype": "c",
   "convalidated": true
  },
