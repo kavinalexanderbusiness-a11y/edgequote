@@ -17,7 +17,7 @@ import { composeBriefing } from '@/lib/dashboard/briefing'
 import { normalizeDashboardLayout, visibleDashboardCards, type DashboardCardId } from '@/lib/dashboard/layout'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { PageContainer } from '@/components/layout/PageContainer'
-import { localTodayISO } from '@/lib/utils'
+import { loadTenantToday } from '@/lib/tenantTimeServer'
 import { Card } from '@/components/ui/Card'
 import Link from 'next/link'
 import { Plus, CalendarCheck, ArrowRight } from 'lucide-react'
@@ -71,7 +71,10 @@ const rise = (n: number) => `animate-rise ${STAGGER[Math.min(n, STAGGER.length -
 export default async function DashboardPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  const todayISO = localTodayISO()
+  // ⭐ The BUSINESS's day. This is a server component, so `localTodayISO()` here
+  // was UTC — a different day from the Schedule page's (client, device zone)
+  // every evening. See lib/tenantTimeServer.
+  const todayISO = await loadTenantToday(supabase, user!.id)
   // The inbox's extra sources and the layout preference load BESIDE the
   // dashboard batch, not inside it: the dashboard keeps its all-or-throw
   // contract for the numbers it paints, while a failed inbox source only

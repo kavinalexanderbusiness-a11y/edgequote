@@ -125,7 +125,7 @@
   }
  ],
  "pg_version": "PostgreSQL 17.6 on aarch64-unknown-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit",
- "captured_at": "2026-08-29 02:27:01.645138+00",
+ "captured_at": "2026-08-30 07:29:26.865834+00",
  "default_acls": [
   {
    "acl": "{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
@@ -272,7 +272,7 @@
    "objtype": "r"
   }
  ],
- "latest_migration": "20260828120000",
+ "latest_migration": "20260830120000",
  "publication_tables": [
   "public.content_pieces",
   "public.conversations",

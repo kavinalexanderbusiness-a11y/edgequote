@@ -269,6 +269,16 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
     const fee = { payment_fee_strategy: biz?.payment_fee_strategy as never, fee_recovery_percent: biz?.fee_recovery_percent }
     const cfg = pricingConfigFromSettings(biz)
     const pkg = pricingPackage(sqft, cfg, { overgrowth: 1, nearbyCount: 0 })
+    // ⭐ AUDITED, AND SAFE — recorded here so nobody "fixes" the half holding it up.
+    // These `?? 0`s look like the QuoteBuilder bug (same expression, same engine)
+    // but they are NOT a commercial fallback, because `submit_booking` writes
+    // `nullif(p_weekly, 0)` — the database turns each zero back into NULL before
+    // it reaches `quotes.weekly_price`. So an unpriceable cadence is stored as
+    // "no price", which is correct.
+    // ⛔ THE LOAD-BEARING HALF IS THE `nullif` IN THE RPC. If that is ever removed,
+    // these four arguments start writing real $0 cadence prices onto a quote built
+    // from a PUBLIC booking — the customer-facing path. verify:unpriced-work
+    // asserts the nullif is still there for exactly this reason.
     const opt = (c: string) => pkg.options.find(o => o.cadence === c)?.price ?? 0
     const { data, error: rpcErr } = await supabase.rpc('submit_booking', {
       p_token: token, p_name: name.trim(), p_email: email.trim(), p_phone: phone.trim(),

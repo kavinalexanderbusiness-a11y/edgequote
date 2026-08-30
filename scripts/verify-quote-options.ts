@@ -44,7 +44,7 @@
 // Section 5 needs no login and no fixture at all: it is pure refusal-probing
 // against anonymous callers, and it writes nothing by construction.
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import {
@@ -64,6 +64,18 @@ const ok = (n: string) => console.log(`  ✓ ${n}`)
 const fail = (n: string, d = '') => { failures++; console.log(`  ✗ ${n}${d ? `\n      ${d}` : ''}`) }
 const check = (n: string, cond: boolean, d = '') => cond ? ok(n) : fail(n, d)
 const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8')
+
+// ⚠️ THE APPLY PATH **AND** THE ARCHIVE, never one filename. A migration has two
+// lives: its own file while in flight, and the generated baseline once production
+// has run it — at which point the file moves to supabase/archive/ledger/, which is
+// never applied. Pinning the name made this throw ENOENT the moment the schema
+// converged, taking the whole suite down with it. Assertions over a migration's
+// COMMENTS need the archive specifically, because the generator strips prose.
+const schemaSources = (): string => {
+  const dirs = [join(process.cwd(), 'supabase', 'migrations'), join(process.cwd(), 'supabase', 'archive', 'ledger')]
+  return dirs.filter(d => existsSync(d)).flatMap(d =>
+    readdirSync(d).filter(f => f.endsWith('.sql')).sort().map(f => readFileSync(join(d, f), 'utf8'))).join('\n')
+}
 
 const GHOST = '00000000-0000-0000-0000-0000000000ff'
 
@@ -272,25 +284,51 @@ check('PORTAL — nothing is pre-selected, not even Recommended',
   'a pre-ticked option turns "I chose" into "I tapped"')
 check('PORTAL — Approve is refused until an option is named',
   /disabled=\{!approveReady\}/.test(BILLING))
+// ⭐ Session 121 re-pointed the WORD, not the rule. The button used to read
+// "Approve {name}"; the quote's own state is ACCEPTED everywhere now (see
+// lib/quoteAcceptance's vocabulary ruling — the DEAL's rung stays "Won" in
+// lib/salesStage). What this line has always enforced is that the button quotes
+// the CHOSEN OPTION'S OWN AMOUNT, never the quote total, and that is unchanged.
+// ⚠️ The rule is CONDITIONAL, and stating it as "the total never appears" would
+// be wrong: a quote with no alternatives is correctly priced by its own total.
+// What must hold is that the OPTIONS branch quotes the picked option's own
+// amount — so the two are pinned together, keyed on hasOpts.
 check('PORTAL — the button quotes the CHOSEN option, not the quote total',
-  /Approve \$\{pickedOpt\.name\} — \$\{formatCurrency\(pickedOpt\.amount\)\}/.test(BILLING))
+  /hasOpts[\s\S]{0,60}pickedOpt \? `Accept \$\{pickedOpt\.name\} — \$\{formatCurrency\(pickedOpt\.amount\)\}`/.test(BILLING))
 check('PORTAL — the selection is passed to the canonical RPC',
   /p_option_id: chosenOpt\.id/.test(PORTAL_CLIENT))
 check('PORTAL — a stale option id is refused rather than approved as something else',
   /isn’t on this quote any more/.test(PORTAL_CLIENT))
 check('PORTAL — the confirm dialog names the option and the other options’ fate',
-  /Approve \$\{chosenOpt\.name\}/.test(PORTAL_CLIENT) && /won’t be charged/.test(PORTAL_CLIENT))
-check('PORTAL HOME — the one-tap Approve shortcut stands down on an options quote',
+  /Accept \$\{chosenOpt\.name\}/.test(PORTAL_CLIENT) && /won’t be charged/.test(PORTAL_CLIENT))
+check('PORTAL HOME — the one-tap accept shortcut stands down on an options quote',
   /!\(oneQuoteDoc\.options\?\.length\)/.test(HOME),
   'there is nowhere on that card to compare three scopes; approving from it would be a choice nobody made')
 
+// ── The owner's side MOVED in Session 121, and the contracts moved with it ───
+// All three assertions below used to read the quote detail page directly, where
+// the owner's accept-on-behalf handler lived. It now lives in ONE dialog
+// (RecordAcceptanceDialog) reached from both entry points, because the old
+// version recorded a customer's decision without ever asking whose decision it
+// was or how it reached the owner. Same three contracts, re-pointed at the
+// component that now owns them — never deleted.
+const ACCEPT_DIALOG = read('src/components/quotes/RecordAcceptanceDialog.tsx')
 check('OWNER — accept-on-behalf goes through the canonical contract',
-  /owner_select_quote_option/.test(QUOTE_DETAIL),
+  /owner_record_customer_acceptance/.test(ACCEPT_DIALOG)
+  && !/from\('quotes'\)\s*\.update/.test(ACCEPT_DIALOG),
   'a direct table update would be a SECOND implementation of the money rule')
-check('OWNER — "Won" cannot record an approval with no option named',
-  /options\.length > 0/.test(QUOTE_DETAIL) && /pick the one the customer chose/.test(QUOTE_DETAIL))
+check('OWNER — the quote page reaches that dialog rather than writing its own acceptance',
+  /RecordAcceptanceDialog/.test(QUOTE_DETAIL) && !/markWonPatch/.test(QUOTE_DETAIL))
+// ⭐ This rule got STRONGER, not weaker: the app-side check the old "Won" button
+// carried is now also a database refusal (quote_record_acceptance raises when a
+// quote offers options and none is named), so it holds on every path rather than
+// on the one screen that remembered it. Both halves are pinned.
+check('OWNER — an options quote cannot be accepted with no option named',
+  /options\.length > 0/.test(ACCEPT_DIALOG) && /needsOption/.test(ACCEPT_DIALOG))
+check('OWNER — …and the DATABASE refuses it too, not just the dialog',
+  /the accepted one must be named/.test(schemaSources()))
 check('OWNER — a falsy RPC result is never reported as success',
-  /if \(error \|\| !applied\)/.test(QUOTE_DETAIL))
+  /if \(error \|\| !data\)/.test(ACCEPT_DIALOG))
 
 // ── 4. The schema is what enforces it, not the app ───────────────────────────
 console.log('\n═══ The database refuses what no screen should have to remember ═══')

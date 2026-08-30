@@ -36,6 +36,7 @@ import {
   EXAMPLE_OPTION_NAMES, OPTIONS_VS_LINES_MESSAGE, headlineOptionPrice, optionProblemMessage,
   optionSetProblem, optionsConflictWithLines, recommendedOption,
 } from '@/lib/quoteOptions'
+import { BLANK_NUMERIC_FIELD, UNKNOWN_AMOUNT_TEXT } from '@/lib/pricingState'
 import { loadServiceUnits, SYSTEM_UNITS, type ServiceUnit } from '@/lib/units'
 import { formatCurrency, formatDate, suggestTravelFee, cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
@@ -112,7 +113,11 @@ type PriceOrigin = 'empty' | 'suggested' | 'applied' | 'manual'
 // autosave and submitted writes are byte-identical to the 0 seed. NEVER swap this
 // for undefined: an untouched field would then submit NaN through the pages'
 // Number(values.x) wrappers, changing the DB write.
-const BLANK = '' as unknown as number
+// ⭐ Now ONE sentinel, shared with JobForm (lib/pricingState). This constant had
+// already been reverted once by a replay that "silently took the pre-fix side;
+// the zeros returned" — a second local copy in the job form was the same
+// accident waiting to happen to the other money form.
+const BLANK = BLANK_NUMERIC_FIELD
 
 // The cadences the owner can lead a quote with — the plan tiles and the "which one
 // did you pitch" highlight. Monthly is deliberately absent: it's off the standard
@@ -628,11 +633,21 @@ export function QuoteBuilder({
     if (pricingKind !== 'lawn_recurring' || measuredSqft <= 0) return null
     const cfg = pricingConfigFromSettings(settings)
     const pkg = pricingPackage(measuredSqft, cfg, { overgrowth: overgrowth || 1, nearbyCount: 0 })
+    // ⛔⛔ THE NAMED FALLBACK. These three were `?.price ?? 0`, and the `?? 0` was
+    // a COMMERCIAL claim: when the pricing package did not return a cadence (an
+    // unconfigured rate, a measurement the engine declines to price), the tile
+    // rendered "$0" and one tap wrote a real $0 weekly price onto the quote —
+    // an offer to mow this property every week, forever, for nothing.
+    //
+    // `find()` already returns undefined for "the engine has no answer". The bug
+    // was translating that into a number. It now stays absent all the way to the
+    // screen, where it reads "Not set" and cannot be applied.
+    const priceFor = (c: string) => pkg.options.find(o => o.cadence === c)?.price ?? null
     return {
       one_time: pkg.oneTime,
-      weekly: pkg.options.find(o => o.cadence === 'weekly')?.price ?? 0,
-      biweekly: pkg.options.find(o => o.cadence === 'biweekly')?.price ?? 0,
-      monthly: pkg.options.find(o => o.cadence === 'monthly')?.price ?? 0,
+      weekly: priceFor('weekly'),
+      biweekly: priceFor('biweekly'),
+      monthly: priceFor('monthly'),
       recommended: pkg.recommended.cadence,
     }
   }, [pricingKind, measuredSqft, overgrowth, settings])
@@ -706,10 +721,13 @@ export function QuoteBuilder({
   // pitch. Monthly fills only when enabled. All fields stay editable after.
   function applySuggested(c: PitchCadence) {
     if (!suggested) return
+    // ⭐ A cadence the engine could not price fills BLANK, never 0. The owner is
+    // then looking at an empty field they can type into — which is the truth —
+    // instead of a $0 offer they have to notice and delete.
     setValue('initial_price', suggested.one_time)
-    setValue('weekly_price', suggested.weekly)
-    setValue('biweekly_price', suggested.biweekly)
-    setValue('monthly_price', includeMonthly ? suggested.monthly : 0)
+    setValue('weekly_price', suggested.weekly ?? BLANK)
+    setValue('biweekly_price', suggested.biweekly ?? BLANK)
+    setValue('monthly_price', includeMonthly ? (suggested.monthly ?? BLANK) : BLANK)
     setValue('suggested_price', suggested.one_time)
     markApplied()   // tapping a plan tile IS an accept
     setPickedCadence(c)
@@ -957,8 +975,12 @@ export function QuoteBuilder({
   // (e.g. the owner clears the hours) rather than stranding a stale number.
   useEffect(() => {
     if (priceLocked || pickedCadence) return
-    const price = serviceRec?.price ?? 0
-    if (price > 0) {
+    // `?? null`, not `?? 0`: absent means the engine has no recommendation, and
+    // the test below is an EXISTENCE test. Spelling absence as zero here worked
+    // only because the very next line filtered zeros out — a safety that a later
+    // edit could remove without noticing what it was holding up.
+    const price = serviceRec?.price ?? null
+    if (price != null && price > 0) {
       setValue('initial_price', price)
       setPriceOrigin('suggested')
     } else if (priceOrigin === 'suggested') {
@@ -1284,7 +1306,13 @@ export function QuoteBuilder({
         {effectiveTotal <= 0 && !(weeklyPrice > 0 || biweeklyPrice > 0 || monthlyPrice > 0) && (
           <p className="text-[11px] text-amber-400 flex items-start gap-1.5 leading-snug">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
-            No price yet — saving now creates a $0 quote. You can price it later.
+            {/* ⛔ WAS "saving now creates a $0 quote" — which described the bug as
+                if it were the design. Saving an unpriced draft does NOT create a
+                $0 quote: it creates a quote with NO price, which is a different
+                and much safer thing. The sentence now says what the record will
+                hold and what it will refuse to do until someone prices it. */}
+            No price yet. Saving keeps it as an unpriced draft — it can’t be sent,
+            approved or invoiced until you set a price or mark it No charge.
           </p>
         )}
         {/* Same predicate and promise as QuotePDF's "Plus GST (X%) — added on your
@@ -1642,10 +1670,13 @@ export function QuoteBuilder({
                       return
                     }
                     const c = suggested.recommended
+                    // Same rule as applySuggested: the LEARNED price fills its own
+                    // cadence, and any cadence the engine could not price stays
+                    // blank rather than becoming a $0 offer.
                     setValue('initial_price', c === 'one_time' ? price : suggested.one_time)
-                    setValue('weekly_price', c === 'weekly' ? price : suggested.weekly)
-                    setValue('biweekly_price', c === 'biweekly' ? price : suggested.biweekly)
-                    setValue('monthly_price', includeMonthly ? (c === 'monthly' ? price : suggested.monthly) : 0)
+                    setValue('weekly_price', c === 'weekly' ? price : (suggested.weekly ?? BLANK))
+                    setValue('biweekly_price', c === 'biweekly' ? price : (suggested.biweekly ?? BLANK))
+                    setValue('monthly_price', includeMonthly ? (c === 'monthly' ? price : (suggested.monthly ?? BLANK)) : BLANK)
                     setValue('suggested_price', suggested.one_time)
                     markApplied()
                     setPickedCadence(c === 'monthly' ? null : c)
@@ -1719,8 +1750,8 @@ export function QuoteBuilder({
                         // overwrite a hand-typed monthly price while the origin
                         // still read 'applied' — and could claim "Monthly: on"
                         // over a field it had declined to fill.
-                        if (!next) setValue('monthly_price', 0)
-                        else if (suggested && !(Number(getValues('monthly_price')) > 0)) setValue('monthly_price', suggested.monthly)
+                        if (!next) setValue('monthly_price', BLANK)
+                        else if (suggested && !(Number(getValues('monthly_price')) > 0)) setValue('monthly_price', suggested.monthly ?? BLANK)
                       }}
                       className={cn('shrink-0 text-[10px] font-semibold rounded-full px-2 py-0.5 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                         includeMonthly ? 'text-accent-text border-accent/40 bg-accent/10' : 'text-ink-faint border-border hover:text-ink')}>
@@ -1734,13 +1765,20 @@ export function QuoteBuilder({
                       { c: 'one_time', label: 'One-Time', price: suggested.one_time, per: '' },
                     ] as const).map(opt => {
                       const active = pickedCadence === opt.c && priceOrigin === 'applied'
+                      // ⭐ A cadence the engine could not price is not offerable.
+                      // The tile says so and refuses the tap, instead of showing
+                      // "$0" and writing that onto the quote.
+                      const unpriced = opt.price == null
                       return (
                         // aria-pressed (§7): the selection ring is visual-only, so
                         // without it a screen reader hears three identical price
                         // buttons and no way to tell which plan is picked.
-                        <button key={opt.c} type="button" aria-pressed={active} onClick={() => applySuggested(opt.c)}
+                        <button key={opt.c} type="button" aria-pressed={active} disabled={unpriced}
+                          title={unpriced ? 'No rate configured for this cadence — set one in Settings, or type a price below.' : undefined}
+                          onClick={() => applySuggested(opt.c)}
                           className={cn('rounded-xl border p-2.5 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50', // transition-all so the selection ring eases in too
-                            active ? 'border-accent bg-accent/10 ring-1 ring-accent' : 'border-border bg-surface hover:border-border-strong')}>
+                            unpriced ? 'border-border bg-surface opacity-60 cursor-not-allowed'
+                            : active ? 'border-accent bg-accent/10 ring-1 ring-accent' : 'border-border bg-surface hover:border-border-strong')}>
                           <span className="flex items-center justify-between gap-1">
                             <span className="text-[11px] font-medium text-ink-muted">{opt.label}</span>
                             {/* ONE recommendation on screen: when Pricing Intelligence is
@@ -1749,7 +1787,9 @@ export function QuoteBuilder({
                             {!(pricingKind === 'lawn_recurring' && measuredSqft > 0) && suggested.recommended === opt.c && <span className="text-[10px] font-bold uppercase tracking-wide text-accent-text">Rec</span>}
                           </span>
                           <span className="block text-base font-bold text-ink mt-0.5 leading-tight tabular-nums">
-                            {formatCurrency(opt.price)}<span className="text-[10px] font-normal text-ink-faint">{opt.per}</span>
+                            {unpriced
+                              ? <span className="text-ink-faint font-semibold text-sm">{UNKNOWN_AMOUNT_TEXT}</span>
+                              : <>{formatCurrency(opt.price as number)}<span className="text-[10px] font-normal text-ink-faint">{opt.per}</span></>}
                           </span>
                         </button>
                       )
@@ -2652,7 +2692,7 @@ export function QuoteBuilder({
                 // no price: an unconfigured plan must leave the field alone rather
                 // than stamp a 0 the owner would have to notice and undo.
                 setValue('initial_price', sel.plan.price, { shouldDirty: true })
-                setValue('suggested_price', sel.suggested)
+                setValue('suggested_price', sel.suggested ?? BLANK)
                 markApplied()
               }
               setShowMeasure(false)
@@ -2663,14 +2703,19 @@ export function QuoteBuilder({
             // one-time price plus every recurring option, so the customer sees all
             // choices with zero re-typing. Monthly stays blank unless enabled (or
             // the measure flow explicitly recommended monthly).
-            setValue('initial_price', sel.oneTime)
-            setValue('weekly_price', sel.weekly)
-            setValue('biweekly_price', sel.biweekly)
+            // ⭐ Each field takes BLANK when the measure flow could not price that
+            // cadence. A blank field is "nobody has priced this"; a 0 is an offer.
+            // ⭐ `?? BLANK`, never `?? 0`. A cadence the measure flow could not
+            // price leaves an EMPTY field — "nobody has priced this" — where a 0
+            // would have been a standing offer to do the work for nothing.
+            setValue('initial_price', sel.oneTime ?? BLANK)
+            setValue('weekly_price', sel.weekly ?? BLANK)
+            setValue('biweekly_price', sel.biweekly ?? BLANK)
             if (includeMonthly || sel.cadence === 'monthly') {
-              setValue('monthly_price', sel.monthly)
+              setValue('monthly_price', sel.monthly ?? BLANK)
               if (sel.cadence === 'monthly') setIncludeMonthly(true)
             }
-            setValue('suggested_price', sel.suggested)
+            setValue('suggested_price', sel.suggested ?? BLANK)
             // ADR-002: record the derived state that PRICED these numbers, alongside
             // the numbers themselves. Set here rather than above the early return on
             // purpose — for a non-lawn service the prices are never applied, so no

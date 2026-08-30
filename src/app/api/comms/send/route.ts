@@ -82,7 +82,12 @@ export async function POST(req: NextRequest) {
   const token = await ensurePortalToken(supabase, user.id, customerId)
   // Build portal links off the REQUEST origin so they're always absolute and work
   // in SMS/email (NEXT_PUBLIC_APP_URL may be unset in some deploys).
-  const origin = cleanOrigin(req.nextUrl?.origin) || appOrigin()
+  // ⚠️ CONFIGURED ORIGIN WINS. This was request-origin-first, and the message
+  // history shows what that produces: two portal links sent on the apex host
+  // rather than the canonical one, simply because that is where the request
+  // landed. A link is stored and re-opened later — it must name the host we
+  // intend to be reachable at. The request stays as the dev/preview fallback.
+  const origin = appOrigin(req.nextUrl?.origin)
   const msgVars = {
     firstName: c.name,
     // Neutral fallback — never sign messages with a brand the owner didn't set.

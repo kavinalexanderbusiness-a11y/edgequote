@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
 import { withCronSweep, counts } from '@/lib/cron/heartbeat'
-import { localTodayISO } from '@/lib/utils'
+import { loadTenantZones, todayForTenant } from '@/lib/tenantTimeServer'
 import { loadAccountingData } from '@/lib/accounting/data'
 import { composeReport, periodForReport, type ReportKind } from '@/lib/reports/schedule'
 import { summarize, summaryHtml } from '@/lib/reports/summary'
@@ -17,10 +17,19 @@ import { sendEmail } from '@/lib/comms/send'
 // period exactly once. A "last_sent_at > 7 days ago" rule would drift a little
 // later every week and double-send on every retry.
 //
-// TIMEZONE: the period comes from the SERVER's date (localTodayISO), the same
-// convention every other cron here uses, with the schedule hour picked so it lands
-// in the owner's morning (11:00 UTC ≈ 5am in Calgary — the launch market). There is
-// no per-owner timezone column; when one exists this is the single line to change.
+// TIMEZONE: the period comes from EACH OWNER'S OWN DATE, derived from
+// business_settings.timezone (IANA). It used to come from the SERVER's date —
+// UTC on Vercel — and this header used to end "there is no per-owner timezone
+// column; when one exists this is the single line to change". There was one, and
+// nothing but the quiet-hours governor had ever read it. Session 121.
+//
+// ⚠️ THE SCHEDULE HOUR IS STILL GLOBAL and still UTC: vercel.json fires this at
+// 12:00 UTC, chosen to land in the morning for the launch market. That is fine
+// while every tenant is in one region and becomes wrong when they are not — a
+// tenant in Auckland would get their morning report in the evening. The DATE is
+// now correct for every tenant; the DELIVERY HOUR is a scheduling problem
+// (per-tenant fan-out, or an hourly sweep that picks the tenants whose local
+// hour has just struck) and is deliberately out of this session's scope.
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -40,7 +49,6 @@ async function handler(req: NextRequest) {
   const sb = serviceClient()
   if (!sb) return NextResponse.json({ ok: false, error: 'Set SUPABASE_SERVICE_ROLE_KEY to run scheduled reports.' }, { status: 500 })
 
-  const today = localTodayISO()
   const { data, error } = await sb
     .from('report_schedules')
     .select('id, user_id, kind, recipient, last_period_to')
@@ -49,10 +57,26 @@ async function handler(req: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   const rows = (data ?? []) as ScheduleRow[]
 
+  // ── ⭐⭐ ONE DATE PER TENANT, NOT ONE PER RUN (Session 121) ────────────────
+  // The header above this file used to end "There is no per-owner timezone
+  // column; when one exists this is the single line to change." There is one —
+  // business_settings.timezone, IANA, NOT NULL — and it had been sitting unread
+  // by everything except the quiet-hours governor. This is that line.
+  //
+  // It matters because a report's PERIOD is derived from the date: a weekly
+  // report generated against the server's UTC date closes the owner's week on
+  // the wrong day for every tenant west of Greenwich, and the last day's takings
+  // land in the following week's email.
+  //
+  // One read for every tenant in this sweep, never a query per row.
+  const zones = await loadTenantZones(sb, [...new Set(rows.map(r => r.user_id))])
+  const now = new Date()
+
   let sent = 0, skipped = 0, failed = 0
   const notes: string[] = []
 
   for (const row of rows) {
+    const today = todayForTenant(zones, row.user_id, now)
     // The period that has finished — never the one in progress. A "today" report
     // emailed at 5am reports an empty day and reads as a business that died.
     const period = periodForReport(row.kind, today, true)
@@ -149,7 +173,11 @@ async function handler(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: failed === 0, today, considered: rows.length, sent, skipped, failed, notes })
+  // `today` is per-tenant now, so there is no single one to report. The count of
+  // DISTINCT tenant dates in this sweep is the honest summary — and it is the
+  // number that goes from 1 to 2 as the sweep straddles a midnight somewhere.
+  const tenantDates = [...new Set(rows.map(r => todayForTenant(zones, r.user_id, now)))].sort()
+  return NextResponse.json({ ok: failed === 0, tenantDates, considered: rows.length, sent, skipped, failed, notes })
 }
 
 // Before this, a run that sent nothing left NO trace anywhere: no console line, no

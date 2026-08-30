@@ -1,5 +1,6 @@
 import type { Quote, QuoteStatus } from '@/types'
 import { parseLocalDate } from '@/lib/utils'
+import { quotePriceState, passesMoneyDoor, type PriceableQuote } from '@/lib/pricingState'
 
 // ── Quote expiry ─────────────────────────────────────────────────────────────
 // THE single place "has this quote expired?" is decided — the exact shape
@@ -113,7 +114,7 @@ export function markSentPatch(
 // Pure and reason-bearing, the shape lib/comms/reach.ts established: it owns the
 // REASON, so every surface can explain the refusal identically instead of each
 // inventing its own message.
-export type SendableQuote = { total?: number | null; customer_id?: string | null }
+export type SendableQuote = PriceableQuote & { customer_id?: string | null }
 
 export type SendBlock = 'no_price' | 'no_customer'
 
@@ -122,9 +123,18 @@ export function sendBlockedReason(q: SendableQuote): SendBlock | null {
   // A customerless quote can't be delivered, chased or shown in a portal. Four such
   // rows exist live, one with work already scheduled.
   if (!q.customer_id) return 'no_customer'
-  // `null` (no price) and `0` are both blocked, and deliberately share a branch: to a
-  // customer receiving it, "$0.00" and "no price" are the same broken document.
-  if (q.total == null || Number(q.total) <= 0) return 'no_price'
+  // ⭐ WAS `total == null || total <= 0`, which read "$0.00" and "no price" as the
+  // same broken document. For an UNPRICED quote that is still exactly right — and
+  // it is still what happens, because `quotePriceState` calls an absent or zero
+  // total 'unpriced'.
+  //
+  // What changed is the case the old rule could not see: work the owner has
+  // DECIDED is free, recorded with a reason, an actor and a timestamp. That is a
+  // known price of zero, and refusing it made honest no-charge work impossible to
+  // send at all — the owner's only way out was to invent a number. One engine
+  // answers both (lib/pricingState), so the send door, the portal and every money
+  // surface cannot drift apart on what "$0" meant.
+  if (!passesMoneyDoor(quotePriceState(q))) return 'no_price'
   return null
 }
 
@@ -135,7 +145,7 @@ export function canSendQuote(q: SendableQuote): boolean {
 /** Plain words for the block — what to DO, not what went wrong. */
 export function sendBlockedLabel(r: SendBlock): string {
   return r === 'no_price'
-    ? 'This quote has no price yet — add one before sending it.'
+    ? 'This quote has no price yet — add one, or mark it No charge, before sending it.'
     : 'This quote has no customer linked — add one so it can be sent and followed up.'
 }
 
@@ -173,7 +183,11 @@ export function isSystemAdvancedQuoteStatus(s: QuoteStatus): boolean {
 export const QUOTE_STATUS_MEANING: Record<QuoteStatus, string> = {
   draft: 'Still being prepared — the customer hasn’t seen it',
   sent: 'With the customer — waiting on their answer',
-  accepted: 'The customer approved this price',
+  // ⚠️ "The customer approved this price" was a CLAIM this status could not
+  // support: nothing distinguished a portal approval from an owner picking
+  // Accepted out of a dropdown. The status now means what it can prove — a deal
+  // was struck — and lib/quoteAcceptance says who struck it, or says nobody did.
+  accepted: 'A deal was struck — see the acceptance record for who accepted it',
   declined: 'The customer said no',
   scheduled: 'Set automatically when the work is booked',
   completed: 'Set automatically when the work is done',

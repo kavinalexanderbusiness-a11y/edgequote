@@ -5,6 +5,7 @@ import { AuthUnavailable } from '@/components/auth/AuthUnavailable'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { BottomNav } from '@/components/layout/BottomNav'
 import { QuickAddProvider } from '@/components/layout/QuickAddProvider'
+import { TenantTimeProvider } from '@/components/layout/TenantTimeProvider'
 import { RouteFocusManager } from '@/components/layout/RouteFocusManager'
 import { InstallPrompt } from '@/components/pwa/InstallPrompt'
 import { CommandPalette } from '@/components/command/CommandPalette'
@@ -39,6 +40,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
   if (!bizErr && !bizRow) redirect('/setup')
 
   return (
+    // ⭐ The tenant's clock wraps EVERYTHING under the dashboard, above the
+    // sidebar and every page, because "what day is it" has to be one answer for
+    // all of them at once. Three surfaces each deriving it themselves is what
+    // let the Dashboard, the Schedule and Weather show three different days.
+    <TenantTimeProvider>
     <div className="lg:flex min-h-screen">
       {/* Keyboard users can jump the sidebar straight to page content. Visually
           hidden until focused (Tab from the top of the page). */}
@@ -74,5 +80,6 @@ export default async function DashboardLayout({ children }: { children: React.Re
       <LostReasonHost />
       <UploadQueueWidget />
     </div>
+    </TenantTimeProvider>
   )
 }

@@ -600,6 +600,18 @@
   "tgenabled": "O"
  },
  {
+  "def": "CREATE TRIGGER trg_quote_acceptances_append_only BEFORE DELETE OR UPDATE ON public.quote_acceptances FOR EACH ROW EXECUTE FUNCTION quote_acceptances_append_only()",
+  "tbl": "quote_acceptances",
+  "tgname": "trg_quote_acceptances_append_only",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_quote_acceptances_assign_seq BEFORE INSERT ON public.quote_acceptances FOR EACH ROW EXECUTE FUNCTION quote_acceptances_assign_seq()",
+  "tbl": "quote_acceptances",
+  "tgname": "trg_quote_acceptances_assign_seq",
+  "tgenabled": "O"
+ },
+ {
   "def": "CREATE TRIGGER quote_addons_total_trg AFTER INSERT OR DELETE OR UPDATE ON public.quote_addons FOR EACH ROW EXECUTE FUNCTION quote_addons_sync_total()",
   "tbl": "quote_addons",
   "tgname": "quote_addons_total_trg",
@@ -657,6 +669,12 @@
   "def": "CREATE TRIGGER trg_notify_quote_accepted AFTER UPDATE OF status ON public.quotes FOR EACH ROW EXECUTE FUNCTION notify_quote_accepted()",
   "tbl": "quotes",
   "tgname": "trg_notify_quote_accepted",
+  "tgenabled": "O"
+ },
+ {
+  "def": "CREATE TRIGGER trg_quotes_protect_consent_snapshot BEFORE UPDATE OF accepted_price, selected_option_id ON public.quotes FOR EACH ROW EXECUTE FUNCTION quotes_protect_consent_snapshot()",
+  "tbl": "quotes",
+  "tgname": "trg_quotes_protect_consent_snapshot",
   "tgenabled": "O"
  },
  {

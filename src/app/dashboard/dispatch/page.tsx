@@ -1220,6 +1220,9 @@ export default function DispatchPage() {
     }
     if (res.outcome === 'queued') notify('Completed offline — it’ll sync and draft the invoice when you’re back in signal.', { undo })
     else if (invoiceCreated) notify(`${job.customers?.name || job.title} done — draft invoice ${res.invoice!.invoiceNumber} created.`, { undo })
+    // ⭐ Two refusals, two sentences. "No price" on work the owner deliberately
+    // gave away tells them to go fix something that was already right.
+    else if (res.invoice?.reason === 'no-charge') notify('Done — marked No charge, so no invoice was drafted. Nothing to bill.', { undo })
     else if (res.invoice?.reason === 'no-amount') notify('Done — no invoice drafted because this visit has no price.', { undo })
     else if (res.invoice?.reason === 'error') notify.error('Completed, but the draft invoice failed — invoice it manually from the job.')
     else notify(`${job.customers?.name || job.title} done.`, { undo })

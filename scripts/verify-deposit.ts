@@ -307,8 +307,17 @@ console.log('\nThe charge paths all ask the engine, and the webhook cannot doubl
     failedBranch.length > 0 && !/from\('payments'\)/.test(failedBranch),
     'a failed payment must never create ledger rows — only a notification')
   // Client-request-fails path: nothing client-side writes paid-state at all.
-  check('the success URL is display-only (?paid=1), never a writer',
-    /\?paid=1/.test(checkout) && /\?paid=1/.test(portal),
+  // ⚠️ RE-POINTED, NOT RELAXED (Session 110). The flag used to be spelled inline
+  // as `?paid=1`; /api/portal/pay now asks lib/portal's one link builder for it
+  // — `portalUrl(token, base, { paid: 1 })` — so that the host, path and token of
+  // a customer-facing URL have exactly one spelling. The CONTRACT is untouched:
+  // the success URL carries a display-only flag and writes nothing. So the
+  // assertion follows the flag to its new home rather than being deleted, and
+  // still fails if the flag stops being sent at all.
+  const carriesPaidFlag = (s: string) =>
+    /\?paid=1/.test(s) || /portalUrl\([^)]*\bpaid:\s*1/.test(s)
+  check('the success URL is display-only (a paid flag), never a writer',
+    carriesPaidFlag(checkout) && carriesPaidFlag(portal),
     'the webhook is the one writer of paid-state; the redirect only decorates the UI')
 }
 
