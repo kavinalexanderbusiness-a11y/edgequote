@@ -44,7 +44,7 @@
 // Section 5 needs no login and no fixture at all: it is pure refusal-probing
 // against anonymous callers, and it writes nothing by construction.
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import {
@@ -64,6 +64,18 @@ const ok = (n: string) => console.log(`  ✓ ${n}`)
 const fail = (n: string, d = '') => { failures++; console.log(`  ✗ ${n}${d ? `\n      ${d}` : ''}`) }
 const check = (n: string, cond: boolean, d = '') => cond ? ok(n) : fail(n, d)
 const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8')
+
+// ⚠️ THE APPLY PATH **AND** THE ARCHIVE, never one filename. A migration has two
+// lives: its own file while in flight, and the generated baseline once production
+// has run it — at which point the file moves to supabase/archive/ledger/, which is
+// never applied. Pinning the name made this throw ENOENT the moment the schema
+// converged, taking the whole suite down with it. Assertions over a migration's
+// COMMENTS need the archive specifically, because the generator strips prose.
+const schemaSources = (): string => {
+  const dirs = [join(process.cwd(), 'supabase', 'migrations'), join(process.cwd(), 'supabase', 'archive', 'ledger')]
+  return dirs.filter(d => existsSync(d)).flatMap(d =>
+    readdirSync(d).filter(f => f.endsWith('.sql')).sort().map(f => readFileSync(join(d, f), 'utf8'))).join('\n')
+}
 
 const GHOST = '00000000-0000-0000-0000-0000000000ff'
 
@@ -314,7 +326,7 @@ check('OWNER — the quote page reaches that dialog rather than writing its own 
 check('OWNER — an options quote cannot be accepted with no option named',
   /options\.length > 0/.test(ACCEPT_DIALOG) && /needsOption/.test(ACCEPT_DIALOG))
 check('OWNER — …and the DATABASE refuses it too, not just the dialog',
-  /the accepted one must be named/.test(read('supabase/migrations/20260828140000_quote_acceptance_integrity_v1.sql')))
+  /the accepted one must be named/.test(schemaSources()))
 check('OWNER — a falsy RPC result is never reported as success',
   /if \(error \|\| !data\)/.test(ACCEPT_DIALOG))
 

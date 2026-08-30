@@ -54,7 +54,21 @@ const fail = (n: string, d = '') => { failures++; console.log(`  ✗ ${n}${d ? `
 const check = (n: string, cond: boolean, d = '') => cond ? ok(n) : fail(n, d)
 const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8')
 
-const MIGRATION = 'supabase/migrations/20260828140000_quote_acceptance_integrity_v1.sql'
+// ⚠️⚠️ THE APPLY PATH, NOT A FILENAME. A migration has two lives: its own file
+// while in flight, and the generated BASELINE once production has run it and a
+// resync folds it in — at which point the file moves to supabase/archive/ledger/,
+// which is never applied. Pinning the name means this guard goes red on the very
+// convergence that proves the schema landed. That has now happened FOUR times in
+// this repo (verify-comm-prefs, verify-estimate-appointments, verify-custom-fields,
+// verify-client-privileges), so read all of supabase/migrations/ and assert the
+// STATE it produces. The generator also spells SQL its own way — quoted
+// identifiers, `= ANY (ARRAY[…])` for an IN list — so match the shape, never one
+// literal spelling.
+const APPLY_PATH = (() => {
+  const dir = join(process.cwd(), 'supabase', 'migrations')
+  return readdirSync(dir).filter(f => f.endsWith('.sql')).sort()
+    .map(f => readFileSync(join(dir, f), 'utf8')).join('\n')
+})()
 
 // A state row shaped the way quote_acceptance_state returns one.
 function state(over: Partial<AcceptanceState> = {}): AcceptanceState {
@@ -381,7 +395,11 @@ check('…and a deliberately dull one for a hand-set status',
 async function behaviour() {
   console.log('\n═══ 3. Behaviour — an empty Postgres built from this repository ═══')
 
-  if (!existsSync(MIGRATION)) { fail('the acceptance migration exists', MIGRATION); return }
+  // The objects must be reachable by the apply path — as their own migration
+  // while in flight, or inside the baseline once absorbed. Either is correct.
+  if (!/create table if not exists public."?quote_acceptances"?/i.test(APPLY_PATH)) {
+    fail('quote_acceptances is defined somewhere in the apply path', 'neither a migration nor the baseline defines it'); return
+  }
 
   const pglite = await loadPGlite()
   if (!pglite) {
@@ -987,13 +1005,44 @@ async function behaviour() {
 
   // Re-run just the backfill from the migration file — the same statement, not a
   // paraphrase of it, so the guard cannot pass against a backfill that differs.
-  const migSql = read(MIGRATION)
+  // ⚠️ A BACKFILL IS THE ONE THING THE BASELINE NEVER CARRIES. The generated
+  // baseline describes SCHEMA; a one-time DML that gives existing accepted quotes
+  // their legacy_unrecorded evidence is history, and once production has run it
+  // the statement lives only in supabase/archive/ledger/. So look in the apply
+  // path first (while the migration is still in flight) and fall back to the
+  // archive (after it is absorbed).
+  // ⭐ This does NOT breach "archive is never applied": nothing here applies it to
+  // production. The guard REPLAYS it into a throwaway PGlite to prove what it
+  // does — which is the whole reason it extracts the real statement instead of
+  // paraphrasing one.
+  const ledgerDir = join(process.cwd(), 'supabase', 'archive', 'ledger')
+  const archived = existsSync(ledgerDir)
+    ? readdirSync(ledgerDir).filter(f => f.endsWith('.sql')).sort()
+        .map(f => readFileSync(join(ledgerDir, f), 'utf8')).join('\n')
+    : ''
+  // ⚠️ Do NOT pick a source by "does it contain the opening line" — the BASELINE
+  // contains that line too, inside quote_record_acceptance()'s body, so the
+  // fallback never fires and the search runs over a file with no backfill in it.
+  // Search both and let the marker below decide, which is the only thing that
+  // actually distinguishes the backfill from the function that resembles it.
+  const migSql = APPLY_PATH + '\n' + archived
   // ⚠️ lastIndexOf, not indexOf: quote_record_acceptance() contains the SAME
   // opening line, and grabbing that one lifts a fragment of a plpgsql body
   // instead of the backfill ("syntax error at or near into" — which is how this
   // was caught).
-  const backfill = migSql.slice(migSql.lastIndexOf('insert into public.quote_acceptances ('))
-  const backfillStmt = backfill.slice(0, backfill.indexOf(';') + 1)
+  // ⚠️ SELECT BY MARKER, NOT BY POSITION. `lastIndexOf` worked while this read one
+  // file in a known order; reading the archive concatenates several, and
+  // quote_record_acceptance()'s body contains the SAME opening line, so position
+  // picks up `) returning id into v_id;` — a fragment of plpgsql, not a statement.
+  // The backfill is the only one of these that names legacy_unrecorded, and it is
+  // the only one that is not inside a function body, so say that instead.
+  const candidates: string[] = []
+  for (let i = migSql.indexOf('insert into public.quote_acceptances ('); i !== -1;
+       i = migSql.indexOf('insert into public.quote_acceptances (', i + 1)) {
+    const rest = migSql.slice(i)
+    candidates.push(rest.slice(0, rest.indexOf(';') + 1))
+  }
+  const backfillStmt = candidates.find(s => /legacy_unrecorded/.test(s) && !/into\s+v_id/i.test(s)) ?? ''
   check('the backfill statement was located in the migration', /legacy_unrecorded/.test(backfillStmt))
   await db.exec(backfillStmt)
   const legacyEv = (await acceptanceOf(legacyQ.id))[0]
@@ -1099,7 +1148,15 @@ async function behaviour() {
     !/override_reason/.test(JSON.stringify(nextAudit?.after ?? {})), JSON.stringify(nextAudit?.after))
 
   // ── 3i · The migration says what it is ────────────────────────────────────
-  const mig = read(MIGRATION)
+  // These assert what the migration SAYS — its recorded intent, in comments the
+  // generated baseline necessarily strips. That prose is history, so read the
+  // apply path AND the archive: whichever life the migration is in, the sentence
+  // it committed to is still findable.
+  const ledgerDir2 = join(process.cwd(), 'supabase', 'archive', 'ledger')
+  const mig = APPLY_PATH + '\n' + (existsSync(ledgerDir2)
+    ? readdirSync(ledgerDir2).filter(f => f.endsWith('.sql')).sort()
+        .map(f => readFileSync(join(ledgerDir2, f), 'utf8')).join('\n')
+    : '')
   check('the migration states that signatures are NOT its job',
     /S74|documents\/signatures/.test(mig) && /NOT THIS TABLE|Not a signature store/.test(mig))
   check('…and that an administrative override produces no acceptance row',
