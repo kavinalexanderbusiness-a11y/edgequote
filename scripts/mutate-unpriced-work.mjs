@@ -172,10 +172,8 @@ mutate('the status picker stops gating accepted/completed/paid',
   "    if (s === 'accepted' || s === 'completed' || s === 'paid') {",
   '    if (false) {')
 
-mutate('the invoice drafter stops refusing a $0 amount',
-  'src/lib/invoicing.ts',
-  "  if (!(amount > 0)) return { created: false, reason: 'no-amount' }",
-  "  if (false) return { created: false, reason: 'no-amount' }")
+mutate('the invoice drafter stops refusing a zero amount',
+  'src/lib/invoicing.ts', '  if (!(amount > 0)) {', '  if (false) {')
 
 console.log('\n── 5 · quote options ──')
 

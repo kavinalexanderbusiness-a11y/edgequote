@@ -410,8 +410,15 @@ check('the action module goes through the RPC, never a direct column write',
 check('it never names the columns in a write', !/no_charge_at\s*:/.test(action))
 check('it has no actor parameter to forge',
   !/p_actor|actorId|no_charge_by\s*:/.test(action))
+// ⚠️ This asserted only that the STRINGS were present, and mutation testing
+// walked straight through it: replacing the branch condition with `if (false)`
+// left every string in place and the check stayed green. Naming a code is not
+// the same as BRANCHING on it — assert the wiring.
 check('a missing migration is reported as such, not as a save failure',
-  /needsMigration/.test(action) && /42883/.test(action) && /42703/.test(action))
+  /needsMigration: true/.test(action)
+  && /MISSING = new Set\(\['42883', '42703', 'PGRST202'\]\)/.test(action)
+  && /if \(MISSING\.has\(String\(error\.code\)\)\) \{/.test(action),
+  'the missing-migration branch is no longer wired to the error code set')
 
 // ⭐ The whole app is checked, not just the module: any OTHER writer would be a
 // second door, and the point of the RPC is that there is only one.
@@ -741,6 +748,22 @@ async function dbDoor() {
   eq('a signed-out caller cannot mark anything free', await (async () => {
     await asNobody(); const r = await setNoCharge(draft, 'nope'); await asOwner(); return r
   })(), false)
+
+  // ⛔⛔ CROSS-TENANT. Found by mutation testing: removing `and user_id = v_uid`
+  // from the UPDATE left every check above green, because every check above used
+  // the owner's OWN rows. SECURITY DEFINER bypasses RLS, so that predicate is the
+  // only thing standing between this door and another business's book — and a
+  // guard that never exercises a second tenant cannot see it disappear.
+  const OTHER_T = '00000000-0000-0000-0000-0000000c000a'
+  await db.exec(`insert into auth.users (id, email) values ('${OTHER_T}', 'other-tenant@s114.test')`)
+  const theirs = await mkQuote({ price: null, status: 'draft' })
+  await db.query(`update public.quotes set user_id = $1, customer_id = null where id = $2`, [OTHER_T, theirs])
+  await asOwner()
+  eq('⛔ one tenant cannot mark ANOTHER tenant\'s quote No charge',
+    await setNoCharge(theirs, 'not mine to give away'), false)
+  check('… and that quote is untouched',
+    !(await ncOf(theirs))?.no_charge_at,
+    'a foreign tenant\'s row was written')
 
   // ── F · a foreign tenant's token cannot approve anything ──────────────────
   // The tenancy statement was already there; re-asserted because this lane
