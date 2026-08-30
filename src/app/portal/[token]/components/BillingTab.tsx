@@ -265,7 +265,7 @@ function RecordsHub({ view, actions, initialCat, focusDocId }: TabProps & { init
 // status, never a second lifecycle engine; declined/expired answer null and
 // get no rail — a rail promises forward motion those rows don't have). ───────
 
-function DocRow({ d, actions, termsText, focus }: { d: DocItem; actions: PortalActions; termsText: string | null; focus?: boolean }) {
+export function DocRow({ d, actions, termsText, focus }: { d: DocItem; actions: PortalActions; termsText: string | null; focus?: boolean }) {
   const m = KIND_META[d.kind]
   // The one action each document actually needs, right on the row: a sent quote
   // can be accepted; an invoice with a balance can be paid.
@@ -417,7 +417,14 @@ function DocRow({ d, actions, termsText, focus }: { d: DocItem; actions: PortalA
             return (
               <>
                 <p className="text-sm font-bold text-ink tabular-nums">{formatCurrency(d.amount)}</p>
-                {d.amountNote ? <p className="text-[11px] text-ink-faint mt-0.5">{d.amountNote}</p> : null}
+                {/* max-w: this column is shrink-0 (the amount must never be
+                    squeezed), so a LONG note — the S121 drift sentence — set the
+                    column's width instead of wrapping and pushed the whole row
+                    to 577px inside a 375px phone. Measured by the S112 harness;
+                    pre-existing whenever the note ran long. Wrapping inside a
+                    bounded column keeps the amount protected AND the row on
+                    screen. */}
+                {d.amountNote ? <p className="text-[11px] text-ink-faint mt-0.5 max-w-[200px]">{d.amountNote}</p> : null}
               </>
             )
           })()}
