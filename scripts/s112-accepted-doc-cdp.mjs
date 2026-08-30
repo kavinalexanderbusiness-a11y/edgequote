@@ -34,22 +34,39 @@ const check = (n, c, d = '') => (c ? ok(n) : fail(n, d))
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
 const REQUIRED = {
-  'portal-standing': [
-    'Accepted', 'your download above is that accepted version',
+  // A — the customer really accepted: the row may say so.
+  'portal-customer-standing': [
+    'your download above is that accepted version',
   ],
+  // B — recorded on their behalf: says RECORDED, never portal-accepted.
+  'portal-onbehalf-standing': [
+    'Acceptance recorded',
+    'the version it was recorded against',
+  ],
+  // C — legacy backfill: history acknowledged, nothing overclaimed.
+  'portal-legacy-standing': [
+    'On record as accepted (from before detailed records)',
+    'shows the quote as first recorded',
+  ],
+  // D — accepted then edited: the accepted figure + the coming-revision note.
   'portal-drifted': [
     'This is the price you accepted — we’ve made changes since',
     'your download above is that accepted version',
   ],
+  // E — re-sent revision beside the prior artifact.
   'portal-resent': [
     'Updated quote — replaces the version you accepted',
     'Your previously accepted version',
     'unchanged by the update above, which needs your approval',
   ],
 }
-// Sentences that would mean the two documents were being confused again.
+// Sentences that would mean evidence kinds were being confused again.
 const FORBIDDEN = {
-  // A drifted row must not claim the live figure is what they agreed to.
+  // On-behalf must never wear the customer's sentence.
+  'portal-onbehalf-standing': ['your download above is that accepted version'],
+  // Legacy must claim neither the customer sentence nor a recorded acceptance.
+  'portal-legacy-standing': ['your download above is that accepted version', 'Acceptance recorded'],
+  // A drifted row must not headline the live figure the customer never agreed to.
   'portal-drifted': ['6,225'],
   // A re-sent update must not present itself as already accepted.
   'portal-resent': ['your download above is that accepted version'],

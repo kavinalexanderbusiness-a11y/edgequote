@@ -40,7 +40,7 @@ import { isWon } from '@/lib/salesStage'
 import {
   acceptanceStanding, acceptanceSentence, reapprovalSentence, materialChanges,
   isUnevidencedAcceptance, acceptanceBlock, acceptanceBlockLabel,
-  hasCurrentValidAcceptance, type AcceptanceState,
+  hasCurrentValidAcceptance, acceptedDocumentLabel, acceptedArtifactLabel, acceptedFileSuffix, type AcceptanceState,
 } from '@/lib/quoteAcceptance'
 import { loadAcceptanceState, loadAcceptanceHistory, type AcceptanceHistoryRow } from '@/lib/quoteAcceptanceData'
 import { RecordAcceptanceDialog } from '@/components/quotes/RecordAcceptanceDialog'
@@ -582,13 +582,16 @@ export default function QuoteDetailPage() {
         acceptedAt: acceptance.accepted_at ?? quote.created_at,
         selectedOptionId: acceptance.selected_option_id,
         termsText: (termsRow as { terms_text: string | null } | null)?.terms_text ?? null,
+        // The evidence kind, off the ledger. A missing kind degrades to the
+        // WEAKEST claim (legacy wording), never to "the customer accepted".
+        kind: acceptance.kind ?? 'legacy_unrecorded',
         presentation: { quoteId: quote.id, createdAt: quote.created_at, issuedDate: quote.issued_date },
       })
       const blob = await renderQuoteBlob(input.quote, settings, input.services, input.options, input.accepted)
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `${quote.quote_number}-accepted.pdf`
+      a.download = `${quote.quote_number}-${acceptedFileSuffix(acceptance.kind ?? 'legacy_unrecorded')}.pdf`
       document.body.appendChild(a)
       a.click()
       a.remove()
@@ -1198,15 +1201,19 @@ export default function QuoteDetailPage() {
             </Button>
           )}
           {/* ── The accepted version (Session 112 · accepted-document-truth) ──
-              Only once an acceptance record exists: the immutable document the
-              customer said yes to, rendered from the ledger snapshot. Sits
-              beside the current PDF so the two are visibly DIFFERENT artifacts
-              — the current one is relabelled "Current PDF" the moment this
-              appears, so neither can pass for the other. */}
+              Only once an acceptance record exists: the immutable snapshot the
+              ledger holds, rendered beside the current PDF so the two are
+              visibly DIFFERENT artifacts — the current one is relabelled
+              "Current PDF" the moment this appears. The LABEL follows the
+              evidence kind (THE engine's words): a customer or on-behalf row is
+              an "Accepted version"; a legacy backfill is a "Historical record",
+              because who accepted it was never captured and this button must
+              not claim otherwise. */}
           {acceptance?.accepted && acceptance.document && (
             <Button onClick={handleOpenAcceptedPdf} variant="secondary" size="sm" loading={acceptedPdfLoading}
-              title={`The exact document accepted${acceptance.accepted_at ? ' on ' + formatDate(acceptance.accepted_at) : ''} — later edits are not in it`}>
-              <FileDown className="w-3.5 h-3.5" /> Accepted version
+              title={acceptedDocumentLabel(acceptance.kind ?? 'legacy_unrecorded',
+                acceptance.accepted_at ? formatDate(acceptance.accepted_at) : 'the recorded date').body}>
+              <FileDown className="w-3.5 h-3.5" /> {acceptedArtifactLabel(acceptance.kind ?? 'legacy_unrecorded')}
             </Button>
           )}
           {/* The other direction of the estimate/quote link: a quote the owner

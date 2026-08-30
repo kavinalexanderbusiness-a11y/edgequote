@@ -21,8 +21,9 @@ import {
 import { PaymentsSection } from './PaymentsSection'
 import { ChangeBreakdown, PendingChangeCard } from './ChangesCard'
 // The acceptance engine's own words, so the customer's screen and the owner's
-// screen describe the same act identically (Session 121).
-import { TERMS_ACK_LABEL, acceptBlockedLabel } from '@/lib/quoteAcceptance'
+// screen describe the same act identically (Session 121; per-kind document
+// labels Session 112 — a legacy backfill must never read as "you accepted").
+import { TERMS_ACK_LABEL, acceptBlockedLabel, acceptedRowSentence, priorVersionHeading } from '@/lib/quoteAcceptance'
 
 const KIND_META: Record<DocKind, { label: string; icon: typeof FileText; tone: string }> = {
   quote: { label: 'Quote', icon: FileText, tone: 'text-accent-text border-accent/25 bg-accent/10' },
@@ -338,10 +339,16 @@ export function DocRow({ d, actions, termsText, focus }: { d: DocItem; actions: 
             <p className="text-xs text-ink-muted">{m.label} · {d.number} · {formatDate(d.date)}</p>
             {/* An UPDATED quote must announce itself as one, at the top — not
                 leave the customer to notice that a document they already
-                accepted is somehow asking for approval again. */}
+                accepted is somehow asking for approval again. The clause names
+                the prior evidence in its own strength: accepted / recorded /
+                on record — never "you accepted" over a legacy backfill. */}
             {d.kind === 'quote' && d.status === 'sent' && d.acceptedVersion && (
               <p className="text-xs mt-0.5 text-amber-400 font-medium">
-                Updated quote — replaces the version you accepted {formatDate(d.acceptedVersion.at)} once you approve it
+                Updated quote — replaces {
+                  d.acceptedVersion.kind === 'legacy_unrecorded' ? 'the version on record'
+                  : d.acceptedVersion.kind === 'owner_on_behalf' ? `the version recorded ${formatDate(d.acceptedVersion.at)}`
+                  : `the version you accepted ${formatDate(d.acceptedVersion.at)}`
+                } once you approve it
               </p>
             )}
             {/* When it's due — the row showed only the ISSUE date, so "am I late?" was
@@ -760,17 +767,20 @@ export function DocRow({ d, actions, termsText, focus }: { d: DocItem; actions: 
       {d.acceptedVersion && !canAccept && (
         <p className="text-[11px] text-ink-faint mt-2 flex items-center gap-1">
           <Check className="w-3 h-3 text-emerald-400 shrink-0" aria-hidden />
-          Accepted {formatDate(d.acceptedVersion.at)} — your download above is that accepted version.
+          {/* THE engine's per-kind sentence: "accepted" only when the customer
+              actually accepted; "recorded" for on-behalf; a legacy record says
+              detailed evidence predates the system and claims nothing more. */}
+          {acceptedRowSentence(d.acceptedVersion.kind, formatDate(d.acceptedVersion.at))}
         </p>
       )}
       {d.acceptedVersion && canAccept && (
         <div className="mt-3 rounded-lg border border-border bg-bg-tertiary p-3">
           <p className="text-xs font-semibold text-ink flex items-center gap-1.5">
             <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" aria-hidden />
-            Your previously accepted version
+            {priorVersionHeading(d.acceptedVersion.kind)}
           </p>
           <p className="text-[11px] text-ink-muted mt-0.5 tabular-nums">
-            Accepted {formatDate(d.acceptedVersion.at)}
+            {d.acceptedVersion.kind === 'legacy_unrecorded' ? 'On record' : d.acceptedVersion.kind === 'owner_on_behalf' ? `Recorded ${formatDate(d.acceptedVersion.at)}` : `Accepted ${formatDate(d.acceptedVersion.at)}`}
             {d.acceptedVersion.amount != null ? ` · ${formatCurrency(d.acceptedVersion.amount)}` : ''} —
             unchanged by the update above, which needs your approval before anything replaces it.
           </p>

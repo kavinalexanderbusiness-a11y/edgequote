@@ -32,7 +32,7 @@
 // the live setting.
 
 import type { Quote, QuoteService, QuoteOption } from '@/types'
-import type { AcceptedDocument } from '@/lib/quoteAcceptance'
+import type { AcceptedDocument, AcceptanceKind } from '@/lib/quoteAcceptance'
 
 /** What renderQuoteBlob needs, plus the stamp that marks the render as the
  *  accepted version rather than the current quote. */
@@ -40,8 +40,10 @@ export interface AcceptedRenderInput {
   quote: Quote
   services: QuoteService[] | undefined
   options: QuoteOption[] | undefined
-  /** Passed to QuoteDocument's `accepted` prop — its presence IS the label. */
-  accepted: { at: string; termsText: string | null }
+  /** Passed to QuoteDocument's `accepted` prop — its presence IS the label, and
+   *  `kind` decides WHICH label: the three evidence kinds are not
+   *  interchangeable, and the paper must say which one it carries. */
+  accepted: { at: string; termsText: string | null; kind: AcceptanceKind }
 }
 
 const num = (v: number | string | null | undefined): number => {
@@ -67,10 +69,17 @@ export function acceptedRenderInput(args: {
   selectedOptionId: string | null
   /** The EXACT terms text stored on the acceptance row. Null = none were agreed. */
   termsText: string | null
+  /** The evidence kind, straight off the ledger row — never inferred. */
+  kind: AcceptanceKind
   presentation: { quoteId: string; createdAt: string; issuedDate: string | null }
 }): AcceptedRenderInput {
   const d = args.document
   const p = args.presentation
+  // ⛔ A LEGACY ROW ACKNOWLEDGED NO TERMS — the database welds that shut
+  // (kind='legacy_unrecorded' carries no terms claim by CHECK), and this
+  // mapper welds it again so no caller can dress a backfill up as consent to
+  // a specific text: whatever arrives, a legacy render prints no terms.
+  const termsText = args.kind === 'legacy_unrecorded' ? null : args.termsText
 
   // Material fields: snapshot only. Presentation fields: named, minimal, inert.
   // Everything else the Quote type carries is zeroed — QuoteDocument's read set
@@ -143,5 +152,5 @@ export function acceptedRenderInput(args: {
       }))
     : undefined
 
-  return { quote, services, options, accepted: { at: args.acceptedAt, termsText: args.termsText } }
+  return { quote, services, options, accepted: { at: args.acceptedAt, termsText, kind: args.kind } }
 }

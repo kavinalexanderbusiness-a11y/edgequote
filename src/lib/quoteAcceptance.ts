@@ -446,3 +446,65 @@ export function acceptBlockedLabel(r: AcceptBlock): string {
     ? 'Choose which option you’d like before accepting.'
     : 'Please tick to confirm you agree to the quoted scope and terms.'
 }
+
+// ── The accepted-version DOCUMENT's words, per evidence kind (Session 112) ───
+//
+// ⭐⭐ THE THREE KINDS ARE NOT INTERCHANGEABLE EVIDENCE, and the document that
+// renders a snapshot must say which one it carries. A `customer` row proves the
+// customer acted; an `owner_on_behalf` row proves the business RECORDED that
+// they did; a `legacy_unrecorded` row proves only that the old system had the
+// quote marked accepted — who accepted, against which exact document, and
+// whether any terms were seen was never captured, and no label here may claim
+// otherwise. These functions are THE words — the PDF band, the portal row and
+// the owner tooltip all read them, so the three surfaces cannot drift apart.
+// Customer-safe by construction: no actor ids, no audit jargon.
+
+/** Band title + body for the snapshot-fed PDF. `dateText` is the caller's
+ *  formatted accepted_at (each renderer owns its own date format). */
+export function acceptedDocumentLabel(kind: AcceptanceKind, dateText: string): { title: string; body: string } {
+  if (kind === 'legacy_unrecorded') return {
+    title: `HISTORICAL RECORD — ${dateText}`,
+    body: `This quote was marked accepted before detailed acceptance records were kept. ` +
+      `This document shows the quote as recorded on ${dateText}; the original acceptance — ` +
+      `who gave it, and against which exact document — was not captured.`,
+  }
+  if (kind === 'owner_on_behalf') return {
+    title: `ACCEPTED VERSION — RECORDED ${dateText}`,
+    body: `This document is the version the acceptance was recorded against on ${dateText} — ` +
+      `the decision was given outside this portal and recorded by the business on the customer’s behalf. ` +
+      `Changes made after that date are not reflected here and would need a fresh approval.`,
+  }
+  return {
+    title: `ACCEPTED VERSION — ${dateText}`,
+    body: `This document is the version accepted on ${dateText}. Any changes made to the quote ` +
+      `after that date are not reflected here and would need a fresh approval.`,
+  }
+}
+
+/** The portal row's one-liner under the download, on a standing/drifted row. */
+export function acceptedRowSentence(kind: AcceptanceKind, dateText: string): string {
+  if (kind === 'legacy_unrecorded') {
+    return `On record as accepted (from before detailed records) — your download above shows the quote as first recorded.`
+  }
+  if (kind === 'owner_on_behalf') {
+    return `Acceptance recorded ${dateText} — your download above is the version it was recorded against.`
+  }
+  return `Accepted ${dateText} — your download above is that accepted version.`
+}
+
+/** Heading of the prior-version artifact beside a re-sent revision. */
+export function priorVersionHeading(kind: AcceptanceKind): string {
+  if (kind === 'legacy_unrecorded') return 'The version previously on record'
+  if (kind === 'owner_on_behalf') return 'The previously recorded version'
+  return 'Your previously accepted version'
+}
+
+/** The owner-side door label for the snapshot document. */
+export function acceptedArtifactLabel(kind: AcceptanceKind): string {
+  return kind === 'legacy_unrecorded' ? 'Historical record' : 'Accepted version'
+}
+
+/** Filename suffix — a legacy snapshot must not download as "-accepted". */
+export function acceptedFileSuffix(kind: AcceptanceKind): string {
+  return kind === 'legacy_unrecorded' ? 'record' : 'accepted'
+}

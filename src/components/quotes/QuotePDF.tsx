@@ -7,6 +7,7 @@ import type { Quote, QuoteService, QuoteOption, BusinessSettings } from '@/types
 import { serviceLineTotals } from '@/lib/quoteServices'
 import { activeOption, hasOptions, sortedOptions } from '@/lib/quoteOptions'
 import { pdfLogoUrl } from '@/lib/photos'
+import { acceptedDocumentLabel, type AcceptanceKind } from '@/lib/quoteAcceptance'
 
 const COLORS = {
   green: '#00C896',
@@ -115,9 +116,13 @@ interface QuotePDFProps {
   //     (null = nothing was agreed = no terms box);
   //   · the crew/hours estimate labels are suppressed ('—'): the snapshot
   //     never held them, and an accepted document must not gain a live guess.
+  // `kind` decides the band's WORDS (acceptedDocumentLabel): a customer
+  // acceptance may say "accepted"; an owner-recorded one says "recorded on the
+  // customer's behalf"; a legacy backfill says the original evidence was never
+  // captured and claims nothing more. The three are not interchangeable.
   // ⛔ A render of the CURRENT quote must never pass this. The guard pins both
   // directions.
-  accepted?: { at: string; termsText: string | null }
+  accepted?: { at: string; termsText: string | null; kind: AcceptanceKind }
 }
 
 export function QuoteDocument({ quote, settings, services, options, accepted }: QuotePDFProps) {
@@ -225,20 +230,22 @@ export function QuoteDocument({ quote, settings, services, options, accepted }: 
         </View>
 
         {/* ── The accepted-version band ─────────────────────────────────────
-            Renders ONLY on a snapshot-fed document. Names what this paper IS —
-            the version that was accepted, on the ledger's date — and says
-            plainly that later edits are not in it. A current/draft render never
-            carries this band, so the two documents can never be mistaken for
-            one another. */}
-        {accepted ? (
-          <View style={styles.acceptedBand}>
-            <Text style={styles.acceptedBandTitle}>ACCEPTED VERSION — {dateStr(accepted.at)}</Text>
-            <Text style={styles.acceptedBandText}>
-              This document is the version accepted on {dateStr(accepted.at)}. Any changes made to the
-              quote after that date are not reflected here and would need a fresh approval.
-            </Text>
-          </View>
-        ) : null}
+            Renders ONLY on a snapshot-fed document. Names what this paper IS,
+            in THE engine's words for its evidence kind (acceptedDocumentLabel):
+            a customer acceptance says accepted; an owner-recorded one says
+            recorded on the customer's behalf; a legacy backfill says the
+            original evidence was never captured — and never more. A current/
+            draft render never carries this band, so the two documents can never
+            be mistaken for one another. */}
+        {accepted ? (() => {
+          const label = acceptedDocumentLabel(accepted.kind, dateStr(accepted.at))
+          return (
+            <View style={styles.acceptedBand}>
+              <Text style={styles.acceptedBandTitle}>{label.title}</Text>
+              <Text style={styles.acceptedBandText}>{label.body}</Text>
+            </View>
+          )
+        })() : null}
 
         {/* Bill to + service */}
         <View style={styles.twoCol}>
@@ -517,7 +524,7 @@ export function QuoteDocument({ quote, settings, services, options, accepted }: 
 // heavy @react-pdf library only loads when the user actually opens a PDF.
 export async function renderQuoteBlob(
   quote: Quote, settings: BusinessSettings | null, services?: QuoteService[], options?: QuoteOption[],
-  accepted?: { at: string; termsText: string | null },
+  accepted?: { at: string; termsText: string | null; kind: AcceptanceKind },
 ): Promise<Blob> {
   return pdf(<QuoteDocument quote={quote} settings={settings} services={services} options={options} accepted={accepted} />).toBlob()
 }

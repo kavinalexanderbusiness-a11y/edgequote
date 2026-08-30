@@ -179,6 +179,8 @@ export async function renderPortalQuoteBlob(q: PortalPdfQuote, customerName: str
 // snapshot deliberately does not carry.
 export interface PortalPdfAcceptance {
   accepted_at: string
+  /** The evidence kind — decides the document's label; never inferred. */
+  kind: import('@/lib/quoteAcceptance').AcceptanceKind
   accepted_amount?: number | string | null
   selected_option_id: string | null
   document: import('@/lib/quoteAcceptance').AcceptedDocument
@@ -199,6 +201,7 @@ export async function renderPortalAcceptedQuoteBlob(
     acceptedAt: acc.accepted_at,
     selectedOptionId: acc.selected_option_id,
     termsText: acc.terms_text,
+    kind: acc.kind,
     presentation: { quoteId: q.id ?? '', createdAt: q.created_at, issuedDate: q.issued_date },
   })
   return renderQuoteBlob(input.quote, portalBusinessToSettings(b), input.services, input.options, input.accepted)

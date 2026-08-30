@@ -15,9 +15,15 @@
 // migrations; the OWNER surface is proved live against a local build (the
 // ledger it reads DOES exist in production).
 //
-// It also renders the accepted-version PDF FOR REAL (renderQuoteBlob with the
-// accepted stamp, via the snapshot mapper) and writes the bytes out — proof the
-// snapshot-fed pipeline produces an actual document, not just props.
+// THE FIVE REVIEW STATES, one scene each:
+//   A portal-customer-standing   real customer acceptance, unchanged
+//   B portal-onbehalf-standing   owner recorded it on the customer's behalf
+//   C portal-legacy-standing     legacy backfill — no original evidence
+//   D portal-drifted             accepted, then materially edited (reapproval due)
+//   E portal-resent              revision re-sent; prior artifact rides beside it
+//
+// It also renders the accepted-version PDF FOR REAL — once per evidence kind —
+// through the snapshot mapper, proving the pipeline produces actual documents.
 
 import { renderToStaticMarkup } from 'react-dom/server'
 import { writeFileSync, readdirSync, readFileSync, mkdirSync } from 'node:fs'
@@ -27,7 +33,7 @@ import { DocRow } from '../src/app/portal/[token]/components/BillingTab'
 import type { DocItem } from '../src/app/portal/[token]/model'
 import type { PortalActions } from '../src/app/portal/[token]/components/shared'
 import { acceptedRenderInput } from '../src/lib/acceptedDocument'
-import type { AcceptedDocument } from '../src/lib/quoteAcceptance'
+import type { AcceptedDocument, AcceptanceKind } from '../src/lib/quoteAcceptance'
 
 const outdir = process.argv[2] || '.s112b'
 mkdirSync(outdir, { recursive: true })
@@ -47,7 +53,12 @@ const actions = {
 } as unknown as PortalActions
 
 const blob = async () => new Blob(['x'], { type: 'application/pdf' })
+const AT = '2026-08-20T10:00:00Z'
 
+const av = (kind: AcceptanceKind, needsReapproval = false) => ({
+  at: AT, kind, amount: 5550, needsReapproval,
+  filename: `Q-1042-${kind === 'legacy_unrecorded' ? 'record' : 'accepted'}.pdf`, getBlob: blob,
+})
 const baseDoc = (over: Partial<DocItem> = {}): DocItem => ({
   id: 'qQ1', rawId: 'Q1', kind: 'quote', number: 'Q-1042', title: 'Lawn care',
   date: '2026-08-02', status: 'accepted', validUntil: '2027-01-15',
@@ -57,28 +68,36 @@ const baseDoc = (over: Partial<DocItem> = {}): DocItem => ({
   ...over,
 } as DocItem)
 
-// ── The three states the customer can meet ───────────────────────────────────
 const SCENES: Record<string, React.ReactElement> = {
-  // Accepted, unchanged: the row's download IS the accepted version, and says so.
-  'portal-standing': (
+  // A — the customer really accepted, and nothing has changed since.
+  'portal-customer-standing': (
+    <DocRow termsText={null} actions={actions} d={baseDoc({ acceptedVersion: av('customer') })} />
+  ),
+  // B — staff recorded a decision that arrived by phone/email/in person.
+  'portal-onbehalf-standing': (
+    <DocRow termsText={null} actions={actions} d={baseDoc({ acceptedVersion: av('owner_on_behalf') })} />
+  ),
+  // C — legacy backfill: the old system had it marked accepted; the original
+  // evidence was never captured, and the row must not claim more.
+  'portal-legacy-standing': (
     <DocRow termsText={null} actions={actions} d={baseDoc({
-      acceptedVersion: { at: '2026-08-20T10:00:00Z', amount: 5550, needsReapproval: false, filename: 'Q-1042-accepted.pdf', getBlob: blob },
+      filename: 'Q-1042-record.pdf', acceptedVersion: av('legacy_unrecorded'),
     })} />
   ),
-  // Accepted, then edited (fingerprint drifted): accepted figure holds the
-  // headline, the amber note says a revision is coming, download stays the snapshot.
+  // D — accepted, then materially edited: the accepted figure holds the
+  // headline, the amber note says a revision is coming, download = snapshot.
   'portal-drifted': (
     <DocRow termsText={null} actions={actions} d={baseDoc({
       amountNote: 'This is the price you accepted — we’ve made changes since and will send you an updated quote to look over.',
-      acceptedVersion: { at: '2026-08-20T10:00:00Z', amount: 5550, needsReapproval: true, filename: 'Q-1042-accepted.pdf', getBlob: blob },
+      acceptedVersion: av('customer', true),
     })} />
   ),
-  // Re-sent for approval: the row is the UPDATE, announced as one, with the
-  // previously-accepted version beside it as its own labelled artifact.
+  // E — the revision is re-sent: the row is the UPDATE, announced as one, with
+  // the previously-accepted version beside it as its own labelled artifact.
   'portal-resent': (
     <DocRow termsText={null} actions={actions} d={baseDoc({
       status: 'sent', amount: 6225, filename: 'Q-1042.pdf',
-      acceptedVersion: { at: '2026-08-20T10:00:00Z', amount: 5550, needsReapproval: true, filename: 'Q-1042-accepted.pdf', getBlob: blob },
+      acceptedVersion: av('customer', true),
     })} />
   ),
 }
@@ -92,7 +111,7 @@ for (const [name, el] of Object.entries(SCENES)) {
   console.log(`scene: ${name}.html (${body.length} bytes of markup)`)
 }
 
-// ── The accepted PDF, rendered for real from the snapshot ────────────────────
+// ── The accepted PDF, rendered for real, once per evidence kind ──────────────
 const SNAP: AcceptedDocument = {
   quote_number: 'Q-1042', customer_name: 'Dana Reyes', address: '12 Elm St SW, Calgary',
   service_type: 'Lawn care', notes: 'Front and back, gate code 4417',
@@ -106,21 +125,24 @@ const SNAP: AcceptedDocument = {
   ],
 }
 
-async function renderPdf() {
+async function renderPdfs() {
   const { renderQuoteBlob } = await import('../src/components/quotes/QuotePDF')
-  const input = acceptedRenderInput({
-    document: SNAP, acceptedAt: '2026-08-20T10:00:00Z', selectedOptionId: null,
-    termsText: 'Payment due on completion. Cancellations need 24 hours notice.',
-    presentation: { quoteId: 'q1', createdAt: '2026-08-01T09:00:00Z', issuedDate: '2026-08-02' },
-  })
-  const b = await renderQuoteBlob(input.quote, {
-    company_name: 'Fixture Yard', phone: '403-555-0100', email_primary: 'hi@fixture.test',
-    base_address: '1 Shop Rd', gst_percent: 5,
-  } as never, input.services, input.options, input.accepted)
-  const buf = Buffer.from(await b.arrayBuffer())
-  writeFileSync(join(outdir, 'accepted-version.pdf'), buf)
-  const magic = buf.subarray(0, 5).toString() === '%PDF-'
-  console.log(`accepted PDF: ${buf.length} bytes, magic ${magic ? 'OK' : 'MISSING'}`)
-  if (!magic || buf.length < 4000) { console.error('PDF PROOF FAILED'); process.exit(1) }
+  for (const kind of ['customer', 'owner_on_behalf', 'legacy_unrecorded'] as AcceptanceKind[]) {
+    const input = acceptedRenderInput({
+      document: SNAP, acceptedAt: AT, selectedOptionId: null,
+      termsText: 'Payment due on completion. Cancellations need 24 hours notice.',
+      kind,
+      presentation: { quoteId: 'q1', createdAt: '2026-08-01T09:00:00Z', issuedDate: '2026-08-02' },
+    })
+    const b = await renderQuoteBlob(input.quote, {
+      company_name: 'Fixture Yard', phone: '403-555-0100', email_primary: 'hi@fixture.test',
+      base_address: '1 Shop Rd', gst_percent: 5,
+    } as never, input.services, input.options, input.accepted)
+    const buf = Buffer.from(await b.arrayBuffer())
+    writeFileSync(join(outdir, `accepted-${kind}.pdf`), buf)
+    const magic = buf.subarray(0, 5).toString() === '%PDF-'
+    console.log(`accepted PDF (${kind}): ${buf.length} bytes, magic ${magic ? 'OK' : 'MISSING'}`)
+    if (!magic || buf.length < 4000) { console.error('PDF PROOF FAILED'); process.exit(1) }
+  }
 }
-renderPdf().then(() => console.log('harness done'))
+renderPdfs().then(() => console.log('harness done'))

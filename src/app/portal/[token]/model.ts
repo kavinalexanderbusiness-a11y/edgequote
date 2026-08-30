@@ -33,7 +33,7 @@ import { sortedOptions } from '@/lib/quoteOptions'
 // "$5,500 + $575 = $6,075" is one calculation with two audiences, not two.
 import { authorizedValue } from '@/lib/changeOrders'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
-import { isAcceptedOrBeyond, type AcceptedDocument } from '@/lib/quoteAcceptance'
+import { isAcceptedOrBeyond, acceptedFileSuffix, type AcceptedDocument, type AcceptanceKind } from '@/lib/quoteAcceptance'
 import { formatCurrency, parseLocalDate } from '@/lib/utils'
 // THE request engine (lib/portalRequests) — the same module the owner's request
 // card reads. The kinds, the media contract and the "a request is an ask, not an
@@ -77,7 +77,7 @@ export interface PortalQuote { id: string; quote_number: string; service_type: s
  */
 export interface PortalQuoteAcceptance {
   accepted_at: string
-  kind: 'customer' | 'owner_on_behalf' | 'legacy_unrecorded'
+  kind: AcceptanceKind
   accepted_amount: number | string | null
   selected_option_id: string | null
   document: AcceptedDocument
@@ -686,9 +686,11 @@ export interface DocItem { id: string; rawId: string; kind: DocKind; number: str
    * accepted quote the ROW's own download already IS this document; the field
    * still matters there (the date line), and on a re-sent revision it is the
    * separate, labelled artifact beside the update being offered.
-   * `needsReapproval` is the database's fingerprint verdict.
+   * `needsReapproval` is the database's fingerprint verdict. `kind` is the
+   * evidence kind — the row's words come from THE engine per kind, because a
+   * legacy backfill must never read as "the customer accepted this".
    */
-  acceptedVersion?: { at: string; amount: number | null; needsReapproval: boolean; filename: string; getBlob: () => Promise<Blob> }
+  acceptedVersion?: { at: string; kind: AcceptanceKind; amount: number | null; needsReapproval: boolean; filename: string; getBlob: () => Promise<Blob> }
   /** Additive breakdown — these SUM to `amount`. The scope being approved. */
   lines?: { label: string; amount: number }[]
   /**
@@ -916,7 +918,15 @@ export function buildDocItems(opts: {
       // are never shown a price they have not agreed to as though they had.
       amountNote: [
         driftedSinceAccepted
-          ? 'This is the price you accepted — we’ve made changes since and will send you an updated quote to look over.'
+          // Named in the evidence's own strength: "you accepted" only for a
+          // customer acceptance; "recorded"/"on record" otherwise. The payload-
+          // less degraded path keeps the S121 sentence (its figure comes from
+          // accepted_price, which only the acceptance window ever wrote).
+          ? `This is the price ${
+              acc?.kind === 'legacy_unrecorded' ? 'on record'
+              : acc?.kind === 'owner_on_behalf' ? 'we recorded'
+              : 'you accepted'
+            } — we’ve made changes since and will send you an updated quote to look over.`
           : null,
         gstPct > 0 ? `+ GST (${gstPct}%) — added on your invoice` : null,
       ].filter(Boolean).join(' · ') || undefined,
@@ -931,16 +941,20 @@ export function buildDocItems(opts: {
       // on; their previously-accepted version, when one exists, rides beside
       // it as `acceptedVersion` so the two are separate, labelled artifacts.
       // No acceptance in the payload = the pre-ledger behaviour, unchanged.
+      // The filename says which document it is, in the evidence's own strength:
+      // "-accepted" for a real acceptance, "-record" for a legacy backfill that
+      // must not download under a stronger name than S121 recorded.
       filename: acc && isAcceptedOrBeyond(qq.status)
-        ? `${qq.quote_number}-accepted.pdf` : `${qq.quote_number}.pdf`,
+        ? `${qq.quote_number}-${acceptedFileSuffix(acc.kind)}.pdf` : `${qq.quote_number}.pdf`,
       getBlob: acc && isAcceptedOrBeyond(qq.status)
         ? () => renderers.acceptedQuote(qq, acc)
         : () => renderers.quote(qq),
       acceptedVersion: acc ? {
         at: acc.accepted_at,
+        kind: acc.kind,
         amount: acc.accepted_amount == null ? null : Number(acc.accepted_amount) || null,
         needsReapproval: driftedSinceAccepted,
-        filename: `${qq.quote_number}-accepted.pdf`,
+        filename: `${qq.quote_number}-${acceptedFileSuffix(acc.kind)}.pdf`,
         getBlob: () => renderers.acceptedQuote(qq, acc),
       } : undefined,
       lines, planOptions,
