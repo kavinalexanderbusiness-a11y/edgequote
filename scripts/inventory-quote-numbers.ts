@@ -138,7 +138,9 @@ async function main() {
     : '  ✅ No duplicates in the visible tenant — UNIQUE (user_id, quote_number)\n     would be creatable for this tenant. Other tenants are not visible under RLS.')
   console.log('')
 
-  await sb.auth.signOut()
+  // Explicit scope: a bare signOut() defaults to GLOBAL and would end the
+  // owner's sessions everywhere, from a read-only inventory script.
+  await sb.auth.signOut({ scope: 'local' })
 }
 
 main().catch(e => { console.error(e); process.exit(1) })

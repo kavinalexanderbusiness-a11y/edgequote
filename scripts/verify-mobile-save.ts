@@ -234,7 +234,10 @@ console.log('\n═══ A save that did not happen loses nothing ═══')
     'clearing on RETURN threw away minutes of typing whenever a write failed')
   check('the new-quote page returns false on a failed customer link',
     /Could not link this quote to a customer[\s\S]{0,200}return false/.test(nw))
-  check('and on a failed quote-number read', /return false/.test(nw) && /existing quote numbers/.test(nw))
+  // S123: the number now comes from the database, so there is no read to fail —
+  // but a failed ALLOCATION must still save nothing and keep the autosave draft.
+  check('and on a failed quote-number allocation',
+    /return false/.test(nw) && /QUOTE_NUMBER_FAILED/.test(nw))
   check('both save buttons are disabled while a submit is in flight',
     (qb.match(/loading=\{isSubmitting\}/g) || []).length >= 2,
     'measured: two taps in one frame produced ONE quote, because the first tap disabled both')

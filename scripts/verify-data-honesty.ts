@@ -100,23 +100,38 @@ H('Bulk quote actions refuse rather than renumber or double-bill')
   check('…converting nothing rather than billing twice',
     /nothing was converted/.test(QUOTE_LIST), true)
 
-  check('bulk duplicate captures the quote_number read error',
-    /const \[\{ data: qnums, error: qnumsErr \}/.test(QUOTE_LIST), true)
-  check('…and branches on it', /if \(qnumsErr \|\| !qnums\) \{/.test(QUOTE_LIST), true)
+  // ⭐ THE QUOTE-NUMBER HALF OF THIS SECTION MOVED, AND GOT STRONGER (S123).
+  // These used to assert that the browser CHECKED its quote_number read before
+  // adding one to it. There is no read any more: the number comes from
+  // public.allocate_quote_number() in one atomic statement, so the lie those
+  // checks guarded against — "a failed read restarts the sequence at 0001" — is
+  // now unreachable rather than merely handled. What still has to be true, and is
+  // what these now assert, is that a FAILED ALLOCATION saves nothing.
+  // (The invoice half above is untouched: src/lib/invoicing.ts still carries the
+  // original read-then-mint shape, and belongs to another session.)
+  check('bulk duplicate asks the database for its numbers',
+    /allocateQuoteNumbers\(supabase, sel\.selectedItems\.length\)/.test(QUOTE_LIST), true)
+  check('…and branches when allocation fails',
+    /if \(alloc\.error \|\| !alloc\.quoteNumbers\) \{/.test(QUOTE_LIST), true)
 
   // The guard must sit between the read and the first mint in BOTH flows.
   const cGate = QUOTE_LIST.indexOf('if (numsErr || !nums || existingErr || !existing)')
   const cMint = QUOTE_LIST.indexOf("maxNumericSuffix((nums as { invoice_number: string }[])")
   check('…bulk convert gates before minting', cGate > 0 && cMint > cGate, true)
-  const dGate = QUOTE_LIST.indexOf('if (qnumsErr || !qnums)')
-  const dMint = QUOTE_LIST.indexOf("maxNumericSuffix((qnums as { quote_number: string }[])")
-  check('…bulk duplicate gates before minting', dGate > 0 && dMint > dGate, true)
+  const dGate = QUOTE_LIST.indexOf('if (alloc.error || !alloc.quoteNumbers)')
+  const dUse = QUOTE_LIST.indexOf('quote_number: numbers[created]')
+  check('…bulk duplicate gates before using a number', dGate > 0 && dUse > dGate, true)
 
   check('a new quote refuses to save under an unverified number',
-    /if \(qnumsErr \|\| !qnums\) \{/.test(QUOTE_NEW) && /nothing was saved/.test(QUOTE_NEW), true)
-  const nGate = QUOTE_NEW.indexOf('if (qnumsErr || !qnums)')
-  const nMintQ = QUOTE_NEW.indexOf('const quote_number = generateQuoteNumber(')
-  check('…before generating one', nGate > 0 && nMintQ > nGate, true)
+    /if \(alloc\.error \|\| !alloc\.quoteNumber\) \{/.test(QUOTE_NEW)
+    && /QUOTE_NUMBER_FAILED/.test(QUOTE_NEW), true)
+  const nGate = QUOTE_NEW.indexOf('if (alloc.error || !alloc.quoteNumber)')
+  const nUse = QUOTE_NEW.indexOf('const quote_number = alloc.quoteNumber')
+  check('…before using one', nGate > 0 && nUse > nGate, true)
+  // ⛔ AND THE STRONGER CLAIM THE NEW SHAPE MAKES POSSIBLE: there is no computed
+  // fallback to fall back TO. A guessed document number is worse than no quote.
+  check('…with no computed fallback anywhere in the seam',
+    !/generateQuoteNumber/.test(read('src/lib/quoteNumber.ts')), true)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

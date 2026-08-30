@@ -163,8 +163,14 @@ for (const f of appFiles) {
   // locally and stay green. A mutation caught this.
   if (/\bgenerateQuoteNumber\b/.test(code)) offenders.push(`${f} (generateQuoteNumber)`)
   // A hand-rolled equivalent: zero-padding a counter into a prefixed string.
-  if (/padStart\(\s*4\s*,\s*'0'\s*\)/.test(code) && /quote/i.test(f)) {
-    offenders.push(`${f} (pads a 4-digit document number by hand)`)
+  // ⚠️ PER LINE, AND NEVER THE INVOICE PATH. Keyed on the FILENAME containing
+  // "quote", this fired on QuoteList's bulk INVOICE conversion — a different
+  // document number, owned by another session, in a file that merely happens to
+  // live under components/quotes. The check has to look at the line, not the path.
+  for (const line of code.split('\n')) {
+    if (/padStart\(\s*4\s*,\s*'0'\s*\)/.test(line) && /quote/i.test(line) && !/invoice/i.test(line)) {
+      offenders.push(`${f} (pads a quote number by hand: ${line.trim().slice(0, 60)})`)
+    }
   }
   if (/maxNumericSuffix\s*\([^)]*quote_number/i.test(code)) offenders.push(`${f} (maxNumericSuffix over quote_number)`)
 }
