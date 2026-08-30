@@ -38,6 +38,7 @@ const STATUS  = 'src/lib/quoteStatus.ts'
 const BUILDER = 'src/components/quotes/QuoteBuilder.tsx'
 const JOBFORM = 'src/components/schedule/JobForm.tsx'
 const SCHED   = 'src/app/dashboard/schedule/page.tsx'
+const MIGRATION = 'supabase/migrations/29999999000000_no_charge_v1_temp_reversion_required.sql'
 
 const sh = (cmd) => execSync(cmd, { encoding: 'utf8' }).trim()
 
@@ -209,16 +210,76 @@ mutate('the save path writes 0 instead of NULL for a blank price',
   SCHED, '      price: Number(values.price) > 0 ? Number(values.price) : null,',
   '      price: Number(values.price) > 0 ? Number(values.price) : 0,')
 
+console.log('\n── 6b · THE DATABASE DOOR (each of these is driven through real SQL) ──')
+
+// ⭐⭐ These mutate the MIGRATION and require section 13 — which builds the schema
+// from zero and calls the real portal RPC — to notice. A guard that only reads
+// the SQL as text would survive every one of them.
+
+mutate('the accept gate stops refusing unpriced quotes',
+  MIGRATION, '  if not v_free and (v_base is null or v_base <= 0) then\n    return false;\n  end if;', '')
+
+mutate('the accept gate refuses free work too (the regression to NOT reintroduce)',
+  MIGRATION, '  if not v_free and (v_base is null or v_base <= 0) then',
+  '  if (v_base is null or v_base <= 0) then')
+
+mutate('a $0 resolved price slips past the accept gate',
+  MIGRATION, '  if not v_free and (v_base is null or v_base <= 0) then',
+  '  if not v_free and v_base is null then')
+
+mutate('the no-charge completeness CHECK is dropped',
+  MIGRATION, 'num_nonnulls("no_charge_at", "no_charge_reason", "no_charge_by") in (0, 3)',
+  'num_nonnulls("no_charge_at", "no_charge_reason", "no_charge_by") in (0, 1, 2, 3)')
+
+mutate('a blank no-charge reason becomes acceptable to the database',
+  MIGRATION, 'and ("no_charge_reason" is null or btrim("no_charge_reason") <> \'\')',
+  'and true')
+
+mutate('the no-charge actor is taken from the caller instead of the session',
+  MIGRATION, '  v_uid := auth.uid();\n  if v_uid is null then return false; end if;\n\n  v_reason := nullif(btrim(coalesce(p_reason, \'\')), \'\');\n\n  select status, (no_charge_at is not null) into v_status, v_had\n    from public.quotes where id = p_quote_id and user_id = v_uid;',
+  '  v_uid := coalesce(auth.uid(), \'00000000-0000-0000-0000-0000000c0001\'::uuid);\n\n  v_reason := nullif(btrim(coalesce(p_reason, \'\')), \'\');\n\n  select status, (no_charge_at is not null) into v_status, v_had\n    from public.quotes where id = p_quote_id;')
+
+mutate('an accepted quote\'s no-charge record becomes clearable again',
+  MIGRATION, "    if v_status not in ('draft', 'sent') then return false; end if;", '')
+
+mutate('the no-charge decision stops reaching the audit trail',
+  MIGRATION, "  perform public.audit_log(v_uid, 'quote_marked_no_charge', 'quote', p_quote_id,",
+  "  perform public.audit_log(v_uid, 'quote_touched', 'quote', p_quote_id,")
+
+mutate('the tenancy predicate is dropped from the no-charge UPDATE',
+  MIGRATION, '   where id = p_quote_id and user_id = v_uid;\n  perform public.audit_log(v_uid, \'quote_marked_no_charge\'',
+  '   where id = p_quote_id;\n  perform public.audit_log(v_uid, \'quote_marked_no_charge\'')
+
+console.log('\n── 6c · the No charge action and the invoice split ──')
+
+mutate('the action writes the columns directly instead of through the RPC',
+  'src/lib/noChargeAction.ts', '  const { data, error } = await supabase.rpc(fn, args)',
+  '  const { data, error } = await supabase.from(\'quotes\').update({ no_charge_at: new Date().toISOString() }).eq(\'id\', String(args.p_quote_id))')
+
+mutate('a missing migration is reported as an ordinary save failure',
+  'src/lib/noChargeAction.ts', '    if (MISSING.has(String(error.code))) {', '    if (false) {')
+
+mutate('an empty reason is accepted by the form rule',
+  'src/lib/noChargeAction.ts', '  if (r.length < NO_CHARGE_REASON_MIN) return', '  if (false) return')
+
+mutate('the invoice door stops telling free work apart from unpriced work',
+  'src/lib/invoicing.ts', "    return { created: false, reason: isNoCharge(job as NoChargeRecord) ? 'no-charge' : 'no-amount' }",
+  "    return { created: false, reason: 'no-amount' }")
+
+mutate('the schedule page tells free work it has no price',
+  SCHED, "      else if (res.reason === 'no-charge') setBanner('Done — marked No charge, so no invoice was drafted. Nothing to bill.')", '')
+
+mutate('the quote header stops saying whether it is priced',
+  'src/app/dashboard/quotes/[id]/page.tsx',
+  '${statusPhrase} · ${PRICE_STATE_LABEL[quotePriceState(quote)]} · Created',
+  '${statusPhrase} · Created')
+
 console.log('\n── 7 · the guard\'s own machinery ──')
 
 mutate('the banned `|| 0` sum expression comes back in a real file',
   'src/lib/dashboard/data.ts', '  const quotesOutTotal = sumQuoteAmounts(quotesOut).total',
   '  const quotesOutTotal = quotesOut.reduce((s, q) => s + Number(q.total || 0), 0)')
 
-mutate('the no-charge proposal loses the accept-door fix',
-  'supabase/proposals/no_charge_v1.sql',
-  '  if not v_free and (v_base is null or v_base <= 0) then',
-  '  if false then')
 
 // ── Restore proof ────────────────────────────────────────────────────────────
 const TREE_AFTER = sh('git rev-parse HEAD') + '|' + sh('git status --porcelain')

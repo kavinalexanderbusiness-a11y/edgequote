@@ -232,6 +232,126 @@ end $function$;
 comment on function public.quote_apply_choice(uuid, uuid, uuid[], text) is
   'THE acceptance core, reached by portal_accept_quote and the owner''s own approval. Refuses to authorize an UNPRICED quote (null or <= 0 resolved price) unless the quote carries a complete no-charge decision — unpriced work must never become customer-authorized paid work.';
 
+-- ── 4 · The ONLY doors that write a no-charge decision ─────────────────────
+-- ⭐⭐ Why an RPC and not an app-side UPDATE:
+--
+--   ATOMIC       one statement sets all three columns or none. An app writing
+--                them in sequence could be interrupted between the reason and
+--                the actor, and the CHECK in §2 would then reject the row —
+--                correct, but a save that fails halfway is not a feature.
+--   ACTOR        `auth.uid()`, taken from the SESSION. A client-supplied actor
+--                is a signature anyone can forge; this one cannot be passed in
+--                at all, which is why the parameter list has no actor.
+--   AUDITED      `audit_log` is called from inside the same statement, so the
+--                immutable trail and the columns cannot disagree. The existing
+--                audit_quotes/audit_jobs triggers watch a FIXED list of columns
+--                that does not include these, so without this the decision
+--                would leave no trace in audit_events at all.
+--   SCOPED       `user_id = auth.uid()` on the UPDATE. SECURITY DEFINER bypasses
+--                RLS, so the tenancy predicate is written out by hand and is the
+--                only thing standing between the door and another tenant's row.
+--
+-- ⛔ NOTHING ELSE MAY WRITE THESE COLUMNS. Ordinary price editing must never
+--    manufacture or clear free-work evidence as a side effect — that is the
+--    whole failure mode this lane exists to end.
+
+create or replace function public.quote_set_no_charge(p_quote_id uuid, p_reason text)
+ returns boolean
+ language plpgsql
+ security definer
+ set search_path to 'public'
+as $function$
+declare v_uid uuid; v_status text; v_reason text; v_had boolean;
+begin
+  v_uid := auth.uid();
+  if v_uid is null then return false; end if;
+
+  v_reason := nullif(btrim(coalesce(p_reason, '')), '');
+
+  select status, (no_charge_at is not null) into v_status, v_had
+    from public.quotes where id = p_quote_id and user_id = v_uid;
+  if v_status is null then return false; end if;
+
+  -- ⭐⭐ CLEARING IS THE DANGEROUS DIRECTION, and this is the guard on it.
+  -- A no-charge quote that has been ACCEPTED was authorised BECAUSE it was
+  -- explicitly free (§3 lets it through on exactly that basis). Removing the
+  -- designation afterwards would leave customer-authorised work with no price
+  -- and no free-work record — the precise state §3 exists to make impossible,
+  -- reached by the back door. Correcting a mistake is only safe while the quote
+  -- is still the owner's own document.
+  if v_reason is null then
+    if v_status not in ('draft', 'sent') then return false; end if;
+    if not v_had then return true; end if;   -- already clear; nothing to record
+    update public.quotes
+       set no_charge_at = null, no_charge_reason = null, no_charge_by = null
+     where id = p_quote_id and user_id = v_uid;
+    perform public.audit_log(v_uid, 'quote_no_charge_cleared', 'quote', p_quote_id,
+      null, null, jsonb_build_object('no_charge', true), jsonb_build_object('no_charge', false));
+    return true;
+  end if;
+
+  update public.quotes
+     set no_charge_at = now(), no_charge_reason = v_reason, no_charge_by = v_uid
+   where id = p_quote_id and user_id = v_uid;
+  perform public.audit_log(v_uid, 'quote_marked_no_charge', 'quote', p_quote_id,
+    null, null, jsonb_build_object('no_charge', v_had),
+    jsonb_build_object('no_charge', true, 'reason', v_reason));
+  return true;
+end $function$;
+
+create or replace function public.job_set_no_charge(p_job_id uuid, p_reason text)
+ returns boolean
+ language plpgsql
+ security definer
+ set search_path to 'public'
+as $function$
+declare v_uid uuid; v_status text; v_reason text; v_had boolean;
+begin
+  v_uid := auth.uid();
+  if v_uid is null then return false; end if;
+
+  v_reason := nullif(btrim(coalesce(p_reason, '')), '');
+
+  select status, (no_charge_at is not null) into v_status, v_had
+    from public.jobs where id = p_job_id and user_id = v_uid;
+  if v_status is null then return false; end if;
+
+  -- The visit equivalent of the rule above: once the work is DONE the record is
+  -- history, and history is a record rather than a draft. A completed visit that
+  -- was delivered free stays that way; correct it before completion.
+  if v_reason is null then
+    if v_status = 'completed' then return false; end if;
+    if not v_had then return true; end if;
+    update public.jobs
+       set no_charge_at = null, no_charge_reason = null, no_charge_by = null
+     where id = p_job_id and user_id = v_uid;
+    perform public.audit_log(v_uid, 'job_no_charge_cleared', 'job', p_job_id,
+      null, null, jsonb_build_object('no_charge', true), jsonb_build_object('no_charge', false));
+    return true;
+  end if;
+
+  update public.jobs
+     set no_charge_at = now(), no_charge_reason = v_reason, no_charge_by = v_uid
+   where id = p_job_id and user_id = v_uid;
+  perform public.audit_log(v_uid, 'job_marked_no_charge', 'job', p_job_id,
+    null, null, jsonb_build_object('no_charge', v_had),
+    jsonb_build_object('no_charge', true, 'reason', v_reason));
+  return true;
+end $function$;
+
+-- Owners only. ⛔ Not anon, and not the customer portal: deciding that work is
+-- free is the BUSINESS's call, and a portal token proves which customer someone
+-- is, never what they may forgive themselves.
+revoke all on function public.quote_set_no_charge(uuid, text) from public, anon;
+revoke all on function public.job_set_no_charge(uuid, text) from public, anon;
+grant execute on function public.quote_set_no_charge(uuid, text) to authenticated;
+grant execute on function public.job_set_no_charge(uuid, text) to authenticated;
+
+comment on function public.quote_set_no_charge(uuid, text) is
+  'THE only door that writes a quote''s no-charge decision. A non-empty reason SETS it (actor = auth.uid(), timestamp = now(), all three atomically); NULL CLEARS it, and clearing is refused once the quote is past draft/sent because an accepted no-charge quote was authorised on that basis. Every call is written to audit_events.';
+comment on function public.job_set_no_charge(uuid, text) is
+  'THE only door that writes a visit''s no-charge decision. Same contract as quote_set_no_charge; clearing is refused once the visit is completed.';
+
 commit;
 
 -- ═══════════════════════════════════════════════════════════════════════════

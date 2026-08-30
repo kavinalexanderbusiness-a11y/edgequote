@@ -46,6 +46,7 @@ import {
 } from '../src/lib/pricingState'
 import { optionSetProblem, optionProblemMessage, optionRowsFor } from '../src/lib/quoteOptions'
 import { sendBlockedReason, canSendQuote, sendBlockedLabel } from '../src/lib/quoteStatus'
+import { noChargeReasonProblem, NO_CHARGE_REASON_MAX } from '../src/lib/noChargeAction'
 
 let failures = 0
 const ok = (n: string) => console.log(`  ✓ ${n}`)
@@ -386,6 +387,77 @@ const invoicing = stripComments(read('src/lib/invoicing.ts'))
 check('the invoice drafter still refuses a $0 amount',
   /if \(!\(amount > 0\)\) return \{ created: false, reason: 'no-amount' \}/.test(invoicing))
 
+console.log('\n═══ 10b · The No charge action, and what may write the decision ═══')
+
+// The reason rule, driven from the real module the form calls.
+check('an empty reason is refused with a sentence',
+  (noChargeReasonProblem('') ?? '').length > 20)
+check('a two-character reason is refused', !!noChargeReasonProblem('ok'))
+eq('a real reason passes', noChargeReasonProblem('Warranty redo'), null)
+check('an over-long reason is refused', !!noChargeReasonProblem('x'.repeat(NO_CHARGE_REASON_MAX + 1)))
+eq('the max mirrors the database CHECK', NO_CHARGE_REASON_MAX, 500)
+
+const action = stripComments(read('src/lib/noChargeAction.ts'))
+// ⛔⛔ THE ONE-DOOR RULE. If the app can UPDATE these columns directly, every
+// database-side guarantee above becomes optional — the actor could be forged,
+// the three parts could be written apart, and nothing would reach audit_events.
+check('the action module goes through the RPC, never a direct column write',
+  /supabase\.rpc\(fn, args\)/.test(action) && !/from\('quotes'\)\s*\.update/.test(action))
+check('it never names the columns in a write', !/no_charge_at\s*:/.test(action))
+check('it has no actor parameter to forge',
+  !/p_actor|actorId|no_charge_by\s*:/.test(action))
+check('a missing migration is reported as such, not as a save failure',
+  /needsMigration/.test(action) && /42883/.test(action) && /42703/.test(action))
+
+// ⭐ The whole app is checked, not just the module: any OTHER writer would be a
+// second door, and the point of the RPC is that there is only one.
+{
+  const { readdirSync, statSync } = require('node:fs') as typeof import('node:fs')
+  const walk = (dir: string, out: string[] = []): string[] => {
+    for (const e of readdirSync(dir)) {
+      const p = join(dir, e)
+      if (statSync(p).isDirectory()) walk(p, out)
+      else if (/\.(ts|tsx)$/.test(p)) out.push(p)
+    }
+    return out
+  }
+  const writers = walk(join(ROOT, 'src'))
+    .filter(p => {
+      const src = stripComments(readFileSync(p, 'utf8'))
+      // A no_charge column named on the left of a colon inside an object literal
+      // is a WRITE shape. Reading them (destructuring, property access) is fine.
+      return /no_charge_(at|reason|by)\s*:/.test(src)
+    })
+    .map(p => p.slice(ROOT.length + 1))
+  check('NOTHING in src/ writes the no-charge columns directly', writers.length === 0,
+    writers.join(' · '))
+}
+
+// The invoice door tells the two refusals apart.
+const inv = stripComments(read('src/lib/invoicing.ts'))
+check('the invoice result can say "deliberately free" as well as "no price"',
+  /'no-charge'/.test(inv) && /isNoCharge\(job as NoChargeRecord\)/.test(inv))
+check('… and still refuses to draft either as a $0 invoice',
+  /if \(!\(amount > 0\)\) \{/.test(inv))
+for (const [label, f] of [
+  ['the schedule page', 'src/app/dashboard/schedule/page.tsx'],
+  ['the dispatch board', 'src/app/dashboard/dispatch/page.tsx'],
+] as const) {
+  const src = stripComments(read(f)).replace(/\s+/g, ' ')
+  check(`${label} says "No charge" rather than "no price" for free work`,
+    /'no-charge'\) (setBanner|notify)\('Done — marked No charge/.test(src))
+}
+
+// Visibly no-charge, and never mistaken for unknown.
+check('the quote header states the price state out loud',
+  /PRICE_STATE_LABEL\[quotePriceState\(quote\)\]/.test(quoteDetail))
+check('the send card offers the No charge route as well as a price',
+  /setNoChargeOpen/.test(quoteDetail) && /Mark No charge/.test(quoteDetail))
+check('the No charge form calls the one door',
+  /markQuoteNoCharge\(supabase, quote\.id, noChargeReason\)/.test(quoteDetail))
+check('it re-reads the row instead of guessing the timestamp it did not set',
+  /from\('quotes'\)\.select\('\*'\)\.eq\('id', quote\.id\)\.single\(\)/.test(quoteDetail))
+
 console.log('\n═══ 11 · The public booking path ═══')
 
 // ⭐ BookingClient keeps a `?? 0`, and it is SAFE — but only because
@@ -603,6 +675,68 @@ async function dbDoor() {
                     values ($1,'S114-blank','X','1 Test Way','Service','draft', now(), '   ', $1)`, [OWNER])
   } catch { blankRefused = true }
   check('⛔ a BLANK no-charge reason is refused by the database', blankRefused)
+
+  // ── E2 · THE NO-CHARGE DOOR — the only thing allowed to write the decision ─
+  // ⭐ `auth.uid()` reads request.jwt.claim.sub (the platform prelude models
+  // PostgREST's JWT exactly as a real request presents it), so signing in is
+  // setting that claim — the same thing the door will see in production.
+  const asOwner = async () => {
+    await db.exec(`set request.jwt.claim.sub = '${OWNER}'`)
+    await db.exec(`set request.jwt.claims = '{"role":"authenticated","sub":"${OWNER}"}'`)
+  }
+  const asNobody = async () => {
+    await db.exec(`set request.jwt.claim.sub = ''`)
+    await db.exec(`set request.jwt.claims = '{"role":"anon"}'`)
+  }
+  const setNoCharge = async (id: string, reason: string | null) =>
+    (await one(`select public.quote_set_no_charge($1, $2) as ok`, [id, reason]))?.ok
+  const ncOf = async (id: string) =>
+    await one(`select no_charge_at, no_charge_reason, no_charge_by from public.quotes where id = $1`, [id])
+
+  await asOwner()
+  const draft = await mkQuote({ price: null, status: 'draft' })
+  eq('the owner can mark a quote No charge', await setNoCharge(draft, 'Goodwill — storm damage'), true)
+  const nc = await ncOf(draft)
+  check('all three parts are written together',
+    !!nc?.no_charge_at && String(nc?.no_charge_reason) === 'Goodwill — storm damage' && String(nc?.no_charge_by) === OWNER,
+    JSON.stringify(nc))
+  // ⛔ The actor is taken from the SESSION and cannot be passed in — the function
+  // has no actor parameter at all, which is why it cannot be forged.
+  eq('the actor is the signed-in owner, not a client-supplied value', String(nc?.no_charge_by), OWNER)
+
+  const events = await rows(
+    `select action from public.audit_events where entity_id = $1 order by seq`, [draft])
+  check('the decision is written to the immutable audit trail',
+    events.some(e => e.action === 'quote_marked_no_charge'),
+    events.map(e => e.action).join(', '))
+
+  eq('a BLANK reason does not mark it free', await setNoCharge(draft, '   '), true)
+  eq('… because a blank reason CLEARS instead of setting', (await ncOf(draft))?.no_charge_at, null)
+
+  // Clearing, and the safety rule on it.
+  await setNoCharge(draft, 'Warranty')
+  eq('the owner can CORRECT an accidental designation while it is a draft',
+    await setNoCharge(draft, null), true)
+  eq('… and the record is fully cleared', (await ncOf(draft))?.no_charge_reason, null)
+  const cleared = await rows(`select action from public.audit_events where entity_id = $1`, [draft])
+  check('clearing is audited too', cleared.some(e => e.action === 'quote_no_charge_cleared'))
+
+  // ⛔⛔ THE BACK DOOR THAT MUST STAY SHUT. An ACCEPTED no-charge quote was
+  // authorised BECAUSE it was explicitly free. Clearing that afterwards would
+  // leave customer-authorised work with no price and no free-work record — the
+  // exact state the accept gate exists to prevent, reached from behind.
+  const acceptedFree = await mkQuote({ price: 0, free: true })
+  await portalAccept(acceptedFree)
+  eq('… the accepted free quote really is accepted', await statusOf(acceptedFree), 'accepted')
+  await asOwner()
+  eq('⛔ the No charge record CANNOT be cleared once the quote is accepted',
+    await setNoCharge(acceptedFree, null), false)
+  check('… and the evidence survives the attempt',
+    !!(await ncOf(acceptedFree))?.no_charge_at)
+
+  eq('a signed-out caller cannot mark anything free', await (async () => {
+    await asNobody(); const r = await setNoCharge(draft, 'nope'); await asOwner(); return r
+  })(), false)
 
   // ── F · a foreign tenant's token cannot approve anything ──────────────────
   // The tenancy statement was already there; re-asserted because this lane

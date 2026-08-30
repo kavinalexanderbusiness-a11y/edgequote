@@ -1444,6 +1444,7 @@ export default function SchedulePage() {
       const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, ...fields, ...perVisit })
       if (res.created) draftInvoiceToast(res.invoiceNumber, `Draft invoice ${res.invoiceNumber} created from the completed job.`)
       else if (res.reason === 'exists') setBanner('That job already has an invoice.')
+      else if (res.reason === 'no-charge') setBanner('Done — marked No charge, so no invoice was drafted. Nothing to bill.')
       else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
     }
 
@@ -1998,7 +1999,8 @@ export default function SchedulePage() {
           if (error) throw new Error(error.message)
           const res = await createDraftInvoiceForCompletedJob(supabase, completed)
           if (res.created) draftInvoiceToast(res.invoiceNumber, `Draft invoice ${res.invoiceNumber} created.`)
-          else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
+          else if (res.reason === 'no-charge') setBanner('Done — marked No charge, so no invoice was drafted. Nothing to bill.')
+      else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
           // A failed draft used to say NOTHING, which is indistinguishable from the success
           // banner you scrolled past — the visit leaves the un-invoiced queue and the money
           // is never billed, with no trace pointing at it. ('exists' stays quiet: an invoice
@@ -2146,7 +2148,8 @@ export default function SchedulePage() {
             // replay already drafts from it, so both doors bill the same amount.
             const res = await createDraftInvoiceForCompletedJob(supabase, completed)
             if (res.created) draftInvoiceToast(res.invoiceNumber, `Saved — draft invoice ${res.invoiceNumber} created.`)
-            else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
+            else if (res.reason === 'no-charge') setBanner('Done — marked No charge, so no invoice was drafted. Nothing to bill.')
+      else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
             // The quick-edit sheet completes a job through the same transition as the Complete
             // button, which DOES report this (completeJob below). Without it a failed draft leaves
             // the visit out of the un-invoiced queue and it is never billed, with no trace.

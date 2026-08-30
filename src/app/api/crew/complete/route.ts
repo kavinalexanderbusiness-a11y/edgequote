@@ -179,9 +179,9 @@ export async function POST(req: NextRequest) {
         body: `${job.title || 'A visit'} was completed by your crew, but the draft invoice could not be created. Invoice it from the schedule.`,
       }).catch(() => {})
     }
-    // 'exists' and 'no-amount' are terminal non-events, exactly as on the owner
-    // path (an unpriced visit is already surfaced by the day board's
-    // "done with no price" line).
+    // 'exists', 'no-amount' and 'no-charge' are terminal non-events, exactly as on
+    // the owner path (an unpriced visit is already surfaced by the day board's
+    // "done with no price" line; deliberately free work needs no chasing at all).
     return NextResponse.json({ ok: true, updatedAt: rpc.updated_at })
   }
 

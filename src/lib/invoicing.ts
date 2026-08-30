@@ -12,7 +12,7 @@ export interface AutoInvoiceResult {
   /** Set when created — the crew completion route hands this to the AutoPay
    *  engine directly (the browser fire-and-forget can't run server-side). */
   invoiceId?: string
-  reason?: 'not-recurring' | 'exists' | 'no-amount' | 'error'
+  reason?: 'not-recurring' | 'exists' | 'no-amount' | 'no-charge' | 'error'
 }
 
 // The three pure visit-value functions live in lib/visitValue — a leaf module
@@ -20,6 +20,7 @@ export interface AutoInvoiceResult {
 // WITHOUT dragging this whole invoice engine into its bundle. Re-exported here
 // so every existing `from '@/lib/invoicing'` call site keeps working unchanged.
 import { effectiveFreq, quoteVisitAmount, jobVisitValue, quoteVisitAmountOrNull, jobVisitValueOrNull } from '@/lib/visitValue'
+import { isNoCharge, type NoChargeRecord } from '@/lib/pricingState'
 export { effectiveFreq, quoteVisitAmount, jobVisitValue, quoteVisitAmountOrNull, jobVisitValueOrNull }
 
 // Human label for the base service line on an invoice/breakdown ("Weekly Mowing").
@@ -214,7 +215,25 @@ export async function createDraftInvoiceForCompletedJob(
   const { lineItems, total } = buildInvoiceLineItems({ serviceType: job.service_type, baseAmount: base, freq, isInitial: job.is_initial_visit, addons, quote })
   const amount = Math.round(total)
   // Never draft a $0 invoice — an unpriced visit pollutes billing history forever.
-  if (!(amount > 0)) return { created: false, reason: 'no-amount' }
+  //
+  // ⭐ TWO REASONS, NOT ONE. Both refuse to draft, and that is the same correct
+  // outcome — but they are different facts and the owner is owed the difference:
+  //
+  //   no-amount   nobody has priced this. Something is MISSING and the owner
+  //               probably needs to act.
+  //   no-charge   somebody DECIDED this is free, with a reason on the record.
+  //               Nothing is missing and there is nothing to do.
+  //
+  // Reporting the second as the first is how "Done — no invoice drafted because
+  // this visit has no price" ended up on top of work the owner had deliberately
+  // given away, telling them to go fix something that was already right.
+  //
+  // ⛔ Neither drafts a $0 invoice. Free work is not billed for nothing; it is
+  // not billed. And a no-charge visit is NOT paid — no invoice means no ledger
+  // entry, so nothing anywhere claims money arrived.
+  if (!(amount > 0)) {
+    return { created: false, reason: isNoCharge(job as NoChargeRecord) ? 'no-charge' : 'no-amount' }
+  }
 
   // Customer + property details (denormalised onto the invoice for history).
   let customerName = ''
