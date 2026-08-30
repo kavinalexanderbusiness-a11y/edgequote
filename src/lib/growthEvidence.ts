@@ -223,12 +223,24 @@ export function annualize(
  *
  * ⭐ MEASURED, not chosen: 32 of the book's customers have exactly ONE completed
  * visit, and the old code annualized every one of them. A single observation has
- * no spread, so no robust statistic can be computed from it and nothing about it
- * supports a claim about a year. Two is the smallest sample a median means
- * anything for; four is where this module stops calling the figure provisional.
+ * no spread, so no robust statistic can be computed from it.
+ *
+ * ⭐⭐ AND THREE, NOT TWO — A CORRECTION THIS SESSION HAD TO MAKE OF ITSELF.
+ * The threshold started at 2, the unit guard passed, and driving the REAL book
+ * exposed it: one customer with exactly TWO visits contributed $86,058 of a
+ * $109,130 headline (79%), through `$4,098 × 14 bi-weekly visits`.
+ *
+ * The reason is arithmetic, not taste: **the median of two points IS their
+ * mean.** `median([70, 6295]) === 3182.5`. So at n=2 the robustness this whole
+ * module rests on does not exist — it is a mean wearing the word "median", and
+ * the outlier protection is exactly zero. At n=3 a single extreme value cannot
+ * move the middle at all, which is the property being relied on.
+ *
+ * That is also why this is not an "arbitrary cap": it is the smallest sample for
+ * which the chosen statistic actually behaves like itself.
  */
-export const MIN_VISITS_FOR_VALUE = 2
-export const MIN_VISITS_FOR_CONFIDENT = 4
+export const MIN_VISITS_FOR_VALUE = 3
+export const MIN_VISITS_FOR_CONFIDENT = 5
 
 export type EvidenceStrength = 'confident' | 'provisional' | 'insufficient'
 

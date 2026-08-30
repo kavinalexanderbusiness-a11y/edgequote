@@ -9,8 +9,7 @@ import { Coord } from '@/lib/geo'
 import { neighborhoodKey, ProfitJob, ProfitContext, ProfitQuote, RecInfo } from '@/lib/profitability'
 import { VIP_LTV, cadenceDays, churnRisk, daysBetween, lifetimeValue, type ChurnRisk } from '@/lib/signals'
 import {
-  assessEvidence, declaredCadence, robustPerVisit, looksLikeFixture,
-  mayShowAnnual, INSUFFICIENT_LABEL,
+  assessEvidence, declaredCadence, mayShowAnnual, INSUFFICIENT_LABEL,
   type Evidence, type DeclaredCadence,
 } from '@/lib/growthEvidence'
 

@@ -60,9 +60,9 @@ const MUTATIONS = [
   // ── 4. ONE-OFF WORK ANNUALIZED ─────────────────────────────────────────────
   {
     file: 'src/lib/growthEvidence.ts',
-    name: 'one-off annualized (the minimum sample drops to one visit)',
-    from: 'export const MIN_VISITS_FOR_VALUE = 2',
-    to: 'export const MIN_VISITS_FOR_VALUE = 1',
+    name: 'one-off annualized (the minimum sample drops to two — where a median IS a mean)',
+    from: 'export const MIN_VISITS_FOR_VALUE = 3',
+    to: 'export const MIN_VISITS_FOR_VALUE = 2',
   },
   {
     file: 'src/lib/revenueIntelligence.ts',

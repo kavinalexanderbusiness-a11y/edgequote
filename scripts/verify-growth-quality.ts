@@ -71,13 +71,14 @@ console.log('\n── 1. ⭐⭐ UNPRICED ≠ $0 ≠ A PRICE ──')
   // unknown, making a gap in the record indistinguishable from free work.
   eq('a job with no price but a derived value is admissible', priceEvidence(null, 70), 'ok')
 
-  const e = assessEvidence({ visits: [visit(70), visit(80), visit(null), visit(0)], declaredFreq: 'weekly', visitsPerSeason: vps })
-  eq('unpriced and $0 visits are BOTH excluded from the statistic', e.sampleSize, 2)
+  const e = assessEvidence({ visits: [visit(70), visit(80), visit(90), visit(null), visit(0)], declaredFreq: 'weekly', visitsPerSeason: vps })
+  eq('unpriced and $0 visits are BOTH excluded from the statistic', e.sampleSize, 3)
   const reasons = e.excluded.map(x => x.reason).sort()
   eq('and both are reported, separately', reasons, ['unpriced', 'zero_price'])
-  check('the median is taken over the priced visits only', e.perVisit === 75, String(e.perVisit))
-  // ⭐ The failure this prevents: 4 visits, 2 unpriced → mean of $150/4 = $37.50.
-  check('an unpriced visit never drags the figure toward zero', (e.perVisit as number) > 37.5, String(e.perVisit))
+  check('the median is taken over the priced visits only', e.perVisit === 80, String(e.perVisit))
+  // ⭐ The failure this prevents: 5 visits, 2 of them valueless → a mean of
+  // $240/5 = $48, which is BELOW every price the customer has ever paid.
+  check('an unpriced visit never drags the figure toward zero', (e.perVisit as number) > 48, String(e.perVisit))
 }
 
 console.log('\n── 2. ⭐⭐ A CADENCE IS DECLARED, NEVER INFERRED ──')
@@ -135,7 +136,7 @@ console.log('\n── 3. ⭐⭐ ONE-OFF WORK IS NEVER ANNUALIZED ──')
   eq('a single visit yields NO figure at all', single.strength, 'insufficient')
   eq('not a per-visit one', single.perVisit, null)
   eq('and not an annual one', single.annual, null)
-  check(`the minimum sample is ${MIN_VISITS_FOR_VALUE}`, MIN_VISITS_FOR_VALUE === 2, String(MIN_VISITS_FOR_VALUE))
+  check(`the minimum sample is ${MIN_VISITS_FOR_VALUE}`, MIN_VISITS_FOR_VALUE === 3, String(MIN_VISITS_FOR_VALUE))
 
   // ⭐ Even a big single visit. $6,295 × 14 = $88,130 — nearly the entire
   // headline, from ONE job.
@@ -146,6 +147,18 @@ console.log('\n── 3. ⭐⭐ ONE-OFF WORK IS NEVER ANNUALIZED ──')
   // And a single visit does not become annualizable merely by having a cadence.
   const singleDeclared = assessEvidence({ visits: [visit(500)], declaredFreq: 'weekly', visitsPerSeason: vps })
   eq('a declared cadence does not rescue a sample of one', singleDeclared.annual, null)
+
+  // ⭐⭐ TWO IS ALSO TOO FEW, AND THE REASON IS ARITHMETIC.
+  // The median of two points IS their mean, so at n=2 the robustness this whole
+  // module rests on does not exist. Driving the REAL book proved it costs real
+  // money: one customer with exactly two $4,098 visits contributed $86,058 of a
+  // $109,130 headline through `$4,098 × 14 bi-weekly visits`.
+  eq('the median of two points is just their mean', median([70, 6295]), 3182.5)
+  const two = assessEvidence({ visits: [visit(4098), visit(4098)], declaredFreq: 'biweekly', visitsPerSeason: vps })
+  eq('so a sample of two is refused', two.strength, 'insufficient')
+  eq('and cannot annualize into a five-figure claim', two.annual, null)
+  const three = assessEvidence({ visits: [visit(70), visit(70), visit(6295)], declaredFreq: 'biweekly', visitsPerSeason: vps })
+  eq('at three, one outlier can no longer move the middle', three.perVisit, 70)
 }
 
 console.log('\n── 4. ⭐⭐ NO SINGLE VISIT MAY DOMINATE ──')
@@ -199,10 +212,10 @@ console.log('\n── 5. Fixture / test records are refused — and narrowly ─
   check('an empty label is not a fixture', !looksLikeFixture(null, undefined, ''), '')
 
   const e = assessEvidence({
-    visits: [visit(70), visit(70), visit(9000, { labels: ['ZZ S111 Fixture A', 'Snow'] })],
+    visits: [visit(70), visit(70), visit(70), visit(9000, { labels: ['ZZ S111 Fixture A', 'Snow'] })],
     declaredFreq: 'weekly', visitsPerSeason: vps,
   })
-  eq('a fixture visit is excluded from the sample', e.sampleSize, 2)
+  eq('a fixture visit is excluded from the sample', e.sampleSize, 3)
   eq('and reported as such', e.excluded.find(x => x.reason === 'fixture')?.count, 1)
   eq('so it cannot move the figure', e.perVisit, 70)
 }
@@ -220,9 +233,9 @@ console.log('\n── 6. ⭐⭐ WEAK EVIDENCE SHOWS A SENTENCE, NOT A DOLLAR ─
   check('"every visit was unpriced" is said in those words',
     /no price recorded/.test(insufficientReason(allUnpriced)), insufficientReason(allUnpriced))
 
-  const thin = assessEvidence({ visits: [visit(70), visit(70)], declaredFreq: 'weekly', visitsPerSeason: vps })
-  eq('two priced visits are PROVISIONAL, not confident', thin.strength, 'provisional')
-  const solid = assessEvidence({ visits: [visit(70), visit(70), visit(70), visit(70)], declaredFreq: 'weekly', visitsPerSeason: vps })
+  const thin = assessEvidence({ visits: [visit(70), visit(70), visit(70)], declaredFreq: 'weekly', visitsPerSeason: vps })
+  eq('three priced visits are PROVISIONAL, not confident', thin.strength, 'provisional')
+  const solid = assessEvidence({ visits: [visit(70), visit(70), visit(70), visit(70), visit(70)], declaredFreq: 'weekly', visitsPerSeason: vps })
   eq(`${MIN_VISITS_FOR_CONFIDENT} are confident`, solid.strength, 'confident')
 
   // ⛔ The UI must render the sentence, and must not print a confident $0.

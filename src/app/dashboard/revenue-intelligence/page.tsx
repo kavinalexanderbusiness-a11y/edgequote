@@ -259,7 +259,14 @@ function OppCard({ o, index, status, busy, onAct }: { o: Opportunity; index: num
             <Button size="sm" variant="ghost" onClick={() => onAct(o, 'dismissed')} disabled={busy}><X className="w-3.5 h-3.5" /> Dismiss</Button>
           </>
         )}
-        <button onClick={() => setShowWhy(v => !v)} className="ml-auto text-[11px] font-medium text-ink-faint hover:text-ink transition-colors rounded flex items-center gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+        {/* ⭐ Given a real touch height because this control is now load-bearing:
+            it is the door to the evidence behind the figure — sample size, the
+            statistic, the cadence assumption, the formula and the exclusions.
+            A transparency affordance nobody can reliably tap on a phone is not
+            transparency. */}
+        <button onClick={() => setShowWhy(v => !v)}
+          aria-expanded={showWhy}
+          className="ml-auto min-h-[32px] px-1.5 -mr-1.5 text-[11px] font-medium text-ink-faint hover:text-ink transition-colors rounded flex items-center gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
           <HelpCircle className="w-3 h-3" /> {showWhy ? 'Hide' : 'Why?'}
         </button>
       </div>
