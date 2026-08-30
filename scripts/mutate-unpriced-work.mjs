@@ -162,15 +162,15 @@ mutate('a $0 quote becomes sendable',
   STATUS, "  if (!passesMoneyDoor(quotePriceState(q))) return 'no_price'",
   "  if (q.total == null) return 'no_price'")
 
-mutate('the won gate is removed from the quote page',
-  'src/app/dashboard/quotes/[id]/page.tsx',
-  '    const wonBlock = moneyDoorBlock(quotePriceState(quote), \'won\')\n    if (wonBlock) { toast.error(wonBlock); return }',
-  '    const wonBlock = null')
-
-mutate('the status picker stops gating accepted/completed/paid',
+// ⚠️ The two app-side Won mutations that used to live here are GONE, because
+// what they broke is gone: S121 deleted the hand-rolled acceptance patch and
+// routed the owner's Won through the database. Replaced by the mutation that
+// matters now — an app surface writing the status directly, which is exactly
+// how the DB chokepoint would get bypassed.
+mutate('the status picker starts writing an acceptance by hand again',
   'src/components/quotes/QuoteStatusControl.tsx',
-  "    if (s === 'accepted' || s === 'completed' || s === 'paid') {",
-  '    if (false) {')
+  "    const updates: Record<string, unknown> =",
+  "    if (s === 'accepted') { await supabase.from('quotes').update({ status: 'accepted' }).eq('id', quoteId) }\n    const updates: Record<string, unknown> =")
 
 mutate('the invoice drafter stops refusing a zero amount',
   'src/lib/invoicing.ts', '  if (!(amount > 0)) {', '  if (false) {')
