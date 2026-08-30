@@ -129,6 +129,50 @@ where it flatly contradicts the configuration.
   as supplementary.
 - **Done — the send is now BLOCKED.** See below.
 
+### The acceptance gate (the database is the boundary)
+
+The send gate is app-side and stops a NEW contradictory document. It cannot stop
+an **already-sent** quote being accepted, nor terms edited **after** a compatible
+quote was sent — and `portal_accept_quote` is granted to `anon`, so a stale or
+direct client bypasses any app check by construction. **The UI is not the
+boundary.**
+
+`quote_record_acceptance` is where every evidence-writing path converges
+(customer via `portal_accept_quote`; owner via `owner_record_customer_acceptance`),
+so the gate lives there. `owner_override_quote_status` never reaches it, which is
+how an administrative status correction still records **no** evidence — S121's
+distinction, preserved.
+
+The database cannot read English and does not try. The app classifies the terms
+once and stores a **normalized, quote-independent** verdict; the gate is a scalar
+comparison.
+
+| Column | Meaning |
+|---|---|
+| `terms_payment_claim` | `no_claim` · `no_money_before_work` · `money_before_work` · `ambiguous` |
+| `terms_payment_claim_fingerprint` | `quote_terms_fingerprint()` of the exact terms classified |
+| `terms_payment_claim_version` | the classifier version that produced it |
+
+There is deliberately **no state meaning "compatible"** — compatibility is a
+property of a (terms, quote) pair and would be wrong for the very next quote.
+`unclassified` is not storable: it is the DB's word for "the stored verdict
+cannot be trusted", derived at read time.
+
+Acceptance is refused when the claim contradicts the quote in **either**
+direction, or when the verdict cannot be trusted — fingerprint mismatch, stale
+classifier version, `ambiguous`, or never classified. A refusal leaves **no
+`quote_acceptances` row, no `accepted` status and no `accepted_price`**.
+
+⭐ **The fingerprint is the trust, not the trigger.** The stored claim is believed
+only while it matches the live terms, which is what un-trusts an old verdict
+after a post-send edit. The invalidation trigger is secondary and never the thing
+relied on. The version catches the other case: terms byte-identical while our
+reading of them improved.
+
+Applying the migration is not the last step — **backfill first**
+(`scripts/backfill-terms-claim.ts`, report-only by default). Until a tenant is
+classified the gate reads `unclassified` and fails closed for quotes under terms.
+
 ### The terms gate
 
 `lib/payments/termsTimingConflict` detects a **clear** contradiction between the
