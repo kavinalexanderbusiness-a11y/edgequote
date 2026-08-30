@@ -7,37 +7,53 @@ import { toast } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { QuoteStatus, STATUS_LABELS, STATUS_COLORS } from '@/types'
 import { markSentPatch, isSystemAdvancedQuoteStatus, QUOTE_STATUS_MEANING } from '@/lib/quoteStatus'
-import { markWonPatch } from '@/lib/followup'
-import { quotePriceState, moneyDoorBlock, type NoChargeRecord } from '@/lib/pricingState'
 import { askLostReason } from '@/lib/lostReason'
 import { localTodayISO } from '@/lib/utils'
 import { ChevronDown, Loader2 } from 'lucide-react'
 
 const ALL: QuoteStatus[] = ['draft', 'sent', 'accepted', 'scheduled', 'completed', 'paid', 'declined']
 
+// ── ⭐⭐ WHY "ACCEPTED" IS NOT A DROPDOWN CHOICE (Session 121) ────────────────
+// It used to be, and picking it wrote a plain PATCH: status='accepted' plus an
+// accepted_price copied off whatever the quote's total happened to be at that
+// moment. That did three separate untrue things.
+//
+//   1. It INVENTED a consent figure. accepted_price is meant to be what the
+//      customer agreed to; here it was a guess made by the person recording it.
+//   2. It bypassed the rule that an options quote must name the option it sold.
+//      The quote page's own Won button checks that; this control never did, so
+//      the same quote could be marked accepted from the LIST with the choice
+//      left null — approved, with nobody able to say what was approved.
+//   3. It produced a row byte-identical to a real portal approval, which is how
+//      the notification bell ended up telling the owner that a customer had
+//      accepted a quote the owner had just ticked themselves.
+//
+// Acceptance is now recorded through a named action that asks WHO decided and
+// HOW it reached you (lib/quoteAcceptance · owner_record_customer_acceptance),
+// and the option is offered here only so an already-accepted quote still shows
+// its own state. Moving AWAY from accepted is still allowed — repairing a wrong
+// row is a real need — and is recorded as the status override it is.
+const ACCEPTANCE_IS_NOT_A_LABEL: QuoteStatus = 'accepted'
+
 interface Props {
   quoteId: string
   status: QuoteStatus
-  followUpCount?: number
   /** The quote's current send/expiry stamps, so the shared patches can leave an
    *  existing one alone. Optional: absent behaves as "not yet stamped", which is
    *  what a caller that doesn't track them means. */
   sentAt?: string | null
   validUntil?: string | null
-  /** The price on the document, snapshotted if this control marks the quote won.
-   *  Absent → the snapshot records null rather than a guess (see markWonPatch). */
-  total?: number | null
-  /** The quote's no-charge decision, if it has one. Absent behaves as "not free",
-   *  which is what a caller that doesn't track it means — and is why an unpriced
-   *  quote cannot be marked won through this control. */
-  noCharge?: NoChargeRecord | null
   /** Only to address the lost-reason question by name ("Why did Dana say no?").
    *  Absent simply drops the name from the title. */
   customerName?: string
   onChanged?: (s: QuoteStatus) => void
+  // ⛔ `followUpCount` and `total` USED TO LIVE HERE and are gone on purpose.
+  // They existed solely to feed markWonPatch's acceptance snapshot from this
+  // dropdown — the guess this control is no longer allowed to make. Leaving them
+  // as accepted-but-ignored props is how a future caller re-learns the old model.
 }
 
-export function QuoteStatusControl({ quoteId, status, followUpCount, sentAt, validUntil, total, noCharge, customerName, onChanged }: Props) {
+export function QuoteStatusControl({ quoteId, status, sentAt, validUntil, customerName, onChanged }: Props) {
   const supabase = createClient()
   const [current, setCurrent] = useState<QuoteStatus>(status)
   const [saving, setSaving] = useState(false)
@@ -62,6 +78,13 @@ export function QuoteStatusControl({ quoteId, status, followUpCount, sentAt, val
 
   async function handleChange(e: React.ChangeEvent<HTMLSelectElement>) {
     const s = e.target.value as QuoteStatus
+    // Belt to the disabled <option>'s braces. A select can be driven by keyboard,
+    // by a browser autofill, or by a test — and this control must not be the one
+    // path in the app that can still write an acceptance nobody gave.
+    if (s === ACCEPTANCE_IS_NOT_A_LABEL && current !== ACCEPTANCE_IS_NOT_A_LABEL) {
+      toast.error('Open the quote and use “Record customer acceptance” — it asks who accepted and how, so the record says what actually happened.')
+      return   // controlled select snaps back to `current` on its own
+    }
     // "Scheduled" here only relabels the quote — it does NOT create a job, and it
     // hides the "Accepted — not scheduled yet" reminder. Say so before the owner
     // silently removes their own safety net.
@@ -97,18 +120,6 @@ export function QuoteStatusControl({ quoteId, status, followUpCount, sentAt, val
       })
       if (!ok) return   // controlled select snaps back to `current` on its own
     }
-    // ── The money doors, from the one engine that owns them ─────────────────
-    // 'accepted' says a customer authorised this price, and 'paid' and
-    // 'completed' say money moved against it. None of those sentences can be
-    // true of a quote nobody has priced — recording one puts a $0 win into the
-    // pipeline, booked revenue and every Growth recommendation downstream.
-    // Refused HERE as well as at the send door, because this control can move a
-    // DRAFT straight to accepted without it ever being sent.
-    // ⭐ A no-charge quote passes: that is a known price of zero, on the record.
-    if (s === 'accepted' || s === 'completed' || s === 'paid') {
-      const block = moneyDoorBlock(quotePriceState({ total, ...(noCharge ?? {}) }), 'won')
-      if (block) { toast.error(block); return }   // select snaps back on its own
-    }
     // A declined quote is lost — confirm before committing the transition.
     if (s === 'declined' && current !== 'declined') {
       const ok = await confirmDialog({
@@ -125,9 +136,11 @@ export function QuoteStatusControl({ quoteId, status, followUpCount, sentAt, val
     // markWonPatch's two accepted_* fields inline, and stamped sent_at in a SECOND
     // update that never wrote valid_until (which is why 0 of 55 quotes could expire).
     // One event, one patch, one write.
+    // ⛔ NO 'accepted' BRANCH. The acceptance patch that used to live here wrote a
+    // consent snapshot this control had no way of knowing — see the note at the
+    // top of the file. Every remaining transition is a plain label change.
     const updates: Record<string, unknown> =
-      s === 'sent'     ? markSentPatch({ sent_at: sentAt ?? null, valid_until: validUntil ?? null }, localTodayISO())
-      : s === 'accepted' ? markWonPatch(followUpCount ?? 0, { acceptedPrice: Number(total) || null, selectedCadence: null })
+      s === 'sent' ? markSentPatch({ sent_at: sentAt ?? null, valid_until: validUntil ?? null }, localTodayISO())
       : { status: s }
     try {
       await queueOrRun(
@@ -179,11 +192,25 @@ export function QuoteStatusControl({ quoteId, status, followUpCount, sentAt, val
             half of this list the app normally manages, which is the difference
             between an informed correction and an accident. */}
         <optgroup label="You set these" className="bg-bg-secondary text-ink normal-case">
-          {ALL.filter(s => !isSystemAdvancedQuoteStatus(s)).map(s => (
+          {ALL.filter(s => !isSystemAdvancedQuoteStatus(s) && s !== ACCEPTANCE_IS_NOT_A_LABEL).map(s => (
             <option key={s} value={s} title={QUOTE_STATUS_MEANING[s]} className="bg-bg-secondary text-ink normal-case">
               {STATUS_LABELS[s]}
             </option>
           ))}
+        </optgroup>
+        {/* Present so an already-accepted quote renders its own state, and
+            DISABLED so this control can never be the thing that records one. The
+            heading says where acceptance actually comes from rather than leaving
+            a greyed-out option to look like a bug. */}
+        <optgroup label="Recorded from the customer’s decision" className="bg-bg-secondary text-ink normal-case">
+          <option
+            value={ACCEPTANCE_IS_NOT_A_LABEL}
+            disabled={current !== ACCEPTANCE_IS_NOT_A_LABEL}
+            title="Open the quote and use “Record customer acceptance”"
+            className="bg-bg-secondary text-ink normal-case"
+          >
+            {STATUS_LABELS[ACCEPTANCE_IS_NOT_A_LABEL]}
+          </option>
         </optgroup>
         <optgroup label="Set automatically — override with care" className="bg-bg-secondary text-ink normal-case">
           {ALL.filter(isSystemAdvancedQuoteStatus).map(s => (

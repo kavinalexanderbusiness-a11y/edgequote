@@ -3185,6 +3185,125 @@
   "convalidated": true
  },
  {
+  "def": "CHECK ((actor_type = ANY (ARRAY['customer'::text, 'owner'::text, 'system'::text])))",
+  "tbl": "quote_acceptances",
+  "conname": "quote_acceptances_actor_type_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((accepted_amount >= (0)::numeric))",
+  "tbl": "quote_acceptances",
+  "conname": "quote_acceptances_amount_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id, customer_id) REFERENCES customers(user_id, id) ON DELETE SET NULL (customer_id)",
+  "tbl": "quote_acceptances",
+  "conname": "quote_acceptances_customer_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((btrim(document_fingerprint) <> ''::text))",
+  "tbl": "quote_acceptances",
+  "conname": "quote_acceptances_fingerprint_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((kind = ANY (ARRAY['customer'::text, 'owner_on_behalf'::text, 'legacy_unrecorded'::text])))",
+  "tbl": "quote_acceptances",
+  "conname": "quote_acceptances_kind_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (\nCASE kind\n    WHEN 'owner_on_behalf'::text THEN ((actor_type = 'owner'::text) AND (source = 'dashboard'::text) AND (on_behalf_reason IS NOT NULL) AND (btrim(on_behalf_reason) <> ''::text))\n    WHEN 'customer'::text THEN ((actor_type = 'customer'::text) AND (source = 'portal'::text) AND (on_behalf_reason IS NULL) AND (on_behalf_note IS NULL))\n    WHEN 'legacy_unrecorded'::text THEN ((actor_type = 'system'::text) AND (source = 'migration'::text) AND (actor_id IS NULL) AND (on_behalf_reason IS NULL) AND (on_behalf_note IS NULL) AND (NOT terms_required) AND (NOT terms_acknowledged))\n    ELSE false\nEND)",
+  "tbl": "quote_acceptances",
+  "conname": "quote_acceptances_on_behalf_shape_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
+  "tbl": "quote_acceptances",
+  "conname": "quote_acceptances_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id, quote_id) REFERENCES quotes(user_id, id) ON DELETE CASCADE",
+  "tbl": "quote_acceptances",
+  "conname": "quote_acceptances_quote_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (quote_id, seq)",
+  "tbl": "quote_acceptances",
+  "conname": "quote_acceptances_quote_seq_unique",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((on_behalf_reason IS NULL) OR (on_behalf_reason = ANY (ARRAY['phone'::text, 'email'::text, 'text_message'::text, 'in_person'::text, 'written'::text, 'other'::text]))))",
+  "tbl": "quote_acceptances",
+  "conname": "quote_acceptances_reason_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (selected_option_id, quote_id) REFERENCES quote_options(id, quote_id) ON DELETE RESTRICT",
+  "tbl": "quote_acceptances",
+  "conname": "quote_acceptances_selected_option_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((seq >= 1))",
+  "tbl": "quote_acceptances",
+  "conname": "quote_acceptances_seq_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK ((source = ANY (ARRAY['portal'::text, 'dashboard'::text, 'migration'::text])))",
+  "tbl": "quote_acceptances",
+  "conname": "quote_acceptances_source_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id, supersedes_id) REFERENCES quote_acceptances(user_id, id) ON DELETE RESTRICT",
+  "tbl": "quote_acceptances",
+  "conname": "quote_acceptances_supersedes_same_owner",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (((NOT terms_required) OR (terms_acknowledged AND (terms_fingerprint IS NOT NULL) AND (terms_text IS NOT NULL))))",
+  "tbl": "quote_acceptances",
+  "conname": "quote_acceptances_terms_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+  "tbl": "quote_acceptances",
+  "conname": "quote_acceptances_user_id_fkey",
+  "contype": "f",
+  "convalidated": true
+ },
+ {
+  "def": "UNIQUE (user_id, id)",
+  "tbl": "quote_acceptances",
+  "conname": "quote_acceptances_user_id_unique",
+  "contype": "u",
+  "convalidated": true
+ },
+ {
   "def": "UNIQUE (id, quote_id)",
   "tbl": "quote_addons",
   "conname": "quote_addons_id_quote_unique",

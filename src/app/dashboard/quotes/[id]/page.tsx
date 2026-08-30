@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { Quote, Customer, QuoteFormValues, QuoteService, QuoteOption, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, STATUS_LABELS, PAYMENT_METHODS } from '@/types'
+import { Quote, Customer, QuoteFormValues, QuoteService, QuoteOption, QuoteStatus, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, STATUS_LABELS, PAYMENT_METHODS } from '@/types'
 import { sumServiceLines, serviceLineTotals, splitServices, recentTemplateIdsFrom } from '@/lib/quoteServices'
 import {
   activeOption, headlineOptionPrice, optionRowsFor, optionValueBasis, optionValueBasisLabel,
@@ -27,14 +27,24 @@ import { SaveAsBundleDialog } from '@/components/quotes/SaveAsBundleDialog'
 import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { nextInvoiceNumber } from '@/lib/invoicing'
 import { isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil, markSentPatch, sendBlockedReason, sendBlockedLabel, DEFAULT_QUOTE_VALID_DAYS } from '@/lib/quoteStatus'
-import { quotePriceState, moneyDoorBlock, PRICE_STATE_LABEL } from '@/lib/pricingState'
+import { quotePriceState, PRICE_STATE_LABEL } from '@/lib/pricingState'
 import { markQuoteNoCharge, noChargeReasonProblem, NO_CHARGE_REASON_MAX } from '@/lib/noChargeAction'
 import { toast } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
-import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
+import { needsFollowUp, daysSince, logFollowUpPatch } from '@/lib/followup'
 import { isWon } from '@/lib/salesStage'
+// THE acceptance engine (Session 121). What an acceptance IS, what un-does one,
+// and the words for it — read here, never restated.
+import {
+  acceptanceStanding, acceptanceSentence, reapprovalSentence, materialChanges,
+  isUnevidencedAcceptance, acceptanceBlock, acceptanceBlockLabel,
+  hasCurrentValidAcceptance, type AcceptanceState,
+} from '@/lib/quoteAcceptance'
+import { loadAcceptanceState, loadAcceptanceHistory, type AcceptanceHistoryRow } from '@/lib/quoteAcceptanceData'
+import { RecordAcceptanceDialog } from '@/components/quotes/RecordAcceptanceDialog'
+import { OverrideStatusDialog } from '@/components/quotes/OverrideStatusDialog'
 import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { servicePricingKind } from '@/lib/servicePricing'
@@ -47,7 +57,7 @@ import {
   schedulingPreferenceLine, stampDepositOverride, type GateLedgerRow,
 } from '@/lib/payments/depositGate'
 import { recordDeposit } from '@/lib/payments/ledger'
-import { AlertTriangle, Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Camera, Globe, CalendarClock, Layers, Lock, Wallet, CheckCircle2 } from 'lucide-react'
+import { AlertTriangle, Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Camera, Globe, CalendarClock, Layers, Lock, Wallet, CheckCircle2, ShieldAlert } from 'lucide-react'
 import { AUDIENCE_COPY } from '@/lib/noteScope'
 
 export default function QuoteDetailPage() {
@@ -96,6 +106,15 @@ export default function QuoteDetailPage() {
   const [depAmount, setDepAmount] = useState('')
   const [depMethod, setDepMethod] = useState('etransfer')
   const [depBusy, setDepBusy] = useState(false)
+  // ── The acceptance record (Session 121) ────────────────────────────────────
+  // `null` = not loaded yet OR the read failed, and the two must behave the same
+  // way: an unreadable ledger renders as "checking", never as "nobody accepted".
+  // The distinction matters here more than almost anywhere else in the app —
+  // "no acceptance on record" is an accusation when it isn't true.
+  const [acceptance, setAcceptance] = useState<AcceptanceState | null>(null)
+  const [acceptanceLoaded, setAcceptanceLoaded] = useState(false)
+  const [showRecordAcceptance, setShowRecordAcceptance] = useState(false)
+  const [selectedAddonsTotal, setSelectedAddonsTotal] = useState(0)
 
 
   const supabase = createClient()
@@ -179,10 +198,31 @@ export default function QuoteDetailPage() {
       } else {
         setDepositRows([])
       }
+      await refreshAcceptance(id)
       setLoading(false)
     }
     load()
   }, [id])
+
+  // ⭐ The acceptance record comes from quote_acceptance_state, never from the
+  // quote row. The quote row can say 'accepted' with nothing behind it — that is
+  // precisely the state this page now has to be able to show.
+  async function refreshAcceptance(quoteId: string) {
+    // The selected extras are read here rather than assumed to be zero: the
+    // database adds them into accepted_amount, so a dialog that ignored them
+    // would quote one figure and record another. (The add-on EDITOR is Session
+    // 113's lane; the rows and their money already exist in this schema.)
+    const { data: addonRows } = await supabase
+      .from('quote_addons').select('price').eq('quote_id', quoteId).eq('is_selected', true)
+    setSelectedAddonsTotal(((addonRows as { price: number | string }[] | null) || [])
+      .reduce((n, a) => n + (Number(a.price) || 0), 0))
+
+    const { data, error } = await supabase.rpc('quote_acceptance_state', { p_quote_id: quoteId })
+    if (error) { setAcceptance(null); setAcceptanceLoaded(false); return }
+    const row = (Array.isArray(data) ? data[0] : data) as AcceptanceState | undefined
+    setAcceptance(row ?? null)
+    setAcceptanceLoaded(true)
+  }
 
   // Re-derive the gate's ledger picture (post-record / post-refresh).
   async function refreshDepositRows(quoteId: string) {
@@ -351,8 +391,10 @@ export default function QuoteDetailPage() {
         measurement_snapshot: values.measurement_snapshot ?? null,
         suggested_price: Number(values.suggested_price) || null,
         // QL-1: editing quote CONTENT never touches status. QuoteStatusControl is
-        // the sole status writer (routes sent→markSentPatch, accepted→markWonPatch),
-        // so a content edit can't downgrade a Sent quote or skip the expiry stamps.
+        // the sole writer of the LABEL statuses (sent → markSentPatch, declined,
+        // draft), so a content edit can't downgrade a Sent quote or skip the
+        // expiry stamps. ACCEPTED is not among them: it is written only by the
+        // acceptance doors, which record who accepted and how (Session 121).
       })
       .eq('id', id)
       .select()
@@ -629,6 +671,20 @@ export default function QuoteDetailPage() {
     if (!quote) return
     // A $0 invoice can never be paid — it would sit stuck until cancelled.
     if (!(Number(quote.total) > 0)) { toast.error('Set a price on this quote before invoicing it.'); return }
+    // ── ⭐⭐ THE ACCEPTANCE GATE (Session 121) ────────────────────────────────
+    // Billing is the sharpest end of "acting on the commercial terms", and this
+    // conversion writes `amount: quote.total` — the CURRENT total. Before the
+    // gate, an owner could accept at $5,550, raise the price to $6,075, press
+    // Convert, and send the customer a bill for a number they never agreed to,
+    // with the quote still reading Accepted the whole way through.
+    //
+    // Same engine as scheduling and the deposit ask; a failed read BLOCKS.
+    {
+      const { state, error: accErr } = await loadAcceptanceState(supabase, quote.id)
+      if (accErr) { toast.error('Could not check this quote’s acceptance record, so nothing was invoiced. Check your connection and try again.'); return }
+      const block = acceptanceBlock(quote.status, state)
+      if (block) { toast.error(acceptanceBlockLabel(block, 'invoicing')); return }
+    }
     setConverting(true)
     // One invoice per quote — the completed-job auto-draft stamps quote_id too, so
     // this catches BOTH a prior manual convert and an auto-draft. Without it,
@@ -838,85 +894,81 @@ export default function QuoteDetailPage() {
   }
 
   // ── "They rang and said they want the Premium" ──────────────────────────────
-  // The owner records the customer's choice through the SAME contract the portal
-  // uses: `owner_select_quote_option` and `portal_accept_quote` are two doors into
-  // one function (quote_apply_option_choice) that owns the money rule. There is no
-  // second implementation of "an option's price becomes the quote's price" — which
-  // is exactly how the owner's screen and the customer's screen would otherwise
-  // start disagreeing about what was bought.
-  const [choosing, setChoosing] = useState<string | null>(null)
-  async function acceptOptionForCustomer(optionId: string) {
-    if (!quote || choosing) return
-    const opt = options.find(o => o.id === optionId)
-    if (!opt) return
-    const priced = Number(opt.price) + (Number(quote.travel_fee) || 0)
-    const ok = await confirmDialog({
-      title: `Record ${opt.name} as the customer’s choice?`,
-      message: `This approves ${quote.quote_number} at ${formatCurrency(priced)} on ${quote.customer_name}’s behalf — the same as if they had approved it in their portal. The other options stay on the record as what was offered, and this can’t be swapped afterwards without sending a revised quote.`,
-      confirmLabel: `Approve ${opt.name} — ${formatCurrency(priced)}`,
-    })
-    if (!ok) return
-    setChoosing(optionId)
-    try {
-      const { data: applied, error } = await supabase.rpc('owner_select_quote_option', {
-        p_quote_id: quote.id, p_option_id: optionId,
-      })
-      // ⚠️ A falsy result is a REFUSAL, not a success with nothing to show, and it
-      // must never be reported as one. Re-read the row and let the database say
-      // what happened rather than assuming either way.
-      const { data: fresh } = await supabase.from('quotes').select('*').eq('id', quote.id).single()
-      if (error || !applied) {
-        if (fresh && (fresh as Quote).selected_option_id === optionId) {
-          setQuote(fresh as Quote)   // it landed (another tab, a retry) — say the true thing
-          toast.success(`${opt.name} recorded as the approved option.`)
-        } else {
-          toast.error(
-            (fresh as Quote | null)?.selected_option_id
-              ? 'This quote already has an approved option — send a revised quote to change it.'
-              : 'Could not record that choice — check your connection and try again.',
-          )
-        }
-        return
-      }
-      if (fresh) setQuote(fresh as Quote)
-      toast.success(`${opt.name} recorded — ${quote.quote_number} is approved at ${formatCurrency(priced)}.`)
-    } finally { setChoosing(null) }
+  // ⭐⭐ ONE DOOR, and it asks the question that makes the record true (Session
+  // 121). There used to be two: this options-picker button and a "Won" button —
+  // and neither asked WHERE the yes came from, so both produced a row that read
+  // exactly like the customer had approved it in their portal.
+  //
+  // Recording someone else's decision is legitimate and common. It is simply a
+  // different event, and RecordAcceptanceDialog is the only place the product
+  // now performs it: it names the option, computes the same figure the database
+  // will store, requires a reason, and writes through
+  // owner_record_customer_acceptance — which refuses without one.
+  const [presetOptionId, setPresetOptionId] = useState<string | null>(null)
+  function openRecordAcceptance(optionId?: string) {
+    setPresetOptionId(optionId ?? null)
+    setShowRecordAcceptance(true)
   }
 
-  async function markWon() {
-    if (!quote || actionBusy) return
-    // ⛔ An options quote cannot be "won" without saying WHICH option. Accepting
-    // one through the plain patch would set status='accepted' and leave
-    // selected_option_id NULL — an approved quote whose approved scope nobody can
-    // name, which is the single state this whole feature exists to make
-    // impossible. Point at the picker instead of half-recording the sale.
-    if (options.length > 0) {
-      toast.error('This quote offers options — pick the one the customer chose, just below.')
-      document.getElementById('eq-quote-options')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      return
+  // ── "Revise quote" — editing an agreement, said out loud ───────────────────
+  // ⛔ NOT a change order. A change order is ADDITIONAL work agreed on top of a
+  // deal that still stands (lib/changeOrders, and it hangs off a JOB). This is
+  // the other thing: the deal itself is being restated, so the standing
+  // acceptance stops authorizing it and the customer has to say yes again.
+  //
+  // ⭐ The editor underneath is the SAME editor. That is the smallest correct
+  // architecture precisely BECAUSE the ledger is immutable: the version they
+  // agreed to is already preserved as evidence, so the working document is free
+  // to move. Copying the quote into a "revision" row would mint a second
+  // lifecycle to keep in sync for no gain the ledger doesn't already give.
+  async function beginRevision() {
+    if (!quote) return
+    const ok = await confirmDialog({
+      title: `Revise ${quote.quote_number}?`,
+      message:
+        `${acceptanceSentence(quote.status, acceptance)} That acceptance stays on the record permanently — revising never erases it. ` +
+        `But if you change the price, the scope, the option or the terms, this quote stops being approved at the new figure: ` +
+        `it will show “Changes require reapproval”, and it can’t be scheduled or invoiced until they accept it again.`,
+      confirmLabel: 'Revise the quote',
+    })
+    if (!ok) return
+    setEditing(true)
+  }
+
+  // ── The administrative override, under Advanced ────────────────────────────
+  // ⭐⭐ CHANGING A STATUS IS NOT ACCEPTANCE. Repairing a stuck row is a real
+  // need — a quote that was paid in cash months ago, a row imported wrong — so
+  // the door exists. It just isn't the same door, doesn't live in the everyday
+  // dropdown, and cannot manufacture consent: owner_override_quote_status writes
+  // NO acceptance evidence, so an overridden quote still fails the gate and
+  // still cannot be scheduled or invoiced on that basis.
+  const [showOverride, setShowOverride] = useState(false)
+  async function overrideStatus(next: QuoteStatus, reason: string): Promise<boolean> {
+    if (!quote) return false
+    const { data, error } = await supabase.rpc('owner_override_quote_status', {
+      p_quote_id: quote.id, p_status: next, p_reason: reason,
+    })
+    // A falsy result is a REFUSAL — the same contract every other RPC on this
+    // page uses. Never report one as done.
+    if (error || data !== true) {
+      toast.error(error?.message || 'Could not override the status — check your connection and try again.')
+      return false
     }
-    // ⛔ "Won" asserts a customer authorised a PRICE. On an unpriced quote there
-    // is no price to have authorised, and the win would enter the pipeline,
-    // booked revenue and Growth as a $0 sale — the exact silent-zero this lane
-    // exists to stop. Same engine as the send door and the status picker.
-    const wonBlock = moneyDoorBlock(quotePriceState(quote), 'won')
-    if (wonBlock) { toast.error(wonBlock); return }
-    setActionBusy(true)
-    try {
-      // Snapshot what was bought (Pricing v2 Phase 0). `total` is the number on the
-      // document the customer said yes to — copying it here is what makes it
-      // survivable when the quote is later edited. The cadence is deliberately NOT
-      // passed: this button says "they said yes", not "they said yes to weekly", and
-      // the app must not invent a distinction the owner never made. It becomes known
-      // when the job is scheduled against a recurrence.
-      const patch = markWonPatch(quote.follow_up_count, {
-        acceptedPrice: Number(quote.total) || null,
-        selectedCadence: null,
-      })
-      await supabase.from('quotes').update(patch).eq('id', quote.id)
-      setQuote({ ...quote, ...patch })   // status → accepted; the persistent banner shows automatically
-      toast.success('Marked as won — schedule the job to lock it in.')
-    } finally { setActionBusy(false) }
+    setQuote(q => q ? { ...q, status: next } : q)
+    await refreshAcceptance(quote.id)
+    toast.success(`Status overridden to ${STATUS_LABELS[next]} — recorded with your reason.`)
+    return true
+  }
+
+  // After the acceptance lands, both the quote row and the ledger have moved —
+  // re-read BOTH rather than patching state locally. accepted_price is now
+  // written only inside the database's own consent window, so a guessed local
+  // value would be a second, wrong copy of the one figure that matters.
+  async function afterAcceptanceRecorded() {
+    if (!quote) return
+    const { data: fresh } = await supabase.from('quotes').select('*').eq('id', quote.id).single()
+    if (fresh) setQuote(fresh as Quote)
+    await refreshAcceptance(quote.id)
   }
 
   async function markLost() {
@@ -980,19 +1032,16 @@ export default function QuoteDetailPage() {
   if (editing) return (
     <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader title={`Edit ${quote.quote_number}`} />
-      {/* The customer's approval covered a SPECIFIC number. Edit was offered on
-          accepted/scheduled/completed quotes with no acknowledgement that a deal
-          existed — and the accepted_price snapshot the portal writes was read
-          nowhere in the app, so rewriting an approved total looked identical to
-          tweaking a draft. Warn, never block: price corrections after acceptance
-          are legitimate (that's why Edit exists here), but they must be made
-          knowing the customer hasn't agreed to the new number. */}
+      {/* The acceptance covered a SPECIFIC number. Edit is still OFFERED on an
+          accepted quote — corrections after a deal are legitimate, which is why
+          Edit exists here — but the sentence is now taken from the acceptance
+          RECORD rather than asserted. When nothing accepted this quote, it says
+          that instead of claiming a customer approved it (Session 121). */}
       {isWon(quote.status) && (
         <Banner tone="warn" icon={AlertTriangle}>
-          <span className="font-semibold text-ink">
-            The customer approved this quote{Number(quote.accepted_price) > 0 ? ` at ${formatCurrency(Number(quote.accepted_price))}` : ''}.
-          </span>{' '}
-          Changes here are not re-approved automatically — if the price moves, send it again or confirm with them before the work is billed.
+          <span className="font-semibold text-ink">{acceptanceSentence(quote.status, acceptance)}</span>{' '}
+          A commercial change here does not stay accepted: send the quote again so
+          {acceptance?.accepted ? ' they can accept' : ' it can be accepted at'} what it says now.
         </Banner>
       )}
       <QuoteBuilder
@@ -1118,14 +1167,11 @@ export default function QuoteDetailPage() {
             key={quote.status}
             quoteId={quote.id}
             status={quote.status}
-            // Without these the shared patches can't do their job: followUpCount was
-            // missing entirely (so flipping to Accepted here recorded no follow-up
-            // attribution), and the stamps let markSentPatch leave a deliberate expiry
-            // alone instead of overwriting it.
-            followUpCount={quote.follow_up_count}
+            // The stamps let markSentPatch leave a deliberate expiry alone instead
+            // of overwriting it. (followUpCount/total used to be passed too, for the
+            // acceptance snapshot this control no longer writes — see Session 121.)
             sentAt={quote.sent_at}
             validUntil={quote.valid_until}
-            total={quote.total}
             // Names the optional "why was this lost?" question on a decline.
             customerName={quote.customer_name}
             onChanged={(s) => {
@@ -1155,8 +1201,21 @@ export default function QuoteDetailPage() {
               <FileText className="w-3.5 h-3.5" /> Convert to invoice
             </Button>
           ) : null}
-          <Button onClick={() => setEditing(true)} variant="ghost" size="sm">
-            <Edit2 className="w-3.5 h-3.5" /> Edit
+          {/* ── ⭐⭐ EDIT vs REVISE (Session 121) ─────────────────────────────
+              A quote with a live acceptance is not a document you edit — it is
+              an agreement you replace. Presenting the same quiet "Edit" for both
+              is what let a $5,550 approved quote become a $6,075 approved quote
+              with nothing on screen marking the moment.
+              So: same editor underneath (the immutable ledger is what preserves
+              the agreed version, which is exactly why the current quote model
+              can stay mutable), different NAME and a confirm that says what is
+              about to become true. */}
+          <Button
+            onClick={() => hasCurrentValidAcceptance(acceptance) ? beginRevision() : setEditing(true)}
+            variant="ghost"
+            size="sm"
+          >
+            <Edit2 className="w-3.5 h-3.5" /> {hasCurrentValidAcceptance(acceptance) ? 'Revise quote' : 'Edit'}
           </Button>
           {/* Save the SCOPE for reuse — distinct from Duplicate, which copies
               this whole quote (customer and all) once. Hidden on an options
@@ -1236,6 +1295,79 @@ export default function QuoteDetailPage() {
           })()}
         </Banner>
       )}
+
+      {/* ── The acceptance record (Session 121) ────────────────────────────────
+          THREE states, three sentences, and none of them is inferred from
+          quotes.status alone:
+
+            needs_reapproval  a real acceptance exists and the deal has moved
+                              since. The quote still SAYS accepted — nothing is
+                              silently un-done behind the owner's back — but the
+                              page names what changed and what to do.
+            none (unevidenced) the status says accepted and no acceptance was
+                              ever recorded. Almost always an old row or a manual
+                              repair; either way it must not read as consent.
+            standing          say who accepted, for how much, and how it reached
+                              us. This is the only branch allowed to say "the
+                              customer accepted".
+
+          ⚠️ Gated on acceptanceLoaded. A FAILED read must never render as "no
+          acceptance on record" — that sentence is an accusation, and getting it
+          from a dropped connection is the day this feature loses the owner's
+          trust. */}
+      {acceptanceLoaded && isWon(quote.status) && (() => {
+        const standing = acceptanceStanding(acceptance)
+        if (standing === 'needs_reapproval') {
+          const changes = materialChanges(acceptance?.document ?? null, {
+            initial_price: quote.initial_price, travel_fee: quote.travel_fee, total: quote.total,
+            service_type: quote.service_type, address: quote.address, notes: quote.notes,
+            weekly_price: quote.weekly_price, biweekly_price: quote.biweekly_price,
+            monthly_price: quote.monthly_price, deposit_type: quote.deposit_type,
+            deposit_value: quote.deposit_value, selected_option_id: quote.selected_option_id,
+            options, services,
+          })
+          return (
+            <Banner tone="warn" icon={AlertTriangle}>
+              <span className="font-semibold text-ink">Changes require reapproval.</span>{' '}
+              {reapprovalSentence(acceptance, changes)}
+              {changes.length > 0 && (
+                <span className="block mt-1.5 text-xs text-ink-muted">
+                  {changes.map(c => (
+                    <span key={c.what} className="block">
+                      {c.what}: <span className="text-ink-faint">{c.was ?? '—'}</span> → <span className="text-ink">{c.now ?? '—'}</span>
+                    </span>
+                  ))}
+                </span>
+              )}
+              <span className="block mt-1.5 text-xs text-ink-muted">
+                The original acceptance stays on the record either way — reapproving adds to the history, it never replaces it.
+              </span>
+            </Banner>
+          )
+        }
+        if (isUnevidencedAcceptance(quote.status, acceptance)) {
+          return (
+            <Banner tone="warn" icon={AlertTriangle}>
+              <span className="font-semibold text-ink">No customer acceptance on record.</span>{' '}
+              This quote’s status was set by hand. If they did accept it, record that so the
+              amount, the date and how they told you are all on file.
+            </Banner>
+          )
+        }
+        return (
+          <Banner tone="info" icon={CheckCircle2}>
+            <span className="font-semibold text-ink">{acceptanceSentence(quote.status, acceptance)}</span>
+            {acceptance?.accepted_at && (
+              <span className="text-ink-muted"> {formatDate(acceptance.accepted_at)}.</span>
+            )}
+            {acceptance?.terms_acknowledged && (
+              <span className="block mt-1 text-xs text-ink-muted">
+                The terms in force at that moment are stored with the acceptance — editing your terms in Settings will not change them.
+              </span>
+            )}
+          </Banner>
+        )
+      })()}
 
       {(quote.status === 'accepted' || quote.status === 'scheduled') && (() => {
         // The gate — derived from the ledger rows loaded above. rowsUnknown means
@@ -1542,15 +1674,21 @@ export default function QuoteDetailPage() {
               >
                 <RotateCw className="w-4 h-4" /> Followed up
               </button>
+              {/* ⭐ "Won" was the wrong word AND the wrong act. The word, because
+                  the quote's own state is Accepted everywhere now (lib/
+                  quoteAcceptance's vocabulary ruling — the DEAL's rung stays Won,
+                  in lib/salesStage, which is a different thing). The act, because
+                  one tap here used to write an acceptance with no actor, no
+                  source and a guessed price. It now opens the dialog that asks. */}
               <button
-                onClick={markWon}
+                onClick={() => openRecordAcceptance()}
                 disabled={actionBusy}
                 className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-emerald-500/25 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               >
-                <Check className="w-4 h-4" /> Won
+                <Check className="w-4 h-4" /> They accepted
               </button>
               {/* Lost is the discouraging path — kept quieter (ghost) so the eye
-                  lands on Won first. Handler unchanged. */}
+                  lands on the acceptance first. Handler unchanged. */}
               <button
                 onClick={markLost}
                 disabled={actionBusy}
@@ -1681,13 +1819,13 @@ export default function QuoteDetailPage() {
                         </div>
                         <span className="text-sm font-semibold text-ink shrink-0 tabular-nums">{formatCurrency(priced)}</span>
                       </div>
-                      {/* Owner-side acceptance, on the SAME contract as the portal.
-                          Offered only while the quote is still undecided — after a
-                          choice these rows are history, not buttons. */}
+                      {/* Opens THE acceptance dialog with this option preselected —
+                          it does not record anything by itself. Offered only while
+                          the quote is still undecided; after a choice these rows
+                          are history, not buttons. */}
                       {!quote.selected_option_id && (quote.status === 'draft' || quote.status === 'sent') && (
                         <Button type="button" variant="secondary" size="sm" className="mt-2.5"
-                          loading={choosing === o.id} disabled={!!choosing}
-                          onClick={() => acceptOptionForCustomer(o.id)}>
+                          onClick={() => openRecordAcceptance(o.id)}>
                           <Check className="w-3.5 h-3.5" /> They chose {o.name}
                         </Button>
                       )}
@@ -1867,6 +2005,52 @@ export default function QuoteDetailPage() {
           />
         </CardBody>
       </Card>
+
+      {/* THE owner-side acceptance door. Mounted at page level (not inside the
+          options card) because it is reached from two places — the options list
+          and the follow-up card — and one dialog with one contract is the whole
+          point of the change. */}
+      <RecordAcceptanceDialog
+        open={showRecordAcceptance}
+        onClose={() => setShowRecordAcceptance(false)}
+        quoteId={quote.id}
+        quoteNumber={quote.quote_number}
+        customerName={quote.customer_name}
+        travelFee={Number(quote.travel_fee) || 0}
+        total={Number(quote.total) || 0}
+        options={options.map(o => ({ id: o.id, name: o.name, price: Number(o.price) || 0, is_recommended: o.is_recommended }))}
+        presetOptionId={presetOptionId}
+        termsText={settings?.terms_text ?? null}
+        selectedAddonsTotal={selectedAddonsTotal}
+        onRecorded={afterAcceptanceRecorded}
+      />
+
+      {/* Advanced → Override status. Deliberately the LAST thing on the page and
+          the quietest control on it: an owner looking for it will find it, and an
+          owner not looking for it will never meet it by accident — which is how
+          the old status dropdown turned a repair tool into the acceptance door. */}
+      <details className="rounded-xl border border-border bg-bg-tertiary/30">
+        <summary className="cursor-pointer select-none px-4 py-3 text-xs font-semibold uppercase tracking-wide text-ink-muted hover:text-ink">
+          Advanced
+        </summary>
+        <div className="px-4 pb-4 pt-1 space-y-2">
+          <p className="text-xs text-ink-muted">
+            Repairing a row that is already wrong. Overriding a status moves the label only —
+            it never records that a customer accepted anything, and it never lets a quote be
+            scheduled or invoiced on that basis.
+          </p>
+          <Button variant="secondary" size="sm" onClick={() => setShowOverride(true)}>
+            <ShieldAlert className="w-3.5 h-3.5" /> Override status
+          </Button>
+        </div>
+      </details>
+      <OverrideStatusDialog
+        open={showOverride}
+        onClose={() => setShowOverride(false)}
+        quoteNumber={quote.quote_number}
+        currentStatus={quote.status}
+        onOverride={overrideStatus}
+      />
     </div>
   )
 }

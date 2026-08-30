@@ -144,12 +144,12 @@ comment on column public."jobs"."no_charge_by" is
 -- CHANGED). The argument list below is byte-identical to the live one; changing
 -- it would leave the old body callable with its existing grants.
 
-create or replace function public.quote_apply_choice(p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[], p_via text)
- returns boolean
- language plpgsql
- security definer
- set search_path to 'public'
-as $function$
+CREATE OR REPLACE FUNCTION public.quote_apply_choice(p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[], p_via text)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
 declare
   v_status text; v_travel numeric(10,2); v_follow int;
   v_base numeric(10,2); v_addons numeric(10,2);
@@ -160,7 +160,9 @@ begin
   if p_via is null or p_via not in ('portal', 'owner') then return false; end if;
 
   -- 'draft' or 'sent' = NOT YET DECIDED. Anything else means a choice already
-  -- stands, and re-deciding would silently rewrite the approved price.
+  -- stands, and re-deciding would silently rewrite the approved price. A
+  -- REAPPROVAL therefore travels the same road as the first one: the owner sends
+  -- the revised quote again, which returns it to 'sent'.
   select q.status, coalesce(q.travel_fee, 0), coalesce(q.follow_up_count, 0), q.initial_price,
          (q.no_charge_at is not null and q.no_charge_reason is not null and q.no_charge_by is not null)
     into v_status, v_travel, v_follow, v_base, v_free
@@ -180,12 +182,20 @@ begin
     return false;
   end if;
 
-  -- ⭐⭐ NEW — UNPRICED WORK CANNOT BE AUTHORIZED.
-  -- `v_base is null` is a quote nobody priced; `v_base = 0` is the manufactured
-  -- zero a blank input becomes. Neither is something a customer can agree to
-  -- pay, so neither may become 'accepted'. A recorded no-charge decision IS
-  -- agreeable — it is a known price of zero, which is exactly the distinction
-  -- this migration exists to make expressible.
+  -- SESSION 114 - UNPRICED WORK CANNOT BE AUTHORIZED.
+  -- Placed AFTER the option branch on purpose: when the customer names an
+  -- option, the price being judged is THAT option's, not the quote's headline.
+  --
+  -- v_base IS NULL is a quote nobody priced; v_base = 0 is the manufactured zero
+  -- a blank input becomes. Neither is something a customer can agree to pay, so
+  -- neither may become 'accepted'. A recorded no-charge decision IS agreeable -
+  -- it is a KNOWN price of zero, which is exactly the distinction the columns
+  -- above make expressible.
+  --
+  -- THIS IS THE ONLY CHOKEPOINT, and that is why the gate is here rather than in
+  -- the app: portal_accept_quote, owner_record_customer_acceptance and
+  -- owner_select_quote_option ALL route through this function. One gate covers
+  -- the customer's door and both of the owner's.
   if not v_free and (v_base is null or v_base <= 0) then
     return false;
   end if;
@@ -215,6 +225,25 @@ begin
   select coalesce(sum(price), 0) into v_addons
     from public.quote_addons where quote_id = p_quote_id and is_selected;
 
+  -- ⭐ The marker. Transaction-local (`true`), set by in-database code, in the
+  -- same transaction as the write it authorises. Nothing a PostgREST caller can
+  -- send reaches it, and it is gone the moment this transaction ends.
+  perform set_config('app.quote_consent_writer', p_quote_id::text, true);
+
+  -- ⭐⭐ AND THE KIND, FOR THE TRIGGERS THAT FIRE BEFORE THE LEDGER ROW EXISTS.
+  -- ⚠️ This is an ORDERING TRAP the behavioural guard caught and reading did not:
+  -- the doors update the quote FIRST and write the acceptance SECOND, so
+  -- audit_quotes() and notify_quote_accepted() — AFTER ROW triggers on that
+  -- update — run while the ledger is still empty. Reading the ledger alone, they
+  -- called a genuine owner-recorded acceptance an administrative override.
+  --
+  -- p_via is not an inference: it is passed in by the door that knows, and this
+  -- function already refuses every value but the two. Same shape as the
+  -- app.audit_context GUC the audit engine already honours — transaction-local,
+  -- settable only by in-database code, unreachable from any PostgREST request.
+  perform set_config('app.quote_acceptance_kind',
+    case p_via when 'portal' then 'customer' else 'owner_on_behalf' end, true);
+
   update public.quotes
      set status = 'accepted',
          selected_option_id = coalesce(p_option_id, selected_option_id),
@@ -226,11 +255,37 @@ begin
          accepted_after_followup = v_follow > 0,
          follow_up_count_at_acceptance = v_follow
    where id = p_quote_id and status in ('draft', 'sent');
+
+  -- Both markers cleared the moment the write they authorise is done. An AFTER
+  -- ROW trigger fires at the END of the UPDATE statement above, so it has
+  -- already read them; anything that happens later in this transaction must not
+  -- inherit them.
+  perform set_config('app.quote_consent_writer', '', true);
+  perform set_config('app.quote_acceptance_kind', '', true);
   return found;
 end $function$;
 
 comment on function public.quote_apply_choice(uuid, uuid, uuid[], text) is
-  'THE acceptance core, reached by portal_accept_quote and the owner''s own approval. Refuses to authorize an UNPRICED quote (null or <= 0 resolved price) unless the quote carries a complete no-charge decision — unpriced work must never become customer-authorized paid work.';
+  'THE acceptance core — the single chokepoint under portal_accept_quote, owner_record_customer_acceptance and owner_select_quote_option. Refuses to authorize an UNPRICED quote (null or <= 0 resolved price) unless the quote carries a complete no-charge decision. Unpriced work must never become customer-authorized paid work.';
+
+-- ⚠️⚠️ REBASED ONTO SESSION 121, NOT WRITTEN OVER IT.
+-- S121 landed while this lane was open and rewrote this same function, adding the
+-- transaction-local consent markers (`app.quote_consent_writer`,
+-- `app.quote_acceptance_kind`) that its AFTER-ROW triggers read before the
+-- acceptance ledger row exists. A `create or replace` carrying the OLD body would
+-- have silently reverted all of that — the function keeps its signature, so
+-- nothing would have failed; acceptances would just have stopped being recorded
+-- as evidence.
+--
+-- The body above is S121's, VERBATIM, with exactly four additions:
+--   1. `v_free` declared,
+--   2. the no-charge decision read in the SAME lookup (no second query),
+--   3. the gate itself, placed AFTER the option branch so that when an option is
+--      named it is THAT option's price being judged,
+--   4. `coalesce(v_base, 0)` on accepted_price, so a no-charge acceptance
+--      snapshots a KNOWN zero instead of NULL.
+-- ⭐ S106: if this function moves again before landing, re-extract the live body
+-- and re-apply those four — do not paste this one over a newer one.
 
 -- ── 4 · The ONLY doors that write a no-charge decision ─────────────────────
 -- ⭐⭐ Why an RPC and not an app-side UPDATE:

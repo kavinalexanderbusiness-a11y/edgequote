@@ -127,16 +127,26 @@ check('EXPIRING_SOON_DAYS is 5', EXPIRING_SOON_DAYS, 5)
 // STATUS PRESENTATION — the words the owner reads, pinned to what the row means.
 //
 // These labels are not cosmetic; they were derived by reading the live contracts.
-// portal_accept_quote sets status='accepted' at the instant of CUSTOMER CONSENT and
-// snapshots accepted_price — so "Approved" is the honest owner-facing word for it.
 // resync_quote_on_job_recurring, sync_quote_on_job_complete and
 // sync_quote_on_invoice_paid are DATABASE TRIGGERS, so scheduled/completed/paid are
 // advanced by the app from real events rather than chosen by anyone.
 //
-// If a label is renamed back to the database's vocabulary, or a state is quietly
-// dropped out of the picker, this fails.
+// ⭐ THE ACCEPTED LABEL CHANGED, AND THE RULE DID NOT (Session 121). This line
+// used to pin "Approved", on the reasoning that it was the owner's word for a
+// customer consenting. The reasoning was sound and the word was still wrong,
+// because it was not the ONLY word: the pill said Approved, four dashboard
+// banners said Accepted, the quote page's own action said Won, and the portal
+// button said Approve — four words for one event, on screens read side by side.
+// The contract this line has always enforced is "one canonical, owner-facing
+// acceptance word, pinned so it cannot drift"; the answer is now Accepted, which
+// also matches the stored value so the label and the row cannot diverge.
+//
+// ⭐ "Won" survives in lib/salesStage and is NOT a synonym — that ladder
+// describes a DEAL, not a document, and a deal can be won before a quote exists.
+//
+// If a label is renamed, or a state is quietly dropped out of the picker, this fails.
 console.log('\n── status presentation ──')
-check('accepted reads as the customer APPROVING (portal_accept_quote records consent)', STATUS_LABELS.accepted, 'Approved')
+check('accepted reads as ACCEPTED — one word for the quote’s own state', STATUS_LABELS.accepted, 'Accepted')
 check('draft stays plain', STATUS_LABELS.draft, 'Draft')
 check('sent stays plain (it is the only state that can expire)', STATUS_LABELS.sent, 'Sent')
 check('declined stays plain', STATUS_LABELS.declined, 'Declined')

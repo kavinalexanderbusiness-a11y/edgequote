@@ -865,11 +865,19 @@ console.log('\nrecentPaymentLanded (post-checkout confirmation):')
 
   // ── The regression half: narrowing Home must not have removed an ANSWER. ──
   const homeSrc = readFileSync(join(process.cwd(), 'src/app/portal/[token]/components/HomeTab.tsx'), 'utf8')
-  // A quote awaiting approval, and the approve action itself.
-  check('Home still surfaces quotes awaiting approval',
+  // A quote awaiting an answer, and the accept action itself.
+  //
+  // ⭐ Session 121 re-pointed the ACTION, not the answer. The one-tap shortcut
+  // now passes the terms acknowledgement explicitly and is only rendered when
+  // the business has NO terms — accepting from a card that never showed the
+  // terms would be ticking the box on the customer's behalf. So the assertion
+  // pins the accept door still being on Home AND that it is the terms-aware one;
+  // a bare `actions.accept(oneQuoteId)` reappearing is the regression.
+  check('Home still surfaces quotes awaiting an answer, with a terms-aware accept',
     homeSrc.includes("d.kind === 'quote' && d.status === 'sent'")
     && homeSrc.includes('quotes are ready for your review')
-    && homeSrc.includes('actions.accept(oneQuoteId)'))
+    && homeSrc.includes('actions.accept(oneQuoteId, undefined, true)')
+    && homeSrc.includes('oneQuoteId && !hasTerms'))
   // Money owed, and the ability to pay it.
   check('Home still surfaces money owed and the way to pay it',
     homeSrc.includes('view.money.due > 0') && homeSrc.includes('Amount due')

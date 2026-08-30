@@ -372,15 +372,47 @@ for (const [label, src] of [['QuoteBuilder', builder], ['JobForm', jobForm]] as 
 console.log('\n═══ 10 · The gates are wired at the doors, not just defined ═══')
 
 const quoteDetail = stripComments(read('src/app/dashboard/quotes/[id]/page.tsx'))
-check('the quote page refuses to mark an unpriced quote won',
-  /moneyDoorBlock\(quotePriceState\(quote\), 'won'\)/.test(quoteDetail))
-check('and it returns rather than continuing', /if \(wonBlock\) \{ toast\.error\(wonBlock\); return \}/.test(quoteDetail))
 
+// ⚠️⚠️ RE-EXPRESSED (Session 114, after S121 landed mid-lane). These four checks
+// used to assert an APP-SIDE Won gate on this page and in QuoteStatusControl.
+// S121 deleted both: the status picker now REFUSES 'accepted' outright and sends
+// the owner to "Record customer acceptance", which routes through the database.
+//
+// The rule was never "this component holds a price check" — it was "an unpriced
+// quote cannot become Won". S121 made that rule stronger, not weaker, by moving
+// the decision to the one place the app cannot go around. So the assertion moves
+// with it: prove there is NO app-side path that sets 'accepted' by hand, and let
+// §13 prove the database refuses it. Deleting these checks would have been the
+// wrong answer; so would restoring a now-redundant app gate.
 const statusControl = stripComments(read('src/components/quotes/QuoteStatusControl.tsx'))
-check('the status picker gates accepted/completed/paid',
-  /s === 'accepted' \|\| s === 'completed' \|\| s === 'paid'/.test(statusControl))
-check('the status picker asks the same engine',
-  /moneyDoorBlock\(quotePriceState\(/.test(statusControl))
+check('the status picker no longer writes an acceptance by hand',
+  !/markWonPatch/.test(statusControl) && !/status: 'accepted'/.test(statusControl),
+  'a hand-written accepted patch is back in the status control')
+check('… it refuses the transition and names the recorded door instead',
+  /Record customer acceptance/.test(statusControl))
+check('the quote page has no hand-rolled Won patch either',
+  !/markWonPatch/.test(quoteDetail),
+  'the quote page marks a quote won without going through the database')
+// ⭐ THE LOAD-BEARING CONSEQUENCE: every acceptance door in the app reaches the
+// database, so the §13 gate covers all of them. If an app path ever sets
+// 'accepted' directly again, this is the check that notices.
+{
+  const { readdirSync, statSync } = require('node:fs') as typeof import('node:fs')
+  const walk = (dir: string, out: string[] = []): string[] => {
+    for (const e of readdirSync(dir)) {
+      const p = join(dir, e)
+      if (statSync(p).isDirectory()) walk(p, out)
+      else if (/\.(ts|tsx)$/.test(p)) out.push(p)
+    }
+    return out
+  }
+  const setters = walk(join(ROOT, 'src'))
+    .filter(p => !/portal\/\[token\]/.test(p.replace(/\\/g, '/')))
+    .filter(p => /\.update\(\s*\{[^}]*status:\s*'accepted'|status:\s*'accepted'[^}]*\}\s*\)/.test(
+      stripComments(readFileSync(p, 'utf8')).replace(/\s+/g, ' ')))
+    .map(p => p.slice(ROOT.length + 1))
+  check('NO app surface writes status = accepted directly', setters.length === 0, setters.join(' · '))
+}
 
 // The invoice door already refused, and must keep refusing. ⚠️ This pinned the
 // single-line form and went red when the refusal grew a second reason
