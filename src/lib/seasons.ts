@@ -136,6 +136,44 @@ export function resolveSeriesSeason(
   return { season: null, source: 'unknown', key: null }
 }
 
+/**
+ * Where the season migration currently stands, and whether that is consistent.
+ *
+ * ⭐⭐ PURE, AND IN src/ ON PURPOSE. This rule used to live inside
+ * verify:season-recurrence, where it could not be tested — a guard cannot
+ * mutation-test its own logic, so the ratchet that stops the transition
+ * silently never ending was itself unguarded. Mutation testing found exactly
+ * that. It lives here so the guard can drive it over fixtures AND use the same
+ * function against the live book.
+ *
+ * The two failure directions are the whole point:
+ *   • every active series declared, flag still false → the transition never
+ *     ended and the keyword guess lives on forever;
+ *   • series still undeclared, flag already true → flipping early strips the
+ *     season from every un-migrated series at once.
+ */
+export type TransitionVerdict =
+  | 'not-started'        // the column does not exist yet; the flag must be false
+  | 'in-progress'        // rows remain undeclared; the flag must be false
+  | 'complete'           // every active row declared; the flag must be TRUE
+  | 'flag-too-early'     // ⛔ flag true while rows are still undeclared
+  | 'flag-overdue'       // ⛔ every row declared but the flag is still false
+
+export function seasonTransitionVerdict(input: {
+  columnExists: boolean
+  undeclaredActive: number
+  flag: boolean
+}): TransitionVerdict {
+  if (!input.columnExists) return input.flag ? 'flag-too-early' : 'not-started'
+  if (input.undeclaredActive > 0) return input.flag ? 'flag-too-early' : 'in-progress'
+  return input.flag ? 'complete' : 'flag-overdue'
+}
+
+/** True for the verdicts that mean something is wrong and must fail a gate. */
+export function transitionIsBroken(v: TransitionVerdict): boolean {
+  return v === 'flag-too-early' || v === 'flag-overdue'
+}
+
 /** The season keys an owner may choose, in a stable order. */
 export function seasonKeys(seasons: ServiceSeasons): string[] {
   return Object.keys(seasons).sort()

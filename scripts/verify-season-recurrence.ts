@@ -29,7 +29,7 @@
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { resolveSeriesSeason, effectiveSeriesEnd, seasonEndDateFor, isWithinSeason, settingsToSeasons, seasonKeys, SEASON_NONE, DEFAULT_SEASONS, type ServiceSeason, type ServiceSeasons } from '../src/lib/seasons'
+import { resolveSeriesSeason, seasonTransitionVerdict, transitionIsBroken, effectiveSeriesEnd, seasonEndDateFor, isWithinSeason, settingsToSeasons, seasonKeys, SEASON_NONE, DEFAULT_SEASONS, type ServiceSeason, type ServiceSeasons } from '../src/lib/seasons'
 import { bridgeSeasonForSeries, SEASON_DECLARATIONS_COMPLETE } from '../src/lib/legacySeasonInference'
 import { generateOccurrences } from '../src/lib/recurrence'
 
@@ -145,6 +145,18 @@ console.log('\n▸ 2 · "no season" is a DECISION, not an absence')
     leg.indexOf("if (declared.source !== 'unknown') return declared.season")
       < leg.indexOf('if (SEASON_DECLARATIONS_COMPLETE)'),
     'the guess can run ahead of a declaration')
+  // ⛔ ORDER, not merely presence. A guess inserted BETWEEN the declaration and
+  // the flag still leaves both lines in place and in order — so checking the
+  // pair is not enough. The guess must come AFTER the short-circuit, or
+  // flipping the flag would not retire it.
+  check('⛔ the keyword guess sits AFTER the flag short-circuit',
+    leg.indexOf('if (SEASON_DECLARATIONS_COMPLETE) return null')
+      < leg.indexOf('inferSeasonKeyFromName(serviceType'),
+    'the guess can run before the flag is consulted, so completing the migration would not retire it')
+  // ⚠️ CALLS, not occurrences: `export function inferSeasonKeyFromName(` is the
+  // declaration and must not be counted as a use of it.
+  eq('…and the bridge calls the guess exactly once',
+    (leg.match(/inferSeasonKeyFromName\(serviceType/g) ?? []).length, 1)
 
   // ⛔⛔ THE RESOLVER ITSELF NEVER SEES A NAME. Not a flag, not a branch — no
   // parameter. That is what makes "a rename cannot move a season" structural.
@@ -345,6 +357,45 @@ console.log('\n▸ 7 · the reconciliation report is READ-ONLY')
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+console.log('\n▸ 8 · the migration backfills only what a RULE can classify')
+
+{
+  // ⚠️ The proposal SQL had no guard at all until mutation testing pointed it
+  // out: three separate ways to make the backfill overreach all scanned clean.
+  const sql = read('supabase/proposals/recurrence_season_key.sql')
+  const code = sql.split('\n').filter(l => !l.trimStart().startsWith('--')).join('\n')
+
+  check('the backfill exists and writes season_key', /update public\.job_recurrences[\s\S]*set season_key/.test(code))
+  // (a) it only ever acts on a real suggestion…
+  check('⛔ it refuses to write when the keyword produced nothing',
+    /and sg\.season_key is not null/.test(code),
+    'the backfill can assign a season to a row no rule classified')
+  // (b) …and only when doing so strands no existing visit.
+  check('⛔ it refuses to write when future visits would fall out of season',
+    /and coalesce\(o\.n, 0\) = 0;/.test(code),
+    'the backfill dropped its out-of-season guard and can now strand real visits')
+  check('…and only fills rows nobody has declared',
+    /and r\.season_key is null/.test(code))
+
+  // ⛔ It sets the declaration and NOTHING else.
+  check('⛔ the backfill writes no end_date', !/set[\s\S]{0,200}end_date\s*=/.test(code),
+    'the migration bounds a series as a side effect; that is an owner-visible action')
+  check('⛔ and deletes nothing at all', !/\bdelete\s+from\b/i.test(code),
+    'the migration removes rows — history is never traded for a rule change')
+
+  // ⛔ GENERIC, not a list. A migration that names rows works on one book only.
+  const NAMES = /\b(sajjan|sarah\s+brown|bi-?weekly|general\s+upkeep)\b/i
+  check('⛔ no customer or service name appears anywhere in the migration',
+    !NAMES.test(sql), (sql.match(NAMES) ?? []).join(' '))
+  check('[negative control] a hardcoded name would be caught', NAMES.test("-- Sajjan's series"))
+
+  // The season windows come from the owner's settings, not from constants.
+  check('the season windows are read from the owner\'s own settings',
+    /jsonb_each\(coalesce\(b\.service_seasons/.test(code))
+  check('…and a wrapping season is handled', /case when se\.start_md <= se\.end_md/.test(code))
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 console.log('\n▸ 9 · the transition can END — the flag cannot sit false unnoticed')
 
 // ── Offline half: the two states are internally consistent ──────────────────
@@ -365,6 +416,27 @@ console.log('\n▸ 9 · the transition can END — the flag cannot sit false unn
     eq('…and while incomplete an undeclared series still falls back',
       bridgeSeasonForSeries(null, 'Weekly Mowing', SEASONS), LAWN)
   }
+}
+
+// ── The ratchet rule itself, driven over fixtures ───────────────────────────
+// ⭐⭐ Extracted to lib/seasons so it CAN be tested. While it lived inside this
+// guard it was unguarded by construction — a guard cannot mutation-test its own
+// logic, which is exactly what mutation testing exposed.
+{
+  const V = (columnExists: boolean, undeclaredActive: number, flag: boolean) =>
+    seasonTransitionVerdict({ columnExists, undeclaredActive, flag })
+  eq('column absent + flag false → not started', V(false, 0, false), 'not-started')
+  eq('rows undeclared + flag false → in progress', V(true, 3, false), 'in-progress')
+  eq('every row declared + flag true → complete', V(true, 0, true), 'complete')
+  // ⛔ THE TWO FAILURES, and both must be reported as broken.
+  eq('⛔ every row declared but flag STILL FALSE → overdue', V(true, 0, false), 'flag-overdue')
+  eq('⛔ rows undeclared but flag ALREADY TRUE → too early', V(true, 3, true), 'flag-too-early')
+  eq('⛔ column absent but flag already true → too early', V(false, 0, true), 'flag-too-early')
+  check('…and both are treated as failures', transitionIsBroken('flag-overdue') && transitionIsBroken('flag-too-early'))
+  check('…while the three legitimate states are not',
+    !transitionIsBroken('not-started') && !transitionIsBroken('in-progress') && !transitionIsBroken('complete'))
+  // ⭐ A single undeclared row is enough to hold the transition.
+  eq('one undeclared row keeps the flag down', V(true, 1, false), 'in-progress')
 }
 
 // ── Live half: the flag and the BOOK must agree ─────────────────────────────
@@ -423,19 +495,17 @@ async function liveTransitionCheck() {
   const undeclared = active.filter((r: any) => !r.season_key || !String(r.season_key).trim())
 
   console.log(`    live book: ${active.length} active series, ${undeclared.length} still undeclared`)
-  if (undeclared.length === 0) {
-    // ⭐⭐ DECLARATIONS ARE COMPLETE. The flag MUST be true, or the transition
-    // has quietly never ended.
-    check('⛔ declarations are COMPLETE, so the flag must be true',
-      SEASON_DECLARATIONS_COMPLETE === true,
-      'every active series has declared a season, but SEASON_DECLARATIONS_COMPLETE is still false — '
-      + 'flip it in lib/legacySeasonInference so the keyword guess stops being reachable')
-    check('⛔ …and no active series may resolve to unknown',
-      undeclared.length === 0, `${undeclared.length} undeclared`)
-  } else {
-    check('⛔ series are still undeclared, so the flag must be false',
-      SEASON_DECLARATIONS_COMPLETE === false,
-      `${undeclared.length} active series have no declaration; flipping the flag strips their season`)
+  // ⭐ The SAME pure rule the fixtures above drive. The guard does not restate
+  // the ratchet in its own words — restating it is how the two come apart.
+  const verdict = seasonTransitionVerdict({
+    columnExists: true, undeclaredActive: undeclared.length, flag: SEASON_DECLARATIONS_COMPLETE,
+  })
+  check(`⛔ the flag and the book agree (verdict: ${verdict})`, !transitionIsBroken(verdict),
+    verdict === 'flag-overdue'
+      ? 'every active series has declared a season, but SEASON_DECLARATIONS_COMPLETE is still false — '
+        + 'flip it in lib/legacySeasonInference so the keyword guess stops being reachable'
+      : `${undeclared.length} active series have no declaration; flipping the flag strips their season`)
+  if (verdict === 'in-progress') {
     console.log(`    ⏸ transition PAUSED, legitimately — ${undeclared.length} series await an owner decision.`)
     console.log('       npx tsx scripts/season-reconcile.ts names them and lists the choices.')
   }
