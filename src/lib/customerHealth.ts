@@ -1,7 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { localTodayISO } from '@/lib/utils'
 import { effectiveFreq } from '@/lib/visitValue'
-import { serviceCategory, seasonForService, isWithinSeason, settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
+import { isWithinSeason, settingsToSeasons, ServiceSeasons, resolveSeriesSeason } from '@/lib/seasons'
+import { serviceCategory } from '@/lib/legacySeasonInference'
 import { VIP_LTV, cadenceDays, churnRisk, daysBetween, isLapsed, lifetimeValue } from '@/lib/signals'
 import { invoiceBalance } from '@/lib/payments/ledger'
 import type { FeeSettings } from '@/lib/invoiceTotals'
@@ -131,7 +132,7 @@ export function computeCustomerHealth(
     let intervalDays: number | null = null
     const lastDone = done[done.length - 1]
     if (recInfo && lastDone) {
-      const season = seasonForService(lastDone.service_type, seasons)
+      const season = resolveSeriesSeason({ seasonKey: null }, seasons).season /* ⛔ declaration-only: no name is read (S110) */
       const inSeason = !season || isWithinSeason(today, season)
       if (inSeason) {
         intervalDays = cadenceDays(recInfo.cadence, recInfo.rec)

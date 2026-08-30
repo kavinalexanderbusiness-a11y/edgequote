@@ -5,7 +5,7 @@
 // typed when a job was created. ONE place; reuses serviceCategory for grouping.
 // Pure and synchronous — no I/O, safe to call inside the suggestions engine.
 
-import { serviceCategory } from '@/lib/seasons'
+import { serviceCategory } from '@/lib/legacySeasonInference'
 import { DEFAULT_JOB_MIN } from '@/lib/route'
 
 export interface DurationModel {

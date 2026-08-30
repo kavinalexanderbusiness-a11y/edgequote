@@ -1,7 +1,7 @@
 import { addDays, addMonths, format, parseISO, differenceInCalendarDays } from 'date-fns'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Job, JobRecurrence, RecurUnit, RecurrenceScope } from '@/types'
-import { ServiceSeasons, seasonForService, seasonEndDateFor, seasonLabel } from '@/lib/seasons'
+import { ServiceSeasons, seasonEndDateFor, seasonLabel, resolveSeriesSeason } from '@/lib/seasons'
 // THE seasonality rule — shared with reactivation/churn so a customer never
 // reads as dormant on one screen and lost on another (see signals/lifecycle).
 import { isSeasonallyDormant } from '@/lib/signals/lifecycle'
@@ -436,7 +436,7 @@ export function buildServicePlans(
     if (r.end_date) {
       windowLabel = `${formatShort(startISO)} → ${formatShort(r.end_date)}`
     } else if (!r.end_count) {
-      const season = seasonForService(serviceName, seasons)
+      const season = resolveSeriesSeason({ seasonKey: null }, seasons).season /* ⛔ declaration-only: no name is read (S110) */
       if (season) {
         const endISO = startISO ? seasonEndDateFor(startISO, season) : null
         windowLabel = endISO ? seasonLabel(season) : null

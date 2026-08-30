@@ -23,7 +23,8 @@ import { readFileSync, readdirSync, statSync } from 'fs'
 import { join, relative } from 'path'
 import { TRADE_PACKS, LAWN_PACK, NEUTRAL_PACK, tradePack, DEFAULT_BUSINESS_TYPE } from '../src/lib/trades'
 import type { TradePack } from '../src/lib/trades'
-import { serviceCategory, DEFAULT_SEASONS } from '../src/lib/seasons'
+import { DEFAULT_SEASONS } from '../src/lib/seasons'
+import { serviceCategory } from '../src/lib/legacySeasonInference'
 import { SEASONAL_TEMPLATES } from '../src/lib/crm/campaigns'
 
 let pass = 0

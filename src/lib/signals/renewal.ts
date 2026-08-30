@@ -4,10 +4,7 @@ import {
 } from './constants'
 import { cadenceDays, type CadenceRecLike } from './cadence'
 import { daysBetween } from './lifecycle'
-import {
-  nextSeasonStartISO, seasonEndDateFor, seasonForService,
-  type ServiceSeason, type ServiceSeasons,
-} from '@/lib/seasons'
+import { nextSeasonStartISO, seasonEndDateFor, type ServiceSeason, type ServiceSeasons, resolveSeriesSeason } from '@/lib/seasons'
 
 // ── Renewal — THE "this plan is ending, offer them the next one" engine ──────
 //
@@ -222,7 +219,7 @@ export function planRenewal(f: PlanFacts, seasons: ServiceSeasons, today: string
   const planStart = f.planStart || dates[0]
   const cadence = cadenceDays(f.cadence, f.interval)
 
-  const season = seasonForService(f.serviceType, seasons)
+  const season = resolveSeriesSeason({ seasonKey: null }, seasons).season /* ⛔ declaration-only: no name is read (S110) */
   const seasonEnd = season ? seasonEndDateFor(planStart, season) : null
 
   // ⭐⭐ HAVING AN END DATE IS NOT REACHING IT.

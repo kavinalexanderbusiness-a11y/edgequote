@@ -65,7 +65,7 @@ console.log('\n▸ 1 · a DECLARED season wins — the name is never consulted')
 {
   // ⭐ THE HEADLINE. A series named "Snow Removal" that DECLARES lawn is a lawn
   // series. If the name could still win, renaming would move the season.
-  const r = resolveSeriesSeason({ seasonKey: 'lawn', serviceType: 'Snow Removal' }, SEASONS)
+  const r = resolveSeriesSeason({ seasonKey: 'lawn' }, SEASONS)
   eq('a declared season beats a contradicting name', r.season, LAWN)
   eq('…and says it was declared', r.source, 'declared')
 }
@@ -73,16 +73,16 @@ console.log('\n▸ 1 · a DECLARED season wins — the name is never consulted')
 {
   // The production case: a name that matches NOTHING still resolves, because the
   // series declared its season.
-  const r = resolveSeriesSeason({ seasonKey: 'lawn', serviceType: 'Bi-weekly' }, SEASONS)
+  const r = resolveSeriesSeason({ seasonKey: 'lawn' }, SEASONS)
   eq('"Bi-weekly" resolves when it declares lawn', r.season, LAWN)
-  const g = resolveSeriesSeason({ seasonKey: 'lawn', serviceType: 'General Upkeep' }, SEASONS)
+  const g = resolveSeriesSeason({ seasonKey: 'lawn' }, SEASONS)
   eq('…and so does "General Upkeep"', g.season, LAWN)
 }
 
 {
   // Renaming cannot change governance.
-  const before = resolveSeriesSeason({ seasonKey: 'pool', serviceType: 'Pool Opening' }, SEASONS)
-  const after = resolveSeriesSeason({ seasonKey: 'pool', serviceType: 'Completely Different Name' }, SEASONS)
+  const before = resolveSeriesSeason({ seasonKey: 'pool' }, SEASONS)
+  const after = resolveSeriesSeason({ seasonKey: 'pool' }, SEASONS)
   eq('renaming a declared series changes nothing', after.season, before.season)
   eq('…still the pool season', after.season, POOL)
 }
@@ -90,7 +90,7 @@ console.log('\n▸ 1 · a DECLARED season wins — the name is never consulted')
 {
   // ⛔ A key naming a season the business does not have is NOT downgraded to a
   // guess — answering with a different season would be worse than admitting it.
-  const r = resolveSeriesSeason({ seasonKey: 'holiday_lights', serviceType: 'Lawn Mowing' }, SEASONS)
+  const r = resolveSeriesSeason({ seasonKey: 'holiday_lights' }, SEASONS)
   eq('an unknown key does not fall back to the name', r.season, null)
   eq('…and reports itself unresolved', r.source, 'unknown')
   eq('…while remembering what was asked for', r.key, 'holiday_lights')
@@ -100,26 +100,32 @@ console.log('\n▸ 1 · a DECLARED season wins — the name is never consulted')
 console.log('\n▸ 2 · "no season" is a DECISION, not an absence')
 
 {
-  const none = resolveSeriesSeason({ seasonKey: SEASON_NONE, serviceType: 'Lawn Mowing' }, SEASONS)
+  const none = resolveSeriesSeason({ seasonKey: SEASON_NONE }, SEASONS)
   eq('SEASON_NONE means no season even for a lawn-shaped name', none.season, null)
   eq('…and is reported as a decision', none.source, 'declared-none')
 
-  const silent = resolveSeriesSeason({ serviceType: 'Bi-weekly' }, SEASONS)
+  const silent = resolveSeriesSeason({ seasonKey: null }, SEASONS)
   eq('an undeclared series is NOT the same answer', silent.source, 'unknown')
   check('…the two are distinguishable', none.source !== silent.source)
 }
 
 {
-  // Inference is the migration fallback, and it is switchable.
-  const on = resolveSeriesSeason({ serviceType: 'Lawn Mowing' }, SEASONS)
-  eq('with no declaration the legacy guess still runs (migration)', on.source, 'inferred')
-  eq('…and finds lawn', on.season, LAWN)
-  const off = resolveSeriesSeason({ serviceType: 'Lawn Mowing' }, SEASONS, { allowNameInference: false })
-  eq('…and turning inference OFF stops it guessing', off.source, 'unknown')
-  eq('…with no season', off.season, null)
-  // ⭐ but a DECLARATION still resolves with inference off — that is the end state.
-  const declared = resolveSeriesSeason({ seasonKey: 'lawn', serviceType: 'anything' }, SEASONS, { allowNameInference: false })
-  eq('a declaration resolves even with inference disabled', declared.season, LAWN)
+  // ⛔⛔ THERE IS NO INFERENCE LEFT AT RUNTIME. Not a disabled branch, not a
+  // flag — the resolver has no parameter for a service name and no code path
+  // that reads one. An undeclared series answers `unknown`, always.
+  const undeclared = resolveSeriesSeason({ seasonKey: null }, SEASONS)
+  eq('an undeclared series never resolves to a season', undeclared.season, null)
+  eq('…and never claims a source it did not use', undeclared.source, 'unknown')
+  eq('…and an empty declaration is not a declaration',
+    resolveSeriesSeason({ seasonKey: '   ' }, SEASONS).source, 'unknown')
+  // ⭐ A declaration resolves with no fallback in play at all — the end state.
+  eq('a declaration resolves on its own', resolveSeriesSeason({ seasonKey: 'lawn' }, SEASONS).season, LAWN)
+
+  // The resolver's INPUT has no field a name could arrive through.
+  const iface = strip(read('src/lib/seasons.ts')).split('interface SeriesSeasonInput')[1]?.split('}')[0] ?? ''
+  check('⛔ the resolver input has no service-name field at all',
+    iface.length > 0 && !/serviceType|serviceName|title/i.test(iface), iface.trim())
+  check('[negative control] the field matcher works', /serviceType/i.test('  serviceType?: string'))
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -168,7 +174,7 @@ console.log('\n▸ 5 · ⛔ nothing is generated past the effective end — the 
   // ⭐⭐ THE PRODUCTION DEFECT, reproduced and then fixed by a declaration.
   // Sajjan: biweekly, started 2026-04-18, no end date, service named "Bi-weekly".
   const START = '2026-04-18'
-  const undeclaredEnd = effectiveSeriesEnd(START, null, resolveSeriesSeason({ serviceType: 'Bi-weekly' }, SEASONS).season)
+  const undeclaredEnd = effectiveSeriesEnd(START, null, resolveSeriesSeason({ seasonKey: null }, SEASONS).season)
   eq('undeclared + unmatched name ⇒ NO bound (the live defect)', undeclaredEnd, null)
   const runaway = generateOccurrences(START, 'week', 2, undeclaredEnd, null)
   check('…so generation runs past the season, into winter', runaway.some(d => d > '2026-10-31'),
@@ -177,7 +183,7 @@ console.log('\n▸ 5 · ⛔ nothing is generated past the effective end — the 
     `last generated ${runaway[runaway.length - 1]}`)
 
   // The same series, declaring lawn.
-  const declaredEnd = effectiveSeriesEnd(START, null, resolveSeriesSeason({ seasonKey: 'lawn', serviceType: 'Bi-weekly' }, SEASONS).season)
+  const declaredEnd = effectiveSeriesEnd(START, null, resolveSeriesSeason({ seasonKey: 'lawn' }, SEASONS).season)
   eq('declaring the season supplies the bound', declaredEnd, '2026-10-31')
   const bounded = generateOccurrences(START, 'week', 2, declaredEnd, null)
   eq('⛔ NOT ONE visit past the season end', bounded.filter(d => d > '2026-10-31'), [])
@@ -216,9 +222,31 @@ console.log('\n▸ 6 · the shape of the model')
 
 {
   const src = strip(read('src/lib/seasons.ts'))
-  check('the resolver consults serviceType ONLY through the inference branch',
-    (src.match(/input\.serviceType/g) ?? []).length === 1,
-    'the declaration path reads the service name')
+  // ⛔⛔ THE QUARANTINE. The runtime seasons module must not read a service name
+  // at all, and must not reach the legacy keyword module.
+  check('⛔ the runtime seasons module never reads a service name',
+    !/input\.serviceType|serviceType|serviceName/.test(src),
+    'lib/seasons reads a service name again')
+  check('⛔ …and does not import the quarantined inference',
+    !/legacySeasonInference/.test(src.replace(/\/\/[^\n]*/g, '')),
+    'lib/seasons imports the keyword guess')
+  // No file under src/ may import the season RESOLVER or the suggestion helper.
+  // (serviceCategory and the hint lists are permitted: duplicate-detection and a
+  // settings collision warning, neither of which resolves a season.)
+  const SRC: string[] = []
+  const walk = (d: string) => {
+    for (const e of readdirSync(join(ROOT, d))) {
+      const rel = `${d}/${e}`
+      if (statSync(join(ROOT, rel)).isDirectory()) { walk(rel); continue }
+      if (/\.(ts|tsx)$/.test(e)) SRC.push(rel)
+    }
+  }
+  walk('src')
+  const reaching = SRC.filter(f => f !== 'src/lib/legacySeasonInference.ts')
+    .filter(f => /\b(seasonForService|inferSeasonKeyFromName)\b/.test(strip(read(f))))
+  eq('⛔ NO file under src/ resolves a season from a name', reaching, [])
+  check('[negative control] a reintroduced call would be caught',
+    /\b(seasonForService|inferSeasonKeyFromName)\b/.test('const s = seasonForService(x, y)'))
   check('⛔ the resolver has no industry keyword of its own',
     !/\b(mow|snow|plow|pool|pest|lawn)\b/i.test(src.split('export function resolveSeriesSeason')[1]?.split('export function seasonKeys')[0] ?? ''),
     'resolveSeriesSeason names a trade')

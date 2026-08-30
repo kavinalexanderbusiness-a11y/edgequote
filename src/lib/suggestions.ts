@@ -21,7 +21,8 @@ import {
 import { FOLLOW_UP_DAYS, quoteIsQuiet, startOfDayMs } from '@/lib/followup'
 import { recurrenceEligibilityFor, cadenceFromGap, mayRecommendRecurring } from '@/lib/serviceRecurrence'
 import { dayDelta, type RecurringPlanPayload } from '@/lib/recurrence'
-import { ServiceSeasons, serviceCategory, seasonForService, seasonEndDateFor, isWithinSeason, nextSeasonStartISO } from '@/lib/seasons'
+import { ServiceSeasons, seasonEndDateFor, isWithinSeason, nextSeasonStartISO, resolveSeriesSeason } from '@/lib/seasons'
+import { serviceCategory } from '@/lib/legacySeasonInference'
 import { addDays, parseISO, format, getDay } from 'date-fns'
 
 // ── Suggestions Center — EdgeQuote's business advisor ────────────────────────
@@ -648,7 +649,7 @@ function recurringConversions(ctx: SuggestionContext): Suggestion[] {
     const prop = rep.property_id ? pById[rep.property_id] : undefined
     const nearby = nearbyCustomerStops(prop, ctx, g.custId)
     const startDate = nextWorkdayStart(ctx)
-    const season = seasonForService(rep.service_type, ctx.seasons)
+    const season = resolveSeriesSeason({ seasonKey: null }, ctx.seasons).season /* ⛔ declaration-only: no name is read (S110) */
     if (season && !isWithinSeason(startDate, season)) continue   // don't start a seasonal plan off-season
     const endDate = season ? seasonEndDateFor(startDate, season) : null
     const mkPlan = (count: 1 | 2): RecurringPlanPayload => ({
@@ -1533,7 +1534,7 @@ function crossSeasonOffers(ctx: SuggestionContext): Suggestion[] {
 function seasonalRenewals(ctx: SuggestionContext): Suggestion[] {
   const out: Suggestion[] = []
   for (const s of getSeries(ctx)) {
-    const season = seasonForService(s.rep.service_type, ctx.seasons)
+    const season = resolveSeriesSeason({ seasonKey: null }, ctx.seasons).season /* ⛔ declaration-only: no name is read (S110) */
     if (!season) continue                                   // only seasonal services renew
     if (!s.jobs.some(j => j.status === 'completed')) continue // established series only
     if (s.perVisit <= 0 || !s.customerId) continue

@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { JobLineItem, RecurrenceScope } from '@/types'
-import { serviceCategory } from '@/lib/seasons'
+import { serviceCategory } from '@/lib/legacySeasonInference'
 
 // ── Job add-ons + price-change history ────────────────────────────────────────
 // Composition only — no new pricing math. The base price stays on the job/quote

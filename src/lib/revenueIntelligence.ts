@@ -2,7 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { localTodayISO } from '@/lib/utils'
 import { effectiveFreq, jobVisitValue } from '@/lib/visitValue'
 import { SEASON_VISITS } from '@/lib/pricing'
-import { serviceCategory, seasonForService, isWithinSeason, settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
+import { isWithinSeason, settingsToSeasons, ServiceSeasons, resolveSeriesSeason } from '@/lib/seasons'
+import { serviceCategory } from '@/lib/legacySeasonInference'
 import { densityFor, locatedStops, DensityTier } from '@/lib/routeDensity'
 import { normalizeServiceKey, isRecurringProgramService } from '@/lib/jobPricing'
 import { Coord } from '@/lib/geo'
@@ -223,7 +224,7 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
     a.cadence = r.cadence; a.perVisit = r.perVisit; a.recServiceType = r.serviceType
     a.hasActiveRecurring = r.hasFuture
     a.annualRecurring = round(r.perVisit * visitsPerSeason(r.cadence))
-    const season = seasonForService(r.serviceType, seasons)
+    const season = resolveSeriesSeason({ seasonKey: null }, seasons).season /* ⛔ declaration-only: no name is read (S110) */
     a.inSeason = !season || isWithinSeason(today, season)
     a.churn = churnRisk({
       hasActiveRecurring: r.hasFuture,

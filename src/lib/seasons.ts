@@ -12,7 +12,6 @@ import { addDays, parseISO, format } from 'date-fns'
 import { monthShort } from '@/lib/preferences'
 import type { RecurUnit } from '@/types'
 
-export type SeasonCategory = 'lawn' | 'snow' | 'year_round'
 
 // A season as recurring month/day anchors. start may be after end on the
 // calendar (wraps the year) — handled by every consumer below.
@@ -44,91 +43,11 @@ export interface ServiceSeasons {
   [key: string]: ServiceSeason
 }
 
-// Service-type → category. Hints match at a WORD START (prefix), so "Weekly
-// Mowing", "Monthly Lawn Care" and "Fertilization" all read as lawn, and "Snow
-// Removal/Blowing/Clearing" as snow. Anything else is year-round (no season).
-//
-// The boundary is load-bearing, not tidiness. These used to be plain substring
-// tests, and 'ice' is inside serv·ice — so EVERY service with "Service" in its
-// name was classified snow, and snow is tested first, so it won even when the
-// string said "Lawn":
-//
-//     "Lawn Service"   → snow        "Full Service Mowing" → snow
-//     "Weekly Service" → snow        "Edge Property Services" → snow
-//
-// Snow's season is Nov 1–Mar 31, so isSeasonallyDormant answered TRUE all
-// summer: those customers silently left the re-book and reactivation queues for
-// the whole mowing season. "Weekly Service" is not a hypothetical name — the
-// optimizer's own MOW_LABEL matches `(weekly|biweekly|monthly) service`.
-//
-// Prefix, not whole-word: 'fertiliz' must still catch "Fertilizing", and 'mow'
-// "Mowing". Only the LEADING boundary is required.
-//
-// Exported so the Settings editor can WARN when a custom season's keyword collides
-// with a built-in hint — custom seasons resolve first (deliberately: the owner's
-// word beats ours), which means adding 'trim' to a Tree season silently moves
-// "Hedge Trimming" off the lawn season. That priority is right; it being invisible
-// is not. The UI's only defence is knowing these words.
-export const LAWN_HINTS = ['mow', 'lawn', 'fertiliz', 'fertilis', 'grass', 'aerat', 'trim', 'edge']
-export const SNOW_HINTS = ['snow', 'ice', 'plow', 'plough', 'salt', 'shovel']
-
 // Calgary defaults. lawn/snow resolve through the built-in hint lists (below), not
 // through `match`, so their exact priority is preserved — `label` is only for display.
 export const DEFAULT_LAWN_SEASON: ServiceSeason = { startMonth: 4, startDay: 15, endMonth: 10, endDay: 31, label: 'Lawn' }
 export const DEFAULT_SNOW_SEASON: ServiceSeason = { startMonth: 11, startDay: 1, endMonth: 3, endDay: 31, label: 'Snow' }
 export const DEFAULT_SEASONS: ServiceSeasons = { lawn: DEFAULT_LAWN_SEASON, snow: DEFAULT_SNOW_SEASON }
-
-// THE hint matcher — used for the built-in lists AND for an owner's own `match`
-// words, so a season an owner defines can never be matched by a rule the built-ins
-// aren't held to. One matcher, one behaviour.
-const hintRe = (h: string) => new RegExp(`\\b${h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i')
-export const matchesHint = (s: string, hints: string[]) => hints.some(h => hintRe(h).test(s))
-
-export function serviceCategory(serviceType: string | null | undefined): SeasonCategory {
-  const s = (serviceType || '').toLowerCase()
-  if (matchesHint(s, SNOW_HINTS)) return 'snow'
-  if (matchesHint(s, LAWN_HINTS)) return 'lawn'
-  return 'year_round'
-}
-
-// Resolve the season a service belongs to. THE fix for the one structural blocker:
-// this used to consult only the hardcoded lawn/snow hints, so a genuinely seasonal
-// non-lawn trade (pool opens in spring, pest ramps in summer) matched nothing, fell
-// to year-round with no season end, and the reactivation engine could not tell
-// "their season ended" from "we lost them" — every off-season customer read as
-// lapsed.
-//
-// Now an owner-defined `match` list wins first, so any trade can declare its own
-// season through the EXISTING service_seasons jsonb. The built-in lawn/snow hints
-// remain as the fallback, so a lawn business — including every install whose stored
-// seasons predate `match` — resolves exactly as before.
-export function seasonForService(serviceType: string | null | undefined, seasons: ServiceSeasons): ServiceSeason | null {
-  const s = (serviceType || '').toLowerCase()
-  // Owner-defined CUSTOM seasons (any key other than the built-in lawn/snow) win
-  // first — this is the new capability. lawn/snow are deliberately excluded here so
-  // their exact resolution, INCLUDING snow-before-lawn priority, is left entirely to
-  // the untouched hint logic below. That's what guarantees a lawn business behaves
-  // byte-for-byte as before.
-  if (s) {
-    // Keys are SORTED before iterating. Object.keys order is insertion order in
-    // memory but Postgres jsonb canonicalises key order on save (length, then
-    // bytewise) — so without sorting, which season wins an overlapping keyword
-    // could FLIP between "before save" and "after reload" with no edit by the
-    // owner. Sorting makes resolution identical everywhere, always.
-    for (const key of Object.keys(seasons).sort()) {
-      if (key === 'lawn' || key === 'snow') continue
-      const season = seasons[key]
-      // Same word-start matcher as the built-in hints: an owner who types 'ice' for
-      // an ice-machine business must not have it match every "Service" they sell —
-      // the exact trap the built-in lists were just pulled out of.
-      if (season?.match?.some(m => m && matchesHint(s, [m.toLowerCase()]))) return season
-    }
-  }
-  const cat = serviceCategory(serviceType)
-  if (cat === 'lawn') return seasons.lawn
-  if (cat === 'snow') return seasons.snow
-  return null
-}
 
 // ── The season a SERIES belongs to — declared, not guessed ───────────────────
 // Session 110, after a production audit found recurring visits scheduled through
@@ -170,16 +89,13 @@ export interface SeriesSeasonInput {
   /** A key in business_settings.service_seasons, SEASON_NONE, or null/undefined
    *  when the series predates the declaration and has not been backfilled. */
   seasonKey?: string | null
-  /** ⚠️ LEGACY ONLY. Consulted solely when there is no declaration AND name
-   *  inference is still enabled. Never consulted when `seasonKey` is set. */
-  serviceType?: string | null
 }
 
 export interface SeasonResolution {
   season: ServiceSeason | null
   /** How the answer was reached — so a surface can tell the owner, and so the
    *  guard can prove a declaration was not quietly overridden by a guess. */
-  source: 'declared' | 'declared-none' | 'inferred' | 'unknown'
+  source: 'declared' | 'declared-none' | 'unknown'
   /** The key that was declared, when one was. */
   key: string | null
 }
@@ -187,23 +103,19 @@ export interface SeasonResolution {
 /**
  * THE resolver. A series' season, from its DECLARATION.
  *
- * Order, and it is not negotiable:
- *   1. an explicit `seasonKey` that names a configured season  → that season
- *   2. `SEASON_NONE`                                           → no season, ON PURPOSE
- *   3. no declaration, inference ALLOWED                       → the legacy guess
- *   4. no declaration, inference DISABLED                      → unknown
+ * Order, and it is short because there is nothing to weigh:
+ *   1. a  naming a configured season → that season
+ *   2. SEASON_NONE                              → no season, ON PURPOSE
+ *   3. anything else (including no key at all)  → unknown
  *
- * ⚠️ `allowNameInference` defaults TRUE and that is a migration decision, not an
- * endorsement. Until `job_recurrences.season_key` exists and is backfilled, every
- * live series would resolve to `unknown` without it — which would strip the
- * season from the 14 series that currently work. Turning it off is the last step
- * of the migration, not the first; the guard pins that a declaration ALWAYS wins
- * regardless of the flag, which is the property that actually matters.
+ * ⛔⛔ THERE IS NO FOURTH BRANCH. No service name is read, so no rename can
+ * move a season and no unanticipated vocabulary can silently lose one. An
+ * undeclared series answers , which the UI MUST surface as "Needs
+ * selection" rather than quietly treating as year-round.
  */
 export function resolveSeriesSeason(
   input: SeriesSeasonInput,
   seasons: ServiceSeasons,
-  opts?: { allowNameInference?: boolean },
 ): SeasonResolution {
   const key = input.seasonKey?.trim() || null
   if (key === SEASON_NONE) return { season: null, source: 'declared-none', key }
@@ -216,12 +128,12 @@ export function resolveSeriesSeason(
     if (declared) return { season: declared, source: 'declared', key }
     return { season: null, source: 'unknown', key }
   }
-  const allow = opts?.allowNameInference !== false
-  if (!allow) return { season: null, source: 'unknown', key: null }
-  const inferred = seasonForService(input.serviceType, seasons)
-  return inferred
-    ? { season: inferred, source: 'inferred', key: null }
-    : { season: null, source: 'unknown', key: null }
+  // ⛔⛔ NO INFERENCE. There is no branch here that looks at a service name,
+  // and that absence IS the repair. An undeclared series resolves to 'unknown'
+  // — which the UI must surface as "Needs selection", never quietly treat as
+  // year-round. The keyword guess lives in lib/legacySeasonInference and is
+  // reachable only from the migration.
+  return { season: null, source: 'unknown', key: null }
 }
 
 /** The season keys an owner may choose, in a stable order. */

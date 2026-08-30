@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { serviceCategory } from '@/lib/seasons'
+import { serviceCategory } from '@/lib/legacySeasonInference'
 
 // ── businessShape — THE derivation of what a business does ────────────────────
 // EdgeQuote is lawn-care-first, but the same product has to fit a plumber, an

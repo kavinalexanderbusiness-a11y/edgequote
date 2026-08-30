@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeServiceKey } from '@/lib/jobPricing'
-import { serviceCategory } from '@/lib/seasons'
+import { serviceCategory } from '@/lib/legacySeasonInference'
 
 // ── Change orders: new scope, agreed after the original approval ─────────────
 //

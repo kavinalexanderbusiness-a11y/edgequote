@@ -15,10 +15,8 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { recurrenceLabel, recurrenceToUi, reseedRepeatUi, OPEN_ENDED_HORIZON, type RepeatPreset, type EndMode } from '@/lib/recurrence'
 import { latestSavedRecommendation, savedPriceFor, recommendationIsStale, CadenceKey } from '@/lib/pricing'
 import { servicePricingKind } from '@/lib/servicePricing'
-import {
-  ServiceSeasons, DEFAULT_SEASONS, settingsToSeasons, serviceCategory, seasonForService,
-  seasonEndDateFor, estimateSeasonVisits, seasonLabel, resolveSeriesSeason,
-} from '@/lib/seasons'
+import { ServiceSeasons, DEFAULT_SEASONS, settingsToSeasons, seasonEndDateFor, estimateSeasonVisits, seasonLabel, resolveSeriesSeason } from '@/lib/seasons'
+import { serviceCategory } from '@/lib/legacySeasonInference'
 import { WeeklyScheduler } from '@/components/schedule/WeeklyScheduler'
 import { SmartEstimateCard } from '@/components/labor/SmartEstimateCard'
 import { EstimatedVsActual } from '@/components/labor/EstimatedVsActual'
@@ -301,7 +299,7 @@ export function JobForm({ customers, crews, technicians, defaultValues, excludeJ
   // Until job_recurrences.season_key lands (see supabase/proposals/) there is no
   // key to pass, so this resolves exactly as before for every live series; what
   // changes is that the seam now exists and the guard pins declaration-wins.
-  const seasonResolution = resolveSeriesSeason({ seasonKey: seriesSeasonKey ?? null, serviceType }, seasons)
+  const seasonResolution = resolveSeriesSeason({ seasonKey: seriesSeasonKey ?? null }, seasons)
   const serviceSeason = seasonResolution.season
   const category = serviceCategory(serviceType)
   // Season End is a property of the SERIES, so it resolves from the series'
