@@ -246,7 +246,7 @@ export default function ServiceTemplatesPage() {
     }
     const { error } = await supabase.from('service_templates').update(publishPatch(next)).eq('id', t.id)
     if (error) {
-      // ⚠️ 42703 = the column does not exist ⇒ migration 20260829120000 has not
+      // ⚠️ 42703 = the column does not exist ⇒ migration 20260830130000 has not
       // been applied to this database. Say the useful thing rather than "could
       // not update", which sends the owner looking at the service.
       toast.error(/column .*published_at/i.test(error.message)

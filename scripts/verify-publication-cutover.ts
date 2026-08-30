@@ -15,7 +15,7 @@
 //
 // So it is proven the only honest way available: build the schema FROM ZERO on
 // PGlite (WASM Postgres, in-process), apply every migration in the real apply
-// order including 20260829120000, seed four services covering the four states,
+// order including 20260830130000, seed four services covering the four states,
 // and call `public_services()` — the actual anonymous door — to see which ones
 // come back.
 //

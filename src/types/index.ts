@@ -1788,7 +1788,7 @@ export interface ServiceTemplate {
   // the owner may quote with it and no customer can see it. Set = PUBLISHED.
   // `is_active` wins: a switched-off service is never public regardless.
   // ⛔ Never backfilled and never set as a side effect — publication is an act.
-  // ⚠️ Requires migration 20260829120000; reading it against an un-migrated
+  // ⚠️ Requires migration 20260830130000; reading it against an un-migrated
   // database answers 42703 (undefined column).
   published_at: string | null
   sort_order: number

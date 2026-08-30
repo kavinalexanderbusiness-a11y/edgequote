@@ -132,7 +132,7 @@ async function main() {
 
   // ── Services ───────────────────────────────────────────────────────────────
   head('SERVICE CATALOGUE — PUBLICATION INVENTORY')
-  // ⚠️ `published_at` may not exist yet: migration 20260829120000 is deliberately
+  // ⚠️ `published_at` may not exist yet: migration 20260830130000 is deliberately
   // unapplied until S106 owns the cutover. Probe for it rather than assume, so
   // this report works on BOTH sides of that apply and says which side it is on.
   const probe = await sb.from('service_templates').select('published_at').limit(1)

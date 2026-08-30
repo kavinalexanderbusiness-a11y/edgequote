@@ -225,7 +225,7 @@ async function main() {
   const columnLive = !(probeErr && /published_at/.test(probeErr.message))
   console.log(columnLive
     ? '  ℹ️  published_at EXISTS on the live database — the migration has been applied.'
-    : '  ⚠️  published_at does NOT exist on the live database yet — migration 20260829120000 is UNAPPLIED, so the public catalogue is still gated on is_active alone.')
+    : '  ⚠️  published_at does NOT exist on the live database yet — migration 20260830130000 is UNAPPLIED, so the public catalogue is still gated on is_active alone.')
   check('the live database was actually reachable for that probe',
     probeErr === null || /published_at|permission|row-level/i.test(probeErr.message),
     `unexpected: ${probeErr?.message}`)
