@@ -24,6 +24,7 @@ import { dayDelta, type RecurringPlanPayload } from '@/lib/recurrence'
 import { ServiceSeasons, seasonEndDateFor, isWithinSeason, nextSeasonStartISO } from '@/lib/seasons'
 import { serviceCategory, bridgeSeasonForSeries } from '@/lib/legacySeasonInference'
 import { addDays, parseISO, format, getDay } from 'date-fns'
+import { sumQuoteAmounts } from '@/lib/pricingState'
 
 // ── Suggestions Center — EdgeQuote's business advisor ────────────────────────
 // Decision-first, action-first. This is NOT another analytics view: it turns the
@@ -1059,7 +1060,7 @@ function retention(ctx: SuggestionContext): Suggestion[] {
   // still correct at night.
   const toChase = ctx.quotes.filter(q => quoteIsQuiet(q, FOLLOW_UP_DAYS, startOfDayMs(ctx.today)))
   if (toChase.length) {
-    const atRisk = toChase.reduce((s, q) => s + Number(q.total || 0), 0)
+    const atRisk = sumQuoteAmounts(toChase).total
     out.push({
       id: 'retention-followup',
       category: 'retention',

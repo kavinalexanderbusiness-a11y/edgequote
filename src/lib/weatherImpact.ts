@@ -1,9 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { localTodayISO } from '@/lib/utils'
+import { safeTimeZone, tenantTodayISO } from '@/lib/tenantTime'
 import { effectiveFreq, jobVisitValue } from '@/lib/visitValue'
 import { estimateLabor, learnLaborModel, LaborModel, LaborObservation } from '@/lib/labor'
 import { fetchForecast, DayForecast, weatherScore, WeatherScore } from '@/lib/weather'
 import { buildDayStatusMap, DAY_STATUS_SELECT, DayStatusRow, DayStatusMap, dayStatusLabel } from '@/lib/dayStatus'
+// THE dry-day search, which now records why each day was passed over, and THE
+// tenant clock. `today` is no longer whatever the runtime's zone happens to be.
+import {
+  findDryDay as findDryDaySearch, visiblyDryButRejected, forecastHorizon,
+  type DryDaySearch, type DryDayEvaluation,
+} from '@/lib/weatherTruth'
 
 // ── Weather Impact analytics ─────────────────────────────────────────────────────
 // Turns the forecast + your booked work into a risk picture: which jobs, labor
@@ -49,6 +55,10 @@ export interface DayImpact {
   recommendedProjectedHours: number | null // dest day's hours if these jobs move there
   recommendedOverbooks: boolean
   recommendedNote: string
+  /** Dry, reachable days we did NOT recommend, with the reason. Empty when the
+   *  only thing in the way was rain — the forecast strip already shows that, so
+   *  listing it would be noise rather than an explanation. */
+  rejections: DryDayEvaluation[]
 }
 
 export interface WeatherImpactReport {
@@ -112,21 +122,31 @@ export function computeWeatherImpact(
   // rain days this week were already assigned, so multiple rain days spread across
   // multiple dry days instead of all piling onto the first dry day.
   const committedExtra: Record<string, number> = {}
-  const findDryDay = (afterDate: string, neededHours: number): string | null => {
+  // ⭐ THE SEARCH NOW REMEMBERS ITS REASONS (lib/weatherTruth). Behaviourally
+  // identical — same order, same preferences, same overbooked fallback — but it
+  // returns WHY every other day was passed over, so the page can answer the
+  // question the owner is actually asking while looking at a sunny Saturday we
+  // did not suggest. "No dry work day in range" was the only explanation the old
+  // version could give, and it is a claim about the FORECAST; the commonest real
+  // reason was the owner's own working-days setting.
+  const searchDryDay = (afterDate: string, neededHours: number): DryDaySearch => {
     // Availability unknown → name no day at all. Every candidate below is
     // filtered by `blockedDates`, so without it the first dry day wins even if
     // the owner closed it. "Pick a date yourself" is the honest answer.
-    if (!dayStatusKnown) return null
-    let firstDry: string | null = null
-    for (const f of forecast) {
-      if (f.date <= afterDate) continue
-      if (pref && !pref.has(dow(f.date))) continue
-      if (blockedDates.has(f.date)) continue   // day marked unavailable — never recommend it
-      if (f.rainy) continue
-      if (firstDry == null) firstDry = f.date
-      if ((hoursByDate[f.date] || 0) + (committedExtra[f.date] || 0) + neededHours <= capacityHours) return f.date
-    }
-    return firstDry  // nothing with spare capacity — soonest dry day (flagged overbooked)
+    if (!dayStatusKnown) return { chosen: null, chosenOverbooks: false, evaluations: [] }
+    return findDryDaySearch({
+      days: forecast.map(f => ({ date: f.date, rainy: f.rainy })),
+      afterDate,
+      neededHours,
+      // The already-committed extra from EARLIER rain days is folded in here, so
+      // several rain days spread across several dry days instead of all piling
+      // onto the first one.
+      hoursByDate: Object.fromEntries(forecast.map(f =>
+        [f.date, (hoursByDate[f.date] || 0) + (committedExtra[f.date] || 0)])),
+      capacityHours,
+      preferredDays: pref,
+      blockedDates: new Set(blockedDates),
+    })
   }
 
   const atRiskDays: DayImpact[] = []
@@ -144,7 +164,8 @@ export function computeWeatherImpact(
     const laborHours = round1(hoursByDate[f.date] || 0)
     const revenue = Math.round(dayJobs.reduce((s, j) => s + j.value, 0))
     const customers = new Set(dayJobs.map(j => j.customerId).filter(Boolean)).size
-    const rec = findDryDay(f.date, laborHours)
+    const search = searchDryDay(f.date, laborHours)
+    const rec = search.chosen
     const recExisting = rec ? (hoursByDate[rec] || 0) + (committedExtra[rec] || 0) : 0
     const recProjected = rec ? round1(recExisting + laborHours) : null
     const recOverbooks = recProjected != null && recProjected > capacityHours
@@ -167,6 +188,10 @@ export function computeWeatherImpact(
       capacityHours, utilizationPct: capacityHours > 0 ? Math.round((laborHours / capacityHours) * 100) : 0,
       overbooked: laborHours > capacityHours,
       recommendedDay: rec, recommendedProjectedHours: recProjected, recommendedOverbooks: recOverbooks,
+      // ⭐ Carried onto the day so the page can answer "why not Saturday?" — the
+      // rejections the owner can SEE are dry, which are the only ones that look
+      // like a contradiction with the forecast strip beside them.
+      rejections: visiblyDryButRejected(search),
       recommendedNote: !rec
         ? (dayStatusKnown
             ? 'No dry work day in the next week — consider a specific date'
@@ -215,7 +240,7 @@ export function computeWeatherImpact(
  * quietly mispriced the revenue-at-risk figure).
  */
 export interface WeatherPreloaded {
-  settings?: { base_lat?: number | null; base_lng?: number | null; base_address?: string | null; daily_capacity_hours?: number | null; preferred_work_days?: number[] | null } | null
+  settings?: { base_lat?: number | null; base_lng?: number | null; base_address?: string | null; daily_capacity_hours?: number | null; preferred_work_days?: number[] | null; timezone?: string | null } | null
   /** Must cover today → +8d and include the joined properties(lawn_sqft). */
   jobs?: unknown[]
   quotes?: { id: string }[]
@@ -231,11 +256,27 @@ export async function loadWeatherImpact(supabase: SupabaseClient, pre?: WeatherP
   const user = session?.user
   if (!user) return empty
   const uid = user.id
-  const today = localTodayISO()
-  const horizon = (() => { const d = new Date(today + 'T00:00:00'); d.setDate(d.getDate() + 8); return d.toISOString().slice(0, 10) })()
 
-  const [sRes, jRes, qRes, pRes, rRes, oRes, dRes] = await Promise.all([
-    pre?.settings !== undefined ? { data: pre.settings } : supabase.from('business_settings').select('base_lat, base_lng, base_address, daily_capacity_hours, preferred_work_days').eq('user_id', uid).maybeSingle(),
+  // ── ⭐⭐ THE TENANT'S DAY, READ BEFORE ANYTHING ELSE (Session 121) ──────────
+  // This used to be `localTodayISO()` — the RUNTIME's date, which in the browser
+  // is the DEVICE's zone. The page beside it used `new Date().toISOString()` —
+  // UTC. From about 17:00 in Alberta those two disagree, and the disagreement is
+  // what put the word "Today" on two different cards at once.
+  //
+  // The settings read is deliberately pulled OUT of the parallel batch and run
+  // first: `today` is an input to the jobs query's own date range, so it cannot
+  // be derived from a row fetched in the same round. It costs one serial hop on
+  // a cold load and none at all from the dashboard, which preloads settings.
+  const sRes = pre?.settings !== undefined
+    ? { data: pre.settings, error: null }
+    : await supabase.from('business_settings')
+        .select('base_lat, base_lng, base_address, daily_capacity_hours, preferred_work_days, timezone')
+        .eq('user_id', uid).maybeSingle()
+  const tz = safeTimeZone((sRes.data as { timezone?: string | null } | null)?.timezone ?? null)
+  const today = tenantTodayISO(tz)
+  const horizon = forecastHorizon(today, 8)
+
+  const [jRes, qRes, pRes, rRes, oRes, dRes] = await Promise.all([
     pre?.jobs ? { data: pre.jobs } : supabase.from('jobs').select('id, scheduled_date, status, service_type, crew_size, property_id, quote_id, recurrence_id, price, is_initial_visit, customer_id, properties(lawn_sqft)').eq('user_id', uid).gte('scheduled_date', today).lte('scheduled_date', horizon),
     pre?.quotes ? { data: pre.quotes } : supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', uid),
     supabase.from('properties').select('id, lawn_sqft').eq('user_id', uid),

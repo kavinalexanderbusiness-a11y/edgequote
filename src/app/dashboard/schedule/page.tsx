@@ -39,6 +39,7 @@ import type { JobRecurrence, Crew, Technician } from '@/types'
 import { loadCrews, loadTechnicians } from '@/lib/crews'
 import { assigneeOf, sameAssignee } from '@/lib/crewAssignment'
 import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts, uncompleteJob } from '@/lib/invoicing'
+import { BLANK_NUMERIC_FIELD } from '@/lib/pricingState'
 import { queueOrRun, isNetworkError } from '@/lib/offline/outbox'
 // THE completion stamp. Every door on this page that moves a visit to
 // "completed" writes the same three fields through it — see lib/jobStatus.
@@ -92,7 +93,8 @@ import { Button } from '@/components/ui/Button'
 import { FieldStopBar } from '@/components/schedule/FieldStopBar'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Skeleton, SkeletonRows } from '@/components/ui/Skeleton'
-import { cn, minutesBetween, localTodayISO, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, minutesBetween, formatCurrency, formatDate } from '@/lib/utils'
+import { useTenantTime } from '@/components/layout/TenantTimeProvider'
 // THE scheduling gate — this door must agree with the quote page's Schedule
 // button about whether a deposit-gated booking may book (lib/payments/depositGate).
 import { gateBlocksScheduling, loadQuoteDepositRows, schedulingGate, stampDepositOverride } from '@/lib/payments/depositGate'
@@ -156,6 +158,14 @@ function recFromRow(r: JobRecurrence): Recurrence {
 
 export default function SchedulePage() {
   const supabase = createClient()
+  // ── ⭐⭐ THE BUSINESS'S DAY (Session 121) ──────────────────────────────────
+  // This page called `localTodayISO()`, which on the CLIENT reads the DEVICE's
+  // zone — an owner's phone still set to another province, or a laptop that
+  // travelled. The Dashboard renders on the SERVER, where the same helper is
+  // UTC. So "today" here and "today" there were routinely different days, and
+  // the board's missed-jobs cut-off moved with whichever machine was looking.
+  // One clock now, the tenant's, shared by every dashboard surface.
+  const { todayISO: tenantToday } = useTenantTime()
   // Learned drive speed — feeds the proactive optimizer suggestions below.
   const [travel, setTravel] = useState<TravelModel>(DEFAULT_TRAVEL_MODEL)
   useEffect(() => { loadTravelModel(supabase).then(setTravel) }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -443,7 +453,7 @@ export default function SchedulePage() {
   // Past-due visits still open — the same derivation the dashboard's "Resolve missed
   // jobs" count uses (isMissed), so the board's card and that count can't disagree.
   // The Day Ops board only renders the viewed day, so these were otherwise invisible.
-  const missedJobs = useMemo(() => jobs.filter(j => isMissed(j, localTodayISO())), [jobs])
+  const missedJobs = useMemo(() => jobs.filter(j => isMissed(j, tenantToday)), [jobs, tenantToday])
 
   // Auto-propose optimization after a job is added (review-first — NEVER auto-
   // applies). CONTEXT-AWARE escalation, anchored on the new job's date:
@@ -733,7 +743,7 @@ export default function SchedulePage() {
       // Field window — today ± a week, what a contractor actually works out of.
       // Bounded by date so a 200-job/week book stays well inside quota instead of
       // serializing the whole year.
-      const from = shiftDate(localTodayISO(), -1), to = shiftDate(localTodayISO(), 7)
+      const from = shiftDate(tenantToday, -1), to = shiftDate(tenantToday, 7)
       fieldJobs = loadedJobs.filter(j => j.scheduled_date >= from && j.scheduled_date <= to)
       const addons = await listLineItemsByJob(supabase, user!.id, loadedJobs.map(j => j.id))
       setAddonsByJobId(addons)
@@ -1443,6 +1453,7 @@ export default function SchedulePage() {
       const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, ...fields, ...perVisit })
       if (res.created) draftInvoiceToast(res.invoiceNumber, `Draft invoice ${res.invoiceNumber} created from the completed job.`)
       else if (res.reason === 'exists') setBanner('That job already has an invoice.')
+      else if (res.reason === 'no-charge') setBanner('Done — marked No charge, so no invoice was drafted. Nothing to bill.')
       else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
     }
 
@@ -1997,7 +2008,8 @@ export default function SchedulePage() {
           if (error) throw new Error(error.message)
           const res = await createDraftInvoiceForCompletedJob(supabase, completed)
           if (res.created) draftInvoiceToast(res.invoiceNumber, `Draft invoice ${res.invoiceNumber} created.`)
-          else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
+          else if (res.reason === 'no-charge') setBanner('Done — marked No charge, so no invoice was drafted. Nothing to bill.')
+      else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
           // A failed draft used to say NOTHING, which is indistinguishable from the success
           // banner you scrolled past — the visit leaves the un-invoiced queue and the money
           // is never billed, with no trace pointing at it. ('exists' stays quiet: an invoice
@@ -2145,7 +2157,8 @@ export default function SchedulePage() {
             // replay already drafts from it, so both doors bill the same amount.
             const res = await createDraftInvoiceForCompletedJob(supabase, completed)
             if (res.created) draftInvoiceToast(res.invoiceNumber, `Saved — draft invoice ${res.invoiceNumber} created.`)
-            else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
+            else if (res.reason === 'no-charge') setBanner('Done — marked No charge, so no invoice was drafted. Nothing to bill.')
+      else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
             // The quick-edit sheet completes a job through the same transition as the Complete
             // button, which DOES report this (completeJob below). Without it a failed draft leaves
             // the visit out of the un-invoiced queue and it is never billed, with no trace.
@@ -2950,7 +2963,7 @@ export default function SchedulePage() {
       {!loading && missedJobs.length > 0 && (
         <MissedJobsCard
           jobs={missedJobs}
-          today={localTodayISO()}
+          today={tenantToday}
           onBringToToday={(job) => moveJobToDate(job, new Date())}
           onComplete={(job) => { void completeJob(job) }}
           onOpen={(job) => setEditing(job)}
@@ -3132,7 +3145,13 @@ export default function SchedulePage() {
                 status: editing.status,
                 notes: editing.notes || '',
                 actual_minutes: editing.actual_minutes || 0,
-                price: editing.price ?? 0,
+                // ⛔ WAS `editing.price ?? 0`. A visit whose price is NULL — the
+                // normal state of every visit in a quote-linked series — opened
+                // its editor showing "0", so the owner read "this visit is worth
+                // nothing" where the row actually says "follow the quote". Blank
+                // is what NULL means here, and the save turns blank back into
+                // NULL, so the round-trip is now lossless.
+                price: editing.price ?? BLANK_NUMERIC_FIELD,
                 crew_id: editing.crew_id ?? null,
                 technician_id: editing.technician_id ?? null,
               } : (quotePrefill ?? customerPrefill ?? { scheduled_date: formDate })}

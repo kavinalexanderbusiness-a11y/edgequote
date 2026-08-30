@@ -695,7 +695,7 @@ export default function SettingsPage() {
             />
 
             {/* Owner-defined seasons — the UI half of the engine's custom-season
-                support (lib/seasons.seasonForService). Any trade declares its own
+                support (lib/legacySeasonInference, migration-only since S110). Any trade declares its own
                 season here: a name, the words its service names contain, and dates.
                 No industry picker; the season IS the configuration. */}
             {Object.entries(seasons).filter(([k]) => k !== 'lawn' && k !== 'snow').map(([key, season]) => (
@@ -915,7 +915,7 @@ const MONTH_OPTS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep
 // One editor for every season. The two built-ins pass a fixed `title`; an
 // owner-defined season passes `editable` instead, which swaps the title for a
 // name input, adds the match-keywords field (how the engine maps services to this
-// season — see lib/seasons.seasonForService), and offers Remove. Same component
+// season — see lib/legacySeasonInference), and offers Remove. Same component
 // so a custom season can never drift visually from the built-in two.
 function SeasonEditor({ icon, title, hint, season, onChange, editable, onRemove, seasons, seasonKey }: {
   icon: React.ReactNode; title?: string; hint?: string; season: ServiceSeason; onChange: (s: ServiceSeason) => void

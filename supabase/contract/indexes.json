@@ -2016,6 +2016,42 @@
   "backs_constraint": false
  },
  {
+  "tbl": "quote_acceptances",
+  "indexdef": "CREATE INDEX quote_acceptances_customer_idx ON public.quote_acceptances USING btree (customer_id, accepted_at DESC)",
+  "indexname": "quote_acceptances_customer_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quote_acceptances",
+  "indexdef": "CREATE UNIQUE INDEX quote_acceptances_pkey ON public.quote_acceptances USING btree (id)",
+  "indexname": "quote_acceptances_pkey",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "quote_acceptances",
+  "indexdef": "CREATE INDEX quote_acceptances_quote_idx ON public.quote_acceptances USING btree (quote_id, seq DESC)",
+  "indexname": "quote_acceptances_quote_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "quote_acceptances",
+  "indexdef": "CREATE UNIQUE INDEX quote_acceptances_quote_seq_unique ON public.quote_acceptances USING btree (quote_id, seq)",
+  "indexname": "quote_acceptances_quote_seq_unique",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "quote_acceptances",
+  "indexdef": "CREATE UNIQUE INDEX quote_acceptances_user_id_unique ON public.quote_acceptances USING btree (user_id, id)",
+  "indexname": "quote_acceptances_user_id_unique",
+  "backs_constraint": true
+ },
+ {
+  "tbl": "quote_acceptances",
+  "indexdef": "CREATE INDEX quote_acceptances_user_idx ON public.quote_acceptances USING btree (user_id, accepted_at DESC)",
+  "indexname": "quote_acceptances_user_idx",
+  "backs_constraint": false
+ },
+ {
   "tbl": "quote_addons",
   "indexdef": "CREATE UNIQUE INDEX quote_addons_id_quote_unique ON public.quote_addons USING btree (id, quote_id)",
   "indexname": "quote_addons_id_quote_unique",

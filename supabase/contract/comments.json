@@ -26,6 +26,16 @@
    "comment": "Sum of a job's work-session minutes. NULL when it has none (unknown, not zero)."
   },
   {
+   "fn": "job_set_no_charge",
+   "args": "p_job_id uuid, p_reason text",
+   "comment": "THE only door that writes a visit's no-charge decision. Same contract as quote_set_no_charge; clearing is refused once the visit is completed."
+  },
+  {
+   "fn": "owner_override_quote_status",
+   "args": "p_quote_id uuid, p_status text, p_reason text",
+   "comment": "Administrative status override. Moves quotes.status and records the owner's stated reason on the audit row audit_quotes() already writes. ⛔ Writes NO acceptance evidence: an overridden quote still fails quote_acceptance_is_current(), so scheduling, invoicing and the deposit ask keep refusing it. Changing a label is not obtaining consent."
+  },
+  {
    "fn": "portal_add_contact",
    "args": "p_token text, p_phone text, p_email text",
    "comment": "Portal self-service: fill a MISSING customer phone/email from a valid portal token. Fills only - never overwrites a populated field (an email change is an identity change). Never touches sms_opt_in/email_opt_in/message_prefs. Refuses a value another customer of the same owner already holds. Returns the row state read back after the write."
@@ -39,6 +49,31 @@
    "fn": "portal_set_scheduling_preference",
    "args": "p_token text, p_quote_id uuid, p_date date, p_date_2 date, p_timing text, p_note text",
    "comment": "THE writer of a customer's scheduling preference. Token proves the customer; quote must be theirs and 'accepted'. A preference is a request — it never creates, moves, or implies a visit. All-null clears it."
+  },
+  {
+   "fn": "quote_acceptance_is_current",
+   "args": "p_quote_id uuid",
+   "comment": "THE gate: does a live, un-drifted acceptance authorize this quote's CURRENT commercial terms? False when nothing ever accepted it, when a material fact changed since, or when the tenant's terms moved. Mirrored (never re-derived) by hasCurrentValidAcceptance() in src/lib/quoteAcceptance."
+  },
+  {
+   "fn": "quote_acceptance_kind_now",
+   "args": "p_quote_id uuid",
+   "comment": "Which kind of acceptance is being (or was) recorded for this quote: customer, owner_on_behalf, or NULL meaning an administrative status change with no acceptance behind it. Reads the doors' in-flight marker first because the AFTER UPDATE triggers on quotes fire BEFORE the acceptance row is inserted."
+  },
+  {
+   "fn": "quote_apply_choice",
+   "args": "p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[], p_via text",
+   "comment": "THE acceptance core — the single chokepoint under portal_accept_quote, owner_record_customer_acceptance and owner_select_quote_option. Refuses to authorize an UNPRICED quote (null or <= 0 resolved price) unless the quote carries a complete no-charge decision. Unpriced work must never become customer-authorized paid work."
+  },
+  {
+   "fn": "quote_material_fingerprint",
+   "args": "p_quote_id uuid",
+   "comment": "THE definition of a commercial change to a quote: price, plan prices, deposit ask, scope (service_type/address/notes), the chosen option, and every quote_services / quote_options / quote_addons row including which extras are selected. Deliberately EXCLUDES internal_notes, the measurement columns, property/customer repairs, follow-up counters and scheduling preferences — those are corrections, not new terms. Read by quote_acceptance_state() to decide reapproval; mirrored, never re-derived, by src/lib/quoteAcceptance."
+  },
+  {
+   "fn": "quote_set_no_charge",
+   "args": "p_quote_id uuid, p_reason text",
+   "comment": "THE only door that writes a quote's no-charge decision. A non-empty reason SETS it (actor = auth.uid(), timestamp = now(), all three atomically); NULL CLEARS it, and clearing is refused once the quote is past draft/sent because an accepted no-charge quote was authorised on that basis. Every call is written to audit_events."
   },
   {
    "fn": "schema_contract",
@@ -135,6 +170,10 @@
   {
    "tbl": "purchase_order_items",
    "comment": "PO lines. qty_received is intentionally absent — it is derived from part_movements linked by purchase_order_item_id, so stock and receipts cannot drift apart."
+  },
+  {
+   "tbl": "quote_acceptances",
+   "comment": "Append-only evidence of quote acceptance: WHAT was accepted (an immutable document snapshot + fingerprint), BY WHOM (kind/actor/source), for HOW MUCH (accepted_amount), WHEN, and against WHICH terms. Never updated; never deleted while its quote exists. A reapproval after a commercial change appends a new row with supersedes_id set. NOT a signature store — S74 documents/signatures and S83 contracts own signatures; nothing here mints or verifies one."
   },
   {
    "tbl": "quote_options",
@@ -451,6 +490,21 @@
    "comment": "Which crew runs this visit; members resolve from technicians.crew_id at read time. Mutually exclusive with technician_id (jobs_one_assignee). NULL = no crew. Orthogonal to crew_size (headcount)."
   },
   {
+   "col": "no_charge_at",
+   "tbl": "jobs",
+   "comment": "When the owner DECIDED this visit is free. NULL = no such decision. ⛔ jobs.price IS NULL means \"no job-level override, follow the quote\" — it has never meant free, and must not start to."
+  },
+  {
+   "col": "no_charge_by",
+   "tbl": "jobs",
+   "comment": "Which account made the no-charge decision. Audit evidence."
+  },
+  {
+   "col": "no_charge_reason",
+   "tbl": "jobs",
+   "comment": "Why this visit is free, in the owner's words. Required whenever no_charge_at is set (jobs_no_charge_complete_check)."
+  },
+  {
    "col": "notes",
    "tbl": "jobs",
    "comment": "INTERNAL ONLY. The access/instruction note for whoever does the work (gate code, where to park). Shipped to the crew by crew_day. Removed from get_portal_data 2026-08-11 — it was being rendered to customers. Customer-facing words go in completion_summary."
@@ -491,6 +545,31 @@
    "comment": "requested = a worker asked and the owner has not decided; approved = counts against planning availability (every pre-existing row: the owner booked it); declined = kept as a record, never subtracts availability and never blocks a later booking."
   },
   {
+   "col": "document",
+   "tbl": "quote_acceptances",
+   "comment": "The quote as accepted: quote_number, service_type, address, notes, the line items, the option chosen (its own name and price, copied not referenced), every selected add-on, the plan prices and the deposit ask. Copied so later edits — or deleting an option row — cannot rewrite what was agreed."
+  },
+  {
+   "col": "document_fingerprint",
+   "tbl": "quote_acceptances",
+   "comment": "quote_material_fingerprint() at the instant of consent, compared against the live value to decide whether the quote still stands accepted. This is why reapproval is DERIVED and never stored."
+  },
+  {
+   "col": "kind",
+   "tbl": "quote_acceptances",
+   "comment": "customer = the customer decided, through their own portal door. owner_on_behalf = staff recorded a decision the customer made elsewhere, and on_behalf_reason says where. An ADMINISTRATIVE STATUS OVERRIDE is neither and produces NO row here — it is an audit event only."
+  },
+  {
+   "col": "supersedes_id",
+   "tbl": "quote_acceptances",
+   "comment": "The acceptance this one replaces after a commercial change. The superseded row is never modified — history is appended to, never rewritten."
+  },
+  {
+   "col": "terms_text",
+   "tbl": "quote_acceptances",
+   "comment": "The exact business_settings.terms_text the customer was shown. Snapshotted because that field is tenant-level and unversioned: editing it would otherwise retroactively change what every past acceptance appears to have agreed to."
+  },
+  {
    "col": "kind",
    "tbl": "quote_services",
    "comment": "What this line IS: service (labour you perform) or material (goods you supply). A material line is an ESTIMATE ON THE QUOTE — quantity x unit_price, same arithmetic, same discount engine. It never reserves, allocates or deducts stock, and carries no cost: see RUN-2026-07-16-quote-materials.sql."
@@ -524,6 +603,21 @@
    "col": "measurement_snapshot",
    "tbl": "quotes",
    "comment": "Frozen record of the measurement and the pricing rule that produced this quote's figure — total, unit, traced parts, term, basis, rate, price, as they were at quote time. Never re-derived from the Price Book on read; a later rate change must not rewrite history."
+  },
+  {
+   "col": "no_charge_at",
+   "tbl": "quotes",
+   "comment": "When the owner DECIDED this quote is free. NULL = no such decision. ⛔ A $0 or absent price is UNPRICED (unknown), never free — see lib/pricingState."
+  },
+  {
+   "col": "no_charge_by",
+   "tbl": "quotes",
+   "comment": "Which account made the no-charge decision. Audit evidence, not authorization: the RLS policies already decide who may write the row."
+  },
+  {
+   "col": "no_charge_reason",
+   "tbl": "quotes",
+   "comment": "Why this work is free, in the owner's words. Required whenever no_charge_at is set (quotes_no_charge_complete_check) — a free-work record with no reason is indistinguishable from an unanswered price field."
   },
   {
    "col": "notes",
