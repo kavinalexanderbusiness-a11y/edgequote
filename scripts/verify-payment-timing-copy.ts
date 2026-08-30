@@ -207,6 +207,17 @@ console.log('\n■ 2. THE contradiction detector — and proof it can fail')
     /comes off your final invoice/i.test(approvedTimingLine(paymentTiming(PCT_ACCEPTED), satisfied)))
   check('satisfied line is depositCreditLine (one sentence, one home)',
     approvedTimingLine(paymentTiming(PCT_ACCEPTED), satisfied) === depositCreditLine())
+  // ⚠️ …and it must not OVERCLAIM. Applying the credit to an invoice is a manual
+  // owner action (applyCreditToInvoice, from the "Apply $X credit" button) and
+  // nothing does it automatically — so "comes off your final invoice" states the
+  // contract, while "already deducted" would assert a ledger movement that has
+  // not happened. See docs/PAYMENT-TIMING.md § "The one claim this repair makes
+  // that the system does not guarantee". This guard exists so a future tidy-up
+  // cannot quietly upgrade the promise.
+  check('…and never claims the deduction has ALREADY happened',
+    !/already (deducted|applied|credited|taken off)|has been (deducted|reduced|applied)|balance (has|is) (already )?(been )?reduced/i
+      .test(depositCreditLine()),
+    `overclaims: "${depositCreditLine()}"`)
   check('partial never reads as satisfied',
     !/comes off your final invoice/i.test(
       approvedTimingLine(paymentTiming(PCT_ACCEPTED), { outstanding: 350, status: 'partial' })))
@@ -316,6 +327,20 @@ console.log('\n■ 4. Adjacent surfaces must not reintroduce a contradiction')
   const gateSrc = stripComments(read('src/lib/payments/depositGate.ts'))
   check('scheduling readiness is still derived, never stored',
     !/deposit_paid/.test(gateSrc) && /isCashRow/.test(gateSrc))
+
+  // The OWNER's help describes the customer-facing copy. It taught that
+  // "approving a quote never takes money", full stop — so an owner who set a
+  // deposit rule had no idea what their customer was about to be asked for. A
+  // help page that describes only the no-deposit branch misrepresents the
+  // product back to the person configuring it.
+  const help = stripComments(read('src/lib/help/content.ts'))
+  check('owner help no longer says approval is the end of the money story',
+    !/approving a quote never takes money/i.test(help),
+    'the unqualified claim is back in help/content.ts')
+  check('owner help names the scheduling deposit as what follows approval',
+    /scheduling deposit\*\*, that deposit is the very next thing/i.test(help))
+  check('owner help describes the deposit branch of the approval dialog',
+    /also names the deposit they.ll be asked for next/i.test(help))
 }
 
 console.log(failures > 0 ? `\n✗ ${failures} FAILURE(S)` : '\n✓ all payment-timing-copy checks passed')

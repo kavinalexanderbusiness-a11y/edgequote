@@ -136,6 +136,52 @@ where it flatly contradicts the configuration.
 
 ---
 
+## ⚠️ The one claim this repair makes that the system does not guarantee
+
+The satisfied-deposit copy says the deposit **"comes off your final invoice"**.
+That is a correct statement of the *configuration* — it is what a scheduling
+deposit is for — but the mechanism behind it is **manual**, and that gap was
+found while verifying this session's own wording. It is recorded here rather
+than fixed: it is a money-path change inside the frozen payments lane, not a
+copy contradiction, and it needs an owner decision.
+
+What actually happens when a scheduling deposit is paid:
+
+1. `ledger.recordDeposit` writes two legs — the cash, and a matching
+   `kind='credit'` row. The money becomes **customer credit**.
+2. Credit lives on the **customer**, not on any invoice.
+3. `applyCreditToInvoice` moves it onto a bill — and it is only ever called from
+   the owner's **"Apply $X credit"** button in `InvoicePaymentControls`, which
+   appears on an invoice with an open balance. Nothing applies it automatically.
+4. The portal's invoice balance is `invoiceBalance` (total − `amount_paid`). It
+   **does not net available credit.**
+
+So a customer who paid a $1,350 deposit can be shown an invoice for the full
+$2,700 with a Pay button for that amount, while their $1,350 sits in the
+portal's "Available credit" panel — a bare figure with no words explaining what
+it is for. Paying then leaves them $1,350 in cash out of pocket, still holding
+$1,350 of credit. They are not *robbed*, but they have been asked for money they
+had already paid, by the same product that promised it would come off this bill.
+
+Three ways to close it, cheapest first — **owner's call, none of them built**:
+
+- **Explain the credit where it appears.** The portal's "Available credit" tile
+  is a number with no sentence. Naming it ("from your deposit on Quote #1042 —
+  it comes off your next invoice") costs nothing and no money path moves.
+- **Net credit into the portal's collection ask**, the way `depositChargeAmount`
+  already clamps every charge to the live balance. This is the honest fix for
+  the Pay button and it touches the frozen charge path.
+- **Apply the credit automatically** when an invoice is raised against a quote
+  whose deposit was collected. Cleanest for the customer, but it writes money
+  without review — the same objection that kept reconciliation read-only
+  ([[payments-trust-decisions-2026-07-15]]), so it should not be assumed.
+
+⛔ Until one of these lands, do not strengthen the copy further. The current
+sentence describes the product's contract; a stronger promise ("already deducted",
+"your balance has been reduced") would assert something the ledger has not done.
+
+---
+
 ## NOT built — the future payment-schedule engine
 
 **⛔ Do not implement any of these as part of a copy fix.** They are listed so
