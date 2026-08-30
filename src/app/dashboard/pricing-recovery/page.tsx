@@ -8,7 +8,8 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { jobVisitValue, quoteVisitAmount, effectiveFreq } from '@/lib/visitValue'
 import { pricingConfigFromSettings, recommendedJobPrice, PricingConfig } from '@/lib/pricing'
-import { generateQuoteNumber, formatCurrency, maxNumericSuffix, localTodayISO } from '@/lib/utils'
+import { formatCurrency, localTodayISO } from '@/lib/utils'
+import { allocateQuoteNumber, QUOTE_NUMBER_FAILED } from '@/lib/quoteNumber'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -202,8 +203,15 @@ export default function PricingRecoveryPage() {
   async function applyNewPrice(recId: string, sample: JobRow, cadence: string | null, price: number) {
     setWorking(recId)
     const { data: { user } } = await supabase.auth.getUser()
-    // Max-suffix, never count — counts reissue numbers after deletes.
-    const quote_number = generateQuoteNumber(maxNumericSuffix(quotes.map(q => q.quote_number)) + 1)
+    // ⭐ Allocated by the database. This previously read `quotes` — page STATE,
+    // loaded when the screen opened — so a tab left open reissued a number the
+    // series had long since passed. That is precisely how the production
+    // duplicates were minted, 70 and 76 minutes after their originals.
+    const alloc = await allocateQuoteNumber(supabase)
+    if (alloc.error || !alloc.quoteNumber) {
+      toast.error(QUOTE_NUMBER_FAILED); setWorking(null); return
+    }
+    const quote_number = alloc.quoteNumber
     const field = cadenceField(cadence)
     const insert: Record<string, unknown> = {
       user_id: user!.id, quote_number,

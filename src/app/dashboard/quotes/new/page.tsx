@@ -8,7 +8,8 @@ import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Banner } from '@/components/ui/Banner'
-import { applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix, formatCurrency, formatDate } from '@/lib/utils'
+import { applyOvergrowth, localTodayISO, formatCurrency, formatDate } from '@/lib/utils'
+import { allocateQuoteNumber, QUOTE_NUMBER_FAILED } from '@/lib/quoteNumber'
 import { Globe, RefreshCw } from 'lucide-react'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes } from '@/lib/pricing'
 import { servicePricingKind } from '@/lib/servicePricing'
@@ -160,19 +161,18 @@ export default function NewQuotePage() {
 
     // Next number from the highest EXISTING quote number — a row count would
     // reissue a number after any delete and two quotes would share it.
-    const { data: qnums, error: qnumsErr } = await supabase
-      .from('quotes')
-      .select('quote_number')
-      .eq('user_id', user!.id)
-    // A failed read resolves as {data:null,error}; coerced to [] it would report
-    // "you have no quotes" and reissue EPS-<year>-0001 on top of an existing one.
-    // quote_number carries no unique index, so the duplicate would be written and
-    // never noticed. Returning false keeps the autosave draft — nothing is lost.
-    if (qnumsErr || !qnums) {
-      toast.error('Could not read your existing quote numbers, so nothing was saved. Check your connection and press Save again.')
+    // ⭐ THE DATABASE ALLOCATES THE NUMBER, atomically, once. This used to read
+    // every existing number and add one here in the browser — which is how
+    // production ended up holding EPS-2026-0008 and EPS-2026-0009 twice each.
+    // ⛔ No fallback and no retry: a failure stops the save. A quote with a
+    // guessed number is worse than a quote that was not created, and the autosave
+    // draft is kept, so nothing the owner typed is lost.
+    const alloc = await allocateQuoteNumber(supabase)
+    if (alloc.error || !alloc.quoteNumber) {
+      toast.error(QUOTE_NUMBER_FAILED)
       return false
     }
-    const quote_number = generateQuoteNumber(maxNumericSuffix((qnums as { quote_number: string }[]).map(n => n.quote_number)) + 1)
+    const quote_number = alloc.quoteNumber
 
     // Every quote gets a real customer + property (create or match — no dupes, no orphans).
     let customerId: string | null = values.customer_id && values.customer_id !== '__manual' ? values.customer_id : null

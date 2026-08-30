@@ -7,7 +7,8 @@ import Link from 'next/link'
 import { hoverIntent } from '@/lib/prefetch'
 import { Quote, QuoteService, QuoteStatus } from '@/types'
 import { serviceLineTotals } from '@/lib/quoteServices'
-import { formatCurrency, formatDate, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
+import { formatCurrency, formatDate, localTodayISO, maxNumericSuffix } from '@/lib/utils'
+import { allocateQuoteNumbers, QUOTE_NUMBER_FAILED } from '@/lib/quoteNumber'
 import { needsFollowUp, daysSince, compareFollowUp, chaseBlockedReason } from '@/lib/followup'
 import type { ReachCustomer } from '@/lib/comms/reach'
 import { describeSkip } from '@/lib/comms/skipReasons'
@@ -255,26 +256,28 @@ export function QuoteList({ quotes, onDelete, reachById, onNotesSaved }: QuoteLi
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
     setBusyKey('duplicate')
-    const [{ data: qnums, error: qnumsErr }, linesByQuote] = await Promise.all([
-      supabase.from('quotes').select('quote_number').eq('user_id', user.id),
+    // ⭐ ONE DATABASE ALLOCATION PER NEW DOCUMENT, reserved up front. This used
+    // to read every existing number and count upward in the browser; prod already
+    // carries two duplicated quote numbers, so that was not hypothetical.
+    // ⛔ A mid-loop failure now SPENDS numbers and stops. It never reuses one —
+    // gaps are acceptable, duplicates are not.
+    const [alloc, linesByQuote] = await Promise.all([
+      allocateQuoteNumbers(supabase, sel.selectedItems.length),
       fetchLinesByQuote(supabase, sel.selectedItems.map(q => q.id)),
     ])
-    // A failed read coerced to [] restarts the sequence at EPS-<year>-0001, and
-    // quote_number has no unique index either — prod already carries two
-    // duplicated quote numbers, so this is not hypothetical.
-    if (qnumsErr || !qnums) {
-      toast.error('Could not read your existing quote numbers, so nothing was duplicated. Check your connection and try again.')
+    if (alloc.error || !alloc.quoteNumbers) {
+      toast.error(QUOTE_NUMBER_FAILED)
       setBusyKey(null)
       return
     }
-    let next = maxNumericSuffix((qnums as { quote_number: string }[]).map(n => n.quote_number)) + 1
+    const numbers = alloc.quoteNumbers
     // (The breakdown for every selected quote was batch-fetched above via
     // fetchLinesByQuote — the same helper bulkConvert uses.)
     let created = 0
     let lineFailures = 0
     for (const q of sel.selectedItems) {
       const { data: dup, error } = await supabase.from('quotes').insert({
-        quote_number: generateQuoteNumber(next), user_id: user.id, status: 'draft', issued_date: localTodayISO(),
+        quote_number: numbers[created], user_id: user.id, status: 'draft', issued_date: localTodayISO(),
         customer_id: q.customer_id, customer_name: q.customer_name, address: q.address,
         service_type: q.service_type, service_template_id: q.service_template_id,
         initial_price: q.initial_price, weekly_price: q.weekly_price, biweekly_price: q.biweekly_price, monthly_price: q.monthly_price,
@@ -296,7 +299,9 @@ export function QuoteList({ quotes, onDelete, reachById, onNotesSaved }: QuoteLi
         boulevard_sqft: q.boulevard_sqft, other_sqft: q.other_sqft,
       }).select('id').single()
       if (!error && dup) {
-        created++; next++
+        // `created` indexes the reserved numbers — there is no local counter to
+        // advance any more, because the database advanced it already.
+        created++
         const src = linesByQuote.get(q.id)
         if (src?.length) {
           const { error: lineErr } = await supabase.from('quote_services').insert(src.map(s => ({

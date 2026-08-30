@@ -24,7 +24,8 @@ import { SkeletonRows } from '@/components/ui/Skeleton'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { QuoteIntelligencePanel } from '@/components/quotes/QuoteIntelligencePanel'
 import { SaveAsBundleDialog } from '@/components/quotes/SaveAsBundleDialog'
-import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
+import { formatCurrency, formatDate, applyOvergrowth, localTodayISO } from '@/lib/utils'
+import { allocateQuoteNumber, QUOTE_NUMBER_FAILED } from '@/lib/quoteNumber'
 import { nextInvoiceNumber } from '@/lib/invoicing'
 import { isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil, markSentPatch, sendBlockedReason, sendBlockedLabel, DEFAULT_QUOTE_VALID_DAYS } from '@/lib/quoteStatus'
 import { toast } from '@/lib/toast'
@@ -785,11 +786,13 @@ export default function QuoteDetailPage() {
     setDuplicating(true)
     try {
       const { data: { user } } = await supabase.auth.getUser()
-      const { data: qnums } = await supabase
-        .from('quotes')
-        .select('quote_number')
-        .eq('user_id', user!.id)
-      const quote_number = generateQuoteNumber(maxNumericSuffix(((qnums as { quote_number: string }[]) || []).map(n => n.quote_number)) + 1)
+      // ⭐ The database allocates it. A duplicate of a quote is still a NEW
+      // document and gets its own number, atomically.
+      // ⛔ No fallback: this used to read every existing number and add one in
+      // the browser, which is how production ended up with two EPS-2026-0008s.
+      const alloc = await allocateQuoteNumber(supabase)
+      if (alloc.error || !alloc.quoteNumber) { toast.error(QUOTE_NUMBER_FAILED); return }
+      const quote_number = alloc.quoteNumber
 
       const { data, error } = await supabase.from('quotes').insert({
         quote_number,

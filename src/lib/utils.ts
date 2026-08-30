@@ -83,11 +83,17 @@ export function calculateQuote(
   return { manHours, subtotal, total }
 }
 
-export function generateQuoteNumber(index: number): string {
-  const year = new Date().getFullYear()
-  const num = String(index).padStart(4, '0')
-  return `EPS-${year}-${num}`
-}
+// ⛔ generateQuoteNumber() USED TO LIVE HERE, AND IT IS NOT COMING BACK.
+// It built `EPS-<year>-<n>` from a number the CALLER worked out by reading every
+// existing quote and adding one. Two defects in one line: it hardcoded one
+// business's initials for every tenant, and it derived a document number from a
+// value read earlier — which is how production came to hold EPS-2026-0008 and
+// EPS-2026-0009 twice each, 70 minutes apart, with no uniqueness constraint to
+// notice.
+//
+// ⭐ Quote numbers are now allocated by the database, atomically, through
+// `lib/quoteNumber.allocateQuoteNumber()` → `public.allocate_quote_number()`.
+// verify:quote-number-integrity fails if any app file computes one again.
 
 export function getInitials(name: string): string {
   return name
