@@ -353,8 +353,19 @@ function dayAvailabilityWiring() {
     /dayStatus: DayStatusMap \| null = \{ byDate: \{\}, blockedDates: new Set\(\) \}/.test(WEATHER), true)
   check('…its loader passes null when the read failed',
     /const dayStatus = dRes\.error \? null : buildDayStatusMap/.test(WEATHER), true)
-  check('…and findDryDay refuses before scanning the forecast',
-    /if \(!dayStatusKnown\) return null/.test(WEATHER), true)
+  // ⭐ RE-POINTED, NOT RELAXED (Session 121). The search moved into
+  // lib/weatherTruth so it could record WHY each day was passed over, and its
+  // return type went from `string | null` to a result object — so the old
+  // `return null` no longer appears. The CONTRACT is unchanged and is what is
+  // asserted: with day availability UNKNOWN, it must refuse BEFORE scanning the
+  // forecast, because every candidate is filtered by `blockedDates` and without
+  // it the first dry day wins even if the owner had closed it.
+  check('…and the dry-day search refuses before scanning the forecast',
+    /if \(!dayStatusKnown\) return \{ chosen: null, chosenOverbooks: false, evaluations: \[\] \}/.test(WEATHER), true)
+  // …and it refuses with an EMPTY explanation list, not a list of reasons it
+  // never actually checked — an invented "why not" would be worse than silence.
+  check('…returning no reasons either, since it examined no day',
+    /evaluations: \[\] \}/.test(WEATHER), true)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
