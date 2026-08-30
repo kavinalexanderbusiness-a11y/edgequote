@@ -157,7 +157,15 @@ const offenders: string[] = []
 for (const f of appFiles) {
   const code = stripTs(src(f))
   // ⭐ THE RULE: nothing outside the allocator may compute a quote number.
-  if (/generateQuoteNumber\s*\(/.test(code)) offenders.push(`${f} (generateQuoteNumber)`)
+  // ⚠️ MATCH THE IDENTIFIER, NOT THE CALL. `generateQuoteNumber\s*\(` missed a
+  // door that DEFINED its own — `const generateQuoteNumber = (i) => …` has ` = `
+  // between the name and the paren — so a file could reintroduce the whole defect
+  // locally and stay green. A mutation caught this.
+  if (/\bgenerateQuoteNumber\b/.test(code)) offenders.push(`${f} (generateQuoteNumber)`)
+  // A hand-rolled equivalent: zero-padding a counter into a prefixed string.
+  if (/padStart\(\s*4\s*,\s*'0'\s*\)/.test(code) && /quote/i.test(f)) {
+    offenders.push(`${f} (pads a 4-digit document number by hand)`)
+  }
   if (/maxNumericSuffix\s*\([^)]*quote_number/i.test(code)) offenders.push(`${f} (maxNumericSuffix over quote_number)`)
 }
 check('no app file computes a quote number', offenders.length === 0,

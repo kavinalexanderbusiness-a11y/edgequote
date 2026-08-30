@@ -128,10 +128,14 @@ mutate static "year dropped from the counter key" \
   's/primary key \(user_id, kind, prefix, year\)/primary key (user_id, kind, prefix)/'
 
 # 6 · remove the seeding, so the first allocation lands on a live series
-mutate static "counter seeding removed" \
-  "the counter is seeded from existing series" \
+#     ⚠️ FULL, NOT STATIC. The static check only asserts a seeding statement
+#     EXISTS; a seeding statement that seeds the wrong thing still matches it. The
+#     claim being made — "the counter continues the series" — is behavioural, and
+#     only the from-zero half can test it. Run as static, this mutation survived.
+mutate full "counter seeding neutered" \
+  "the counter continues tenant A's existing series" \
   "$PROPOSAL" \
-  's/insert into public\.document_number_counters \(user_id, kind, prefix, year, next_value\)\nselect q\.user_id,/insert into public.document_number_counters (user_id, kind, prefix, year, next_value)\nselect null::uuid,/'
+  's/       max\(\(\(regexp_match\(q\.quote_number/       1 + 0 * max(((regexp_match(q.quote_number/'
 
 # 7 · drop the tenant-boundary check inside the allocator
 #     FULL: the static text check and the behavioural refusal both matter, but the
