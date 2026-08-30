@@ -8,6 +8,7 @@ import {
   loadRevenueIntel, recordRecommendation, RevenueIntelReport, Opportunity, LtvForecast,
   OppKind, OPP_META, Confidence, FeedbackRow,
 } from '@/lib/revenueIntelligence'
+import { INSUFFICIENT_LABEL, evidenceSummary, insufficientReason } from '@/lib/growthEvidence'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { StatTile } from '@/components/ui/StatTile'
@@ -94,7 +95,16 @@ export default function RevenueIntelligencePage() {
 
       {/* Summary — upside on the left, risk on the right (the two numbers that matter) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-rise">
-        <Tile label="Recurring opportunity" value={formatCurrency(summary.totalOpportunity)} sub="/yr if all won" accent />
+        {/* ⭐⭐ THE HEADLINE NOW SAYS HOW MUCH OF THE BOOK IT SPEAKS FOR.
+            "$98,000/yr if all won" read as a claim about the whole advisor. It
+            was in fact a sum over figures many of which were a single visit
+            multiplied by a cadence nobody declared. The figure is now only the
+            quantified ones, and the sub-line says how many were left out. */}
+        <Tile label="Recurring opportunity" value={formatCurrency(summary.totalOpportunity)}
+          sub={summary.unquantified > 0
+            ? `/yr from ${summary.quantified} · ${summary.unquantified} without enough data`
+            : `/yr from ${summary.quantified} recommendation${summary.quantified === 1 ? '' : 's'}`}
+          accent />
         <Tile label="One-time opportunity" value={formatCurrency(summary.totalOneTime)} />
         <Tile label="Revenue from acted" value={formatCurrency(wonValue)} sub={`${actedCount} acted · ${wonCount} won`} />
         {(() => {
@@ -220,7 +230,19 @@ function OppCard({ o, index, status, busy, onAct }: { o: Opportunity; index: num
           </div>
           <p className="text-sm font-bold tracking-tight text-ink mt-1.5">{o.action} — {o.customerName}</p>
         </div>
-        <span className="shrink-0 text-sm font-bold text-accent-text flex items-center gap-1 tabular-nums"><TrendingUp className="w-3.5 h-3.5" /> +{formatCurrency(o.expectedValue)}{o.oneTime ? '' : '/yr'}</span>
+        {/* ⭐⭐ THE FIGURE ONLY APPEARS WHEN ITS EVIDENCE EARNED IT.
+            An unquantified opportunity is still worth acting on — the action and
+            the reasoning are unchanged — so this states the absence plainly
+            instead of printing a confident "+$0/yr", which would read as "this
+            customer is worth nothing". */}
+        {o.expectedValue > 0 ? (
+          <span className="shrink-0 text-sm font-bold text-accent-text flex items-center gap-1 tabular-nums"><TrendingUp className="w-3.5 h-3.5" /> +{formatCurrency(o.expectedValue)}{o.oneTime ? '' : '/yr'}</span>
+        ) : (
+          <span className="shrink-0 text-[11px] font-semibold text-ink-faint text-right leading-tight max-w-[9.5rem]"
+            title={insufficientReason(o.evidence)}>
+            {INSUFFICIENT_LABEL}
+          </span>
+        )}
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -243,9 +265,26 @@ function OppCard({ o, index, status, busy, onAct }: { o: Opportunity; index: num
       </div>
 
       {showWhy && (
-        <ul className="mt-2 space-y-0.5 border-t border-border pt-2">
-          {o.why.map((w, i) => <li key={i} className="text-xs text-ink-muted flex gap-1.5"><span className="text-accent-text/60 shrink-0">•</span><span>{w}</span></li>)}
-        </ul>
+        <div className="mt-2 border-t border-border pt-2 space-y-2">
+          <ul className="space-y-0.5">
+            {o.why.map((w, i) => <li key={i} className="text-xs text-ink-muted flex gap-1.5"><span className="text-accent-text/60 shrink-0">•</span><span>{w}</span></li>)}
+          </ul>
+          {/* ⭐⭐ THE TRANSPARENCY CONTRACT, in the one place the owner asks "why?".
+              Record count, the statistic named, the cadence assumption, the
+              annualization formula in full, and everything excluded with its
+              reason. Fake precision is the failure mode this replaces: a figure
+              to the dollar, derived from two visits and an assumed cadence. */}
+          <div className="rounded-lg border border-border bg-bg-tertiary/60 px-2.5 py-2 space-y-1">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">What this is based on</p>
+            <p className="text-[11px] text-ink-muted">{evidenceSummary(o.evidence)}</p>
+            {o.evidence.skew && (
+              <p className="text-[11px] text-amber-400">Spread: {o.evidence.skew}</p>
+            )}
+            {o.expectedValue <= 0 && (
+              <p className="text-[11px] text-ink-faint">{insufficientReason(o.evidence)}</p>
+            )}
+          </div>
+        </div>
       )}
     </div>
   )

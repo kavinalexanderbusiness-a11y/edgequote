@@ -42,6 +42,7 @@
     "verify:measurement-rpc": "tsx scripts/verify-measurement-rpc.ts",
     "verify:navigation": "tsx scripts/verify-navigation.ts",
     "verify:grow": "tsx scripts/verify-grow.ts",
+    "verify:growth-quality": "tsx scripts/verify-growth-quality.ts",
     "verify:vocabulary": "tsx scripts/verify-vocabulary.ts",
     "verify:advanced-setup": "tsx scripts/verify-advanced-setup.ts",
     "verify:create-doors": "tsx scripts/verify-create-doors.ts",
