@@ -16,22 +16,26 @@
 // The read-only inventory (scripts/inventory-quote-numbers.ts) is the only thing
 // that touches production, and it issues SELECTs only.
 //
-// ⚠️⚠️ WHAT THE CONCURRENCY PROOF DOES AND DOES NOT MODEL. PGlite is Postgres
-// compiled to WASM with ONE connection, so genuinely parallel transactions
-// cannot be run here and no amount of wishing makes them appear. What is proven
-// instead is precise:
+// ⚠️⚠️ WHAT THE CONCURRENCY PROOF HERE DOES AND DOES NOT MODEL. PGlite is
+// Postgres compiled to WASM with ONE connection, so genuinely parallel
+// transactions cannot be run here and no amount of wishing makes them appear.
+// What is proven in this file is precise:
 //   • the OLD rule is driven through its REAL seam (the exported maxNumericSuffix
 //     and generateQuoteNumber, and the actual SQL MAX()+1 lifted from the
 //     baseline) under the classic interleaving — every caller reads, then every
 //     caller writes. That IS what concurrent callers do, and it is deterministic.
 //   • the NEW allocator cannot be interleaved that way at all, because there is
-//     no separate read to hoist: allocation is one statement. That is the
-//     argument, and the test demonstrates the shape rather than pretending to
-//     race it.
-//   • the UNIQUE index is exercised for real — it refuses a duplicate whatever
-//     produced it.
-// A single-connection harness cannot prove serialisation under contention. That
-// is stated here rather than implied by a green tick.
+//     no separate read to hoist: allocation is one statement.
+//   • the barrier is exercised for real — it refuses a duplicate whatever
+//     produced it, including a number that only history has ever held.
+//
+// ⭐⭐ SERIALISATION UNDER CONTENTION IS PROVEN ELSEWHERE, FOR REAL:
+// scripts/verify-quote-number-concurrency.ts starts a disposable REAL PostgreSQL
+// server and races 2, 10 and 100 INDEPENDENT CONNECTIONS, asserting that their
+// transactions actually overlapped before asserting that they got distinct
+// numbers. That claim was moved out of this file rather than fudged in it,
+// because calling a sequential loop "concurrency" is the exact species of false
+// green this session exists to remove.
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -115,8 +119,44 @@ check('the counter is seeded from existing series',
   /insert into public\.document_number_counters[\s\S]{0,600}from public\.quotes/i.test(pSchema),
   'without seeding, the first allocation after apply mints 0001 onto a live series')
 
+// ⛔⛔ NUMBERING MUST NOT DEPEND ON A SYSTEM COLUMN.
+check('the allocator returns next_value - 1, not an xmax branch',
+  /returning next_value - 1 into v_value/i.test(allocBody) && !/xmax/i.test(allocBody),
+  'xmax is an MVCC implementation detail; both branches already leave next_value one past the claimed value')
+check('no part of the proposal reads xmax',
+  !/xmax/i.test(pSchema),
+  'a comment may name it (that text is stripped before this check); executable SQL may not')
+
 // ── The barrier ────────────────────────────────────────────────────────────
-check('a UNIQUE index protects (user_id, quote_number)',
+// ⭐⭐ THE REGISTRY IS THE BARRIER, and the thing that makes it cover HISTORY.
+check('a claim registry exists, keyed on (tenant, kind, number)',
+  /create table if not exists public\.document_number_claims/i.test(pSchema)
+  && /primary key \(user_id, kind, number\)/i.test(pSchema),
+  'a counter alone is a convention — only a claimed-number registry can refuse a number history already used')
+check('the registry is seeded from DISTINCT historical numbers',
+  /insert into public\.document_number_claims[\s\S]{0,300}select distinct[\s\S]{0,200}from public\.quotes/i.test(pSchema),
+  'DISTINCT is what lets the two duplicated pairs collapse into one claim each without renumbering either row')
+check('the registry claims EVERY number, not only well-formed ones',
+  /select distinct q\.user_id, 'quote', q\.quote_number[\s\S]{0,140}where q\.quote_number is not null/i.test(pSchema),
+  'EPS-0002 and EPS-0009 carry no year segment, so no counter can ever protect them — only a literal claim can')
+check('a BEFORE trigger claims the number on the way in',
+  /create trigger quotes_claim_document_number[\s\S]{0,200}before insert or update of quote_number on public\.quotes/i.test(pSchema),
+  'a claim written by application code is a convention again')
+check('claiming is an INSERT against the primary key, never a SELECT EXISTS',
+  /insert into public\.document_number_claims \(user_id, kind, number\)[\s\S]{0,120}values \(new\.user_id/i.test(pSchema)
+  && !/if\s+exists\s*\(\s*select[\s\S]{0,160}document_number_claims/i.test(pSchema),
+  'a read-then-decide check is precisely the raceable shape this session removed from the app')
+check('the claim trigger advances the counter past any number it did not mint',
+  /greatest\(public\.document_number_counters\.next_value, excluded\.next_value\)[\s\S]{0,400}return new;/i.test(pSchema),
+  'without the watermark bump, an old deployment writing MAX()+1 leaves the counter BEHIND the data during the cutover')
+check('a claim is released only when no row still holds the number',
+  /create or replace function public\.release_document_number[\s\S]*?not exists \([\s\S]{0,160}from public\.quotes[\s\S]{0,200}delete from public\.document_number_claims/i.test(pSchema),
+  'Undo re-inserts a deleted quote with its ORIGINAL number, and a surviving duplicate must keep its claim')
+check('the registry has no client write policy',
+  !/create policy[^;]*document_number_claims[^;]*for (insert|update|delete)/i.test(pSchema),
+  'a client that can delete a claim can free a number and reissue it')
+
+check('a UNIQUE index protects (user_id, quote_number) as defence in depth',
   /create unique index quotes_user_qnum_new_unique on public\.quotes \(user_id, quote_number\)/i.test(pSchema),
   'an allocator without a barrier is a convention, not a guarantee')
 check('the barrier is tenant-scoped, not global',
@@ -131,7 +171,42 @@ check('stage 2 REPORTS duplicates rather than modifying them',
   /Cannot add UNIQUE \(user_id, quote_number\) — duplicates remain/i.test(proposal)
   && /does not append "-2", does not mint a\s*\n?--\s*replacement/i.test(proposal))
 
+// ── The cutover has no escape window ───────────────────────────────────────
+// ⛔⛔ A HAND-EDITED CUTOFF IS A BUG WAITING FOR A DEPLOY. The previous draft
+// asked whoever applied the file to edit a literal timestamp to the apply date.
+// A cutoff before apply cannot be indexed; a cutoff after apply leaves every row
+// created in between unprotected. There is no correct literal, so there must be
+// no literal.
+check('the cutover takes a table lock before it seeds',
+  /lock table public\.quotes in share row exclusive mode/i.test(pSchema),
+  'without quiescing writers, a quote written mid-seed is claimed by nothing')
+check('the cutoff is measured inside the transaction, not written by hand',
+  /v_cutoff := clock_timestamp\(\)/i.test(pSchema)
+  && !/timestamptz '20\d\d-\d\d-\d\d/i.test(pSchema),
+  'a literal cutoff is either unindexable or leaves a window; both are wrong')
+check('seeding and enforcement are the SAME transaction',
+  /lock table public\.quotes[\s\S]{0,900}insert into public\.document_number_claims[\s\S]{0,700}create trigger quotes_claim_document_number/i.test(pSchema),
+  'a gap between "seeded" and "enforced" is a gap a duplicate fits through')
+check('the migration REFUSES to finish if any quote is unclaimed',
+  /are not in the claim registry — history is not protected/i.test(proposal)
+  && /claim trigger\(s\) missing/i.test(proposal),
+  'a migration that silently half-applied is worse than one that stopped')
+check('the file no longer asks S106 to edit a timestamp',
+  !/must be edited to the apply date/i.test(proposal),
+  'the instruction is gone because the thing it pointed at is gone')
+
 // ── Tenant safety ──────────────────────────────────────────────────────────
+// ⛔⛔ THE PREFIX RESOLVER IS A DISCLOSURE ORACLE IF IT IS REACHABLE. It reads
+// another business's configured prefix, its numbering, and the initials of its
+// company name. Two independent defences, and the guard pins both — either one
+// alone is a single point of failure.
+check('the prefix resolver has NO direct execute grant (defence A)',
+  !/grant execute on function public\.quote_number_prefix\(uuid\) to (authenticated|anon|public)/i.test(pSchema)
+  && /revoke all on function public\.quote_number_prefix\(uuid\) from authenticated/i.test(pSchema),
+  'an internal helper of the allocator needs no client door at all')
+check('the prefix resolver ALSO enforces the tenant boundary (defence B)',
+  /create or replace function public\.quote_number_prefix[\s\S]*?cannot resolve the prefix of another business/i.test(pSchema),
+  'if a future migration restores a grant by accident, the boundary inside must still refuse')
 check('a signed-in caller cannot allocate for another tenant',
   /if v_caller is not null and v_caller <> v_user then/i.test(pSchema)
   && /cannot allocate a number for another business/i.test(proposal))
@@ -382,6 +457,30 @@ async function behaviour() {
   console.log('       no read for a second caller to interleave with. See the header')
   console.log('       for what a single-connection harness can and cannot prove.')
 
+  // ⭐⭐ BOTH BRANCHES OF `RETURNING next_value - 1`, MEASURED SEPARATELY. This is
+  // what replaced the xmax trick, and a claim about two branches is worth
+  // nothing if only one of them is ever executed.
+  //   • INSERT branch — no counter row exists, one is created with next_value 2,
+  //     so the claimed value is 1.
+  //   • UPDATE branch — a counter row exists, next_value becomes old + 1, so the
+  //     claimed value is old.
+  const D = '00000000-0000-0000-0000-0000000000dd'
+  await exec(`insert into auth.users (id, email) values ('${D}','d@example.test')`)
+  await exec(`insert into public.business_settings (user_id, company_name) values ('${D}', 'Nordic Snow Removal')`)
+  const dFirst = await alloc(D)
+  check('BRANCH · the INSERT branch (first ever allocation) claims 0001',
+    dFirst === `NSR-${YEAR}-0001`,
+    `a fresh counter row is written with next_value = 2, so next_value - 1 = 1; got ${dFirst}`)
+  const dSecond = await alloc(D)
+  check('BRANCH · the UPDATE branch (every allocation after) claims 0002',
+    dSecond === `NSR-${YEAR}-0002`,
+    `an existing row becomes old + 1, so next_value - 1 = old; got ${dSecond}`)
+  const dCounter = Number((await q(
+    `select next_value from public.document_number_counters where user_id='${D}' and prefix='NSR' and year=${YEAR}`)).rows[0].next_value)
+  check('BRANCH · and the stored counter is exactly one past the last claim',
+    dCounter === 3,
+    `the returned value and the stored value must agree without consulting xmax; counter reads ${dCounter}`)
+
   // Tenant isolation.
   // ⭐ Capture A's counter BEFORE touching B rather than predicting it. The
   // hardcoded expectation here was off by one (101 allocations from a seed of 8
@@ -443,17 +542,44 @@ async function behaviour() {
   // ── THE BARRIER ──────────────────────────────────────────────────────────
   const dupMsg = await refuses(mkQuote(A, `EPS-${YEAR}-0008`, '11111111-1111-1111-1111-111111111111'))
   check('BARRIER · a duplicate within one tenant is refused by the database',
-    /quotes_user_qnum_new_unique|duplicate key/i.test(dupMsg),
-    `expected the unique index to bite; got: ${dupMsg.slice(0, 160) || 'IT SUCCEEDED'}`)
+    /already been used by this business|duplicate key|quotes_user_qnum_new_unique/i.test(dupMsg),
+    `expected the barrier to bite; got: ${dupMsg.slice(0, 200) || 'IT SUCCEEDED'}`)
 
-  // ⭐ The historical rows are untouched and remain insertable — that is the
-  // whole reason the stage-1 index is partial.
-  const hist = await refuses(
+  // ⭐⭐ THE HISTORICAL COLLISION. `EPS-<year>-0006` was written before the
+  // cutover, so it sits OUTSIDE the partial index's predicate and that index
+  // cannot see it. Only the claim registry can refuse this.
+  const histReuse = await refuses(mkQuote(A, `EPS-${YEAR}-0006`, '11111111-1111-1111-1111-111111111111'))
+  check('BARRIER · a NEW quote cannot reuse a PRE-CUTOVER historical number',
+    /already been used by this business/i.test(histReuse),
+    `the partial index cannot see a pre-cutoff row; the registry must: ${histReuse.slice(0, 200) || 'IT SUCCEEDED'}`)
+
+  // ⛔⛔ AND BACKDATING created_at DOES NOT GET YOU PAST IT. This is the exact
+  // manipulation the partial-index-only design was vulnerable to: place the new
+  // row outside the index predicate and the index stops applying. The registry
+  // does not care what created_at says.
+  const backdated = await refuses(
     `insert into public.quotes (user_id, quote_number, customer_name, address, service_type, customer_id, created_at)
-       values ('${A}', 'EPS-${YEAR}-0008', 'C','A','S','11111111-1111-1111-1111-111111111111', timestamptz '2026-06-09 23:28:47+00')`)
-  check('BARRIER · history is deliberately outside the stage-1 index',
-    hist === '',
-    `a pre-cutoff row must still be writable so no historical quote has to be renumbered: ${hist.slice(0, 160)}`)
+       values ('${A}', 'EPS-${YEAR}-0007', 'C','A','S','11111111-1111-1111-1111-111111111111', timestamptz '2020-01-01 00:00:00+00')`)
+  check('BARRIER · a stale or manipulated caller cannot backdate its way around it',
+    /already been used by this business/i.test(backdated),
+    `created_at is caller-supplied, so a barrier keyed on it is a barrier with a door: ${backdated.slice(0, 200) || 'IT SUCCEEDED'}`)
+
+  // ⭐ A malformed legacy number belongs to no year series, so no counter can
+  // ever protect it. The registry claims the literal string, which can.
+  await exec(mkQuote(A, 'EPS-0077', '11111111-1111-1111-1111-111111111111'))
+  const malformedReuse = await refuses(mkQuote(A, 'EPS-0077', '11111111-1111-1111-1111-111111111111'))
+  check('BARRIER · a malformed legacy number is protected too',
+    /already been used by this business/i.test(malformedReuse),
+    `EPS-0077 has no year segment: ${malformedReuse.slice(0, 200) || 'IT SUCCEEDED'}`)
+
+  // ⭐⭐ AND HISTORY IS UNTOUCHED — the whole reason for a registry rather than a
+  // renumbering. The pre-existing rows are still there, still carrying the
+  // numbers they were issued.
+  const survivors = await q(
+    `select count(*)::int n from public.quotes where user_id='${A}' and quote_number in ('EPS-${YEAR}-0006','EPS-${YEAR}-0007')`)
+  check('BARRIER · not one historical row was renumbered or removed',
+    Number(survivors.rows[0].n) === 2,
+    'the registry protects the future by remembering the past, not by editing it')
 
   // ── Year boundary ────────────────────────────────────────────────────────
   await exec(`insert into public.document_number_counters (user_id, kind, prefix, year, next_value)
