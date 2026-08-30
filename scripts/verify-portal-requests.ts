@@ -424,8 +424,15 @@ H('11 · internal notes stay internal')
   // this guard cannot silently read the wrong copy).
   const defFiles = sqlFilesUnder('supabase')
     .filter(p => /create\s+(or\s+replace\s+)?function\s+public\.get_portal_data/i.test(read(p)))
-  check('exactly one file in the apply path defines get_portal_data', defFiles.length === 1, defFiles.join(', '))
-  const defFile = defFiles[0]
+  // Re-expressed with verify:portal-canonical (Session 112): an in-flight
+  // evolution legitimately carries a second definer that sorts AFTER the
+  // baseline; what this guard must never do is read a SUPERSEDED copy. So: at
+  // least one definer, and the checks below run against the EFFECTIVE one —
+  // last in apply order, the body a from-zero apply ends with. The
+  // forward-only ordering rule itself is portal-canonical's to enforce.
+  check('the apply path defines get_portal_data', defFiles.length >= 1, 'none found')
+  const defFile = [...defFiles].sort((a, b) =>
+    a.split(/[\\/]/).pop()!.localeCompare(b.split(/[\\/]/).pop()!)).at(-1)
   if (defFile) {
     // ⚠️ Stripped FIRST. The live definition documents, in a `--` comment inside
     // its own body, that completion_issue is internal and absent — so an

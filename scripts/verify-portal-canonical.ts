@@ -68,12 +68,31 @@ const definers = migrationFiles.filter(f => DEF_HEADER.test(readFileSync(f, 'utf
 
 console.log('\n── one definition, and it is in the apply path ──')
 check('supabase/migrations/ exists and holds a baseline', migrationFiles.length > 0)
-check('exactly one migration defines get_portal_data', definers.length === 1, definers.join(', ') || 'none')
+// ⭐ RE-EXPRESSED (Session 112 · accepted-document-truth). "Exactly one" was the
+// spelling; the CONTRACT was always "the apply path can only move this function
+// FORWARD". A lane that evolves the RPC legitimately carries a second definer
+// while in flight — a migration that sorts AFTER every baseline, so applying
+// from zero ends on the new body, and the next baseline regeneration absorbs it
+// back to one. What stays fatal is the thing INF-2 existed to stop: a definer
+// that sorts BEFORE a baseline, which a from-zero apply would silently override —
+// production rolled backward with no error. Resting state is still exactly one.
+const baselineDefiners = definers.filter(f => /_baseline\.sql$/i.test(f))
+const extraDefiners = definers.filter(f => !/_baseline\.sql$/i.test(f))
+check('at least one apply-path file defines get_portal_data', definers.length >= 1, 'none found')
+check('no definer can roll the apply path backward (every non-baseline definer sorts after every baseline)',
+  extraDefiners.every(x => baselineDefiners.every(b => x.split(/[\\/]/).pop()! > b.split(/[\\/]/).pop()!)),
+  definers.join(', '))
 
-// Extract just this function's body from the baseline. The baseline defines ~93
-// functions; running the contract regexes over all 468 KB would let a phrase from
-// a neighbouring function satisfy a check meant for this one.
-const baselineSrc = definers[0] ? readFileSync(definers[0], 'utf8') : ''
+// The EFFECTIVE definition — the one a from-zero apply ends with, which is the
+// one production runs. Every body check below runs against THIS, never a copy
+// an in-flight migration has already superseded.
+const effectiveDefiner = [...definers].sort((a, b) =>
+  a.split(/[\\/]/).pop()!.localeCompare(b.split(/[\\/]/).pop()!)).at(-1)
+
+// Extract just this function's body from the effective file. The baseline defines
+// ~93 functions; running the contract regexes over all 468 KB would let a phrase
+// from a neighbouring function satisfy a check meant for this one.
+const baselineSrc = effectiveDefiner ? readFileSync(effectiveDefiner, 'utf8') : ''
 const fnMatch = baselineSrc.match(
   /CREATE OR REPLACE FUNCTION public\.get_portal_data[\s\S]*?\$function\$[\s\S]*?\$function\$/i)
 const src = fnMatch?.[0] ?? ''

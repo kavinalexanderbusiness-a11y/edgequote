@@ -151,8 +151,16 @@ check('archive lives outside supabase/migrations/', !archiveSubdirs.includes('mi
 
 const DEF_HEADER = /create\s+(or\s+replace\s+)?function\s+(public\.)?get_portal_data\s*\(/i
 const definersInApplyPath = migrationFiles.filter(f => DEF_HEADER.test(readFileSync(join(MIGRATIONS, f), 'utf8')))
-check('exactly one file in the apply path defines get_portal_data',
-  definersInApplyPath.length === 1, definersInApplyPath.join(', ') || 'none')
+// Re-expressed with verify:portal-canonical (Session 112): the contract is that
+// the apply path can only move the portal RPC FORWARD. Resting state is one
+// definer (the baseline); an in-flight evolution adds one that sorts AFTER
+// every baseline, which the next baseline regeneration absorbs. Fatal remains a
+// definer sorting BEFORE a baseline — a from-zero apply would roll it backward.
+check('the apply path defines get_portal_data, and only forward',
+  definersInApplyPath.length >= 1 &&
+  definersInApplyPath.filter(f => !/_baseline\.sql$/i.test(f))
+    .every(x => definersInApplyPath.filter(f => /_baseline\.sql$/i.test(f)).every(b => x > b)),
+  definersInApplyPath.join(', ') || 'none')
 
 // The historical bodies must still exist somewhere — that is the point of an
 // archive — but they must be marked, so nobody pastes one into a SQL editor.
