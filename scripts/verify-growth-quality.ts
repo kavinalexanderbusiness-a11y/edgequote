@@ -233,9 +233,16 @@ console.log('\n── 6. ⭐⭐ WEAK EVIDENCE SHOWS A SENTENCE, NOT A DOLLAR ─
   // returns `annual: null` whenever strength is insufficient — so no input can
   // prove the guard clause present. Defence-in-depth has to be asserted
   // structurally or not at all.
+  // ⚠️ Anchored to the function itself, not a byte-slice around it: a 220-char
+  // window ran past the closing brace into mayShowPerVisit, which contains the
+  // very same clause — so the check answered a question about its NEIGHBOUR and
+  // stayed green through the mutation. Two near-identical functions is exactly
+  // where a windowed source assertion goes wrong.
   check('mayShowAnnual refuses insufficient evidence in its own right',
-    /strength !== 'insufficient'/.test(CODE.evidence.slice(CODE.evidence.indexOf('export function mayShowAnnual'), CODE.evidence.indexOf('export function mayShowAnnual') + 220)),
+    /export function mayShowAnnual\([^)]*\)[^{]*\{\s*return e\.strength !== 'insufficient'/.test(CODE.evidence),
     'the belt as well as the braces: a later refactor may make this reachable')
+  check('and mayShowPerVisit does the same',
+    /export function mayShowPerVisit\([^)]*\)[^{]*\{\s*return e\.strength !== 'insufficient'/.test(CODE.evidence), '')
   check('the money figure is CONDITIONAL on the value being positive',
     /o\.expectedValue\s*>\s*0\s*\?/.test(CODE.page),
     'an unconditional +$0/yr reads as "this customer is worth nothing"')
