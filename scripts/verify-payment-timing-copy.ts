@@ -40,6 +40,12 @@ import {
   type PaymentTiming,
 } from '../src/lib/payments/paymentTiming'
 import { requiredDeposit, type GateQuote } from '../src/lib/payments/depositGate'
+// §5 — the terms_text contradiction gate. The detector and the send gate it
+// feeds, exercised over a corpus of real conflicts AND a corpus of harmless
+// wording: this gate BLOCKS a send, so a false positive stops an owner doing
+// business over words that were fine.
+import { detectTermsTimingConflict, termsConflictExplanation } from '../src/lib/payments/termsTimingConflict'
+import { sendBlockedReason, sendBlockedLabel } from '../src/lib/quoteStatus'
 
 let failures = 0
 const ok = (name: string) => console.log(`  ✓ ${name}`)
@@ -341,6 +347,131 @@ console.log('\n■ 4. Adjacent surfaces must not reintroduce a contradiction')
     /scheduling deposit\*\*, that deposit is the very next thing/i.test(help))
   check('owner help describes the deposit branch of the approval dialog',
     /also names the deposit they.ll be asked for next/i.test(help))
+}
+
+console.log('\n■ 5. terms_text — detected, blocked, NEVER obeyed and NEVER rewritten')
+{
+  // ⛔⛔ THE INVARIANT. terms_text is prose we detect a contradiction in; it is
+  // never an input to what is owed, when, or how much. If a money path starts
+  // reading it, the third source of truth becomes a live one.
+  for (const f of ['src/lib/payments/paymentTiming.ts', 'src/lib/payments/depositGate.ts',
+    'src/lib/payments/deposit.ts', 'src/lib/payments/ledger.ts',
+    'src/app/api/portal/pay/route.ts', 'src/app/api/portal/quote-deposit/route.ts',
+    'src/app/api/payments/checkout/route.ts']) {
+    check(`terms_text never drives payment behaviour: ${f.split('/').pop()}`,
+      !/terms_text|termsText/.test(stripComments(read(f))),
+      'a money path is reading the owner\'s free-text terms')
+  }
+  // The detector reads them, and that is the ONLY place that may.
+  const det = read('src/lib/payments/termsTimingConflict.ts')
+  check('the detector never rewrites, normalises or returns edited terms',
+    !/\.replace\(\s*\/(?!\\r)/.test(stripComments(det).replace(/termsSentences[\s\S]*?\n}/, ''))
+    && /sentence: s\b/.test(det),
+    'the offending sentence must be returned VERBATIM')
+  check('the detector derives the configuration from paymentTiming, not its own rules',
+    /from '@\/lib\/payments\/paymentTiming'/.test(det) && /paymentTiming\(quote\)/.test(det))
+
+  // ── The gate is wired to every send door ─────────────────────────────────
+  const qs = stripComments(read('src/lib/quoteStatus.ts'))
+  check('the send gate knows the block', /'terms_contradict_timing'/.test(qs)
+    && /detectTermsTimingConflict/.test(qs))
+  const qpage = stripComments(read('src/app/dashboard/quotes/[id]/page.tsx'))
+  check('quote page: message send passes the terms',
+    /sendBlockedReason\(quote, settings\?\.terms_text\)/.test(qpage))
+  check('quote page: the PDF path is gated too (it prints BOTH statements)',
+    /sendBlockedReason\(quote, settings\?\.terms_text\) === 'terms_contradict_timing'/.test(qpage))
+  check('quote page: the offending sentence is shown to the owner verbatim',
+    /termsConflict\.sentence/.test(qpage) && /termsConflictExplanation\(termsConflict\)/.test(qpage))
+  check('quote page: the owner is told nothing was changed for them',
+    /Nothing has been changed for you/i.test(read('src/app/dashboard/quotes/[id]/page.tsx')))
+  check('quote page: no "send anyway" escape hatch',
+    !/send anyway/i.test(qpage))
+  const qlist = stripComments(read('src/components/quotes/QuoteList.tsx'))
+  check('bulk send passes the terms to the shared gate',
+    /canSendQuote\(q, termsText\)/.test(qlist)
+    && /sendBlockedReason\(sel\.selectedItems\[0\], termsText\)/.test(qlist))
+
+  // ── Detection: the CONFLICTS that must be caught ─────────────────────────
+  const GATED = PCT_ACCEPTED
+  const CONFLICTS: [string, GateQuote, string][] = [
+    ['deposit quote + "payment in full upon completion"', GATED,
+      'Payment in full is due upon completion of the work.'],
+    ['deposit quote + "no deposit is required"', GATED,
+      'No deposit is required. We invoice after the job.'],
+    ['deposit quote + "we do not require a deposit"', GATED,
+      'We do not require a deposit for residential work.'],
+    ['deposit quote + "no payment is due until the work is complete"', GATED,
+      'No payment is due until the work is complete.'],
+    ['deposit quote + "100% due on completion"', GATED,
+      '100% is due on completion.'],
+    ['deposit quote + "no upfront payment"', GATED,
+      'There is no upfront payment for any of our services.'],
+    ['NO-deposit quote + "a 50% deposit is required"', NONE,
+      'A 50% deposit is required before we schedule your job.'],
+    ['NO-deposit quote + "we require a deposit before booking"', NONE,
+      'We require a deposit before booking your date.'],
+  ]
+  for (const [name, q, terms] of CONFLICTS) {
+    const c = detectTermsTimingConflict(q, terms)
+    check(`CONFLICT caught — ${name}`, c !== null, `not detected in: "${terms}"`)
+    if (c) check(`…and quotes the sentence verbatim — ${name}`, terms.includes(c.sentence),
+      `returned "${c.sentence}" which is not a substring of the terms`)
+  }
+
+  // ── ⭐ FALSE POSITIVES: the ways honest terms talk about money ────────────
+  // This gate BLOCKS a send. Every one of these must pass through untouched, or
+  // an owner is stopped from doing business over wording that was fine.
+  const HARMLESS: [string, GateQuote, string][] = [
+    ['deposit quote + "the balance is due upon completion" (the TRUE other half)', GATED,
+      'A deposit secures your booking. The balance is due upon completion.'],
+    ['deposit quote + balance wording alone', GATED,
+      'The remaining balance is due on completion of the work.'],
+    ['deposit quote + correctly documented deposit', GATED,
+      'A 50% deposit is required before we schedule. Payment of the total is due on completion.'],
+    ['NO-deposit quote + hedged deposit ("may be required")', NONE,
+      'A deposit may be required for larger projects.'],
+    ['NO-deposit quote + hedged ("we can request a deposit on some jobs")', NONE,
+      'For some jobs we can request a deposit up front.'],
+    ['NO-deposit quote + "deposits are non-refundable" (asserts no timing)', NONE,
+      'Deposits are non-refundable once work has been scheduled.'],
+    ['deposit quote + payment methods', GATED,
+      'We accept cash, cheque and e-transfer. Please make cheques payable to the company.'],
+    ['deposit quote + Net-30 wording on the INVOICE', GATED,
+      'Invoices are payable within 30 days of the invoice date.'],
+    ['deposit quote + cancellation policy', GATED,
+      'Please give 24 hours notice to cancel or reschedule a visit.'],
+    ['deposit quote + warranty wording', GATED,
+      'All work is guaranteed for 30 days after completion.'],
+    ['NO-deposit quote + "no payment is due until the work is complete" (AGREES)', NONE,
+      'No payment is due until the work is complete.'],
+    ['deposit quote + empty terms', GATED, '   '],
+    ['NO-deposit quote + late-fee wording', NONE,
+      'Overdue accounts are subject to a 2% monthly late fee.'],
+  ]
+  for (const [name, q, terms] of HARMLESS) {
+    const c = detectTermsTimingConflict(q, terms)
+    check(`NO false positive — ${name}`, c === null,
+      c ? `wrongly flagged "${c.sentence}"` : '')
+  }
+
+  // The gate itself, end to end.
+  const sendable = { total: 2700, customer_id: 'c1', deposit_type: 'percent', deposit_value: 50 }
+  check('sendBlockedReason BLOCKS a contradicting quote',
+    sendBlockedReason(sendable, 'No deposit is required.') === 'terms_contradict_timing')
+  check('sendBlockedReason passes a compatible one',
+    sendBlockedReason(sendable, 'The balance is due upon completion.') === null)
+  check('…and omitting the terms never invents a block',
+    sendBlockedReason(sendable) === null)
+  check('the older blocks still win first (price/customer before terms)',
+    sendBlockedReason({ total: 0, customer_id: 'c1', deposit_type: 'percent', deposit_value: 50 },
+      'No deposit is required.') === 'no_price'
+    && sendBlockedReason({ total: 2700, customer_id: null }, 'No deposit is required.') === 'no_customer')
+  check('the block has plain words that name the fix',
+    /Terms & Conditions/i.test(sendBlockedLabel('terms_contradict_timing'))
+    && /before sending/i.test(sendBlockedLabel('terms_contradict_timing')))
+  check('the explanation never proposes replacement wording',
+    !/(change it to|use this|replace with|suggested wording|we.ve updated)/i.test(
+      termsConflictExplanation({ claim: 'no_money_before_work', sentence: 'x', configured: 'deposit_before_scheduling' })))
 }
 
 console.log(failures > 0 ? `\n✗ ${failures} FAILURE(S)` : '\n✓ all payment-timing-copy checks passed')

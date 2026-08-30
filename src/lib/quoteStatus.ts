@@ -1,5 +1,9 @@
 import type { Quote, QuoteStatus } from '@/types'
 import { parseLocalDate } from '@/lib/utils'
+// THE terms-vs-configuration detector. Lives beside the payment engines because
+// it is a claim about payment timing; consumed here because the send gate is
+// where a contradiction has to stop.
+import { detectTermsTimingConflict } from '@/lib/payments/termsTimingConflict'
 
 // ── Quote expiry ─────────────────────────────────────────────────────────────
 // THE single place "has this quote expired?" is decided — the exact shape
@@ -113,30 +117,61 @@ export function markSentPatch(
 // Pure and reason-bearing, the shape lib/comms/reach.ts established: it owns the
 // REASON, so every surface can explain the refusal identically instead of each
 // inventing its own message.
-export type SendableQuote = { total?: number | null; customer_id?: string | null }
+export type SendableQuote = {
+  total?: number | null; customer_id?: string | null
+  // The scheduling-deposit rule, so the gate can compare what this quote is
+  // CONFIGURED to do against what the owner's terms TELL the customer. Optional
+  // because most callers pass a projection; absent = no rule = nothing to
+  // contradict, which is the same answer the deposit engines give.
+  deposit_type?: string | null; deposit_value?: number | string | null
+  accepted_price?: number | string | null
+}
 
-export type SendBlock = 'no_price' | 'no_customer'
+export type SendBlock = 'no_price' | 'no_customer' | 'terms_contradict_timing'
 
-/** Why this quote cannot be sent — null when it can. */
-export function sendBlockedReason(q: SendableQuote): SendBlock | null {
+/**
+ * Why this quote cannot be sent — null when it can.
+ *
+ * `termsText` is the owner's free-text Terms & Conditions, which print on the
+ * quote and which the customer must now agree to before accepting. Passing it
+ * enables the payment-timing contradiction check; omitting it simply skips that
+ * check, so an older call site is never broken — but every real send door passes
+ * it, and verify:payment-timing-copy pins that they do.
+ *
+ * ⛔ The terms are READ here and never rewritten, and they never change what is
+ * owed or when. See lib/payments/termsTimingConflict.
+ */
+export function sendBlockedReason(q: SendableQuote, termsText?: string | null): SendBlock | null {
   // A customerless quote can't be delivered, chased or shown in a portal. Four such
   // rows exist live, one with work already scheduled.
   if (!q.customer_id) return 'no_customer'
   // `null` (no price) and `0` are both blocked, and deliberately share a branch: to a
   // customer receiving it, "$0.00" and "no price" are the same broken document.
   if (q.total == null || Number(q.total) <= 0) return 'no_price'
+  // Last, because it is the only one that needs the quote to be otherwise
+  // sendable to matter: a priceless quote's terms are not the owner's problem yet.
+  if (termsText && detectTermsTimingConflict(
+    { status: 'draft', total: q.total, accepted_price: q.accepted_price ?? null,
+      deposit_type: q.deposit_type ?? null, deposit_value: q.deposit_value ?? null },
+    termsText,
+  )) return 'terms_contradict_timing'
   return null
 }
 
-export function canSendQuote(q: SendableQuote): boolean {
-  return sendBlockedReason(q) === null
+export function canSendQuote(q: SendableQuote, termsText?: string | null): boolean {
+  return sendBlockedReason(q, termsText) === null
 }
 
 /** Plain words for the block — what to DO, not what went wrong. */
 export function sendBlockedLabel(r: SendBlock): string {
   return r === 'no_price'
     ? 'This quote has no price yet — add one before sending it.'
-    : 'This quote has no customer linked — add one so it can be sent and followed up.'
+    : r === 'terms_contradict_timing'
+      // Deliberately short here; the quote page renders the offending sentence
+      // and the full explanation beside it (termsConflictExplanation). A list
+      // row needs the verdict, not the essay.
+      ? 'Your Terms & Conditions contradict this quote’s deposit — fix one of them before sending.'
+      : 'This quote has no customer linked — add one so it can be sent and followed up.'
 }
 
 // ── Who actually moves a quote through its life ──────────────────────────────
