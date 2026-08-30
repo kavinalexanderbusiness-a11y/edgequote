@@ -72,6 +72,7 @@
     "verify:crew-assignments": "tsx scripts/verify-crew-assignments.ts",
     "verify:field-reliability": "tsx scripts/verify-field-reliability.ts",
     "verify:recurrence": "tsx scripts/verify-recurrence.ts",
+    "verify:unpriced-work": "tsx scripts/verify-unpriced-work.ts",
     "verify:dedup": "tsx scripts/verify-dedup.ts",
     "verify:dedup-contract": "tsx scripts/verify-dedup-contract.ts",
     "verify:route": "tsx scripts/verify-route.ts",

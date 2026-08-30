@@ -50,6 +50,7 @@ import type { LeadResponseReport } from '@/lib/leadResponse'
 import type { ServiceSeasons } from '@/lib/seasons'
 import type { FeeSettings } from '@/lib/invoiceTotals'
 import type { InvoiceStatus, Quote } from '@/types'
+import { sumQuoteAmounts } from '@/lib/pricingState'
 
 export type PriorityKind =
   | 'leads' | 'unpaid' | 'unscheduled' | 'missed'
@@ -350,7 +351,7 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
   const gateOf = (q: Quote) => schedulingGate(q, i.quoteDepositRows?.[q.id] ?? [])
   const readyToSchedule = acceptedUnscheduled.filter(q => !gateBlocksScheduling(q, gateOf(q)))
   const waitingOnDeposit = acceptedUnscheduled.filter(q => gateBlocksScheduling(q, gateOf(q)))
-  const acceptedTotal = readyToSchedule.reduce((s, q) => s + Number(q.total || 0), 0)
+  const acceptedTotal = sumQuoteAmounts(readyToSchedule).total
   if (readyToSchedule.length > 0) {
     // Biggest first: within one tier the engine already ranks by money, so the
     // quote it opens is the one whose slipping costs most. `?quote=` opens the
@@ -445,7 +446,7 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
     // leads engine's oldest-first and compareFollowUp's oldest-anchor).
     const top = [...quoteDrafts].sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')))[0]
     const named = displayName(top?.customer_name)
-    const draftQuoteTotal = quoteDrafts.reduce((s, q) => s + Number(q.total || 0), 0)
+    const draftQuoteTotal = sumQuoteAmounts(quoteDrafts).total
     // Whole days since creation, same construction as the followups row's
     // "quiet N days" — a timestamp difference, not a date-string slice (slicing
     // a timestamptz to its UTC date then comparing locally drifts at midnight).
@@ -477,7 +478,12 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
   const custById: Record<string, ReachCustomer> = {}
   for (const c of customers) custById[c.id] = c
   const followups = quotes.filter(needsFollowUp)
-  const sumTotals = (qs: Quote[]) => qs.reduce((s, q) => s + Number(q.total || 0), 0)
+  // ⛔ WAS a local "Number(q.total || 0)" reduce — one of NINE copies of that
+  // expression in this codebase, each adding a silent zero for every unpriced
+  // quote. One summer now (lib/pricingState), which also reports how many
+  // records it had to leave out so a caller cannot take the money without the
+  // caveat.
+  const sumTotals = (qs: Quote[]) => sumQuoteAmounts(qs).total
   const chaseable = followups.filter(q => q.customer_id && canChaseCustomer(custById[q.customer_id]))
   const blocked = followups.filter(q => !q.customer_id || !canChaseCustomer(custById[q.customer_id]))
   const chaseableTotal = sumTotals(chaseable)
