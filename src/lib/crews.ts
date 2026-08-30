@@ -15,6 +15,7 @@ import { Crew, Technician, TechnicianStatus, DispatchNote, Job, CrewMembershipCh
 import { DEFAULT_JOB_MIN } from '@/lib/route'
 import { DayStatusRow, dayStartTime } from '@/lib/dayStatus'
 import { assigneeColumns, UNASSIGNED, type Assignee } from '@/lib/crewAssignment'
+import { withoutFixtures } from '@/lib/fixtureData'
 
 // ── Crew palette ─────────────────────────────────────────────────────────────
 // Distinct HUES (not the 6 semantic tones — those mean status/alarm). Hex is
@@ -297,10 +298,27 @@ export const TECHNICIAN_SELECT = 'id, created_at, updated_at, user_id, crew_id, 
 // button. That handling was simply unreachable for this class of failure. Throwing
 // also means the caller's `Promise.all` rejects before any setter runs, so the last
 // known-good data stays on screen instead of being replaced by a confident blank.
-export async function loadCrews(supabase: SupabaseClient, userId: string): Promise<Crew[]> {
+// ── ⭐⭐ FIXTURE ROWS LEAVE HERE, AT THE DOOR ───────────────────────────────
+// The production audit found fixture crews and fixture workers on live
+// surfaces — visible in dispatch, and counted as available capacity, which
+// silently inflates how much work the business believes it can take.
+//
+// The fix belongs in THESE two functions and not at the call sites. They are the
+// canonical doors (the reader contract above says so), there are two of them,
+// and a filter repeated across every screen that shows a person is a filter that
+// will be forgotten on the next screen. ⛔ Same reasoning as the surface-token
+// rule: fix the door, not the two hundred rooms.
+//
+// The predicate is lib/fixtureData.isFixtureName — Tier 1 only, so a real
+// employee called "Demo" is never hidden from the person who hired them.
+export async function loadCrews(
+  supabase: SupabaseClient, userId: string,
+  opts: { includeFixtures?: boolean } = {},
+): Promise<Crew[]> {
   const { data, error } = await supabase.from('crews').select(CREW_SELECT).eq('user_id', userId).order('sort_order').order('created_at')
   if (error) throw new Error(error.message)
-  return (data as Crew[] | null) ?? []
+  const rows = (data as Crew[] | null) ?? []
+  return opts.includeFixtures ? rows : withoutFixtures(rows, c => c.name)
 }
 
 // THE technician reader. Active roster by default — archiving means "off the
@@ -315,9 +333,15 @@ export async function loadCrews(supabase: SupabaseClient, userId: string): Promi
 //     the payroll maths reading as changed when only the roster did.
 // Rule of thumb: showing people → default. Counting money or replaying history →
 // includeArchived.
+// ⭐ `includeFixtures` deliberately MIRRORS `includeArchived` above rather than
+// inventing a second idiom: both answer "does this reader want the working
+// roster, or the complete historical one?", and a caller already has to think
+// about that question here. The rule of thumb is the same one — showing people
+// or counting capacity → default; replaying MONEY that was already paid →
+// include, because a pay run rebuilt from a filtered roster reports false drift.
 export async function loadTechnicians(
   supabase: SupabaseClient, userId: string,
-  opts: { includeArchived?: boolean } = {},
+  opts: { includeArchived?: boolean; includeFixtures?: boolean } = {},
 ): Promise<Technician[]> {
   let q = supabase.from('technicians').select(TECHNICIAN_SELECT).eq('user_id', userId)
   if (!opts.includeArchived) q = q.is('archived_at', null)
@@ -326,7 +350,8 @@ export async function loadTechnicians(
   // empty roster — on the pay surfaces that is the same silent underpay the
   // includeArchived warning describes, arrived at by a different route.
   if (error) throw new Error(error.message)
-  return (data as Technician[] | null) ?? []
+  const rows = (data as Technician[] | null) ?? []
+  return opts.includeFixtures ? rows : withoutFixtures(rows, t => t.name)
 }
 
 // Removing someone from the roster. This REPLACES the delete that used to be

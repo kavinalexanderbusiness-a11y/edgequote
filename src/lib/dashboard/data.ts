@@ -14,6 +14,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Invoice, Quote } from '@/types'
 import { needsFollowUp } from '@/lib/followup'
+import { isAnyFixtureName } from '@/lib/fixtureData'
 import { invoiceBalance, displayInvoiceStatus, collectedBetween, dayBoundsIso } from '@/lib/payments/ledger'
 import type { ReachCustomer } from '@/lib/comms/reach'
 import { computeLeadsNeedingResponse, type LeadConvRow, type LeadQuoteRow } from '@/lib/leadResponse'
@@ -260,8 +261,23 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   if (failure) throw new Error(`Dashboard could not load — ${failure}`)
 
   const settings = (setRes.data as SettingsRow | null)
-  const invoices = invRes.rows
-  const quotes = quoteRes.rows
+  // ── ⭐⭐ Fixture rows leave the BOOK before anything counts money ───────────
+  // Guard and harness runs create real quotes and real invoices in whatever
+  // tenant they run in, and they tag them unmistakably — the quote NUMBER
+  // (VERIFY-ADDONS-…, ZZ-S81-…) and the customer NAME (“Automated guard fixture
+  // — safe to delete”). Left in, they land in pipeline value, Owed/Collected,
+  // win rate, the follow-up queue and every reactivation nudge — the owner is
+  // then chasing a customer who does not exist for money that was never owed.
+  //
+  // Filtered HERE, at the one loader every dashboard/Growth/analytics surface
+  // reads through, rather than in each engine downstream: this function is the
+  // single door, and a rule repeated per engine is a rule that will be missing
+  // from the next one.
+  //
+  // ⛔ Tier 1 markers only (lib/fixtureData). A real customer called “Test
+  // Valley Farms” keeps every dollar they are worth.
+  const invoices = invRes.rows.filter(r => !isAnyFixtureName(r.invoice_number, r.customer_name))
+  const quotes = quoteRes.rows.filter(q => !isAnyFixtureName(q.quote_number, q.customer_name))
   const jobs = jobRes.rows
   const recurrences = (recRes.data as RRecurrence[]) || []
   const recById: Record<string, RRecurrence> = {}
