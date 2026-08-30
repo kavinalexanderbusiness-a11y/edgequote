@@ -436,10 +436,15 @@ console.log('\n■ 5. terms_text — detected, blocked, NEVER obeyed and NEVER r
     ['NO-deposit quote + hedged deposit ("may be required")', NONE,
       'A deposit may be required for larger projects.'],
     // ⚠️ The GATED branch has its OWN hedge guard, and nothing exercised it —
-    // every hedged case above tests the no-deposit branch only. Mutation #28
-    // deleted the gated hedge line and the guard stayed green.
+    // every hedged case above tests the no-deposit branch only. The sentence has
+    // to be one that WOULD match a conflict pattern and is spared only by the
+    // hedge: "no deposit … required" trips NO_MONEY_UPFRONT, and "typically" is
+    // the single word standing between it and a blocked send. My first attempt
+    // here ("we may not require a deposit") matched no pattern at all, so
+    // mutation #28 still passed — a harmless case only proves a guard when the
+    // guard is the thing making it harmless.
     ['deposit quote + hedged no-deposit wording', GATED,
-      'For some smaller jobs we may not require a deposit.'],
+      'No deposit is typically required for a job of this size.'],
     // ⚠️ Likewise the REMAINDER guard: this is the only sentence that BOTH
     // matches a total-after-work phrase ("due in full") AND is scoped to the
     // balance, so it is the only one that proves the guard does anything.
