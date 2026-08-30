@@ -376,8 +376,13 @@ console.log('\n■ 5. terms_text — detected, blocked, NEVER obeyed and NEVER r
   check('the send gate knows the block', /'terms_contradict_timing'/.test(qs)
     && /detectTermsTimingConflict/.test(qs))
   const qpage = stripComments(read('src/app/dashboard/quotes/[id]/page.tsx'))
+  // ⚠️ Anchored to the ASSIGNMENT, not to the call shape. A bare
+  // /sendBlockedReason\(quote, settings\?\.terms_text\)/ was satisfied by the
+  // PDF-path call three hundred lines below, so dropping the terms from THIS
+  // door — the message composer, the one that actually reaches the customer —
+  // left the guard green. Mutation #25 found it.
   check('quote page: message send passes the terms',
-    /sendBlockedReason\(quote, settings\?\.terms_text\)/.test(qpage))
+    /const sendBlock = sendBlockedReason\(quote, settings\?\.terms_text\)/.test(qpage))
   check('quote page: the PDF path is gated too (it prints BOTH statements)',
     /sendBlockedReason\(quote, settings\?\.terms_text\) === 'terms_contradict_timing'/.test(qpage))
   check('quote page: the offending sentence is shown to the owner verbatim',
@@ -430,6 +435,17 @@ console.log('\n■ 5. terms_text — detected, blocked, NEVER obeyed and NEVER r
       'A 50% deposit is required before we schedule. Payment of the total is due on completion.'],
     ['NO-deposit quote + hedged deposit ("may be required")', NONE,
       'A deposit may be required for larger projects.'],
+    // ⚠️ The GATED branch has its OWN hedge guard, and nothing exercised it —
+    // every hedged case above tests the no-deposit branch only. Mutation #28
+    // deleted the gated hedge line and the guard stayed green.
+    ['deposit quote + hedged no-deposit wording', GATED,
+      'For some smaller jobs we may not require a deposit.'],
+    // ⚠️ Likewise the REMAINDER guard: this is the only sentence that BOTH
+    // matches a total-after-work phrase ("due in full") AND is scoped to the
+    // balance, so it is the only one that proves the guard does anything.
+    // Mutation #29 deleted it and nothing failed.
+    ['deposit quote + "remaining balance due IN FULL upon completion"', GATED,
+      'The remaining balance is due in full upon completion.'],
     ['NO-deposit quote + hedged ("we can request a deposit on some jobs")', NONE,
       'For some jobs we can request a deposit up front.'],
     ['NO-deposit quote + "deposits are non-refundable" (asserts no timing)', NONE,
