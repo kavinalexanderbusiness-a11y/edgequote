@@ -55,9 +55,10 @@ apply path this repo uses):
 | --- | --- | --- |
 | 1 | `lock table public.quotes in share row exclusive mode` | conflicts with the `ROW EXCLUSIVE` lock every INSERT/UPDATE/DELETE holds, so it **waits for in-flight quote writes to finish** and blocks new ones. Reads are untouched — the app keeps rendering. |
 | 2 | seed `document_number_claims` from `select distinct … from quotes` | no quote write can be in flight, so the snapshot is complete. `DISTINCT` collapses each duplicated pair into one claim and touches no row. |
-| 3 | create the claim + release triggers | same transaction, so they are visible to every writer that was waiting on the lock. |
+| 2b | seed `document_number_claim_holders` from **every** row — *not* distinct | claims are per NUMBER, holders are per ROW. ⛔ Without this the first Undo of any pre-existing quote is refused and the quote is lost. |
+| 3 | create the claim trigger (ONE; there is deliberately no release counterpart) | same transaction, so it is visible to every writer that was waiting on the lock. |
 | 4 | `v_cutoff := clock_timestamp()`, then create the partial unique index | taken **after** the lock, so no row that could still be written predates it. |
-| 5 | commit | releases the lock. The first write to proceed already fires the triggers. |
+| 5 | commit | releases the lock. The first write to proceed already fires the trigger. |
 
 There is no gap between "seeded" and "enforced" because they are the same commit.
 
@@ -100,7 +101,9 @@ filename.**
         it expects  (re-measure before forcing anything)
       • any function still allocates quote numbers with MAX()+1
       • any existing quote is not in the claim registry
-      • either claim trigger is missing
+      • any existing quote is not a HOLDER of its own number (Undo would break)
+      • the claim trigger is missing
+      • a release trigger from an earlier draft is still attached
     A refusal here is recoverable. A silent partial apply is not.
 
 4 · VERIFY ON THE LIVE DATABASE (read-only)
@@ -110,6 +113,11 @@ filename.**
 
     select count(*) from public.document_number_claims;
       → one row per DISTINCT quote number: 114 quotes − 2 duplicate rows = 112.
+
+    select count(*) from public.document_number_claim_holders;
+      → one row per QUOTE: 114. Claims are per number, holders are per row —
+        that difference is what keeps the two duplicate pairs representable and
+        what lets every existing quote still be restored after a delete.
 
     select * from public.document_number_counters;
       → one row per (tenant, prefix, year), next_value one past that series'
@@ -123,9 +131,11 @@ filename.**
 
 5 · DEPLOY THE APP
     The six creation doors now call lib/quoteNumber.allocateQuoteNumber().
-    The two undo-restore doors deliberately do NOT — they re-insert a row that
-    keeps the number it was issued, and the release trigger is what lets that
-    work.
+    The two undo-restore doors deliberately do NOT — they re-insert the row with
+    its ORIGINAL id and created_at, and being a recorded HOLDER of that number is
+    what lets them succeed. ⛔ Both read the row with select(*); narrowing either
+    one would drop created_at and a restored historical duplicate pair would then
+    collide inside the stage-1 index.
 
 6 · CONFIRM
     Create one quote in the deployed app. Its number must continue the existing
@@ -138,27 +148,36 @@ filename.**
 
 | step reached | how to undo |
 | --- | --- |
-| after 3, before 5 | Drop the two triggers. The old app is unaffected — it never called the allocator. The registry and counters can stay; they are inert without the triggers. |
-| after 5 | Redeploy the previous app build. ⛔ Do **not** drop the triggers as well: the old build mints `MAX()+1`, and the triggers are the only thing stopping it duplicating again. |
+| after 3, before 5 | Drop the claim trigger. The old app is unaffected — it never called the allocator. The registry, holders and counters can stay; they are inert without the trigger. ⛔ Do not DELETE claim rows: if the trigger is ever re-attached they are what still protects history. |
+| after 5 | Redeploy the previous app build. ⛔ Do **not** drop the claim trigger as well: the old build mints `MAX()+1`, and the trigger is the only thing stopping it duplicating again. |
 
-⭐ The migration adds two tables, one column, four functions, two triggers and one
-index. It **alters no existing column and rewrites no existing row**, so there is
+⭐ The migration adds three tables, one column, three functions, ONE trigger and
+one index. It **alters no existing column and rewrites no existing row**, so there is
 nothing to restore from backup.
 
 ---
 
 ## What is NOT in this landing
 
-**Stage 2 — the full `UNIQUE (user_id, quote_number)` — stays commented out.** It
-cannot be created while production holds `EPS-2026-0008` ×2 and `EPS-2026-0009`
-×2, and renumbering a customer-facing document is the owner's decision.
+**Stage 2 — the full `UNIQUE (user_id, quote_number)` — is PARKED BY OWNER
+DECISION (2026-08-31), not pending.** `EPS-2026-0008` and `EPS-2026-0009` are not
+to be renumbered, and these four rows are not to be touched:
 
-⭐ **Nothing is unprotected while it waits.** Stage 1 already refuses any new
-quote that reuses any number the tenant has ever held, including the historical
-duplicates and including a caller that backdates `created_at` to slip past the
-partial index. Stage 2 only collapses two barriers into one.
+```
+41259e2e…   84e3176e…      EPS-2026-0008
+638e99d2…   192cdcbc…      EPS-2026-0009
+```
 
-The evidence for that decision is in
+⭐⭐ **Nothing is waiting on that, and no cleanup is owed.** Stage 1 refuses any
+quote that reuses any number this tenant has ever held — including the historical
+duplicates, including after a quote is deleted or renumbered, and including a
+caller that backdates `created_at` to slip past the partial index. Stage 2 would
+only collapse two barriers into one by retiring the partial index in favour of a
+full `UNIQUE` on `quotes`. That is a simplification, not a protection, and it is
+not worth renaming a document a customer already holds.
+
+⛔ **Do not create cleanup work for tidiness.** The evidence behind the decision
+is in
 [`docs/quote-number-duplicate-decision.md`](./quote-number-duplicate-decision.md),
 regenerated read-only by `scripts/report-duplicate-quote-numbers.ts`.
 
@@ -169,7 +188,24 @@ regenerated read-only by `scripts/report-duplicate-quote-numbers.ts`.
 `src/lib/invoicing.ts nextInvoiceNumber()` carries the **identical defect** —
 read every `invoice_number`, take the max trailing digits, add one, no year
 scope — and `invoices` has no unique constraint either. Another session owns
-invoicing, so it is out of scope here. `document_number_counters.kind` and
-`document_number_claims.kind` exist so invoices can adopt this allocator without
-a second counter engine; both currently `check (kind in ('quote'))`, which is one
-line to widen.
+invoicing, so it is out of scope here. `document_number_counters.kind`,
+`document_number_claims.kind` and `document_number_claim_holders.kind` exist so
+invoices can adopt this allocator without a second counter engine; all three
+currently `check (kind in ('quote'))`, which is one line each to widen.
+
+---
+
+## The one property to preserve if this is ever changed
+
+**A claim is permanent.** Nothing may delete a row from
+`document_number_claims`, and nothing may attach a trigger that frees a claim
+when a quote is deleted or renumbered. An earlier draft of this migration did
+exactly that in order to keep Undo working, and it silently downgraded the
+invariant from *"a number this tenant has ever used"* to *"a number currently in
+use"* — which fails on `create → delete → a stale caller supplies the number`.
+
+Undo works because the restored row carries the **same id**, and that id is
+recorded in `document_number_claim_holders`. ⛔ That table must never gain a
+foreign key to `quotes`: its whole purpose is to outlive the row it describes,
+and an `ON DELETE CASCADE` would delete precisely the history that stops the
+number being reissued — silently, wearing the clothes of referential integrity.

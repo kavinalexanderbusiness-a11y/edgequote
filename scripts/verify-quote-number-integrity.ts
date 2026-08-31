@@ -385,11 +385,22 @@ check(`the restore paths are still restore-only (found ${restoreDoors.length})`,
 // This is not theory — the real-Postgres guard failed on precisely this until it
 // modelled the restore faithfully, and it only works because both doors read the
 // row with select('*').
-for (const f of ['src/app/dashboard/quotes/page.tsx', 'src/components/quotes/QuoteList.tsx']) {
-  const code = stripTs(src(f.replace(/\//g, sep)))
-  check(`${f} loads whole rows, so a restore keeps its id and created_at`,
-    /\.select\('\*'\)/.test(code),
-    'a narrowed select would silently drop created_at (and possibly id) from the restore')
+// ⚠️⚠️ AND IT MUST BE THE READ OF `quotes`, NOT ANY select('*') IN THE FILE. The
+// first version of this looked for `.select('*')` anywhere in QuoteList.tsx and
+// passed — on a `from('quote_services').select('*')`, which has nothing to do
+// with restoring a quote. A mutation that narrowed the real read survived against
+// it. BOTH restore paths are fed from src/app/dashboard/quotes/page.tsx:
+//   • the list query  → QuoteList's bulk-delete Undo re-inserts those row objects
+//   • the by-id read  → the single-quote delete Undo
+// QuoteList has no quotes read of its own, so there is exactly one file to pin.
+{
+  const restoreFile = join('src', 'app', 'dashboard', 'quotes', 'page.tsx')
+  const code = stripTs(src(restoreFile))
+  const quoteReads = [...code.matchAll(/from\('quotes'\)\s*(?:\n\s*)?\.select\(([^)]*)\)/g)].map(m => m[1].trim())
+  check('both quote reads that feed a restore load whole rows',
+    quoteReads.length >= 2 && quoteReads.every(sel => sel === "'*'"),
+    `src/app/dashboard/quotes/page.tsx reads quotes as: ${quoteReads.join(' | ') || '(none found)'}\n      `
+    + 'a narrowed select drops created_at, and a restored historical duplicate pair then collides inside the stage-1 partial index')
 }
 
 // ── The database doors ─────────────────────────────────────────────────────

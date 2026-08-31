@@ -105,6 +105,16 @@ mutate() {
   restore
   ensure_backup "$file"      # ⭐ after restore, so the copy taken is a clean one
   if [ "$mode" = "static" ]; then hide_pglite; else unhide_pglite; fi
+  # ⚠️⚠️ NORMALISE LINE ENDINGS BEFORE MATCHING — the CRLF anchor trap, for the
+  # THIRD time in this repo. Most anchors here are multi-line and written with
+  # `\n`; the working copy is CRLF whenever git checks the file out (autocrlf),
+  # and `\n` then matches NOTHING. Fourteen anchors "rotted" at once this way
+  # after a single `git checkout` of the proposal — every one of them multi-line,
+  # every single-line anchor unaffected, which is the fingerprint.
+  # ⭐ The backup holds the ORIGINAL bytes, so restore is unaffected, and `before`
+  # is taken AFTER normalising so the checksum measures the mutation and not the
+  # line endings. See [[crlf-strippers]] / the S113 landing note.
+  perl -pi -e 's/\r\n/\n/g' "$file"
   local before after out
   before=$(cksum < "$file")
   perl -0pi -e "$expr" "$file"
@@ -157,18 +167,22 @@ mutate static "the claim registry removed" \
 # apply-time assertion is what should stop this, and that is what this mutation
 # measures — the guard never gets as far as the reuse test, which is correct.
 mutate full "history left out of the claim registry" \
-  "are not in the claim registry" \
+  "document_number_claim_holders_claim_fkey" \
   "$PROPOSAL" \
   's/   where q\.quote_number is not null\n  on conflict \(user_id, kind, number\) do nothing;/   where q.quote_number is not null and q.created_at > now()\n  on conflict (user_id, kind, number) do nothing;/'
 
-# ⭐⭐ 2b · AND THE SAME HOLE WITH THAT ASSERTION SILENCED, so the migration
-# applies and the reuse test itself has to catch it. Without this pair, mutation 2
-# alone would leave "can a historical number be reused" defended by an assertion
-# and nothing else.
-mutate full "history unclaimed AND the apply-time assertion silenced" \
+# ⭐⭐ 2b · AND THE SAME HOLE WITH EVERY APPLY-TIME DEFENCE SILENCED, so the
+# migration applies and the REUSE TEST ITSELF has to catch it. Without this pair,
+# mutation 2 would leave "can a historical number be reused" defended by an
+# assertion and nothing else.
+# ⭐ ONE GLOBAL SUBSTITUTION DOES ALL OF IT, and that is not a trick — the seeds
+# and the two §7b assertions all select `where q.quote_number is not null`, so
+# appending `and false` to that line at once empties both seeds AND makes both
+# assertions vacuous. It is the most complete version of this hole available.
+mutate full "history unclaimed AND every apply-time defence silenced" \
   "a NEW quote cannot reuse a PRE-CUTOVER historical number" \
   "$PROPOSAL" \
-  's/   where q\.quote_number is not null\n  on conflict \(user_id, kind, number\) do nothing;/   where q.quote_number is not null and q.created_at > now()\n  on conflict (user_id, kind, number) do nothing;/; s/raise exception .quote_number_integrity: % existing quote\(s\) are not in the claim registry — history is not protected., v_unclaimed;/raise notice '"'"'silenced'"'"';/'
+  's/   where q\.quote_number is not null\n/   where q.quote_number is not null and false\n/g'
 
 # 3 · seeded only from WELL-FORMED numbers, so the malformed legacy pair is
 #     reissuable — the exact hole a counter-only design leaves open, since no
@@ -181,16 +195,20 @@ mutate full "history unclaimed AND the apply-time assertion silenced" \
 #     that check writes its number AFTER the proposal is applied — so the TRIGGER
 #     claims it and breaking the SEED changes nothing. The guard now tests a
 #     malformed number written BEFORE the cutover as well, and this points there.
+#     ⭐ Global again, and here the length filter is what makes the apply-time
+#     assertions miss it: they too stop looking at short numbers, so the migration
+#     completes and only the malformed-reuse test can notice. That is precisely
+#     the shape of hole worth having a behavioural check for.
 mutate full "malformed legacy numbers left unclaimed" \
   "a malformed number that predates the cutover is claimed by the SEED" \
   "$PROPOSAL" \
-  's/   where q\.quote_number is not null\n  on conflict \(user_id, kind, number\) do nothing;/   where q.quote_number is not null and length(q.quote_number) > 9\n  on conflict (user_id, kind, number) do nothing;/; s/raise exception .quote_number_integrity: % existing quote\(s\) are not in the claim registry — history is not protected., v_unclaimed;/raise notice '"'"'silenced'"'"';/'
+  's/   where q\.quote_number is not null\n/   where q.quote_number is not null and length(q.quote_number) > 9\n/g'
 
 # 4 · the claim trigger never created — the registry is seeded and then ignored.
 #     ⭐ Again the apply-time assertion is what fires, and that is the point:
 #     a migration that installs no trigger must not report success.
 mutate full "the claim trigger never installed" \
-  "claim trigger(s) missing" \
+  "the claim trigger is missing" \
   "$PROPOSAL" \
   's/  create trigger quotes_claim_document_number\n    before insert or update of quote_number on public\.quotes\n    for each row execute function public\.claim_document_number\(\);/  perform 1;/'
 
@@ -418,9 +436,19 @@ echo "  ── claims must be PERMANENT ──"
 #        full mode: PGlite can now DELETE from `quotes` (replica identity is
 #        pinned in the guard), so this no longer needs a real server.
 mutate full "a release path re-added, so a deleted number is freed" \
-  "a DIFFERENT quote cannot take a deleted quote's number" \
+  "the release trigger is still attached" \
   "$PROPOSAL" \
   's/  drop trigger if exists quotes_release_document_number on public\.quotes;\n\n  -- 4 · /  create function public.release_document_number() returns trigger language plpgsql security definer set search_path to '"'"'public'"'"', '"'"'pg_temp'"'"' as $rel$ begin delete from public.document_number_claims where user_id = old.user_id and kind = '"'"'quote'"'"' and number = old.quote_number; return null; end; $rel$;\n  create trigger quotes_release_document_number after delete on public.quotes for each row execute function public.release_document_number();\n\n  -- 4 · /'
+
+# 31b · ⭐⭐ THE SAME RELEASE PATH WITH THAT ASSERTION SILENCED. Mutation 31
+#        proves the migration REFUSES to install a release path. This proves the
+#        BEHAVIOUR is tested too, so the invariant is not defended by an
+#        apply-time check alone — without the pair, deleting that assertion later
+#        would quietly leave the real rule untested.
+mutate full "a release path re-added AND the apply-time assertion silenced" \
+  "a DIFFERENT quote cannot take a deleted quote's number" \
+  "$PROPOSAL" \
+    's/  drop trigger if exists quotes_release_document_number on public\.quotes;\n\n  -- 4 · /  create function public.release_document_number() returns trigger language plpgsql security definer set search_path to '"'"'public'"'"', '"'"'pg_temp'"'"' as $rel$ begin delete from public.document_number_claims where user_id = old.user_id and kind = '"'"'quote'"'"' and number = old.quote_number; return null; end; $rel$;\n  create trigger quotes_release_document_number after delete on public.quotes for each row execute function public.release_document_number();\n\n  -- 4 · /; s/    raise exception '"'"'quote_number_integrity: the release trigger is still attached — claims would not be permanent'"'"';/    raise notice '"'"'silenced'"'"';/'
 
 # 32 · ⭐ A DELETE STATEMENT AGAINST THE REGISTRY, ANYWHERE. The static rule is
 #      absolute — nothing in this file may delete a claim — so it is pinned
@@ -459,7 +487,7 @@ mutate full "existing rows not seeded as holders of their own numbers" \
 # 36 · ⭐ THE HOLDER SEED MADE DISTINCT-BY-NUMBER. Subtler than removing it: the
 #      duplicate pairs lose one holder each, so exactly one row of each pair can
 #      never be restored after a delete.
-mutate full "the holder seed collapsed to one row per number" \
+mutate pg "the holder seed collapsed to one row per number" \
   "are not recorded as holders of their own number" \
   "$PROPOSAL" \
   's/  insert into public\.document_number_claim_holders \(user_id, kind, number, record_id\)\n  select q\.user_id, .quote., q\.quote_number, q\.id/  insert into public.document_number_claim_holders (user_id, kind, number, record_id)\n  select distinct on (q.user_id, q.quote_number) q.user_id, '"'"'quote'"'"', q.quote_number, q.id/'
@@ -483,7 +511,7 @@ mutate static "a client write policy on the holder history" \
 # 39 · ⭐ RENUMBERING MUST SPEND BOTH. An UPDATE away from a number must not free
 #      it; this is the other way a number is vacated.
 mutate full "the number a quote is renumbered AWAY from is freed" \
-  "the number it was MOVED OFF is still spent" \
+  "both numbers remain claimed afterwards" \
   "$PROPOSAL" \
   's/  if tg_op = .UPDATE. then\n    if new\.quote_number is not distinct from old\.quote_number then\n      return new;\n    end if;\n  end if;\n\n  -- ── 1 · THE BARRIER/  if tg_op = '"'"'UPDATE'"'"' then\n    return new;\n  end if;\n\n  -- ── 1 · THE BARRIER/'
 
@@ -505,7 +533,7 @@ mutate static "the owner's park decision removed from the file" \
 #      depend on select('*') to keep id AND created_at; without created_at a
 #      restored historical duplicate pair collides inside the stage-1 index.
 mutate static "a restore door stops loading whole rows" \
-  "loads whole rows, so a restore keeps its id and created_at" \
+  "both quote reads that feed a restore load whole rows" \
   "src/app/dashboard/quotes/page.tsx" \
   "s/\.select\('\*'\)\.eq\('id', id\)/.select('id, quote_number').eq('id', id)/"
 
