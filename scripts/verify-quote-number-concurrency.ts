@@ -137,12 +137,18 @@ async function main() {
 
   const server = await startServer()
   if (!server) {
-    console.log('  ⏭  SKIPPED — no real PostgreSQL available.')
+    console.log('  ⏭  COULD NOT RUN — no real PostgreSQL available.')
     console.log('     This guard is the ONLY proof of serialisation under contention;')
     console.log('     verify:quote-number-integrity runs on single-connection PGlite and')
     console.log('     deliberately does not claim it.')
     console.log('     npm i -D embedded-postgres    (or set QUOTE_NUMBER_PG_URL)\n')
-    return
+    // ⛔⛔ EXIT 2, NOT 0 — the same convention verify-schema uses, for the same
+    // reason. verify-all counts a 0 as PROOF. A guard whose whole subject is
+    // contention, reporting success because it could not attempt the test, is
+    // dead safety that reads as green — and this repo has already shipped two
+    // schema drifts through exactly that hole. 2 means "could not run" and is
+    // reported separately, never as a pass.
+    process.exit(2)
   }
 
   const { Client } = await import('pg')
