@@ -8,8 +8,8 @@
 --
 -- This file is the ONE starting point for a database. Applying it to an empty
 -- Postgres 17 database produces the production schema contract:
---   116 tables · 166 functions · 137 triggers · 374 policies
---   649 constraints · 297 standalone indexes · 7 storage buckets
+--   116 tables · 167 functions · 138 triggers · 374 policies
+--   650 constraints · 297 standalone indexes · 7 storage buckets
 --
 -- IT DOES NOT RESTORE DATA. Not one row. Rebuilding a working production system
 -- is: this file, THEN a backup restore, THEN storage objects, THEN env config.
@@ -193,7 +193,10 @@ create table if not exists public."business_settings" (
   "opening_bank_balance" numeric(12,2),
   "opening_balance_date" date,
   "opening_equity" numeric(12,2),
-  "timezone" text default 'America/Edmonton'::text not null
+  "timezone" text default 'America/Edmonton'::text not null,
+  "terms_payment_claim" text,
+  "terms_payment_claim_fingerprint" text,
+  "terms_payment_claim_version" integer
 );
 create table if not exists public."change_orders" (
   "id" uuid default extensions.uuid_generate_v4() not null,
@@ -1886,7 +1889,7 @@ create table if not exists public."worker_availability" (
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 3 · FUNCTIONS
--- 166 application functions, verbatim from pg_get_functiondef.
+-- 167 application functions, verbatim from pg_get_functiondef.
 -- Emitted BEFORE constraints: a CHECK constraint can call one, and the dependency
 -- is resolved when the constraint is added.
 -- SECURITY DEFINER + `set search_path` is not decoration here: these functions are
@@ -2833,6 +2836,23 @@ begin
   where id = new.conversation_id;
   return new;
 end; $function$;
+
+CREATE OR REPLACE FUNCTION public.business_settings_invalidate_terms_claim()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public'
+AS $function$
+begin
+  if new.terms_payment_claim is not null
+     and new.terms_payment_claim_fingerprint
+         is distinct from md5(btrim(coalesce(new.terms_text, ''))) then
+    new.terms_payment_claim := null;
+    new.terms_payment_claim_fingerprint := null;
+    new.terms_payment_claim_version := null;
+  end if;
+  return new;
+end;
+$function$;
 
 CREATE OR REPLACE FUNCTION public.can_provision_business()
  RETURNS boolean
@@ -6713,6 +6733,52 @@ begin
       using errcode = 'check_violation';
   end if;
 
+  -- ⭐⭐ S122 · TERMS MAY NOT CONTRADICT THE QUOTE'S CONFIGURED PAYMENT TIMING.
+  -- Reached by EVERY door that records consent (portal_accept_quote for the
+  -- customer, owner_record_customer_acceptance for owner-on-behalf), which is
+  -- why the gate lives here and not in either caller.
+  -- ⛔ owner_override_quote_status never reaches this function and is therefore
+  -- untouched: an administrative status correction still records NO evidence,
+  -- exactly as S121 intended.
+  if v_terms_required then
+    declare
+      v_claim text; v_claim_fp text; v_claim_ver integer;
+      v_live_fp text; v_requires_deposit boolean;
+    begin
+      select b.terms_payment_claim, b.terms_payment_claim_fingerprint, b.terms_payment_claim_version
+        into v_claim, v_claim_fp, v_claim_ver
+        from public.business_settings b where b.user_id = v_q.user_id limit 1;
+      v_live_fp := public.quote_terms_fingerprint(v_q.user_id);
+
+      -- FAIL CLOSED on anything but a trustworthy verdict for THESE EXACT terms.
+      -- The fingerprint is what un-trusts an old classification after a terms
+      -- edit; the version catches terms that never changed while our reading of
+      -- them did. ⛔ Never trust "a trigger ran last time".
+      if v_claim is null
+         or v_claim_fp is distinct from v_live_fp
+         or coalesce(v_claim_ver, 0) <> 1
+         or v_claim = 'ambiguous' then
+        raise exception 'these terms have not been reviewed against this quote''s payment schedule — the business needs to update the quote or its terms before this can be accepted'
+          using errcode = 'check_violation';
+      end if;
+
+      -- Does this quote actually ask for money before the work? Derived from
+      -- v_amount, the authorized value this function already computed, so a
+      -- no-charge quote (S114) can never be read as requiring a deposit.
+      v_requires_deposit := v_q.deposit_type is not null and coalesce(v_amount, 0) > 0;
+
+      -- BOTH directions. Half a detector is how this gate would have shipped.
+      if v_requires_deposit and v_claim = 'no_money_before_work' then
+        raise exception 'this quote requires a deposit before scheduling, but the terms in force tell the customer no money is due until the work is done — the business needs to update the quote or its terms'
+          using errcode = 'check_violation';
+      end if;
+      if not v_requires_deposit and v_claim = 'money_before_work' then
+        raise exception 'this quote asks for no deposit, but the terms in force tell the customer a deposit is required before the work starts — the business needs to update the quote or its terms'
+          using errcode = 'check_violation';
+      end if;
+    end;
+  end if;
+
   insert into public.quote_acceptances (
     user_id, quote_id, customer_id, accepted_at,
     kind, source, actor_type, actor_id, actor_label,
@@ -8057,7 +8123,7 @@ alter table public."suggestion_dismissals" add constraint "suggestion_dismissals
 alter table public."technicians" add constraint "technicians_id_user_key" UNIQUE (id, user_id);
 alter table public."worker_availability" add constraint "worker_availability_one_per_weekday" UNIQUE (technician_id, weekday);
 
--- check (210)
+-- check (211)
 alter table public."audit_events" add constraint "audit_events_action_check" CHECK (((char_length(action) >= 1) AND (char_length(action) <= 64)));
 alter table public."audit_events" add constraint "audit_events_actor_type_check" CHECK ((actor_type = ANY (ARRAY['owner'::text, 'worker'::text, 'customer'::text, 'system'::text])));
 alter table public."audit_events" add constraint "audit_events_entity_type_check" CHECK (((char_length(entity_type) >= 1) AND (char_length(entity_type) <= 32)));
@@ -8073,6 +8139,7 @@ alter table public."business_settings" add constraint "business_settings_ot_mult
 alter table public."business_settings" add constraint "business_settings_ot_weekly_range" CHECK (((ot_weekly_hours IS NULL) OR ((ot_weekly_hours > (0)::numeric) AND (ot_weekly_hours <= (168)::numeric))));
 alter table public."business_settings" add constraint "business_settings_pay_period_kind" CHECK ((pay_period = ANY (ARRAY['weekly'::text, 'biweekly'::text, 'semimonthly'::text, 'monthly'::text])));
 alter table public."business_settings" add constraint "business_settings_pay_week_start_range" CHECK (((pay_week_starts_on >= 0) AND (pay_week_starts_on <= 6)));
+alter table public."business_settings" add constraint "business_settings_terms_payment_claim_check" CHECK (((terms_payment_claim IS NULL) OR (terms_payment_claim = ANY (ARRAY['no_claim'::text, 'no_money_before_work'::text, 'money_before_work'::text, 'ambiguous'::text]))));
 alter table public."change_orders" add constraint "change_orders_amount_check" CHECK ((amount > (0)::numeric));
 alter table public."change_orders" add constraint "change_orders_decided_via_check" CHECK (((decided_via IS NULL) OR (decided_via = ANY (ARRAY['portal'::text, 'owner'::text]))));
 alter table public."change_orders" add constraint "change_orders_decided_via_present" CHECK (((status = ANY (ARRAY['approved'::text, 'declined'::text])) = (decided_via IS NOT NULL)));
@@ -8548,7 +8615,7 @@ alter table public."worker_availability" add constraint "worker_availability_use
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 5 · TRIGGERS
--- 137 triggers, including the two DEFERRABLE constraint triggers that
+-- 138 triggers, including the two DEFERRABLE constraint triggers that
 -- enforce quote-option/quote-service shape at commit time.
 -- ══════════════════════════════════════════════════════════════════════════
 
@@ -8558,6 +8625,8 @@ drop trigger if exists "business_settings_no_crew_owner" on public."business_set
 CREATE TRIGGER business_settings_no_crew_owner BEFORE INSERT ON public.business_settings FOR EACH ROW EXECUTE FUNCTION guard_business_settings_owner();
 drop trigger if exists "business_settings_updated_at" on public."business_settings";
 CREATE TRIGGER business_settings_updated_at BEFORE UPDATE ON public.business_settings FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+drop trigger if exists "trg_business_settings_invalidate_terms_claim" on public."business_settings";
+CREATE TRIGGER trg_business_settings_invalidate_terms_claim BEFORE INSERT OR UPDATE ON public.business_settings FOR EACH ROW EXECUTE FUNCTION business_settings_invalidate_terms_claim();
 drop trigger if exists "trg_audit_change_orders_insert" on public."change_orders";
 CREATE TRIGGER trg_audit_change_orders_insert AFTER INSERT ON public.change_orders FOR EACH ROW EXECUTE FUNCTION audit_change_orders();
 drop trigger if exists "trg_audit_change_orders_update" on public."change_orders";
@@ -10927,6 +10996,11 @@ grant execute on function public."booking_set_consent"(p_token text, p_quote_id 
 grant execute on function public."booking_set_consent"(p_token text, p_quote_id uuid, p_sms_opt_in boolean, p_email_opt_in boolean, p_prefs jsonb) to service_role;
 revoke all on function public."bump_conversation"() from public, anon, authenticated, service_role;
 grant execute on function public."bump_conversation"() to service_role;
+revoke all on function public."business_settings_invalidate_terms_claim"() from public, anon, authenticated, service_role;
+grant execute on function public."business_settings_invalidate_terms_claim"() to public;
+grant execute on function public."business_settings_invalidate_terms_claim"() to anon;
+grant execute on function public."business_settings_invalidate_terms_claim"() to authenticated;
+grant execute on function public."business_settings_invalidate_terms_claim"() to service_role;
 revoke all on function public."can_provision_business"() from public, anon, authenticated, service_role;
 grant execute on function public."can_provision_business"() to authenticated;
 grant execute on function public."can_provision_business"() to service_role;
@@ -11456,6 +11530,9 @@ comment on column public."business_settings"."ot_weekly_hours" is 'Hours in a WO
 comment on column public."business_settings"."pay_period" is 'weekly | biweekly | semimonthly | monthly. Drives the payroll summary window.';
 comment on column public."business_settings"."pay_period_anchor" is 'Any start date of a known period. Biweekly needs it to know WHICH two weeks; NULL falls back to the first pay_week_starts_on of 1970 (deterministic).';
 comment on column public."business_settings"."pay_week_starts_on" is '0=Sun..6=Sat. The OT WORK WEEK boundary — legally load-bearing, so it is explicit rather than assumed. Defaults to 1 (Mon) to match the existing timesheet week.';
+comment on column public."business_settings"."terms_payment_claim" is 'Normalized, quote-INDEPENDENT claim the terms make about WHEN money is due: no_claim | no_money_before_work | money_before_work | ambiguous. Written ONLY by the app''s canonical classifier (lib/payments/termsTimingConflict). NULL = never classified, treated as unclassified and fails closed at acceptance.';
+comment on column public."business_settings"."terms_payment_claim_fingerprint" is 'quote_terms_fingerprint() of the EXACT terms_text this claim was computed from. The claim is trusted only while this equals the live fingerprint — this is what un-trusts an old verdict after a post-send terms edit.';
+comment on column public."business_settings"."terms_payment_claim_version" is 'TERMS_CLASSIFIER_VERSION that produced the claim. Terms can stay byte-identical while our reading of them improves, which a fingerprint cannot see. An older version reads as unclassified.';
 comment on column public."change_orders"."decided_via" is 'portal = the customer decided it themselves; owner = the owner recorded a decision taken elsewhere. Never inferred - no surface may imply a customer tapped approve when they did not.';
 comment on column public."crew_media"."message_id" is 'NULL = office reference material for the visit (the original meaning). Set = an attachment on that crew_messages row. Deleting the message takes its attachments with it.';
 comment on column public."crew_messages"."event_type" is 'NULL = a person spoke. Non-null = a system event (schedule_changed). Do not dump every mutation here: a system event may only join a conversation that already exists.';

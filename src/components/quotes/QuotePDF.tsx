@@ -7,6 +7,9 @@ import type { Quote, QuoteService, QuoteOption, BusinessSettings } from '@/types
 import { serviceLineTotals } from '@/lib/quoteServices'
 import { activeOption, hasOptions, sortedOptions } from '@/lib/quoteOptions'
 import { pdfLogoUrl } from '@/lib/photos'
+// THE payment-timing reader. The document states the configuration it was
+// generated from; it never composes its own wording about when money is due.
+import { paymentTiming, pdfTimingLine } from '@/lib/payments/paymentTiming'
 
 const COLORS = {
   green: '#00C896',
@@ -54,6 +57,12 @@ const styles = StyleSheet.create({
   grandValue: { fontSize: 16, fontFamily: 'Helvetica-Bold', color: COLORS.green },
 
   notesBox: { marginTop: 24, backgroundColor: COLORS.bgSoft, borderRadius: 6, padding: 14 },
+  // The payment-timing statement. Given the soft panel treatment rather than the
+  // Terms' fine print: this is the answer to "when do I pay", not boilerplate,
+  // and on a deposit-gated quote it is the second most consequential sentence on
+  // the page after the total itself.
+  timingBox: { marginTop: 20, backgroundColor: COLORS.bgSoft, borderRadius: 6, padding: 12 },
+  timingText: { fontSize: 9, color: COLORS.ink, lineHeight: 1.5 },
   termsBox: { marginTop: 18 },
   termsText: { fontSize: 8, color: COLORS.muted, lineHeight: 1.5 },
 
@@ -118,6 +127,12 @@ export function QuoteDocument({ quote, settings, services, options }: QuotePDFPr
   // answer the one engine gives every other surface, so the paper and the portal
   // cannot disagree about which price the quote currently stands at.
   const leading = activeOption(opts, quote.selected_option_id)
+  // ⭐ When this quote's money is due. basisSettled is false on an options quote
+  // with no choice made — a PERCENT deposit has no settled price to be taken of
+  // yet, and printing the leading option's figure onto paper the customer keeps
+  // would state a number for an option they may not pick. Exactly the rule the
+  // grand-total label above already follows.
+  const timing = paymentTiming(quote, { basisSettled: !(isOptionsQuote && !chosen) })
   // ⛔ NEVER fall back to quotes.subtotal. That column is `generated always as
   // (hours * crew_size * rate)` — the exact fabrication RUN-2026-07-16e ripped out
   // of quotes.total after it reached real customers ("When no price was entered,
@@ -398,6 +413,23 @@ export function QuoteDocument({ quote, settings, services, options }: QuotePDFPr
               ? 'To pick your option and approve it, open the secure link in your email.'
               : 'To approve this quote, open the secure link in your email.'}
           </Text>
+        </View>
+
+        {/* ── When your money is due ───────────────────────────────────────────
+            ⭐ The document the customer KEEPS said nothing at all about payment
+            timing. On a quote carrying a scheduling-deposit rule that silence was
+            not neutral: the reader filled it with the ordinary case, and the
+            portal then asked them for half the job at the moment they approved.
+            One sentence, from lib/payments/paymentTiming — the same reader the
+            portal card, Home and the approval dialog render, so the paper and
+            the screen cannot say different things.
+
+            ⛔ No arithmetic in this document (the rule verify:deposit-documents
+            enforces on the invoice PDF): every figure in the line arrives already
+            computed by the engine. */}
+        <View style={styles.timingBox}>
+          <Text style={styles.sectionTitle}>Payment</Text>
+          <Text style={styles.timingText}>{pdfTimingLine(timing)}</Text>
         </View>
 
         {/* Ongoing maintenance options */}

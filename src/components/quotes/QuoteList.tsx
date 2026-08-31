@@ -40,6 +40,12 @@ interface QuoteListProps {
   /** Quick-notes saved a row's notes — hand the patch up so the parent's copy
    *  (which feeds the CSV export) stays current without a refetch. */
   onNotesSaved?: (id: string, patch: { notes: string | null; internal_notes: string | null }) => void
+  /** The owner's Terms & Conditions. The bulk-send gate compares them against
+   *  each quote's deposit rule (lib/payments/termsTimingConflict) and refuses a
+   *  quote whose terms contradict it. Optional: absent skips that check, which
+   *  is the same answer an owner with no terms gets — this gate guards against
+   *  the owner's own stale wording, so it must never fail closed on a slow read. */
+  termsText?: string | null
 }
 
 const STATUS_FILTERS: { value: '' | QuoteStatus; label: string }[] = [
@@ -53,7 +59,7 @@ const STATUS_FILTERS: { value: '' | QuoteStatus; label: string }[] = [
   { value: 'declined', label: 'Declined' },
 ]
 
-export function QuoteList({ quotes, onDelete, reachById, onNotesSaved }: QuoteListProps) {
+export function QuoteList({ quotes, onDelete, reachById, onNotesSaved, termsText }: QuoteListProps) {
   const router = useRouter()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'' | QuoteStatus>('')
@@ -128,11 +134,11 @@ export function QuoteList({ quotes, onDelete, reachById, onNotesSaved }: QuoteLi
     // — it also catches the priceless ones, which this used to send happily. Now that
     // the DB no longer fabricates a total (RUN-2026-07-16e), an unpriced quote reads
     // $0.00, and $0.00 is not a document you send to a customer.
-    const targets = sel.selectedItems.filter(canSendQuote)
+    const targets = sel.selectedItems.filter(q => canSendQuote(q, termsText))
     const blocked = sel.selectedItems.length - targets.length
     if (!targets.length) {
       toast.error(sel.selectedItems.length === 1
-        ? sendBlockedLabel(sendBlockedReason(sel.selectedItems[0])!)
+        ? sendBlockedLabel(sendBlockedReason(sel.selectedItems[0], termsText)!)
         : 'None of the selected quotes can be sent — they need a price and a linked customer.')
       return
     }
