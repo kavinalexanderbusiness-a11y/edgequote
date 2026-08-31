@@ -614,34 +614,132 @@ async function main() {
       `public booking resolves the tenant from its token and must keep working: ${definerPath}`)
 
     // ═══════════════════════════════════════════════════════════════════════
-    console.log('\n══ 7 · undo still works, and duplicates still cannot ═══════════════════\n')
+    console.log('\n══ 7 · a claim is PERMANENT, and Undo still works ══════════════════════\n')
     // ═══════════════════════════════════════════════════════════════════════
-    // ⭐ The two delete paths offer a full-row Undo that RE-INSERTS the row with
-    // its ORIGINAL number. A claim that outlived its row would turn a data-
-    // integrity feature into a data-loss bug.
-    const undoNum = (await admin.query('select public.allocate_quote_number($1) as v', [A])).rows[0].v
-    await admin.query(mkQuote(A, undoNum, CUST_A))
-    await admin.query(`delete from public.quotes where user_id=$1 and quote_number=$2`, [A, undoNum])
-    const restored = await (async () => {
-      try { await admin.query(mkQuote(A, undoNum, CUST_A)); return '' }
-      catch (e: any) { return String(e?.message) }
-    })()
-    check('UNDO · a deleted quote can be restored with its original number',
-      restored === '', `the claim must be released when nothing holds it: ${restored.slice(0, 200)}`)
+    // ⭐⭐ THE INVARIANT UNDER TEST: a number this tenant has EVER used cannot go
+    // to a DIFFERENT quote — not after the quote is deleted, not after it is
+    // renumbered. Undo works not because deletion frees the number, but because
+    // the restored row has the SAME id and that id is on record as a holder.
+    //
+    // ⛔ An earlier draft released the claim once no row carried the number. That
+    // passed a test that looked exactly like the first one below and was still
+    // wrong, because it never asked the question that matters: can somebody ELSE
+    // have it now? Every case here names which quote id is asking.
 
-    // ⭐⭐ But deleting ONE row of the historical duplicate pair must NOT free the
-    // number the OTHER row is still showing a customer.
-    const dupIds = (await admin.query(
-      `select id from public.quotes where user_id=$1 and quote_number=$2 order by created_at`,
-      [A, `EPS-${YEAR}-0008`])).rows
-    await admin.query(`delete from public.quotes where id=$1`, [dupIds[1].id])
-    const stillClaimed = await (async () => {
-      try { await admin.query(mkQuote(A, `EPS-${YEAR}-0008`, CUST_A)); return 'IT SUCCEEDED' }
-      catch (e: any) { return String(e?.message) }
-    })()
-    check('UNDO · deleting one of a duplicate pair does NOT free the surviving number',
-      /already been used by this business/i.test(stillClaimed),
-      `one row still displays EPS-${YEAR}-0008: ${stillClaimed.slice(0, 200)}`)
+    // Distinct ids, chosen here so the tests can talk about identity explicitly.
+    const ID1 = 'aaaaaaa1-0000-4000-8000-000000000001'
+    const ID2 = 'aaaaaaa2-0000-4000-8000-000000000002'
+    const mkQuoteId = (id: string, user: string, num: string, cust: string) =>
+      `insert into public.quotes (id, user_id, quote_number, customer_name, address, service_type, customer_id)
+         values ('${id}', '${user}', '${num}', 'C', 'A', 'S', '${cust}')`
+    const tryQ = async (sql: string) => {
+      try { await admin.query(sql); return '' } catch (e: any) { return String(e?.message ?? 'error') }
+    }
+
+    // ── 1·2·3 · delete does NOT free the number for a different quote ───────
+    const permNum = (await admin.query('select public.allocate_quote_number($1) as v', [A])).rows[0].v as string
+    check('PERMANENT · (1) quote A is created with a freshly allocated number',
+      (await tryQ(mkQuoteId(ID1, A, permNum, CUST_A))) === '')
+    await admin.query('delete from public.quotes where id=$1', [ID1])
+    const afterDelete = Number((await admin.query(
+      'select count(*)::int n from public.quotes where id=$1', [ID1])).rows[0].n)
+    check('PERMANENT · (2) quote A is deleted — the row is really gone',
+      afterDelete === 0)
+    const stranger = await tryQ(mkQuoteId(ID2, A, permNum, CUST_A))
+    check('PERMANENT · (3) a DIFFERENT quote id cannot take the deleted number',
+      /already been used by this business/i.test(stranger),
+      `this is the whole defect: deletion must not hand the number to someone else. Got: ${stranger.slice(0, 200) || 'IT SUCCEEDED'}`)
+    const claimSurvived = Number((await admin.query(
+      `select count(*)::int n from public.document_number_claims where user_id=$1 and kind='quote' and number=$2`,
+      [A, permNum])).rows[0].n)
+    check('PERMANENT · the claim outlived the row that created it',
+      claimSurvived === 1, 'a claim is never released')
+
+    // ── 4 · the SAME id may come back ───────────────────────────────────────
+    const restored = await tryQ(mkQuoteId(ID1, A, permNum, CUST_A))
+    check('PERMANENT · (4) the SAME quote id restores with its original number',
+      restored === '',
+      `Undo re-inserts the same id; it satisfies the invariant rather than excepting it: ${restored.slice(0, 200)}`)
+
+    // ── 5·6·7·8·9 · a historical duplicate pair, deleted and restored ───────
+    // ⚠️⚠️ CAPTURE created_at AND RESTORE IT. Both Undo paths in the app read the
+    // row with `select('*')` and re-insert the whole object, so the restored row
+    // keeps its ORIGINAL created_at. Modelling the restore without it is not a
+    // detail — a historical duplicate pair restored with created_at = now() lands
+    // INSIDE the stage-1 partial index and the second row is refused by
+    // quotes_user_qnum_new_unique. This test failed exactly that way first, and
+    // the test was wrong, not the schema. verify:quote-number-integrity pins that
+    // both restore doors still select '*', because this depends on it.
+    const dupRows = (await admin.query(
+      `select id, created_at from public.quotes where user_id=$1 and quote_number=$2 order by created_at`,
+      [A, `EPS-${YEAR}-0008`])).rows as { id: string; created_at: string }[]
+    const dupIds = dupRows
+    const mkQuoteAt = (id: string, user: string, num: string, cust: string, at: string) =>
+      `insert into public.quotes (id, user_id, quote_number, customer_name, address, service_type, customer_id, created_at)
+         values ('${id}', '${user}', '${num}', 'C', 'A', 'S', '${cust}', '${new Date(at).toISOString()}')`
+    check('PERMANENT · (5) the historical duplicate pair is representable — one claim, two holders',
+      dupIds.length === 2
+      && Number((await admin.query(
+        `select count(*)::int n from public.document_number_claim_holders
+          where user_id=$1 and kind='quote' and number=$2`, [A, `EPS-${YEAR}-0008`])).rows[0].n) === 2,
+      'per-number claims and per-row holders is exactly what makes a duplicate pair expressible')
+
+    await admin.query('delete from public.quotes where id=$1', [dupIds[0].id])
+    const oneGone = await tryQ(mkQuoteId(ID2, A, `EPS-${YEAR}-0008`, CUST_A))
+    check('PERMANENT · (6) delete only A — B survives and the number stays claimed',
+      /already been used by this business/i.test(oneGone), oneGone.slice(0, 200) || 'IT SUCCEEDED')
+
+    await admin.query('delete from public.quotes where id=$1', [dupIds[1].id])
+    const bothGone = await tryQ(mkQuoteId(ID2, A, `EPS-${YEAR}-0008`, CUST_A))
+    check('PERMANENT · (7) delete A AND B — the number is STILL claimed',
+      /already been used by this business/i.test(bothGone),
+      `no row carries it and it is still spent, which is the difference between "ever used" and "in use": ${bothGone.slice(0, 200) || 'IT SUCCEEDED'}`)
+
+    const restoreA = await tryQ(mkQuoteAt(dupRows[0].id, A, `EPS-${YEAR}-0008`, CUST_A, dupRows[0].created_at))
+    check('PERMANENT · (8) restore A — allowed', restoreA === '', restoreA.slice(0, 200))
+    const restoreB = await tryQ(mkQuoteAt(dupRows[1].id, A, `EPS-${YEAR}-0008`, CUST_A, dupRows[1].created_at))
+    check('PERMANENT · (9) restore B — allowed, and the pair is whole again',
+      restoreB === '',
+      `both are recorded holders of this number, and an Undo carries the original created_at: ${restoreB.slice(0, 200)}`)
+    check('PERMANENT · both duplicate rows are back, unrenumbered',
+      Number((await admin.query(
+        `select count(*)::int n from public.quotes where user_id=$1 and quote_number=$2`,
+        [A, `EPS-${YEAR}-0008`])).rows[0].n) === 2)
+
+    // ── 10·11·12 · renumbering spends BOTH numbers, forever ─────────────────
+    const numX = permNum
+    const numY = (await admin.query('select public.allocate_quote_number($1) as v', [A])).rows[0].v as string
+    check('PERMANENT · (10a) quote A moves from X to Y',
+      (await tryQ(`update public.quotes set quote_number='${numY}' where id='${ID1}'`)) === '')
+    const strangerX = await tryQ(mkQuoteId(ID2, A, numX, CUST_A))
+    check('PERMANENT · (10b) the number it LEFT is still spent',
+      /already been used by this business/i.test(strangerX),
+      `updating away from a number must not free it: ${strangerX.slice(0, 200) || 'IT SUCCEEDED'}`)
+    const strangerY = await tryQ(mkQuoteId(ID2, A, numY, CUST_A))
+    check('PERMANENT · (10c) and the number it MOVED TO is spent too',
+      /already been used by this business/i.test(strangerY), strangerY.slice(0, 200) || 'IT SUCCEEDED')
+    const revert = await tryQ(`update public.quotes set quote_number='${numX}' where id='${ID1}'`)
+    check('PERMANENT · (11) the SAME quote may revert from Y back to X',
+      revert === '',
+      `A is a recorded holder of X, so this is a return, not a reuse: ${revert.slice(0, 200)}`)
+    const strangerXAgain = await tryQ(mkQuoteId(ID2, A, numX, CUST_A))
+    check('PERMANENT · (12) a different quote id still cannot have X',
+      /already been used by this business/i.test(strangerXAgain),
+      strangerXAgain.slice(0, 200) || 'IT SUCCEEDED')
+
+    // ── and there is no release path at all ────────────────────────────────
+    const releaseTrigger = Number((await admin.query(
+      `select count(*)::int n from pg_trigger
+        where tgname = 'quotes_release_document_number'
+          and tgrelid = 'public.quotes'::regclass and not tgisinternal`)).rows[0].n)
+    check('PERMANENT · no release trigger is attached to quotes',
+      releaseTrigger === 0, 'a release trigger is the defect, not a leftover')
+    const releaseFn = Number((await admin.query(
+      `select count(*)::int n from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+        where n.nspname='public' and p.proname='release_document_number'`)).rows[0].n)
+    check('PERMANENT · and the release function does not exist',
+      releaseFn === 0, 'left dormant it would be re-attached by the next person who saw the trigger name')
+
 
     // ═══════════════════════════════════════════════════════════════════════
     console.log('\n══ 8 · the final state is coherent ═════════════════════════════════════\n')

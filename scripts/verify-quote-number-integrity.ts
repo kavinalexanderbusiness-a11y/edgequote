@@ -38,7 +38,7 @@
 // green this session exists to remove.
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { splitStatements, loadPGlite, substitutePlatformStatements } from './lib/pg-sql'
 // ⭐ THE REAL SEAM, IMPORTED AND EXECUTED. `maxNumericSuffix` is the function
 // that actually computed the old number, it is unchanged by this session, and it
@@ -153,12 +153,50 @@ check('claiming is an INSERT against the primary key, never a SELECT EXISTS',
 check('the claim trigger advances the counter past any number it did not mint',
   /greatest\(public\.document_number_counters\.next_value, excluded\.next_value\)[\s\S]{0,400}return new;/i.test(pSchema),
   'without the watermark bump, an old deployment writing MAX()+1 leaves the counter BEHIND the data during the cutover')
-check('a claim is released only when no row still holds the number',
-  /create or replace function public\.release_document_number[\s\S]*?not exists \([\s\S]{0,160}from public\.quotes[\s\S]{0,200}delete from public\.document_number_claims/i.test(pSchema),
-  'Undo re-inserts a deleted quote with its ORIGINAL number, and a surviving duplicate must keep its claim')
+// ⭐⭐⭐ CLAIMS ARE PERMANENT. This is the invariant, and it is not the same as
+// "no live row currently carries this number". An earlier draft RELEASED a claim
+// once the last row carrying it was deleted, which silently downgraded the
+// promise to "cannot be reused while some row still holds it" — and that fails on
+// a sequence as ordinary as create → delete → a stale caller supplies the number.
+check('⛔ nothing in the proposal ever DELETES a claim',
+  !/delete\s+from\s+public\.document_number_claims\b/i.test(pSchema),
+  'a released claim is a forgotten number; permanence is the whole invariant')
+check('⛔ there is no release function and no release trigger',
+  !/create\s+or\s+replace\s+function\s+public\.release_document_number/i.test(pSchema)
+  && !/create\s+trigger\s+quotes_release_document_number/i.test(pSchema),
+  'a release path is the defect itself, not a leftover')
+check('the old release path is DROPPED, not merely absent',
+  /drop trigger if exists quotes_release_document_number on public\.quotes/i.test(pSchema)
+  && /drop function if exists public\.release_document_number\(\)/i.test(pSchema),
+  'if an earlier version of this migration ran, its trigger is still attached and still freeing claims')
+check('the migration REFUSES to finish if the release trigger is still attached',
+  /the release trigger is still attached — claims would not be permanent/i.test(proposal))
+
+// ⭐⭐ PERMANENCE IS MADE COMPATIBLE WITH UNDO BY IDENTITY, not by expiry.
+check('a holder relation records WHICH record has held each number',
+  /create table if not exists public\.document_number_claim_holders\s*\(/i.test(pSchema)
+  && /constraint document_number_claim_holders_pkey primary key \(user_id, kind, number, record_id\)/i.test(pSchema),
+  'without it, permanence and Undo cannot both be true')
+check('⛔⛔ the holder history has NO foreign key to quotes',
+  !/references public\.quotes/i.test(pSchema),
+  'an FK to quotes — cascading or not — deletes exactly the history that stops the number being reissued')
+check('a restore is allowed only for the SAME record id',
+  /and record_id = new\.id/i.test(pSchema)
+  && /has already been used by this business/i.test(pSchema),
+  'the exception is identity, not recency: a different quote id must still be refused')
+check('every existing row is seeded as a holder, NOT distinct',
+  /insert into public\.document_number_claim_holders \(user_id, kind, number, record_id\)[\s\S]{0,260}select q\.user_id, 'quote', q\.quote_number, q\.id/i.test(pSchema),
+  'claims are per NUMBER and holders are per ROW — that difference is what makes a duplicate pair representable and what lets an existing quote be restored')
+check('the migration REFUSES to finish if any row is not a holder of its own number',
+  /are not recorded as holders of their own number/i.test(proposal),
+  'without the holder seed, the first Undo of any pre-existing quote is refused and the quote is lost')
+
 check('the registry has no client write policy',
   !/create policy[^;]*document_number_claims[^;]*for (insert|update|delete)/i.test(pSchema),
   'a client that can delete a claim can free a number and reissue it')
+check('the holder history has no client write policy',
+  !/create policy[^;]*document_number_claim_holders[^;]*for (insert|update|delete)/i.test(pSchema),
+  'a client that can delete a holder row can strand its own quote, or free a number')
 
 check('a UNIQUE index protects (user_id, quote_number) as defence in depth',
   /create unique index quotes_user_qnum_new_unique on public\.quotes \(user_id, quote_number\)/i.test(pSchema),
@@ -166,11 +204,20 @@ check('a UNIQUE index protects (user_id, quote_number) as defence in depth',
 check('the barrier is tenant-scoped, not global',
   /\(user_id, quote_number\)/i.test(pSchema) && !/unique[^;]*\(quote_number\)\s*[;)]/i.test(pSchema),
   'two unrelated businesses may both hold ABC-2026-0001')
-// ⭐ Stage 2 must stay inert until the owner resolves the historical pairs.
-check('stage 2 is present but NOT executed',
-  /stage 2, deliberately NOT executed/i.test(proposal)
+// ⭐⭐ STAGE 2 IS PARKED BY OWNER DECISION (2026-08-31), not pending work. The
+// four rows are named in the file so nobody "tidies them up" later, and the guard
+// pins that they are still not being touched.
+check('stage 2 is PARKED by owner decision, and not executed',
+  /stage 2 — PARKED BY OWNER DECISION/i.test(proposal)
+  && /DO NOT RENUMBER EPS-2026-0008 OR\s*\n?--\s*EPS-2026-0009/i.test(proposal)
   && !/^\s*alter table public\.quotes\s*\n?\s*add constraint quotes_user_quote_number_key/im.test(pSchema),
-  'a full UNIQUE cannot be created while EPS-2026-0008/0009 are duplicated')
+  'the owner ruled: do not renumber, do not create cleanup work for tidiness')
+check('the four historical rows are named so they are not "tidied" later',
+  /41259e2e/.test(proposal) && /84e3176e/.test(proposal)
+  && /638e99d2/.test(proposal) && /192cdcbc/.test(proposal))
+check('the file says nothing is waiting on stage 2',
+  /AND NOTHING IS WAITING ON IT/i.test(proposal),
+  'history is protected by the permanent registry, with no renumbering at all')
 check('stage 2 REPORTS duplicates rather than modifying them',
   /Cannot add UNIQUE \(user_id, quote_number\) — duplicates remain/i.test(proposal)
   && /does not append "-2", does not mint a\s*\n?--\s*replacement/i.test(proposal))
@@ -193,8 +240,18 @@ check('seeding and enforcement are the SAME transaction',
   'a gap between "seeded" and "enforced" is a gap a duplicate fits through')
 check('the migration REFUSES to finish if any quote is unclaimed',
   /are not in the claim registry — history is not protected/i.test(proposal)
-  && /claim trigger\(s\) missing/i.test(proposal),
+  && /the claim trigger is missing/i.test(proposal),
   'a migration that silently half-applied is worse than one that stopped')
+// ⚠️⚠️ THE CRLF ANCHOR TRAP, which cost S113 an apply and hit S122 again. The
+// anchors below are multi-line; their newlines are `\n` ESCAPES inside E'' on one
+// physical line, so they are LF whatever THIS file's line endings are. What is
+// not under this file's control is the STORED body: a function loaded from a CRLF
+// source comes back from pg_get_functiondef() with CRLF, and an LF anchor then
+// matches zero times. Normalising the haystack costs nothing and removes the
+// whole class. ⛔ The anchor is never loosened.
+check('the in-place swap normalises line endings at transport',
+  (pSchema.match(/v_fn := replace\(v_fn, chr\(13\), ''\)/g) ?? []).length >= 2,
+  'both book_service and submit_booking read a live body that may be CRLF; an LF anchor would match 0 times and the apply would refuse')
 check('the file no longer asks S106 to edit a timestamp',
   !/must be edited to the apply date/i.test(proposal),
   'the instruction is gone because the thing it pointed at is gone')
@@ -317,6 +374,24 @@ check(`the restore paths are still restore-only (found ${restoreDoors.length})`,
   `restore doors:\n      ${restoreDoors.join('\n      ')}\n      `
   + 'a restore that starts allocating would mint a second number for a quote that already has one')
 
+// ⭐⭐ AND A RESTORE MUST CARRY THE WHOLE ROW — id AND created_at.
+//   • the ID is what makes the restore legal at all: the claim registry allows a
+//     spent number only for a record already on file as a holder of it. A restore
+//     that minted a new id would be refused, and the quote would be unrecoverable.
+//   • CREATED_AT matters for the two historical duplicate pairs. Both rows share
+//     one number; restoring them with created_at = now() would drop them INSIDE
+//     the stage-1 partial index, where they collide with each other. With their
+//     original timestamps they stay outside it, exactly as they are today.
+// This is not theory — the real-Postgres guard failed on precisely this until it
+// modelled the restore faithfully, and it only works because both doors read the
+// row with select('*').
+for (const f of ['src/app/dashboard/quotes/page.tsx', 'src/components/quotes/QuoteList.tsx']) {
+  const code = stripTs(src(f.replace(/\//g, sep)))
+  check(`${f} loads whole rows, so a restore keeps its id and created_at`,
+    /\.select\('\*'\)/.test(code),
+    'a narrowed select would silently drop created_at (and possibly id) from the restore')
+}
+
 // ── The database doors ─────────────────────────────────────────────────────
 const baseFile = readdirSync(MIGRATIONS).filter(f => /baseline/.test(f)).sort().pop()!
 const baseline = stripSql(src(join(MIGRATIONS, baseFile)))
@@ -395,6 +470,20 @@ async function behaviour() {
     if (!await applyFile(f, src(join(MIGRATIONS, f)))) return
   }
   console.log('  ✓ applied the prelude and every migration in version order')
+
+  // ⚠️⚠️ A HARNESS-ENVIRONMENT ADJUSTMENT, NAMED RATHER THAN HIDDEN. The baseline
+  // adds `quotes` to the `supabase_realtime` publication and `quotes.total` is a
+  // GENERATED column; on a from-zero engine that combination makes Postgres refuse
+  // every UPDATE and DELETE on the table. Production does both every day, so this
+  // is a difference between a rebuilt database and the live project, not a defect
+  // in the schema under test.
+  // ⛔ It is not cosmetic. Without it the renumber tests below pass VACUOUSLY —
+  // the UPDATE fails, the number never moves, and "the number it was moved off is
+  // still spent" reports green having tested nothing. That is exactly the false
+  // green this session exists to remove, so the fix is applied and the reason is
+  // written down.
+  try { await exec('alter table public.quotes replica identity using index quotes_pkey') }
+  catch { /* older engines: the renumber checks below will fail loudly, not silently */ }
 
   const A = '00000000-0000-0000-0000-0000000000aa'
   const B = '00000000-0000-0000-0000-0000000000bb'
@@ -618,6 +707,60 @@ async function behaviour() {
   check('BARRIER · a malformed legacy number is protected too',
     /already been used by this business/i.test(malformedReuse),
     `EPS-0077 has no year segment: ${malformedReuse.slice(0, 200) || 'IT SUCCEEDED'}`)
+
+  // ⭐⭐ RENUMBERING SPENDS BOTH NUMBERS, PERMANENTLY. PGlite cannot DELETE from
+  // `quotes` on this schema, so the delete/restore half of permanence lives in
+  // verify:quote-number-concurrency — but UPDATE works here, and an update is the
+  // other way a number is vacated. Moving a quote off a number must NOT hand that
+  // number to anybody else.
+  const RENUM = 'cccccccc-0000-4000-8000-00000000000c'
+  const numX = await alloc(A)
+  const numY = await alloc(A)
+  await exec(`insert into public.quotes (id, user_id, quote_number, customer_name, address, service_type, customer_id)
+                values ('${RENUM}', '${A}', '${numX}', 'C','A','S','11111111-1111-1111-1111-111111111111')`)
+  const moved = await refuses(`update public.quotes set quote_number = '${numY}' where id = '${RENUM}'`)
+  check('PERMANENT · a quote may be renumbered to a free number',
+    moved === '', moved.slice(0, 200))
+  const strangerTakesX = await refuses(mkQuote(A, numX, '11111111-1111-1111-1111-111111111111'))
+  check('PERMANENT · the number it was MOVED OFF is still spent',
+    /already been used by this business/i.test(strangerTakesX),
+    `updating away from a number must never free it: ${strangerTakesX.slice(0, 200) || 'IT SUCCEEDED'}`)
+  const reverted = await refuses(`update public.quotes set quote_number = '${numX}' where id = '${RENUM}'`)
+  check('PERMANENT · but the SAME quote may revert to a number it held before',
+    reverted === '',
+    `it is a recorded holder of ${numX}, so this is a return and not a reuse: ${reverted.slice(0, 200)}`)
+  const claimsKept = await q(
+    `select count(*)::int n from public.document_number_claims where user_id='${A}' and number in ('${numX}','${numY}')`)
+  check('PERMANENT · both numbers remain claimed afterwards',
+    Number(claimsKept.rows[0].n) === 2, 'a vacated number is spent, not recycled')
+
+  // ⭐⭐⭐ AND THE CASE THE WHOLE REVISION EXISTS FOR: DELETE MUST NOT FREE A
+  // NUMBER. An earlier draft released the claim once no row carried the number,
+  // which turned "a number this tenant has ever used" into "a number currently in
+  // use" — a materially weaker promise that fails on create → delete → a stale
+  // caller supplies the number.
+  const GONE = 'dddddddd-0000-4000-8000-00000000000d'
+  const OTHER = 'eeeeeeee-0000-4000-8000-00000000000e'
+  const numDel = await alloc(A)
+  await exec(`insert into public.quotes (id, user_id, quote_number, customer_name, address, service_type, customer_id)
+                values ('${GONE}', '${A}', '${numDel}', 'C','A','S','11111111-1111-1111-1111-111111111111')`)
+  await exec(`delete from public.quotes where id = '${GONE}'`)
+  const rowGone = await q(`select count(*)::int n from public.quotes where id='${GONE}'`)
+  check('PERMANENT · a deleted quote really leaves the table',
+    Number(rowGone.rows[0].n) === 0,
+    'if the delete silently failed, everything below would pass without testing anything')
+  const strangerAfterDelete = await refuses(
+    `insert into public.quotes (id, user_id, quote_number, customer_name, address, service_type, customer_id)
+       values ('${OTHER}', '${A}', '${numDel}', 'C','A','S','11111111-1111-1111-1111-111111111111')`)
+  check('PERMANENT · a DIFFERENT quote cannot take a deleted quote\'s number',
+    /already been used by this business/i.test(strangerAfterDelete),
+    `deletion must not hand the number to someone else: ${strangerAfterDelete.slice(0, 200) || 'IT SUCCEEDED'}`)
+  const sameIdBack = await refuses(
+    `insert into public.quotes (id, user_id, quote_number, customer_name, address, service_type, customer_id)
+       values ('${GONE}', '${A}', '${numDel}', 'C','A','S','11111111-1111-1111-1111-111111111111')`)
+  check('PERMANENT · but the SAME quote id restores with its original number',
+    sameIdBack === '',
+    `Undo re-inserts the same id, which is on record as a holder: ${sameIdBack.slice(0, 200)}`)
 
   // ⭐⭐ AND HISTORY IS UNTOUCHED — the whole reason for a registry rather than a
   // renumbering. The pre-existing rows are still there, still carrying the

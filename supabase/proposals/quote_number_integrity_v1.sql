@@ -361,8 +361,31 @@ grant execute on function public.allocate_quote_number(uuid) to service_role;
 -- ═══════════════════════════════════════════════════════════════════════════
 -- ⭐⭐ THE INVARIANT THIS ENFORCES, STATED ONCE:
 --
---     A NEW QUOTE ROW CANNOT CARRY A NUMBER THIS TENANT HAS ALREADY USED —
---     INCLUDING A NUMBER USED BEFORE THIS MIGRATION EXISTED.
+--     A NUMBER THIS TENANT HAS EVER USED CANNOT BE ISSUED TO A DIFFERENT QUOTE —
+--     EVER. NOT AFTER THE QUOTE IS DELETED. NOT AFTER IT IS RENUMBERED.
+--     A SPENT NUMBER IS SPENT FOREVER.
+--
+-- ⛔⛔ AND "EVER USED" IS NOT "CURRENTLY IN USE". An earlier draft of this file
+-- RELEASED a claim once the last quote row carrying that number disappeared, in
+-- order to keep Undo working. That quietly downgraded the invariant to
+--
+--     "a number cannot be reused WHILE some quote row still holds it"
+--
+-- which is a different and much weaker promise. It fails on a sequence as
+-- ordinary as: EPS-2026-0042 exists → the quote is deleted → the claim is
+-- released → a stale tab, an import or a hand-written INSERT supplies
+-- EPS-2026-0042 → the trigger claims it happily. The registry had forgotten
+-- history, which is the one thing it exists to remember. ⛔ Counter position is
+-- not a substitute: the counter is a convention, and this file's whole argument
+-- is that a convention is not an invariant.
+--
+-- ⭐⭐ THE FIX IS IDENTITY, NOT EXPIRY. Claims are permanent; a second relation
+-- records WHICH RECORD has ever held each claim. A write is allowed when the
+-- number is unclaimed (new claim), or when it is claimed AND THIS EXACT QUOTE ID
+-- is already a holder of it (a restore, or a revert to a number this same quote
+-- previously carried). A different quote id is refused. Undo keeps working
+-- because Undo restores the SAME id — it is not an exception to the rule, it
+-- satisfies it.
 --
 -- ⛔ WHY A PARTIAL INDEX OVER `created_at >= cutoff` IS NOT ENOUGH, which is what
 -- an earlier draft of this file relied on. A partial index only sees rows its
@@ -400,7 +423,7 @@ create table if not exists public.document_number_claims (
 );
 
 comment on table public.document_number_claims is
-  'THE uniqueness barrier for document numbers. One row per (tenant, kind, number) the tenant has ever used, seeded from DISTINCT historical quote numbers so a pre-existing number can never be reissued. Its PRIMARY KEY is the guarantee — claiming is an INSERT, not a check, so it cannot be raced.';
+  'THE uniqueness barrier for document numbers. One PERMANENT row per (tenant, kind, number) the tenant has EVER used, seeded from DISTINCT historical quote numbers. ⛔ Rows are never deleted — not when the quote is deleted, not when it is renumbered. A spent number is spent forever. Its PRIMARY KEY is the guarantee: claiming is an INSERT, not a check, so it cannot be raced.';
 
 alter table public.document_number_claims enable row level security;
 
@@ -412,12 +435,79 @@ create policy "document_number_claims: select own" on public.document_number_cla
 revoke all on public.document_number_claims from anon;
 
 
--- ── 6a · claiming, on the way in ────────────────────────────────────────────
--- ⛔ SECURITY DEFINER because the claim registry and the counter have NO client
--- write policy — by design. The trigger therefore writes them as the owning
--- role. The tenant it writes for is NEW.user_id, and that value is already
--- constrained by the quotes RLS insert policy (`with check (auth.uid() =
--- user_id)`), so a client cannot aim this at another business.
+-- ── 6a · WHO has ever held a claim ──────────────────────────────────────────
+-- ⭐⭐ THIS IS WHAT MAKES PERMANENCE COMPATIBLE WITH UNDO. The claim says the
+-- number is spent. This says which record spent it. A restore of the SAME quote
+-- id is therefore not an exception carved out of the invariant — it satisfies
+-- it, because that id is already on record as a holder of that number.
+--
+-- ⛔⛔ THERE IS DELIBERATELY NO FOREIGN KEY TO public.quotes, AND ESPECIALLY NOT
+-- AN `ON DELETE CASCADE` ONE. The entire purpose of this table is to OUTLIVE the
+-- row it describes. An FK to quotes would delete exactly the history that stops
+-- the number being reissued — it would reintroduce the released-claim defect
+-- through the back door, and it would do it silently, as referential integrity.
+--
+-- ⭐ A number may have MORE THAN ONE holder. That is not a flaw, it is how the
+-- two historical duplicate pairs stay representable: EPS-2026-0008 is one claim
+-- with two holder rows. Both of those quotes may be deleted and restored freely;
+-- neither may be replaced by a third.
+create table if not exists public.document_number_claim_holders (
+  "user_id"   uuid not null,
+  "kind"      text not null,
+  "number"    text not null,
+  -- The quote id. ⛔ Not a reference — a record of one.
+  "record_id" uuid not null,
+  "held_at"   timestamp with time zone default now() not null,
+
+  constraint document_number_claim_holders_pkey primary key (user_id, kind, number, record_id),
+  -- ⭐ The claim must exist for a holder to exist. Cascade only so that deleting
+  -- the TENANT cleans up; nothing in this file ever deletes a claim.
+  constraint document_number_claim_holders_claim_fkey
+    foreign key (user_id, kind, number)
+    references public.document_number_claims(user_id, kind, number) on delete cascade,
+  constraint document_number_claim_holders_user_id_fkey
+    foreign key (user_id) references auth.users(id) on delete cascade,
+  constraint document_number_claim_holders_kind_check check (kind in ('quote'))
+);
+
+comment on table public.document_number_claim_holders is
+  'Which record has ever held a document number. PERMANENT and deliberately NOT foreign-keyed to quotes: it must survive the deletion of the row it describes, because that survival is what stops a deleted quote''s number being reissued to a different one. A restore of the SAME quote id is allowed because that id is recorded here; a different id is refused. Several holders per number is normal — that is how a historical duplicate pair stays representable.';
+
+alter table public.document_number_claim_holders enable row level security;
+
+create policy "document_number_claim_holders: select own" on public.document_number_claim_holders
+  for select to authenticated using (auth.uid() = user_id);
+
+revoke all on public.document_number_claim_holders from anon;
+
+
+-- ── 6b · claiming, on the way in — THE ONLY TRIGGER ─────────────────────────
+-- ⛔⛔ THERE IS NO RELEASE TRIGGER, AND THAT IS THE POINT. A DELETE on quotes
+-- fires nothing here. A quote's number is not given back when the quote goes
+-- away, because "this number is spent" is a fact about the tenant's history, not
+-- about the current contents of a table.
+--
+-- ⛔ SECURITY DEFINER because the claim registry, the holder history and the
+-- counter all have NO client write policy — by design. The trigger therefore
+-- writes them as the owning role. The tenant it writes for is NEW.user_id, and
+-- that value is already constrained by the quotes RLS insert policy
+-- (`with check (auth.uid() = user_id)`), so a client cannot aim this at another
+-- business.
+--
+-- ⭐⭐ THE DECISION, IN THE ORDER IT IS MADE:
+--   1. the number is NOT claimed  → claim it, record this quote as a holder, ALLOW
+--   2. the number IS claimed AND this exact quote id is already a holder
+--                                 → ALLOW (a restore, or a revert to a number
+--                                   this same quote carried before)
+--   3. the number IS claimed by anything else → REFUSE
+--
+-- ⭐ STEP 1 IS THE BARRIER AND IT IS NOT A CHECK. `insert … on conflict do
+-- nothing` against the claim PRIMARY KEY is what decides; two concurrent writers
+-- of the same new number serialise on the index and exactly one of them takes
+-- it. The holder lookup in step 2 only ever runs on the branch where the claim
+-- already existed, so it can never be the thing that lets a duplicate through —
+-- the worst a stale read there can do is REFUSE a legitimate restore, which is
+-- the safe direction.
 --
 -- ⭐⭐ IT ALSO ADVANCES THE COUNTER TO MATCH — the watermark bump. Any row that
 -- arrives carrying a number the allocator did not mint (an old deployment still
@@ -435,6 +525,7 @@ as $function$
 declare
   v_parts text[];
   v_year  int;
+  v_held  boolean;
 begin
   if new.quote_number is null then
     return new;
@@ -448,15 +539,33 @@ begin
     end if;
   end if;
 
-  -- ⭐ THE BARRIER. An INSERT against a PRIMARY KEY — not a check, not a scan.
-  begin
-    insert into public.document_number_claims (user_id, kind, number)
-         values (new.user_id, 'quote', new.quote_number);
-  exception when unique_violation then
-    raise exception 'quote number % has already been used by this business', new.quote_number
-      using errcode = '23505',
-            hint = 'Quote numbers are issued by allocate_quote_number(). Ask for a new one rather than setting this field by hand.';
-  end;
+  -- ── 1 · THE BARRIER. An INSERT against a PRIMARY KEY — not a check, not a
+  --        scan. If this inserts, the number was never used and is now ours.
+  insert into public.document_number_claims (user_id, kind, number)
+       values (new.user_id, 'quote', new.quote_number)
+  on conflict (user_id, kind, number) do nothing;
+
+  if not found then
+    -- ── 2 · Already claimed. The ONLY thing that may proceed is the same
+    --        record reclaiming a number it is already on record as holding.
+    select true into v_held
+      from public.document_number_claim_holders
+     where user_id = new.user_id and kind = 'quote'
+       and number = new.quote_number and record_id = new.id;
+
+    if not coalesce(v_held, false) then
+      -- ── 3 · A different record. Refuse, permanently and by design.
+      raise exception 'quote number % has already been used by this business', new.quote_number
+        using errcode = '23505',
+              hint = 'Document numbers are spent permanently, including after the quote is deleted or renumbered. Ask allocate_quote_number() for a new one.';
+    end if;
+  end if;
+
+  -- ⭐ Record this record as a holder. Idempotent: the same quote may be deleted
+  -- and restored any number of times, and may revert to a number it held before.
+  insert into public.document_number_claim_holders (user_id, kind, number, record_id)
+       values (new.user_id, 'quote', new.quote_number, new.id)
+  on conflict (user_id, kind, number, record_id) do nothing;
 
   -- ── the watermark bump ──────────────────────────────────────────────────
   -- ⚠️ Only for numbers that parse as prefix-year-sequence, and only inside the
@@ -480,63 +589,19 @@ end;
 $function$;
 
 comment on function public.claim_document_number() is
-  'BEFORE INSERT/UPDATE OF quote_number on quotes: claims the number in document_number_claims (PK = the barrier, so a number this tenant already used is refused) and advances the counter past it. ⛔ Trigger use only — no EXECUTE grant.';
+  'BEFORE INSERT/UPDATE OF quote_number on quotes: permanently claims the number (PK = the barrier) and records this quote id as a holder. A number already claimed is refused UNLESS this exact quote id is already a holder of it, which is what lets Undo restore a deleted quote with its original number without ever making that number available to a different quote. ⛔ Trigger use only — no EXECUTE grant, and there is no release counterpart.';
 
-
--- ── 6b · releasing, on the way out ──────────────────────────────────────────
--- ⭐ WITHOUT THIS, UNDO WOULD BE BROKEN. Both delete paths in the app offer a
--- full-row Undo that RE-INSERTS the original row keeping its original number
--- (src/app/dashboard/quotes/page.tsx and src/components/quotes/QuoteList.tsx).
--- If a claim outlived its row, the restore would be refused and the quote would
--- be unrecoverable — a data-loss bug introduced by a data-integrity feature.
---
--- ⭐⭐ IT RELEASES ONLY WHEN NO ROW STILL HOLDS THE NUMBER. That single condition
--- is what keeps the historical duplicate pairs safe: EPS-2026-0008 exists twice
--- and shares ONE claim, so deleting one of them must not free a number the other
--- one is still showing a customer.
---
--- ⚠️ THE RACE, NAMED AND ACCEPTED. Two concurrent transactions each deleting one
--- row of a duplicate pair will each still see the other's row and neither will
--- release, leaving a claim with no holder. That direction is CONSERVATIVE — the
--- number stays reserved and simply cannot be reused. The opposite error (freeing
--- a number a live quote still displays) cannot happen, because the surviving row
--- is visible to any snapshot that could reach this code.
-create or replace function public.release_document_number()
-returns trigger
-language plpgsql
-security definer
-set search_path to 'public', 'pg_temp'
-as $function$
-begin
-  if old.quote_number is null then
-    return null;
-  end if;
-  if tg_op = 'UPDATE' then
-    if new.quote_number is not distinct from old.quote_number then
-      return null;
-    end if;
-  end if;
-
-  if not exists (
-    select 1 from public.quotes
-     where user_id = old.user_id and quote_number = old.quote_number
-  ) then
-    delete from public.document_number_claims
-     where user_id = old.user_id and kind = 'quote' and number = old.quote_number;
-  end if;
-
-  return null;
-end;
-$function$;
-
-comment on function public.release_document_number() is
-  'AFTER DELETE/UPDATE OF quote_number on quotes: frees the claim only when no quote row still carries that number, so Undo can restore a deleted quote with its original number while a surviving duplicate keeps its own claim. ⛔ Trigger use only — no EXECUTE grant.';
-
--- ⛔ Neither trigger function is callable directly (Postgres refuses to call a
+-- ⛔ The trigger function is not callable directly (Postgres refuses to call a
 -- trigger function from SQL), but the grants are removed anyway: a future change
 -- that alters a return type should not silently inherit a public door.
 revoke all on function public.claim_document_number() from public, anon, authenticated, service_role;
-revoke all on function public.release_document_number() from public, anon, authenticated, service_role;
+
+-- ⛔⛔ AND THE OLD RELEASE PATH IS REMOVED, NOT LEFT DORMANT. If an earlier
+-- version of this migration ever ran, its trigger and function still exist and
+-- would keep freeing claims underneath the new model. Dropping them is part of
+-- the fix, not cleanup.
+drop trigger if exists quotes_release_document_number on public.quotes;
+drop function if exists public.release_document_number();
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -598,16 +663,31 @@ begin
    where q.quote_number is not null
   on conflict (user_id, kind, number) do nothing;
 
-  -- 3 · from here on, every write claims
+  -- 2b · ⭐⭐ AND RECORD EVERY EXISTING ROW AS A HOLDER — NOT DISTINCT THIS TIME.
+  --      The claims are per NUMBER; the holders are per ROW. That difference is
+  --      exactly what makes the two historical duplicate pairs representable:
+  --      one claim, two holders each. It is also what lets every existing quote
+  --      be deleted and restored after this migration — without this seed, the
+  --      first Undo of any pre-existing quote would be refused, and a data
+  --      integrity feature would have eaten a quote.
+  insert into public.document_number_claim_holders (user_id, kind, number, record_id)
+  select q.user_id, 'quote', q.quote_number, q.id
+    from public.quotes q
+   where q.quote_number is not null
+  on conflict (user_id, kind, number, record_id) do nothing;
+
+  -- 3 · from here on, every write claims. ⛔ ONE trigger. There is deliberately
+  --     no release counterpart: a claim is permanent, so a DELETE has nothing to
+  --     do. An earlier draft installed a release trigger here and that is what
+  --     downgraded the invariant from "ever used" to "currently in use".
   drop trigger if exists quotes_claim_document_number on public.quotes;
   create trigger quotes_claim_document_number
     before insert or update of quote_number on public.quotes
     for each row execute function public.claim_document_number();
 
+  -- ⛔ If an earlier version of this migration ever ran, its release trigger is
+  --    still attached and would keep freeing claims underneath the new model.
   drop trigger if exists quotes_release_document_number on public.quotes;
-  create trigger quotes_release_document_number
-    after delete or update of quote_number on public.quotes
-    for each row execute function public.release_document_number();
 
   -- 4 · ⭐ DEFENCE IN DEPTH, NOT THE BARRIER. The claim registry above is what
   --     makes reuse impossible. This partial index is a second, independent
@@ -632,6 +712,7 @@ comment on index public.quotes_user_qnum_new_unique is
 do $$
 declare
   v_unclaimed int;
+  v_unheld    int;
   v_missing   int;
 begin
   select count(*) into v_unclaimed
@@ -644,18 +725,44 @@ begin
     raise exception 'quote_number_integrity: % existing quote(s) are not in the claim registry — history is not protected', v_unclaimed;
   end if;
 
+  -- ⭐⭐ EVERY EXISTING ROW MUST BE A HOLDER OF ITS OWN NUMBER. Without this, the
+  -- first Undo of any pre-existing quote would be refused as though a stranger
+  -- were reusing the number — a data-loss bug created by a data-integrity
+  -- feature. It is asserted rather than assumed because the holder seed is the
+  -- one statement in this file whose omission is invisible until a user hits it.
+  select count(*) into v_unheld
+    from public.quotes q
+   where q.quote_number is not null
+     and not exists (select 1 from public.document_number_claim_holders h
+                      where h.user_id = q.user_id and h.kind = 'quote'
+                        and h.number = q.quote_number and h.record_id = q.id);
+  if v_unheld > 0 then
+    raise exception 'quote_number_integrity: % existing quote(s) are not recorded as holders of their own number — Undo would be refused for them', v_unheld;
+  end if;
+
   -- ⚠️ SCOPED TO public.quotes. `pg_trigger.tgname` is unique per TABLE, not per
   -- database, so an unscoped lookup would be satisfied by a same-named trigger on
   -- some other table — an assertion that passes for the wrong reason is worse
   -- than no assertion.
   select count(*) into v_missing
-    from (values ('quotes_claim_document_number'), ('quotes_release_document_number')) t(n)
+    from (values ('quotes_claim_document_number')) t(n)
    where not exists (select 1 from pg_trigger g
                       where g.tgname = t.n
                         and g.tgrelid = 'public.quotes'::regclass
                         and not g.tgisinternal);
   if v_missing > 0 then
-    raise exception 'quote_number_integrity: % claim trigger(s) missing — new quotes are not protected', v_missing;
+    raise exception 'quote_number_integrity: the claim trigger is missing — new quotes are not protected';
+  end if;
+
+  -- ⛔⛔ AND THE RELEASE TRIGGER MUST BE GONE. Its presence is not a leftover, it
+  -- is a live defect: it frees a claim when the last row carrying that number is
+  -- deleted, which is precisely the downgrade from "ever used" to "currently in
+  -- use" that this model exists to undo.
+  if exists (select 1 from pg_trigger g
+              where g.tgname = 'quotes_release_document_number'
+                and g.tgrelid = 'public.quotes'::regclass
+                and not g.tgisinternal) then
+    raise exception 'quote_number_integrity: the release trigger is still attached — claims would not be permanent';
   end if;
 end $$;
 
@@ -687,6 +794,16 @@ begin
   if v_fn is null then
     raise exception 'quote_number_integrity: public.book_service() not found';
   end if;
+  -- ⚠️⚠️ NORMALISE LINE ENDINGS AT TRANSPORT. The anchors below are multi-line
+  -- and their newlines are `\n` ESCAPES inside E'' literals on a single physical
+  -- line, so they are LF whatever this FILE's line endings are. What is not under
+  -- this file's control is the stored body: if a function was ever loaded from a
+  -- CRLF source, pg_get_functiondef() hands back CRLF and an LF anchor matches
+  -- ZERO times. S113 lost an apply to exactly that and S122 hit it again.
+  -- ⭐ Stripping CR from the HAYSTACK is the fix; the anchor is never loosened,
+  -- and the replacement is written back without CRs, which is how the rest of the
+  -- schema already stores its bodies.
+  v_fn := replace(v_fn, chr(13), '');
 
   v_new := replace(v_fn,
     E'    select coalesce(max((regexp_match(quote_number,\'([0-9]+)$\'))[1]::int),0)+1 into v_num from public.quotes where user_id=v_user and quote_number like \'EPS-\'||extract(year from now())::text||\'-%\';\n'
@@ -705,6 +822,7 @@ begin
   if v_fn is null then
     raise exception 'quote_number_integrity: public.submit_booking() not found';
   end if;
+  v_fn := replace(v_fn, chr(13), '');   -- same transport normalisation as above
 
   v_new := replace(v_fn,
     E'  select coalesce(max((regexp_match(quote_number, \'([0-9]+)$\'))[1]::int), 0) + 1 into v_num\n'
@@ -732,16 +850,23 @@ begin
 end $$;
 
 
--- ── 9 · stage 2, deliberately NOT executed here ─────────────────────────────
--- ⛔ DO NOT UNCOMMENT UNTIL THE OWNER HAS RESOLVED THE HISTORICAL DUPLICATES.
--- Run the preflight first; it REPORTS and REFUSES rather than modifying data.
+-- ── 9 · stage 2 — PARKED BY OWNER DECISION ──────────────────────────────────
+-- ⛔⛔ THE OWNER HAS RULED, 2026-08-31: DO NOT RENUMBER EPS-2026-0008 OR
+-- EPS-2026-0009. These four rows are not to be touched:
+--     41259e2e…  84e3176e…    (EPS-2026-0008)
+--     638e99d2…  192cdcbc…    (EPS-2026-0009)
+-- Stage 2 stays PARKED. This is a decision, not an outstanding task, and it is
+-- recorded here so the next reader does not "tidy it up".
 --
--- ⭐ WHAT STAGE 2 IS AND IS NOT. It is NOT what protects history — §6 already
--- does that, from the moment §7 commits, and it does it without renaming a
--- single quote. Stage 2 only collapses two barriers into one: it retires the
--- partial index in favour of a full UNIQUE on `quotes` itself. It is worth doing
--- because it removes a predicate that has to be reasoned about, not because
--- anything is unprotected without it.
+-- ⭐⭐ AND NOTHING IS WAITING ON IT. §6 protects history from the moment §7
+-- commits: a number this tenant has ever used cannot go to a different quote,
+-- deleted or not, renumbered or not. Stage 2 would only collapse two barriers
+-- into one by retiring the partial index in favour of a full UNIQUE on `quotes`.
+-- That is a simplification, not a protection — and it is not worth renaming a
+-- document a customer already holds to obtain.
+--
+-- ⛔ DO NOT CREATE CLEANUP WORK MERELY FOR TIDINESS. If stage 2 is ever wanted,
+-- run the preflight first; it REPORTS and REFUSES rather than modifying data.
 --
 --   do $$
 --   declare v_dupes text;
