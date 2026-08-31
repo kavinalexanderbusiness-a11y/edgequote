@@ -294,7 +294,12 @@ console.log('\n■ 3. No surface composes its own payment-timing sentence')
   // always won — the check passed against a document that printed the timing
   // BELOW the terms, and mutation #18 proved it could not fail.
   const timingAt = pdf.indexOf('{pdfTimingLine(timing)}')
-  const termsAt = pdf.indexOf('{settings.terms_text}')
+  // Re-pointed by S112 (accepted-document-truth): the terms box now renders a
+  // local `termsText` — the acceptance row's EXACT text on a snapshot-fed
+  // render, the live settings text otherwise — so the render site is
+  // `{termsText}` inside styles.termsText. Same rule, same comparison of
+  // RENDER SITES; only the spelling of the terms site moved.
+  const termsAt = pdf.indexOf('<Text style={styles.termsText}>{termsText}</Text>')
   check('canonical timing prints ABOVE the owner\'s free-text Terms',
     timingAt > 0 && termsAt > 0 && timingAt < termsAt,
     `terms_text is an ungoverned third source — it must not lead (timing@${timingAt}, terms@${termsAt})`)
