@@ -102,6 +102,17 @@ export function acceptedRenderInput(args: {
     biweekly_price: numOrNull(d.plan_prices?.biweekly),
     monthly_price: numOrNull(d.plan_prices?.monthly),
     selected_option_id: args.selectedOptionId,
+    // ── The payment-timing inputs (S122) ─────────────────────────────────────
+    // QuoteDocument's timing sentence reads these THROUGH lib/payments/
+    // paymentTiming (deposit_type/deposit_value; depositBasis prefers
+    // accepted_price) — an indirect read the PDF read-set pin cannot see, which
+    // is exactly how the accepted render briefly said "no deposit" over a
+    // snapshot that carried a percent rule. All three come from the snapshot:
+    // the deposit RULE as accepted, and the snapshot total, which IS the
+    // authorized figure a percent rule is taken of.
+    deposit_type: d.deposit_type ?? null,
+    deposit_value: numOrNull(d.deposit_value),
+    accepted_price: num(d.total),
     // Travel on the accepted document is always ITEMIZED: the snapshot records
     // the fee as its own fact, and the most transparent rendering of a record
     // is the one that shows it. (Rolled-in vs itemized never changes the total.)

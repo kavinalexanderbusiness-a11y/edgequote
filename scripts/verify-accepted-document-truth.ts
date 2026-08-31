@@ -76,6 +76,16 @@ check('the scope lines are the snapshot lines, in snapshot order',
   out.services?.length === 2 && out.services[0].service_type === 'Mowing' && out.services[0].sort_order === 0
   && out.services[1].unit_price === 80 && out.services[1].discount_value === 40 && out.services[1].kind === 'material')
 check('plan prices come from the snapshot', out.quote.weekly_price === 80 && out.quote.biweekly_price === 95 && out.quote.monthly_price === 120)
+// S122's payment-timing sentence reads the quote INDIRECTLY (paymentTiming /
+// depositBasis take the whole object), so the PDF read-set pin below cannot see
+// those reads — this asserts the mapper feeds the timing engine the ACCEPTED
+// deposit rule and the ACCEPTED basis, never nothing: without them the accepted
+// render's timing sentence said "no deposit" over a snapshot carrying a percent rule.
+const oq = out.quote as unknown as { deposit_type: string | null; deposit_value: number | null; accepted_price: number }
+check('the deposit RULE comes from the snapshot (S122 timing reads it indirectly)',
+  oq.deposit_type === 'percent' && oq.deposit_value === 25)
+check('the timing basis is the snapshot total — the authorized figure',
+  oq.accepted_price === 5550)
 check('the offered alternatives are the snapshot set, chosen one described',
   out.options?.length === 2 && out.options[1].id === 'opt-b' && out.options[1].description === 'Walls and trim' && out.options[0].description === null)
 check('customer-facing notes are the snapshot notes', out.quote.notes === 'Gate code 4471')
@@ -255,9 +265,15 @@ if (migFile) {
   const migFn = extractPortalFn(mig)
   const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const stripped = migFn.replace(new RegExp(`,\\r?\\n\\s*${esc(MARK_START)}[\\s\\S]*?${esc(MARK_END)}`), '')
-  check(`stripped of its markers, the migration is byte-identical to ${baseline}'s function`,
-    stripped === baselineFn,
-    'the baseline moved (S113?) or the file was hand-edited — REGENERATE: npx tsx scripts/schema/generate-portal-accepted-version.ts')
+  // ⚠️⚠️ NORMALIZE LINE ENDINGS BEFORE COMPARING — the S113 lesson. Repo SQL may
+  // be CRLF while a baseline regenerated from production's pg_get_functiondef is
+  // LF: the same function, two transport representations. Raw byte equality
+  // across that boundary is a permanent false red (or worse, teaches someone to
+  // 'fix' it by hand-editing). The equality asserted here is over CONTENT.
+  const eol = (s: string) => s.replace(/\r\n/g, '\n')
+  check(`stripped of its markers, the migration matches ${baseline}'s function (EOL-normalized)`,
+    eol(stripped) === eol(baselineFn),
+    'the baseline moved or the file was hand-edited — REGENERATE: npx tsx scripts/schema/generate-portal-accepted-version.ts')
   check('the projection block is present exactly once, marked',
     migFn.split(MARK_START).length === 2 && migFn.split(MARK_END).length === 2
     && /order by a\.seq desc limit 1\) as acceptance/.test(migFn))
@@ -340,6 +356,19 @@ async function behaviour() {
   await db.exec(`insert into auth.users (id, email) values ('${OWNER}', 'owner@fixture.test')`)
   await db.exec(`insert into public.business_settings (user_id, company_name, owner_name, terms_text)
     values ('${OWNER}', 'Fixture Yard', 'Sam Owner', 'Payment due on completion.')`)
+  // S122's acceptance gate (landed a44195be): a tenant WITH terms may only record
+  // an acceptance while a current, unambiguous payment-timing claim stands for
+  // those exact terms, and the claim must not contradict the quote's deposit
+  // ask. The fixture states the truthful claim for its own terms ("due on
+  // completion" = no money before work; the quotes below carry no deposit), the
+  // way the real classifier pipeline would have — this guard exercises S112's
+  // projection, not S122's classifier.
+  const stampClaim = () => db.exec(`update public.business_settings
+     set terms_payment_claim = 'no_money_before_work',
+         terms_payment_claim_fingerprint = public.quote_terms_fingerprint('${OWNER}'),
+         terms_payment_claim_version = 1
+   where user_id = '${OWNER}'`)
+  await stampClaim()
   const cust = await one(`insert into public.customers (user_id, name) values ('${OWNER}', 'Dana Reyes') returning id`)
   await db.exec(`insert into public.customer_portal_tokens (token, customer_id, user_id) values ('tok-truth', '${cust.id}', '${OWNER}')`)
   const mkQuote = async (qn: string) => one(`insert into public.quotes
@@ -416,6 +445,11 @@ async function behaviour() {
   check('deleting acceptance evidence is refused', del !== null && /append-only/.test(del), del ?? 'the DELETE went through')
 
   // ── E · re-acceptance ADDS; the first document stays byte-identical ────────
+  // D changed the tenant's terms, which un-trusts the S122 payment claim (its
+  // fingerprint no longer matches) — exactly the fail-closed behaviour S122
+  // built. Re-stamp the claim for the CURRENT terms so the re-acceptance below
+  // exercises S112's supersedes chain, not S122's refusal.
+  await stampClaim()
   await db.exec(`update public.quotes set initial_price = 6075, status = 'sent' where id = '${qA.id}'`)
   await anon()
   const a2 = await one(`select public.portal_accept_quote('tok-truth', $1, null, null, true) as ok`, [qA.id])

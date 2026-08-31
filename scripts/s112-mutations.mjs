@@ -45,6 +45,8 @@ const MUTATIONS = [
   ['legacy weld dropped — terms claimed on a backfill', MAPPER,
     "const termsText = args.kind === 'legacy_unrecorded' ? null : args.termsText",
     'const termsText = args.termsText'],
+  ['S122 timing loses the accepted deposit rule (indirect read starved)', MAPPER,
+    'deposit_type: d.deposit_type ?? null,', 'deposit_type: null,'],
   ['portal confuses current revision with accepted version', MODEL,
     'getBlob: acc && isAcceptedOrBeyond(qq.status)\n        ? () => renderers.acceptedQuote(qq, acc)\n        : () => renderers.quote(qq),',
     'getBlob: () => renderers.quote(qq),'],
