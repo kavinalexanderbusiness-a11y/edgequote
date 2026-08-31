@@ -64,7 +64,7 @@ export default function TimeOffPage() {
       const [t, pRes, hRes] = await Promise.all([
         // includeArchived: PTO already taken by someone who has since left is a
         // paid-leave record and must still resolve to a name (see PAY-1).
-        loadTechnicians(supabase, user.id, { includeArchived: true }),
+        loadTechnicians(supabase, user.id, { includeArchived: true, includeFixtures: true }),
         supabase.from('pto_entries').select('*').eq('user_id', user.id).order('date', { ascending: false }),
         supabase.from('holidays').select('*').eq('user_id', user.id).order('date'),
       ])
