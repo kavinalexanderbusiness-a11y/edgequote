@@ -71,6 +71,8 @@ export interface OperatorDashboardSnapshot {
   morning: string
   afternoon: string
   cards: OperatorActionCard[]
+  /** Full pre-cap count, so the UI can say "showing 12 of N" honestly. */
+  totalCards: number
   automationWarning: string | null
   recentRuns: Array<{ id: string; question: string | null; status: string; created_at: string }>
   historyAvailable: boolean

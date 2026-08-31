@@ -1,17 +1,28 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getAutomationHealth, getDailyBrief } from './tools'
-import type { OperatorDashboardSnapshot } from './types'
+import type { OperatorActionCard, OperatorDashboardSnapshot } from './types'
 
 type SB = SupabaseClient<any>
 
-function sentence(cards: Awaited<ReturnType<typeof getDailyBrief>>['cards'], when: 'morning' | 'afternoon') {
+const CAD = new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' })
+
+// The brief SENTENCES only state what the card set actually shows. Within the
+// money category, priority IS the overdue split (listOutstandingBalances sets
+// high = canonically overdue, normal = merely remaining) — so the sentence can
+// say how much is overdue instead of guessing "not all are overdue".
+function sentence(cards: OperatorActionCard[], when: 'morning' | 'afternoon') {
   if (!cards.length) return when === 'morning'
     ? 'No evidence-backed urgent work is showing in the Phase 1 checks. Review today’s schedule before starting the day.'
     : 'No evidence-backed urgent work is showing in the Phase 1 checks. Review completed work and any new inbound messages before wrapping up.'
   const high = cards.filter(c => c.priority === 'urgent' || c.priority === 'high')
-  const money = cards.filter(c => c.category === 'money').reduce((s,c) => s + (c.financial_value ?? 0), 0)
-  if (when === 'morning') return `${high.length} high-priority items need review. ${money > 0 ? `$${money.toFixed(2)} of balances appear in the evidence set; not all are overdue. ` : ''}Start with customer-risk items before routine data cleanup.`
-  return `${cards.length} items remain in the evidence-backed queue. Re-check new inbound messages, accepted work without linked visits, and any confirmed due balances before the day ends.`
+  const moneyCards = cards.filter(c => c.category === 'money')
+  const overdueSum = moneyCards.filter(c => c.priority === 'urgent' || c.priority === 'high').reduce((s, c) => s + (c.financial_value ?? 0), 0)
+  const remainingSum = moneyCards.reduce((s, c) => s + (c.financial_value ?? 0), 0) - overdueSum
+  const moneyClause = moneyCards.length
+    ? `${overdueSum > 0 ? `${CAD.format(overdueSum)} is canonically overdue` : 'No balance is canonically overdue'}${remainingSum > 0 ? `; ${CAD.format(remainingSum)} more remains without evidence of being due now` : ''}. `
+    : ''
+  if (when === 'morning') return `${high.length} high-priority items need review. ${moneyClause}Start with customer-risk items before routine data cleanup.`
+  return `${cards.length} items remain in the evidence-backed queue. ${moneyClause}Re-check new inbound messages and accepted work without linked visits before the day ends.`
 }
 
 export async function loadOperatorSnapshot(sb: SB, userId: string): Promise<OperatorDashboardSnapshot> {
@@ -24,6 +35,7 @@ export async function loadOperatorSnapshot(sb: SB, userId: string): Promise<Oper
     morning: sentence(brief.cards, 'morning'),
     afternoon: sentence(brief.cards, 'afternoon'),
     cards: brief.cards.slice(0, 12),
+    totalCards: brief.cards.length,
     automationWarning: automation.warnings[0] ?? null,
     recentRuns: history.error ? [] : ((history.data ?? []) as OperatorDashboardSnapshot['recentRuns']),
     historyAvailable: !history.error,

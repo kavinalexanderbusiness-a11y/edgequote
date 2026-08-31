@@ -1,6 +1,9 @@
--- Edge Operator V1 — approval/audit foundation.
--- TEMP HIGH VERSION: feature-session migration. S106 MUST re-version from the
--- live ledger before any production apply. No production apply is authorized.
+-- Edge Operator V1 — approval/audit foundation. PROPOSAL, NOT A MIGRATION.
+-- Lives under supabase/proposals/ (the S122 RUN-* pattern) so a from-zero
+-- rebuild stays faithful to the production contract: nothing here has been
+-- applied anywhere. At landing, S106 versions this from the live ledger into
+-- supabase/migrations/ and applies it there. No production apply is authorized
+-- from this branch.
 --
 -- EdgeQuote's current tenant key is auth.users.id == public.*.user_id. Policies
 -- intentionally derive that identity from auth.uid(); no model/client tenant id
@@ -129,17 +132,18 @@ create policy "operator_conversations select own" on public.operator_conversatio
   using ((select auth.uid()) = user_id);
 create policy "operator_conversations insert own" on public.operator_conversations for insert to authenticated
   with check ((select auth.uid()) = user_id and created_by = (select auth.uid()));
-create policy "operator_conversations update own" on public.operator_conversations for update to authenticated
-  using ((select auth.uid()) = user_id)
-  with check ((select auth.uid()) = user_id and created_by = (select auth.uid()));
+-- Deliberately NO update policy in Phase 1: nothing edits a conversation yet,
+-- and an unused mutable surface is where audit integrity quietly leaks. Phase 2
+-- adds a reviewed update seam (title rename) when a code path needs one.
 
 create policy "operator_runs select own" on public.operator_runs for select to authenticated
   using ((select auth.uid()) = user_id);
 create policy "operator_runs insert own" on public.operator_runs for insert to authenticated
   with check ((select auth.uid()) = user_id and initiated_by = (select auth.uid()));
-create policy "operator_runs update own" on public.operator_runs for update to authenticated
-  using ((select auth.uid()) = user_id)
-  with check ((select auth.uid()) = user_id and initiated_by = (select auth.uid()));
+-- Deliberately NO update policy in Phase 1: the route records runs with
+-- INSERT ... ON CONFLICT DO NOTHING only, so run history is append-only for the
+-- app role — a run row that can be rewritten is telemetry, not a record. The
+-- Phase-2 approval seam decides which columns (if any) become updatable.
 
 create policy "operator_tool_calls select own" on public.operator_tool_calls for select to authenticated
   using ((select auth.uid()) = user_id);
@@ -166,11 +170,17 @@ create policy "operator_approvals select own" on public.operator_approvals for s
 create policy "operator_execution_results select own" on public.operator_execution_results for select to authenticated
   using ((select auth.uid()) = user_id);
 
+-- Revoke from PUBLIC and authenticated as well as anon: the project's default
+-- privileges pre-grant broad rights to authenticated on new tables, and a
+-- revoke aimed only at anon leaves that whole surface standing — including
+-- INSERT/UPDATE/DELETE on the two tables whose contract is fail-closed. The
+-- narrow grants below are then the COMPLETE grant surface, not a decoration
+-- on top of an inherited one.
 revoke all on public.operator_conversations, public.operator_runs, public.operator_tool_calls,
   public.operator_proposed_actions, public.operator_approvals, public.operator_execution_results,
-  public.operator_failures from anon;
+  public.operator_failures from public, anon, authenticated;
 
-grant select, insert, update on public.operator_conversations, public.operator_runs to authenticated;
+grant select, insert on public.operator_conversations, public.operator_runs to authenticated;
 grant select, insert on public.operator_tool_calls, public.operator_proposed_actions, public.operator_failures to authenticated;
 grant select on public.operator_approvals, public.operator_execution_results to authenticated;
 

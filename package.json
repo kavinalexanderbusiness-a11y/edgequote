@@ -14,6 +14,7 @@
     "verify:app-origin": "tsx scripts/verify-app-origin.ts",
     "verify:tenant-weld": "tsx scripts/verify-tenant-weld.ts",
     "verify:operator-cli": "tsx scripts/verify-operator-cli.ts",
+    "verify:operator-v1": "tsx scripts/verify-operator-v1.ts",
     "verify:automations": "tsx scripts/verify-automations.ts",
     "verify:capabilities": "tsx scripts/verify-capabilities.ts",
     "verify:comms-governor": "tsx scripts/verify-comms-governor.ts",

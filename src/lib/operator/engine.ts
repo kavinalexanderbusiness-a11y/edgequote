@@ -5,13 +5,21 @@ import { runReadOnlyOperatorTool } from './tools'
 
 type SB = SupabaseClient<any>
 
-const WRITE_WORDS = /\b(send|message|text|email|create|schedule|book|charge|refund|record payment|update status|delete|archive|assign worker)\b/i
+// Verb-shaped write intent. Bare nouns (invoice, bill) stay out: "which
+// invoices are overdue?" is the most common READ question, and stamping the
+// cannot-execute caveat on it would be noise. The caveat is advisory anyway —
+// the tool surface is read-only regardless of what this regex catches.
+const WRITE_WORDS = /\b(send|message|text|email|create|schedule|book|charge|refund|record payment|update status|delete|archive|assign worker|dispatch|remind|collect|reach out|follow up|follow-up)\b/i
 
-function chooseTool(question: string, refs: OperatorContextRefs): OperatorToolName {
+// Exported for the deterministic eval: routing is a contract, not an accident.
+export function chooseTool(question: string, refs: OperatorContextRefs): OperatorToolName {
   const q = question.toLowerCase()
   if ((q.includes('customer') || q.includes('history') || q.includes('timeline')) && refs.customer_id) return 'get_customer_timeline'
   if (q.includes('quote') && (q.includes('detail') || refs.quote_id) && refs.quote_id) return 'get_quote_details'
   if (q.includes('invoice') && (q.includes('detail') || refs.invoice_id) && refs.invoice_id) return 'get_invoice_details'
+  // Attribution BEFORE the leads branch: 'lead source' contains 'lead', so the
+  // generic lead check would otherwise make this branch unreachable.
+  if (q.includes('attribution') || q.includes('lead source') || q.includes('source completeness')) return 'get_attribution_completeness'
   if (q.includes('reply') || q.includes('unanswered') || q.includes('lead')) return 'list_genuine_unanswered_leads'
   if (q.includes('follow') && q.includes('quote')) return 'list_quote_followups_due'
   if ((q.includes('accepted') && (q.includes('date') || q.includes('schedule'))) || q.includes('unscheduled')) return 'list_accepted_unscheduled_work'
@@ -20,7 +28,6 @@ function chooseTool(question: string, refs: OperatorContextRefs): OperatorToolNa
   if (q.includes('worker') || q.includes('crew') || q.includes('staff')) return 'get_worker_availability'
   if (q.includes('availability') || q.includes('calendar') || q.includes('capacity')) return 'get_schedule_availability'
   if (q.includes('automation') || q.includes('sweep') || q.includes('rule health')) return 'get_automation_health'
-  if (q.includes('attribution') || q.includes('lead source') || q.includes('source completeness')) return 'get_attribution_completeness'
   return 'get_daily_brief'
 }
 
@@ -45,11 +52,35 @@ function tierFromEnv(): AiTier {
   return raw === 'vision' || raw === 'smart' || raw === 'fast' ? raw : 'balanced'
 }
 
+// Customer-controlled text (names, message bodies, quote titles) rides inside
+// the evidence JSON. JSON.stringify does NOT escape angle brackets, so a crafted
+// value could otherwise forge a closing </untrusted_records> tag and escape the
+// untrusted-data boundary. Escaping < and > to their JSON \uXXXX forms keeps the
+// payload byte-for-byte valid JSON while making tag forgery impossible.
+export function encodeUntrustedEvidence(value: unknown, maxChars: number): { payload: string; truncated: boolean } {
+  const json = JSON.stringify(value).replace(/</g, '\\u003c').replace(/>/g, '\\u003e')
+  if (json.length <= maxChars) return { payload: json, truncated: false }
+  // A hard slice can cut mid-JSON; the marker tells the model (and the reader)
+  // that the evidence is amputated rather than letting it reason over a silently
+  // incomplete record set as if it were whole.
+  return { payload: `${json.slice(0, maxChars)}\n[EVIDENCE TRUNCATED AT ${maxChars} CHARACTERS — the record set is incomplete]`, truncated: true }
+}
+
+// The model must never claim the operator DID something — Phase 1 has no write
+// path, so any executed-action claim is a fabrication. This is a deterministic
+// output-side floor beneath the system-prompt rule, not a replacement for it.
+export function claimsExecutedAction(answer: string): boolean {
+  const DONE = '(?:sent|scheduled|created|charged|refunded|updated|deleted|archived|booked|recorded|executed|dispatched)'
+  return new RegExp(`\\b(?:i|we)(?:'ve| have| had)?(?: already| just| now)?\\s+${DONE}\\b`, 'i').test(answer)
+    || new RegExp(`\\b(?:has|have) been ${DONE}\\b`, 'i').test(answer)
+}
+
 async function summarizeWithConfiguredProvider(question: string, result: Awaited<ReturnType<typeof runReadOnlyOperatorTool>>) {
   const provider = (process.env.EDGE_OPERATOR_PROVIDER || 'anthropic').toLowerCase()
   if (provider === 'deterministic') return null
   if (provider !== 'anthropic') return null
-  const evidence = JSON.stringify({ summary: result.summary, cards: result.cards, warnings: result.warnings, records: result.records ?? [] }).slice(0, 24_000)
+  const { payload: evidence, truncated } = encodeUntrustedEvidence(
+    { summary: result.summary, cards: result.cards, warnings: result.warnings, records: result.records ?? [] }, 24_000)
   const out = await generateStructured<ModelAnswer>({
     tier: tierFromEnv(), model: process.env.EDGE_OPERATOR_MODEL || undefined, maxTokens: 700, timeoutMs: 20_000,
     system: [
@@ -62,14 +93,18 @@ async function summarizeWithConfiguredProvider(question: string, result: Awaited
       'If contact or a production change is recommended, say owner approval/confirmation is required.',
       'Cite records naturally by their visible labels or record IDs when relevant.',
     ].join('\n'),
-    blocks: [{ type: 'text', text: `Question: ${question}\n<untrusted_records>${evidence}</untrusted_records>` }],
+    blocks: [{ type: 'text', text: `Question: ${question}\n${truncated ? 'NOTE: the evidence below was truncated and is incomplete.\n' : ''}<untrusted_records>${evidence}</untrusted_records>` }],
     tool: {
       name: 'operator_answer',
       description: 'Return one concise evidence-grounded answer.',
       schema: { type: 'object', additionalProperties: false, required: ['answer'], properties: { answer: { type: 'string', maxLength: 2400 } } },
     },
   })
-  return validModelAnswer(out) ? out.answer.trim() : null
+  if (!validModelAnswer(out)) return null
+  const answer = out.answer.trim()
+  // Fail closed to the deterministic answer on any executed-action claim —
+  // nothing was executed, so a model answer saying otherwise must not ship.
+  return claimsExecutedAction(answer) ? null : answer
 }
 
 export async function answerOperatorQuestion(sb: SB, userId: string, question: string, refs: OperatorContextRefs = {}): Promise<OperatorAnswer> {

@@ -126,6 +126,7 @@ const WRITES_COMPLETED = /\bstatus:\s*['"]completed['"]/
 const ALLOWED: Record<string, string> = {
   'lib/jobStatus.ts': 'THE stamp — this is the one definition',
   'lib/integrations/events.ts': 'a documentation sample payload for the job.completed event, never written to a row',
+  'app/api/operator/route.ts': "operator_runs.status — the operator's own telemetry lifecycle (running/completed/failed), not a job row; Phase 1 operator code cannot write jobs at all",
 }
 
 const offenders = files.filter(f => WRITES_COMPLETED.test(f.text) && !(f.path in ALLOWED))
