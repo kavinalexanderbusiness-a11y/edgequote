@@ -23,6 +23,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { addDays, format, parseISO } from 'date-fns'
+import { withoutFixtures } from '@/lib/fixtureData'
 import { serviceHistory, type LaborComparison, type ServiceVariance } from '@/lib/estimateVsActual'
 import { loadCompletedVisitLearning } from '@/lib/estimateVsActualData'
 import { workersAvailableOn, type DayVisitLike, type DayFitInput, type TechForAvailability } from '@/lib/dayFit'
@@ -93,9 +94,17 @@ export async function loadDayFitContext(
     supabase.from('business_settings')
       .select('daily_capacity_hours, preferred_work_days')
       .eq('user_id', userId).maybeSingle(),
+    // crew_id rides along so availability can be asked per crew — the same
+    // rule, narrowed, rather than a second engine counting people.
+    // ⭐ `name` is also what lib/fixtureData reads to drop test rows AFTER the
+    // read: a fixture worker counted here inflates how much work the business
+    // believes it can take, which is the quiet half of the production-hygiene
+    // defect — nobody SEES a wrong capacity number.
+    // ⚠️ These notes sit ABOVE the chain on purpose. verify:day-plan and
+    // verify:availability assert tenancy inside a 320-character window from
+    // `.from(`, so a comment BETWEEN the call and its `.eq('user_id', userId)`
+    // pushes the filter out of view and the tenancy claim stops being provable.
     supabase.from('technicians')
-      // crew_id rides along so availability can be asked per crew — the same
-      // rule, narrowed, rather than a second engine counting people.
       .select('id, name, crew_id, is_active, ended_on, archived_at')
       .eq('user_id', userId),
     // Time off is narrowed by `isBookedOff` AFTER the read, not by a status
@@ -143,7 +152,16 @@ export async function loadDayFitContext(
   // read is a genuine unknown and still darkens the whole workforce answer.
   const availabilityAbsent = isMissingRelation(aRes.error)
   const workforceKnown = !tRes.error && !pRes.error && (!aRes.error || availabilityAbsent)
-  const techs = workforceKnown ? ((tRes.data as WorkerForAvailability[]) || []) : []
+  // ⭐⭐ Fixture workers are dropped HERE, before anything counts them. A test
+  // technician left in a real tenant does not just look wrong on a roster — it
+  // raises the day's available staffing, so the fit engine reports headroom the
+  // business does not have and the suggestion engine offers dates it cannot
+  // serve. That is the SILENT half of the production-hygiene defect: a wrong
+  // capacity number nobody can see is wrong.
+  // ⛔ Tier 1 only (lib/fixtureData) — a real employee named “Demo” keeps counting.
+  const techs = workforceKnown
+    ? withoutFixtures((tRes.data as WorkerForAvailability[]) || [], t => t.name)
+    : []
   // GRANTED leave only, through the one shared predicate.
   const pto = workforceKnown
     ? (((pRes.data as (ApprovedTimeOffDay & { status?: string | null })[]) || []).filter(isBookedOff))

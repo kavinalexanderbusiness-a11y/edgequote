@@ -2497,6 +2497,12 @@
  },
  {
   "tbl": "service_templates",
+  "indexdef": "CREATE INDEX service_templates_published_idx ON public.service_templates USING btree (user_id, sort_order, name) WHERE (is_active AND (published_at IS NOT NULL))",
+  "indexname": "service_templates_published_idx",
+  "backs_constraint": false
+ },
+ {
+  "tbl": "service_templates",
   "indexdef": "CREATE INDEX service_templates_user_idx ON public.service_templates USING btree (user_id)",
   "indexname": "service_templates_user_idx",
   "backs_constraint": false

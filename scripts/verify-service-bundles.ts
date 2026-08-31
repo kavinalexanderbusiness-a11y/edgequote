@@ -62,7 +62,7 @@ const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8')
 const T = (over: Partial<ServiceTemplate> & { id: string; default_rate: number }): ServiceTemplate => ({
   created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
   name: 'Fixture service', category: 'General', pricing_display_type: 'starting_from',
-  default_description: null, notes: null, is_active: true, sort_order: 0, user_id: 'u1',
+  default_description: null, notes: null, is_active: true, published_at: null, sort_order: 0, user_id: 'u1',
   unit_cost: null, material_cost: null, is_favorite: false, recurrence: null, form_template_id: null,
   measured_by: null, ...over,
 });
