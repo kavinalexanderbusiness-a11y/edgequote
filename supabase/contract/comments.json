@@ -51,6 +51,11 @@
    "comment": "THE writer of a customer's scheduling preference. Token proves the customer; quote must be theirs and 'accepted'. A preference is a request — it never creates, moves, or implies a visit. All-null clears it."
   },
   {
+   "fn": "public_services",
+   "args": "p_token text",
+   "comment": "The public website catalogue. ANONYMOUS + edge-cached. Returns PUBLISHED services only (is_active AND published_at is not null) — see the boundary note in the body. ⛔ Never widen this to is_active alone."
+  },
+  {
    "fn": "quote_acceptance_is_current",
    "args": "p_quote_id uuid",
    "comment": "THE gate: does a live, un-drifted acceptance authorize this quote's CURRENT commercial terms? False when nothing ever accepted it, when a material fact changed since, or when the tenant's terms moved. Mirrored (never re-derived) by hasCurrentValidAcceptance() in src/lib/quoteAcceptance."
@@ -718,6 +723,11 @@
    "col": "measured_by",
    "tbl": "service_templates",
    "comment": "How this service is measured on the map: area | length | count. NULL = not stated; lib/measurePricing falls back to pricing_display_type. NULL is also how a service says \"not measured\" in practice — Measure & Price is not offered for it."
+  },
+  {
+   "col": "published_at",
+   "tbl": "service_templates",
+   "comment": "When this service was explicitly made customer-visible. NULL = INTERNAL: the owner may quote with it, but public_services() and get_portal_data() will not return it. Set = PUBLISHED. is_active is the master switch and wins over this: a switched-off service is never public regardless. ⛔ Never backfilled — publication is an act, not a migration."
   },
   {
    "col": "recurrence",

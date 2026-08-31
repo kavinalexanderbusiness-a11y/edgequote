@@ -86,7 +86,7 @@ export default function LaborPage() {
         // includeArchived: labour COST is historical. Hours worked by someone who
         // has since left were still paid, and dropping them understates the cost of
         // every past job they touched.
-        loadTechnicians(supabase, user.id, { includeArchived: true }),
+        loadTechnicians(supabase, user.id, { includeArchived: true, includeFixtures: true }),
         loadCrews(supabase, user.id),
         supabase.from('jobs').select('id, customer_id, scheduled_date, service_type, price, duration_minutes').eq('user_id', user.id),
         supabase.from('customers').select('id, name').eq('user_id', user.id),
