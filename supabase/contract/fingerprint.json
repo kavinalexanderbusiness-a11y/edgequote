@@ -1,18 +1,18 @@
 {
   "_comment": "Production's schema shape at capture time, from public.schema_fingerprint(). `npm run verify:schema` compares live production against this. Regenerate with `npm run schema:contract` — never hand-edit a hash to make the guard pass, because the hash is the only thing standing between a silent production change and a rebuild that quietly omits it.",
-  "captured_at": "2026-08-30 08:12:32.549064+00",
+  "captured_at": "2026-08-31 05:54:12.127707+00",
   "captured_from": "production, PostgreSQL 17.6 on aarch64-unknown-linux-gnu",
   "baseline": "supabase/migrations/*_baseline.sql",
-  "overall": "72caa9c97ee27aa28a38a49cd66a2d3f",
-  "latest_migration": "20260830130000",
+  "overall": "bfb2b83527829a8fd5209ffa80e7bae3",
+  "latest_migration": "20260830150000",
   "sections": {
     "tables": {
       "n": 116,
       "md5": "db4e197b2b6c059fcc7ebee50b9d104c"
     },
     "columns": {
-      "n": 1598,
-      "md5": "b4673c155ec75bb0c7105dbc10b4bddb"
+      "n": 1601,
+      "md5": "c78c42c233b6ce99ac8269b2e7084d70"
     },
     "indexes": {
       "n": 468,
@@ -31,20 +31,20 @@
       "md5": "5a6d776ae7e2fa3e987fc954943499d8"
     },
     "triggers": {
-      "n": 137,
-      "md5": "cf87e783dc0724884c30dfc4e9f57ca7"
+      "n": 138,
+      "md5": "731fc0148fce59bc6a44339bd4fb1192"
     },
     "fn_grants": {
-      "n": 166,
-      "md5": "8723daca903e6a1f13ac11f3163799a1"
+      "n": 167,
+      "md5": "559d10474012bd04dd8140c02def4f52"
     },
     "functions": {
-      "n": 166,
-      "md5": "36d52ad2d4e397ceb19a86999f62e32b"
+      "n": 167,
+      "md5": "c7373c3cc5ef9627331d75d470a799ab"
     },
     "constraints": {
-      "n": 651,
-      "md5": "080091b599b87dc1bec7d8b289f0f1bc"
+      "n": 652,
+      "md5": "027422c9860a148b2a3e988d18be09de"
     },
     "table_grants": {
       "n": 116,

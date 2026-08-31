@@ -27,6 +27,11 @@ export default function QuotesPage() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [uid, setUid] = useState<string | null>(null)
+  // The owner's Terms & Conditions — the bulk-send gate compares them against
+  // each quote's deposit rule (lib/payments/termsTimingConflict). Loaded beside
+  // the list, never blocking it: null simply means the terms check is skipped,
+  // which is the same answer an owner with no terms gets.
+  const [termsText, setTermsText] = useState<string | null>(null)
 
   const supabase = useMemo(() => createClient(), [])
 
@@ -55,6 +60,15 @@ export default function QuotesPage() {
     const reach: Record<string, ReachCustomer> = {}
     for (const c of (custRes.data as (ReachCustomer & { id: string })[]) || []) reach[c.id] = c
     setReachById(reach)
+    // Terms, for the bulk-send gate. Deliberately AFTER the list is populated and
+    // never awaited alongside it: a failed or slow settings read must not delay or
+    // blank the quote list. Left null on failure, which skips the terms check —
+    // the same behaviour as an owner who has written no terms. ⚠️ That is a
+    // fail-OPEN, and it is the right trade here: this gate protects against the
+    // owner's own stale wording, not against an attacker, and refusing to let
+    // anyone send because a settings read blipped would be the worse failure.
+    void supabase.from('business_settings').select('terms_text').eq('user_id', user!.id).maybeSingle()
+      .then(({ data: bs }) => setTermsText((bs as { terms_text: string | null } | null)?.terms_text ?? null))
     setQuotes(data || [])
     // Cache only the first screenful — enough for an instant revisit paint, without
     // JSON-serializing thousands of rows into sessionStorage on every fetch. The full
@@ -139,6 +153,7 @@ export default function QuotesPage() {
           quotes={quotes}
           onDelete={handleDelete}
           reachById={reachById}
+          termsText={termsText}
           onNotesSaved={(id, patch) => setQuotes(p => p.map(q => q.id === id ? { ...q, ...patch } : q))}
         />
       )}

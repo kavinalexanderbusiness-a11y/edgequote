@@ -1160,5 +1160,19 @@
   "sql_md5": "00fe22527e830740dc255f7fd85bbc73",
   "version": "20260830130000",
   "stmt_count": 1
+ },
+ {
+  "name": "terms_payment_claim_columns",
+  "sql_len": 5880,
+  "sql_md5": "0c2c63304dd2a946be9a56177780f79d",
+  "version": "20260830140000",
+  "stmt_count": 1
+ },
+ {
+  "name": "acceptance_terms_gate",
+  "sql_len": 6589,
+  "sql_md5": "60773aacc273664282d9bf3741447c93",
+  "version": "20260830150000",
+  "stmt_count": 1
  }
 ]

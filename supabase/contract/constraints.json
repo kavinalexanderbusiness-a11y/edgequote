@@ -224,6 +224,13 @@
   "convalidated": true
  },
  {
+  "def": "CHECK (((terms_payment_claim IS NULL) OR (terms_payment_claim = ANY (ARRAY['no_claim'::text, 'no_money_before_work'::text, 'money_before_work'::text, 'ambiguous'::text]))))",
+  "tbl": "business_settings",
+  "conname": "business_settings_terms_payment_claim_check",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
   "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
   "tbl": "business_settings",
   "conname": "business_settings_user_id_fkey",

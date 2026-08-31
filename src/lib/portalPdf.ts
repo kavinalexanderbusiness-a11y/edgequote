@@ -34,6 +34,15 @@ export interface PortalPdfQuote {
   // document they keep says something different from the one that was sent.
   options?: PortalQuoteOption[] | null
   selected_option_id?: string | null
+  // ⭐ The scheduling-deposit RULE, and the price it is taken of. get_portal_data
+  // already returns all three (they drive the portal's own deposit panel), but
+  // this bridge dropped them — so the PDF the customer downloads and keeps was
+  // the ONE copy of their quote that could not state when their money was due,
+  // on exactly the quotes where that matters. Optional: an older cached payload
+  // resolves to null, which is precisely "no deposit required".
+  accepted_price?: number | null
+  deposit_type?: string | null
+  deposit_value?: number | null
 }
 export interface PortalPdfInvoice {
   invoice_number: string; service_type: string | null; amount: number; status: string
@@ -91,6 +100,14 @@ function portalQuoteToQuote(q: PortalPdfQuote, customerName: string): Quote {
     // render an already-decided quote as though the choice were still open —
     // "Choose One Option" on a document for a job that is already booked.
     selected_option_id: q.selected_option_id ?? null,
+    // Same reason as selected_option_id above: the deposit rule has to survive
+    // the mapping, or the customer's own PDF prints "Nothing is charged when you
+    // approve" for a quote the portal is about to gate behind a deposit. The
+    // consent snapshot travels with it — it is what a PERCENT rule is taken of
+    // once the quote is approved.
+    accepted_price: q.accepted_price ?? null,
+    deposit_type: q.deposit_type ?? null,
+    deposit_value: q.deposit_value ?? null,
   } as unknown as Quote
 }
 
