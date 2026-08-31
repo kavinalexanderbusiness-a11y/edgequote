@@ -199,17 +199,43 @@ console.log('\n── 4. ⭐⭐ NO SINGLE VISIT MAY DOMINATE ──')
 
 console.log('\n── 5. Fixture / test records are refused — and narrowly ──')
 {
+  // ⭐⭐ RE-EXPRESSED (Session 114) — this section now describes ONE classifier.
+  // `looksLikeFixture` used to keep its own marker list; it now delegates to
+  // lib/fixtureData, and two of the assertions here were encoding the very
+  // over-breadth that made converging necessary. Both are inverted below, with
+  // the reason, rather than deleted:
+  //
+  //   'S61 Field Home'      was asserted CAUGHT by /^s\d{2,3}\s/. That pattern
+  //                         cannot tell it from "S61 Roofing Ltd" — and measured
+  //                         across the whole repo, "S61 Field Home" is written by
+  //                         NO harness. It appeared only in this assertion. It is
+  //                         the name of the S61 FEATURE, not of a fixture row, so
+  //                         catching it was always wrong and nothing real is lost.
+  //
+  //   'Test Customer Record' was asserted CAUGHT by a (test|demo|sample)+(data|
+  //                         record|…) pair. That is Tier 2 in the canonical rule:
+  //                         test-LOOKING data is flagged for a human, never acted
+  //                         on. "Demo Farms" and "Soil Testing" are real money.
   check('an explicit fixture marker is caught', looksLikeFixture('ZZ S111 Fixture A'), '')
   check('a delete-me marker is caught', looksLikeFixture('S61 FIELD FIXTURE — DELETE ME'), '')
-  check('a session-numbered artefact is caught', looksLikeFixture('S61 Field Home'), '')
-  check('"test data" is caught', looksLikeFixture('Test Customer Record'), '')
-  check('an example.com address is caught', looksLikeFixture('bob@example.com'), '')
+  check('a harness-joined token is caught', looksLikeFixture('S61-FIXTURE CREW'), '')
+  // ⭐ COVERAGE THIS FILE'S OLD RULE DID NOT HAVE. Growth had no VERIFY- rule, so
+  // guard fixtures tagged that way were counted as real money by the one report
+  // built to exclude them. Converging fixed a narrowness, not only a breadth.
+  check('a VERIFY- guard fixture is caught (it was NOT, before convergence)',
+    looksLikeFixture('VERIFY-ADDONS-3391'), '')
+  check('a reserved documentation address is caught', looksLikeFixture('bob@example.com'), '')
   // ⛔⛔ AND THE OTHER HALF, WHICH MATTERS AS MUCH: excluding a REAL customer's
   // revenue is as much a trust failure as including a fixture's.
   check('a real business with "Test" in its name is NOT excluded', !looksLikeFixture('Test Valley Landscaping'), '')
   check('a real surname is NOT excluded', !looksLikeFixture('Sample & Sons Roofing'), '')
   check('an ordinary name is NOT excluded', !looksLikeFixture('Edge Property Services'), '')
   check('an empty label is not a fixture', !looksLikeFixture(null, undefined, ''), '')
+  // ⛔ The four names the convergence was ordered to protect.
+  check('an electrician\'s real service is NOT excluded', !looksLikeFixture('Light Fixture Installation'), '')
+  check('a roofer named for a session number is NOT excluded', !looksLikeFixture('S61 Roofing Ltd'), '')
+  check('a customer called Demo Farms is NOT excluded', !looksLikeFixture('Demo Farms'), '')
+  check('a ZZ-prefixed real business is NOT excluded', !looksLikeFixture('ZZ Top Tribute Band Venue Clean'), '')
 
   const e = assessEvidence({
     visits: [visit(70), visit(70), visit(70), visit(9000, { labels: ['ZZ S111 Fixture A', 'Snow'] })],

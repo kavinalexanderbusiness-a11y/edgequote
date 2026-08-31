@@ -95,6 +95,56 @@ const SELF_IDENTIFYING = [
 ] as const
 
 /**
+ * ⭐⭐ HARNESS-SHAPED FIXTURE NAMES — the second conjunction, added when Growth's
+ * rival classifier was folded into this one (Session 114).
+ *
+ * Growth had its own marker list, and it classified on SINGLE words. Measured
+ * against these two rules it was both too broad AND too narrow:
+ *
+ *   TOO BROAD   /\bfixture\b/  classified "Light Fixture Installation".
+ *               /^s\d{2,3}\s/  classified "S61 Roofing Ltd".
+ *               Both are ordinary businesses. An electrician and a roofer would
+ *               have watched their own revenue vanish out of Growth.
+ *
+ *   TOO NARROW  it had no rule for `VERIFY-…`, so guard fixtures tagged that way
+ *               counted as real money in the very report meant to exclude them.
+ *
+ * These two shapes close the gap the narrow direction left, WITHOUT importing
+ * the broad direction. Both are anchored at the start and both still require the
+ * word "fixture", so neither half acts alone — the same discipline as
+ * SELF_IDENTIFYING above:
+ *
+ *   "S61-FIXTURE CREW"            → harness token, joined by a hyphen. Classified.
+ *   "ZZ S111 Fixture A"           → zz-prefixed AND says fixture. Classified.
+ *   "Light Fixture Installation"  → says fixture, no harness token. NOT classified.
+ *   "S61 Roofing Ltd"             → harness-shaped token, never says fixture. NOT.
+ *   "ZZ Top Tribute Band Venue Clean" → zz-prefixed, never says fixture. NOT.
+ *
+ * ⭐ The hyphen in the first rule is load-bearing. `S61-FIXTURE` is how a script
+ * joins a token to a word; `S61 Light Fixture Co` is how a person writes a name.
+ * Requiring the join is what separates them, and it is why the rule is a regex
+ * rather than another word pair.
+ */
+const HARNESS_SHAPES: readonly { shape: RegExp; alsoSays?: string }[] = [
+  // scripts/s61-field-cdp.mjs: "S61-FIXTURE", "S61-FIXTURE CREW", "S61-fixture-…"
+  { shape: /^s\d{1,3}[-_]fixture\b/i },
+  // scripts/recurring-quote-fixture.mjs: "ZZ S111 Fixture A" — space-separated, so
+  // the anchored `zz-` prefix misses it; the word "fixture" is what makes it safe.
+  { shape: /^zz[\s\-_]/i, alsoSays: 'fixture' },
+]
+
+/**
+ * Domains RFC 2606 and RFC 6761 RESERVE for documentation and testing. They can
+ * never belong to a real business, which is the only reason an address is
+ * allowed to classify at all — no English word is being judged here.
+ *
+ * ⚠️ Deliberately NOT `test@…`: a real company genuinely runs test@theirdomain
+ * as a shared inbox, and Growth's old rule matched it. Measured before removing:
+ * ZERO harnesses in scripts/ write a `test@` address, so nothing real is lost.
+ */
+const RESERVED_EMAIL_DOMAINS = /@(example\.(com|org|net)|.*\.(invalid|test|localhost))$/i
+
+/**
  * ⭐⭐ THE predicate. True only for Tier 1 — a row a machine created and labelled.
  *
  * ⛔ It takes the NAME, not the row, deliberately: every entity on this seam
@@ -117,6 +167,11 @@ export function isFixtureName(name: string | null | undefined): boolean {
   // ⭐ The conjunction rule — position-independent BECAUSE both halves must be
   // present. See SELF_IDENTIFYING for why a single keyword would be unsafe here.
   if (SELF_IDENTIFYING.some(r => n.includes(r.needs) && n.includes(r.and))) return true
+  // ⭐ Harness shapes: anchored, and each still requires the word "fixture"
+  // (either inside the shape itself or via `alsoSays`). See HARNESS_SHAPES.
+  if (HARNESS_SHAPES.some(r => r.shape.test(n) && (!r.alsoSays || n.includes(r.alsoSays)))) return true
+  // A reserved documentation/testing domain cannot be a real business address.
+  if (RESERVED_EMAIL_DOMAINS.test(n)) return true
   // Anchored at the start. `includes()` would classify "Deck ZZ-Top Mural".
   return FIXTURE_PREFIXES.some(p => n.startsWith(p))
 }

@@ -14,11 +14,16 @@ import { execSync } from 'node:child_process'
 
 const MUTATIONS = [
   // ── 1. FIXTURE DATA INCLUDED ───────────────────────────────────────────────
+  // ⚠️ RETARGETED (Session 114). Two mutations here used to break Growth's own
+  // `FIXTURE_MARKERS` list. That list is gone — Growth delegates to
+  // lib/fixtureData — so those patterns would now match nothing and report as
+  // no-ops, which reads as "survived" and looks like a guard hole. They aim at
+  // the canonical rule instead, testing the SAME two failure modes.
   {
     file: 'src/lib/growthEvidence.ts',
-    name: 'fixture included (the fixture flag stops flagging)',
-    from: '    if (FIXTURE_MARKERS.some(rx => rx.test(s))) return true',
-    to: '    if (false && FIXTURE_MARKERS.some(rx => rx.test(s))) return true',
+    name: 'fixture included (Growth stops asking the canonical rule)',
+    from: '  return isAnyFixtureName(...texts)',
+    to: '  return false',
   },
   {
     file: 'src/lib/growthEvidence.ts',
@@ -28,12 +33,37 @@ const MUTATIONS = [
   },
   // ⛔ The mirror-image failure: over-broad exclusion is as much a trust breach
   // as contamination. A real business called "Test Valley Landscaping" must keep
-  // its revenue.
+  // its revenue — and, since the convergence, so must "Light Fixture
+  // Installation" and "S61 Roofing Ltd".
   {
-    file: 'src/lib/growthEvidence.ts',
-    name: 'the fixture rule goes over-broad and eats a real customer',
-    from: '  /\\b(test|demo|sample|dummy)\\s*(data|record|customer|account|job|service)\\b/i,',
-    to: '  /(test|demo|sample|dummy)/i,',
+    file: 'src/lib/fixtureData.ts',
+    name: 'the conjunction collapses to a single keyword (eats a real electrician)',
+    from: '  if (SELF_IDENTIFYING.some(r => n.includes(r.needs) && n.includes(r.and))) return true',
+    to: '  if (SELF_IDENTIFYING.some(r => n.includes(r.needs) || n.includes(r.and))) return true',
+  },
+  {
+    file: 'src/lib/fixtureData.ts',
+    name: 'the harness shape stops requiring the word "fixture" (eats a real roofer)',
+    from: '  if (HARNESS_SHAPES.some(r => r.shape.test(n) && (!r.alsoSays || n.includes(r.alsoSays)))) return true',
+    to: '  if (HARNESS_SHAPES.some(r => r.shape.test(n))) return true',
+  },
+  {
+    file: 'src/lib/fixtureData.ts',
+    name: 'the session token loses its hyphen (S61 Light Fixture Co becomes a fixture)',
+    from: '  { shape: /^s\\d{1,3}[-_]fixture\\b/i },',
+    to: '  { shape: /^s\\d{1,3}[-_ ]*fixture/i },',
+  },
+  {
+    file: 'src/lib/fixtureData.ts',
+    name: 'the zz shape stops being anchored (Deck ZZ fixture mural becomes a fixture)',
+    from: "  { shape: /^zz[\\s\\-_]/i, alsoSays: 'fixture' },",
+    to: "  { shape: /zz[\\s\\-_]/i, alsoSays: 'fixture' },",
+  },
+  {
+    file: 'src/lib/fixtureData.ts',
+    name: 'reserved-domain matching widens to any address containing "example"',
+    from: "const RESERVED_EMAIL_DOMAINS = /@(example\\.(com|org|net)|.*\\.(invalid|test|localhost))$/i",
+    to: "const RESERVED_EMAIL_DOMAINS = /example/i",
   },
 
   // ── 2. UNKNOWN PRICE INCLUDED ──────────────────────────────────────────────
@@ -193,7 +223,14 @@ for (const m of MUTATIONS) {
   writeFileSync(m.file, original.replace(anchor, m.to.replace(/\$/g, '$$$$')))
   let red = false
   try {
+    // ⭐ BOTH guards, since Session 114 (the convergence). The fixture rule now
+    // lives in lib/fixtureData and Growth delegates to it, so a break in that one
+    // rule is a break in two features: Growth's exclusions AND the hygiene tiers.
+    // Running only Growth's guard would let a mutation that hides a real
+    // electrician's service pass, as long as Growth's own cases happened to miss
+    // it. Either going red is a catch — that is what a shared engine means.
     execSync('npm run verify:growth-quality', { stdio: 'pipe' })
+    execSync('npm run verify:production-hygiene', { stdio: 'pipe' })
   } catch {
     red = true
   } finally {
