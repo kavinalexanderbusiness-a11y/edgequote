@@ -264,8 +264,31 @@ async function main() {
   ] as const) {
     const { data, error } = await sb.from(table).select('id, name').order('name')
     if (error) { line(`  ⚠️  could not read ${table}: ${error.message}`); continue }
-    const rows = ((data ?? []) as Array<{ id: string; name: string }>).filter(r => isFixtureName(r.name))
-    line(`  ${table}: ${rows.length} fixture row(s).`)
+    const all = (data ?? []) as Array<{ id: string; name: string }>
+    const rows = all.filter(r => isFixtureName(r.name))
+    line(`  ${table}: ${rows.length} fixture row(s) of ${all.length}.`)
+
+    // ── ⚠️ TIER 2 for the workforce: the same person, twice ──────────────────
+    // Duplicates are already a catalogue-quality rule for services; the roster
+    // needs it too, and for a sharper reason. Two rows for one person split
+    // their hours, their pay and their capacity across two identities, and the
+    // split is invisible — every screen looks plausible. It found a real pair
+    // here (one archived, one active), which is the shape a rehire leaves.
+    //
+    // ⛔ REPORTED, NEVER ACTED ON. A duplicate is not a fixture: both rows may
+    // carry real payroll history, and merging or deleting either is a decision
+    // about statutory records. This says the names and stops.
+    const dupeNames = duplicateNameSet(all.map(r => r.name))
+    if (dupeNames.size) {
+      line(`  ⚠️  ${dupeNames.size} duplicated name(s) in ${table} — REVIEW, not a cleanup candidate:`)
+      for (const n of dupeNames) {
+        const both = all.filter(r => String(r.name).trim().toLowerCase() === n)
+        line(`        "${both[0].name}" ×${both.length}: ${both.map(r => r.id).join(', ')}`)
+      }
+      line('        Two rows for one person split hours, pay and capacity across two')
+      line('        identities, and every screen still looks plausible. ⛔ Merging or')
+      line('        deleting either is a decision about payroll records — not this script’s.')
+    }
     for (const r of rows) {
       const refs = await countRefs(sb, refSpecs.map(spec => {
         const [t, c] = spec.split('.')
