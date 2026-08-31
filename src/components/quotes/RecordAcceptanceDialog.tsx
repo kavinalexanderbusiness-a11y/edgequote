@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
 import { Modal } from '@/components/ui/Modal'
@@ -68,6 +68,8 @@ export function RecordAcceptanceDialog({
   const [reason, setReason] = useState<OnBehalfReason | ''>('')
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
+  // The synchronous in-flight latch. See save() for why state alone cannot do this.
+  const inFlight = useRef(false)
 
   // Adopt the preset each time the dialog is OPENED. Seeding from the prop at
   // mount only would leave the second visit showing the first visit's choice —
@@ -93,30 +95,51 @@ export function RecordAcceptanceDialog({
   const canSave = !needsOption && !!reason && !saving
 
   async function save() {
+    // ⚠️⚠️ A REF, not the `saving` state, is what makes this one-request-per-click.
+    // `canSave` closes over the value `saving` had at RENDER time, so two clicks
+    // inside one frame — or a click plus the modal's ⌘/Ctrl+Enter — both read
+    // `saving === false`, both pass, and both fire. That is how the owner's
+    // screen came to show the same refusal stacked several times over: not one
+    // bug emitting twice, but two requests each honestly reporting their own
+    // failure. The ref flips synchronously, so the second caller returns here.
+    if (inFlight.current) return
     if (!canSave || !reason) return
+    inFlight.current = true
     setSaving(true)
     try {
-      const supabase = createClient()
-      const { data, error } = await supabase.rpc('owner_record_customer_acceptance', {
-        p_quote_id: quoteId,
-        p_reason: reason,
-        ...(chosen ? { p_option_id: chosen.id } : {}),
-        ...(note.trim() ? { p_note: note.trim() } : {}),
+      // ⭐ Through the owner route, not straight to the RPC. The route makes the
+      // stored terms classification CURRENT first (the canonical classifier,
+      // server-side, owner-authenticated) and then calls the same RPC. The
+      // database gate is unchanged and still decides — a real contradiction is
+      // still refused. See app/api/quotes/record-acceptance.
+      const res = await fetch('/api/quotes/record-acceptance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          quoteId, reason,
+          ...(chosen ? { optionId: chosen.id } : {}),
+          ...(note.trim() ? { note: note.trim() } : {}),
+        }),
       })
-      // ⚠️ A null id is a REFUSAL, not a success with nothing to show. The RPC
-      // returns the new acceptance's id, so "no id" means no acceptance was
-      // recorded — and reporting that as done is how an owner comes to believe a
-      // deal is on the record when nothing is.
-      if (error || !data) {
-        toast.error(error?.message
-          ? `Could not record it: ${error.message}`
+      const out = await res.json().catch(() => null) as
+        { ok?: boolean; error?: string; sentence?: string | null } | null
+
+      // ⚠️ A refusal is a refusal — never a success with nothing to show.
+      if (!res.ok || !out?.ok) {
+        toast.error(out?.error
+          ? `Could not record it: ${out.error}`
           : 'Could not record that acceptance — the quote may already be accepted, or it may need to be sent again first.')
         return
       }
       toast.success(`Recorded — ${quoteNumber} is accepted${amount != null ? ` at ${formatCurrency(amount)}` : ''}.`)
       onRecorded()
       onClose()
-    } finally { setSaving(false) }
+    } catch {
+      toast.error('Could not record that acceptance — check your connection and try again.')
+    } finally {
+      inFlight.current = false
+      setSaving(false)
+    }
   }
 
   return (
