@@ -101,6 +101,11 @@ export function injectProjection(fnBody: string): string {
     ['draft-QUOTE privacy predicate', /from public\.quotes qt where qt\.customer_id = v_customer and qt\.user_id = v_user and qt\.status <> 'draft'/],
     ['draft-INVOICE privacy predicate', /from public\.invoices where customer_id = v_customer and user_id = v_user and status <> 'draft'/],
     ['tenant filter on the customer row', /from public\.customers where id = v_customer and user_id = v_user/],
+    // S113 (landed 2026-08-30, main 21ca4a44): "active is not published". The
+    // services catalogue may only show what the owner has PUBLISHED — losing
+    // this predicate re-opens the exposure S113 closed, so a function without
+    // it is a function this generator refuses to touch.
+    ['S113 service-publication gate', /from public\.service_templates\s*\r?\n\s*where user_id = v_user and is_active and published_at is not null/],
   ]
   for (const [name, re] of REQUIRED) {
     if (!re.test(stripped)) throw new Error(`REFUSED: expected shape missing — ${name}. The function has changed; update this generator deliberately.`)

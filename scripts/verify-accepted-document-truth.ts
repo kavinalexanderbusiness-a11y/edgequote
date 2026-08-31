@@ -277,14 +277,18 @@ if (migFile) {
     !/\binternal_notes\b|\bcompletion_issue\b/.test(sqlOnly))
   check('tenant filters survive on the customer row',
     /from public\.customers where id = v_customer and user_id = v_user/.test(sqlOnly))
-  // S113 forward-arm: the day the baseline's services block gains a publication
-  // gate, the byte-delta above forces regeneration and THIS check starts
-  // asserting the migration carries it too.
-  const baselineHasPublication = /is_published/.test(baselineFn)
-  check(baselineHasPublication
-    ? 'the S113 publication gate survives into the migration'
-    : 'publication gate not yet on main (S113 unlanded) — byte-delta stands watch',
-    baselineHasPublication ? /is_published/.test(sqlOnly) : true)
+  // S113 landed (main 21ca4a44): "active is not published" — the services
+  // catalogue is gated on `published_at is not null`, and losing that predicate
+  // re-opens the exposure S113 closed. Asserted BOTH on the current baseline
+  // (so this check can never silently watch the wrong vocabulary again — the
+  // first version grepped `is_published`, a column that never existed, and
+  // reported S113 "unlanded" while it was on main) AND on the migration body.
+  const PUBLICATION = /where user_id = v_user and is_active and published_at is not null/
+  check('the S113 publication gate is in the current baseline\'s function',
+    PUBLICATION.test(baselineFn.split(/\r?\n/).filter(l => !l.trim().startsWith('--')).join('\n')),
+    'the baseline lost the publication gate — that is an incident, not a regeneration')
+  check('…and survives into the migration',
+    PUBLICATION.test(sqlOnly))
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
