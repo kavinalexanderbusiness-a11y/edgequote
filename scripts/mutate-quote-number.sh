@@ -440,15 +440,16 @@ mutate full "a release path re-added, so a deleted number is freed" \
   "$PROPOSAL" \
   's/  drop trigger if exists quotes_release_document_number on public\.quotes;\n\n  -- 4 · /  create function public.release_document_number() returns trigger language plpgsql security definer set search_path to '"'"'public'"'"', '"'"'pg_temp'"'"' as $rel$ begin delete from public.document_number_claims where user_id = old.user_id and kind = '"'"'quote'"'"' and number = old.quote_number; return null; end; $rel$;\n  create trigger quotes_release_document_number after delete on public.quotes for each row execute function public.release_document_number();\n\n  -- 4 · /'
 
-# 31b · ⭐⭐ THE SAME RELEASE PATH WITH THAT ASSERTION SILENCED. Mutation 31
-#        proves the migration REFUSES to install a release path. This proves the
-#        BEHAVIOUR is tested too, so the invariant is not defended by an
-#        apply-time check alone — without the pair, deleting that assertion later
-#        would quietly leave the real rule untested.
-mutate full "a release path re-added AND the apply-time assertion silenced" \
-  "a DIFFERENT quote cannot take a deleted quote's number" \
-  "$PROPOSAL" \
-    's/  drop trigger if exists quotes_release_document_number on public\.quotes;\n\n  -- 4 · /  create function public.release_document_number() returns trigger language plpgsql security definer set search_path to '"'"'public'"'"', '"'"'pg_temp'"'"' as $rel$ begin delete from public.document_number_claims where user_id = old.user_id and kind = '"'"'quote'"'"' and number = old.quote_number; return null; end; $rel$;\n  create trigger quotes_release_document_number after delete on public.quotes for each row execute function public.release_document_number();\n\n  -- 4 · /; s/    raise exception '"'"'quote_number_integrity: the release trigger is still attached — claims would not be permanent'"'"';/    raise notice '"'"'silenced'"'"';/'
+# ⭐ THERE IS NO 31b. A paired mutation that silenced the apply-time assertion
+#   was written and then removed, because its premise was wrong: the static
+#   rules above read the PROPOSAL, so a mutation of the proposal cannot silence
+#   them. A re-added release path is caught three times over — two static rules
+#   and the apply-time assertion — and the migration refuses before any
+#   behaviour runs, which is the correct outcome and not a gap.
+#   ⭐ The BEHAVIOURAL delete-then-stranger check is proven to bite by mutations
+#   33 and 34 below, which break the identity rule while leaving the file shaped
+#   exactly as the static rules expect. That pair is what keeps the real
+#   invariant from resting on apply-time checks alone.
 
 # 32 · ⭐ A DELETE STATEMENT AGAINST THE REGISTRY, ANYWHERE. The static rule is
 #      absolute — nothing in this file may delete a claim — so it is pinned
