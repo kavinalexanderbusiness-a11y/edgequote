@@ -32,8 +32,14 @@ const mow = (cid: string, date: string, price = 60, over: object = {}) => ({
   customer_id: cid, status: 'completed', scheduled_date: date,
   service_type: 'Weekly Mowing', recurrence_id: null as string | null, quote_id: null, price, ...over,
 })
-const weekly = { freq: 'weekly', interval_unit: null, interval_count: null }
-const RECS = { rB: weekly, rC: weekly, rD: weekly, rG: weekly }
+// ⭐⭐ THE SERIES DECLARES ITS SEASON (S110). These used to carry no season at
+// all: the season was guessed from each visit's service_type, so G read as snow
+// only because a visit happened to be called "Snow Removal". The declaration is
+// the series' own fact now, which is why G can be renamed and still be dormant
+// in July rather than "at risk".
+const weekly = { freq: 'weekly', interval_unit: null, interval_count: null, season_key: 'lawn' }
+const weeklySnow = { ...weekly, season_key: 'snow' }
+const RECS = { rB: weekly, rC: weekly, rD: weekly, rG: weeklySnow }
 
 const CUSTOMERS = [
   cust('A', 'Fresh', '2026-07-15'),          // brand new, nothing yet

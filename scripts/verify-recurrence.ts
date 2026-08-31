@@ -513,7 +513,10 @@ const endedPlan = planOf(
 check('end date passed → ended (not "paused")', endedPlan.status, 'ended')
 
 const dormantPlan = planOf(
-  rec({ id: 'd', start_date: '2026-01-07' }),
+  // ⭐ Declares snow. PLAN_TODAY sits in August — inside lawn, outside snow — so
+  // this is the "dormant, not lost" case, and it now comes from the DECLARATION
+  // rather than from the visits being titled "Snow Removal".
+  rec({ id: 'd', start_date: '2026-01-07', season_key: 'snow' }),
   ['2026-01-07', '2026-03-04'].map((d, i) =>
     job({ id: 'd' + i, recurrence_id: 'd', scheduled_date: d, status: 'completed', service_type: 'Snow Removal' })))
 check('snow series in August → dormant, via the lifecycle detector', dormantPlan.status, 'dormant')
