@@ -90,7 +90,7 @@ export default function TimesheetPage() {
         // includeArchived: this is the paid-time LEDGER. Shifts worked by someone
         // who has since left still have to render with their name and wage —
         // that is the payroll record PAY-1 exists to preserve.
-        loadTechnicians(supabase, user.id, { includeArchived: true }),
+        loadTechnicians(supabase, user.id, { includeArchived: true, includeFixtures: true }),
         loadTimeEntries(supabase, user.id, { fromISO, toISO }),
       ])
       // THE payroll engine decides what a work week is. Reading the column

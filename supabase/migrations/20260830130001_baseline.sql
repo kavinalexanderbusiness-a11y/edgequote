@@ -9,7 +9,7 @@
 -- This file is the ONE starting point for a database. Applying it to an empty
 -- Postgres 17 database produces the production schema contract:
 --   116 tables · 166 functions · 137 triggers · 374 policies
---   649 constraints · 296 standalone indexes · 7 storage buckets
+--   649 constraints · 297 standalone indexes · 7 storage buckets
 --
 -- IT DOES NOT RESTORE DATA. Not one row. Rebuilding a working production system
 -- is: this file, THEN a backup restore, THEN storage objects, THEN env config.
@@ -1657,7 +1657,8 @@ create table if not exists public."service_templates" (
   "is_favorite" boolean default false not null,
   "recurrence" text,
   "form_template_id" uuid,
-  "measured_by" text
+  "measured_by" text,
+  "published_at" timestamp with time zone
 );
 create table if not exists public."service_units" (
   "id" uuid default gen_random_uuid() not null,
@@ -2713,6 +2714,7 @@ declare
   v_address text; v_city text; v_postal text; v_province text;
   v_service text; v_sqft numeric; v_date date; v_notes text;
   v_rate numeric; v_job uuid; v_quote uuid; v_num int; v_qnum text := null; v_mode text;
+  v_fallback_service text;
 begin
   select user_id into v_user from public.business_settings where booking_token = p_token and booking_enabled = true;
   if v_user is null then return null; end if;
@@ -2728,6 +2730,11 @@ begin
   v_province := coalesce(nullif(trim(p_payload->>'province',''),''), 'AB');
   v_service := nullif(trim(coalesce(p_payload->>'serviceType', p_payload->>'service', p_payload->>'requestedServices','')), '');
   v_notes   := nullif(trim(coalesce(p_payload->>'notes', p_payload->>'message','')), '');
+  select name into v_fallback_service from public.service_templates
+   where user_id = v_user and is_active and published_at is not null
+   order by sort_order, name limit 1;
+  v_fallback_service := coalesce(v_fallback_service, 'Service');
+
   begin v_sqft := nullif((p_payload->>'sqft')::numeric, 0); exception when others then v_sqft := null; end;
   begin v_date := (p_payload->>'requestedDate')::date; exception when others then v_date := null; end;
   if v_name is null then return json_build_object('error','missing_name'); end if;
@@ -2768,7 +2775,7 @@ begin
     -- config never touched it. resolveQuoteProvenance() reads this as
     -- 'not_engine_priced' and says so, instead of implying a rate card it never used.
     insert into public.quotes (user_id, quote_number, customer_id, customer_name, address, service_type, initial_price, status, measured_sqft, property_id, sent_at, price_source)
-      values (v_user, v_qnum, v_customer, left(v_name,200), v_address, coalesce(v_service,'Lawn Mowing'), v_rate, 'sent', v_sqft, v_prop, now(), 'template_rate') returning id into v_quote;
+      values (v_user, v_qnum, v_customer, left(v_name,200), v_address, coalesce(v_service, v_fallback_service), v_rate, 'sent', v_sqft, v_prop, now(), 'template_rate') returning id into v_quote;
   end if;
 
   insert into public.service_requests (user_id, customer_id, message)
@@ -4691,7 +4698,7 @@ begin
     'services', coalesce((select json_agg(s order by s.sort_order, s.name) from (
       select name, category, default_rate, pricing_display_type, default_description, sort_order
       from public.service_templates
-      where user_id = v_user and is_active
+      where user_id = v_user and is_active and published_at is not null
     ) s), '[]'::json),
     -- UNCHANGED — the primary property. Kept because Home/PropertyTab/PDF fallbacks
     -- read it today; 'properties' below is the addition, not a replacement.
@@ -6199,10 +6206,17 @@ begin
     'business', (select to_json(b) from (
       select company_name, owner_name, logo_url, phone, email_primary, website, base_address, coalesce(gst_percent,0) as gst_percent
       from public.business_settings where user_id = v_user) b),
+    -- ⛔⛔ `and published_at is not null` IS THE PRIVACY/QUALITY BOUNDARY, not a
+    -- filter preference. This function is reachable ANONYMOUSLY with only a
+    -- booking token and its answer is cached at the edge for five minutes.
+    -- Without this clause every active service — including anything a test left
+    -- behind — is served to the open internet. Deleting it re-opens exactly the
+    -- exposure this migration was written for.
     'services', (select coalesce(json_agg(json_build_object(
         'id', id, 'name', name, 'category', category, 'description', default_description,
         'default_rate', default_rate, 'pricing_display_type', pricing_display_type) order by sort_order, name), '[]'::json)
-      from public.service_templates where user_id = v_user and is_active = true)
+      from public.service_templates
+      where user_id = v_user and is_active = true and published_at is not null)
   ) into result;
   return result;
 end; $function$;
@@ -8815,7 +8829,7 @@ CREATE TRIGGER worker_availability_updated_at BEFORE UPDATE ON public.worker_ava
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 6 · INDEXES
--- 296 standalone indexes. Constraint-backing indexes are omitted on purpose —
+-- 297 standalone indexes. Constraint-backing indexes are omitted on purpose —
 -- section 4 already created them; declaring both would fail or duplicate.
 -- The partial UNIQUE indexes are correctness, not speed: they are what stops a
 -- second open shift per technician and a duplicate invoice number.
@@ -9084,6 +9098,7 @@ create index if not exists service_requests_open_portal_idx ON public.service_re
 create index if not exists service_requests_user_idx ON public.service_requests USING btree (user_id, status);
 create index if not exists service_templates_active_idx ON public.service_templates USING btree (is_active);
 create index if not exists service_templates_favorite_idx ON public.service_templates USING btree (user_id, is_favorite) WHERE is_favorite;
+create index if not exists service_templates_published_idx ON public.service_templates USING btree (user_id, sort_order, name) WHERE (is_active AND (published_at IS NOT NULL));
 create index if not exists service_templates_user_idx ON public.service_templates USING btree (user_id);
 create unique index if not exists service_units_system_code_key ON public.service_units USING btree (code) WHERE (user_id IS NULL);
 create unique index if not exists service_units_user_code_key ON public.service_units USING btree (user_id, code) WHERE (user_id IS NOT NULL);
@@ -11520,6 +11535,7 @@ comment on column public."service_templates"."form_template_id" is 'Default chec
 comment on column public."service_templates"."is_favorite" is 'Owner shortlist — surfaced first in the quote builder picker.';
 comment on column public."service_templates"."material_cost" is 'Material cost per unit. NULL = not set; never treat as 0.';
 comment on column public."service_templates"."measured_by" is 'How this service is measured on the map: area | length | count. NULL = not stated; lib/measurePricing falls back to pricing_display_type. NULL is also how a service says "not measured" in practice — Measure & Price is not offered for it.';
+comment on column public."service_templates"."published_at" is 'When this service was explicitly made customer-visible. NULL = INTERNAL: the owner may quote with it, but public_services() and get_portal_data() will not return it. Set = PUBLISHED. is_active is the master switch and wins over this: a switched-off service is never public regardless. ⛔ Never backfilled — publication is an act, not a migration.';
 comment on column public."service_templates"."recurrence" is 'Recurrence eligibility: one_time = never suggest recurring; recurring_ok = recurrence suggestions allowed; usually_recurring = this service is normally a recurring plan. NULL = owner has not said (suggestions then require behavioural cadence evidence).';
 comment on column public."service_templates"."unit_cost" is 'What delivering one unit costs (labour/subcontract). NULL = not set; never treat as 0.';
 comment on column public."technicians"."archived_at" is 'Soft-archive: set when the technician leaves the roster (hidden everywhere, record preserved). NULL = active. Removing a technician must archive, never delete — their time_entries/wage_history/pto_entries are statutory records.';
@@ -11542,6 +11558,7 @@ comment on function public."owner_override_quote_status"(p_quote_id uuid, p_stat
 comment on function public."portal_add_contact"(p_token text, p_phone text, p_email text) is 'Portal self-service: fill a MISSING customer phone/email from a valid portal token. Fills only - never overwrites a populated field (an email change is an identity change). Never touches sms_opt_in/email_opt_in/message_prefs. Refuses a value another customer of the same owner already holds. Returns the row state read back after the write.';
 comment on function public."portal_request_photos_ok"(p text[]) is 'Validator for service_requests.photos: at most 6 elements, each a booking-uploads path of the shape portal/<uuid>/<uuid>.<ext>. Used by a CHECK constraint, so it holds no matter which door writes.';
 comment on function public."portal_set_scheduling_preference"(p_token text, p_quote_id uuid, p_date date, p_date_2 date, p_timing text, p_note text) is 'THE writer of a customer''s scheduling preference. Token proves the customer; quote must be theirs and ''accepted''. A preference is a request — it never creates, moves, or implies a visit. All-null clears it.';
+comment on function public."public_services"(p_token text) is 'The public website catalogue. ANONYMOUS + edge-cached. Returns PUBLISHED services only (is_active AND published_at is not null) — see the boundary note in the body. ⛔ Never widen this to is_active alone.';
 comment on function public."quote_acceptance_is_current"(p_quote_id uuid) is 'THE gate: does a live, un-drifted acceptance authorize this quote''s CURRENT commercial terms? False when nothing ever accepted it, when a material fact changed since, or when the tenant''s terms moved. Mirrored (never re-derived) by hasCurrentValidAcceptance() in src/lib/quoteAcceptance.';
 comment on function public."quote_acceptance_kind_now"(p_quote_id uuid) is 'Which kind of acceptance is being (or was) recorded for this quote: customer, owner_on_behalf, or NULL meaning an administrative status change with no acceptance behind it. Reads the doors'' in-flight marker first because the AFTER UPDATE triggers on quotes fire BEFORE the acceptance row is inserted.';
 comment on function public."quote_apply_choice"(p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[], p_via text) is 'THE acceptance core — the single chokepoint under portal_accept_quote, owner_record_customer_acceptance and owner_select_quote_option. Refuses to authorize an UNPRICED quote (null or <= 0 resolved price) unless the quote carries a complete no-charge decision. Unpriced work must never become customer-authorized paid work.';

@@ -68,7 +68,7 @@ export default function PayrollPage() {
         // includeArchived: someone archived MID-PERIOD still worked hours in that
         // period and is still owed them. buildDraftPayRun computes the draft FROM
         // this list, so filtering them out silently underpays a real person.
-        loadTechnicians(supabase, user.id, { includeArchived: true }),
+        loadTechnicians(supabase, user.id, { includeArchived: true, includeFixtures: true }),
       ])
       const s = sRes.data as BusinessSettings | null
       setSettings(s)
