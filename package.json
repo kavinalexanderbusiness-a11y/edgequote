@@ -112,6 +112,7 @@
     "verify:mobile-shell": "tsx scripts/verify-mobile-shell.ts",
     "verify:field-stops": "tsx scripts/verify-field-stops.ts",
     "verify:field-mode": "tsx scripts/verify-field-mode.ts",
+    "verify:workforce-identity": "tsx scripts/verify-workforce-identity.ts",
     "verify:workforce": "tsx scripts/verify-workforce.ts",
     "verify:team": "tsx scripts/verify-team.ts",
     "verify:job-completion": "tsx scripts/verify-job-completion.ts",
