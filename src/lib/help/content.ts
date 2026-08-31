@@ -109,7 +109,13 @@ export const HELP_ARTICLES: HelpArticle[] = [
         body: [
           '**Draft** — yours alone. Your customer cannot see a draft quote in their portal, so you can leave one half-finished without worrying.',
           '**Sent** — it’s in their portal and they can approve it. Their portal calls this *"Awaiting your approval"*.',
-          '**Approved** — they said yes. Nothing has been charged; approving a quote never takes money.',
+          // ⭐ This used to end "…approving a quote never takes money", full stop —
+          // which taught you that approval is always the end of the money story.
+          // On a quote carrying a scheduling deposit it is the START of it, and an
+          // owner who believed otherwise had no idea what their customer was about
+          // to be asked for. The act of approving still charges nothing; what
+          // follows it depends on the rule you set.
+          '**Approved** — they said yes. The approval itself never takes money. If the quote carries a **scheduling deposit**, that deposit is the very next thing they’re asked for, and their booking waits on it.',
           '**Scheduled / Completed** — the work is on the calendar, or done. The quote’s job is finished at this point.',
         ],
       },
@@ -117,7 +123,11 @@ export const HELP_ARTICLES: HelpArticle[] = [
         heading: 'What the customer actually sees',
         body: [
           'They get a private portal link — no password, no account. It shows the quote total, any ongoing plan price per visit, and a plain-English explanation of what’s behind the number: the measured size of their property, the time the work takes, and any travel charge.',
-          'Before they can approve, they’re asked to confirm the amount, and told that approving doesn’t charge them. That’s deliberate — it’s the fear that stops people tapping.',
+          // Describes the customer-facing copy, so it has to stay true to it: the
+          // dialog branches on the deposit rule (lib/payments/paymentTiming), and
+          // a help page that describes only the no-deposit branch misrepresents
+          // your own product back to you.
+          'Before they can approve, they’re asked to confirm the amount, and told that approving doesn’t charge them. That’s deliberate — it’s the fear that stops people tapping. On a quote with a scheduling deposit the same screen also names the deposit they’ll be asked for next, so the promise and the ask can never contradict each other.',
         ],
       },
     ],

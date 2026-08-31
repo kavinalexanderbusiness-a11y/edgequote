@@ -10,6 +10,10 @@ import { displayQuoteStatus } from '@/lib/quoteStatus'
 // THE scheduling-deposit rule (lib/payments/depositGate) — the approve dialog and
 // success banner name the exact ask the charge route will make, from one engine.
 import { requiredDeposit } from '@/lib/payments/depositGate'
+// THE payment-timing words (lib/payments/paymentTiming) — the same reader the
+// quote card and Home render, so the sentence at the moment of commitment cannot
+// contradict the one that led the customer here.
+import { paymentTiming, approvalTimingLine } from '@/lib/payments/paymentTiming'
 import type { QuoteStatus } from '@/types'
 import { renderPortalInvoiceBlob, renderPortalQuoteBlob } from '@/lib/portalPdf'
 import { REQUEST_PHOTO_BUCKET, requestPhotoExt, requestPhotoPath } from '@/lib/portalRequests'
@@ -428,10 +432,17 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     // chosen option + travel: identical to what accepted_price will become).
     // Named at the moment of commitment: "approving doesn't charge you" must
     // not stand unqualified when a deposit request is the very next screen.
-    const depositAsk = requiredDeposit({
+    //
+    // ⭐ One object, read twice: `requiredDeposit` for the figure the banner and
+    // the RPC path need, `paymentTiming` for the words. Both engines take the
+    // SAME structural quote, so the sentence in the dialog and the number under
+    // it are the same fact — the split that let a customer read "nothing is
+    // charged" and then be asked for half the job cannot reopen here.
+    const consented = {
       status: q.status, total: amount, accepted_price: amount,
       deposit_type: q.deposit_type ?? null, deposit_value: q.deposit_value ?? null,
-    })
+    }
+    const depositAsk = requiredDeposit(consented)
     const confirmed = await confirmDialog({
       // ⭐ ONE WORD, BOTH SIDES OF THE GLASS (Session 121). This dialog said
       // "Approve", the status pill said "Approved", the owner's own screen said
@@ -449,9 +460,10 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
           ? `The other ${freshOpts.length - 1} option${freshOpts.length > 2 ? 's aren’t' : ' isn’t'} ordered and won’t be charged.`
           : null,
         plan,
-        depositAsk > 0
-          ? `Accepting doesn't charge you. A ${formatCurrency(depositAsk)} deposit is asked for next to secure your booking — we'll confirm your date once it's received.`
-          : `Accepting doesn't charge you — we'll confirm a date with you first, and you'll only get an invoice after the work is done.`,
+        // ⭐ The timing sentence, from THE reader — no longer a pair of branches
+        // this file maintains privately. The two strings it replaces were correct;
+        // being correct in one file was never the problem.
+        approvalTimingLine(paymentTiming(consented)),
       ].filter(Boolean).join(' '),
       confirmLabel: chosenOpt ? `Accept ${chosenOpt.name}` : `Accept ${formatCurrency(amount)}`,
     })

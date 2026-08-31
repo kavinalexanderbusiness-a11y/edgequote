@@ -579,8 +579,12 @@ function DocRow({ d, actions, termsText, focus }: { d: DocItem; actions: PortalA
               {formatCurrency(d.schedulingDeposit.collected)} of {formatCurrency(d.schedulingDeposit.required)} received — {formatCurrency(d.schedulingDeposit.outstanding)} still required.
             </p>
           )}
+          {/* ⭐ The model's ONE gate-aware timing sentence. This panel used to
+              write its own, which meant the quote card three inches above could
+              promise "an invoice once the work is done" while this one asked for
+              money now. Both strings now come out of lib/payments/paymentTiming. */}
           <p className="text-[11px] text-ink-muted mt-1">
-            Your quote is approved. Your preferred timing will be confirmed after the required deposit is received.
+            Your quote is approved. {d.depositTimingLine}
           </p>
           {actions.paymentsEnabled && !actions.paymentPending ? (
             <>
@@ -609,10 +613,15 @@ function DocRow({ d, actions, termsText, focus }: { d: DocItem; actions: PortalA
           <p className="text-sm font-semibold text-emerald-400 flex items-center gap-1.5">
             <CheckCircle2 className="w-4 h-4 shrink-0" /> Deposit received — {formatCurrency(d.schedulingDeposit.collected)}
           </p>
+          {/* Where the money WENT, not just that it arrived. recordDeposit holds
+              the deposit as credit on the customer's account, so it comes off the
+              final invoice — a customer who is only told "received" is left to
+              wonder whether they have just paid above the quoted price. */}
           <p className="text-[11px] text-ink-muted mt-1">
             {d.status === 'scheduled'
               ? 'Your booking is secured — the visit is on your schedule.'
-              : 'Ready to schedule — we’ll confirm the final date with you.'}
+              : 'Ready to schedule — we’ll confirm the final date with you.'}{' '}
+            It comes off your final invoice.
           </p>
         </div>
       )}

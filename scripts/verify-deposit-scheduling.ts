@@ -38,6 +38,8 @@ import {
   type GateLedgerRow, type GateQuote,
 } from '../src/lib/payments/depositGate'
 import { depositFromPercent } from '../src/lib/payments/deposit'
+// Session 122: the WORDS moved here. See the re-pointed check in section 7.
+import { paymentTiming, approvedTimingLine } from '../src/lib/payments/paymentTiming'
 import { isCashRow } from '../src/lib/payments/ledger'
 
 let failures = 0
@@ -274,8 +276,24 @@ console.log('\n■ 7. The five states can never collapse (vocabulary pins)')
   const billing = read('src/app/portal/[token]/components/BillingTab.tsx')
   check('portal says the preference is a request, not a booking',
     /request, not a booking/i.test(billing) && /confirm the final date/i.test(billing))
-  check('portal deposit copy: approved now, timing confirmed after the deposit',
-    /approved/.test(billing) && /after the required deposit is received/i.test(billing))
+  // ⭐ RE-POINTED, not relaxed (Session 122). This assertion used to grep the
+  // sentence "…confirmed after the required deposit is received" out of
+  // BillingTab, which pinned the copy to that FILE. Session 122 moved every
+  // payment-timing sentence into lib/payments/paymentTiming so the quote card
+  // could stop promising "an invoice once the work is done" on a gated quote —
+  // a strictly better home, which this grep would have blocked.
+  //
+  // The CONTRACT is unchanged and still proven, now in two halves: the panel
+  // renders the model's one line rather than composing its own, and the engine
+  // that produces that line genuinely tells an approved-but-unpaid customer the
+  // booking waits on the deposit. Both must hold.
+  check('portal deposit copy: approved now, and the panel defers to THE timing engine',
+    /approved/.test(billing) && /\{d\.depositTimingLine\}/.test(billing)
+    && !/after the required deposit is received/i.test(stripComments(billing)),
+    'BillingTab must render d.depositTimingLine, not a private sentence')
+  check('…and that engine says the deposit is what secures the booking',
+    /secures your booking/i.test(
+      approvedTimingLine(paymentTiming(q()), { outstanding: 1350, status: 'awaiting' })))
   // "Deposit received" state exists and is distinct from "Scheduled": the
   // satisfied panel says ready-to-schedule language, never claims a booking.
   check('satisfied panel says ready-to-schedule, not scheduled',
