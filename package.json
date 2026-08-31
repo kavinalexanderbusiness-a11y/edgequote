@@ -173,7 +173,8 @@
     "verify:tenant-time": "tsx scripts/verify-tenant-time.ts",
     "verify:weather-truth": "tsx scripts/verify-weather-truth.ts",
     "verify:quote-number-integrity": "tsx scripts/verify-quote-number-integrity.ts",
-    "verify:quote-number-concurrency": "tsx scripts/verify-quote-number-concurrency.ts"
+    "verify:quote-number-concurrency": "tsx scripts/verify-quote-number-concurrency.ts",
+    "preflight:quote-number": "tsx scripts/preflight-quote-number.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",
