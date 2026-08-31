@@ -277,8 +277,19 @@ check('the owner door is a named action that says whose act it is',
   /you<\/span> wrote it down for them/.test(dialog) || /wrote it down for them/.test(dialog))
 check('…and cannot be submitted without a reason',
   /const canSave = !needsOption && !!reason/.test(dialog))
+// ⚠️ RE-POINTED, not relaxed. This asserted `error || !data` in the DIALOG,
+// which pinned the rule to the dialog calling the RPC directly. The owner path
+// now goes through app/api/quotes/record-acceptance, which reclassifies stale
+// terms server-side before running the SAME RPC — a strictly better home that
+// this grep would have blocked.
+//
+// The CONTRACT is unchanged and still proven, in both halves: the route treats a
+// null acceptance id as a refusal, and the dialog treats a non-ok response as
+// one. A "recorded" toast over a row that was never written is the failure this
+// check exists to prevent, wherever the decision is made.
 check('…and treats a null id from the RPC as a REFUSAL, not a quiet success',
-  /error \|\| !data/.test(dialog))
+  /!acceptanceId/.test(read('src/app/api/quotes/record-acceptance/route.ts'))
+  && /!res\.ok \|\| !out\?\.ok/.test(dialog))
 
 const billing = read('src/app/portal/[token]/components/BillingTab.tsx')
 check('the portal shows the terms in full above the accept button',
