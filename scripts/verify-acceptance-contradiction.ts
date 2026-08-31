@@ -74,16 +74,28 @@ async function main() {
   await apply('S122 Stage A', readFileSync(join(ROOT, 'supabase/proposals/RUN-S122A-terms-payment-claim-columns.sql'), 'utf8'))
   console.log('  applied Stage A — RUN-S122A-terms-payment-claim-columns.sql')
 
-  // ⭐⭐ STAGE A IS INERT, PROVEN NOT ASSUMED. Before Stage B exists, an
-  // unclassified tenant must still be able to accept — otherwise "additive and
-  // safe to sit on" is a claim nobody checked, and S106 would be applying A on
-  // production trusting a sentence in a comment.
+  // ⭐⭐ STAGE A IS INERT, PROVEN NOT ASSUMED.
+  //
+  // ⚠️ RE-EXPRESSED AFTER LANDING, and the reason matters. This used to read the
+  // LIVE function after layering baseline + Stage A and assert the gate was not
+  // there yet. That worked only while the baseline PREDATED S122. Production has
+  // now run both stages and the baseline was regenerated from production, so the
+  // baseline itself carries the gate — the old assertion could only fail, and the
+  // two dishonest ways to green it would be reverting the baseline or deleting
+  // the question.
+  //
+  // The property that is true in BOTH lives is a property of Stage A's own SQL:
+  // it cannot introduce the gate, whatever it is layered onto. That is what
+  // "additive and inert" actually means, and it is what was verified on
+  // production at apply time — quote_record_acceptance's md5 was byte-identical
+  // before and after Stage A (481873eb11b695c2d7332a62bed53b04).
   {
-    const d0 = (await db.query(
-      `select pg_get_functiondef(p.oid) as d from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-        where n.nspname='public' and p.proname='quote_record_acceptance' and p.prokind='f'`)).rows[0] as { d: string }
+    const stageA = readFileSync(join(ROOT, 'supabase/proposals/RUN-S122A-terms-payment-claim-columns.sql'), 'utf8')
+    const executable = stageA.replace(/^\s*--.*$/gm, '')   // comments may NAME it; only code may touch it
     check('Stage A alone does NOT touch quote_record_acceptance',
-      !/S122 · TERMS MAY NOT CONTRADICT/.test(d0.d))
+      !/S122 · TERMS MAY NOT CONTRADICT/.test(executable)
+      && !/quote_record_acceptance/.test(executable),
+      'Stage A must be additive and inert — the gate belongs to Stage B alone')
   }
 
   await apply('S122 Stage B', readFileSync(join(ROOT, 'supabase/proposals/RUN-S122B-acceptance-terms-gate.sql'), 'utf8'))
