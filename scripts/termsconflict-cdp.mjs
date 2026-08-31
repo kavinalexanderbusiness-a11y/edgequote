@@ -83,7 +83,14 @@ await ev(`(function(){
   b.click(); return 'login tapped'
 })()`)
 await sleep(9000)
-console.log("after login path: " + await ev("location.pathname"));console.log("LOGIN PAGE: " + await ev("(document.body.innerText||String()).replace(/[\s]+/g,String.fromCharCode(32)).slice(0,400)"))
+// Sign-in has to be CONFIRMED, not assumed. A failed login leaves an empty body
+// and every assertion below then reports "absent" — which reads exactly like a
+// passing negative control. This caught a whole wrong diagnosis once already:
+// a bundle built from a lowercase `c:` cwd rendered nothing at all, and without
+// this line it looked like the feature had stopped working.
+const landed = await ev('location.pathname')
+if (landed === '/login') { console.error('SIGN-IN FAILED — still on /login; aborting rather than reporting absence as success'); process.exit(3) }
+console.log('signed in → ' + landed)
 
 await go(base + '/dashboard/quotes/' + quoteId)
 await sleep(12000)
@@ -103,6 +110,11 @@ console.log(await ev(`(function(){
     sendAnyway: btns.some(function(b){ return /send anyway/i.test(b) }),
   }, null, 1)
 })()`))
-console.log('PAGE TEXT (first 700): ' + await ev("(document.body.innerText||'').replace(/\s+/g,' ').slice(0,700)"))
+// ⚠️ The page-text dump that stood here was written as a JS double-quoted string
+// containing /\s+/g — which JS parses as /s+/g, so it stripped every letter "s"
+// from the output ("Payment" → "Payment", but "varieties" → "varietie"). Harmless
+// to the assertions above, actively misleading to read. Either escape the
+// backslash or use a template literal; the dump is gone because the structured
+// assertions above are what this script exists to report.
 await shot(`terms-conflict-${width}`)
 ws.close(); chrome.kill(); process.exit(0)
