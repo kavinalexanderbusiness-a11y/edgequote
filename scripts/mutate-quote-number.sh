@@ -38,12 +38,31 @@ GUARD="scripts/verify-quote-number-integrity.ts"
 GUARD_PG="scripts/verify-quote-number-concurrency.ts"
 
 BACKUP_DIR="$(mktemp -d)"
-cp "$PROPOSAL" "$BACKUP_DIR/proposal.sql"
-cp "$UTILS"    "$BACKUP_DIR/utils.ts"
-cp "$SEAM"     "$BACKUP_DIR/seam.ts"
-cp "$NEWQ"     "$BACKUP_DIR/newq.tsx"
-cp "$GUARD"    "$BACKUP_DIR/guard.ts"
-cp "$GUARD_PG" "$BACKUP_DIR/guard-pg.ts"
+
+# ⚠️⚠️ THE BACKUP SET IS DERIVED, NOT HAND-KEPT — because a hand-kept one already
+# leaked a mutation into the working tree. A mutation was added against
+# src/app/dashboard/quotes/page.tsx, that file was not in the list, and `restore`
+# therefore skipped it: the mutation SURVIVED THE SUITE and sat in the tree
+# afterwards, where the next run saw it as the new baseline and reported a
+# HARNESS BUG for an anchor that was perfectly good. Committing first meant
+# nothing was lost, but a test harness that edits files must not be able to
+# forget one.
+#
+# ⭐ Now every file is backed up the first time a mutation names it, and restore
+# walks what was actually touched. Adding a mutation against a new file needs no
+# bookkeeping at all.
+declare -A BACKUP_OF
+TOUCHED=()
+
+ensure_backup() {
+  local f="$1"
+  [ -n "${BACKUP_OF[$f]:-}" ] && return 0
+  local key; key="$(printf '%s' "$f" | tr '/\\:' '___')"
+  cp "$f" "$BACKUP_DIR/$key"
+  BACKUP_OF["$f"]="$BACKUP_DIR/$key"
+  TOUCHED+=("$f")
+  return 0
+}
 
 PGLITE_DIR="node_modules/@electric-sql/pglite"
 PGLITE_HIDDEN="node_modules/@electric-sql/.pglite-hidden-by-mutation-test"
@@ -51,12 +70,10 @@ hide_pglite()   { [ -d "$PGLITE_DIR" ] && mv "$PGLITE_DIR" "$PGLITE_HIDDEN"; ret
 unhide_pglite() { [ -d "$PGLITE_HIDDEN" ] && mv "$PGLITE_HIDDEN" "$PGLITE_DIR"; return 0; }
 
 restore() {
-  cp "$BACKUP_DIR/proposal.sql" "$PROPOSAL"
-  cp "$BACKUP_DIR/utils.ts"     "$UTILS"
-  cp "$BACKUP_DIR/seam.ts"      "$SEAM"
-  cp "$BACKUP_DIR/newq.tsx"     "$NEWQ"
-  cp "$BACKUP_DIR/guard.ts"     "$GUARD"
-  cp "$BACKUP_DIR/guard-pg.ts"  "$GUARD_PG"
+  local f
+  for f in ${TOUCHED[@]+"${TOUCHED[@]}"}; do
+    cp "${BACKUP_OF[$f]}" "$f"
+  done
 }
 cleanup() { restore; unhide_pglite; rm -rf "$BACKUP_DIR"; }
 trap cleanup EXIT INT TERM
@@ -86,6 +103,7 @@ run_guard_pg() { npx tsx "$GUARD_PG" 2>&1; }
 mutate() {
   local mode="$1" name="$2" expect="$3" file="$4" expr="$5"
   restore
+  ensure_backup "$file"      # ⭐ after restore, so the copy taken is a clean one
   if [ "$mode" = "static" ]; then hide_pglite; else unhide_pglite; fi
   local before after out
   before=$(cksum < "$file")
@@ -95,6 +113,16 @@ mutate() {
     echo "  ⚠ HARNESS BUG: $name"
     echo "      the mutation did not change $file — its anchor no longer matches."
     fail=$((fail+1)); return
+  fi
+  # ⭐ MUTATE_DRY=1 · anchors only. Every mutation here is anchored to exact text
+  # in a file other sessions also edit, so anchor rot is the failure this suite
+  # hits most often — and discovering it 40 minutes into a full run, one mutation
+  # at a time, is the slowest possible way to learn it. A dry pass answers "do all
+  # 46 anchors still apply?" in seconds. It proves nothing about the GUARDS, so it
+  # is never a substitute for the real run.
+  if [ "${MUTATE_DRY:-}" = "1" ]; then
+    echo "  ✓ anchor applies: $name  [$mode, dry]"
+    pass=$((pass+1)); return
   fi
   if [ "$mode" = "pg" ]; then out=$(run_guard_pg); else out=$(run_guard); fi
   if ! printf '%s' "$out" | grep -A3 '✗' | grep -qF "$expect"; then
@@ -170,10 +198,14 @@ mutate full "the claim trigger never installed" \
 #     partial index: a caller that supplies an old created_at lands outside the
 #     predicate and is written. This is precisely why the index alone was not
 #     enough, so it gets its own mutation.
+#     ⚠️ RE-ANCHORED when claims became permanent: the trigger no longer refuses
+#     via an exception block around the INSERT, it refuses via the raise that
+#     follows the holder lookup. The old anchor rotted silently and the dry pass
+#     is what surfaced it.
 mutate full "only the created_at-predicated index defends" \
   "a stale or manipulated caller cannot backdate its way around it" \
   "$PROPOSAL" \
-  's/    insert into public\.document_number_claims \(user_id, kind, number\)\n         values \(new\.user_id, .quote., new\.quote_number\);/    insert into public.document_number_claims (user_id, kind, number)\n         values (new.user_id, '"'"'quote'"'"', new.quote_number) on conflict do nothing;/'
+  "s/      raise exception 'quote number % has already been used by this business', new\.quote_number\n        using errcode = '23505',\n              hint = '[^']*';/      raise notice 'barrier disabled';/"
 
 # 6 · the UNIQUE index downgraded — defence in depth, still load-bearing.
 mutate static "the UNIQUE index downgraded to a plain index" \
@@ -376,26 +408,108 @@ mutate pg "the allocator's year pinned to a literal" \
   's/  v_year   := extract\(year from now\(\)\)::int;/  v_year   := 2020;/'
 
 echo ""
-echo "  ── undo must keep working ──"
+echo "  ── claims must be PERMANENT ──"
 
-# 31 · ⭐ the release condition removed, so deleting ONE row of a duplicate pair
-#      frees a number the OTHER row is still showing a customer.
-#      pg mode: PGlite cannot DELETE from `quotes` at all on this schema.
-mutate pg "a claim released while another row still holds the number" \
-  "deleting one of a duplicate pair does NOT free the surviving number" \
+# ⭐⭐⭐ 31 · THE RELEASE MODEL, PUT BACK. This is the defect the review caught:
+#        freeing a claim once no row carries the number downgrades the invariant
+#        from "a number this tenant has EVER used" to "a number currently in
+#        use". Re-add a release trigger + function and the create → delete →
+#        stranger-takes-it sequence starts succeeding again.
+#        full mode: PGlite can now DELETE from `quotes` (replica identity is
+#        pinned in the guard), so this no longer needs a real server.
+mutate full "a release path re-added, so a deleted number is freed" \
+  "a DIFFERENT quote cannot take a deleted quote's number" \
   "$PROPOSAL" \
-  's/  if not exists \(\n    select 1 from public\.quotes\n     where user_id = old\.user_id and quote_number = old\.quote_number\n  \) then\n    delete from public\.document_number_claims\n     where user_id = old\.user_id and kind = .quote. and number = old\.quote_number;\n  end if;/    delete from public.document_number_claims\n     where user_id = old.user_id and kind = '"'"'quote'"'"' and number = old.quote_number;/'
+  's/  drop trigger if exists quotes_release_document_number on public\.quotes;\n\n  -- 4 · /  create function public.release_document_number() returns trigger language plpgsql security definer set search_path to '"'"'public'"'"', '"'"'pg_temp'"'"' as $rel$ begin delete from public.document_number_claims where user_id = old.user_id and kind = '"'"'quote'"'"' and number = old.quote_number; return null; end; $rel$;\n  create trigger quotes_release_document_number after delete on public.quotes for each row execute function public.release_document_number();\n\n  -- 4 · /'
 
-# 32 · ⭐ THE OPPOSITE FAILURE, AND IT IS DATA LOSS, NOT A DUPLICATE. A claim that
-#      is never released outlives its row, so Undo cannot restore a deleted quote
-#      and the quote is simply gone. A data-integrity feature must not create one.
-#      ⚠️ The trigger is left installed and its DELETE is neutered instead —
-#      removing the trigger would trip the migration's own apply-time assertion
-#      and never reach the Undo test at all.
-mutate pg "claims never released, so Undo cannot restore a quote" \
-  "a deleted quote can be restored with its original number" \
+# 32 · ⭐ A DELETE STATEMENT AGAINST THE REGISTRY, ANYWHERE. The static rule is
+#      absolute — nothing in this file may delete a claim — so it is pinned
+#      independently of whether any particular path exercises it.
+mutate static "a claim deletion added to the migration" \
+  "nothing in the proposal ever DELETES a claim" \
   "$PROPOSAL" \
-  's/    delete from public\.document_number_claims\n     where user_id = old\.user_id and kind = .quote. and number = old\.quote_number;/    perform 1;/'
+  's/-- ── 9 · stage 2 — PARKED BY OWNER DECISION/delete from public.document_number_claims where number = '"'"'x'"'"';\n\n-- ── 9 · stage 2 — PARKED BY OWNER DECISION/'
+
+# 33 · ⭐⭐ THE HOLDER CHECK REPLACED BY A BARE ALLOW. If the trigger stops asking
+#      WHICH record is reclaiming the number and simply permits any second
+#      comer, permanence collapses into the old released-claim behaviour without
+#      a release path being visible anywhere.
+mutate full "the holder identity check dropped, so anyone may reclaim" \
+  "a DIFFERENT quote cannot take a deleted quote's number" \
+  "$PROPOSAL" \
+  's/    if not coalesce\(v_held, false\) then/    if false then/'
+
+# 34 · ⭐ THE IDENTITY ITSELF. Matching on the number alone rather than on the
+#      record id makes every holder row equivalent — a stranger inherits the
+#      right to reuse the number from whoever held it first.
+mutate full "the holder lookup ignores the record id" \
+  "a DIFFERENT quote cannot take a deleted quote's number" \
+  "$PROPOSAL" \
+  's/       and number = new\.quote_number and record_id = new\.id;/       and number = new.quote_number;/'
+
+# 35 · ⭐⭐ THE HOLDER SEED REMOVED. Claims still cover history, but no EXISTING
+#      quote is recorded as holding its own number — so the first Undo of any
+#      pre-existing quote is refused and the quote is lost. The migration's own
+#      apply-time assertion is what must stop this.
+mutate full "existing rows not seeded as holders of their own numbers" \
+  "are not recorded as holders of their own number" \
+  "$PROPOSAL" \
+  's/  select q\.user_id, .quote., q\.quote_number, q\.id\n    from public\.quotes q\n   where q\.quote_number is not null/  select q.user_id, '"'"'quote'"'"', q.quote_number, q.id\n    from public.quotes q\n   where q.quote_number is not null and false/'
+
+# 36 · ⭐ THE HOLDER SEED MADE DISTINCT-BY-NUMBER. Subtler than removing it: the
+#      duplicate pairs lose one holder each, so exactly one row of each pair can
+#      never be restored after a delete.
+mutate full "the holder seed collapsed to one row per number" \
+  "are not recorded as holders of their own number" \
+  "$PROPOSAL" \
+  's/  insert into public\.document_number_claim_holders \(user_id, kind, number, record_id\)\n  select q\.user_id, .quote., q\.quote_number, q\.id/  insert into public.document_number_claim_holders (user_id, kind, number, record_id)\n  select distinct on (q.user_id, q.quote_number) q.user_id, '"'"'quote'"'"', q.quote_number, q.id/'
+
+# 37 · ⛔⛔ AN ON DELETE CASCADE FK FROM THE HOLDER HISTORY TO quotes. This is the
+#      most dangerous available regression precisely because it looks like good
+#      hygiene: referential integrity quietly deletes the history whose entire
+#      job is to outlive the row.
+mutate static "an FK from holder history to quotes" \
+  "the holder history has NO foreign key to quotes" \
+  "$PROPOSAL" \
+  's/  constraint document_number_claim_holders_user_id_fkey/  constraint document_number_claim_holders_record_fkey\n    foreign key (record_id) references public.quotes(id) on delete cascade,\n  constraint document_number_claim_holders_user_id_fkey/'
+
+# 38 · a client write policy on the holder history — delete your own holder row
+#      and the number is yours to hand to a different quote
+mutate static "a client write policy on the holder history" \
+  "the holder history has no client write policy" \
+  "$PROPOSAL" \
+  's/create policy "document_number_claim_holders: select own" on public\.document_number_claim_holders/create policy "document_number_claim_holders: delete own" on public.document_number_claim_holders\n  for delete to authenticated using (auth.uid() = user_id);\ncreate policy "document_number_claim_holders: select own" on public.document_number_claim_holders/'
+
+# 39 · ⭐ RENUMBERING MUST SPEND BOTH. An UPDATE away from a number must not free
+#      it; this is the other way a number is vacated.
+mutate full "the number a quote is renumbered AWAY from is freed" \
+  "the number it was MOVED OFF is still spent" \
+  "$PROPOSAL" \
+  's/  if tg_op = .UPDATE. then\n    if new\.quote_number is not distinct from old\.quote_number then\n      return new;\n    end if;\n  end if;\n\n  -- ── 1 · THE BARRIER/  if tg_op = '"'"'UPDATE'"'"' then\n    return new;\n  end if;\n\n  -- ── 1 · THE BARRIER/'
+
+# 40 · ⚠️⚠️ THE CRLF ANCHOR TRAP, which cost S113 a production apply. Remove the
+#      transport normalisation and a stored body that comes back CRLF makes every
+#      LF anchor match zero times.
+mutate static "the CRLF transport normalisation removed" \
+  "the in-place swap normalises line endings at transport" \
+  "$PROPOSAL" \
+  "s/  v_fn := replace\(v_fn, chr\(13\), ''\);   -- same transport normalisation as above/  perform 1;/"
+
+# 41 · ⛔ THE OWNER'S STAGE-2 DECISION. Parked is a decision, not a task.
+mutate static "the owner's park decision removed from the file" \
+  "stage 2 is PARKED by owner decision" \
+  "$PROPOSAL" \
+  's/-- ── 9 · stage 2 — PARKED BY OWNER DECISION ──────────────────────────────────/-- ── 9 · stage 2, deliberately NOT executed here ─────────────────────────────/'
+
+# 42 · ⭐ A restore door narrowed so it stops carrying whole rows. Both Undo paths
+#      depend on select('*') to keep id AND created_at; without created_at a
+#      restored historical duplicate pair collides inside the stage-1 index.
+mutate static "a restore door stops loading whole rows" \
+  "loads whole rows, so a restore keeps its id and created_at" \
+  "src/app/dashboard/quotes/page.tsx" \
+  "s/\.select\('\*'\)\.eq\('id', id\)/.select('id, quote_number').eq('id', id)/"
+
+
 
 # 33 · ⭐ THE HARNESS TESTS ITSELF. A mutation that changes no bytes must be
 #      reported as a HARNESS BUG rather than counted as a survivor or a pass.
