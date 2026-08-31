@@ -4,8 +4,7 @@ import {
 } from './constants'
 import { cadenceDays, type CadenceRecLike } from './cadence'
 import { daysBetween } from './lifecycle'
-import { nextSeasonStartISO, seasonEndDateFor, type ServiceSeason, type ServiceSeasons } from '@/lib/seasons'
-import { bridgeSeasonForSeries } from '@/lib/legacySeasonInference'
+import { nextSeasonStartISO, resolveSeriesSeason, seasonEndDateFor, type ServiceSeason, type ServiceSeasons } from '@/lib/seasons'
 
 // ── Renewal — THE "this plan is ending, offer them the next one" engine ──────
 //
@@ -188,7 +187,8 @@ export interface PlanFacts {
   /** The owner's stated visit count for the series, if they set one. */
   endCount: number | null
   /** What the plan's visits are for — resolves the season, and nothing else. */
-  serviceType: string | null
+  /** ⭐ The season the SERIES declares (job_recurrences.season_key), not its name. */
+  seasonKey: string | null
   /** Resolved cadence name (weekly|biweekly|monthly) when known. */
   cadence: string | null
   /** The raw recurrence interval, for cadences with no standard name. */
@@ -220,7 +220,7 @@ export function planRenewal(f: PlanFacts, seasons: ServiceSeasons, today: string
   const planStart = f.planStart || dates[0]
   const cadence = cadenceDays(f.cadence, f.interval)
 
-  const season = bridgeSeasonForSeries(null, f.serviceType, seasons)
+  const season = resolveSeriesSeason({ seasonKey: f.seasonKey }, seasons).season
   const seasonEnd = season ? seasonEndDateFor(planStart, season) : null
 
   // ⭐⭐ HAVING AN END DATE IS NOT REACHING IT.

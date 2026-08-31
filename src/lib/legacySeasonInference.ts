@@ -34,31 +34,41 @@
 import { resolveSeriesSeason, type ServiceSeason, type ServiceSeasons } from '@/lib/seasons'
 
 /**
- * ⭐⭐ THE ONE SWITCH. False while the book still contains series that have not
- * declared a season; true once every series has one.
+ * ⭐⭐ THE ONE SWITCH — and it is TRUE.
  *
- * ⚠️ IT IS FALSE ON PURPOSE, AND FLIPPING IT IS THE LAST STEP OF THE MIGRATION,
- * NOT THE FIRST. `job_recurrences.season_key` is proposed, not applied
- * (supabase/proposals/), so today NO series has a declaration. Removing the
- * bridge before the column lands does not make the product correct — it makes
- * 17 live series seasonless at once, which silently costs real behaviour:
- * "a snow customer in July is dormant, not lost" stops being true, renewals
- * lose the season that gives a plan its ending, and off-season customers
- * re-enter the chase queue.
+ * True means: every active series in the book has DECLARED a season, so nothing
+ * needs to guess one from a service name ever again. With it true the fallback
+ * below is unreachable, and `inferSeasonKeyFromName` survives only for the two
+ * migration callers that must reproduce the OLD suggestion for a human to accept.
  *
- * ⭐ What is ALREADY structural, flag or no flag: `resolveSeriesSeason` has no
- * parameter a service name can arrive through, so a DECLARED season can never
- * be overridden by a rename. The flag only governs what happens for a series
- * that has declared NOTHING.
+ * ── ⛔ WHY TRUE IS SAFE HERE, AND ONLY HERE ─────────────────────────────────
+ * It is safe because of the ORDER the cutover runs in, not because of anything
+ * this file can check at runtime. The code that assumes declarations exist is
+ * deployed LAST:
  *
- * S106: flip this to `true` in the same change that completes the backfill.
- * verify:season-recurrence proves the end state — with it true, nothing infers.
+ *   1. apply job_recurrences.season_key          (supabase/proposals/recurrence_season_key.sql)
+ *   2. generic AUTO-SAFE declarations       = 14  (the migration's data rule; no names, no ids)
+ *   3. explicit owner-approved declarations =  3  (OWNER-APPROVED-season-declarations.sql)
+ *   4. prove active undeclared              =  0  (npm run verify:season-cutover)
+ *   5. deploy THIS code, with the flag already true
+ *
+ * ⛔ DEPLOYING THIS BRANCH BEFORE STEP 1 IS THE ONE WAY TO BREAK IT. Every season
+ * a screen shows is now read from `season_key`; against a database that has not
+ * received the column, every series reads as undeclared and the product loses
+ * seasonality wholesale — dormancy, renewal windows and season-bounded plans all
+ * go quiet at once. `seasonTransitionVerdict` calls that pairing 'flag-too-early'
+ * and verify:season-recurrence fails on it, which is what keeps step 5 last.
+ *
+ * ⭐ What is STRUCTURAL rather than flag-gated: `resolveSeriesSeason` has no
+ * parameter a service name can arrive through, and nothing under src/ imports
+ * the resolver below any more. So a rename cannot move a declared season even
+ * if this flag were flipped back — the flag governs only what happens to a
+ * series that has declared NOTHING.
  */
-// ⚠️ Typed `boolean`, not inferred as the literal `false`. A literal type makes
-// every "what happens when this is true" check a compile error, which would mean
-// the END STATE could never be asserted — the guard would be unable to test the
-// half of the transition that actually matters.
-export const SEASON_DECLARATIONS_COMPLETE: boolean = false
+// ⚠️ Typed `boolean`, not inferred as the literal `true`. A literal type makes
+// every "what happens when this is false" check a compile error, which would mean
+// the guard could no longer exercise BOTH halves of the transition rule.
+export const SEASON_DECLARATIONS_COMPLETE: boolean = true
 
 /**
  * THE only runtime path that may consult a service name, and only while

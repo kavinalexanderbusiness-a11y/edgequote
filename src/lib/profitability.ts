@@ -41,7 +41,7 @@ export interface ProfitQuote {
 export { GRADE_COLORS } from './grade'
 export type { Grade }
 
-export interface RecInfo { freq: string | null; interval_unit: string | null; interval_count: number | null }
+export interface RecInfo { freq: string | null; interval_unit: string | null; interval_count: number | null; season_key?: string | null }
 
 export interface ProfitContext {
   quotesById: Record<string, ProfitQuote>

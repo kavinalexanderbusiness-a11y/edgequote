@@ -41,7 +41,7 @@ const { RowAction } = require('../src/components/grow/RenewalQueue') as typeof i
 import { computeRenewals, loadRenewals, renewalStageFor, type RnJob, type RnQuote, type RnRecurrence } from '../src/lib/renewals'
 import { computeReactivation, loadReactivation, type RJob, type RQuote, type RRecurrence } from '../src/lib/reactivation'
 import { planRenewal, ranOut, renewalDue, renewalLeadDays } from '../src/lib/signals'
-import { DEFAULT_SEASONS, type ServiceSeasons } from '../src/lib/seasons'
+import { DEFAULT_SEASONS, type ServiceSeasons, SEASON_NONE } from '../src/lib/seasons'
 
 let pass = 0
 let fail = 0
@@ -126,21 +126,26 @@ const seasonsFor = (label: string, match: string[], sm: number, sd: number, em: 
   // before the next opening, wherever that falls on the calendar. Two of these
   // seasons WRAP the new year (a snow season, a lighting season), which is the
   // case a naive month comparison gets wrong.
+  // ⭐⭐ EACH TRADE DECLARES A SEASON KEY (S110). `service` is now a LABEL for the
+  // test output only — the engine is handed `key`, the season the series declares.
+  // `seasonsFor(label,…)` stores the season under label.toLowerCase(), so that is
+  // the key. Feeding the service NAME here is precisely the defect this lane
+  // removed, and verify:season-recurrence fails if any src/ call site does it.
   const trades: {
-    service: string; seasons: ServiceSeasons
+    service: string; key: string; seasons: ServiceSeasons
     visits: string[]; today: string; nextStart: string
   }[] = [
-    { service: 'Weekly Mowing', seasons: DEFAULT_SEASONS,
+    { service: 'Weekly Mowing', key: 'lawn', seasons: DEFAULT_SEASONS,
       visits: ['2026-05-01', '2026-06-01', '2026-10-20'], today: '2027-03-01', nextStart: '2027-04-15' },
-    { service: 'Snow Clearing', seasons: DEFAULT_SEASONS,
+    { service: 'Snow Clearing', key: 'snow', seasons: DEFAULT_SEASONS,
       visits: ['2025-12-01', '2026-01-15', '2026-03-20'], today: '2026-10-01', nextStart: '2026-11-01' },
-    { service: 'Pool Opening', seasons: seasonsFor('Pool', ['pool'], 5, 1, 9, 30),
+    { service: 'Pool Opening', key: 'pool', seasons: seasonsFor('Pool', ['pool'], 5, 1, 9, 30),
       visits: ['2026-05-10', '2026-07-01', '2026-09-20'], today: '2027-04-01', nextStart: '2027-05-01' },
-    { service: 'Pest Control Round', seasons: seasonsFor('Pest', ['pest'], 4, 1, 9, 15),
+    { service: 'Pest Control Round', key: 'pest', seasons: seasonsFor('Pest', ['pest'], 4, 1, 9, 15),
       visits: ['2026-04-10', '2026-06-10', '2026-09-10'], today: '2027-03-05', nextStart: '2027-04-01' },
-    { service: 'Holiday Lighting', seasons: seasonsFor('Lights', ['holiday', 'light'], 11, 1, 1, 15),
+    { service: 'Holiday Lighting', key: 'lights', seasons: seasonsFor('Lights', ['holiday', 'light'], 11, 1, 1, 15),
       visits: ['2025-11-10', '2025-12-10', '2026-01-10'], today: '2026-10-05', nextStart: '2026-11-01' },
-    { service: 'Furnace Tune-Up', seasons: seasonsFor('Heating', ['furnace', 'heating'], 9, 1, 2, 28),
+    { service: 'Furnace Tune-Up', key: 'heating', seasons: seasonsFor('Heating', ['furnace', 'heating'], 9, 1, 2, 28),
       visits: ['2025-09-15', '2025-11-15', '2026-02-01'], today: '2026-08-01', nextStart: '2026-09-01' },
   ]
   for (const t of trades) {
@@ -151,7 +156,7 @@ const seasonsFor = (label: string, match: string[], sm: number, sd: number, em: 
       completedCount: t.visits.length,
       endDate: null,
       endCount: null,
-      serviceType: t.service,
+      seasonKey: t.key,
       cadence: null,
       interval: { interval_unit: 'month', interval_count: 2 },
       customerHasFutureVisit: false,
@@ -176,7 +181,9 @@ const seasonsFor = (label: string, match: string[], sm: number, sd: number, em: 
     completedCount: 3,
     endDate: '2026-08-31',
     endCount: null,
-    serviceType: 'Fire Extinguisher Inspection',
+    // ⭐ A DECLARED year-round trade. 'none' is a decision the owner made; it is
+    // NOT the same fact as null (nobody has said yet) — see verify:season-recurrence.
+    seasonKey: SEASON_NONE,
     cadence: null,
     interval: { interval_unit: 'month', interval_count: 6 },
     customerHasFutureVisit: false,
@@ -215,6 +222,10 @@ const cust = (id: string, name: string) => ({ id, name, phone: null, email: null
 const REC: RnRecurrence = {
   id: 'r1', customer_id: 'c1', freq: 'weekly', interval_unit: 'week', interval_count: 1,
   start_date: '2026-04-15', end_date: '2026-10-31', end_count: null,
+  // ⭐ The series DECLARES lawn. Before S110 this was inferred from the visits'
+  // service_type ('Weekly Mowing'); the queue now reads the declaration, so a
+  // renamed series keeps its season and an undeclared one claims none.
+  season_key: 'lawn',
 }
 const visit = (d: string, o: Partial<RnJob> = {}): RnJob => ({
   id: 'j' + d, customer_id: 'c1', recurrence_id: 'r1', property_id: 'p1', scheduled_date: d,
@@ -357,6 +368,9 @@ const rq: RQuote = {
 const rrec: RRecurrence = {
   id: 'r1', freq: 'weekly', interval_unit: 'week', interval_count: 1,
   start_date: '2026-04-15', end_date: '2026-10-31', end_count: null,
+  // The series DECLARES lawn. Reactivation reads the declaration now, so 'their
+  // season ended' stays distinguishable from 'we lost them' after a rename.
+  season_key: 'lawn',
 }
 const reactRows = (today: string, jobs: RJob[] = VISITS.map(v => rj(v.scheduled_date))) => ({
   customers: [cust('c1', 'Dana Fields')],
@@ -425,7 +439,11 @@ const reactRows = (today: string, jobs: RJob[] = VISITS.map(v => rj(v.scheduled_
 {
   // The SAME dates with no end date on the series: this plan fell over, and that
   // IS urgent. The distinction the whole feature rests on.
-  const noEnd = { ...rrec, end_date: null }
+  // ⭐ NON-SEASONAL IS NOW A DECLARATION, not the absence of a keyword match.
+  // This used to be non-seasonal only because 'Office Cleaning' matched no hint;
+  // it must say so, or it inherits rrec’s lawn season and a February plan that
+  // fell over reads as "dormant until spring" instead of urgent.
+  const noEnd = { ...rrec, end_date: null, season_key: SEASON_NONE }
   const jobs = ['2027-02-01', '2027-02-08', '2027-02-15'].map(d => rj(d, { service_type: 'Office Cleaning' }))
   const urgent = computeReactivation({
     ...reactRows('2027-03-01', jobs), recById: { r1: { ...noEnd, start_date: '2027-02-01' } },

@@ -65,6 +65,8 @@ export interface RnRecurrence {
   start_date: string
   end_date: string | null
   end_count: number | null
+  /** ⭐ The season the SERIES DECLARES — see JobRecurrence.season_key. Optional: the column ships in the same cutover that deploys this code. */
+  season_key?: string | null
 }
 export interface RnQuote {
   id: string
@@ -255,7 +257,7 @@ export function computeRenewals<C extends { id: string } = Customer>(
       completedCount: completed.length,
       endDate: r.end_date,
       endCount: r.end_count,
-      serviceType: serviceName,
+      seasonKey: r.season_key ?? null,
       cadence: freq,
       interval: r,
       customerHasFutureVisit: (jobsByCustomer.get(customerId!) || []).some(j => LIVE_FUTURE(j, today)),
@@ -406,7 +408,7 @@ export async function loadRenewals(sb: Supa): Promise<RenewalLoad> {
     sb.from('customers').select('*').eq('user_id', user.id).is('archived_at', null),
     sb.from('jobs').select('id, customer_id, recurrence_id, property_id, scheduled_date, status, service_type, title, quote_id, price, crew_size, duration_minutes, is_initial_visit').eq('user_id', user.id),
     sb.from('quotes').select('id, quote_number, customer_id, status, total, created_at, sent_at, valid_until, service_type, initial_price, weekly_price, biweekly_price, monthly_price, renewal_of_recurrence_id').eq('user_id', user.id),
-    sb.from('job_recurrences').select('id, customer_id, freq, interval_unit, interval_count, start_date, end_date, end_count').eq('user_id', user.id),
+    sb.from('job_recurrences').select('id, customer_id, freq, interval_unit, interval_count, start_date, end_date, end_count, season_key').eq('user_id', user.id),
     sb.from('business_settings').select('service_seasons').eq('user_id', user.id).maybeSingle(),
   ])
 

@@ -1,5 +1,4 @@
-import { isWithinSeason, ServiceSeasons } from '@/lib/seasons'
-import { bridgeSeasonForSeries } from '@/lib/legacySeasonInference'
+import { isWithinSeason, resolveSeriesSeason, ServiceSeasons } from '@/lib/seasons'
 import { CHURN_RATIO_HIGH, CHURN_RATIO_WARN, RANOUT_URGENT_CADENCES, RANOUT_URGENT_MIN_DAYS } from './constants'
 
 // ── Lifecycle — THE "where is this customer in their life" engine ────────────
@@ -23,12 +22,21 @@ export function daysBetween(fromISODate: string, toISODate: string): number {
 // A recurring lawn/snow customer whose series ended because the SEASON ended is
 // not lost — they're dormant until next season. They resurface automatically once
 // their season returns and they still have nothing booked.
+// ⭐⭐ TAKES A DECLARATION, NOT A NAME. This used to receive `service_type` and
+// guess the season from keywords in it, which meant renaming "Weekly Mowing" to
+// "Bi-weekly" silently stopped a customer from ever reading as dormant — they
+// read as LOST instead. The season a series runs in is now a fact the series
+// declares (job_recurrences.season_key), so a rename cannot move it.
+//
+// `null`/undefined = nothing declared ⇒ NEVER dormant. That direction is chosen
+// deliberately: a customer we cannot classify SURFACES in the re-book queue
+// rather than being silently hidden from it.
 export function isSeasonallyDormant(
-  serviceType: string | null,
+  seasonKey: string | null | undefined,
   seasons: ServiceSeasons,
   today: string,
 ): boolean {
-  const season = bridgeSeasonForSeries(null, serviceType, seasons)
+  const season = resolveSeriesSeason({ seasonKey: seasonKey ?? null }, seasons).season
   return !!season && !isWithinSeason(today, season)
 }
 

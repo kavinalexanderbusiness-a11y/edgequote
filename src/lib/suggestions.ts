@@ -21,8 +21,8 @@ import {
 import { FOLLOW_UP_DAYS, quoteIsQuiet, startOfDayMs } from '@/lib/followup'
 import { recurrenceEligibilityFor, cadenceFromGap, mayRecommendRecurring } from '@/lib/serviceRecurrence'
 import { dayDelta, type RecurringPlanPayload } from '@/lib/recurrence'
-import { ServiceSeasons, seasonEndDateFor, isWithinSeason, nextSeasonStartISO } from '@/lib/seasons'
-import { serviceCategory, bridgeSeasonForSeries } from '@/lib/legacySeasonInference'
+import { ServiceSeasons, seasonEndDateFor, isWithinSeason, nextSeasonStartISO, resolveSeriesSeason } from '@/lib/seasons'
+import { serviceCategory } from '@/lib/legacySeasonInference'
 import { addDays, parseISO, format, getDay } from 'date-fns'
 import { sumQuoteAmounts } from '@/lib/pricingState'
 
@@ -650,9 +650,16 @@ function recurringConversions(ctx: SuggestionContext): Suggestion[] {
     const prop = rep.property_id ? pById[rep.property_id] : undefined
     const nearby = nearbyCustomerStops(prop, ctx, g.custId)
     const startDate = nextWorkdayStart(ctx)
-    const season = bridgeSeasonForSeries(null, rep.service_type, ctx.seasons)
-    if (season && !isWithinSeason(startDate, season)) continue   // don't start a seasonal plan off-season
-    const endDate = season ? seasonEndDateFor(startDate, season) : null
+    // ⛔ NO SERIES EXISTS YET, so there is no season_key to read — and a season
+    // may NOT be guessed from `rep.service_type`. A proposal therefore carries no
+    // season boundary: the owner declares the season when they accept it (the job
+    // editor's Season control requires a choice), which is the only place that
+    // fact can honestly come from.
+    //
+    // ⚠️ This also drops the off-season suppression that used to live here. That
+    // was never a scheduling fact — it was a keyword guess about a plan nobody
+    // had created yet, and it is exactly what made a rename change when work ran.
+    const endDate: string | null = null
     const mkPlan = (count: 1 | 2): RecurringPlanPayload => ({
       customerId: g.custId, propertyId: rep.property_id, serviceType: rep.service_type, title: rep.title,
       perVisitPrice: avg, intervalUnit: 'week', intervalCount: count, startDate, endDate,
@@ -977,7 +984,7 @@ function retention(ctx: SuggestionContext): Suggestion[] {
       hasActiveRecurring: true,
       daysSinceLastService: daysSince,
       cadenceDays: interval,
-      seasonallyDormant: isSeasonallyDormant(s.rep.service_type, ctx.seasons, ctx.today),
+      seasonallyDormant: isSeasonallyDormant(s.rec.season_key ?? null, ctx.seasons, ctx.today),
     })
     if (risk.ratio <= CHURN_RATIO_HIGH) continue                  // still roughly on cadence
     const nextFuture = s.futureOpen[0]?.scheduled_date || null
@@ -1031,7 +1038,7 @@ function retention(ctx: SuggestionContext): Suggestion[] {
       hasUpcoming: s.futureOpen.length > 0 || !!(s.customerId && custWithFuture.has(s.customerId)),
       lastServiceDate: lastDone?.scheduled_date ?? null,
       cadenceDays: cadenceDays(s.cadence, s.rec),
-      seasonallyDormant: isSeasonallyDormant(s.rep.service_type, ctx.seasons, ctx.today),
+      seasonallyDormant: isSeasonallyDormant(s.rec.season_key ?? null, ctx.seasons, ctx.today),
       today: ctx.today,
     })
     if (!ro.isRanOut) continue
@@ -1111,7 +1118,7 @@ function routeGapFinder(ctx: SuggestionContext): Suggestion[] {
       hasUpcoming: s.futureOpen.length > 0 || !!(s.customerId && futureCust.has(s.customerId)),
       lastServiceDate: lastDone?.scheduled_date ?? null,
       cadenceDays: cadenceDays(s.cadence, s.rec),
-      seasonallyDormant: isSeasonallyDormant(s.rep.service_type, ctx.seasons, ctx.today),
+      seasonallyDormant: isSeasonallyDormant(s.rec.season_key ?? null, ctx.seasons, ctx.today),
       today: ctx.today,
     })
     if (ro.isRanOut) lapsed++
@@ -1535,7 +1542,8 @@ function crossSeasonOffers(ctx: SuggestionContext): Suggestion[] {
 function seasonalRenewals(ctx: SuggestionContext): Suggestion[] {
   const out: Suggestion[] = []
   for (const s of getSeries(ctx)) {
-    const season = bridgeSeasonForSeries(null, s.rep.service_type, ctx.seasons)
+    /** ⭐ The season the SERIES DECLARES. ⛔ Never its name. */
+    const season = resolveSeriesSeason({ seasonKey: s.rec.season_key ?? null }, ctx.seasons).season
     if (!season) continue                                   // only seasonal services renew
     if (!s.jobs.some(j => j.status === 'completed')) continue // established series only
     if (s.perVisit <= 0 || !s.customerId) continue

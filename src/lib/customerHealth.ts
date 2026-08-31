@@ -1,8 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { localTodayISO } from '@/lib/utils'
 import { effectiveFreq } from '@/lib/visitValue'
-import { isWithinSeason, settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
-import { serviceCategory, bridgeSeasonForSeries } from '@/lib/legacySeasonInference'
+import { isWithinSeason, settingsToSeasons, ServiceSeasons, resolveSeriesSeason } from '@/lib/seasons'
+import { serviceCategory } from '@/lib/legacySeasonInference'
 import { VIP_LTV, cadenceDays, churnRisk, daysBetween, isLapsed, lifetimeValue } from '@/lib/signals'
 import { invoiceBalance } from '@/lib/payments/ledger'
 import type { FeeSettings } from '@/lib/invoiceTotals'
@@ -45,7 +45,7 @@ interface HJob {
   price: number | null
   is_initial_visit?: boolean | null
 }
-interface HRec { freq: string | null; interval_unit: string | null; interval_count: number | null }
+interface HRec { freq: string | null; interval_unit: string | null; interval_count: number | null; season_key?: string | null }
 interface HQuote { id: string }
 interface HInvoice {
   customer_id: string | null
@@ -132,7 +132,8 @@ export function computeCustomerHealth(
     let intervalDays: number | null = null
     const lastDone = done[done.length - 1]
     if (recInfo && lastDone) {
-      const season = bridgeSeasonForSeries(null, lastDone.service_type, seasons)
+      /** ⭐ The season the SERIES DECLARES. ⛔ Never its name. */
+      const season = resolveSeriesSeason({ seasonKey: recInfo.rec?.season_key ?? null }, seasons).season
       const inSeason = !season || isWithinSeason(today, season)
       if (inSeason) {
         intervalDays = cadenceDays(recInfo.cadence, recInfo.rec)
@@ -209,7 +210,7 @@ export async function loadCustomerHealth(supabase: SupabaseClient): Promise<Heal
   const [cRes, jRes, rRes, qRes, iRes, sRes] = await Promise.all([
     supabase.from('customers').select('id, name, created_at').eq('user_id', uid),
     supabase.from('jobs').select('customer_id, status, scheduled_date, service_type, recurrence_id, quote_id, price, is_initial_visit').eq('user_id', uid),
-    supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', uid),
+    supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count, season_key').eq('user_id', uid),
     supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', uid),
     // amount_paid + discount so the unpaid figure is the BALANCE, via the one
     // ledger definition — not the raw ex-GST amount of a possibly-part-paid invoice.

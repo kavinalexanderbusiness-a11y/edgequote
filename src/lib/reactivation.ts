@@ -55,6 +55,8 @@ export interface RQuote {
 export interface RRecurrence {
   id: string; freq: string | null; interval_unit: string | null; interval_count: number | null
   start_date?: string | null; end_date?: string | null; end_count?: number | null
+  /** ⭐ The season the SERIES DECLARES — see JobRecurrence.season_key. Optional: the column ships in the same cutover that deploys this code. */
+  season_key?: string | null
 }
 
 export type Bucket = '12+' | '6+' | '3+'
@@ -212,7 +214,7 @@ export function computeReactivation<C extends { id: string } = Customer>(i: Reac
           completedCount: series.filter(j => j.status === 'completed').length,
           endDate: rec.end_date ?? null,
           endCount: rec.end_count ?? null,
-          serviceType: recService,
+          seasonKey: rec?.season_key ?? null,
           cadence: freq,
           interval: rec,
           customerHasFutureVisit: upcoming,
@@ -227,7 +229,7 @@ export function computeReactivation<C extends { id: string } = Customer>(i: Reac
       hasUpcoming: upcoming,
       lastServiceDate: lastDate,
       cadenceDays: cadenceDays(freq, rec),
-      seasonallyDormant: isSeasonallyDormant(recService, seasons, today),
+      seasonallyDormant: isSeasonallyDormant(rec?.season_key ?? null, seasons, today),
       // ⭐ A plan that finished as agreed is not a plan that fell over.
       plannedEnd: !!plan?.hasPlannedEnd || !!plan?.endedByCancellation,
       today,
@@ -356,7 +358,7 @@ export async function loadReactivation(sb: Supa): Promise<ReactivationLoad> {
     sb.from('customers').select('*').eq('user_id', user.id).is('archived_at', null),
     sb.from('jobs').select('customer_id, scheduled_date, status, service_type, quote_id, recurrence_id, price, is_initial_visit').eq('user_id', user.id),
     sb.from('quotes').select('id, customer_id, status, total, service_type, created_at, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user.id),
-    sb.from('job_recurrences').select('id, freq, interval_unit, interval_count, start_date, end_date, end_count').eq('user_id', user.id),
+    sb.from('job_recurrences').select('id, freq, interval_unit, interval_count, start_date, end_date, end_count, season_key').eq('user_id', user.id),
     sb.from('business_settings').select('service_seasons').eq('user_id', user.id).maybeSingle(),
   ])
 

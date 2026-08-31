@@ -22,7 +22,7 @@ import {
   VIP_LTV, CHURN_RATIO_WARN, CHURN_RATIO_HIGH, RANOUT_URGENT_MIN_DAYS, RANOUT_URGENT_CADENCES,
   type RanOutInput,
 } from '../src/lib/signals'
-import { DEFAULT_SEASONS } from '../src/lib/seasons'
+import { DEFAULT_SEASONS, SEASON_NONE } from '../src/lib/seasons'
 
 let pass = 0
 let fail = 0
@@ -48,12 +48,20 @@ check('an unknown unit falls back to 14', cadenceDays(null, { interval_unit: 'ye
 
 // ═══════════════════════════════════════════════════════════════════════════
 H('2. SEASONAL DORMANCY — the snow-customer-in-July rule, both directions')
-check('a snow customer in July is dormant, not lost', isSeasonallyDormant('Snow Removal', DEFAULT_SEASONS, '2026-07-15'), true)
-check('the same snow customer in January is IN season', isSeasonallyDormant('Snow Removal', DEFAULT_SEASONS, '2026-01-15'), false)
-check('a mowing customer in January is dormant', isSeasonallyDormant('Weekly Mowing', DEFAULT_SEASONS, '2026-01-15'), true)
-check('the same mowing customer in July is in season', isSeasonallyDormant('Weekly Mowing', DEFAULT_SEASONS, '2026-07-15'), false)
-check('a service with NO season is never dormant (year-round trade)', isSeasonallyDormant('Plumbing Repair', DEFAULT_SEASONS, '2026-01-15'), false)
-check('a null service is never dormant', isSeasonallyDormant(null, DEFAULT_SEASONS, '2026-01-15'), false)
+// ⭐⭐ DECLARATIONS, NOT NAMES (S110). These fixtures used to pass 'Snow Removal'
+// and 'Weekly Mowing' — the service NAME — and dormancy was guessed from keywords
+// in it. A series now declares its season, so the fixture declares one too.
+check('a snow customer in July is dormant, not lost', isSeasonallyDormant('snow', DEFAULT_SEASONS, '2026-07-15'), true)
+check('the same snow customer in January is IN season', isSeasonallyDormant('snow', DEFAULT_SEASONS, '2026-01-15'), false)
+check('a mowing customer in January is dormant', isSeasonallyDormant('lawn', DEFAULT_SEASONS, '2026-01-15'), true)
+check('the same mowing customer in July is in season', isSeasonallyDormant('lawn', DEFAULT_SEASONS, '2026-07-15'), false)
+// ⭐ 'none' is a DECLARATION (year-round, on purpose); null is the ABSENCE of one.
+// Both are never-dormant, and they must stay distinguishable — see verify:season-recurrence.
+check('a year-round DECLARATION is never dormant', isSeasonallyDormant(SEASON_NONE, DEFAULT_SEASONS, '2026-01-15'), false)
+check('an UNDECLARED series is never dormant (surfaces, never hidden)', isSeasonallyDormant(null, DEFAULT_SEASONS, '2026-01-15'), false)
+// ⛔ THE RENAME RULE, at the dormancy call site: a declared season cannot be moved
+// by what the service is called, because no name reaches this function at all.
+check('a lawn DECLARATION stays lawn whatever the service is called', isSeasonallyDormant('lawn', DEFAULT_SEASONS, '2026-01-15'), true)
 
 // ═══════════════════════════════════════════════════════════════════════════
 H('3. RAN OUT — the guard ladder, in its exact order')

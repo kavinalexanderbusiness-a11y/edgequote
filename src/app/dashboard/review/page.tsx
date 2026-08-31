@@ -49,7 +49,7 @@ export default function WeeklyReviewPage() {
         const [jRes, qRes, rRes, sRes, travel] = await Promise.all([
           supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', user.id),
           supabase.from('quotes').select('*').eq('user_id', user.id),
-          supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user.id),
+          supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count, season_key').eq('user_id', user.id),
           supabase.from('business_settings').select('base_lat, base_lng, base_address, service_seasons').eq('user_id', user.id).maybeSingle(),
           loadTravelModel(supabase),
         ])
@@ -93,7 +93,7 @@ export default function WeeklyReviewPage() {
             hasUpcoming: upcoming,
             lastServiceDate: lastDate,
             cadenceDays: cadenceDays(freq, rec),
-            seasonallyDormant: isSeasonallyDormant(recJob?.service_type ?? null, seasons, today),
+            seasonallyDormant: isSeasonallyDormant(rec?.season_key ?? null, seasons, today),
             today,
           })
           // The whole re-book backlog, not just the urgent window — as before.

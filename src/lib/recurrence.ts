@@ -1,8 +1,7 @@
 import { addDays, addMonths, format, parseISO, differenceInCalendarDays } from 'date-fns'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Job, JobRecurrence, RecurUnit, RecurrenceScope } from '@/types'
-import { ServiceSeasons, seasonEndDateFor, seasonLabel } from '@/lib/seasons'
-import { bridgeSeasonForSeries } from '@/lib/legacySeasonInference'
+import { ServiceSeasons, seasonEndDateFor, seasonLabel, resolveSeriesSeason } from '@/lib/seasons'
 // THE seasonality rule — shared with reactivation/churn so a customer never
 // reads as dormant on one screen and lost on another (see signals/lifecycle).
 import { isSeasonallyDormant } from '@/lib/signals/lifecycle'
@@ -437,7 +436,8 @@ export function buildServicePlans(
     if (r.end_date) {
       windowLabel = `${formatShort(startISO)} → ${formatShort(r.end_date)}`
     } else if (!r.end_count) {
-      const season = bridgeSeasonForSeries(null, serviceName, seasons)
+      /** ⭐ The season the SERIES DECLARES. ⛔ Never its name. */
+      const season = resolveSeriesSeason({ seasonKey: r.season_key ?? null }, seasons).season
       if (season) {
         const endISO = startISO ? seasonEndDateFor(startISO, season) : null
         windowLabel = endISO ? seasonLabel(season) : null
@@ -463,7 +463,7 @@ export function buildServicePlans(
         (!!r.end_date && r.end_date < todayISO) ||
         (!!r.end_count && delivered >= r.end_count)
       status =
-        isSeasonallyDormant(serviceName, seasons, todayISO) ? 'dormant'
+        isSeasonallyDormant(r.season_key ?? null, seasons, todayISO) ? 'dormant'
         : ruleExhausted ? 'ended'
         : series.some(j => j.scheduled_date >= todayISO && j.status === 'cancelled') ? 'cancelled_ahead'
         : 'ran_dry'

@@ -258,6 +258,18 @@ export interface JobRecurrence {
   end_date: string | null // null = no date limit
   end_count: number | null // ends after N visits (null = not count-limited)
   customer_id: string | null
+  /**
+   * ⭐⭐ THE SEASON THIS SERIES DECLARES — the relationship that replaced the
+   * service-name guess. `null`/absent = NOTHING DECLARED. The string 'none'
+   * (SEASON_NONE) = declared year-round. ⛔ Those are two different facts and
+   * collapsing them is the whole defect this column exists to fix.
+   *
+   * ⚠️ OPTIONAL IN TYPESCRIPT ON PURPOSE. The column ships in the same cutover
+   * that deploys this code (supabase/proposals/recurrence_season_key.sql, step
+   * 1 of the rollout). A row read from a database that predates the migration
+   * carries `undefined`, which resolves to "no declaration" instead of throwing.
+   */
+  season_key?: string | null
 }
 
 export interface Job {

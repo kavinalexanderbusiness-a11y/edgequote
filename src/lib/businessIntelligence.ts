@@ -186,7 +186,7 @@ const monthKey = (iso: string) => iso.slice(0, 7)
 // A representative active recurring series → its per-visit value + cadence, for
 // recurring run-rate / forecasting. Lightweight grouping (not the suggestions
 // engine's Series, but the same valuation path).
-interface MiniSeries { customerId: string | null; cadence: string | null; perVisit: number; rep: ProfitJob; hasFuture: boolean; lastCompleted: string | null; serviceType: string | null }
+interface MiniSeries { customerId: string | null; cadence: string | null; perVisit: number; rep: ProfitJob; hasFuture: boolean; lastCompleted: string | null; serviceType: string | null; seasonKey: string | null }
 function buildMiniSeries(jobs: ProfitJob[], recs: Record<string, RecInfo>, quotesById: Record<string, ProfitQuote>, today: string): MiniSeries[] {
   const byRec: Record<string, ProfitJob[]> = {}
   for (const j of jobs) if (j.recurrence_id) (byRec[j.recurrence_id] ||= []).push(j)
@@ -202,7 +202,7 @@ function buildMiniSeries(jobs: ProfitJob[], recs: Record<string, RecInfo>, quote
     const q = rep.quote_id ? quotesById[rep.quote_id] : null
     const perVisit = jobVisitValue(rep.price, q as unknown as Record<string, unknown>, cadence)
     const lastCompleted = [...sorted].reverse().find(j => j.status === 'completed')?.scheduled_date ?? null
-    out.push({ customerId: rep.customer_id, cadence, perVisit, rep, hasFuture: futureOpen.length > 0, lastCompleted, serviceType: rep.service_type })
+    out.push({ customerId: rep.customer_id, cadence, perVisit, rep, hasFuture: futureOpen.length > 0, lastCompleted, serviceType: rep.service_type, seasonKey: rec.season_key ?? null })
   }
   return out
 }
@@ -372,7 +372,7 @@ export function computeBI(inp: BIInput): BIReport {
       hasUpcoming: s.hasFuture || futureCust.has(s.customerId),
       lastServiceDate: s.lastCompleted,
       cadenceDays: cadenceDays(s.cadence),
-      seasonallyDormant: isSeasonallyDormant(s.serviceType, seasons, today),
+      seasonallyDormant: isSeasonallyDormant(s.seasonKey, seasons, today),
       today,
     })
     if (signal.reason === 'has_upcoming') { retained++; countedRecCust.add(s.customerId); continue }
@@ -452,7 +452,7 @@ export function computeBI(inp: BIInput): BIReport {
   let projectedSeasonRemaining = 0
   for (const s of series) {
     if (!s.hasFuture) continue
-    if (isSeasonallyDormant(s.serviceType, seasons, today)) continue
+    if (isSeasonallyDormant(s.seasonKey, seasons, today)) continue
     const futureVisits = s.rep ? jobs.filter(j => j.recurrence_id && j.customer_id === s.customerId && j.scheduled_date >= today && j.status !== 'cancelled' && j.status !== 'completed').length : 0
     projectedSeasonRemaining += s.perVisit * Math.max(futureVisits, 0)
   }
@@ -599,7 +599,7 @@ export async function loadBusinessIntelligence(supabase: SupabaseClient): Promis
   const [jRes, qRes, rRes, pRes, cRes, iRes, sRes, oRes] = await Promise.all([
     supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, property_id, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', uid),
     supabase.from('quotes').select('id, status, total, initial_price, weekly_price, biweekly_price, monthly_price, service_type, property_id').eq('user_id', uid),
-    supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', uid),
+    supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count, season_key').eq('user_id', uid),
     supabase.from('properties').select('id, lat, lng, postal_code, city, neighborhood').eq('user_id', uid),
     supabase.from('customers').select('id, name, created_at').eq('user_id', uid),
     // issued_date/paid_at drive collection speed. Existing columns — no migration;
@@ -613,7 +613,7 @@ export async function loadBusinessIntelligence(supabase: SupabaseClient): Promis
   const quotesById: Record<string, ProfitQuote> = {}
   for (const q of (qRes.data as (ProfitQuote & { id: string })[]) || []) quotesById[q.id] = q
   const recurrences: Record<string, RecInfo> = {}
-  for (const r of (rRes.data as (RecInfo & { id: string })[]) || []) recurrences[r.id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
+  for (const r of (rRes.data as (RecInfo & { id: string })[]) || []) recurrences[r.id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count, season_key: r.season_key ?? null }
 
   const baseLat = settings?.base_lat as number | null | undefined
   const baseLng = settings?.base_lng as number | null | undefined

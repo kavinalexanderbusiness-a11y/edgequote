@@ -39,7 +39,7 @@ interface JobRow {
   service_type: string | null
   recurrence_id: string | null
 }
-interface RecRow { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null }
+interface RecRow { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null; season_key?: string | null }
 interface OwnerRow { user_id: string; service_seasons: unknown }
 
 type SignalRow = {
@@ -83,7 +83,7 @@ async function fetchAllRecurrences(supabase: Client, uid: string): Promise<{ row
   for (let from = 0; ; from += PAGE_ROWS) {
     const { data, error } = await supabase
       .from('job_recurrences')
-      .select('id, freq, interval_unit, interval_count')
+      .select('id, freq, interval_unit, interval_count, season_key')
       .eq('user_id', uid)
       .order('id')
       .range(from, from + PAGE_ROWS - 1)
@@ -231,7 +231,8 @@ async function handler(req: NextRequest) {
         // sweep. Changing them shifts numbers on live dashboards — a separate owner call.
         const freq = rec?.freq ?? null
         const cadence = cadenceDays(freq, rec)
-        const dormant = isSeasonallyDormant(recJob.service_type ?? null, seasons, today)
+        /** ⭐ The season the SERIES DECLARES. ⛔ Never its name. */
+        const dormant = isSeasonallyDormant(rec?.season_key ?? null, seasons, today)
 
         const ro = ranOut({ hasRecurring, hasUpcoming, lastServiceDate, cadenceDays: cadence, seasonallyDormant: dormant, today })
         if (ro.isRanOut) {

@@ -303,6 +303,37 @@ console.log('\n▸ 6 · the shape of the model')
     !/\b(mow|snow|plow|pool|pest|lawn)\b/i.test(src.split('export function resolveSeriesSeason')[1]?.split('export function seasonKeys')[0] ?? ''),
     'resolveSeriesSeason names a trade')
   check('[negative control] the keyword matcher works', /\bmow\b/i.test('weekly mow'))
+
+  // ── ⛔⛔ A NAME IS NOT A KEY, AND THE COMPILER CANNOT TELL ────────────────
+  // `service_type` and `season_key` are both `string | null`, so passing the
+  // NAME where the DECLARATION belongs type-checks perfectly and silently
+  // restores the defect this whole lane removed. tsc found 4 call sites when the
+  // signatures changed; it could not see the other 9, because they still
+  // compiled. Only a source scan closes that gap.
+  const NAMEY = /(service_type|serviceType|serviceName|\.title\b)/
+  const nameFed: string[] = []
+  for (const f of SRC) {
+    const t = strip(read(f))
+    for (const m of t.matchAll(/isSeasonallyDormant\(([^,]*),/g)) {
+      if (NAMEY.test(m[1])) nameFed.push(`${f} → isSeasonallyDormant(${m[1].trim()})`)
+    }
+    for (const m of t.matchAll(/seasonKey:\s*([^,}\n]*)/g)) {
+      if (NAMEY.test(m[1])) nameFed.push(`${f} → seasonKey: ${m[1].trim()}`)
+    }
+  }
+  eq('⛔ no season decision under src/ is fed a service NAME', nameFed, [])
+  check('[negative control] a name reaching dormancy WOULD be caught',
+    NAMEY.test('s.rep.service_type'))
+  check('[negative control] …and a real declaration is NOT flagged',
+    !NAMEY.test('s.rec.season_key ?? null'))
+
+  // ⭐ The flag is only safe because of the ORDER the cutover runs in, and that
+  // order lives in a comment — so the comment is load-bearing and pinned here.
+  const legRaw = read('src/lib/legacySeasonInference.ts')
+  check('⛔ the flag documents the deploy order that makes true safe',
+    /apply job_recurrences\.season_key/.test(legRaw)
+      && /deploy THIS code, with the flag already true/.test(legRaw),
+    'the rollout order is gone from the flag, so the next reader cannot know what makes it safe')
 }
 
 {
@@ -507,10 +538,28 @@ async function liveTransitionCheck() {
   const probe = await fetch(`${url}/rest/v1/job_recurrences?select=id,season_key&limit=1`, { headers: H })
   const columnExists = probe.ok
   if (!columnExists) {
-    check('⛔ the flag is FALSE while season_key does not exist', SEASON_DECLARATIONS_COMPLETE === false,
-      'declarations cannot be complete when the column has not been applied — flipping the flag now '
-      + 'would strip the season from every live series at once')
-    console.log('    (job_recurrences.season_key is not applied yet — the migration has not started)')
+    // ⭐⭐ INVERTED AT THE CUTOVER. This slot used to assert "the flag is FALSE
+    // while season_key does not exist". That was right for a branch that had not
+    // yet committed to the end state, and it EXPIRED the moment this branch
+    // adopted flag=true — so it is replaced, not deleted, by the successor it
+    // named: the flag is now a DEPLOY-ORDER COMMITMENT, and what must be proved
+    // is that the order is still real.
+    check('⛔ this branch ships the END STATE — declarations complete',
+      SEASON_DECLARATIONS_COMPLETE === true,
+      'the branch is supposed to carry the end state so nobody hand-edits source at landing')
+    // ⛔ The pairing this code must never be deployed into is exactly the one the
+    // pure rule already calls broken. Asserting it here keeps the teeth: if anyone
+    // ever softens seasonTransitionVerdict so that shipping declaration-reading
+    // code against a column-less database looks acceptable, this fails.
+    check('⛔ …so deploying it BEFORE the migration is a state the rule REJECTS',
+      transitionIsBroken(seasonTransitionVerdict({
+        columnExists: false, undeclaredActive: 0, flag: SEASON_DECLARATIONS_COMPLETE,
+      })),
+      'the rule no longer rejects "flag true, column absent" — the deploy order has lost its guard')
+    console.log('    (job_recurrences.season_key is NOT on this database — PRE-CUTOVER.')
+    console.log('     This branch ships SEASON_DECLARATIONS_COMPLETE=true, so cutover steps 1–4')
+    console.log('     MUST run before it is deployed. verify:season-cutover proves the whole')
+    console.log('     sequence on a disposable database in the meantime.)')
     return
   }
 
