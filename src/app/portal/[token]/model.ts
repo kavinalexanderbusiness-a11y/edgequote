@@ -26,6 +26,11 @@ import { depositState, depositChargeAmount } from '@/lib/payments/deposit'
 // /api/portal/quote-deposit charge route runs over the same ledger rows, so the
 // row's figures and Stripe's ask can never disagree.
 import { schedulingGate } from '@/lib/payments/depositGate'
+// THE payment-timing interpretation (lib/payments/paymentTiming) — the words
+// that describe the gate above. The quote card used to assert "you'll get an
+// invoice once the work is done" on a quote whose approval screen then asked for
+// half up front; both sentences now come from this one reader.
+import { paymentTiming, quoteTimingLine, approvedTimingLine } from '@/lib/payments/paymentTiming'
 import { cashAmountOf, ledgerRowType } from '@/lib/payments/analytics'
 import { serviceLineTotals } from '@/lib/quoteServices'
 import { sortedOptions } from '@/lib/quoteOptions'
@@ -703,6 +708,28 @@ export interface DocItem { id: string; rawId: string; kind: DocKind; number: str
     required: number; collected: number; outstanding: number
     percent: number | null; satisfied: boolean
   }
+  /**
+   * ⭐ WHEN this quote's money is due, in words — lib/payments/paymentTiming's
+   * one sentence, computed HERE so every surface that mentions timing renders
+   * the identical string rather than composing its own.
+   *
+   * It rides the row for the same reason payAmount does: Home, Billing and the
+   * approval dialog each used to write their own version, and a customer could
+   * read "nothing is charged" on one card and "$500 deposit required" on the
+   * next. A component that needs to say when money is due renders THIS.
+   */
+  paymentTimingLine?: string
+  /**
+   * The same interpretation AFTER approval, read against the LEDGER — present
+   * only while a gate exists. Distinct from `paymentTimingLine` because the
+   * question changes once they have said yes: not "when will I owe" but "where
+   * does this stand". It knows three things the standing terms cannot:
+   * what is still outstanding, that a satisfied deposit is HELD AS CREDIT and
+   * comes off the final invoice (ledger.recordDeposit's second leg — the portal
+   * used to leave the customer wondering if they had paid $500 extra), and that
+   * an overridden quote is already booked with the money still owed.
+   */
+  depositTimingLine?: string
   /** The customer's scheduling preference, echoed back. Editable while the
    *  quote is 'accepted'; read-only once a real visit exists. */
   preference?: { date: string | null; date2: string | null; timing: string | null; note: string | null }
@@ -797,6 +824,16 @@ export function buildDocItems(opts: {
           isRecommended: !!o.is_recommended,
         }))
       : undefined
+    // ⭐ THE payment-timing interpretation of this quote — computed ONCE, read by
+    // the explain list below, by `paymentTimingLine` on the row, and (through
+    // that field) by every component that tells this customer when money is due.
+    //
+    // basisSettled: an options quote with no choice made has no settled price for
+    // a PERCENT rule to be taken of, so the copy names the percentage and never a
+    // dollar figure belonging to an option they may not pick. The moment a choice
+    // exists — or acceptance snapshots accepted_price — the figure is real and
+    // the same call prints it.
+    const timing = paymentTiming(qq, { basisSettled: !(options && !qq.selected_option_id) })
     const manHours = Number(qq.hours) > 0 && Number(qq.crew_size) > 0 ? Number(qq.hours) * Number(qq.crew_size) : 0
     const fmtHrs = (h: number) => h < 1 ? `${Math.round(h * 60)} minutes` : h === 1 ? '1 hour' : `${Number(h.toFixed(1))} hours`
     const explainBits = [
@@ -819,7 +856,13 @@ export function buildDocItems(opts: {
           : `Includes a ${formatCurrency(Number(qq.travel_fee))} travel charge to reach your property.`)
         : null,
       planOptionRows.length > 0 ? 'This price is for the visit above. If you want us back regularly, the ongoing rates are listed separately — you can pick one with us later.' : null,
-      'Nothing is charged when you approve — you’ll get an invoice once the work is done.',
+      // ⭐ THE payment-timing sentence — derived, never asserted. This line used
+      // to read "Nothing is charged when you approve — you'll get an invoice once
+      // the work is done" on EVERY quote, and the approval dialog three files
+      // away then asked a deposit-gated customer for half the job. It is the same
+      // sentence for a plain quote and a truthful one for a gated quote, because
+      // both now come out of paymentTiming.
+      quoteTimingLine(timing),
     ].filter((s): s is string => !!s)
     // THE shared expiry engine — the same call the owner's screens make.
     const display = displayQuoteStatus({ status: qq.status as QuoteStatus, valid_until: qq.valid_until }, todayISO)
@@ -883,6 +926,14 @@ export function buildDocItems(opts: {
       filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(qq), lines, planOptions,
       options, selectedOptionId: qq.selected_option_id ?? null,
       schedulingDeposit, preference, canEditPreference: qq.status === 'accepted',
+      paymentTimingLine: quoteTimingLine(timing),
+      // Gate-aware, so it can only exist where a gate does. `scheduled` is the
+      // override case: the owner booked the visit anyway and the money is still
+      // owed — telling that customer a deposit "secures your booking" would
+      // describe a gate that was waived.
+      depositTimingLine: gate && gate.required > 0
+        ? approvedTimingLine(timing, gate, qq.status === 'scheduled')
+        : undefined,
       // Identity, not decoration: the address tells a landlord which of their six
       // quotes this is. It never becomes the row's title — service_type is the
       // real disambiguator for same-property customers.

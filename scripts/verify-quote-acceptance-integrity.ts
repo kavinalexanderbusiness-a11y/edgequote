@@ -47,6 +47,7 @@ import {
   type AcceptanceState, type AcceptedDocument,
 } from '../src/lib/quoteAcceptance'
 import { STATUS_LABELS } from '../src/types'
+import { termsClaimPatch } from '../src/lib/payments/termsTimingConflict'
 
 let failures = 0
 const ok = (n: string) => console.log(`  ✓ ${n}`)
@@ -515,7 +516,42 @@ async function behaviour() {
   await db.exec(`insert into auth.users (id, email) values
     ('${OWNER}', 'owner@example.test'), ('${OTHER}', 'other@example.test')`)
   await db.exec(`insert into public.business_settings (user_id, company_name, owner_name, terms_text)
-    values ('${OWNER}', 'Fixture Yard', 'Sam Owner', 'Payment due on completion. Cancellations need 24 hours notice.')`)
+    values ('${OWNER}', 'Fixture Yard', 'Sam Owner', 'Cancellations need 24 hours notice. All work is guaranteed.')`)
+  // ⚠️ These fixture terms are deliberately PAYMENT-TIMING NEUTRAL. They used to
+  // read "Payment due on completion…", which the canonical classifier correctly
+  // calls `no_money_before_work` — and this fixture accepts DEPOSIT quotes, so
+  // after S122 landed that was a genuine contradiction and the gate refused,
+  // taking every S121 assertion downstream with it.
+  // ⛔ The fixture was inconsistent, not the gate. The verdict below is NOT
+  // hand-picked: `classifyTermsPaymentClaim` independently returns `no_claim`
+  // for this text, which is compatible with deposit and non-deposit quotes
+  // alike, so this guard tests acceptance evidence without also asserting an
+  // orthogonal payment-timing opinion. S122's contradiction behaviour is proven
+  // in verify:acceptance-contradiction, where it belongs.
+
+  // ⭐⭐ S122 landed after this guard was written. Its acceptance gate FAILS
+  // CLOSED on a tenant whose terms carry no trusted payment-timing verdict, so
+  // this fixture — which has terms and never had a classification — could no
+  // longer accept anything, and every S121 assertion downstream became
+  // unreachable.
+  //
+  // ⛔ The fix is NOT to weaken either guard, and NOT to hand-pick a convenient
+  // verdict. It is to make the fixture a REALISTIC post-S122 tenant: whatever
+  // terms it sets, it also carries the verdict the CANONICAL classifier gives
+  // for exactly those terms, fingerprinted the way Postgres fingerprints them.
+  // Called after every terms_text write below, because the invalidation trigger
+  // correctly nulls the verdict each time the terms move.
+  const syncClaim = async () => {
+    const row = (await db.query(
+      `select terms_text from public.business_settings where user_id = '${OWNER}'`)).rows[0] as { terms_text: string | null }
+    const patch = termsClaimPatch(row?.terms_text ?? null)
+    await db.exec(`update public.business_settings set
+        terms_payment_claim = ${patch.terms_payment_claim === null ? 'null' : `'${patch.terms_payment_claim}'`},
+        terms_payment_claim_fingerprint = ${patch.terms_payment_claim_fingerprint === null ? 'null' : `'${patch.terms_payment_claim_fingerprint}'`},
+        terms_payment_claim_version = ${patch.terms_payment_claim_version ?? 'null'}
+      where user_id = '${OWNER}'`)
+  }
+  await syncClaim()
   const cust = await one(`insert into public.customers (user_id, name) values ('${OWNER}', 'Dana Reyes') returning id`)
   await db.exec(`insert into public.customer_portal_tokens (token, customer_id, user_id)
     values ('tok-dana', '${cust.id}', '${OWNER}')`)
@@ -813,6 +849,7 @@ async function behaviour() {
   await asOwner()
   await db.exec(`update public.business_settings set terms_text = 'Payment due in 7 days. No cancellations.'
     where user_id = '${OWNER}'`)
+  await syncClaim()
   s6 = await st(q6.id)
   check('MUTATION — editing the tenant terms flags the acceptance as needing reapproval',
     s6.terms_changed === true)
@@ -966,6 +1003,7 @@ async function behaviour() {
   // which is what makes this a compatibility seam rather than an outage.
   await asService()
   await db.exec(`update public.business_settings set terms_text = null where user_id = '${OWNER}'`)
+  await syncClaim()
   await asCustomer()
   const shimOk = await one(
     `select public.portal_accept_quote(p_token => 'tok-dana', p_quote_id => $1::uuid) as ok`, [shimQ.id])
@@ -990,6 +1028,7 @@ async function behaviour() {
   check('…and records nothing at all', (await acceptanceOf(shimQ2.id)).length === 0)
   // Restore the tenant's terms for the sections below.
   await db.exec(`update public.business_settings set terms_text = 'Payment due in 7 days. No cancellations.' where user_id = '${OWNER}'`)
+  await syncClaim()
 
   // ── 3k · THE LEGACY BACKFILL ──────────────────────────────────────────────
   // ⭐⭐ Without this the gate answers "not authorized" for the whole existing
@@ -1090,12 +1129,14 @@ async function behaviour() {
   // ⭐ TERMS ARE CONSULTED BY THE GATE, not merely stored beside it.
   await asOwner()
   await db.exec(`update public.business_settings set terms_text = 'Brand new terms, never shown to anyone.' where user_id = '${OWNER}'`)
+  await syncClaim()
   check('MUTATION — moving the TERMS revokes the authorization too',
     (await one(`select public.quote_acceptance_is_current($1) as ok`, [gateQ.id])).ok === false)
   await asService()
   check('…and the exact agreed terms are still on the record, unchanged',
     /Payment due in 7 days/.test((await acceptanceOf(gateQ.id))[0].terms_text ?? ''))
   await db.exec(`update public.business_settings set terms_text = 'Payment due in 7 days. No cancellations.' where user_id = '${OWNER}'`)
+  await syncClaim()
   check('…restoring the terms restores it',
     (await one(`select public.quote_acceptance_is_current($1) as ok`, [gateQ.id])).ok === true)
 

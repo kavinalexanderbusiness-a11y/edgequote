@@ -5,6 +5,9 @@ import { fieldBorder } from '@/components/ui/fieldStyles'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
+// THE terms classifier's columns — written atomically with terms_text so the
+// acceptance gate never sees a verdict that does not match the terms in force.
+import { termsClaimPatch } from '@/lib/payments/termsTimingConflict'
 import { useBusinessData } from '@/hooks/useBusinessData'
 import type { BusinessSettingsFormValues, TravelFeeTier } from '@/types'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -267,6 +270,18 @@ export default function SettingsPage() {
         // custom season saved from another tab or device, with both saves reporting
         // success. Untouched here → the column is omitted and the DB value stands.
         ...(seasonsDirtyRef.current ? { service_seasons: seasons } : {}),
+        // ⭐⭐ The terms' payment-timing classification, written in the SAME
+        // statement as the terms themselves. Atomic on purpose: the acceptance
+        // gate refuses while a stored verdict does not match the live terms, so
+        // a two-step save would leave every deposit quote un-acceptable for the
+        // gap between the two writes. Because these three arrive together, a
+        // normal Settings save never opens that window at all.
+        //
+        // ⛔ The classifier is the ONE in lib/payments/termsTimingConflict — the
+        // same call the send gate makes. The database stores this verdict and
+        // compares it; it never interprets the prose itself.
+        // ⛔ The owner's terms are never rewritten — only read.
+        ...termsClaimPatch(values.terms_text),
         base_lat: null, base_lng: null,
       }, { onConflict: 'user_id' })
     // Never claim a save that didn't happen — the old code reported "Saved"

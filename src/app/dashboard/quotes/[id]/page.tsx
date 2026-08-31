@@ -57,8 +57,11 @@ import {
   schedulingPreferenceLine, stampDepositOverride, type GateLedgerRow,
 } from '@/lib/payments/depositGate'
 import { recordDeposit } from '@/lib/payments/ledger'
-import { AlertTriangle, Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Camera, Globe, CalendarClock, Layers, Lock, Wallet, CheckCircle2, ShieldAlert } from 'lucide-react'
+import { AlertTriangle, Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Camera, Globe, CalendarClock, Layers, Lock, Wallet, CheckCircle2, ShieldAlert, Settings as SettingsIcon } from 'lucide-react'
 import { AUDIENCE_COPY } from '@/lib/noteScope'
+// THE terms-vs-configuration detector — the send gate above calls it too; this
+// page also renders WHICH sentence conflicts, verbatim.
+import { detectTermsTimingConflict, termsConflictExplanation } from '@/lib/payments/termsTimingConflict'
 
 export default function QuoteDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -582,6 +585,17 @@ export default function QuoteDetailPage() {
       toast.error(sendBlockedLabel('no_price'))
       return
     }
+    // The terms conflict blocks this path too — and this is the WORST place for
+    // one. The PDF prints the canonical payment-timing line AND the owner's
+    // Terms & Conditions on the same page, so a contradiction here is two
+    // sentences disagreeing with each other in one document, handed to a
+    // customer at their door. The original comment above is still right that a
+    // customerless quote may legitimately be printed; a self-contradicting one
+    // may not.
+    if (sendBlockedReason(quote, settings?.terms_text) === 'terms_contradict_timing') {
+      toast.error(sendBlockedLabel('terms_contradict_timing'))
+      return
+    }
     const delivered = await handleOpenPdf()
     if (!delivered) return   // PDF failed → never claim (or record) that it was sent
     if (quote.status === 'draft') {
@@ -1001,7 +1015,16 @@ export default function QuoteDetailPage() {
   // comment forbids ("a quote in a customer's hands without a price is not a
   // quote"). Asking the same function here enforces the existing rule on the
   // path that needed it most — no new rule, no engine change.
-  const sendBlock = sendBlockedReason(quote)
+  // The owner's Terms are passed in, so a quote whose terms contradict its own
+  // deposit rule cannot be delivered. The customer must AGREE to these terms
+  // before accepting (S121), which is what turns a wording inconsistency into
+  // consent to the wrong thing — so it is stopped at the door, not annotated.
+  const sendBlock = sendBlockedReason(quote, settings?.terms_text)
+  // The offending sentence + what to do about it. Computed only when the gate
+  // actually fired, and shown VERBATIM: these are the owner's own terms.
+  const termsConflict = sendBlock === 'terms_contradict_timing'
+    ? detectTermsTimingConflict(quote, settings?.terms_text)
+    : null
 
   // Surface the quote's state in the header itself — a sent quote reads "Sent 3
   // days ago" (the follow-up clock), everything else the plain status label.
@@ -1518,7 +1541,24 @@ export default function QuoteDetailPage() {
               {/* Blocked → say why and hand over the door, instead of letting the
                   owner open the composer and discover it mid-message (or worse,
                   deliver a $0 quote the customer can approve). */}
-              {sendBlock ? (
+              {termsConflict ? (
+                // The owner needs three things to act: WHICH sentence, what the
+                // quote actually does, and that we changed nothing. Quoting the
+                // sentence verbatim is the point — we will not edit their terms,
+                // so they have to be able to find the words themselves.
+                <div className="mt-1 rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 max-w-prose">
+                  <p className="text-xs font-semibold text-amber-400">
+                    Your Terms &amp; Conditions contradict this quote’s payment timing
+                  </p>
+                  <p className="text-xs text-ink-muted mt-1">
+                    Your terms say: <span className="text-ink italic">“{termsConflict.sentence}”</span>
+                  </p>
+                  <p className="text-xs text-ink-muted mt-1">{termsConflictExplanation(termsConflict)}</p>
+                  <p className="text-[11px] text-ink-faint mt-1.5">
+                    Nothing has been changed for you — your terms are yours to edit.
+                  </p>
+                </div>
+              ) : sendBlock ? (
                 <p className="text-xs text-amber-400 mt-0.5">{sendBlockedLabel(sendBlock)}</p>
               ) : (
                 <p className="text-xs text-ink-muted mt-0.5">
@@ -1542,6 +1582,20 @@ export default function QuoteDetailPage() {
                 </Button>
                 <Button variant="ghost" onClick={() => setNoChargeOpen(v => !v)}>
                   No charge
+                </Button>
+              </div>
+            ) : sendBlock === 'terms_contradict_timing' ? (
+              // Two real fixes, and we cannot know which the owner meant — so the
+              // door offered is the one they are least likely to find: their terms
+              // live in Settings, several screens away. The deposit rule is right
+              // here in Edit. ⛔ No "send anyway": the customer would be agreeing
+              // to terms this quote contradicts.
+              <div className="flex flex-wrap gap-2">
+                <Button variant="secondary" onClick={() => setEditing(true)}>
+                  <Edit2 className="w-4 h-4" /> Edit deposit rule
+                </Button>
+                <Button variant="secondary" onClick={() => router.push('/dashboard/settings')}>
+                  <SettingsIcon className="w-4 h-4" /> Edit terms
                 </Button>
               </div>
             ) : (

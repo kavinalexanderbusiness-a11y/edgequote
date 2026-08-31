@@ -330,6 +330,21 @@
    "comment": "0=Sun..6=Sat. The OT WORK WEEK boundary — legally load-bearing, so it is explicit rather than assumed. Defaults to 1 (Mon) to match the existing timesheet week."
   },
   {
+   "col": "terms_payment_claim",
+   "tbl": "business_settings",
+   "comment": "Normalized, quote-INDEPENDENT claim the terms make about WHEN money is due: no_claim | no_money_before_work | money_before_work | ambiguous. Written ONLY by the app's canonical classifier (lib/payments/termsTimingConflict). NULL = never classified, treated as unclassified and fails closed at acceptance."
+  },
+  {
+   "col": "terms_payment_claim_fingerprint",
+   "tbl": "business_settings",
+   "comment": "quote_terms_fingerprint() of the EXACT terms_text this claim was computed from. The claim is trusted only while this equals the live fingerprint — this is what un-trusts an old verdict after a post-send terms edit."
+  },
+  {
+   "col": "terms_payment_claim_version",
+   "tbl": "business_settings",
+   "comment": "TERMS_CLASSIFIER_VERSION that produced the claim. Terms can stay byte-identical while our reading of them improves, which a fingerprint cannot see. An older version reads as unclassified."
+  },
+  {
    "col": "decided_via",
    "tbl": "change_orders",
    "comment": "portal = the customer decided it themselves; owner = the owner recorded a decision taken elsewhere. Never inferred - no surface may imply a customer tapped approve when they did not."

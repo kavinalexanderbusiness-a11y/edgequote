@@ -5,10 +5,14 @@ import { SEASON_VISITS } from '@/lib/pricing'
 import { isWithinSeason, settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
 import { serviceCategory, bridgeSeasonForSeries } from '@/lib/legacySeasonInference'
 import { densityFor, locatedStops, DensityTier } from '@/lib/routeDensity'
-import { normalizeServiceKey, isRecurringProgramService } from '@/lib/jobPricing'
+import { normalizeServiceKey } from '@/lib/jobPricing'
 import { Coord } from '@/lib/geo'
 import { neighborhoodKey, ProfitJob, ProfitContext, ProfitQuote, RecInfo } from '@/lib/profitability'
 import { VIP_LTV, cadenceDays, churnRisk, daysBetween, lifetimeValue, type ChurnRisk } from '@/lib/signals'
+import {
+  assessEvidence, declaredCadence, mayShowAnnual, INSUFFICIENT_LABEL,
+  type Evidence, type DeclaredCadence,
+} from '@/lib/growthEvidence'
 
 // ── Revenue Intelligence engine (Growth) ────────────────────────────────────────
 // Predictive + prescriptive layer on top of the BI dashboard. Scores every
@@ -42,6 +46,17 @@ export interface Opportunity {
   expectedValue: number // $ (annual unless oneTime)
   oneTime: boolean
   rankValue: number     // expectedValue × confidence × one-time penalty — the business ranking
+  /**
+   * ⭐⭐ THE EVIDENCE THE FIGURE STANDS ON — travels WITH the number, never beside
+   * it. Sample size, the statistic used, what was excluded and why, the cadence
+   * assumption, and the annualization formula in full.
+   *
+   * ⛔ An opportunity whose evidence is `insufficient` carries expectedValue 0
+   * and MUST be rendered as "Not enough reliable data". The ACTION is still
+   * worth showing — "ask for a referral" is good advice regardless — but the
+   * projection has to earn its place separately.
+   */
+  evidence: Evidence
   why: string[]
   action: string        // recommended action (one line)
   actionHref: string    // where the owner goes to do it
@@ -75,6 +90,16 @@ export interface RevenueIntelReport {
     totalOneTime: number
     byKind: Record<OppKind, { count: number; value: number }>
     topAction: Opportunity | null
+    /**
+     * ⭐⭐ THE HONESTY OF THE HEADLINE. A "$98,000/yr" tile is only trustworthy
+     * if it says how much of the book it actually speaks for.
+     *   quantified   — recommendations whose evidence supported a figure
+     *   unquantified — real recommendations shown WITHOUT a projection
+     * The tile must render both, so the number is never read as covering
+     * everything the advisor found.
+     */
+    quantified: number
+    unquantified: number
   }
   labor: LaborContext
 }
@@ -82,7 +107,10 @@ export interface RevenueIntelReport {
 const round = (n: number) => Math.round(n)
 const round5 = (n: number) => Math.round(n / 5) * 5
 const clamp = (n: number, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, n))
-const SEASON_VISITS_BIWEEKLY = SEASON_VISITS.biweekly
+// ⛔ `SEASON_VISITS_BIWEEKLY` used to live here and was the universal fallback
+// multiplier — four predictors reached for it when they had no cadence. It is
+// deliberately GONE rather than left unused: a constant named "the default
+// season length" is an invitation to annualize something that has not earned it.
 
 // NOTE: jobs here deliberately do NOT carry `is_initial_visit`, so lifetimeValue
 // prices a first visit at the recurring rate — this engine's long-standing
@@ -128,14 +156,30 @@ interface Agg {
   addOns: Set<string>          // normalized add-on keys this customer buys
   churn: ChurnRisk             // how far past their own cadence (recurring only)
   inSeason: boolean
+  /** ⭐ What this customer's own visits actually support. Built once, read by
+   *  every predictor, so no two of them can disagree about the same evidence. */
+  evidence: Evidence
 }
 
-function visitsPerSeason(cadence: string | null): number {
-  if (cadence === 'weekly') return SEASON_VISITS.weekly
-  if (cadence === 'biweekly') return SEASON_VISITS.biweekly
-  if (cadence === 'monthly') return SEASON_VISITS.monthly
-  return SEASON_VISITS_BIWEEKLY
+/**
+ * ⭐⭐ THE SINGLE MOST EXPENSIVE LINE IN THIS FILE, NOW REMOVED.
+ *
+ * This function used to end `return SEASON_VISITS_BIWEEKLY` — so a cadence the
+ * owner never declared was silently annualized as fortnightly. Measured on the
+ * real book: 68.6% of customers with completed visits (35/51) have NO declared
+ * cadence, and 28 of them alone contributed $138,144 of "annual opportunity"
+ * derived from nothing at all.
+ *
+ * ⛔ NULL IS THE ANSWER when there is no declared cadence. Callers must render
+ * the insufficient-evidence state; there is no fallback multiplier to reach for.
+ */
+function visitsPerSeason(cadence: string | null): number | null {
+  const c = declaredCadence(cadence)
+  return c ? SEASON_VISITS[c] : null
 }
+
+/** SEASON_VISITS for a cadence the gate has already confirmed is declared. */
+const seasonVisitsFor = (c: DeclaredCadence): number => SEASON_VISITS[c]
 
 export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
   const { jobs, pctx, customers, properties, recurrences, invoices, lineItems, jobCustomerById, seasons, capacityHours, preferredDays, today } = inp
@@ -154,7 +198,7 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
 
   // Add-on penetration (lawn customers) — for upsell targeting.
   const addOnByCust: Record<string, Set<string>> = {}
-  const addOnStats: Record<string, { label: string; custs: Set<string>; amounts: number[]; program: boolean }> = {}
+  const addOnStats: Record<string, { label: string; custs: Set<string>; amounts: number[] }> = {}
   for (const li of lineItems) {
     const amt = Number(li.amount) || 0
     if (amt <= 0) continue
@@ -162,7 +206,7 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
     if (!cid) continue
     const key = li.service_key || normalizeServiceKey(li.description)
     ;(addOnByCust[cid] ||= new Set()).add(key)
-    const e = (addOnStats[key] ||= { label: li.description, custs: new Set(), amounts: [], program: isRecurringProgramService(li.description) })
+    const e = (addOnStats[key] ||= { label: li.description, custs: new Set(), amounts: [] })
     e.custs.add(cid); e.amounts.push(amt)
   }
 
@@ -202,6 +246,8 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
       isReferrer: referrers.has(c.id), prop: propByCust[c.id], addOns: addOnByCust[c.id] || new Set(),
       churn: churnRisk({ hasActiveRecurring: false, daysSinceLastService: null, cadenceDays: 0 }),
       inSeason: true,
+      // Replaced below once this customer's completed visits are known.
+      evidence: assessEvidence({ visits: [], declaredFreq: null, visitsPerSeason: seasonVisitsFor }),
     }
   }
   const completedByCust: Record<string, RIJob[]> = {}
@@ -218,12 +264,46 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
     }
   }
   for (const a of Object.values(aggs)) a.ltv = lifetimeValue(completedByCust[a.id] || [], pctx.quotesById, recurrences)
+
+  // ── ⭐⭐ THE EVIDENCE PASS — built ONCE per customer, before any predictor ──
+  // Every predictor below used to reach for `a.ltv / a.completedCount`: a MEAN,
+  // over a set that silently included unpriced visits valued at $0. On the real
+  // book that mean is $276 against a median of $70, because one visit sits 89.9×
+  // above the middle. Here the unpriced ones are EXCLUDED (and counted, so the
+  // owner is told), and what survives is summarised by a median.
+  for (const a of Object.values(aggs)) {
+    const rec = recByCust[a.id]
+    const jobsFor = completedByCust[a.id] || []
+    a.evidence = assessEvidence({
+      visits: jobsFor.map(j => {
+        const q = j.quote_id ? pctx.quotesById[j.quote_id] : null
+        const freq = j.recurrence_id ? effectiveFreq(recurrences[j.recurrence_id]?.freq ?? null, recurrences[j.recurrence_id]?.interval_unit ?? null, recurrences[j.recurrence_id]?.interval_count ?? null) : null
+        return {
+          rawPrice: j.price,
+          derivedValue: jobVisitValue(j.price, q as unknown as Record<string, unknown>, freq),
+          completed: true,
+          // Any text that could betray a seeded record. ⛔ A FLAG, not a verdict —
+          // every exclusion is counted and shown rather than applied silently.
+          labels: [a.name, j.service_type],
+        }
+      }),
+      // ⛔ ONLY a declared recurrence frequency. Never a service name, never a
+      // guess from the gaps between visits.
+      declaredFreq: rec?.cadence ?? null,
+      visitsPerSeason: seasonVisitsFor,
+    })
+  }
+
   for (const [cid, r] of Object.entries(recByCust)) {
     const a = aggs[cid]
     if (!a) continue
     a.cadence = r.cadence; a.perVisit = r.perVisit; a.recServiceType = r.serviceType
     a.hasActiveRecurring = r.hasFuture
-    a.annualRecurring = round(r.perVisit * visitsPerSeason(r.cadence))
+    // ⭐ Annualized ONLY through the gate. `visitsPerSeason` now returns null for
+    // an undeclared cadence, so this is 0 — and 0 means every predicate below
+    // (`a.annualRecurring > 0`) correctly refuses to speak.
+    const vps = visitsPerSeason(r.cadence)
+    a.annualRecurring = vps != null ? round(r.perVisit * vps) : 0
     const season = bridgeSeasonForSeries(null, r.serviceType, seasons)
     a.inSeason = !season || isWithinSeason(today, season)
     a.churn = churnRisk({
@@ -247,12 +327,32 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
     opportunities.push({ ...o, rankValue })
   }
 
+  /**
+   * ⭐⭐ THE ONLY ANNUAL FIGURE A PREDICTOR MAY CLAIM.
+   *
+   * Four of the six predictors used `(a.ltv / a.completedCount) * SEASON_VISITS_BIWEEKLY`
+   * — a mean over unpriced-inclusive visits, multiplied by a cadence nobody
+   * declared. That single expression is where most of the headline came from.
+   *
+   * Now: a median over PRICED visits only, annualized only by a cadence the
+   * owner actually declared. `null` means the recommendation still shows (the
+   * ACTION is still good advice) but carries no dollar projection.
+   */
+  const annualFor = (a: Agg): number | null => mayShowAnnual(a.evidence) ? a.evidence.annual : null
+
+  /** An unquantified opportunity: real advice, no fabricated number. */
+  const noFigure = (a: Agg) => ({ expectedValue: 0, evidence: a.evidence })
+
   const lawnCustomers = Object.values(aggs).filter(a => a.cats.has('lawn'))
 
   for (const a of Object.values(aggs)) {
     const conf = (n: number): Confidence => n >= 4 ? 'high' : n >= 2 ? 'medium' : 'low'
 
     // 1) RENEWAL — recurring customers; risk-adjusted likelihood to renew next season.
+    // ⭐ The CARD still requires a live recurring series; the FIGURE now comes
+    // from the evidence pass, which is a median over priced visits rather than
+    // the value of one representative job. "Do not let one huge or tiny visit
+    // dominate a recommendation" — the representative job WAS one visit.
     if (a.hasActiveRecurring && a.annualRecurring > 0) {
       let s = 55
       if (a.tenureDays >= 365) s += 15; else if (a.tenureDays >= 180) s += 8
@@ -260,13 +360,15 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
       if (a.churn.level === 'high') s -= 25; else if (a.churn.level === 'watch') s -= 12
       if (a.unpaidCount > 0) s -= 10
       const score = clamp(s)
+      const annual = annualFor(a)
       push({
         key: `renewal:${a.id}`, kind: 'renewal', customerId: a.id, customerName: a.name,
-        score, confidence: conf(a.completedCount), expectedValue: a.annualRecurring, oneTime: false,
+        score, confidence: conf(a.evidence.sampleSize), oneTime: false,
+        ...(annual != null ? { expectedValue: annual, evidence: a.evidence } : noFigure(a)),
         why: [
           `${a.cadence || 'recurring'} customer · ${a.completedCount} visits · ${a.tenureDays >= 365 ? '1+ yr' : Math.round(a.tenureDays / 30) + ' mo'} tenure`,
           a.churn.level !== 'none' ? 'Slipping behind cadence — renewal at risk' : 'On cadence — strong renewal candidate',
-          `$${a.annualRecurring}/yr recurring at stake`,
+          annual != null ? `$${annual}/yr recurring at stake` : `${INSUFFICIENT_LABEL} to put a figure on the season`,
         ],
         action: a.churn.level !== 'none' ? 'Reach out now and re-book the season' : 'Lock in next season before the gap',
         actionHref: `/dashboard/customers/${a.id}`,
@@ -275,30 +377,51 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
 
     // 2) UPSELL — best add-on this lawn customer doesn't buy yet (peer penetration).
     if (a.cats.has('lawn') && a.completedCount >= 1) {
-      let best: { key: string; label: string; pen: number; avg: number; program: boolean } | null = null
+      let best: { key: string; label: string; pen: number; typical: number; n: number; evidence: Evidence } | null = null
       for (const [key, e] of Object.entries(addOnStats)) {
         if (e.custs.size < 2) continue
         if (a.addOns.has(key)) continue
         const pen = e.custs.size / Math.max(1, lawnCustomers.length)
         if (pen > 0.7) continue
-        const avg = round5(e.amounts.reduce((x, y) => x + y, 0) / e.amounts.length)
-        if (avg <= 0) continue
-        if (!best || pen > best.pen) best = { key, label: e.label, pen, avg, program: e.program }
+        // ⭐ MEDIAN, not mean. The add-on price list is drawn from the same
+        // skewed population as everything else here (book-wide: median $70,
+        // mean $276), so an average let one large sale set the expected value
+        // of every future one.
+        const ev = assessEvidence({
+          visits: e.amounts.map(amt => ({ rawPrice: amt, derivedValue: amt, completed: true, labels: [e.label] })),
+          declaredFreq: null, visitsPerSeason: seasonVisitsFor,
+        })
+        const typical = ev.perVisit
+        if (typical == null || typical <= 0) continue
+        if (!best || pen > best.pen) best = { key, label: e.label, pen, typical: round5(typical), n: ev.sampleSize, evidence: ev }
       }
       if (best) {
-        const appsPerYear = best.program ? 4 : 1
-        const expected = round(best.avg * appsPerYear)
+        // ⛔⛔ THE SERVICE-NAME CADENCE INFERENCE IS GONE.
+        // This read `appsPerYear = isRecurringProgramService(description) ? 4 : 1`
+        // — a regex on the add-on's NAME (/mow|grass cut|lawn care/,
+        // /fertiliz|weed control|bed maintenance/) deciding whether to multiply
+        // the price by four. A NAME IS NOT A CADENCE: two businesses doing
+        // identical work would be annualized differently for calling it
+        // different things, and a trade whose vocabulary isn't in that regex
+        // matched nothing at all.
+        //
+        // There is no declared cadence for an add-on anywhere in the schema, so
+        // the honest figure is ONE application. An owner who sells it as a
+        // programme still sees a real number; it is simply not multiplied by a
+        // frequency nobody recorded.
+        const expected = best.typical
         let s = 40 + Math.round(best.pen * 60)
         if (a.hasActiveRecurring) s += 10
         if (a.ltv >= 1000) s += 8
         const score = clamp(s)
         push({
           key: `upsell:${a.id}`, kind: 'upsell', customerId: a.id, customerName: a.name,
-          score, confidence: best.pen >= 0.3 ? 'medium' : 'low', expectedValue: expected, oneTime: !best.program,
+          score, confidence: best.pen >= 0.3 ? 'medium' : 'low', expectedValue: expected, oneTime: true,
+          evidence: best.evidence,
           why: [
             `${Math.round(best.pen * 100)}% of your lawn customers buy ${best.label}`,
             `${a.name} doesn't have it yet`,
-            best.program ? `~4×/season program at avg $${best.avg}` : `~$${best.avg} one-off`,
+            `~$${best.typical} typical (median of ${best.n} sale${best.n === 1 ? '' : 's'}) — one application`,
           ],
           action: `Offer ${best.label}`, offer: best.label,
           actionHref: `/dashboard/quotes/new?customer=${a.id}`,
@@ -311,9 +434,14 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
     const active = a.hasActiveRecurring || a.completedCount >= 1
     if (active && (hasLawn !== hasSnow)) {
       const target = hasLawn ? 'snow' : 'lawn'
-      const base = a.perVisit > 0 ? a.perVisit : (a.completedCount > 0 ? round(a.ltv / a.completedCount) : 0)
-      if (base > 0) {
-        const expected = round(base * SEASON_VISITS_BIWEEKLY)
+      // ⛔ WAS: `base × SEASON_VISITS_BIWEEKLY`, where base fell back to
+      // `ltv / completedCount`. A customer with ONE completed visit had that one
+      // visit multiplied into a fortnightly year — for a season they have never
+      // bought, in a category they have never used.
+      // ⭐ A second season has NO cadence evidence by definition: the plan is the
+      // thing being proposed. So there is a per-visit figure and no annual one.
+      const perVisit = a.evidence.perVisit
+      if (perVisit != null && perVisit > 0) {
         const dens = densityOf(a)
         let s = 45
         if (a.hasActiveRecurring) s += 15
@@ -322,11 +450,12 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
         const score = clamp(s)
         push({
           key: `cross_sell:${a.id}`, kind: 'cross_sell', customerId: a.id, customerName: a.name,
-          score, confidence: a.hasActiveRecurring ? 'medium' : 'low', expectedValue: expected, oneTime: false,
+          score, confidence: a.hasActiveRecurring ? 'medium' : 'low',
+          ...noFigure(a), oneTime: false,
           why: [
             `Active ${hasLawn ? 'lawn' : 'snow'} customer with no ${target} plan`,
             dens.tier !== 'isolated' ? `On a ${dens.tier} route — truck is already nearby` : 'Adds a second season at one address',
-            `~$${expected}/yr second-season opportunity`,
+            `Their typical visit is $${perVisit} — the season's value depends on the plan you offer`,
           ],
           action: `Offer ${target === 'snow' ? 'snow removal' : 'lawn service'}`, offer: target === 'snow' ? 'Snow removal' : 'Lawn service',
           actionHref: `/dashboard/quotes/new?customer=${a.id}`,
@@ -339,20 +468,25 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
     // win-back card below (which owns the lapsed ones).
     const recentlyServed = a.futureBooked || (a.lastCompleted ? dDays(a.lastCompleted) <= 30 : false)
     if (!a.hasActiveRecurring && a.completedCount >= 2 && recentlyServed) {
-      const perVisit = round(a.ltv / a.completedCount)
-      if (perVisit > 0) {
-        const expected = round(perVisit * SEASON_VISITS_BIWEEKLY)
+      // ⭐⭐ THE PUREST CASE OF ONE-OFF WORK BEING ANNUALIZED AS RECURRING.
+      // This card exists precisely BECAUSE the customer has no recurring plan —
+      // and it then multiplied their mean visit by a fortnightly season to
+      // announce "$X/yr predictable revenue". The cadence is the thing being
+      // SOLD; it cannot also be the evidence.
+      const perVisit = a.evidence.perVisit
+      if (perVisit != null && perVisit > 0) {
         let s = 40 + Math.min(30, a.completedCount * 6)
         if (a.unpaidCount === 0) s += 10
         if (a.tenureDays >= 180) s += 8
         const score = clamp(s)
         push({
           key: `membership:${a.id}`, kind: 'membership', customerId: a.id, customerName: a.name,
-          score, confidence: a.completedCount >= 4 ? 'high' : 'medium', expectedValue: expected, oneTime: false,
+          score, confidence: a.evidence.strength === 'confident' ? 'high' : 'medium',
+          ...noFigure(a), oneTime: false,
           why: [
             `${a.completedCount} one-off visits but no recurring plan`,
             a.unpaidCount === 0 ? 'Pays reliably — a great auto-pay candidate' : 'Repeat customer — lock them in',
-            `Converting ≈ $${expected}/yr predictable revenue`,
+            `Their typical visit is $${perVisit} — annual value depends on the cadence you sell`,
           ],
           action: 'Offer a recurring plan / membership',
           actionHref: `/dashboard/customers/${a.id}`,
@@ -364,9 +498,13 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
     if (a.completedCount >= 2 && (a.ltv >= 300 || a.hasActiveRecurring)) {
       const recentlyActive = a.hasActiveRecurring || (a.lastCompleted ? dDays(a.lastCompleted) <= 75 : false)
       if (recentlyActive) {
-        const referredAnnual = a.hasActiveRecurring && a.annualRecurring > 0 ? a.annualRecurring : round((a.ltv / a.completedCount) * SEASON_VISITS_BIWEEKLY)
-        const expected = round(referredAnnual * 0.5)
-        if (expected >= 150) {
+        // ⭐ A referral's value is a projection about a customer WHO DOES NOT
+        // EXIST YET. The only defensible anchor is what THIS customer is worth
+        // on evidence, halved — and only when that annual figure is itself
+        // admissible (declared cadence, enough priced visits).
+        const referredAnnual = annualFor(a)
+        const expected = referredAnnual != null ? round(referredAnnual * 0.5) : 0
+        if (referredAnnual != null && expected >= 150) {
           let s = 45
           if (a.isReferrer) s += 25
           if (a.hasActiveRecurring) s += 12
@@ -376,6 +514,7 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
           push({
             key: `referral:${a.id}`, kind: 'referral', customerId: a.id, customerName: a.name,
             score, confidence: a.isReferrer || a.ltv >= VIP_LTV ? 'high' : 'medium', expectedValue: expected, oneTime: false,
+            evidence: a.evidence,
             why: [
               `$${round(a.ltv)} lifetime · ${a.completedCount} visits${a.isReferrer ? ' · proven referrer' : ''}`,
               hoodOf(a) !== 'Unknown' ? `A referral in ${hoodOf(a)} adds route density` : 'Warm referrals close cheap',
@@ -392,9 +531,12 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
     if (a.completedCount >= 1 && !a.futureBooked && a.lastCompleted && a.inSeason) {
       const daysSince = dDays(a.lastCompleted)
       if (daysSince >= 30) {
-        const annual = a.hasActiveRecurring && a.annualRecurring > 0 ? a.annualRecurring
-          : round((a.ltv / a.completedCount) * SEASON_VISITS_BIWEEKLY)
-        if (annual >= 150) {
+        // ⭐ Win-back is worth what the customer was actually worth — on the
+        // evidence, and only when a declared cadence makes an annual figure
+        // admissible. A lapsed one-off customer still deserves the CARD; they
+        // just do not come with a fabricated annual number attached.
+        const annual = annualFor(a)
+        if (annual != null && annual >= 150) {
           const lost = daysSince >= 60
           const recovery = lost ? 0.3 : 0.5
           const expected = round(annual * recovery)
@@ -405,7 +547,8 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
           const score = clamp(s)
           push({
             key: `reactivation:${a.id}`, kind: 'reactivation', customerId: a.id, customerName: a.name,
-            score, confidence: a.completedCount >= 3 ? 'medium' : 'low', expectedValue: expected, oneTime: false,
+            score, confidence: a.evidence.strength === 'confident' ? 'medium' : 'low', expectedValue: expected, oneTime: false,
+            evidence: a.evidence,
             why: [
               `Last serviced ${daysSince} days ago — ${lost ? 'a lost customer' : 'recently lapsed'}`,
               `${a.completedCount} completed visit${a.completedCount !== 1 ? 's' : ''} · $${round(a.ltv)} lifetime`,
@@ -439,10 +582,13 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
 
   // ── summary + labor context ──
   const byKind = { renewal: { count: 0, value: 0 }, upsell: { count: 0, value: 0 }, cross_sell: { count: 0, value: 0 }, membership: { count: 0, value: 0 }, referral: { count: 0, value: 0 }, reactivation: { count: 0, value: 0 } } as RevenueIntelReport['summary']['byKind']
-  let totalOpportunity = 0, totalOneTime = 0
+  let totalOpportunity = 0, totalOneTime = 0, quantified = 0, unquantified = 0
   for (const o of ranked) {
     byKind[o.kind].count++; byKind[o.kind].value += o.expectedValue
     if (o.oneTime) totalOneTime += o.expectedValue; else totalOpportunity += o.expectedValue
+    // ⭐ An expectedValue of 0 here is never "worth nothing" — it is "we would not
+    // claim a number", which is a different fact and is counted as one.
+    if (o.expectedValue > 0) quantified++; else unquantified++
   }
 
   const bookedMin = jobs.filter(j => j.scheduled_date >= today && dDays(j.scheduled_date) >= -14 && j.scheduled_date <= addDaysISO(today, 14) && j.status !== 'cancelled' && j.status !== 'completed')
@@ -456,7 +602,14 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
   return {
     opportunities: ranked,
     ltvForecast,
-    summary: { totalOpportunity: round(totalOpportunity), totalOneTime: round(totalOneTime), byKind, topAction: ranked[0] || null },
+    summary: {
+      totalOpportunity: round(totalOpportunity), totalOneTime: round(totalOneTime), byKind,
+      // ⭐ The top action is the best QUANTIFIED play. An unquantified card can
+      // still be excellent advice, but it must not headline a screen whose whole
+      // subject is expected revenue.
+      topAction: ranked.find(o => o.expectedValue > 0) || null,
+      quantified, unquantified,
+    },
     labor,
   }
 }
