@@ -14,14 +14,17 @@
 // incident). The suite refuses a dirty target file up front.
 
 import { execSync, spawnSync } from 'node:child_process'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, readdirSync } from 'node:fs'
 
 const MAPPER = 'src/lib/acceptedDocument.ts'
 const ENGINE = 'src/lib/quoteAcceptance.ts'
 const PDF = 'src/components/quotes/QuotePDF.tsx'
 const MODEL = 'src/app/portal/[token]/model.ts'
 const GUARD = 'scripts/verify-accepted-document-truth.ts'
-const MIG = 'supabase/migrations/20260830150000_portal_accepted_version.sql'
+// The candidate migration, resolved the way the guard resolves it — its version
+// number moves every time a landing renumbers the baseline underneath it.
+const MIG = 'supabase/migrations/' + readdirSync('supabase/migrations')
+  .filter(f => /_portal_accepted_version\.sql$/.test(f)).sort().at(-1)
 
 /** [name, file, find, replace] — replace must CHANGE the file. */
 const MUTATIONS = [
