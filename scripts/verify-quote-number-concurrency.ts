@@ -444,23 +444,60 @@ async function main() {
     // ═══════════════════════════════════════════════════════════════════════
     console.log('\n══ 5 · years and prefixes are independent counters ═════════════════════\n')
     // ═══════════════════════════════════════════════════════════════════════
-    // ⭐ ANNUAL RESET, PROVEN BY MOVING THE CLOCK the function actually reads
-    // rather than by inserting a counter row and admiring it. allocate_quote_number
-    // takes the year from now(), so overriding now() for one transaction is the
-    // only way to measure the reset instead of assuming it.
-    // now() cannot be overridden without a mock, so the annual reset is measured
-    // on its actual scope key instead: a fresh (prefix, year) pair starts at 1.
-    const nextYearFirst = (await admin.query(
+    // ⛔⛔ WHAT CANNOT BE SIMULATED, STATED FIRST. allocate_quote_number takes the
+    // year from now(), and now() resolves to pg_catalog.now() — the function pins
+    // `search_path to 'public','pg_temp'`, and pg_catalog is searched implicitly
+    // ahead of both, so there is no way to shadow it. The rollover MOMENT is
+    // therefore not simulated here, and nothing below pretends otherwise.
+    //
+    // ⚠️⚠️ AN EARLIER VERSION OF THIS BLOCK WAS DECORATION. It INSERTed a counter
+    // row by hand and asserted the arithmetic on it — never calling the allocator
+    // at all. That proves a table can hold a 2, not that numbering resets
+    // annually. What follows measures the two halves that together ARE the annual
+    // reset, and measures both THROUGH THE REAL ALLOCATOR.
+
+    // ── half 1 · the allocator's year IS the current year, measured together ──
+    const yearProbe = await admin.query(
+      `select public.allocate_quote_number($1) as v, extract(year from now())::int as now_year`, [A])
+    const emittedYear = Number((yearProbe.rows[0].v as string).split('-')[1])
+    check('YEAR · the year the allocator emits is read from now(), not stored anywhere',
+      emittedYear === Number(yearProbe.rows[0].now_year),
+      `allocator emitted ${emittedYear}, now() says ${yearProbe.rows[0].now_year}`)
+    const movedRow = await admin.query(
+      `select year from public.document_number_counters
+        where user_id=$1 and prefix='EPS' order by updated_at desc limit 1`, [A])
+    check('YEAR · and that is the counter key it advanced',
+      Number(movedRow.rows[0].year) === emittedYear,
+      'if the emitted year and the keyed year could differ, two years would share one sequence')
+
+    // ── half 2 · next year is a genuinely SEPARATE counter that cannot leak ──
+    // ⭐ Park a deliberately absurd value on next year's key. If years were not
+    // independent, the next allocation would either return ~900 or disturb it.
+    await admin.query(
       `insert into public.document_number_counters (user_id, kind, prefix, year, next_value)
-            values ($1,'quote','EPS',$2,2)
-         returning next_value - 1 as claimed`, [A, YEAR + 1])).rows[0].claimed
-    check('YEAR · a new year is a new counter whose FIRST claimed value is 1',
-      Number(nextYearFirst) === 1,
-      `the allocator's insert branch returns next_value - 1 = 1; got ${nextYearFirst}`)
+            values ($1,'quote','EPS',$2,900)`, [A, YEAR + 1])
+    const afterPark = (await admin.query('select public.allocate_quote_number($1) as v', [A])).rows[0].v as string
+    check('YEAR · next year\'s counter cannot leak into this year\'s numbers',
+      !afterPark.includes('-0899') && !afterPark.includes('-0900')
+      && Number(afterPark.split('-')[1]) === emittedYear,
+      `a 900 parked on ${YEAR + 1} produced ${afterPark}`)
+    const parkedStill = Number((await admin.query(
+      `select next_value from public.document_number_counters where user_id=$1 and prefix='EPS' and year=$2`,
+      [A, YEAR + 1])).rows[0].next_value)
+    check('YEAR · and allocating this year did not disturb next year\'s counter',
+      parkedStill === 900, `next year's counter moved to ${parkedStill}`)
+    await admin.query(
+      `delete from public.document_number_counters where user_id=$1 and prefix='EPS' and year=$2`,
+      [A, YEAR + 1])
+
+    // ⭐ The "starts at 0001" half of the reset is the SAME code path for a fresh
+    // year key as for a fresh prefix key or a fresh tenant — one ON CONFLICT on
+    // the composite primary key — and both of those ARE exercised through the real
+    // allocator below (ABC-0001 and NSR-0001).
     const thisYearUnmoved = Number((await admin.query(
       `select next_value from public.document_number_counters where user_id=$1 and prefix='EPS' and year=$2`,
       [A, YEAR])).rows[0].next_value)
-    check('YEAR · starting next year did not disturb this year\'s counter',
+    check('YEAR · this year\'s counter survived all of the above intact',
       thisYearUnmoved > 43, `this year's counter reads ${thisYearUnmoved}`)
 
     // ── prefix change, and change back ────────────────────────────────────

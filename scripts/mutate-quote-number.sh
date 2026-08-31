@@ -354,6 +354,27 @@ mutate static "a computed fallback added to the app seam" \
   "$SEAM" \
   's/  if \(error\) return \{ error: error\.message \}/  if (error) return { quoteNumber: generateQuoteNumber(1) }/'
 
+# 30b · ⭐ THE DOOR INVENTORY TRIPWIRE. The per-door checks already catch a door
+#       that fails to allocate. What they cannot catch is a door DISAPPEARING from
+#       the inventory — a quote creation path that stops being recognised as one
+#       is not defended by a check that only runs over recognised doors.
+#       ⚠️ Reclassifying the builder by dropping its `quote_number` key does NOT
+#       work: the insert object still names the column, so it stays an allocation
+#       door. The door has to leave the RECOGNISED SET, which is what this does.
+mutate static "a creation door quietly leaves the inventory" \
+  "browser creation doors" \
+  "$NEWQ" \
+  "s/await supabase\.from\('quotes'\)\.insert\(\{/await supabase.from('quotes_gone').insert({/"
+
+# 30c · ⭐⭐ THE ANNUAL RESET, at its actual source. The year must come from now();
+#       a pinned year would make every future year share one sequence.
+#       pg mode: the check measures the allocator's output against now() on a real
+#       server in one statement.
+mutate pg "the allocator's year pinned to a literal" \
+  "the year the allocator emits is read from now()" \
+  "$PROPOSAL" \
+  's/  v_year   := extract\(year from now\(\)\)::int;/  v_year   := 2020;/'
+
 echo ""
 echo "  ── undo must keep working ──"
 

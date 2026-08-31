@@ -262,6 +262,8 @@ check('the browser generator is gone from lib/utils',
 
 // Every door that inserts a quote must obtain its number from the seam.
 const inserters = appFiles.filter(f => /from\('quotes'\)[\s\S]{0,40}\.insert/.test(stripTs(src(f))))
+const allocationDoors: string[] = []
+const restoreDoors: string[] = []
 for (const f of inserters) {
   const code = stripTs(src(f))
   // ⭐ CLASSIFY BY THE INSERT ITSELF, NOT BY A NEARBY TOAST. A RESTORE re-inserts
@@ -281,11 +283,39 @@ for (const f of inserters) {
   const setsQuoteNumber = /\bquote_number\s*[,:]/.test(code) || /\bquote_number\s*=/.test(code)
   const isRestore = !setsQuoteNumber
   const allocates = /allocateQuoteNumbers?\(/.test(code)
+  ;(isRestore ? restoreDoors : allocationDoors).push(f.replace(/\\/g, '/'))
   check(`${f.replace(/\\/g, '/')} ${isRestore ? 'restores without allocating' : 'uses the canonical allocator'}`,
     isRestore ? !allocates : allocates,
     isRestore ? 'a restore keeps the number the quote already had'
               : 'this door inserts a quote, so it must call allocateQuoteNumber')
 }
+
+// ⭐⭐ THE DOOR INVENTORY IS A TRIPWIRE, NOT A HAND-KEPT LIST. The classification
+// above is derived from disk and would already catch a NEW door that inserts a
+// quote without allocating. What it would NOT do is make anyone NOTICE that the
+// set of creation doors changed at all — and "a door was added" is exactly the
+// event that has historically reintroduced a second allocator here.
+//
+// ⛔ So the COUNT is pinned and nothing else. A file list would rot on the first
+// rename and would be a list kept by hand, which this repo has been bitten by
+// before. A count changes only when a door is genuinely added or removed, and
+// when it does, the right response is to read the new door and then move the
+// number — not to move the number first.
+//
+// SIX creation doors, and they are these:
+//   4 in the browser — the quote builder, pricing recovery, single duplicate,
+//                      bulk duplicate
+//   2 in the database — book_service(), submit_booking()
+// Plus 2 RESTORE paths, which must NOT allocate: they re-insert a row that keeps
+// the number it was already issued.
+check(`exactly 4 browser creation doors (found ${allocationDoors.length})`,
+  allocationDoors.length === 4,
+  `the set of quote-creation doors changed:\n      ${allocationDoors.join('\n      ')}\n      `
+  + 'read the new door, confirm it allocates through lib/quoteNumber, then update this count')
+check(`the restore paths are still restore-only (found ${restoreDoors.length})`,
+  restoreDoors.length === 1,
+  `restore doors:\n      ${restoreDoors.join('\n      ')}\n      `
+  + 'a restore that starts allocating would mint a second number for a quote that already has one')
 
 // ── The database doors ─────────────────────────────────────────────────────
 const baseFile = readdirSync(MIGRATIONS).filter(f => /baseline/.test(f)).sort().pop()!
