@@ -68,8 +68,26 @@ async function main() {
   const baselineName = readdirSync(join(ROOT, 'supabase/migrations')).filter(f => f.endsWith('_baseline.sql')).sort().pop()!
   await apply('baseline', readFileSync(join(ROOT, 'supabase/migrations', baselineName), 'utf8'))
   console.log(`  applied ${baselineName}`)
-  await apply('S122 candidate', readFileSync(join(ROOT, 'supabase/proposals/RUN-S122-terms-payment-claim.sql'), 'utf8'))
-  console.log('  applied supabase/proposals/RUN-S122-terms-payment-claim.sql\n')
+  // ⭐ Applied in the SAME ORDER S106 must use. Stage A is additive and inert;
+  // Stage B is the only part that can refuse, and it fails closed on an
+  // unclassified tenant — so the real landing runs the backfill between them.
+  await apply('S122 Stage A', readFileSync(join(ROOT, 'supabase/proposals/RUN-S122A-terms-payment-claim-columns.sql'), 'utf8'))
+  console.log('  applied Stage A — RUN-S122A-terms-payment-claim-columns.sql')
+
+  // ⭐⭐ STAGE A IS INERT, PROVEN NOT ASSUMED. Before Stage B exists, an
+  // unclassified tenant must still be able to accept — otherwise "additive and
+  // safe to sit on" is a claim nobody checked, and S106 would be applying A on
+  // production trusting a sentence in a comment.
+  {
+    const d0 = (await db.query(
+      `select pg_get_functiondef(p.oid) as d from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname='public' and p.proname='quote_record_acceptance' and p.prokind='f'`)).rows[0] as { d: string }
+    check('Stage A alone does NOT touch quote_record_acceptance',
+      !/S122 · TERMS MAY NOT CONTRADICT/.test(d0.d))
+  }
+
+  await apply('S122 Stage B', readFileSync(join(ROOT, 'supabase/proposals/RUN-S122B-acceptance-terms-gate.sql'), 'utf8'))
+  console.log('  applied Stage B — RUN-S122B-acceptance-terms-gate.sql\n')
 
   // ── The anchor patch actually landed ──────────────────────────────────────
   const def = (await db.query(

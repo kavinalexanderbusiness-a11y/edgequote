@@ -564,7 +564,9 @@ console.log('\n■ 6. ONE classifier, a quote-independent claim, and a version')
     && !termsClaimConflicts(paymentTiming(NONE), 'no_claim'))
 
   // ── The fingerprint must equal the database's own function ────────────────
-  const sql = read('supabase/proposals/RUN-S122-terms-payment-claim.sql')
+  const stageA = read('supabase/proposals/RUN-S122A-terms-payment-claim-columns.sql')
+  const stageB = read('supabase/proposals/RUN-S122B-acceptance-terms-gate.sql')
+  const sql = stageA + '\n' + stageB
   const baseline = read('supabase/migrations/' + (readdirSync(join(ROOT, 'supabase/migrations'))
     .filter(f => f.endsWith('_baseline.sql')).sort().pop() as string))
   const fpDef = /CREATE OR REPLACE FUNCTION public\.quote_terms_fingerprint[\s\S]*?\$function\$([\s\S]*?)\$function\$/.exec(baseline)?.[1] ?? ''
@@ -602,6 +604,33 @@ console.log('\n■ 6. ONE classifier, a quote-independent claim, and a version')
     `keys: ${Object.keys(termsClaimPatch('x')).join(', ')}`)
 
   // ── The SQL gate ──────────────────────────────────────────────────────────
+  // ── The two-stage split is the apply-order safety, not a filing preference ─
+  // ⚠️ Assert on the SQL that EXECUTES, not the prose. Stage A's header explains
+  // why the gate exists and therefore names quote_record_acceptance — a check
+  // over the raw file failed on its own documentation. Same trap the JS comment
+  // stripper exists for, one language over.
+  const sqlCode = (s: string) => s.replace(/\r\n/g, '\n').replace(/^\s*--.*$/gm, '')
+  check('Stage A is additive only — it never patches a function',
+    !/pg_get_functiondef/.test(sqlCode(stageA)) && !/quote_record_acceptance/.test(sqlCode(stageA)),
+    'Stage A must be inert: applying it changes no behaviour')
+  check('Stage B carries the refusal, and only the refusal',
+    /pg_get_functiondef/.test(sqlCode(stageB)) && !/add column/i.test(sqlCode(stageB)))
+  check('both stages name the load-bearing apply order (A → backfill → B)',
+    /Stage A[\s\S]{0,120}BACKFILL[\s\S]{0,120}Stage B/i.test(stageA)
+    && /Stage A[\s\S]{0,120}BACKFILL[\s\S]{0,120}Stage B/i.test(stageB))
+  check('Stage B says WHY order matters — it fails closed on unclassified',
+    /fails closed on an\s*\n?--\s*unclassified tenant BY DESIGN|fails closed on an unclassified tenant/i.test(stageB))
+
+  // ⚠️ The CRLF trap, pinned. pg_get_functiondef returns the body with the line
+  // endings it was STORED with; an LF anchor against a CRLF body matches zero
+  // times. Normalising is mandatory, and so is refusing on any count but one.
+  check('Stage B normalises line endings BEFORE anchoring',
+    /replace\(v_src, E'\\r\\n', E'\\n'\)/.test(stageB))
+  check('…and normalisation happens before the anchor is counted',
+    stageB.indexOf("replace(v_src, E'\\r\\n'") < stageB.indexOf('v_hits :='))
+  check('Stage B requires EXACTLY ONE anchor match, else refuses',
+    /<> 1 then/.test(stageB) && /expected exactly 1 — refusing to patch/.test(stageB))
+
   check('the gate lives in quote_record_acceptance — the one evidence seam',
     /proname = 'quote_record_acceptance'/.test(sql))
   check('the gate is an ANCHOR PATCH over the LIVE definition, not a restated body',
@@ -629,7 +658,8 @@ console.log('\n■ 6. ONE classifier, a quote-independent claim, and a version')
     /check \(terms_payment_claim is null or terms_payment_claim in/.test(sql)
     && !/'unclassified'\)/.test(sql.split('business_settings_terms_payment_claim_check')[1]?.slice(0, 300) ?? ''))
   check('the candidate is OUTSIDE supabase/migrations (S106 picks the version)',
-    !existsSync(join(ROOT, 'supabase/migrations/RUN-S122-terms-payment-claim.sql')))
+    !existsSync(join(ROOT, 'supabase/migrations/RUN-S122A-terms-payment-claim-columns.sql'))
+    && !existsSync(join(ROOT, 'supabase/migrations/RUN-S122B-acceptance-terms-gate.sql')))
 
   // ── S121 / S114 preserved ─────────────────────────────────────────────────
   check('S121 preserved: owner_override_quote_status still records NO evidence',
