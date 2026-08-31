@@ -49,9 +49,13 @@ const MUTATIONS = [
   },
   {
     file: 'src/lib/fixtureData.ts',
-    name: 'the session token loses its hyphen (S61 Light Fixture Co becomes a fixture)',
+    // ⚠️ The first version of this mutation was WRONG and reported as MISSED:
+    // `[-_ ]*fixture` still requires "fixture" to be the NEXT token, so it never
+    // matched "S61 Light Fixture Co" and no bug was actually introduced. The real
+    // over-broadening is letting anything sit between the token and the word.
+    name: 'the session token stops requiring the join (S61 Light Fixture Co becomes a fixture)',
     from: '  { shape: /^s\\d{1,3}[-_]fixture\\b/i },',
-    to: '  { shape: /^s\\d{1,3}[-_ ]*fixture/i },',
+    to: '  { shape: /^s\\d{1,3}\\b.*fixture/i },',
   },
   {
     file: 'src/lib/fixtureData.ts',

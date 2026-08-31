@@ -111,6 +111,13 @@ const MUST_SURVIVE = [
   // The intersection of the two protected shapes — a session-shaped token AND the
   // word fixture, but written the way a PERSON writes a name (spaced, not joined).
   'S61 Light Fixture Co',
+  // ⭐ ANCHORING, for the zz+fixture shape. Mutation testing caught that nothing
+  // here proved it: an unanchored version of that rule hid this name and every
+  // check still passed.
+  'Deck ZZ Fixture Mural', 'Restore ZZ Light Fixture',
+  // ⭐ And the reserved-DOMAIN rule is about a domain, not the letters "example".
+  // Widening it to a substring hid these, unnoticed, until a mutation said so.
+  'Exampleton Property Care', 'jo@exampleton.ca', 'sales@examplestone.com',
 ]
 for (const name of MUST_SURVIVE) {
   check(`“${name}” is NOT classified as fixture data`, !isFixtureName(name),
