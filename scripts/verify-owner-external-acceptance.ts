@@ -26,6 +26,7 @@ import { splitStatements, loadPGlite, substitutePlatformStatements } from './lib
 import {
   classifyTermsPaymentClaim, termsFingerprint, TERMS_CLASSIFIER_VERSION,
 } from '../src/lib/payments/termsTimingConflict'
+import { termsClaimRefresh, type StoredTermsClaim } from '../src/lib/payments/termsClaimRefresh'
 
 let pass = 0, fail = 0
 const check = (name: string, ok: boolean, detail?: string) => {
@@ -95,12 +96,24 @@ async function main() {
                terms_payment_claim = null, terms_payment_claim_fingerprint = null,
                terms_payment_claim_version = null where user_id = $1`, [TENANT, terms])
   }
-  /** Exactly what app/api/quotes/record-acceptance does before calling the RPC. */
+  /**
+   * The route's own decision, run against the real row — NOT a re-implementation.
+   *
+   * ⚠️⚠️ This used to hand-roll the reclassification the route performs, and the
+   * mutation harness proved that worthless: gutting the route's self-heal, its
+   * classifier call, and its staleness rule all left this guard GREEN, because
+   * the test was agreeing with itself. `termsClaimRefresh` is now the one
+   * function both use, so a change to the route's logic changes this too.
+   */
   const reclassifyLikeTheRoute = async () => {
-    const t = String((await q(`select terms_text from public.business_settings where user_id=$1`, [TENANT])).rows[0].terms_text)
+    const row = (await q(`select terms_text, terms_payment_claim, terms_payment_claim_fingerprint,
+                                 terms_payment_claim_version
+                            from public.business_settings where user_id=$1`, [TENANT])).rows[0] as StoredTermsClaim
+    const { stale, patch } = termsClaimRefresh(row)
+    if (!stale) return
     await q(`update public.business_settings set terms_payment_claim=$2,
                terms_payment_claim_fingerprint=$3, terms_payment_claim_version=$4 where user_id=$1`,
-      [TENANT, classifyTermsPaymentClaim(t), termsFingerprint(t), TERMS_CLASSIFIER_VERSION])
+      [TENANT, patch.terms_payment_claim, patch.terms_payment_claim_fingerprint, patch.terms_payment_claim_version])
   }
   const asOwner = () => q(`select set_config('request.jwt.claim.sub', $1, false)`, [TENANT])
   const ownerRecord = async (quoteId: string): Promise<{ ok: boolean; err?: string }> => {
@@ -216,20 +229,37 @@ async function main() {
     const route = readFileSync(join(ROOT, 'src/app/api/quotes/record-acceptance/route.ts'), 'utf8')
     const code = route.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')
     check('the route requires an authenticated owner', /auth\.getUser\(\)/.test(code) && /status: 401/.test(code))
-    check('it classifies with the CANONICAL classifier', /classifyTermsPaymentClaim/.test(code))
-    // ⚠️ Assert the WRITE, not the word. The route must READ terms_text (it
-    // classifies it) and names it in the row's type annotation — a bare
-    // /terms_text\s*:/ matched that annotation and failed on the route's own
-    // types. The invariant is that the UPDATE payload carries only the three
-    // classification columns. Same trap the backfill's version of this hit.
-    const updates = [...code.matchAll(/\.update\(\{([\s\S]*?)\}\)/g)].map(m => m[1])
+    check('it derives the refresh from THE shared decision, not its own copy',
+      /termsClaimRefresh\(row\)/.test(code) && !/classifyTermsPaymentClaim/.test(code),
+      'the route must not re-implement the staleness rule')
+    // ⚠️ These four were MISSED by the first mutation run, because §1–§4 tested a
+    // simulation of the route rather than the route. The behaviour now lives in
+    // termsClaimRefresh (exercised above), and what remains here is the wiring
+    // that only the route can get wrong.
+    check('it actually PERFORMS the self-heal when the verdict is stale',
+      /if \(row != null && stale\) \{/.test(code) && /\.update\(patch\)/.test(code),
+      'without this the owner is locked out again — the reported bug')
+    check('⛔ the ONLY success response comes AFTER the RPC and carries its id',
+      (code.match(/ok: true/g) || []).length === 1
+      && code.indexOf('ok: true') > code.indexOf('owner_record_customer_acceptance')
+      && /ok: true, acceptanceId/.test(code),
+      'an early ok:true would be a bypass — success without the database deciding')
+    check('a failed TERMS READ specifically refuses (never "no terms")',
+      /if \(bsErr\) \{[\s\S]{0,200}status: 502/.test(code))
+    // ⚠️ The write is now `.update(patch)` — a value, not an inline literal — so
+    // there is no object to grep. That is STRICTER, not weaker: the shape is
+    // fixed by termsClaimRefresh, whose key set is asserted exactly above, and a
+    // second update or an inline literal here would be the regression.
     check('⛔ it never writes terms_text',
-      updates.length === 1 && !/terms_text/.test(updates[0]),
-      `update payloads: ${JSON.stringify(updates)}`)
-    check('it writes ONLY the three classification columns',
-      /terms_payment_claim:/.test(code) && /terms_payment_claim_fingerprint:/.test(code)
-      && /terms_payment_claim_version:/.test(code))
-    check('it scopes the write to the CALLER\'s own tenant', /\.eq\('user_id', user\.id\)/.test(code))
+      !/\.update\(\{/.test(code) && /\.update\(patch\)/.test(code),
+      'the write must be the fixed patch, never an object assembled here')
+    check('the written columns are fixed by the shared patch, not named here',
+      !/terms_payment_claim(_fingerprint|_version)?\s*:/.test(code),
+      'naming the columns in this file would let them drift from termsClaimRefresh')
+    check('it scopes the write to the CALLER\'s own tenant',
+      (code.match(/\.update\(/g) || []).length === 1
+      && /\.update\(patch\)\.eq\('user_id', user\.id\)/.test(code),
+      'an unscoped update would rewrite every tenant\'s classification')
     check('it still calls the unchanged owner RPC — the DB decides',
       /owner_record_customer_acceptance/.test(code))
     check('a null acceptance id is reported as a REFUSAL, never a success',
@@ -242,7 +272,12 @@ async function main() {
       && /if \(inFlight\.current\) return/.test(dcode))
     check('…and goes through the owner route, not straight to the RPC',
       /\/api\/quotes\/record-acceptance/.test(dcode) && !/rpc\('owner_record_customer_acceptance'/.test(dcode))
-    check('the submit button is disabled while pending', /disabled=\{!canSave\}/.test(dcode) && /!saving/.test(dcode))
+    // ⚠️ `canSave` ITSELF must carry !saving. A bare /!saving/ over the file was
+    // satisfied by the Cancel button's `disabled={saving}` nearby, so removing
+    // it from canSave left the guard green.
+    check('the submit button is disabled while pending',
+      /disabled=\{!canSave\}/.test(dcode) && /const canSave = [^\n]*!saving/.test(dcode),
+      'the pending state must gate canSave, not merely appear somewhere in the file')
     check('exactly one success toast and one error toast per attempt',
       (dcode.match(/toast\.success\(/g) || []).length === 1
       && (dcode.match(/toast\.error\(/g) || []).length === 2, // one refusal + one network catch

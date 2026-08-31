@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import {
-  classifyTermsPaymentClaim, termsFingerprint, TERMS_CLASSIFIER_VERSION,
-  termsClaimSentence,
-} from '@/lib/payments/termsTimingConflict'
+import { termsClaimSentence } from '@/lib/payments/termsTimingConflict'
+import { termsClaimRefresh, type StoredTermsClaim } from '@/lib/payments/termsClaimRefresh'
 
 // ── Owner records an acceptance that already happened, off-platform ──────────
 //
@@ -70,28 +68,20 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: 'Could not read your Terms & Conditions — try again.' }, { status: 502 })
   }
 
-  const row = bs as {
-    terms_text: string | null; terms_payment_claim: string | null
-    terms_payment_claim_fingerprint: string | null; terms_payment_claim_version: number | null
-  } | null
+  const row = bs as StoredTermsClaim | null
 
+  // ⭐ THE decision, from lib/payments/termsClaimRefresh — the same function the
+  // guard exercises, so the test can never pass against a re-implementation of
+  // what this route is supposed to do.
+  const { claim, stale, patch } = termsClaimRefresh(row)
   const termsText = row?.terms_text ?? null
-  const liveFingerprint = termsFingerprint(termsText)
-  const claim = classifyTermsPaymentClaim(termsText)
-  const stale = row == null
-    || row.terms_payment_claim == null
-    || row.terms_payment_claim_fingerprint !== liveFingerprint
-    || row.terms_payment_claim_version !== TERMS_CLASSIFIER_VERSION
 
   let reclassified = false
   if (row != null && stale) {
-    // ⛔ The three classification columns ONLY. terms_text is never in this
-    // update — this route cannot alter what it classified, even by accident.
-    const { error: upErr } = await supabase.from('business_settings').update({
-      terms_payment_claim: claim,
-      terms_payment_claim_fingerprint: liveFingerprint,
-      terms_payment_claim_version: TERMS_CLASSIFIER_VERSION,
-    }).eq('user_id', user.id)
+    // ⛔ `patch` is the three classification columns and nothing else, by
+    // construction — terms_text cannot travel through this write.
+    const { error: upErr } = await supabase.from('business_settings')
+      .update(patch).eq('user_id', user.id)
     if (upErr) {
       return NextResponse.json({ ok: false, error: 'Could not review your Terms & Conditions — try again.' }, { status: 502 })
     }
