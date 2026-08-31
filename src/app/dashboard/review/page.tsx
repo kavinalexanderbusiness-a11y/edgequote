@@ -25,6 +25,7 @@ import { Banner } from '@/components/ui/Banner'
 import {
   CalendarCheck, DollarSign, Gauge, MapPin, Bell, HeartPulse, Sprout, ArrowRight, TrendingUp, TrendingDown, AlertTriangle,
 } from 'lucide-react'
+import { sumQuoteAmounts } from '@/lib/pricingState'
 
 type SatJob = ProfitJob & { start_time?: string | null }
 
@@ -138,9 +139,9 @@ export default function WeeklyReviewPage() {
 
     // Next week's opportunities.
     const followUps = quotes.filter(needsFollowUp)
-    const followUpValue = Math.round(followUps.reduce((s, q) => s + Number(q.total || 0), 0))
+    const followUpValue = Math.round(sumQuoteAmounts(followUps).total)
     const pending = quotes.filter(q => q.status === 'draft' || q.status === 'sent')
-    const pendingValue = Math.round(pending.reduce((s, q) => s + Number(q.total || 0), 0))
+    const pendingValue = Math.round(sumQuoteAmounts(pending).total)
 
     // Growth: strongest all-time hood with room (≤2 customers) or warm demand.
     const hoodsAll = neighborhoodProfitability(jobs.filter(j => j.status !== 'cancelled'), ctx).filter(h => h.key !== 'Unknown')

@@ -28,6 +28,7 @@ import { TimelineCard } from '@/components/timeline/TimelineCard'
 import { HistoryPanel } from '@/components/audit/HistoryPanel'
 import { needsFollowUp, daysSince } from '@/lib/followup'
 import { isWon } from '@/lib/salesStage'
+import { quotePriceState, quoteAmountOrNull, excludedNote, sumQuoteAmounts } from '@/lib/pricingState'
 import { quoteNextAction, type PQuote, type PInvoice, type PCustomer } from '@/lib/pipeline'
 import type { GateLedgerRow } from '@/lib/payments/depositGate'
 import { scheduledQuoteIds } from '@/lib/dashboard/priorities'
@@ -376,8 +377,11 @@ export default function CustomerDetailPage() {
       ])
       if (referrerRes?.data) setReferrer(referrerRes.data as { id: string; name: string })
       if (referredRevRes?.data) {
-        const rev = (referredRevRes.data as { total: number; status: string }[])
-          .filter(q => isWon(q.status)).reduce((s, q) => s + Number(q.total || 0), 0)
+        // Referral revenue: the same exclusion rule as every other money
+        // roll-up — an unpriced won quote is unknown, not a zero contribution.
+        const rev = sumQuoteAmounts(
+          (referredRevRes.data as { total: number; status: string }[]).filter(q => isWon(q.status)),
+        ).total
         setReferredRevenue(rev)
       }
 
@@ -722,7 +726,14 @@ export default function CustomerDetailPage() {
 
   // ── Revenue (three separate truths) ──
   const wonQuotes = quotes.filter(q => isWon(q.status))
-  const bookedRevenue = wonQuotes.reduce((s, q) => s + Number(q.total || 0), 0)
+  // ⛔ WAS `s + Number(q.total || 0)` across every won quote. An unpriced won
+  // quote contributed a silent 0 to Booked Revenue AND a full 1 to the divisor
+  // of the average — so the figure was wrong twice, and confidently.
+  // Unknowns are now EXCLUDED and COUNTED, and the card says so. Excluding them
+  // is honest; pretending they were zero is not.
+  const wonPriced = wonQuotes.filter(q => quotePriceState(q) !== 'unpriced')
+  const wonUnpriced = wonQuotes.length - wonPriced.length
+  const bookedRevenue = wonPriced.reduce((s, q) => s + (quoteAmountOrNull(q) ?? 0), 0)
   // Collected = money actually received (ledger amount_paid, incl. partial payments);
   // Outstanding = remaining balance across issued invoices.
   const collectedRevenue = invoices.reduce((s, i) => s + (Number(i.amount_paid) || 0), 0)
@@ -731,11 +742,15 @@ export default function CustomerDetailPage() {
   const outstandingRevenue = invoices
     .filter(i => i.status !== 'draft' && i.status !== 'cancelled')
     .reduce((s, i) => s + Math.max(0, invoiceBalance(i, feeSettings).balance), 0)
-  const avgJobValue = wonQuotes.length > 0 ? bookedRevenue / wonQuotes.length : 0
+  // Divide by what was actually SUMMED. Dividing a priced-only total by the
+  // full won count is how an unpriced quote silently halves the average.
+  const avgJobValue = wonPriced.length > 0 ? bookedRevenue / wonPriced.length : 0
   // "Open" = still awaiting an answer — the SAME 'sent'/'draft' rule the per-property
   // roll-up uses below, applied customer-wide for the header answer strip.
   const openQuotesAll = quotes.filter(q => q.status === 'sent' || q.status === 'draft')
-  const openQuoteValue = openQuotesAll.reduce((s, q) => s + Number(q.total || 0), 0)
+  const openPriced = openQuotesAll.filter(q => quotePriceState(q) !== 'unpriced')
+  const openUnpriced = openQuotesAll.length - openPriced.length
+  const openQuoteValue = openPriced.reduce((s, q) => s + (quoteAmountOrNull(q) ?? 0), 0)
 
   // ── Upcoming + retention ──
   const upcoming = jobs
@@ -826,7 +841,16 @@ export default function CustomerDetailPage() {
     : null
 
   const revenueCards = [
-    { label: 'Booked Revenue', value: formatCurrency(bookedRevenue), sub: 'Won quotes', icon: DollarSign, color: 'text-accent-text' },
+    // ⭐ The subtitle carries the exclusion. A total that quietly dropped records
+    // is the same lie as one that counted them as zero — the reader cannot tell
+    // either from a complete figure unless the figure says so.
+    {
+      label: 'Booked Revenue',
+      value: formatCurrency(bookedRevenue),
+      sub: excludedNote(wonUnpriced, 'quote') ?? 'Won quotes',
+      icon: DollarSign,
+      color: 'text-accent-text',
+    },
     { label: 'Collected', value: formatCurrency(collectedRevenue), sub: 'Invoices paid', icon: Wallet, color: 'text-emerald-400' },
     { label: 'Outstanding', value: formatCurrency(outstandingRevenue), sub: 'Billed, unpaid', icon: AlertTriangle, color: 'text-amber-400' },
     {
@@ -977,6 +1001,10 @@ export default function CustomerDetailPage() {
                 {openQuotesAll.length > 0 && (
                   <span className="text-xs text-ink-muted flex items-center gap-1">
                     <FileText className="w-3 h-3" /> {openQuotesAll.length} open quote{openQuotesAll.length !== 1 ? 's' : ''} · {formatCurrency(openQuoteValue)}
+                    {/* The count and the money come from DIFFERENT sets when a
+                        quote is unpriced — say which, rather than letting the
+                        reader assume the figure covers all of them. */}
+                    {openUnpriced > 0 && <span className="text-ink-faint"> ({openUnpriced} not priced)</span>}
                   </span>
                 )}
                 {lastServicedDays != null && (

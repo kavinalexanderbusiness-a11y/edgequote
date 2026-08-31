@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { neighborhoodKey } from '@/lib/profitability'
 import { isWon, isLost } from '@/lib/salesStage'
+import { quoteAmountOrNull } from '@/lib/pricingState'
 
 // ── Win/Loss analysis (Growth) ──────────────────────────────────────────────────
 // The win side is already in the data (quotes.status accepted vs declined). This
@@ -91,7 +92,11 @@ export function analyzeWinLoss(
     h.decided++
     if (w) { won++; h.won++ }
     if (l) {
-      lost++; h.lost++; h.lostValue += Number(q.total || 0)
+      // ⛔ WAS `+= Number(q.total || 0)`. A lost quote nobody had priced added
+      // nothing to "value lost", so a neighbourhood that keeps losing unpriced
+      // work looked like it was losing nothing worth having. Unknown is skipped,
+      // not counted as zero — the count of losses is unaffected either way.
+      lost++; h.lost++; h.lostValue += quoteAmountOrNull(q) ?? 0
       const reason = reasonByQuote[q.id]
       if (reason) { taggedLost++; reasonCounts[reason] = (reasonCounts[reason] || 0) + 1; if (reason === 'price') h.priceLosses++ }
     }

@@ -14,12 +14,14 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Invoice, Quote } from '@/types'
 import { needsFollowUp } from '@/lib/followup'
+import { isAnyFixtureName } from '@/lib/fixtureData'
 import { invoiceBalance, displayInvoiceStatus, collectedBetween, dayBoundsIso } from '@/lib/payments/ledger'
 import type { ReachCustomer } from '@/lib/comms/reach'
 import { computeLeadsNeedingResponse, type LeadConvRow, type LeadQuoteRow } from '@/lib/leadResponse'
 import { loadWeatherImpact, type WeatherImpactReport } from '@/lib/weatherImpact'
+import { sumQuoteAmounts } from '@/lib/pricingState'
 import { settingsToSeasons } from '@/lib/seasons'
-import { localTodayISO } from '@/lib/utils'
+import { loadTenantToday } from '@/lib/tenantTimeServer'
 import { computePriorities, type Priority } from '@/lib/dashboard/priorities'
 import { computeDayPlan, type DayPlan, type PlanJob } from '@/lib/dashboard/dayPlan'
 import { pageAll } from '@/lib/supabase/pageAll'
@@ -117,10 +119,22 @@ type SettingsRow = {
   base_lat: number | null
   base_lng: number | null
   base_address: string | null
+  // Carried so the weather engine, which is handed this row, derives the SAME
+  // tenant day this loader did rather than falling back.
+  timezone: string | null
 }
 
 export async function loadDashboard(sb: SupabaseClient, userId: string): Promise<DashboardData> {
-  const today = localTodayISO()
+  // ── ⭐⭐ THE BUSINESS'S DAY, NOT THE SERVER'S (Session 121) ────────────────
+  // This was `localTodayISO()`, and this function runs on the SERVER — where
+  // that is UTC, because nothing sets TZ on the deployment. Meanwhile the
+  // Schedule page renders on the CLIENT, where the same helper reads the
+  // DEVICE's zone. Two clocks, one product: from about 17:00 in Alberta the
+  // Dashboard's "Today" and the Schedule's "Today" were different days.
+  //
+  // One serial read ahead of the batch — `today` is an input to almost every
+  // query below, so it cannot come from a row fetched alongside them.
+  const today = await loadTenantToday(sb, userId)
 
   // Rolling 7 days INCLUDING today, not a calendar week: on a Monday a calendar
   // week would read $0 and look broken.
@@ -196,7 +210,7 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     sb.from('service_requests').select('id, customer_id, from_portal, status')
       .eq('user_id', userId).eq('from_portal', true).eq('status', 'new'),
     // Widened with base_* so the weather engine doesn't re-read this same row.
-    sb.from('business_settings').select('gst_percent, service_seasons, preferred_work_days, work_start_time, daily_capacity_hours, base_lat, base_lng, base_address').eq('user_id', userId).maybeSingle(),
+    sb.from('business_settings').select('gst_percent, service_seasons, preferred_work_days, work_start_time, daily_capacity_hours, base_lat, base_lng, base_address, timezone').eq('user_id', userId).maybeSingle(),
     // Quote-linked deposit ledger rows (pre-invoice booking deposits) — the
     // scheduling gate derives readiness from these. Tiny by construction: only
     // rows that secure a booking carry quote_id (partial index matches).
@@ -247,8 +261,23 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   if (failure) throw new Error(`Dashboard could not load — ${failure}`)
 
   const settings = (setRes.data as SettingsRow | null)
-  const invoices = invRes.rows
-  const quotes = quoteRes.rows
+  // ── ⭐⭐ Fixture rows leave the BOOK before anything counts money ───────────
+  // Guard and harness runs create real quotes and real invoices in whatever
+  // tenant they run in, and they tag them unmistakably — the quote NUMBER
+  // (VERIFY-ADDONS-…, ZZ-S81-…) and the customer NAME (“Automated guard fixture
+  // — safe to delete”). Left in, they land in pipeline value, Owed/Collected,
+  // win rate, the follow-up queue and every reactivation nudge — the owner is
+  // then chasing a customer who does not exist for money that was never owed.
+  //
+  // Filtered HERE, at the one loader every dashboard/Growth/analytics surface
+  // reads through, rather than in each engine downstream: this function is the
+  // single door, and a rule repeated per engine is a rule that will be missing
+  // from the next one.
+  //
+  // ⛔ Tier 1 markers only (lib/fixtureData). A real customer called “Test
+  // Valley Farms” keeps every dollar they are worth.
+  const invoices = invRes.rows.filter(r => !isAnyFixtureName(r.invoice_number, r.customer_name))
+  const quotes = quoteRes.rows.filter(q => !isAnyFixtureName(q.quote_number, q.customer_name))
   const jobs = jobRes.rows
   const recurrences = (recRes.data as RRecurrence[]) || []
   const recById: Record<string, RRecurrence> = {}
@@ -337,7 +366,8 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   // same status the conversion figure treats as decided-pending, so the two
   // can't drift apart.
   const quotesOut = quotes.filter(q => q.status === 'sent')
-  const quotesOutTotal = quotesOut.reduce((s, q) => s + Number(q.total || 0), 0)
+  // Unknowns EXCLUDED, not counted as zero (lib/pricingState is the one summer).
+  const quotesOutTotal = sumQuoteAmounts(quotesOut).total
   // Both sides of the comparison are the SAME to-date window, one month apart:
   // [monthStart, today] vs [lastMonthStart, same day of last month]. Review
   // caught the first cut comparing month-to-date against the FULL last month —

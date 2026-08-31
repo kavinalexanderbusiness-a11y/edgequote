@@ -8,8 +8,8 @@
 --
 -- This file is the ONE starting point for a database. Applying it to an empty
 -- Postgres 17 database produces the production schema contract:
---   116 tables · 164 functions · 137 triggers · 374 policies
---   645 constraints · 296 standalone indexes · 7 storage buckets
+--   116 tables · 166 functions · 137 triggers · 374 policies
+--   649 constraints · 297 standalone indexes · 7 storage buckets
 --
 -- IT DOES NOT RESTORE DATA. Not one row. Rebuilding a working production system
 -- is: this file, THEN a backup restore, THEN storage objects, THEN env config.
@@ -832,7 +832,10 @@ create table if not exists public."jobs" (
   "crew_id" uuid,
   "completion_summary" text,
   "completion_issue" text,
-  "technician_id" uuid
+  "technician_id" uuid,
+  "no_charge_at" timestamp with time zone,
+  "no_charge_reason" text,
+  "no_charge_by" uuid
 );
 create table if not exists public."labor_observations" (
   "id" uuid default extensions.uuid_generate_v4() not null,
@@ -1483,7 +1486,10 @@ create table if not exists public."quotes" (
   "deposit_override_at" timestamp with time zone,
   "renewal_of_recurrence_id" uuid,
   "addons_total" numeric(10,2) default 0 not null,
-  "measurement_snapshot" jsonb
+  "measurement_snapshot" jsonb,
+  "no_charge_at" timestamp with time zone,
+  "no_charge_reason" text,
+  "no_charge_by" uuid
 );
 create table if not exists public."referrals" (
   "id" uuid default extensions.uuid_generate_v4() not null,
@@ -1651,7 +1657,8 @@ create table if not exists public."service_templates" (
   "is_favorite" boolean default false not null,
   "recurrence" text,
   "form_template_id" uuid,
-  "measured_by" text
+  "measured_by" text,
+  "published_at" timestamp with time zone
 );
 create table if not exists public."service_units" (
   "id" uuid default gen_random_uuid() not null,
@@ -1879,7 +1886,7 @@ create table if not exists public."worker_availability" (
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 3 · FUNCTIONS
--- 164 application functions, verbatim from pg_get_functiondef.
+-- 166 application functions, verbatim from pg_get_functiondef.
 -- Emitted BEFORE constraints: a CHECK constraint can call one, and the dependency
 -- is resolved when the constraint is added.
 -- SECURITY DEFINER + `set search_path` is not decoration here: these functions are
@@ -2707,6 +2714,7 @@ declare
   v_address text; v_city text; v_postal text; v_province text;
   v_service text; v_sqft numeric; v_date date; v_notes text;
   v_rate numeric; v_job uuid; v_quote uuid; v_num int; v_qnum text := null; v_mode text;
+  v_fallback_service text;
 begin
   select user_id into v_user from public.business_settings where booking_token = p_token and booking_enabled = true;
   if v_user is null then return null; end if;
@@ -2722,6 +2730,11 @@ begin
   v_province := coalesce(nullif(trim(p_payload->>'province',''),''), 'AB');
   v_service := nullif(trim(coalesce(p_payload->>'serviceType', p_payload->>'service', p_payload->>'requestedServices','')), '');
   v_notes   := nullif(trim(coalesce(p_payload->>'notes', p_payload->>'message','')), '');
+  select name into v_fallback_service from public.service_templates
+   where user_id = v_user and is_active and published_at is not null
+   order by sort_order, name limit 1;
+  v_fallback_service := coalesce(v_fallback_service, 'Service');
+
   begin v_sqft := nullif((p_payload->>'sqft')::numeric, 0); exception when others then v_sqft := null; end;
   begin v_date := (p_payload->>'requestedDate')::date; exception when others then v_date := null; end;
   if v_name is null then return json_build_object('error','missing_name'); end if;
@@ -2762,7 +2775,7 @@ begin
     -- config never touched it. resolveQuoteProvenance() reads this as
     -- 'not_engine_priced' and says so, instead of implying a rate card it never used.
     insert into public.quotes (user_id, quote_number, customer_id, customer_name, address, service_type, initial_price, status, measured_sqft, property_id, sent_at, price_source)
-      values (v_user, v_qnum, v_customer, left(v_name,200), v_address, coalesce(v_service,'Lawn Mowing'), v_rate, 'sent', v_sqft, v_prop, now(), 'template_rate') returning id into v_quote;
+      values (v_user, v_qnum, v_customer, left(v_name,200), v_address, coalesce(v_service, v_fallback_service), v_rate, 'sent', v_sqft, v_prop, now(), 'template_rate') returning id into v_quote;
   end if;
 
   insert into public.service_requests (user_id, customer_id, message)
@@ -4685,7 +4698,7 @@ begin
     'services', coalesce((select json_agg(s order by s.sort_order, s.name) from (
       select name, category, default_rate, pricing_display_type, default_description, sort_order
       from public.service_templates
-      where user_id = v_user and is_active
+      where user_id = v_user and is_active and published_at is not null
     ) s), '[]'::json),
     -- UNCHANGED — the primary property. Kept because Home/PropertyTab/PDF fallbacks
     -- read it today; 'properties' below is the addition, not a replacement.
@@ -5299,6 +5312,46 @@ CREATE OR REPLACE FUNCTION public.job_session_minutes(p_job_id uuid)
 AS $function$
   select sum(minutes)::integer from public.job_work_sessions where job_id = p_job_id;
 $function$;
+
+CREATE OR REPLACE FUNCTION public.job_set_no_charge(p_job_id uuid, p_reason text)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_uid uuid; v_status text; v_reason text; v_had boolean;
+begin
+  v_uid := auth.uid();
+  if v_uid is null then return false; end if;
+
+  v_reason := nullif(btrim(coalesce(p_reason, '')), '');
+
+  select status, (no_charge_at is not null) into v_status, v_had
+    from public.jobs where id = p_job_id and user_id = v_uid;
+  if v_status is null then return false; end if;
+
+  -- The visit equivalent of the rule above: once the work is DONE the record is
+  -- history, and history is a record rather than a draft. A completed visit that
+  -- was delivered free stays that way; correct it before completion.
+  if v_reason is null then
+    if v_status = 'completed' then return false; end if;
+    if not v_had then return true; end if;
+    update public.jobs
+       set no_charge_at = null, no_charge_reason = null, no_charge_by = null
+     where id = p_job_id and user_id = v_uid;
+    perform public.audit_log(v_uid, 'job_no_charge_cleared', 'job', p_job_id,
+      null, null, jsonb_build_object('no_charge', true), jsonb_build_object('no_charge', false));
+    return true;
+  end if;
+
+  update public.jobs
+     set no_charge_at = now(), no_charge_reason = v_reason, no_charge_by = v_uid
+   where id = p_job_id and user_id = v_uid;
+  perform public.audit_log(v_uid, 'job_marked_no_charge', 'job', p_job_id,
+    null, null, jsonb_build_object('no_charge', v_had),
+    jsonb_build_object('no_charge', true, 'reason', v_reason));
+  return true;
+end $function$;
 
 CREATE OR REPLACE FUNCTION public.jobs_assignment_guard()
  RETURNS trigger
@@ -6153,10 +6206,17 @@ begin
     'business', (select to_json(b) from (
       select company_name, owner_name, logo_url, phone, email_primary, website, base_address, coalesce(gst_percent,0) as gst_percent
       from public.business_settings where user_id = v_user) b),
+    -- ⛔⛔ `and published_at is not null` IS THE PRIVACY/QUALITY BOUNDARY, not a
+    -- filter preference. This function is reachable ANONYMOUSLY with only a
+    -- booking token and its answer is cached at the edge for five minutes.
+    -- Without this clause every active service — including anything a test left
+    -- behind — is served to the open internet. Deleting it re-opens exactly the
+    -- exposure this migration was written for.
     'services', (select coalesce(json_agg(json_build_object(
         'id', id, 'name', name, 'category', category, 'description', default_description,
         'default_rate', default_rate, 'pricing_display_type', pricing_display_type) order by sort_order, name), '[]'::json)
-      from public.service_templates where user_id = v_user and is_active = true)
+      from public.service_templates
+      where user_id = v_user and is_active = true and published_at is not null)
   ) into result;
   return result;
 end; $function$;
@@ -6397,6 +6457,7 @@ declare
   v_status text; v_travel numeric(10,2); v_follow int;
   v_base numeric(10,2); v_addons numeric(10,2);
   v_ids uuid[]; v_known int; v_want int;
+  v_free boolean;
 begin
   -- Provenance is passed in by the door that knows it, never inferred here.
   if p_via is null or p_via not in ('portal', 'owner') then return false; end if;
@@ -6405,8 +6466,9 @@ begin
   -- stands, and re-deciding would silently rewrite the approved price. A
   -- REAPPROVAL therefore travels the same road as the first one: the owner sends
   -- the revised quote again, which returns it to 'sent'.
-  select q.status, coalesce(q.travel_fee, 0), coalesce(q.follow_up_count, 0), q.initial_price
-    into v_status, v_travel, v_follow, v_base
+  select q.status, coalesce(q.travel_fee, 0), coalesce(q.follow_up_count, 0), q.initial_price,
+         (q.no_charge_at is not null and q.no_charge_reason is not null and q.no_charge_by is not null)
+    into v_status, v_travel, v_follow, v_base, v_free
     from public.quotes q
    where q.id = p_quote_id and q.status in ('draft', 'sent');
   if v_status is null then return false; end if;
@@ -6420,6 +6482,24 @@ begin
     if v_base is null then return false; end if;
   elsif exists (select 1 from public.quote_options where quote_id = p_quote_id) then
     -- A quote that offers alternatives cannot be approved without naming one.
+    return false;
+  end if;
+
+  -- SESSION 114 - UNPRICED WORK CANNOT BE AUTHORIZED.
+  -- Placed AFTER the option branch on purpose: when the customer names an
+  -- option, the price being judged is THAT option's, not the quote's headline.
+  --
+  -- v_base IS NULL is a quote nobody priced; v_base = 0 is the manufactured zero
+  -- a blank input becomes. Neither is something a customer can agree to pay, so
+  -- neither may become 'accepted'. A recorded no-charge decision IS agreeable -
+  -- it is a KNOWN price of zero, which is exactly the distinction the columns
+  -- above make expressible.
+  --
+  -- THIS IS THE ONLY CHOKEPOINT, and that is why the gate is here rather than in
+  -- the app: portal_accept_quote, owner_record_customer_acceptance and
+  -- owner_select_quote_option ALL route through this function. One gate covers
+  -- the customer's door and both of the owner's.
+  if not v_free and (v_base is null or v_base <= 0) then
     return false;
   end if;
 
@@ -6474,7 +6554,7 @@ begin
          -- ⭐ Computed EXPLICITLY, never coalesce(accepted_price, total): `total`
          -- is GENERATED over initial_price/addons_total and every SET expression
          -- reads the OLD row, so it would snapshot the pre-choice price.
-         accepted_price = v_base + v_travel + v_addons,
+         accepted_price = coalesce(v_base, 0) + v_travel + v_addons,
          accepted_after_followup = v_follow > 0,
          follow_up_count_at_acceptance = v_follow
    where id = p_quote_id and status in ('draft', 'sent');
@@ -6689,6 +6769,50 @@ begin
   return v_id;
 end;
 $function$;
+
+CREATE OR REPLACE FUNCTION public.quote_set_no_charge(p_quote_id uuid, p_reason text)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_uid uuid; v_status text; v_reason text; v_had boolean;
+begin
+  v_uid := auth.uid();
+  if v_uid is null then return false; end if;
+
+  v_reason := nullif(btrim(coalesce(p_reason, '')), '');
+
+  select status, (no_charge_at is not null) into v_status, v_had
+    from public.quotes where id = p_quote_id and user_id = v_uid;
+  if v_status is null then return false; end if;
+
+  -- ⭐⭐ CLEARING IS THE DANGEROUS DIRECTION, and this is the guard on it.
+  -- A no-charge quote that has been ACCEPTED was authorised BECAUSE it was
+  -- explicitly free (§3 lets it through on exactly that basis). Removing the
+  -- designation afterwards would leave customer-authorised work with no price
+  -- and no free-work record — the precise state §3 exists to make impossible,
+  -- reached by the back door. Correcting a mistake is only safe while the quote
+  -- is still the owner's own document.
+  if v_reason is null then
+    if v_status not in ('draft', 'sent') then return false; end if;
+    if not v_had then return true; end if;   -- already clear; nothing to record
+    update public.quotes
+       set no_charge_at = null, no_charge_reason = null, no_charge_by = null
+     where id = p_quote_id and user_id = v_uid;
+    perform public.audit_log(v_uid, 'quote_no_charge_cleared', 'quote', p_quote_id,
+      null, null, jsonb_build_object('no_charge', true), jsonb_build_object('no_charge', false));
+    return true;
+  end if;
+
+  update public.quotes
+     set no_charge_at = now(), no_charge_reason = v_reason, no_charge_by = v_uid
+   where id = p_quote_id and user_id = v_uid;
+  perform public.audit_log(v_uid, 'quote_marked_no_charge', 'quote', p_quote_id,
+    null, null, jsonb_build_object('no_charge', v_had),
+    jsonb_build_object('no_charge', true, 'reason', v_reason));
+  return true;
+end $function$;
 
 CREATE OR REPLACE FUNCTION public.quote_terms_fingerprint(p_tenant uuid)
  RETURNS text
@@ -7933,7 +8057,7 @@ alter table public."suggestion_dismissals" add constraint "suggestion_dismissals
 alter table public."technicians" add constraint "technicians_id_user_key" UNIQUE (id, user_id);
 alter table public."worker_availability" add constraint "worker_availability_one_per_weekday" UNIQUE (technician_id, weekday);
 
--- check (206)
+-- check (210)
 alter table public."audit_events" add constraint "audit_events_action_check" CHECK (((char_length(action) >= 1) AND (char_length(action) <= 64)));
 alter table public."audit_events" add constraint "audit_events_actor_type_check" CHECK ((actor_type = ANY (ARRAY['owner'::text, 'worker'::text, 'customer'::text, 'system'::text])));
 alter table public."audit_events" add constraint "audit_events_entity_type_check" CHECK (((char_length(entity_type) >= 1) AND (char_length(entity_type) <= 32)));
@@ -8029,6 +8153,8 @@ alter table public."job_work_sessions" add constraint "job_work_sessions_minutes
 alter table public."job_work_sessions" add constraint "job_work_sessions_note_check" CHECK (((note IS NULL) OR (char_length(note) <= 280)));
 alter table public."job_work_sessions" add constraint "job_work_sessions_source_check" CHECK ((source = ANY (ARRAY['clock'::text, 'manual'::text, 'carried'::text])));
 alter table public."job_work_sessions" add constraint "job_work_sessions_workers_check" CHECK (((workers >= 1) AND (workers <= 50)));
+alter table public."jobs" add constraint "jobs_no_charge_complete_check" CHECK (((num_nonnulls(no_charge_at, no_charge_reason, no_charge_by) = ANY (ARRAY[0, 3])) AND ((no_charge_reason IS NULL) OR (btrim(no_charge_reason) <> ''::text))));
+alter table public."jobs" add constraint "jobs_no_charge_reason_len_check" CHECK (((no_charge_reason IS NULL) OR ((char_length(no_charge_reason) >= 3) AND (char_length(no_charge_reason) <= 500))));
 alter table public."jobs" add constraint "jobs_one_assignee" CHECK (((crew_id IS NULL) OR (technician_id IS NULL)));
 alter table public."jobs" add constraint "jobs_status_check" CHECK ((status = ANY (ARRAY['scheduled'::text, 'in_progress'::text, 'completed'::text, 'cancelled'::text])));
 alter table public."liabilities" add constraint "liabilities_current_balance_check" CHECK ((current_balance >= (0)::numeric));
@@ -8103,6 +8229,8 @@ alter table public."quote_services" add constraint "quote_services_kind_check" C
 alter table public."quotes" add constraint "quotes_deposit_rule_check" CHECK ((((deposit_type IS NULL) = (deposit_value IS NULL)) AND ((deposit_type IS NULL) OR (deposit_type = ANY (ARRAY['percent'::text, 'fixed'::text]))) AND ((deposit_value IS NULL) OR (deposit_value > (0)::numeric)) AND ((deposit_type IS DISTINCT FROM 'percent'::text) OR (deposit_value <= (100)::numeric))));
 alter table public."quotes" add constraint "quotes_engine_price_needs_config" CHECK (((price_source IS DISTINCT FROM 'engine'::text) OR (pricing_config_version_id IS NOT NULL)));
 alter table public."quotes" add constraint "quotes_nearby_count_nonneg" CHECK (((nearby_count IS NULL) OR (nearby_count >= 0)));
+alter table public."quotes" add constraint "quotes_no_charge_complete_check" CHECK (((num_nonnulls(no_charge_at, no_charge_reason, no_charge_by) = ANY (ARRAY[0, 3])) AND ((no_charge_reason IS NULL) OR (btrim(no_charge_reason) <> ''::text))));
+alter table public."quotes" add constraint "quotes_no_charge_reason_len_check" CHECK (((no_charge_reason IS NULL) OR ((char_length(no_charge_reason) >= 3) AND (char_length(no_charge_reason) <= 500))));
 alter table public."quotes" add constraint "quotes_preferred_note_check" CHECK (((preferred_note IS NULL) OR (char_length(preferred_note) <= 500)));
 alter table public."quotes" add constraint "quotes_preferred_timing_check" CHECK (((preferred_timing IS NULL) OR (preferred_timing = ANY (ARRAY['morning'::text, 'afternoon'::text]))));
 alter table public."quotes" add constraint "quotes_price_source_valid" CHECK (((price_source IS NULL) OR (price_source = ANY (ARRAY['engine'::text, 'template_rate'::text]))));
@@ -8701,7 +8829,7 @@ CREATE TRIGGER worker_availability_updated_at BEFORE UPDATE ON public.worker_ava
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 6 · INDEXES
--- 296 standalone indexes. Constraint-backing indexes are omitted on purpose —
+-- 297 standalone indexes. Constraint-backing indexes are omitted on purpose —
 -- section 4 already created them; declaring both would fail or duplicate.
 -- The partial UNIQUE indexes are correctness, not speed: they are what stops a
 -- second open shift per technician and a duplicate invoice number.
@@ -8970,6 +9098,7 @@ create index if not exists service_requests_open_portal_idx ON public.service_re
 create index if not exists service_requests_user_idx ON public.service_requests USING btree (user_id, status);
 create index if not exists service_templates_active_idx ON public.service_templates USING btree (is_active);
 create index if not exists service_templates_favorite_idx ON public.service_templates USING btree (user_id, is_favorite) WHERE is_favorite;
+create index if not exists service_templates_published_idx ON public.service_templates USING btree (user_id, sort_order, name) WHERE (is_active AND (published_at IS NOT NULL));
 create index if not exists service_templates_user_idx ON public.service_templates USING btree (user_id);
 create unique index if not exists service_units_system_code_key ON public.service_units USING btree (code) WHERE (user_id IS NULL);
 create unique index if not exists service_units_user_code_key ON public.service_units USING btree (user_id, code) WHERE (user_id IS NOT NULL);
@@ -11002,6 +11131,9 @@ grant execute on function public."job_session_minutes"(p_job_id uuid) to public;
 grant execute on function public."job_session_minutes"(p_job_id uuid) to anon;
 grant execute on function public."job_session_minutes"(p_job_id uuid) to authenticated;
 grant execute on function public."job_session_minutes"(p_job_id uuid) to service_role;
+revoke all on function public."job_set_no_charge"(p_job_id uuid, p_reason text) from public, anon, authenticated, service_role;
+grant execute on function public."job_set_no_charge"(p_job_id uuid, p_reason text) to authenticated;
+grant execute on function public."job_set_no_charge"(p_job_id uuid, p_reason text) to service_role;
 revoke all on function public."jobs_assignment_guard"() from public, anon, authenticated, service_role;
 grant execute on function public."jobs_assignment_guard"() to service_role;
 revoke all on function public."list_beta_invites"() from public, anon, authenticated, service_role;
@@ -11178,6 +11310,9 @@ grant execute on function public."quote_options_shape_guard"() to anon;
 grant execute on function public."quote_options_shape_guard"() to authenticated;
 grant execute on function public."quote_options_shape_guard"() to service_role;
 revoke all on function public."quote_record_acceptance"(p_quote_id uuid, p_kind text, p_source text, p_actor_id uuid, p_actor_label text, p_reason text, p_note text, p_terms_ack boolean) from public, anon, authenticated, service_role;
+revoke all on function public."quote_set_no_charge"(p_quote_id uuid, p_reason text) from public, anon, authenticated, service_role;
+grant execute on function public."quote_set_no_charge"(p_quote_id uuid, p_reason text) to authenticated;
+grant execute on function public."quote_set_no_charge"(p_quote_id uuid, p_reason text) to service_role;
 revoke all on function public."quote_terms_fingerprint"(p_tenant uuid) from public, anon, authenticated, service_role;
 grant execute on function public."quote_terms_fingerprint"(p_tenant uuid) to public;
 grant execute on function public."quote_terms_fingerprint"(p_tenant uuid) to anon;
@@ -11354,6 +11489,9 @@ comment on column public."job_recurrences"."form_template_id" is 'Default checkl
 comment on column public."jobs"."completion_issue" is 'INTERNAL ONLY. What the field found that needs attention (leaking sprinkler head, wants a hedge quote). MUST NOT be selected by get_portal_data or reach any customer surface.';
 comment on column public."jobs"."completion_summary" is 'CUSTOMER-VISIBLE. What was done, written for the person who paid for it. Selected by get_portal_data and rendered verbatim in the portal visit history. Never put internal remarks here.';
 comment on column public."jobs"."crew_id" is 'Which crew runs this visit; members resolve from technicians.crew_id at read time. Mutually exclusive with technician_id (jobs_one_assignee). NULL = no crew. Orthogonal to crew_size (headcount).';
+comment on column public."jobs"."no_charge_at" is 'When the owner DECIDED this visit is free. NULL = no such decision. ⛔ jobs.price IS NULL means "no job-level override, follow the quote" — it has never meant free, and must not start to.';
+comment on column public."jobs"."no_charge_by" is 'Which account made the no-charge decision. Audit evidence.';
+comment on column public."jobs"."no_charge_reason" is 'Why this visit is free, in the owner''s words. Required whenever no_charge_at is set (jobs_no_charge_complete_check).';
 comment on column public."jobs"."notes" is 'INTERNAL ONLY. The access/instruction note for whoever does the work (gate code, where to park). Shipped to the crew by crew_day. Removed from get_portal_data 2026-08-11 — it was being rendered to customers. Customer-facing words go in completion_summary.';
 comment on column public."jobs"."technician_id" is 'Direct personal assignment: exactly this person runs the visit. Mutually exclusive with crew_id (jobs_one_assignee). NULL + NULL crew_id = unassigned.';
 comment on column public."part_movements"."purchase_order_item_id" is 'Receipt link. A kind=restock movement carrying this IS the receipt of that PO line; received qty is sum(qty) over these rows (lib/purchasing.receivedQty), never a stored column. CASCADE: deleting the line reverses the stock.';
@@ -11374,6 +11512,9 @@ comment on column public."quotes"."deposit_override_at" is 'Owner explicitly sch
 comment on column public."quotes"."deposit_type" is 'Scheduling-deposit rule: ''percent'' (deposit_value = % of the accepted price) or ''fixed'' (deposit_value = dollars). NULL = no deposit required — the quote behaves exactly as before this feature existed. The dollar figure for percent is DERIVED at read time (lib/payments/depositGate), never stored.';
 comment on column public."quotes"."internal_notes" is 'INTERNAL ONLY. The owner''s private margin on this quote — price floor, who to call before changing scope, why it was priced this way. MUST NOT be selected by get_portal_data or rendered by any PDF. Its customer-facing counterpart is quotes.notes.';
 comment on column public."quotes"."measurement_snapshot" is 'Frozen record of the measurement and the pricing rule that produced this quote''s figure — total, unit, traced parts, term, basis, rate, price, as they were at quote time. Never re-derived from the Price Book on read; a later rate change must not rewrite history.';
+comment on column public."quotes"."no_charge_at" is 'When the owner DECIDED this quote is free. NULL = no such decision. ⛔ A $0 or absent price is UNPRICED (unknown), never free — see lib/pricingState.';
+comment on column public."quotes"."no_charge_by" is 'Which account made the no-charge decision. Audit evidence, not authorization: the RLS policies already decide who may write the row.';
+comment on column public."quotes"."no_charge_reason" is 'Why this work is free, in the owner''s words. Required whenever no_charge_at is set (quotes_no_charge_complete_check) — a free-work record with no reason is indistinguishable from an unanswered price field.';
 comment on column public."quotes"."notes" is 'CUSTOMER-VISIBLE. The scope note the customer reads — printed in QuotePDF''s Notes box and selected by get_portal_data. Never put a gate code or a price floor here; that is quotes.internal_notes.';
 comment on column public."quotes"."preferred_date" is 'The customer''s preferred work date — a REQUEST, never a booking. A real visit exists only when the owner schedules one. Written only by portal_set_scheduling_preference while the quote is accepted.';
 comment on column public."quotes"."renewal_of_recurrence_id" is 'The service plan this quote renews. Set once, points backwards; the renewed plan is a NEW job_recurrences row and the old one is never modified. lib/renewals requires this link plus status=accepted before any visits are created.';
@@ -11394,6 +11535,7 @@ comment on column public."service_templates"."form_template_id" is 'Default chec
 comment on column public."service_templates"."is_favorite" is 'Owner shortlist — surfaced first in the quote builder picker.';
 comment on column public."service_templates"."material_cost" is 'Material cost per unit. NULL = not set; never treat as 0.';
 comment on column public."service_templates"."measured_by" is 'How this service is measured on the map: area | length | count. NULL = not stated; lib/measurePricing falls back to pricing_display_type. NULL is also how a service says "not measured" in practice — Measure & Price is not offered for it.';
+comment on column public."service_templates"."published_at" is 'When this service was explicitly made customer-visible. NULL = INTERNAL: the owner may quote with it, but public_services() and get_portal_data() will not return it. Set = PUBLISHED. is_active is the master switch and wins over this: a switched-off service is never public regardless. ⛔ Never backfilled — publication is an act, not a migration.';
 comment on column public."service_templates"."recurrence" is 'Recurrence eligibility: one_time = never suggest recurring; recurring_ok = recurrence suggestions allowed; usually_recurring = this service is normally a recurring plan. NULL = owner has not said (suggestions then require behavioural cadence evidence).';
 comment on column public."service_templates"."unit_cost" is 'What delivering one unit costs (labour/subcontract). NULL = not set; never treat as 0.';
 comment on column public."technicians"."archived_at" is 'Soft-archive: set when the technician leaves the roster (hidden everywhere, record preserved). NULL = active. Removing a technician must archive, never delete — their time_entries/wage_history/pto_entries are statutory records.';
@@ -11411,13 +11553,17 @@ comment on function public."crew_set_completion_record"(p_job_id uuid, p_summary
 comment on function public."find_portal_access_customers"(p_email text) is 'Portal-link recovery lookup. Normalises both sides (lower+trim). NOT executable by anon/authenticated — service-role only, or the public anon key becomes a customer-existence oracle.';
 comment on function public."is_verify_fixture_tenant"() is 'True when the CALLER is a verification fixture tenant. Answers only about auth.uid(); takes no arguments so it cannot be used to enumerate or probe. Consulted by scripts/ only — no trigger, policy or application path reads it.';
 comment on function public."job_session_minutes"(p_job_id uuid) is 'Sum of a job''s work-session minutes. NULL when it has none (unknown, not zero).';
+comment on function public."job_set_no_charge"(p_job_id uuid, p_reason text) is 'THE only door that writes a visit''s no-charge decision. Same contract as quote_set_no_charge; clearing is refused once the visit is completed.';
 comment on function public."owner_override_quote_status"(p_quote_id uuid, p_status text, p_reason text) is 'Administrative status override. Moves quotes.status and records the owner''s stated reason on the audit row audit_quotes() already writes. ⛔ Writes NO acceptance evidence: an overridden quote still fails quote_acceptance_is_current(), so scheduling, invoicing and the deposit ask keep refusing it. Changing a label is not obtaining consent.';
 comment on function public."portal_add_contact"(p_token text, p_phone text, p_email text) is 'Portal self-service: fill a MISSING customer phone/email from a valid portal token. Fills only - never overwrites a populated field (an email change is an identity change). Never touches sms_opt_in/email_opt_in/message_prefs. Refuses a value another customer of the same owner already holds. Returns the row state read back after the write.';
 comment on function public."portal_request_photos_ok"(p text[]) is 'Validator for service_requests.photos: at most 6 elements, each a booking-uploads path of the shape portal/<uuid>/<uuid>.<ext>. Used by a CHECK constraint, so it holds no matter which door writes.';
 comment on function public."portal_set_scheduling_preference"(p_token text, p_quote_id uuid, p_date date, p_date_2 date, p_timing text, p_note text) is 'THE writer of a customer''s scheduling preference. Token proves the customer; quote must be theirs and ''accepted''. A preference is a request — it never creates, moves, or implies a visit. All-null clears it.';
+comment on function public."public_services"(p_token text) is 'The public website catalogue. ANONYMOUS + edge-cached. Returns PUBLISHED services only (is_active AND published_at is not null) — see the boundary note in the body. ⛔ Never widen this to is_active alone.';
 comment on function public."quote_acceptance_is_current"(p_quote_id uuid) is 'THE gate: does a live, un-drifted acceptance authorize this quote''s CURRENT commercial terms? False when nothing ever accepted it, when a material fact changed since, or when the tenant''s terms moved. Mirrored (never re-derived) by hasCurrentValidAcceptance() in src/lib/quoteAcceptance.';
 comment on function public."quote_acceptance_kind_now"(p_quote_id uuid) is 'Which kind of acceptance is being (or was) recorded for this quote: customer, owner_on_behalf, or NULL meaning an administrative status change with no acceptance behind it. Reads the doors'' in-flight marker first because the AFTER UPDATE triggers on quotes fire BEFORE the acceptance row is inserted.';
+comment on function public."quote_apply_choice"(p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[], p_via text) is 'THE acceptance core — the single chokepoint under portal_accept_quote, owner_record_customer_acceptance and owner_select_quote_option. Refuses to authorize an UNPRICED quote (null or <= 0 resolved price) unless the quote carries a complete no-charge decision. Unpriced work must never become customer-authorized paid work.';
 comment on function public."quote_material_fingerprint"(p_quote_id uuid) is 'THE definition of a commercial change to a quote: price, plan prices, deposit ask, scope (service_type/address/notes), the chosen option, and every quote_services / quote_options / quote_addons row including which extras are selected. Deliberately EXCLUDES internal_notes, the measurement columns, property/customer repairs, follow-up counters and scheduling preferences — those are corrections, not new terms. Read by quote_acceptance_state() to decide reapproval; mirrored, never re-derived, by src/lib/quoteAcceptance.';
+comment on function public."quote_set_no_charge"(p_quote_id uuid, p_reason text) is 'THE only door that writes a quote''s no-charge decision. A non-empty reason SETS it (actor = auth.uid(), timestamp = now(), all three atomically); NULL CLEARS it, and clearing is refused once the quote is past draft/sent because an accepted no-charge quote was authorised on that basis. Every call is written to audit_events.';
 comment on function public."schema_contract"() is 'Full catalogue snapshot for npm run schema:contract. SERVICE_ROLE ONLY — it returns every RLS predicate and SECURITY DEFINER body, i.e. the product''s authorization logic. Use schema_fingerprint() (hashes only) for anything that merely needs to detect change.';
 comment on function public."schema_fingerprint"() is 'Counts + md5 per schema section, for npm run verify:schema. Returns NO names and NO data — only shape hashes, so it is safe to expose to any signed-in caller. The instrument that makes repo-vs-production drift visible; before it existed, 30 migrations reached production with no repo file and nothing reported it.';
 

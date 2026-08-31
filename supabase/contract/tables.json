@@ -5874,6 +5874,30 @@
     "notnull": false,
     "identity": "",
     "generated": ""
+   },
+   {
+    "name": "no_charge_at",
+    "type": "timestamp with time zone",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "no_charge_reason",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "no_charge_by",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
    }
   ],
   "relname": "jobs",
@@ -10770,6 +10794,30 @@
     "notnull": false,
     "identity": "",
     "generated": ""
+   },
+   {
+    "name": "no_charge_at",
+    "type": "timestamp with time zone",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "no_charge_reason",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "no_charge_by",
+    "type": "uuid",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
    }
   ],
   "relname": "quotes",
@@ -12014,6 +12062,14 @@
    {
     "name": "measured_by",
     "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "published_at",
+    "type": "timestamp with time zone",
     "default": null,
     "notnull": false,
     "identity": "",

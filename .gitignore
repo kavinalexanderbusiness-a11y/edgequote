@@ -40,3 +40,6 @@ scripts/.s*-fixture.json
 
 # Session 121 acceptance-surface harness output (scripts/s121-acceptance-harness.tsx)
 .s121/
+
+# Session 121 timezone/weather harness output (scripts/s121-weather-harness.tsx)
+.s121tz/

@@ -26,6 +26,11 @@
    "comment": "Sum of a job's work-session minutes. NULL when it has none (unknown, not zero)."
   },
   {
+   "fn": "job_set_no_charge",
+   "args": "p_job_id uuid, p_reason text",
+   "comment": "THE only door that writes a visit's no-charge decision. Same contract as quote_set_no_charge; clearing is refused once the visit is completed."
+  },
+  {
    "fn": "owner_override_quote_status",
    "args": "p_quote_id uuid, p_status text, p_reason text",
    "comment": "Administrative status override. Moves quotes.status and records the owner's stated reason on the audit row audit_quotes() already writes. ⛔ Writes NO acceptance evidence: an overridden quote still fails quote_acceptance_is_current(), so scheduling, invoicing and the deposit ask keep refusing it. Changing a label is not obtaining consent."
@@ -46,6 +51,11 @@
    "comment": "THE writer of a customer's scheduling preference. Token proves the customer; quote must be theirs and 'accepted'. A preference is a request — it never creates, moves, or implies a visit. All-null clears it."
   },
   {
+   "fn": "public_services",
+   "args": "p_token text",
+   "comment": "The public website catalogue. ANONYMOUS + edge-cached. Returns PUBLISHED services only (is_active AND published_at is not null) — see the boundary note in the body. ⛔ Never widen this to is_active alone."
+  },
+  {
    "fn": "quote_acceptance_is_current",
    "args": "p_quote_id uuid",
    "comment": "THE gate: does a live, un-drifted acceptance authorize this quote's CURRENT commercial terms? False when nothing ever accepted it, when a material fact changed since, or when the tenant's terms moved. Mirrored (never re-derived) by hasCurrentValidAcceptance() in src/lib/quoteAcceptance."
@@ -56,9 +66,19 @@
    "comment": "Which kind of acceptance is being (or was) recorded for this quote: customer, owner_on_behalf, or NULL meaning an administrative status change with no acceptance behind it. Reads the doors' in-flight marker first because the AFTER UPDATE triggers on quotes fire BEFORE the acceptance row is inserted."
   },
   {
+   "fn": "quote_apply_choice",
+   "args": "p_quote_id uuid, p_option_id uuid, p_addon_ids uuid[], p_via text",
+   "comment": "THE acceptance core — the single chokepoint under portal_accept_quote, owner_record_customer_acceptance and owner_select_quote_option. Refuses to authorize an UNPRICED quote (null or <= 0 resolved price) unless the quote carries a complete no-charge decision. Unpriced work must never become customer-authorized paid work."
+  },
+  {
    "fn": "quote_material_fingerprint",
    "args": "p_quote_id uuid",
    "comment": "THE definition of a commercial change to a quote: price, plan prices, deposit ask, scope (service_type/address/notes), the chosen option, and every quote_services / quote_options / quote_addons row including which extras are selected. Deliberately EXCLUDES internal_notes, the measurement columns, property/customer repairs, follow-up counters and scheduling preferences — those are corrections, not new terms. Read by quote_acceptance_state() to decide reapproval; mirrored, never re-derived, by src/lib/quoteAcceptance."
+  },
+  {
+   "fn": "quote_set_no_charge",
+   "args": "p_quote_id uuid, p_reason text",
+   "comment": "THE only door that writes a quote's no-charge decision. A non-empty reason SETS it (actor = auth.uid(), timestamp = now(), all three atomically); NULL CLEARS it, and clearing is refused once the quote is past draft/sent because an accepted no-charge quote was authorised on that basis. Every call is written to audit_events."
   },
   {
    "fn": "schema_contract",
@@ -475,6 +495,21 @@
    "comment": "Which crew runs this visit; members resolve from technicians.crew_id at read time. Mutually exclusive with technician_id (jobs_one_assignee). NULL = no crew. Orthogonal to crew_size (headcount)."
   },
   {
+   "col": "no_charge_at",
+   "tbl": "jobs",
+   "comment": "When the owner DECIDED this visit is free. NULL = no such decision. ⛔ jobs.price IS NULL means \"no job-level override, follow the quote\" — it has never meant free, and must not start to."
+  },
+  {
+   "col": "no_charge_by",
+   "tbl": "jobs",
+   "comment": "Which account made the no-charge decision. Audit evidence."
+  },
+  {
+   "col": "no_charge_reason",
+   "tbl": "jobs",
+   "comment": "Why this visit is free, in the owner's words. Required whenever no_charge_at is set (jobs_no_charge_complete_check)."
+  },
+  {
    "col": "notes",
    "tbl": "jobs",
    "comment": "INTERNAL ONLY. The access/instruction note for whoever does the work (gate code, where to park). Shipped to the crew by crew_day. Removed from get_portal_data 2026-08-11 — it was being rendered to customers. Customer-facing words go in completion_summary."
@@ -575,6 +610,21 @@
    "comment": "Frozen record of the measurement and the pricing rule that produced this quote's figure — total, unit, traced parts, term, basis, rate, price, as they were at quote time. Never re-derived from the Price Book on read; a later rate change must not rewrite history."
   },
   {
+   "col": "no_charge_at",
+   "tbl": "quotes",
+   "comment": "When the owner DECIDED this quote is free. NULL = no such decision. ⛔ A $0 or absent price is UNPRICED (unknown), never free — see lib/pricingState."
+  },
+  {
+   "col": "no_charge_by",
+   "tbl": "quotes",
+   "comment": "Which account made the no-charge decision. Audit evidence, not authorization: the RLS policies already decide who may write the row."
+  },
+  {
+   "col": "no_charge_reason",
+   "tbl": "quotes",
+   "comment": "Why this work is free, in the owner's words. Required whenever no_charge_at is set (quotes_no_charge_complete_check) — a free-work record with no reason is indistinguishable from an unanswered price field."
+  },
+  {
    "col": "notes",
    "tbl": "quotes",
    "comment": "CUSTOMER-VISIBLE. The scope note the customer reads — printed in QuotePDF's Notes box and selected by get_portal_data. Never put a gate code or a price floor here; that is quotes.internal_notes."
@@ -673,6 +723,11 @@
    "col": "measured_by",
    "tbl": "service_templates",
    "comment": "How this service is measured on the map: area | length | count. NULL = not stated; lib/measurePricing falls back to pricing_display_type. NULL is also how a service says \"not measured\" in practice — Measure & Price is not offered for it."
+  },
+  {
+   "col": "published_at",
+   "tbl": "service_templates",
+   "comment": "When this service was explicitly made customer-visible. NULL = INTERNAL: the owner may quote with it, but public_services() and get_portal_data() will not return it. Set = PUBLISHED. is_active is the master switch and wins over this: a switched-off service is never public regardless. ⛔ Never backfilled — publication is an act, not a migration."
   },
   {
    "col": "recurrence",

@@ -174,8 +174,9 @@ export function registerOfflineHandlers(): void {
     // and failing was indistinguishable from succeeding. The op got deleted either
     // way. That is exactly the outcome the note above claims to prevent: eight
     // completed jobs, zero invoices, no trace.
-    // 'exists' and 'no-amount' are terminal successes: the invoice is already there,
-    // or the visit has no price and must never draft a $0 invoice. Only 'error' retries.
+    // 'exists', 'no-amount' and 'no-charge' are terminal successes: the invoice is
+    // already there, the visit has no price, or it was deliberately given away —
+    // and none of the three may ever draft a $0 invoice. Only 'error' retries.
     const draft = await createDraftInvoiceForCompletedJob(supabase, p.job)
     if (!draft.created && draft.reason === 'error') {
       throw new Error(`draft invoice failed for job ${p.id}`)

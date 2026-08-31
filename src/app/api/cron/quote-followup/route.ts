@@ -8,7 +8,7 @@ import { loadOwnerContext, type OwnerContext } from '@/lib/automation/owner'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { dueForAutoFollowUp, compareFollowUp, resolveFollowUpPolicy, type FollowUpPolicy } from '@/lib/followup'
 import { isQuoteExpired } from '@/lib/quoteStatus'
-import { localTodayISO } from '@/lib/utils'
+import { loadTenantZones, todayForTenant } from '@/lib/tenantTimeServer'
 import type { Quote } from '@/types'
 
 export const dynamic = 'force-dynamic'
@@ -67,7 +67,14 @@ async function handler(req: NextRequest) {
     return NextResponse.json({ ok: true, skipped: true, note: 'Set SUPABASE_SERVICE_ROLE_KEY to enable scheduled sends.' })
   }
   const supabase = client
-  const today = localTodayISO()
+  // ⭐⭐ EACH OWNER'S OWN DATE (Session 121). Quote EXPIRY is a date comparison
+  // (lib/quoteStatus), and this ran it against the SERVER's UTC date for every
+  // tenant at once. A quote valid until the 31st stops being chased a day early
+  // for any business whose own day has not rolled over yet — and a chase we
+  // suppress is a chase nobody ever notices was missing.
+  const zones = await loadTenantZones(supabase)
+  const now = new Date()
+  const todayFor = (userId: string) => todayForTenant(zones, userId, now)
 
   // Only quotes still awaiting an answer can be chased at all.
   // Oldest first, so a truncated scan still holds the stalest money (the in-memory
@@ -121,7 +128,7 @@ async function handler(req: NextRequest) {
     sort: (a, b) => compareFollowUp(a as unknown as Quote, b as unknown as Quote),
     // Invoiced → already money owed. Expired → never chase a price we won't honour
     // (ONE expiry engine).
-    skip: q => invoiced.has(q.id) || isQuoteExpired(q, today),
+    skip: q => invoiced.has(q.id) || isQuoteExpired(q, todayFor(q.user_id)),
     loadContext: bizInfo,
     enabled: ctx => ctx.automations.quote_followup,                          // owner hasn't switched it on
     due: (q, ctx) => dueForAutoFollowUp(q as unknown as Quote, ctx.policy),  // ONE engine decides staleness + cap
