@@ -171,7 +171,8 @@
     "verify:migrations": "tsx scripts/verify-migrations.ts",
     "verify:custom-fields": "tsx scripts/verify-custom-fields.ts",
     "verify:tenant-time": "tsx scripts/verify-tenant-time.ts",
-    "verify:weather-truth": "tsx scripts/verify-weather-truth.ts"
+    "verify:weather-truth": "tsx scripts/verify-weather-truth.ts",
+    "verify:day-view-tomorrow": "tsx scripts/verify-day-view-tomorrow.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

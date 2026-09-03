@@ -21,8 +21,9 @@ import { openFixtureTenant, isSkipped } from './lib/verify-fixture'
 const baseUrl = process.argv[2] || 'http://127.0.0.1:3117'
 
 // Tomorrow, so the day is inside lib/dayFitLoad's horizon (workers are only
-// claimed for dates whose time off was actually read) and reachable by the
-// board's own "Tomorrow" button.
+// claimed for dates whose time off was actually read) and one next-period tap
+// from today. (The named "Tomorrow" button was removed in Session 112; this
+// harness never clicked it — it seeds by date.)
 const d = new Date()
 d.setDate(d.getDate() + 1)
 const DATE = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
