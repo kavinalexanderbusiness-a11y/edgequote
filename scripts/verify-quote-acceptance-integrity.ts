@@ -43,6 +43,7 @@ import {
   ON_BEHALF_REASONS, MATERIAL_QUOTE_FIELDS, NON_MATERIAL_QUOTE_FIELDS,
   acceptanceStanding, acceptanceSentence, reapprovalSentence, materialChanges,
   isUnevidencedAcceptance, isAcceptedOrBeyond, termsRequired,
+  customerFacingQuoteAmount,
   acceptBlockedReason, acceptBlockedLabel, TERMS_ACK_LABEL,
   type AcceptanceState, type AcceptedDocument,
 } from '../src/lib/quoteAcceptance'
@@ -346,8 +347,32 @@ check('DEPOSIT — …refusing the charge rather than quoting a figure off chang
 const portalModel = read('src/app/portal/[token]/model.ts')
 // ⭐ The customer-facing half: an accepted quote shows the CONSENTED figure, not
 // whatever the owner has since edited the total to.
-check('PORTAL — an accepted quote shows the figure the customer accepted',
-  /amount: acceptedFigure \?\?/.test(portalModel))
+//
+// ⚠️⚠️ NARROWED, DELIBERATELY, AND IT NAMES ITS OWN SUCCESSOR (S122b).
+// This asserted `amount: acceptedFigure ??` unconditionally — which made the
+// snapshot depend on `quotes.status` alone. A red-team then found the shape that
+// breaks: status=accepted, accepted_price=1400, current total=500, and ZERO
+// quote_acceptances. The old rule showed $1,400 and called it "the price you
+// accepted", against a $500 document nobody had ever agreed to.
+//
+// The contract is now CONDITIONAL, and both halves are asserted behaviourally
+// below: with evidence the consent snapshot is shown; without it the customer
+// sees the live price and no consent claim is made. S121's protection is intact
+// wherever it can be proven — it is simply no longer inferred from a status flag.
+//
+// ⏳ EXPIRES when supabase/proposals/RUN-S122C-portal-acceptance-evidence.sql is
+// applied: the payload then carries `has_acceptance_evidence`, `evidenced`
+// becomes reachable in production, and this should be re-tightened to assert the
+// snapshot IS shown for real accepted quotes end to end.
+check('PORTAL — an accepted quote shows the consented figure WHEN it is evidenced',
+  customerFacingQuoteAmount('evidenced', 1400, 500).amount === 1400
+  && customerFacingQuoteAmount('evidenced', 1400, 500).isAcceptedAmount === true)
+check('PORTAL — …and never a stale snapshot when it is not',
+  customerFacingQuoteAmount('unevidenced', 1400, 500).amount === 500
+  && customerFacingQuoteAmount('unevidenced', 1400, 500).isAcceptedAmount === false)
+check('PORTAL — the model routes that decision through the rule, not status',
+  /customerFacingQuoteAmount\(presentation, qq\.accepted_price/.test(portalModel)
+  && /amount: facing\.amount/.test(portalModel))
 check('PORTAL — …and says so plainly when the document has moved since',
   /priceMovedSinceAccepted/.test(portalModel) && /updated quote to look over/.test(portalModel))
 
