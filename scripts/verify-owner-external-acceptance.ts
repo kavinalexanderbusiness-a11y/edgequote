@@ -278,10 +278,29 @@ async function main() {
     check('the submit button is disabled while pending',
       /disabled=\{!canSave\}/.test(dcode) && /const canSave = [^\n]*!saving/.test(dcode),
       'the pending state must gate canSave, not merely appear somewhere in the file')
-    check('exactly one success toast and one error toast per attempt',
-      (dcode.match(/toast\.success\(/g) || []).length === 1
-      && (dcode.match(/toast\.error\(/g) || []).length === 2, // one refusal + one network catch
-      'a second toast per path is how the same error stacked on the owner\'s screen')
+    // ⚠️ RE-EXPRESSED per HANDLER, not per file. The old form counted literal
+    // toast calls across the whole component and broke the moment a second,
+    // legitimate handler existed (the repair confirmation) — a count is not the
+    // contract. The contract is that ONE attempt produces ONE toast, so each
+    // handler gets exactly one success and each of its error paths returns
+    // rather than falling through into another toast.
+    for (const fn of ['save', 'confirmCurrent']) {
+      const body = new RegExp(`async function ${fn}\\(\\)[\\s\\S]*?\\n  \\}`).exec(dcode)?.[0] ?? ''
+      check(`${fn}(): exactly one success toast`, (body.match(/toast\.success\(/g) || []).length === 1, body ? '' : 'handler not found')
+      // Every error toast must END that attempt: the next statement is `return`,
+      // or it is the catch (where the function is over anyway). A toast that
+      // falls through into another is how the same error stacked on the owner's
+      // screen. Checked by looking at what FOLLOWS each call rather than by
+      // pattern-matching the call itself, which spans template literals.
+      const parts = body.split('toast.error(').slice(1)
+      const terminal = parts.filter(after => {
+        const next = after.slice(0, 300)
+        return /\n\s*return\b/.test(next) || /^\s*'[^']*'\)\s*\n\s*\}\s*finally/.test(next)
+      })
+      check(`${fn}(): every error toast ends the attempt`,
+        parts.length > 0 && terminal.length === parts.length,
+        `${terminal.length}/${parts.length} error toasts are terminal`)
+    }
   }
 
   await db.close()
