@@ -310,7 +310,11 @@ console.log('\n▸ 6 · the shape of the model')
   // restores the defect this whole lane removed. tsc found 4 call sites when the
   // signatures changed; it could not see the other 9, because they still
   // compiled. Only a source scan closes that gap.
-  const NAMEY = /(service_type|serviceType|serviceName|\.title\b)/
+  // ⚠️ `serv` rather than the exact field names. Mutation testing fed the name
+  // through a variable called `recService` — no underscore, no "type" — and the
+  // narrow pattern let it straight through. A declaration never has "serv" in it
+  // (`season_key`, `seasonKey`), so this discriminates without false positives.
+  const NAMEY = /(serv|\.title\b)/i
   const nameFed: string[] = []
   for (const f of SRC) {
     const t = strip(read(f))
@@ -324,6 +328,8 @@ console.log('\n▸ 6 · the shape of the model')
   eq('⛔ no season decision under src/ is fed a service NAME', nameFed, [])
   check('[negative control] a name reaching dormancy WOULD be caught',
     NAMEY.test('s.rep.service_type'))
+  check('[negative control] …including one hidden in a service-ish variable',
+    NAMEY.test('recService'))
   check('[negative control] …and a real declaration is NOT flagged',
     !NAMEY.test('s.rec.season_key ?? null'))
 
@@ -461,6 +467,14 @@ console.log('\n▸ 9 · the transition can END — the flag cannot sit false unn
 // ── Offline half: the two states are internally consistent ──────────────────
 {
   const leg = strip(read('src/lib/legacySeasonInference.ts'))
+  // ⛔⛔ THE BRANCH CONTRACT. The end state ships in the SOURCE so that nobody
+  // hand-edits a flag during landing. Asserted here, offline, as well as in the
+  // live half — the live half needs owner credentials and returns early without
+  // them, so a flag that regressed to false would otherwise sail through CI
+  // with every other check still green.
+  check('⛔ the branch ships the END STATE — declarations complete',
+    SEASON_DECLARATIONS_COMPLETE === true,
+    'SEASON_DECLARATIONS_COMPLETE is not true — the runtime would infer seasons from names again')
   if (SEASON_DECLARATIONS_COMPLETE) {
     // END STATE. The guess must be unreachable, not merely unused.
     eq('⛔ with declarations COMPLETE, an undeclared series gets NOTHING',
