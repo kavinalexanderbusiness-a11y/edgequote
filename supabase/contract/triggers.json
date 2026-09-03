@@ -18,6 +18,12 @@
   "tgenabled": "O"
  },
  {
+  "def": "CREATE TRIGGER trg_business_settings_invalidate_terms_claim BEFORE INSERT OR UPDATE ON public.business_settings FOR EACH ROW EXECUTE FUNCTION business_settings_invalidate_terms_claim()",
+  "tbl": "business_settings",
+  "tgname": "trg_business_settings_invalidate_terms_claim",
+  "tgenabled": "O"
+ },
+ {
   "def": "CREATE TRIGGER trg_audit_change_orders_insert AFTER INSERT ON public.change_orders FOR EACH ROW EXECUTE FUNCTION audit_change_orders()",
   "tbl": "change_orders",
   "tgname": "trg_audit_change_orders_insert",

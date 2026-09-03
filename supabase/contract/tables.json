@@ -1106,6 +1106,30 @@
     "notnull": true,
     "identity": "",
     "generated": ""
+   },
+   {
+    "name": "terms_payment_claim",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "terms_payment_claim_fingerprint",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "terms_payment_claim_version",
+    "type": "integer",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
    }
   ],
   "relname": "business_settings",
