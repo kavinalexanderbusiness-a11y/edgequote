@@ -112,6 +112,10 @@ export async function generateStructured<T>(opts: {
   // the same large system or tool definition is reused across many calls.
   cacheSystem?: boolean
   cacheTools?: boolean
+  // Observability hook: called once on a successful structured response with the
+  // model that actually answered and its token usage, so callers can record an
+  // audit/cost trail. Never called on failure paths (they return null anyway).
+  onMeta?: (meta: { model: string; inputTokens: number | null; outputTokens: number | null }) => void
 }): Promise<T | null> {
   const key = process.env.ANTHROPIC_API_KEY
   if (!key) return null
@@ -151,9 +155,14 @@ export async function generateStructured<T>(opts: {
       }),
     })
     if (!res.ok) return null
-    const data = (await res.json()) as { content?: ToolBlock[] }
+    const data = (await res.json()) as { content?: ToolBlock[]; model?: string; usage?: { input_tokens?: number; output_tokens?: number } }
     const use = (data.content || []).find(c => c.type === 'tool_use' && c.name === opts.tool.name)
     if (!use || use.input == null) return null
+    opts.onMeta?.({
+      model: data.model ?? opts.model ?? modelForTier(opts.tier),
+      inputTokens: typeof data.usage?.input_tokens === 'number' ? data.usage.input_tokens : null,
+      outputTokens: typeof data.usage?.output_tokens === 'number' ? data.usage.output_tokens : null,
+    })
     return use.input as T
   } catch {
     return null

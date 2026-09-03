@@ -70,19 +70,35 @@ export function encodeUntrustedEvidence(value: unknown, maxChars: number): { pay
 // path, so any executed-action claim is a fabrication. This is a deterministic
 // output-side floor beneath the system-prompt rule, not a replacement for it.
 export function claimsExecutedAction(answer: string): boolean {
-  const DONE = '(?:sent|scheduled|created|charged|refunded|updated|deleted|archived|booked|recorded|executed|dispatched)'
+  // Over-matching is the safe direction: a false positive ships the
+  // deterministic answer instead ("I paid attention to…" would), a false
+  // negative ships a fabricated execution claim.
+  const DONE = '(?:sent|scheduled|created|charged|refunded|updated|deleted|archived|booked|recorded|executed|dispatched|marked|paid|cancell?ed|approved)'
   return new RegExp(`\\b(?:i|we)(?:'ve| have| had)?(?: already| just| now)?\\s+${DONE}\\b`, 'i').test(answer)
     || new RegExp(`\\b(?:has|have) been ${DONE}\\b`, 'i').test(answer)
 }
 
-async function summarizeWithConfiguredProvider(question: string, result: Awaited<ReturnType<typeof runReadOnlyOperatorTool>>) {
+// What the route records in operator_runs for the cost/audit trail. NEVER sent
+// to the browser (the response would leak provider internals) and never holds
+// secrets — provider name, model id, and token counts only.
+export interface OperatorRunAudit {
+  provider: 'deterministic' | 'anthropic'
+  model: string | null
+  tokens_in: number | null
+  tokens_out: number | null
+}
+
+async function summarizeWithConfiguredProvider(question: string, result: Awaited<ReturnType<typeof runReadOnlyOperatorTool>>):
+  Promise<{ answer: string; audit: OperatorRunAudit } | null> {
   const provider = (process.env.EDGE_OPERATOR_PROVIDER || 'anthropic').toLowerCase()
   if (provider === 'deterministic') return null
   if (provider !== 'anthropic') return null
   const { payload: evidence, truncated } = encodeUntrustedEvidence(
     { summary: result.summary, cards: result.cards, warnings: result.warnings, records: result.records ?? [] }, 24_000)
+  let meta: { model: string; inputTokens: number | null; outputTokens: number | null } | null = null
   const out = await generateStructured<ModelAnswer>({
     tier: tierFromEnv(), model: process.env.EDGE_OPERATOR_MODEL || undefined, maxTokens: 700, timeoutMs: 20_000,
+    onMeta: m => { meta = m },
     system: [
       'You are Edge Operator, a read-only operational analyst inside a universal service-business CRM.',
       'You may explain evidence and recommend a next action. You MUST NOT claim to have sent, changed, scheduled, charged, created, deleted, or executed anything.',
@@ -104,10 +120,15 @@ async function summarizeWithConfiguredProvider(question: string, result: Awaited
   const answer = out.answer.trim()
   // Fail closed to the deterministic answer on any executed-action claim —
   // nothing was executed, so a model answer saying otherwise must not ship.
-  return claimsExecutedAction(answer) ? null : answer
+  if (claimsExecutedAction(answer)) return null
+  const m = meta as { model: string; inputTokens: number | null; outputTokens: number | null } | null
+  return { answer, audit: { provider: 'anthropic', model: m?.model ?? null, tokens_in: m?.inputTokens ?? null, tokens_out: m?.outputTokens ?? null } }
 }
 
-export async function answerOperatorQuestion(sb: SB, userId: string, question: string, refs: OperatorContextRefs = {}): Promise<OperatorAnswer> {
+const DETERMINISTIC_AUDIT: OperatorRunAudit = { provider: 'deterministic', model: null, tokens_in: null, tokens_out: null }
+
+export async function answerOperatorQuestion(sb: SB, userId: string, question: string, refs: OperatorContextRefs = {}):
+  Promise<{ response: OperatorAnswer; audit: OperatorRunAudit }> {
   const tool = chooseTool(question, refs)
   const input: Record<string, unknown> = {}
   if (refs.customer_id) input.customer_id = refs.customer_id
@@ -116,12 +137,15 @@ export async function answerOperatorQuestion(sb: SB, userId: string, question: s
   const result = await runReadOnlyOperatorTool(sb, userId, tool, input)
   const model = await summarizeWithConfiguredProvider(question, result)
   return {
-    answer: model ?? deterministicAnswer(tool, result.summary, result.warnings, question),
-    cards: result.cards,
-    tools_used: [tool],
-    generated_at: result.generated_at,
-    read_only: true,
-    warnings: result.warnings,
+    response: {
+      answer: model?.answer ?? deterministicAnswer(tool, result.summary, result.warnings, question),
+      cards: result.cards,
+      tools_used: [tool],
+      generated_at: result.generated_at,
+      read_only: true,
+      warnings: result.warnings,
+    },
+    audit: model?.audit ?? DETERMINISTIC_AUDIT,
   }
 }
 

@@ -46,12 +46,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Operator is rate-limited for this hour. Please try again later.' }, { status: 429 })
     }
 
-    const answer = await answerOperatorQuestion(supabase, user.id, body.question, body.context)
+    const { response, audit } = await answerOperatorQuestion(supabase, user.id, body.question, body.context)
 
     // Operator telemetry is business metadata, not a business-record mutation.
     // The id is server-generated when the client omits one so that no caller can
     // opt out of the run history (and therefore out of the rate limit above);
     // a client-supplied id still deduplicates that client's double-submits.
+    // The audit half (provider/model/token spend) is recorded here and NEVER
+    // included in the browser response.
     // Best-effort: missing-table errors must never make the answer unavailable.
     const idempotencyKey = body.requestId ?? `server:${crypto.randomUUID()}`
     await supabase.from('operator_runs').upsert({
@@ -59,12 +61,16 @@ export async function POST(req: NextRequest) {
       initiated_by: user.id,
       idempotency_key: idempotencyKey,
       question: body.question,
-      answer: answer.answer,
+      answer: response.answer,
       status: 'completed',
       completed_at: new Date().toISOString(),
-      tools_used: answer.tools_used,
+      tools_used: response.tools_used,
+      provider: audit.provider,
+      model: audit.model,
+      tokens_in: audit.tokens_in,
+      tokens_out: audit.tokens_out,
     }, { onConflict: 'user_id,idempotency_key', ignoreDuplicates: true }).then(() => undefined, () => undefined)
-    return NextResponse.json(answer)
+    return NextResponse.json(response)
   } catch (error) {
     // The message goes to the server log only: provider failures name API keys,
     // model ids and timeouts, none of which belong in a browser response.

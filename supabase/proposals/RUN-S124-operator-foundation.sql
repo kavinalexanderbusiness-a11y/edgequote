@@ -31,6 +31,14 @@ create table public.operator_runs (
   question text,
   answer text,
   tools_used jsonb not null default '[]'::jsonb,
+  -- Cost/audit trail: WHICH brain answered, at what token spend. 'deterministic'
+  -- means no model was called (no key, provider off, or the model answer failed
+  -- validation and the deterministic floor shipped). Never stores keys, prompts,
+  -- or provider error text — those stay in server logs.
+  provider text not null default 'deterministic' check (provider in ('deterministic','anthropic')),
+  model text,
+  tokens_in integer,
+  tokens_out integer,
   status text not null default 'running' check (status in ('running','completed','failed')),
   started_at timestamptz not null default now(),
   completed_at timestamptz,
@@ -119,6 +127,20 @@ create index operator_proposed_actions_user_status_created_idx on public.operato
 create index operator_approvals_user_action_decided_idx on public.operator_approvals(user_id, proposed_action_id, decided_at desc);
 create index operator_execution_results_user_action_idx on public.operator_execution_results(user_id, proposed_action_id, executed_at desc);
 create index operator_failures_user_created_idx on public.operator_failures(user_id, created_at desc);
+
+-- Every FK column set gets a covering index (the Supabase unindexed_foreign_keys
+-- advisor rule, and real delete-path performance): the composite tenant FKs that
+-- the leading-user_id indexes above don't already prefix-cover, plus the four
+-- actor columns referencing auth.users — without these, deleting an auth user
+-- seq-scans each operator table per FK.
+create index operator_runs_conversation_fk_idx on public.operator_runs(conversation_id, user_id);
+create index operator_proposed_actions_run_fk_idx on public.operator_proposed_actions(run_id, user_id);
+create index operator_failures_run_fk_idx on public.operator_failures(run_id, user_id);
+create index operator_failures_tool_call_fk_idx on public.operator_failures(tool_call_id, user_id);
+create index operator_conversations_created_by_idx on public.operator_conversations(created_by);
+create index operator_runs_initiated_by_idx on public.operator_runs(initiated_by);
+create index operator_proposed_actions_initiating_idx on public.operator_proposed_actions(initiating_user_id);
+create index operator_approvals_decided_by_idx on public.operator_approvals(decided_by);
 
 alter table public.operator_conversations enable row level security;
 alter table public.operator_runs enable row level security;
