@@ -70,6 +70,14 @@ export function RecordAcceptanceDialog({
   const [saving, setSaving] = useState(false)
   // The synchronous in-flight latch. See save() for why state alone cannot do this.
   const inFlight = useRef(false)
+  // ── The repair step ────────────────────────────────────────────────────────
+  // Set only when the server refuses with repairRequired: the quote is flagged
+  // accepted, has no evidence, and its price has moved since. Holds the two
+  // figures and the fingerprint of the version being confirmed, so the
+  // attestation names a specific document rather than "the quote".
+  const [repair, setRepair] = useState<
+    { priorAmount: number; currentAmount: number; fingerprint: string; why: string } | null>(null)
+  const [confirmed, setConfirmed] = useState(false)
 
   // Adopt the preset each time the dialog is OPENED. Seeding from the prop at
   // mount only would leave the second visit showing the first visit's choice —
@@ -79,7 +87,7 @@ export function RecordAcceptanceDialog({
   const [wasOpen, setWasOpen] = useState(false)
   if (open !== wasOpen) {
     setWasOpen(open)
-    if (open) { setOptionId(presetOptionId ?? null); setReason(''); setNote('') }
+    if (open) { setOptionId(presetOptionId ?? null); setReason(''); setNote(''); setRepair(null); setConfirmed(false) }
   }
 
   const chosen = optionId ? options.find(o => o.id === optionId) ?? null : null
@@ -93,6 +101,10 @@ export function RecordAcceptanceDialog({
 
   const needsOption = options.length > 0 && !chosen
   const canSave = !needsOption && !!reason && !saving
+  // The repair step demands MORE than the ordinary one: the checkbox naming the
+  // current amount, and a note. Both are the difference between an attestation
+  // and a shrug.
+  const canConfirm = !!repair && !!reason && confirmed && !!note.trim() && !saving
 
   async function save() {
     // ⚠️⚠️ A REF, not the `saving` state, is what makes this one-request-per-click.
@@ -121,9 +133,27 @@ export function RecordAcceptanceDialog({
           ...(note.trim() ? { note: note.trim() } : {}),
         }),
       })
-      const out = await res.json().catch(() => null) as
-        { ok?: boolean; error?: string; sentence?: string | null } | null
+      const out = await res.json().catch(() => null) as {
+        ok?: boolean; error?: string; sentence?: string | null
+        repairRequired?: boolean; priorAmount?: number; currentAmount?: number
+        currentFingerprint?: string | null
+      } | null
 
+      // ⭐ The one refusal that is not a dead end: the quote is flagged accepted
+      // with no evidence and a price that moved. The owner may genuinely know
+      // the customer accepted THIS version — so the dialog offers that
+      // attestation instead of stopping. It is a second, explicit step on
+      // purpose: naming the current amount is the whole point.
+      if (out?.repairRequired) {
+        setRepair({
+          priorAmount: Number(out.priorAmount),
+          currentAmount: Number(out.currentAmount),
+          fingerprint: String(out.currentFingerprint ?? ''),
+          why: String(out.error ?? ''),
+        })
+        setConfirmed(false)
+        return
+      }
       // ⚠️ A refusal is a refusal — never a success with nothing to show.
       if (!res.ok || !out?.ok) {
         toast.error(out?.error
@@ -142,6 +172,45 @@ export function RecordAcceptanceDialog({
     }
   }
 
+  /**
+   * The explicit attestation about the CURRENT version.
+   *
+   * ⛔ Sends the fingerprint the owner was LOOKING AT. If the quote changed
+   * between opening this and confirming it, the server refuses rather than
+   * recording evidence against a version nobody saw — the amount on the
+   * confirmation would be a different document's amount.
+   */
+  async function confirmCurrent() {
+    if (inFlight.current) return
+    if (!repair || !reason || !confirmed || !note.trim()) return
+    inFlight.current = true
+    setSaving(true)
+    try {
+      const res = await fetch('/api/quotes/confirm-current-acceptance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          quoteId, reason, note: note.trim(),
+          expectedFingerprint: repair.fingerprint,
+          expectedAmount: repair.currentAmount,
+        }),
+      })
+      const out = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null
+      if (!res.ok || !out?.ok) {
+        toast.error(out?.error ? `Could not record it: ${out.error}` : 'Could not record that acceptance.')
+        return
+      }
+      toast.success(`Recorded — ${quoteNumber} is accepted at ${formatCurrency(repair.currentAmount)}.`)
+      onRecorded()
+      onClose()
+    } catch {
+      toast.error('Could not record that acceptance — check your connection and try again.')
+    } finally {
+      inFlight.current = false
+      setSaving(false)
+    }
+  }
+
   return (
     <Modal
       open={open}
@@ -149,17 +218,63 @@ export function RecordAcceptanceDialog({
       size="md"
       icon={UserCheck}
       title={`Record ${customerName}’s acceptance`}
-      onSubmit={save}
+      onSubmit={repair ? confirmCurrent : save}
       footer={
         <div className="flex gap-2 justify-end">
           <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
-          <Button onClick={save} disabled={!canSave}>
-            {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-            {amount != null ? `Record acceptance — ${formatCurrency(amount)}` : 'Record acceptance'}
-          </Button>
+          {repair ? (
+            // ⭐ The button NAMES the amount being attested to. A generic
+            // "Confirm" would let an owner agree to a figure they never read,
+            // which is the whole thing this step exists to prevent.
+            <Button onClick={confirmCurrent} disabled={!canConfirm}>
+              {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+              Confirm acceptance of {formatCurrency(repair.currentAmount)}
+            </Button>
+          ) : (
+            <Button onClick={save} disabled={!canSave}>
+              {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+              {amount != null ? `Record acceptance — ${formatCurrency(amount)}` : 'Record acceptance'}
+            </Button>
+          )}
         </div>
       }
     >
+      {repair && (
+        // ── The repair step ────────────────────────────────────────────────
+        // Both figures, named. The owner is being asked to make a claim about a
+        // specific document, so the document has to be in front of them: the
+        // quote number, what it says NOW, and the unsupported figure that was
+        // sitting on the record.
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.07] px-3.5 py-3 space-y-2.5 mb-4">
+          <p className="text-sm font-semibold text-amber-400">
+            This quote changed after it was marked Accepted
+          </p>
+          <p className="text-xs text-ink-muted">{repair.why}</p>
+          <div className="rounded-lg border border-border bg-bg-secondary px-3 py-2 text-xs space-y-1">
+            <div className="flex justify-between gap-3">
+              <span className="text-ink-muted">Previous unsupported acceptance figure</span>
+              <span className="text-ink-muted line-through tabular-nums">{formatCurrency(repair.priorAmount)}</span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-ink font-medium">Current quote {quoteNumber}</span>
+              <span className="text-ink font-semibold tabular-nums">{formatCurrency(repair.currentAmount)}</span>
+            </div>
+          </div>
+          <label className="flex items-start gap-2 text-xs text-ink cursor-pointer">
+            <input type="checkbox" className="mt-0.5 shrink-0" checked={confirmed}
+              onChange={e => setConfirmed(e.target.checked)} />
+            <span>
+              I confirm the customer accepted the current quote for{' '}
+              <span className="font-semibold tabular-nums">{formatCurrency(repair.currentAmount)}</span>{' '}
+              after the quote was changed.
+            </span>
+          </label>
+          <p className="text-[11px] text-ink-faint">
+            This is recorded as your attestation on the customer’s behalf — never as their own portal acceptance.
+            A note is required.
+          </p>
+        </div>
+      )}
       {/* Says whose act this is, before anything is filled in. The owner is not
           approving the quote; they are writing down that the customer did. */}
       <p className="text-sm text-ink-muted">

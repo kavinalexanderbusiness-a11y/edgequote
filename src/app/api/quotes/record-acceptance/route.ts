@@ -138,11 +138,18 @@ export async function POST(req: Request) {
     const drifted = Number.isFinite(priorAmount) && priorAmount > 0
       && Number.isFinite(currentAmount) && Math.abs(priorAmount - currentAmount) > 0.005
     if (isAcceptedOrBeyond(qq.status) && (count ?? 0) === 0 && drifted) {
+      // ⭐ A refusal, but not a dead end. The owner may genuinely know the
+      // customer accepted THIS version — so we hand back exactly what an
+      // explicit attestation needs to name: both figures, and the fingerprint of
+      // the version being confirmed. The confirmation itself goes through
+      // ../confirm-current-acceptance, which re-checks every one of these
+      // server-side; nothing here is trusted on the way back in.
+      const { data: fp } = await supabase.rpc('quote_material_fingerprint', { p_quote_id: quoteId })
       return NextResponse.json({
         ok: false, claim, reclassified, repairRequired: true,
+        priorAmount, currentAmount, currentFingerprint: fp ?? null,
         error: 'This quote changed after acceptance was marked. We don’t have durable evidence of which version the customer accepted, '
-          + `so we can’t record their acceptance of the current ${money(currentAmount)} document from a prior ${money(priorAmount)} figure. `
-          + 'Send the current quote again and record the acceptance they give you for it.',
+          + `so we can’t record their acceptance of the current ${money(currentAmount)} document from a prior ${money(priorAmount)} figure.`,
       }, { status: 409 })
     }
   }
