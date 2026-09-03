@@ -268,8 +268,13 @@ async function main() {
 
     const dlg = readFileSync(join(ROOT, 'src/components/quotes/RecordAcceptanceDialog.tsx'), 'utf8')
     const dcode = dlg.replace(/^\s*\/\/.*$/gm, '')
-    check('the dialog latches in-flight with a REF, not state', /inFlight\.current/.test(dcode)
-      && /if \(inFlight\.current\) return/.test(dcode))
+    // ⚠️ BOTH handlers, counted. Asserting the phrase merely EXISTS was satisfied
+    // by whichever handler still had it — the mutation harness removed the first
+    // one and the guard stayed green because `confirmCurrent` kept its copy.
+    check('every submit handler latches in-flight with a REF, not state',
+      (dcode.match(/if \(inFlight\.current\) return/g) || []).length === 2
+      && (dcode.match(/async function (save|confirmCurrent)\(\)/g) || []).length === 2,
+      'each handler needs its own synchronous latch — state alone cannot do it')
     check('…and goes through the owner route, not straight to the RPC',
       /\/api\/quotes\/record-acceptance/.test(dcode) && !/rpc\('owner_record_customer_acceptance'/.test(dcode))
     // ⚠️ `canSave` ITSELF must carry !saving. A bare /!saving/ over the file was

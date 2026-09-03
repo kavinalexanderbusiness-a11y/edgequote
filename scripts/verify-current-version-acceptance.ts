@@ -276,6 +276,64 @@ async function main() {
       /v_uid uuid := auth\.uid\(\)/.test(src) && !/p_tenant|p_user_id/.test(src))
   }
 
+  console.log('\n■ G2. Evidence that does NOT match cannot be joined by a repair row')
+  {
+    // The idempotent branch only fires for a repair identical to one already
+    // recorded. Any OTHER evidence — a real customer acceptance above all — must
+    // refuse. Without this case the `evidence_exists` return was unreachable in
+    // the guard, and deleting it changed nothing.
+    const id = await junShaped({ stale: null, status: 'sent' })
+    await asOwner()
+    await q(`select public.portal_accept_quote($1,$2,null,null,true) as ok`, [TOKEN, id])
+    check('G2 · the customer\'s own acceptance is on record', (await evidence(id)) === 1)
+    const kind = String((await q(`select kind from public.quote_acceptances where quote_id=$1`, [id])).rows[0].kind)
+    check('G2 · …recorded as a CUSTOMER acceptance', kind === 'customer')
+    const out = await confirm(id)
+    check('G2 · a repair cannot be added beside customer evidence',
+      out.ok === false && out.reason === 'evidence_exists', JSON.stringify(out))
+    check('G2 · …and the count stays at one', (await evidence(id)) === 1)
+  }
+
+  console.log('\n■ P. The confirmation UI and route demand a NAMED version')
+  {
+    const strip = (s: string) => s.replace(/\r\n/g, '\n').replace(/^\s*\/\/.*$/gm, '')
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '')
+    const dlg = strip(readFileSync(join(ROOT, 'src/components/quotes/RecordAcceptanceDialog.tsx'), 'utf8'))
+    const rt = strip(readFileSync(join(ROOT, 'src/app/api/quotes/confirm-current-acceptance/route.ts'), 'utf8'))
+
+    check('P · the confirmation requires the checkbox AND a note',
+      /const canConfirm = [^\n]*confirmed && !!note\.trim\(\)/.test(dlg),
+      'a repair without an explicit confirmation is just a click')
+    check('P · the confirm button NAMES the amount being attested to',
+      /Confirm acceptance of \{formatCurrency\(repair\.currentAmount\)\}/.test(dlg),
+      'a generic Confirm lets an owner agree to a figure they never read')
+    check('P · the checkbox sentence names the CURRENT amount',
+      /I confirm the customer accepted the current quote for\{' '\}/.test(dlg)
+      && /formatCurrency\(repair\.currentAmount\)/.test(dlg))
+    check('P · the previous unsupported figure is shown to the owner',
+      /Previous unsupported acceptance figure/.test(dlg)
+      && /formatCurrency\(repair\.priorAmount\)/.test(dlg))
+    check('P · the current quote NUMBER is shown beside the current amount',
+      /Current quote \{quoteNumber\}/.test(dlg))
+    check('P · it says plainly this is an attestation, not portal acceptance',
+      /never as their own portal acceptance/.test(dlg))
+    check('P · the dialog sends the fingerprint it READ',
+      /expectedFingerprint: repair\.fingerprint/.test(dlg),
+      'without it a quote edited in another tab is recorded against a version nobody saw')
+    check('P · …and the amount it named', /expectedAmount: repair\.currentAmount/.test(dlg))
+
+    check('P · the route requires an authenticated owner',
+      /auth\.getUser\(\)/.test(rt) && /status: 401/.test(rt))
+    check('P · the route REQUIRES a note on a material repair',
+      /if \(!note\) \{/.test(rt) && /how you know the customer accepted this version/.test(rt))
+    check('P · the route refuses without a fingerprint and an amount',
+      /!fp \|\| !Number\.isFinite\(amount\)/.test(rt))
+    check('P · the route keeps the terms verdict current before asking',
+      /termsClaimRefresh/.test(rt))
+    check('P · ⛔ the route passes NO tenant to the RPC',
+      /owner_confirm_current_acceptance/.test(rt) && !/p_tenant|p_user_id/.test(rt))
+  }
+
   await db.close()
   console.log(fail > 0 ? `\n✗ ${fail} FAILURE(S) — ${pass} passed` : `\n✓ current-version-acceptance: ${pass} checks passed`)
   process.exit(fail > 0 ? 1 : 0)
