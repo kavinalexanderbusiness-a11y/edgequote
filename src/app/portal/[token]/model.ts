@@ -38,7 +38,10 @@ import { sortedOptions } from '@/lib/quoteOptions'
 // "$5,500 + $575 = $6,075" is one calculation with two audiences, not two.
 import { authorizedValue } from '@/lib/changeOrders'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
-import { isAcceptedOrBeyond } from '@/lib/quoteAcceptance'
+import {
+  isAcceptedOrBeyond, acceptedPresentation, customerFacingQuoteAmount,
+  unevidencedAcceptanceNote,
+} from '@/lib/quoteAcceptance'
 import { formatCurrency, parseLocalDate } from '@/lib/utils'
 // THE request engine (lib/portalRequests) — the same module the owner's request
 // card reads. The kinds, the media contract and the "a request is an ask, not an
@@ -69,7 +72,7 @@ export interface PortalQuoteOption { id: string; name: string; description: stri
 // derived from the ledger by lib/payments/depositGate, never stored anywhere.
 // `preferred_*` is the customer's own scheduling REQUEST — a preference, never
 // an appointment — echoed back so a reload keeps what they told us.
-export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null; options?: PortalQuoteOption[] | null; selected_option_id?: string | null; accepted_price?: number | null; deposit_type?: string | null; deposit_value?: number | null; preferred_date?: string | null; preferred_date_2?: string | null; preferred_timing?: string | null; preferred_note?: string | null }
+export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null; options?: PortalQuoteOption[] | null; selected_option_id?: string | null; accepted_price?: number | null; has_acceptance_evidence?: boolean; deposit_type?: string | null; deposit_value?: number | null; preferred_date?: string | null; preferred_date_2?: string | null; preferred_timing?: string | null; preferred_note?: string | null }
 // `property_id` null is the HONEST answer for an invoice spanning several properties —
 // never infer one, or a combined invoice prints one address as if it were the whole bill.
 export interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; property_id?: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null; amount_paid?: number | null; deposit_amount?: number | null; deposit_requested_at?: string | null }
@@ -868,7 +871,28 @@ export function buildDocItems(opts: {
     const display = displayQuoteStatus({ status: qq.status as QuoteStatus, valid_until: qq.valid_until }, todayISO)
     // The consented figure, and whether the document has moved away from it.
     // Both derived here, once, so the amount and the note can never disagree.
-    const acceptedFigure = isAcceptedOrBeyond(qq.status) ? (Number(qq.accepted_price) || null) : null
+    // ── ⭐⭐ MAY WE CALL THIS AN ACCEPTED PRICE AT ALL? ───────────────────────
+    // A red-team found EPS-2026-0152 live: status=accepted, accepted_price=1400,
+    // current total=500, and ZERO quote_acceptances rows — with this screen
+    // telling the customer "This is the price you accepted" over $1,400.
+    //
+    // ⛔ Status is not evidence and neither is accepted_price. The only thing
+    // that can support that sentence is a quote_acceptances row, and
+    // get_portal_data does not carry one — so `hasAcceptanceEvidence` is
+    // `undefined` here and the rule FAILS CLOSED: no consent claim, and the
+    // customer-facing figure is the quote's CURRENT price.
+    //
+    // ⚠️ That deliberately gives up S121's consent snapshot for the moment,
+    // because S121's protection and this one point opposite ways and only one of
+    // them can be right without evidence in the payload. Showing a stale figure
+    // AS AGREED is the worse failure: it is a false statement about what someone
+    // consented to, where the other is merely a less useful true one. The
+    // payload widening that restores the snapshot for evidenced quotes is
+    // supabase/proposals/RUN-S122C-portal-acceptance-evidence.sql — until it is
+    // applied, `evidenced` is unreachable and every accepted quote reads current.
+    const presentation = acceptedPresentation(qq.status, qq.has_acceptance_evidence)
+    const facing = customerFacingQuoteAmount(presentation, qq.accepted_price, Number(qq.total) || 0)
+    const acceptedFigure = facing.isAcceptedAmount ? facing.amount : null
     const priceMovedSinceAccepted =
       acceptedFigure != null && Math.abs(acceptedFigure - (Number(qq.total) || 0)) > 0.005
     const expired = display === 'expired'
@@ -879,7 +903,14 @@ export function buildDocItems(opts: {
     // quote gates nothing. A quote with no rule carries no gate at all — it
     // renders exactly as it did before this feature existed.
     const gateActive = qq.status === 'accepted' || qq.status === 'scheduled'
-    const gate = gateActive ? schedulingGate(qq, depositRowsByQuote.get(qq.id)) : null
+    // ⛔ The deposit basis follows the SAME rule as the headline figure. Without
+    // evidence, `accepted_price` is not a consent snapshot — it is a number a
+    // past state believed — and a 50% ask derived from it would present $700
+    // against a $500 quote. `depositBasis` prefers accepted_price whenever it is
+    // non-zero, so the only way to keep it out is to hand the gate a quote that
+    // does not carry one.
+    const gateQuote = facing.isAcceptedAmount ? qq : { ...qq, accepted_price: null }
+    const gate = gateActive ? schedulingGate(gateQuote, depositRowsByQuote.get(qq.id)) : null
     const schedulingDeposit = gate && gate.required > 0 ? {
       required: gate.required, collected: gate.collected, outstanding: gate.outstanding,
       percent: gate.percent, satisfied: gate.status === 'satisfied',
@@ -911,14 +942,21 @@ export function buildDocItems(opts: {
       // accepted before this feature existed may carry no snapshot, and for them
       // the current total is genuinely the best the record can offer.
       // Un-accepted quotes are untouched — `total` is the offer.
-      amount: acceptedFigure ?? (Number(qq.total) || 0),
+      amount: facing.amount,
       // ⭐ And when the two DISAGREE, say so rather than quietly showing the old
       // number beside new work. The customer is told a revision is coming; they
       // are never shown a price they have not agreed to as though they had.
       amountNote: [
+        // ⛔ The consent sentence is reachable ONLY from `evidenced`. It is the
+        // one claim on this screen about what the customer personally agreed to,
+        // so it may never be made from a status flag.
         priceMovedSinceAccepted
           ? 'This is the price you accepted — we’ve made changes since and will send you an updated quote to look over.'
           : null,
+        // Status says accepted, the record cannot show it. Named plainly rather
+        // than left silent: the customer can see the badge, and an unexplained
+        // "Accepted" they never remember agreeing to is its own small alarm.
+        presentation === 'unevidenced' ? unevidencedAcceptanceNote() : null,
         gstPct > 0 ? `+ GST (${gstPct}%) — added on your invoice` : null,
       ].filter(Boolean).join(' · ') || undefined,
       balance: 0,

@@ -155,6 +155,7 @@
     "verify:payment-timing-copy": "tsx scripts/verify-payment-timing-copy.ts",
     "verify:acceptance-contradiction": "tsx scripts/verify-acceptance-contradiction.ts",
     "verify:owner-external-acceptance": "tsx scripts/verify-owner-external-acceptance.ts",
+    "verify:acceptance-presentation": "tsx scripts/verify-acceptance-presentation.ts",
     "verify:day-fit": "tsx scripts/verify-day-fit.ts",
     "verify:day-plan": "tsx scripts/verify-day-plan.ts",
     "verify:day-sequence": "tsx scripts/verify-day-sequence.ts",

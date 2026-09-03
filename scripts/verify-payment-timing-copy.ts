@@ -572,9 +572,32 @@ console.log('\n■ 6. ONE classifier, a quote-independent claim, and a version')
   const fpDef = /CREATE OR REPLACE FUNCTION public\.quote_terms_fingerprint[\s\S]*?\$function\$([\s\S]*?)\$function\$/.exec(baseline)?.[1] ?? ''
   check('the DB fingerprint is md5 of the TRIMMED terms',
     /md5\(/.test(fpDef) && /btrim\(coalesce\(b\.terms_text, ''\)\)/.test(fpDef), fpDef.trim().slice(0, 120))
+  // ⭐⭐⭐ btrim IS NOT trim. Postgres `btrim(str)` with no second argument strips
+  // SPACES ONLY; JavaScript's `.trim()` strips all whitespace. This check used to
+  // pad with spaces — the one kind of whitespace where the two agree — and so it
+  // passed while production acceptance was DOWN: the live tenant's terms began
+  // with a newline, the TS fingerprint could never equal
+  // quote_terms_fingerprint(), the trigger nulled the claim on every save, and
+  // the gate failed closed forever.
+  //
+  // Every case below is whitespace that is NOT a space, which is precisely where
+  // the old assertion was blind.
   check('…and the TS fingerprint computes the identical thing',
     termsFingerprint('  Payment due upon completion.  ') === md5('Payment due upon completion.')
     && termsFingerprint(null) === md5(''))
+  for (const [label, raw] of [
+    ['leading newline (the live tenant\'s exact shape)', '\n• Payment terms.'],
+    ['trailing newline', '• Payment terms.\n'],
+    ['leading tab', '\t• Payment terms.'],
+    ['CRLF both ends', '\r\n• Payment terms.\r\n'],
+    ['newline OUTSIDE spaces', '  \n• Payment terms.\n  '],
+  ] as [string, string][]) {
+    // btrim() strips spaces from each end and stops at the first non-space.
+    const pg = raw.replace(/^ +/, '').replace(/ +$/, '')
+    check(`fingerprint matches Postgres btrim, not JS trim — ${label}`,
+      termsFingerprint(raw) === md5(pg) && termsFingerprint(raw) !== md5(raw.trim()),
+      `TS=${termsFingerprint(raw)} btrim=${md5(pg)} jsTrim=${md5(raw.trim())}`)
+  }
   check('md5 agrees with node:crypto (empty, unicode, every block boundary)',
     ['', 'a', 'abc', 'x'.repeat(55), 'x'.repeat(56), 'x'.repeat(57), 'x'.repeat(64),
       'x'.repeat(119), 'x'.repeat(120), 'café ☕ — ünïcode “quotes”', T]

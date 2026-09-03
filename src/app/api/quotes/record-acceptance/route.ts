@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { termsClaimSentence } from '@/lib/payments/termsTimingConflict'
 import { termsClaimRefresh, type StoredTermsClaim } from '@/lib/payments/termsClaimRefresh'
+import { isAcceptedOrBeyond } from '@/lib/quoteAcceptance'
+
+/** Money for an owner-facing sentence. Display only — never an authorized figure. */
+const money = (n: number) => new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(n)
 
 // ── Owner records an acceptance that already happened, off-platform ──────────
 //
@@ -98,6 +102,49 @@ export async function POST(req: Request) {
       error: 'Your Terms & Conditions both require a deposit and say none is required, so we cannot tell what this customer agreed to. Edit your terms in Settings so they say one or the other, then record this acceptance again.',
       sentence,
     }, { status: 409 })
+  }
+
+  // ── 1b · ⭐⭐ THE MATERIAL-REVISION GUARD ──────────────────────────────────
+  // A quote can arrive here already flagged accepted, with NO evidence row, and
+  // an `accepted_price` from some earlier state that no longer matches the
+  // document. EPS-2026-0152 is exactly that shape live: status accepted,
+  // accepted_price 1400, current total 500, zero acceptances.
+  //
+  // ⛔ The owner clicking "they replied by text" must NOT mint evidence there.
+  // Their attestation is about a conversation, not about which VERSION of the
+  // document the customer had in front of them — and the record cannot tell us,
+  // because there is no record. Writing an acceptance would manufacture consent
+  // to the CURRENT $500 document out of a click and a stale number.
+  //
+  // ⛔ We do not reconstruct consent from accepted_price, and we do not invent a
+  // timestamp or a version. We stop and ask a human.
+  const { data: qrow, error: qErr } = await supabase.from('quotes')
+    .select('status, total, accepted_price')
+    .eq('id', quoteId).eq('user_id', user.id).maybeSingle()
+  if (qErr) {
+    return NextResponse.json({ ok: false, error: 'Could not read that quote — try again.' }, { status: 502 })
+  }
+  if (qrow) {
+    const qq = qrow as { status: string; total: number | null; accepted_price: number | null }
+    const { count, error: cErr } = await supabase.from('quote_acceptances')
+      .select('id', { count: 'exact', head: true }).eq('quote_id', quoteId)
+    // A failed COUNT is not "no evidence" — that answer is what lets this guard
+    // be skipped exactly when it matters. Refuse instead of guessing.
+    if (cErr) {
+      return NextResponse.json({ ok: false, error: 'Could not check this quote’s acceptance history — try again.' }, { status: 502 })
+    }
+    const priorAmount = Number(qq.accepted_price)
+    const currentAmount = Number(qq.total)
+    const drifted = Number.isFinite(priorAmount) && priorAmount > 0
+      && Number.isFinite(currentAmount) && Math.abs(priorAmount - currentAmount) > 0.005
+    if (isAcceptedOrBeyond(qq.status) && (count ?? 0) === 0 && drifted) {
+      return NextResponse.json({
+        ok: false, claim, reclassified, repairRequired: true,
+        error: 'This quote changed after acceptance was marked. We don’t have durable evidence of which version the customer accepted, '
+          + `so we can’t record their acceptance of the current ${money(currentAmount)} document from a prior ${money(priorAmount)} figure. `
+          + 'Send the current quote again and record the acceptance they give you for it.',
+      }, { status: 409 })
+    }
   }
 
   // ── 2 · The normal, unchanged gate ────────────────────────────────────────

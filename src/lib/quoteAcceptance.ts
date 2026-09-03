@@ -221,6 +221,78 @@ export function isAcceptedOrBeyond(status: QuoteStatus | string): boolean {
   return status === 'accepted' || status === 'scheduled' || status === 'completed' || status === 'paid'
 }
 
+// ── ⭐⭐ WHAT A CUSTOMER MAY BE TOLD ABOUT THEIR OWN ACCEPTANCE ───────────────
+//
+// A live red-team found EPS-2026-0152 in this state:
+//   status = accepted · accepted_price = 1400 · current total = 500
+//   quote_acceptances = 0
+// and the portal told the customer "This is the price you accepted", showing
+// $1,400. Nothing in the record supported that sentence. The payment route
+// refused the charge, but the CLAIM had already been made — and a false claim
+// about what someone agreed to is the failure, not the charge that follows it.
+//
+// ⭐⭐⭐ STATUS IS NOT EVIDENCE, AND NEITHER IS accepted_price. `accepted_price`
+// is written inside the acceptance window, but an administrative status flip
+// leaves it standing with no evidence row behind it — so it records what SOME
+// past state believed, not what any customer agreed to. The only thing that can
+// support the sentence is a `quote_acceptances` row.
+//
+// ⛔ FAILS CLOSED ON UNKNOWN. `hasEvidence: undefined` means the caller could not
+// establish it — the portal payload does not carry acceptance rows — and an
+// unprovable claim must not be made. Silence costs the customer nothing; a false
+// "you accepted this" costs them the ability to trust the number.
+
+export type AcceptedPresentation =
+  /** Not accepted at all — the quote is an offer, show the live price. */
+  | 'offer'
+  /** Evidence supports it: the consent snapshot may be shown AS accepted. */
+  | 'evidenced'
+  /** Status says accepted, evidence does not exist or cannot be proven. */
+  | 'unevidenced'
+
+/**
+ * How a customer-facing surface may present an accepted quote.
+ *
+ * `hasEvidence` is deliberately a THREE-state input (true / false / undefined):
+ * "no evidence" and "we could not look" are different facts, and both must
+ * refuse the claim, but only the first is a defect worth naming to the owner.
+ */
+export function acceptedPresentation(
+  status: QuoteStatus | string, hasEvidence: boolean | undefined,
+): AcceptedPresentation {
+  if (!isAcceptedOrBeyond(status)) return 'offer'
+  return hasEvidence === true ? 'evidenced' : 'unevidenced'
+}
+
+/**
+ * THE customer-facing figure for a quote, and whether it may be called accepted.
+ *
+ * ⛔ `acceptedPrice` is consulted ONLY in the `evidenced` branch. In every other
+ * state the answer is the CURRENT total — which is honest in both directions: an
+ * offer is worth what it says today, and an unevidenced "accepted" row is worth
+ * what the document currently says, because nobody can show what was agreed.
+ */
+export function customerFacingQuoteAmount(
+  presentation: AcceptedPresentation,
+  acceptedPrice: number | null | undefined,
+  currentTotal: number,
+): { amount: number; isAcceptedAmount: boolean } {
+  if (presentation === 'evidenced') {
+    const a = Number(acceptedPrice)
+    if (Number.isFinite(a) && a > 0) return { amount: a, isAcceptedAmount: true }
+  }
+  return { amount: Number(currentTotal) || 0, isAcceptedAmount: false }
+}
+
+/**
+ * The honest sentence for a quote whose status says accepted but whose record
+ * cannot show it. Names the state without accusing the owner of anything — an
+ * owner repairing a stuck row is a real and legitimate need.
+ */
+export function unevidencedAcceptanceNote(): string {
+  return 'Marked accepted by the business — we don’t have a record of your acceptance on file. The price above is this quote’s current price.'
+}
+
 // ── What changed ─────────────────────────────────────────────────────────────
 //
 // ⭐⭐ THE MATERIALITY LIST, stated once. The database answers "did it change?"
