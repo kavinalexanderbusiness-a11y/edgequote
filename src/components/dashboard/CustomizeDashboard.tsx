@@ -116,11 +116,16 @@ export function CustomizeDashboard({ initial }: { initial: DashboardLayout }) {
             const hidden = draft.hidden.includes(id)
             return (
               <li key={id} className={cn('flex items-center gap-3 px-3 py-2.5 bg-surface', hidden && 'opacity-55')}>
+                {/* tap-target: with no label the switch's button IS its 40×24
+                    track — measured 40×24 at 375/390/430 in the S97 a11y
+                    fixture. The class grows the hit area to 44×44 only under
+                    (pointer: coarse); the track and its on/off stay as they are. */}
                 <Toggle
                   checked={!hidden}
                   disabled={meta.required}
                   onChange={() => setDraft(l => toggleCardHidden(l, id))}
                   ariaLabel={`${hidden ? 'Show' : 'Hide'} ${meta.title}`}
+                  className="tap-target"
                 />
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm font-semibold tracking-tight text-ink">
