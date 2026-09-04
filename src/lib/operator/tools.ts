@@ -11,7 +11,7 @@ import { normalizeSource } from '@/lib/attribution'
 import { pageAll } from '@/lib/supabase/pageAll'
 import { loadTenantToday } from '@/lib/tenantTimeServer'
 import type { OperatorActionCard, OperatorToolName, OperatorToolResult } from './types'
-import { isUuid, stripInvisibles } from './types'
+import { isUuid, safeErrorHint, stripInvisibles } from './types'
 
 // ── Read-only operator tools ─────────────────────────────────────────────────
 // Every tool COMPOSES the canonical domain engine that already answers its
@@ -53,8 +53,14 @@ function card(c: OperatorActionCard): OperatorActionCard {
     data_quality_warnings: c.data_quality_warnings.map(stripInvisibles),
   }
 }
+// EVERY tool reports a read failure through here, so this is the one place that
+// has to know a database message is not owner-facing copy. The raw text goes to
+// the server log (where an engineer needs it whole); the owner gets a bounded,
+// identifier-redacted hint — enough to tell "table missing" from "permission
+// denied" without reading a record id out of a Postgres constraint detail.
 function fail(tool: OperatorToolName, summary: string, warning: string): OperatorToolResult {
-  return { tool, generated_at: nowIso(), summary, cards: [], warnings: [warning] }
+  console.error(`[operator] ${tool} read failed:`, warning)
+  return { tool, generated_at: nowIso(), summary, cards: [], warnings: [`${summary} (${safeErrorHint(warning)})`] }
 }
 function href(type: string, id: string): string | undefined {
   if (type === 'customer') return `/dashboard/customers/${id}`
@@ -419,7 +425,15 @@ export async function getAutomationHealth(sb: SB, userId: string): Promise<Opera
   ])
   const latest = (sweep.data ?? [])[0] as any | undefined
   const bad = sweep.error || !latest || latest.ok === false
-  const warning = sweep.error ? 'Automation sweep health could not be read.' : !latest ? 'The automation sweep has never run.' : latest.ok === false ? `The latest automation sweep failed${latest.error ? `: ${latest.error}` : '.'}` : null
+  // ⛔ `latest.error` is written by the PLATFORM-WIDE sweep job — a global table
+  // with no tenant column — so it is not this owner's text and may carry job
+  // ids, a URL, or a Postgres constraint detail. It is redacted and bounded
+  // before display; the untouched string stays in the server log.
+  if (latest?.ok === false && latest.error) console.error('[operator] latest automation sweep failed:', latest.error)
+  const warning = sweep.error ? 'Automation sweep health could not be read.'
+    : !latest ? 'The automation sweep has never run.'
+    : latest.ok === false ? `The latest automation sweep failed${latest.error ? `: ${safeErrorHint(latest.error)}` : '.'}`
+    : null
   const cards = bad ? [card({
     id: 'automation-health', priority: 'high', category: 'automation', title: 'Automation health needs attention',
     summary: warning ?? 'Automation health is unknown.', why_it_matters: 'A silent sweep means expected recommendations may never be evaluated.',

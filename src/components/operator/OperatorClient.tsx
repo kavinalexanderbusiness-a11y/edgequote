@@ -157,6 +157,23 @@ export function OperatorClient({ initial }: { initial: OperatorDashboardSnapshot
         </section>
       </div>
 
+      {/* Setup state, said plainly. Operator is a core module, so it appears for
+          every owner as soon as it ships — including before its storage exists.
+          That state is safe (every answer is still computed from real records)
+          but it is NOT the full feature, and an owner should not have to guess
+          why no run history ever appears. Keyed on historyAvailable because the
+          run-history read and the model pre-check fail from the SAME missing
+          table, so both halves of this sentence are true whenever it shows. */}
+      {!initial.historyAvailable && (
+        <div className="flex items-start gap-3 rounded-2xl border border-border bg-surface-raised p-4">
+          <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0 text-ink-muted" aria-hidden />
+          <div>
+            <p className="text-sm font-semibold text-ink">Setup isn’t finished — you’re seeing the direct-from-records version</p>
+            <p className="mt-1 text-xs leading-5 text-ink-muted">Answers and the cards below are computed straight from your own records and are accurate now. Written summaries and a saved history of what you asked stay switched off until setup is complete.</p>
+          </div>
+        </div>
+      )}
+
       {initial.automationWarning && <div className="flex items-start gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4"><TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" aria-hidden /><div><p className="text-sm font-semibold text-ink">Automation health</p><p className="mt-1 text-xs leading-5 text-ink-muted">{initial.automationWarning}</p></div></div>}
 
       <section>
@@ -181,7 +198,7 @@ export function OperatorClient({ initial }: { initial: OperatorDashboardSnapshot
         </section>
         <section className="rounded-2xl border border-border bg-surface p-5">
           <div className="flex items-center gap-2"><Bot className="h-4 w-4 text-ink-muted" aria-hidden /><h2 className="text-sm font-bold text-ink">Recent operator runs</h2></div>
-          {!initial.historyAvailable ? <p className="mt-2 text-sm text-ink-muted">Run history will appear after the Operator foundation migration is applied.</p> : initial.recentRuns.length === 0 ? <p className="mt-2 text-sm text-ink-muted">No operator runs recorded yet.</p> : <div className="mt-3 space-y-2">{initial.recentRuns.map(r => <div key={r.id} className="flex items-center justify-between gap-3 rounded-xl bg-surface-raised px-3 py-2"><span className="truncate text-xs text-ink-muted">{r.question || 'Operator run'}</span><span className="text-[10px] uppercase text-ink-faint">{r.status}</span></div>)}</div>}
+          {!initial.historyAvailable ? <p className="mt-2 text-sm text-ink-muted">Your questions aren’t being saved yet — this list starts filling in once setup is complete.</p> : initial.recentRuns.length === 0 ? <p className="mt-2 text-sm text-ink-muted">No operator runs recorded yet.</p> : <div className="mt-3 space-y-2">{initial.recentRuns.map(r => <div key={r.id} className="flex items-center justify-between gap-3 rounded-xl bg-surface-raised px-3 py-2"><span className="truncate text-xs text-ink-muted">{r.question || 'Operator run'}</span><span className="text-[10px] uppercase text-ink-faint">{r.status}</span></div>)}</div>}
         </section>
       </div>
 

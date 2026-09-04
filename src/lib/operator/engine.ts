@@ -143,11 +143,16 @@ export async function answerOperatorQuestion(sb: SB, userId: string, question: s
   if (refs.quote_id) input.quote_id = refs.quote_id
   if (refs.invoice_id) input.invoice_id = refs.invoice_id
   const result = await runReadOnlyOperatorTool(sb, userId, tool, input)
-  // NO AUDIT ⇒ NO SPEND. The caller sets allowModel:false when the run history
-  // is unreadable (the Phase-1 table not applied yet), because a run that
-  // cannot be recorded also cannot be counted — and an uncountable run is an
-  // unbounded, unattributable model bill. The evidence answer still works: it
-  // falls back to the deterministic summary, which is free and just as true.
+  // PRE-CHECK FAILS ⇒ NO SPEND. The caller sets allowModel:false when the run
+  // history cannot be READ (the Phase-1 table not applied yet), because a run
+  // that cannot be counted is an unbounded, unattributable model bill. The
+  // evidence answer still works: it falls back to the deterministic summary,
+  // which is free and just as true.
+  //
+  // ⛔ Note the exact scope: this is a pre-check on the READ. It does not
+  // promise "no audit row ⇒ no spend" — the audit WRITE happens after the
+  // answer exists and is best-effort, so a run can spend and then fail to
+  // record. The route logs that case; it cannot be prevented from here.
   const model = opts.allowModel === false ? null : await summarizeWithConfiguredProvider(question, result)
   return {
     response: {

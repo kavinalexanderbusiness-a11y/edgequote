@@ -108,6 +108,37 @@ export function stripInvisibles(s: string): string {
   return s.replace(FORMAT_CONTROLS, '')
 }
 
+// ── Owner-facing error text ─────────────────────────────────────────────────
+// Two kinds of string end up in front of an owner as "why this didn't work":
+// a Postgres/PostgREST message, and `automation_sweeps.error` — which is the
+// PLATFORM-WIDE sweep table, so its text is written by a job that knows nothing
+// about this tenant. Neither is authored for an owner's eyes and both can carry
+// record identifiers: Postgres puts the offending values straight into the
+// message ("Key (user_id)=(<uuid>) already exists"), and a platform error can
+// embed a job's ids or a URL.
+//
+// The goal is NOT silence — "something failed" with no detail is a support
+// ticket. It is a SHORT, BOUNDED hint with identifier-shaped runs replaced, so
+// the owner still learns the shape of the problem ("relation does not exist",
+// "permission denied") without reading anyone's record ids.
+const ID_PATTERNS: Array<[RegExp, string]> = [
+  [/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '[id]'],
+  [/[\w.+-]+@[\w-]+\.[\w.-]+/g, '[email]'],
+  [/\bhttps?:\/\/\S+/gi, '[url]'],
+  // Postgres constraint detail: Key (col)=(value) — the value half is the leak.
+  [/=\([^)]*\)/g, '=([value])'],
+  [/\b\d{6,}\b/g, '[number]'],
+]
+const ERROR_HINT_MAX = 140
+
+export function safeErrorHint(raw: unknown): string {
+  const text = typeof raw === 'string' ? raw : raw instanceof Error ? raw.message : ''
+  let out = stripInvisibles(text).replace(/\s+/g, ' ').trim()
+  if (!out) return 'no further detail is available'
+  for (const [re, to] of ID_PATTERNS) out = out.replace(re, to)
+  return out.length > ERROR_HINT_MAX ? `${out.slice(0, ERROR_HINT_MAX - 1).trimEnd()}…` : out
+}
+
 export function isUuid(value: unknown): value is string {
   return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 }

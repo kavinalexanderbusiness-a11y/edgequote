@@ -18,13 +18,19 @@ import { join } from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
 import { answerOperatorQuestion, chooseTool, claimsExecutedAction, encodeUntrustedEvidence, operatorToolSurface } from '../src/lib/operator/engine'
 import { listQuoteFollowupsDue, listAcceptedUnscheduledWork } from '../src/lib/operator/tools'
-import { isUuid, stripInvisibles, validateContextRefs } from '../src/lib/operator/types'
+import { recordRun } from '../src/lib/operator/runLog'
+import { isUuid, safeErrorHint, stripInvisibles, validateContextRefs } from '../src/lib/operator/types'
 import { displayInvoiceStatus } from '../src/lib/payments/ledger'
 
 let failures = 0
 let checks = 0
 const check = (name: string, cond: boolean, detail = '') => { checks++; if (cond) console.log(`  ✓ ${name}`); else { failures++; console.log(`  ✗ ${name}${detail ? `\n      ${detail}` : ''}`) } }
 const src = (p: string) => readFileSync(join(process.cwd(), p), 'utf8')
+// Source with comments removed. This file's own comments quote the patterns it
+// forbids (that is how a reader learns WHY they are forbidden), so a naive grep
+// over raw text reports the explanation as the offence. Assertions about what
+// the code DOES must read code, not prose.
+const codeOnly = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
 const tools = src('src/lib/operator/tools.ts')
 const engine = src('src/lib/operator/engine.ts')
 const route = src('src/app/api/operator/route.ts')
@@ -58,8 +64,17 @@ check('operator libraries contain no write verb at all',
   (tools + engine).match(/\.(insert|update|upsert|delete|rpc)\s*\([^)]*/)?.[0] ?? '')
 check('operator never reaches for the RLS-bypassing admin client',
   !/createAdminClient|SERVICE_ROLE|service_role/.test(tools + engine + route))
-check('the only operator write is the run-history telemetry upsert',
-  (route.match(/\.(insert|update|upsert|delete|rpc)\s*\(/g) ?? []).length === 1 && /from\('operator_runs'\)\.upsert/.test(route))
+// ONE sanctioned writer for the whole Operator surface, and it writes telemetry
+// only. The route itself now issues no write at all — it delegates to
+// lib/operator/runLog, which is the single place any operator INSERT lives.
+const runLog = src('src/lib/operator/runLog.ts')
+check('the route issues no database write of its own',
+  (codeOnly(route).match(/\.(insert|update|upsert|delete|rpc)\s*\(/g) ?? []).length === 0)
+check('exactly one operator write exists, in the run-history recorder',
+  (codeOnly(runLog).match(/\.(insert|update|upsert|delete|rpc)\s*\(/g) ?? []).length === 1
+  && /from\('operator_runs'\)\s*\.upsert/.test(codeOnly(runLog)))
+check('…and it touches operator_runs and nothing else',
+  (codeOnly(runLog).match(/\.from\('([^']+)'\)/g) ?? []).every(m => m === ".from('operator_runs')"))
 check('the brief page is force-dynamic (evidence is never served from cache)',
   /export const dynamic = 'force-dynamic'/.test(src('src/app/dashboard/operator/page.tsx')))
 
@@ -240,7 +255,46 @@ for (const c of built) {
     c.financial_value === null || Number.isFinite(c.financial_value))
 }
 check('card ids are unique across tools', new Set(built.map(c => c.id)).size === built.length)
-// NO AUDIT ⇒ NO SPEND, exercised: with allowModel:false the engine must return
+// ── F2, driven not asserted-about ──────────────────────────────────────────
+// recordRun lives in a lib precisely so this can call it with a stub client and
+// watch what it actually does with each failure shape.
+{
+  const PAID = { provider: 'anthropic', model: 'm', tokens_in: 10, tokens_out: 5 }
+  const FREE = { provider: 'deterministic', model: null, tokens_in: null, tokens_out: null }
+  const sbWith = (impl: () => any) => ({ from: () => ({ upsert: impl }) }) as any
+  const logs: string[] = []
+  const log = (m: string, d: string) => { logs.push(`${m} ${d}`) }
+
+  const okWrite = await recordRun(sbWith(async () => ({ error: null })), { a: 1 }, PAID, log)
+  check('a successful write returns true and logs nothing', okWrite === true && logs.length === 0)
+
+  logs.length = 0
+  // THE regression: supabase-js RESOLVES with { error }. This used to be dropped.
+  const resolvedErr = await recordRun(sbWith(async () => ({ error: { message: 'relation "operator_runs" does not exist' } })), { a: 1 }, PAID, log)
+  check('a RESOLVED { error } is caught, not dropped (the actual bug)', resolvedErr === false && logs.length === 1)
+  check('…and is logged as a structured, greppable event', /operator_run_unrecorded/.test(logs[0] ?? ''))
+  check('…naming that PAID spend went unrecorded', /"spend_unrecorded":true/.test(logs[0] ?? ''))
+  check('…and keeps the failure shape for diagnosis', /does not exist/.test(logs[0] ?? ''))
+
+  logs.length = 0
+  const threw = await recordRun(sbWith(async () => { throw new Error('socket hang up') }), { a: 1 }, PAID, log)
+  check('a THROWN write failure is caught too (a 200 answer must not become a 500)', threw === false && logs.length === 1)
+  check('…and never propagates out of recordRun', /socket hang up/.test(logs[0] ?? ''))
+
+  logs.length = 0
+  await recordRun(sbWith(async () => ({ error: { message: 'nope' } })), { a: 1 }, FREE, log)
+  check('a deterministic run reports spend_unrecorded false (nothing was spent)', /"spend_unrecorded":false/.test(logs[0] ?? ''))
+
+  logs.length = 0
+  await recordRun(
+    sbWith(async () => ({ error: { message: 'Key (user_id)=(11111111-1111-4111-8111-111111111111) already exists' } })),
+    { question: 'What does Dana owe?', answer: 'Dana owes $412.00', user_id: '11111111-1111-4111-8111-111111111111' },
+    PAID, log)
+  check('the audit log carries NO business content (no question, answer or tenant id)',
+    !/Dana/.test(logs[0] ?? '') && !/412/.test(logs[0] ?? '') && !/11111111-1111/.test(logs[0] ?? ''), logs[0])
+}
+
+// PRE-CHECK FAILS ⇒ NO SPEND, exercised: with allowModel:false the engine must return
 // a usable answer that cost nothing and is recorded as deterministic.
 const noSpend = await answerOperatorQuestion(stubSB({}), 'u1', 'What should I do first today?', {}, { allowModel: false })
 check('allowModel:false records provider=deterministic and zero token spend (behavioral)',
@@ -261,12 +315,58 @@ check('run audit records provider/model/token spend, never secrets', /provider: 
 check('audit is recorded server-side only — browser gets the response half', /NextResponse\.json\(response\)/.test(route) && !/NextResponse\.json\(\{[^}]*audit/.test(route))
 check('proposal has the audit columns', /provider text not null default 'deterministic'/.test(migration) && /tokens_out integer/.test(migration))
 check('exactly one application tool runs per question (no model-driven tool loop)', /tools_used: \[tool\]/.test(engine) && !/while\s*\(/.test(engine))
-// NO AUDIT ⇒ NO SPEND. The module is core:true, so the route is live for every
+// PRE-CHECK FAILS ⇒ NO SPEND (the READ, not the write). The module is core:true, so the route is live for every
 // tenant as soon as the code deploys — possibly a full landing cycle before the
 // run-history table exists. Without this, that window is unmetered, unlogged,
 // paid model calls. Proven both ways: the route decides, the engine obeys.
 check('the route denies model spend when the run history is unreadable', /const auditable = !countError/.test(route) && /allowModel: auditable/.test(route))
 check('the engine honours allowModel:false with the free deterministic answer', /opts\.allowModel === false \? null :/.test(engine))
+
+console.log('\n═══ Audit persistence is honest about what it guarantees (F2) ═══')
+// The bug this closes: supabase-js RESOLVES with { error } on failure, so a
+// handler placed on the REJECTION branch never sees the common failures. The
+// old `.then(() => undefined, () => undefined)` dropped them silently.
+check('the audit write is not fire-and-forget on the rejection branch',
+  !/\.then\(\(\) => undefined, \(\) => undefined\)/.test(codeOnly(route)))
+check('the route delegates the write to the shared, testable recorder', /recordRun\(supabase,/.test(codeOnly(route)))
+// The claim itself, in prose: the guarantee is about the PRE-CHECK, never the write.
+// Needle assembled at runtime: spelled out literally, this assertion would find
+// ITSELF in this file and fail for the wrong reason.
+const OVERSTATED = ['NO', 'AUDIT', '⇒', 'NO', 'SPEND'].join(' ')
+check('no product comment still claims the overstated audit guarantee',
+  !route.includes(OVERSTATED) && !engine.includes(OVERSTATED))
+check('the route states the true invariant (pre-check failed ⇒ no spend)', /pre-check failed ⇒ no spend/i.test(route))
+check('the engine scopes its own claim to the READ', /pre-check on the READ/i.test(engine))
+
+console.log('\n═══ Owner-facing error text is bounded and de-identified (F3) ═══')
+{
+  const pg = 'duplicate key value violates unique constraint "operator_runs_user_id_idempotency_key_key" Key (user_id)=(11111111-1111-4111-8111-111111111111) already exists.'
+  const hint = safeErrorHint(pg)
+  check('a Postgres constraint detail keeps its SHAPE', /duplicate key value/.test(hint))
+  check('…but leaks no uuid', !/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(hint))
+  check('…and no Key(...)=(value) payload', !/=\(1{8}/.test(hint) && /=\(\[value\]\)/.test(hint))
+  check('an email is redacted', !/bob@example\.com/.test(safeErrorHint('sending to bob@example.com failed')))
+  check('a url is redacted', !/https:\/\//.test(safeErrorHint('POST https://internal.host/v1/x failed')))
+  check('a long id-like number is redacted', !/\b9876543210\b/.test(safeErrorHint('job 9876543210 died')))
+  check('output is length-bounded', safeErrorHint('x'.repeat(4000)).length <= 140)
+  check('empty input still yields useful generic feedback', safeErrorHint('').length > 0 && safeErrorHint(null).length > 0)
+  check('an Error instance is accepted', /boom/.test(safeErrorHint(new Error('boom'))))
+  check('ordinary useful text survives intact', safeErrorHint('permission denied for table operator_runs') === 'permission denied for table operator_runs')
+  check('the platform-wide sweep error is redacted before display', /safeErrorHint\(latest\.error\)/.test(tools))
+  check('…and the raw sweep error still reaches the server log', /console\.error\('\[operator\] latest automation sweep failed:'/.test(tools))
+  check('every tool read failure is redacted through the one helper', /safeErrorHint\(warning\)/.test(tools))
+  check('…and the raw read error still reaches the server log', /console\.error\(`\[operator\] \$\{tool\} read failed:`/.test(tools))
+}
+
+console.log('\n═══ Honest unavailable state while storage is absent (F4) ═══')
+{
+  const ui = src('src/components/operator/OperatorClient.tsx')
+  check('the degraded state is surfaced, not silent', /Setup isn’t finished/.test(ui))
+  check('…keyed on the same flag whose read fails with the table', /!initial\.historyAvailable && \(/.test(ui))
+  check('…and it still tells the owner the answers are real', /computed straight from your own records/.test(ui))
+  check('no engineering vocabulary is shown to an owner', !/migration|schema|DDL|RLS/i.test(ui))
+  check('no setup instruction or credential is exposed in the UI', !/SUPABASE|ANTHROPIC|API key|RUN-S124/i.test(ui))
+}
 
 console.log('\n═══ Approval foundation is fail-closed ═══')
 const tables = ['operator_runs', 'operator_conversations', 'operator_tool_calls', 'operator_proposed_actions', 'operator_approvals', 'operator_execution_results', 'operator_failures']

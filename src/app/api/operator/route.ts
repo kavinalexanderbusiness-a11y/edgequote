@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { answerOperatorQuestion } from '@/lib/operator/engine'
 import { validateContextRefs } from '@/lib/operator/types'
+import { recordRun } from '@/lib/operator/runLog'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,8 +37,9 @@ export async function POST(req: NextRequest) {
     // model call, so the trailing hour is counted from the run history itself
     // (the beta-signup / portal-access shape: count rows, 429 past the line).
     // Best-effort while the Phase-1 migration is unapplied — a missing table
-    // must not take the read-only answer down, but once the table exists the
-    // limit is real because EVERY run is recorded (see below).
+    // must not take the read-only answer down. Once the table exists the limit
+    // is real for every run the write actually lands; a write that fails after
+    // the fact is logged rather than counted (see recordRun).
     const hourAgo = new Date(Date.now() - 3_600_000).toISOString()
     const { count, error: countError } = await supabase.from('operator_runs')
       .select('id', { count: 'exact', head: true })
@@ -62,9 +64,25 @@ export async function POST(req: NextRequest) {
     // a client-supplied id still deduplicates that client's double-submits.
     // The audit half (provider/model/token spend) is recorded here and NEVER
     // included in the browser response.
-    // Best-effort: missing-table errors must never make the answer unavailable.
+    //
+    // ⭐⭐ BEST-EFFORT PERSISTENCE, AND SAY SO. The control that bounds spend is
+    // the PRE-CHECK above: if the run history cannot be read, no model is
+    // called. This write is the separate, after-the-fact half — the answer has
+    // already been produced (and, when allowed, already paid for), so a failure
+    // here must never take the answer away from the owner.
+    //
+    // ⛔ It therefore does NOT establish "no audit row ⇒ no spend". The true
+    // invariant is "pre-check failed ⇒ no spend". A run CAN succeed, spend, and
+    // then fail to record — which is exactly why that outcome is now logged
+    // instead of discarded.
+    //
+    // ⛔⛔ supabase-js RESOLVES on failure ({ data: null, error }); it does not
+    // reject. The previous `.then(() => undefined, () => undefined)` put the
+    // handler on the REJECTION branch, so the common failures — table absent,
+    // RLS refusal, constraint violation — landed on the FULFILLED branch and
+    // were dropped without a trace. Both branches are handled below.
     const idempotencyKey = body.requestId ?? `server:${crypto.randomUUID()}`
-    await supabase.from('operator_runs').upsert({
+    await recordRun(supabase, {
       user_id: user.id,
       initiated_by: user.id,
       idempotency_key: idempotencyKey,
@@ -77,7 +95,7 @@ export async function POST(req: NextRequest) {
       model: audit.model,
       tokens_in: audit.tokens_in,
       tokens_out: audit.tokens_out,
-    }, { onConflict: 'user_id,idempotency_key', ignoreDuplicates: true }).then(() => undefined, () => undefined)
+    }, audit)
     return NextResponse.json(response)
   } catch (error) {
     // The message goes to the server log only: provider failures name API keys,
