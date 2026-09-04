@@ -58,9 +58,12 @@ function ActionCard({ card }: { card: OperatorActionCard }) {
             <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-faint">Recommended next step</p>
             <p className="mt-1 text-xs leading-5 text-ink-muted">{card.recommended_action}</p>
           </div>
-          {card.data_quality_warnings.length > 0 && (
-            <p className="mt-2 text-xs leading-5 text-amber-400">{card.data_quality_warnings[0]}</p>
-          )}
+          {/* EVERY warning, not just the first. These are the notes that say
+              what the card cannot prove; silently dropping the second one is
+              how a caveat disappears exactly when a card has several. */}
+          {card.data_quality_warnings.map((w, i) => (
+            <p key={i} className="mt-2 text-xs leading-5 text-amber-400">{w}</p>
+          ))}
           <div className="mt-3 flex flex-wrap gap-2">
             {card.record_references.filter(r => r.href).slice(0, 3).map(r => (
               <Link key={`${r.type}:${r.id}`} href={r.href!} className="rounded text-xs font-semibold text-accent-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Open {r.type.replace('_', ' ')}</Link>
@@ -169,7 +172,25 @@ export function OperatorClient({ initial }: { initial: OperatorDashboardSnapshot
           <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0 text-ink-muted" aria-hidden />
           <div>
             <p className="text-sm font-semibold text-ink">Setup isn’t finished — you’re seeing the direct-from-records version</p>
-            <p className="mt-1 text-xs leading-5 text-ink-muted">Answers and the cards below are computed straight from your own records and are accurate now. Written summaries and a saved history of what you asked stay switched off until setup is complete.</p>
+            {/* ⛔ NO BLANKET ACCURACY CLAIM. This banner is keyed only on setup
+                state; it knows nothing about whether each tool's read
+                succeeded. A failed tool returns no cards plus a warning, so
+                "these are accurate" could sit above a silently short list.
+                It now says only what is true: what could be read. */}
+            <p className="mt-1 text-xs leading-5 text-ink-muted">Answers and the cards below are computed straight from the records we could read. Written summaries and a saved history of what you asked stay switched off until setup is complete.</p>
+          </div>
+        </div>
+      )}
+
+      {/* Independent of setup state: a tool can fail on a fully set-up account
+          too, and a failed read returns no cards — so the list gets shorter
+          with nothing to say why. Never let a short list pass for a quiet day. */}
+      {initial.readIncomplete && (
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4">
+          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" aria-hidden />
+          <div>
+            <p className="text-sm font-semibold text-ink">Some records couldn’t be read this time</p>
+            <p className="mt-1 text-xs leading-5 text-ink-muted">This list is incomplete — treat a short list as “not checked”, not “nothing to do”. The notes on the cards say what was missed.</p>
           </div>
         </div>
       )}

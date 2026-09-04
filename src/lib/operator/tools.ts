@@ -11,7 +11,7 @@ import { normalizeSource } from '@/lib/attribution'
 import { pageAll } from '@/lib/supabase/pageAll'
 import { loadTenantToday } from '@/lib/tenantTimeServer'
 import type { OperatorActionCard, OperatorToolName, OperatorToolResult } from './types'
-import { isUuid, safeErrorHint, stripInvisibles } from './types'
+import { isUuid, safeErrorHint, stripInvisibles, sweepFailureCategory } from './types'
 
 // ── Read-only operator tools ─────────────────────────────────────────────────
 // Every tool COMPOSES the canonical domain engine that already answers its
@@ -425,14 +425,17 @@ export async function getAutomationHealth(sb: SB, userId: string): Promise<Opera
   ])
   const latest = (sweep.data ?? [])[0] as any | undefined
   const bad = sweep.error || !latest || latest.ok === false
-  // ⛔ `latest.error` is written by the PLATFORM-WIDE sweep job — a global table
-  // with no tenant column — so it is not this owner's text and may carry job
-  // ids, a URL, or a Postgres constraint detail. It is redacted and bounded
-  // before display; the untouched string stays in the server log.
+  // ⛔⛔ `latest.error` is written by the PLATFORM-WIDE sweep job. That table has
+  // no tenant column, so the text can be ANOTHER tenant's business content — a
+  // customer name, a business name, free-text notes — none of which is
+  // identifier-shaped, and none of which redaction would remove. Nothing from
+  // that string is displayed: it is classified into one of five categories the
+  // product authors (see sweepFailureCategory), and the untouched original goes
+  // to the server log where an engineer needs it whole.
   if (latest?.ok === false && latest.error) console.error('[operator] latest automation sweep failed:', latest.error)
   const warning = sweep.error ? 'Automation sweep health could not be read.'
     : !latest ? 'The automation sweep has never run.'
-    : latest.ok === false ? `The latest automation sweep failed${latest.error ? `: ${safeErrorHint(latest.error)}` : '.'}`
+    : latest.ok === false ? `The latest platform-wide automation sweep failed (${sweepFailureCategory(latest.error)}). The details are in the server log.`
     : null
   const cards = bad ? [card({
     id: 'automation-health', priority: 'high', category: 'automation', title: 'Automation health needs attention',
@@ -441,7 +444,16 @@ export async function getAutomationHealth(sb: SB, userId: string): Promise<Opera
     financial_value: null, recommended_action: 'Review Automation health and run-history before relying on automated recommendations.',
     requires_approval: false, customer_contact_required: false, record_references: [{ type: 'automation', id: 'health', href: '/dashboard/automation' }], data_quality_warnings: warning ? [warning] : [],
   })] : []
-  return { tool, generated_at: nowIso(), summary: warning ?? 'The latest automation sweep reports healthy.', cards, records: [{ latest_sweep: latest ?? null, recent_rule_runs: runs.data ?? [] }], warnings: warning ? [warning] : [] }
+  // ⛔ The RECORD is a leak too, and a quieter one than the summary: `records`
+  // reaches the model inside the evidence payload and is part of this tool's
+  // output. Shipping the raw sweep row would hand over the very cross-tenant
+  // string the summary was just written to withhold, so the error column is
+  // replaced by its category here as well. Everything else on the row (job,
+  // dates, ok) is operational fact with no tenant content.
+  const safeSweep = latest
+    ? { job: latest.job, ran_on: latest.ran_on, ran_at: latest.ran_at, ok: latest.ok, error_category: latest.ok === false ? sweepFailureCategory(latest.error) : null }
+    : null
+  return { tool, generated_at: nowIso(), summary: warning ?? 'The latest automation sweep reports healthy.', cards, records: [{ latest_sweep: safeSweep, recent_rule_runs: runs.data ?? [] }], warnings: warning ? [warning] : [] }
 }
 
 export async function getAttributionCompleteness(sb: SB, userId: string): Promise<OperatorToolResult> {

@@ -36,6 +36,11 @@ export async function loadOperatorSnapshot(sb: SB, userId: string): Promise<Oper
     afternoon: sentence(brief.cards, 'afternoon'),
     cards: brief.cards.slice(0, 12),
     totalCards: brief.cards.length,
+    // ⛔ Did any tool fail to read? A failed tool returns cards:[] plus a
+    // warning, so the brief can be SILENTLY INCOMPLETE — the card list looks
+    // shorter, nothing says why. The banner must not assert completeness over
+    // that, so it is told rather than left to guess.
+    readIncomplete: brief.warnings.length > 0,
     // The brief's own read stamp — not "now" — so the age shown is the age of
     // the evidence, even if this snapshot is assembled later.
     generated_at: brief.generated_at,

@@ -17,9 +17,9 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
 import { answerOperatorQuestion, chooseTool, claimsExecutedAction, encodeUntrustedEvidence, operatorToolSurface } from '../src/lib/operator/engine'
-import { listQuoteFollowupsDue, listAcceptedUnscheduledWork } from '../src/lib/operator/tools'
+import { listQuoteFollowupsDue, listAcceptedUnscheduledWork, getAutomationHealth } from '../src/lib/operator/tools'
 import { recordRun } from '../src/lib/operator/runLog'
-import { isUuid, safeErrorHint, stripInvisibles, validateContextRefs } from '../src/lib/operator/types'
+import { isUuid, safeErrorHint, stripInvisibles, sweepFailureCategory, SWEEP_FAILURE_CATEGORIES, validateContextRefs } from '../src/lib/operator/types'
 import { displayInvoiceStatus } from '../src/lib/payments/ledger'
 
 let failures = 0
@@ -308,6 +308,30 @@ const noSpend = await answerOperatorQuestion(stubSB({}), 'u1', 'What should I do
 check('allowModel:false records provider=deterministic and zero token spend (behavioral)',
   noSpend.audit.provider === 'deterministic' && noSpend.audit.model === null && noSpend.audit.tokens_out === null)
 check('…and still returns a usable read-only answer', noSpend.response.answer.length > 0 && noSpend.response.read_only === true)
+// ── The cross-tenant samples through the REAL tool, end to end ─────────────
+// The helper-level checks above prove classification. This proves the string
+// never reaches an owner through the actual card the product builds: summary,
+// data_quality_warnings and the tool warnings[] that flow into the answer.
+{
+  const SECRETS = /Bob|Landscaping|Maria|Gonzalez|Elm St|acme|window_cleaning|Henderson|Priya|Raghunathan|Blackfoot|4417/i
+  for (const sweepError of [
+    `invalid input syntax for type numeric: "Bob's Landscaping Ltd"`,
+    'failed to send reminder to Maria Gonzalez at 12 Elm St',
+    'relation "acme_window_cleaning_archive" does not exist',
+    `check constraint "notes_len": notes = 'Client says the Hendersons owe 3 visits'`,
+  ]) {
+    const res = await getAutomationHealth(
+      stubSB({ automation_sweeps: [{ job: 'signals', ran_on: '2026-09-04', ran_at: '2026-09-04T11:00:00Z', ok: false, error: sweepError }], automation_runs: [] }),
+      'u1')
+    const everything = JSON.stringify(res)
+    check(`real tool output leaks no cross-tenant text: ${sweepError.slice(0, 38)}…`, !SECRETS.test(everything),
+      everything.slice(0, 160))
+    check('…and still tells the owner the sweep failed, with a category',
+      /platform-wide automation sweep failed/.test(res.summary)
+      && (SWEEP_FAILURE_CATEGORIES as readonly string[]).some(c => res.summary.includes(c)))
+  }
+}
+
 check('an unreachable-contact card is never a "contact the customer" card',
   (await listQuoteFollowupsDue(stubSB({ quotes: [hostileQuote], customers: [{ id: CID, phone: null, email: null, sms_opt_in: false, email_opt_in: false, message_prefs: null }] }), 'u1'))
     .cards.every(c => c.customer_contact_required === false))
@@ -360,8 +384,47 @@ console.log('\n═══ Owner-facing error text is bounded and de-identified (F
   check('empty input still yields useful generic feedback', safeErrorHint('').length > 0 && safeErrorHint(null).length > 0)
   check('an Error instance is accepted', /boom/.test(safeErrorHint(new Error('boom'))))
   check('ordinary useful text survives intact', safeErrorHint('permission denied for table operator_runs') === 'permission denied for table operator_runs')
-  check('the platform-wide sweep error is redacted before display', /safeErrorHint\(latest\.error\)/.test(tools))
+  // ── The GLOBAL sweep error: a closed category, never the text ─────────────
+  // Redaction is a DENYLIST over identifier shapes. Business content has no
+  // such shape, and Postgres puts the offending value in the PRIMARY message,
+  // which never takes the `=(value)` form. These are the samples that proved it.
+  check('nothing from the global sweep string is interpolated', !/\$\{safeErrorHint\(latest\.error\)\}|\$\{latest\.error\}/.test(tools))
+  check('…it is CLASSIFIED into a product-authored category', /sweepFailureCategory\(latest\.error\)/.test(tools))
   check('…and the raw sweep error still reaches the server log', /console\.error\('\[operator\] latest automation sweep failed:'/.test(tools))
+  const CROSS_TENANT_SAMPLES = [
+    `invalid input syntax for type numeric: "Bob's Landscaping Ltd"`,
+    'invalid input value for enum job_status: "Maria Gonzalez - repeat"',
+    'failed to send reminder to Maria Gonzalez at 12 Elm St',
+    'relation "acme_window_cleaning_archive" does not exist',
+    `new row violates check constraint "notes_len": notes = 'Client says the Hendersons owe 3 visits'`,
+    'could not serialize access due to concurrent update on customer "Priya Raghunathan"',
+    'null value in column "address" violates not-null constraint: 4417 Blackfoot Trail SE',
+  ]
+  const SECRETS = /Bob|Landscaping|Maria|Gonzalez|Elm St|acme|window_cleaning|Henderson|Priya|Raghunathan|Blackfoot|4417|12 Elm/i
+  for (const s of CROSS_TENANT_SAMPLES) {
+    const cat = sweepFailureCategory(s)
+    check(`category only, no business text: ${s.slice(0, 42)}…`,
+      (SWEEP_FAILURE_CATEGORIES as readonly string[]).includes(cat) && !SECRETS.test(cat), cat)
+  }
+  // The guarantee is structural: the return value can only ever be a literal
+  // this file authored, whatever the input. Fuzzed, including non-strings.
+  const FUZZ: unknown[] = [...CROSS_TENANT_SAMPLES, '', null, undefined, 42, {}, [], new Error('Jane Doe owes $900'),
+    'PERMISSION DENIED', 'statement timeout', 'getaddrinfo ENOTFOUND db.internal', 'relation "x" does not exist']
+  check('every possible output is a member of the closed set',
+    FUZZ.every(f => (SWEEP_FAILURE_CATEGORIES as readonly string[]).includes(sweepFailureCategory(f))))
+  check('…and the set is small and product-authored', SWEEP_FAILURE_CATEGORIES.length === 5)
+  check('classification is still useful: permission vs missing vs timeout vs connection',
+    sweepFailureCategory('permission denied for table x') === 'a permission problem'
+    && sweepFailureCategory('relation "x" does not exist') === 'a missing database object'
+    && sweepFailureCategory('canceling statement due to statement timeout') === 'a timeout'
+    && sweepFailureCategory('getaddrinfo ENOTFOUND db') === 'a connection problem'
+    && sweepFailureCategory('something odd') === 'an unexpected error')
+  // ⚠️ The tenant-scoped path must NOT be widened: it reports failures reading
+  // the OWNER'S OWN data through an RLS-scoped client, so a specific hint is the
+  // owner's information shown to the owner — real signal, no cross-tenant channel.
+  check('the tenant-scoped fail() hint is PRESERVED, not replaced by a category',
+    /safeErrorHint\(warning\)/.test(tools) && !/sweepFailureCategory\(warning\)/.test(tools))
+  check('…and it still keeps a useful specific shape', safeErrorHint('permission denied for table operator_runs') === 'permission denied for table operator_runs')
   check('every tool read failure is redacted through the one helper', /safeErrorHint\(warning\)/.test(tools))
   check('…and the raw read error still reaches the server log', /console\.error\(`\[operator\] \$\{tool\} read failed:`/.test(tools))
 }
@@ -371,7 +434,18 @@ console.log('\n═══ Honest unavailable state while storage is absent (F4) �
   const ui = src('src/components/operator/OperatorClient.tsx')
   check('the degraded state is surfaced, not silent', /Setup isn’t finished/.test(ui))
   check('…keyed on the same flag whose read fails with the table', /!initial\.historyAvailable && \(/.test(ui))
-  check('…and it still tells the owner the answers are real', /computed straight from your own records/.test(ui))
+  // ⛔ NO BLANKET ACCURACY CLAIM. The banner is keyed only on setup state and
+  // knows nothing about whether each tool's read succeeded — a failed tool
+  // returns no cards plus a warning, so "accurate" could sit above a silently
+  // short list. It may say what was READ; it may not assert completeness.
+  check('the banner makes no unconditional accuracy claim', !/are accurate now/.test(ui))
+  check('…it says only what could be read', /computed straight from the records we could read/.test(ui))
+  check('a degraded read is surfaced on its own, independent of setup state', /initial\.readIncomplete &&/.test(ui))
+  check('…and tells the owner a short list is "not checked", not "nothing to do"', /not checked/.test(ui))
+  check('EVERY card warning renders, not just the first',
+    /data_quality_warnings\.map\(/.test(ui) && !/data_quality_warnings\[0\]/.test(ui))
+  check('the snapshot derives readIncomplete from real tool warnings',
+    /readIncomplete: brief\.warnings\.length > 0/.test(src('src/lib/operator/snapshot.ts')))
   check('no engineering vocabulary is shown to an owner', !/migration|schema|DDL|RLS/i.test(ui))
   check('no setup instruction or credential is exposed in the UI', !/SUPABASE|ANTHROPIC|API key|RUN-S124/i.test(ui))
 }

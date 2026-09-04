@@ -77,6 +77,9 @@ export interface OperatorDashboardSnapshot {
    *  force-dynamic, so this is fresh on load — but the tab can then sit open
    *  for hours, and money cards that old must not read as current. */
   generated_at: string
+  /** True when at least one tool could not complete its read, so the card set
+   *  is incomplete in a way the card list alone does not show. */
+  readIncomplete: boolean
   automationWarning: string | null
   recentRuns: Array<{ id: string; question: string | null; status: string; created_at: string }>
   historyAvailable: boolean
@@ -137,6 +140,48 @@ export function safeErrorHint(raw: unknown): string {
   if (!out) return 'no further detail is available'
   for (const [re, to] of ID_PATTERNS) out = out.replace(re, to)
   return out.length > ERROR_HINT_MAX ? `${out.slice(0, ERROR_HINT_MAX - 1).trimEnd()}…` : out
+}
+
+// ── The GLOBAL sweep failure: a closed category, never the text ─────────────
+// `automation_sweeps` has no tenant column. Its `error` is written by the
+// platform-wide job, so the text belongs to whatever tenant's work happened to
+// break — and it reaches THIS owner's card summary, warnings and answer.
+//
+// ⛔⛔ REDACTION IS THE WRONG TOOL HERE, and this is the correction that matters:
+// safeErrorHint is a DENYLIST over identifier SHAPES (uuid, email, url,
+// `=(value)`, long digit runs). Business content has none of those shapes, and
+// Postgres routinely puts the offending value in the PRIMARY message, which
+// never takes the `=(value)` form:
+//     invalid input syntax for type numeric: "Bob's Landscaping Ltd"
+//     relation "acme_window_cleaning_archive" does not exist
+// Both survive redaction intact. A denylist cannot be a guarantee over
+// free-form text from another tenant.
+//
+// ⭐ So this returns a value the PRODUCT authored, chosen from a closed set. The
+// input is only ever *classified*; not one character of it is ever returned. The
+// untouched string still goes to the server log, so diagnosis loses nothing.
+//
+// ⚠️ Deliberately NOT used for tools.ts `fail()`. That path reports failures
+// reading the OWNER'S OWN tenant data through an RLS-scoped client — the
+// owner's information shown to the owner, with no cross-tenant channel — and a
+// specific hint there is genuinely useful. Widening this would destroy real
+// signal to fix a leak that does not exist on that path.
+export const SWEEP_FAILURE_CATEGORIES = [
+  'a permission problem',
+  'a missing database object',
+  'a timeout',
+  'a connection problem',
+  'an unexpected error',
+] as const
+export type SweepFailureCategory = typeof SWEEP_FAILURE_CATEGORIES[number]
+
+export function sweepFailureCategory(raw: unknown): SweepFailureCategory {
+  const t = (typeof raw === 'string' ? raw : raw instanceof Error ? raw.message : '').toLowerCase()
+  if (/permission|denied|not authori|forbidden|row-level security|policy/.test(t)) return 'a permission problem'
+  if (/does not exist|undefined table|undefined column|undefined function|no such|not found/.test(t)) return 'a missing database object'
+  if (/timeout|timed out|canceling statement|deadline/.test(t)) return 'a timeout'
+  if (/econn|socket|network|unreachable|getaddrinfo|connection|dns/.test(t)) return 'a connection problem'
+  return 'an unexpected error'
 }
 
 export function isUuid(value: unknown): value is string {
