@@ -281,12 +281,62 @@ check('SCHEDULE — reads the shared clock, not the device',
   /useTenantTime\(\)/.test(schedule) && !/localTodayISO\(\)/.test(schedule))
 const dashData = code('src/lib/dashboard/data.ts')
 check('DASHBOARD — reads the tenant zone server-side, not the server\'s UTC',
-  /loadTenantToday\(sb, userId\)/.test(dashData) && !/localTodayISO/.test(dashData))
+  // Either the loadTenantToday wrapper, or the equivalent unpacked form (S97
+  // presentation follow-up: reads loadTenantTimeZone directly so `timeZone`
+  // stays in scope for the greeting/dateLine, then derives `today` from it via
+  // tenantTodayISO — the exact same call loadTenantToday makes internally).
+  (/loadTenantToday\(sb, userId\)/.test(dashData)
+    || (/loadTenantTimeZone\(sb, userId\)/.test(dashData) && /tenantTodayISO\(timeZone\)/.test(dashData)))
+  && !/localTodayISO/.test(dashData))
+check('DASHBOARD — greeting/dateLine share that SAME tenant zone, not new Date()',
+  /tenantMoment\(timeZone\)/.test(dashData)
+  && !/now\.getHours\(\)/.test(dashData)
+  && !/now\.toLocaleDateString/.test(dashData))
 check('DASHBOARD PAGE — same', /loadTenantToday\(/.test(read('src/app/dashboard/page.tsx')))
 // ⭐ And the zone must ride along to the weather engine, or the dashboard's
 // preloaded settings would silently send it back to the fallback.
 check('…and carries the zone into the preloaded settings it hands on',
   /base_address, timezone/.test(dashData))
+
+console.log('\n─── The greeting/dateLine bug, reproduced and fixed (S97 follow-up) ───')
+// The reported defect, live: 2026-09-04 14:40 in Edmonton (MDT, UTC-6) is
+// 2026-09-04 20:40 UTC. The OLD code read `new Date().getHours()` on the
+// server — Vercel's clock, which is UTC — so it saw hour 20 and said "Good
+// evening" while the owner's own afternoon was mid-day. This is the exact
+// bucket boundary (>=17) the greeting formula uses, so this instant is the
+// sharpest possible reproduction: one hour either side of it would not
+// distinguish the bug from the fix.
+const reportedMoment = new Date('2026-09-04T20:40:00Z')
+const edmontonAtReport = tenantMoment(EDM, reportedMoment)
+check('the wall clock in Edmonton reads 14:40, not 20:40',
+  edmontonAtReport.hour === 14 && edmontonAtReport.minute === 40)
+check('MUTATION — the server’s own UTC hour is 20 (>=17 ⇒ "evening"), a DIFFERENT bucket than Edmonton’s 14 (<17 ⇒ "afternoon")',
+  reportedMoment.getUTCHours() === 20 && edmontonAtReport.hour === 14,
+  'if these land in the same bucket the fixture no longer reproduces the reported "Good evening" defect')
+// The dashboard's greeting formula, restated here byte-for-byte from
+// src/lib/dashboard/data.ts (`hour < 12 ? 'Good morning' : hour < 17 ?
+// 'Good afternoon' : 'Good evening'`) — proving what TEXT the fix produces,
+// not just that the hour value changed.
+const greetingFor = (hour: number) => hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
+check('FIXED — tenantMoment(timeZone).hour buckets to "Good afternoon"',
+  greetingFor(edmontonAtReport.hour) === 'Good afternoon')
+check('OLD BUG — the raw UTC hour would have bucketed to "Good evening"',
+  greetingFor(reportedMoment.getUTCHours()) === 'Good evening',
+  'confirms the OLD code path (server UTC hour) really did produce the reported wrong greeting')
+
+// The local-date boundary this fix's dateLine now shares with `today`: reuse
+// the file's own UTC/local mismatch fixture (`lateEvening`, 23:30 Edmonton /
+// 05:30 UTC the NEXT day) through `tenantMoment` — the exact field
+// (`.date`) dashboard/data.ts's dateLine is built from — not just
+// `tenantTodayISO`, so this pins the actual call the fix makes.
+check('DATELINE BOUNDARY — tenantMoment(...).date is the 28th when UTC already reads the 29th',
+  tenantMoment(EDM, lateEvening).date === '2026-08-28'
+  && lateEvening.toISOString().slice(0, 10) === '2026-08-29',
+  'a dateLine built from the server’s own UTC date would show the wrong calendar day for the last ~6 evening hours of every business day')
+// One minute past that boundary, dateLine rolls with it — same instant
+// `tenantTodayISO` was already proven against above, restated for `.date`.
+check('…and rolls to the 29th one minute past local midnight',
+  tenantMoment(EDM, justAfter).date === '2026-08-29')
 
 console.log('\n─── Crons compute a date PER TENANT ───')
 for (const [name, file] of [

@@ -21,7 +21,8 @@ import { computeLeadsNeedingResponse, type LeadConvRow, type LeadQuoteRow } from
 import { loadWeatherImpact, type WeatherImpactReport } from '@/lib/weatherImpact'
 import { sumQuoteAmounts } from '@/lib/pricingState'
 import { settingsToSeasons } from '@/lib/seasons'
-import { loadTenantToday } from '@/lib/tenantTimeServer'
+import { loadTenantTimeZone } from '@/lib/tenantTimeServer'
+import { tenantTodayISO, tenantMoment } from '@/lib/tenantTime'
 import { computePriorities, type Priority } from '@/lib/dashboard/priorities'
 import { computeDayPlan, type DayPlan, type PlanJob } from '@/lib/dashboard/dayPlan'
 import { pageAll } from '@/lib/supabase/pageAll'
@@ -134,7 +135,13 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   //
   // One serial read ahead of the batch — `today` is an input to almost every
   // query below, so it cannot come from a row fetched alongside them.
-  const today = await loadTenantToday(sb, userId)
+  //
+  // Reads the ZONE directly (loadTenantTimeZone), not the loadTenantToday
+  // wrapper, so `timeZone` stays in scope for the greeting/dateLine below —
+  // same single query, same fallback semantics, `today`'s VALUE is unchanged
+  // (tenantTodayISO(timeZone) is exactly what loadTenantToday did internally).
+  const { timeZone } = await loadTenantTimeZone(sb, userId)
+  const today = tenantTodayISO(timeZone)
 
   // Rolling 7 days INCLUDING today, not a calendar week: on a Monday a calendar
   // week would read $0 and look broken.
@@ -357,7 +364,6 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   })
 
   // ── The month view + pipeline ──
-  const now = new Date()
   const allJobsForKpi = jobs as unknown as { status: string; scheduled_date: string }[]
   const accepted = quotes.filter(q => q.status === 'accepted').length
   const decided = quotes.filter(q => q.status !== 'draft').length
@@ -379,7 +385,25 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     j.status === 'completed' && j.scheduled_date >= monthStartISO && j.scheduled_date <= today).length
   const jobsDoneLastMonth = allJobsForKpi.filter(j =>
     j.status === 'completed' && j.scheduled_date >= lastMonthStartISO && j.scheduled_date <= lastMonthSameDayISO).length
-  const hour = now.getHours()
+
+  // Greeting + dateLine share the SAME tenant zone `today`'s money/KPI queries
+  // already use — never the server runtime's clock. `now.getHours()` /
+  // `now.toLocaleDateString()` read Vercel's clock, which is UTC: an owner in
+  // Edmonton at 2:40pm local (UTC-6, 20:40 UTC) got "Good evening" because the
+  // server's day was already past 17:00 while the owner's was mid-afternoon.
+  // tenantMoment gives the wall-clock hour AND calendar date for `timeZone` in
+  // one read, so both derive from one tenant-local instant rather than two
+  // clocks disagreeing again the way dashboard/schedule already did before
+  // loadTenantToday existed.
+  const tenantNow = tenantMoment(timeZone)
+  const hour = tenantNow.hour
+  // Same `${iso}T00:00:00` + toLocaleDateString idiom this file already uses
+  // for month-window math (see `now0` above) — construct and format in the
+  // SAME implicit runtime zone, so the round trip can't shift the date. The
+  // only change from before is which calendar date it starts from:
+  // `tenantNow.date` (tenant-local) instead of the server's own `now`.
+  const dateLine = new Date(`${tenantNow.date}T00:00:00`)
+    .toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' })
 
   return {
     money: {
@@ -402,7 +426,7 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     },
     weather,
     greeting: hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening',
-    dateLine: now.toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' }),
+    dateLine,
     // Four full-history reads already in hand. Any ONE row of real work — even a
     // customer added and nothing else — means this business has begun, so the
     // first-run framing stands down permanently and can never re-appear later.

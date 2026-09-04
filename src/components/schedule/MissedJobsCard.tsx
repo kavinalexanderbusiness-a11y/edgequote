@@ -40,7 +40,15 @@ export function MissedJobsCard({ jobs, today, busyId, onBringToToday, onComplete
         </div>
 
         <div className="rounded-lg border border-accent/20 bg-accent/5 px-3 py-2 text-xs text-ink-muted">
-          These days have passed with the visit still open — so they were never billed and the customer is a cycle behind. Bring one to today to run it, or complete it if it’s already done.
+          {/* STATUS ONLY. `jobs` here is isMissed's output — date/status alone
+              (still open, day already passed) — with no billing evidence and
+              no recurrence check, so it can include a one-off visit with no
+              cycle at all. The old copy claimed "never billed" and "the
+              customer is a cycle behind" for every row, which is a claim
+              about invoicing and recurrence this card's inputs cannot back —
+              a false statement on some real jobs, not a rounding error. Say
+              only what isMissed actually establishes. */}
+          These visits are still open after their scheduled date. Bring one to today if it still needs doing, or mark it complete if the work is already done.
         </div>
 
         <div className="space-y-2">

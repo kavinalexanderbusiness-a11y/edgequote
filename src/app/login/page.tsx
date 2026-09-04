@@ -139,7 +139,7 @@ function LoginForm() {
             <Input
               label="Email"
               type="email"
-              placeholder="you@edgepropertyservices.ca"
+              placeholder="you@company.com"
               value={email}
               onChange={e => setEmail(e.target.value)}
               required
