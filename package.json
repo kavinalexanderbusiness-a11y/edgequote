@@ -45,6 +45,7 @@
     "verify:growth-quality": "tsx scripts/verify-growth-quality.ts",
     "verify:growth-concentration": "tsx scripts/verify-growth-concentration.ts",
     "verify:growth-presentation": "tsx scripts/verify-growth-presentation.ts",
+    "verify:growth-visual-fixture": "tsx scripts/verify-growth-visual-fixture.ts",
     "verify:vocabulary": "tsx scripts/verify-vocabulary.ts",
     "verify:advanced-setup": "tsx scripts/verify-advanced-setup.ts",
     "verify:create-doors": "tsx scripts/verify-create-doors.ts",
