@@ -41,27 +41,38 @@ const MUTATIONS = [
     from: '  if (SELF_IDENTIFYING.some(r => n.includes(r.needs) && n.includes(r.and))) return true',
     to: '  if (SELF_IDENTIFYING.some(r => n.includes(r.needs) || n.includes(r.and))) return true',
   },
+  // ⚠️ RE-TARGETED (Session 114 follow-up audit). The three mutations that used
+  // to live here targeted the ORIGINAL `{ shape, alsoSays }` HARNESS_SHAPES
+  // structure. The audit found that structure over-broad in exactly the way one
+  // of these mutations warns about ("eats a real roofer") — the `alsoSays`
+  // check used `n.includes('fixture')`, a WHOLE-STRING search, so a zz-prefixed
+  // name that merely mentioned "fixture" LATER in the name (not beside the
+  // zz-token) was already excluded even before any mutation ran. That is a
+  // defect the guard's own MUST_SURVIVE list did not catch, because nothing in
+  // it exercised "fixture" positioned away from the zz-token specifically.
+  //
+  // The fix bakes "fixture" into the regex at the position a machine actually
+  // puts it and deletes the unfounded bare `s\d{1,3}[-_]fixture` shape entirely
+  // (no harness anywhere emits that string — see lib/fixtureData's comment).
+  // These two mutations now test the NEW rule's own two failure directions:
+  // losing the anchor, and losing the fixture requirement.
   {
     file: 'src/lib/fixtureData.ts',
-    name: 'the harness shape stops requiring the word "fixture" (eats a real roofer)',
-    from: '  if (HARNESS_SHAPES.some(r => r.shape.test(n) && (!r.alsoSays || n.includes(r.alsoSays)))) return true',
-    to: '  if (HARNESS_SHAPES.some(r => r.shape.test(n))) return true',
+    name: 'the harness shape stops requiring "fixture" to sit beside the zz-token (the exact over-broad defect the audit found, reintroduced)',
+    from: '  /^zz[\\s\\-_](?:s\\d{1,4}[\\s\\-_])?fixture\\b/i,',
+    to: '  /^zz[\\s\\-_]/i,',
   },
   {
     file: 'src/lib/fixtureData.ts',
-    // ⚠️ The first version of this mutation was WRONG and reported as MISSED:
-    // `[-_ ]*fixture` still requires "fixture" to be the NEXT token, so it never
-    // matched "S61 Light Fixture Co" and no bug was actually introduced. The real
-    // over-broadening is letting anything sit between the token and the word.
-    name: 'the session token stops requiring the join (S61 Light Fixture Co becomes a fixture)',
-    from: '  { shape: /^s\\d{1,3}[-_]fixture\\b/i },',
-    to: '  { shape: /^s\\d{1,3}\\b.*fixture/i },',
+    name: 'the zz shape stops being anchored at the start (Deck ZZ Fixture Mural becomes a fixture)',
+    from: '  /^zz[\\s\\-_](?:s\\d{1,4}[\\s\\-_])?fixture\\b/i,',
+    to: '  /zz[\\s\\-_](?:s\\d{1,4}[\\s\\-_])?fixture\\b/i,',
   },
   {
     file: 'src/lib/fixtureData.ts',
-    name: 'the zz shape stops being anchored (Deck ZZ fixture mural becomes a fixture)',
-    from: "  { shape: /^zz[\\s\\-_]/i, alsoSays: 'fixture' },",
-    to: "  { shape: /zz[\\s\\-_]/i, alsoSays: 'fixture' },",
+    name: 'the whole HARNESS_SHAPES check evaporates (a real emitted quote fixture, "ZZ S111 Fixture A", escapes Tier 1)',
+    from: '  if (HARNESS_SHAPES.some(r => r.test(n))) return true',
+    to: '  if (false) return true',
   },
   {
     file: 'src/lib/fixtureData.ts',

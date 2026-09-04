@@ -218,7 +218,16 @@ console.log('\n── 5. Fixture / test records are refused — and narrowly ─
   //                         on. "Demo Farms" and "Soil Testing" are real money.
   check('an explicit fixture marker is caught', looksLikeFixture('ZZ S111 Fixture A'), '')
   check('a delete-me marker is caught', looksLikeFixture('S61 FIELD FIXTURE — DELETE ME'), '')
-  check('a harness-joined token is caught', looksLikeFixture('S61-FIXTURE CREW'), '')
+  // ⚠️⚠️ RE-MEASURED (Session 114 follow-up audit). This asserted
+  // 'S61-FIXTURE CREW' (no zz- prefix) as the "harness-joined token". Re-checked
+  // against the actual harness: scripts/s61-field-cdp.mjs and s61-field-proof.mjs
+  // NEVER write a bare "S61-FIXTURE" — every row they name is "ZZ-S61-FIXTURE",
+  // with the zz- prefix. The bare form was fictional, and the rule built to catch
+  // it (a bare `s\d+-fixture` shape) was over-broad enough to classify a
+  // plausible real business ("S61-Fixture Installations Inc"). The shape is
+  // removed from lib/fixtureData; this now asserts the string a harness actually
+  // writes, which is ALSO already caught by the pre-existing 'zz-' prefix alone.
+  check('a harness-joined token is caught', looksLikeFixture('ZZ-S61-FIXTURE CREW'), '')
   // ⭐ COVERAGE THIS FILE'S OLD RULE DID NOT HAVE. Growth had no VERIFY- rule, so
   // guard fixtures tagged that way were counted as real money by the one report
   // built to exclude them. Converging fixed a narrowness, not only a breadth.
@@ -236,6 +245,20 @@ console.log('\n── 5. Fixture / test records are refused — and narrowly ─
   check('a roofer named for a session number is NOT excluded', !looksLikeFixture('S61 Roofing Ltd'), '')
   check('a customer called Demo Farms is NOT excluded', !looksLikeFixture('Demo Farms'), '')
   check('a ZZ-prefixed real business is NOT excluded', !looksLikeFixture('ZZ Top Tribute Band Venue Clean'), '')
+  // ⛔⛔ FOUND BY THE FOLLOW-UP AUDIT (Session 114): the zz-shape rule used to
+  // check `n.includes('fixture')` — anywhere in the WHOLE string — not just
+  // beside the zz-token. A zz-branded electrical/lighting retailer (picking a
+  // name starting with a letter early in the alphabet for directory listing is
+  // a real small-business practice) would have had its real revenue silently
+  // excluded. Tightened to require "fixture" beside the zz-token specifically;
+  // these four must all survive.
+  check('a zz-branded lighting retailer is NOT excluded', !looksLikeFixture('ZZ Lighting Fixture Supply'), '')
+  check('a zz-branded electrical supplier is NOT excluded', !looksLikeFixture('ZZ Electric Fixture & Supply Co'), '')
+  check('a zz-branded fixture emporium is NOT excluded', !looksLikeFixture('ZZ Home Fixture Emporium'), '')
+  check('a zz-branded fixture design shop is NOT excluded', !looksLikeFixture('ZZ Modern Fixtures & Design'), '')
+  // ⛔ And the bare-S## direction: a plausible store/unit-numbered retailer.
+  check('a unit-numbered fixture retailer is NOT excluded', !looksLikeFixture('S7-Fixture Gallery'), '')
+  check('a store-numbered fixture supplier is NOT excluded', !looksLikeFixture('S24-Fixture Supply'), '')
 
   const e = assessEvidence({
     visits: [visit(70), visit(70), visit(70), visit(9000, { labels: ['ZZ S111 Fixture A', 'Snow'] })],

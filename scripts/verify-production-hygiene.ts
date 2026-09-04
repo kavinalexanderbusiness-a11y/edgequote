@@ -118,6 +118,26 @@ const MUST_SURVIVE = [
   // ⭐ And the reserved-DOMAIN rule is about a domain, not the letters "example".
   // Widening it to a substring hid these, unnoticed, until a mutation said so.
   'Exampleton Property Care', 'jo@exampleton.ca', 'sales@examplestone.com',
+  // ⛔⛔ Session 114 FOLLOW-UP AUDIT of the approved convergence. The zz-shape
+  // rule checked `n.includes('fixture')` — anywhere in the WHOLE string, not
+  // beside the zz-token — so any zz-branded business that merely mentions
+  // "fixture" later in its name was wrongly excluded. Picking a name starting
+  // with a letter early in the alphabet (so it lists first in a directory) is a
+  // real small-business practice, and any of these could be a real lighting,
+  // electrical or plumbing-fixture retailer. All four MUST survive; before the
+  // fix, all four were classified as machine fixtures.
+  'ZZ Lighting Fixture Supply', 'ZZ Electric Fixture & Supply Co',
+  'ZZ Home Fixture Emporium', 'ZZ Modern Fixtures & Design',
+  // ⛔⛔ The companion finding: the bare `s\d{1,3}[-_]fixture` shape was
+  // justified by a comment claiming scripts/s61-field-cdp.mjs writes
+  // "S61-FIXTURE". MEASURED: it does not. Every row that script names is
+  // "ZZ-S61-FIXTURE" (see the zz- prefix test above) — no harness anywhere
+  // writes a bare "S##-FIXTURE". The shape existed only to satisfy a
+  // self-authored guard string with no real backing, and it was over-broad
+  // enough to exclude a plausible mall-unit or store-numbered retailer. Removed
+  // from lib/fixtureData; these must survive with no replacement rule needed.
+  'S7-Fixture Gallery', 'S24-Fixture Supply', 'S3_Fixture Wholesale',
+  'S61-Fixture Installations Inc',
 ]
 for (const name of MUST_SURVIVE) {
   check(`“${name}” is NOT classified as fixture data`, !isFixtureName(name),
@@ -175,7 +195,7 @@ console.log('\n═══ There is exactly ONE fixture classifier ═══')
   // agree on every one, because they are now the same function.
   const corpus = [
     ...MUST_SURVIVE,
-    'ZZ-S70 Fixture', 'VERIFY-ADDONS-3391', 'S61-FIXTURE CREW', 'ZZ S111 Fixture A',
+    'ZZ-S70 Fixture', 'VERIFY-ADDONS-3391', 'ZZ-S61-FIXTURE CREW', 'ZZ S111 Fixture A',
     'S61 FIELD FIXTURE — DELETE ME (A)', 'Automated guard fixture — safe to delete',
     'bob@example.com', 'someone@realroofing.ca', '', '   ',
   ]
@@ -189,7 +209,7 @@ console.log('\n═══ There is exactly ONE fixture classifier ═══')
       'Growth would drop this business\'s own revenue out of its report')
   }
   // …and the real machine fixtures still classify at both.
-  for (const n of ['S61-FIXTURE CREW', 'ZZ S111 Fixture A', 'S61 FIELD FIXTURE — DELETE ME (A)', 'VERIFY-ADDONS-3391']) {
+  for (const n of ['ZZ-S61-FIXTURE CREW', 'ZZ S111 Fixture A', 'S61 FIELD FIXTURE — DELETE ME (A)', 'VERIFY-ADDONS-3391']) {
     check(`“${n}” is a fixture at both doors`, isFixtureName(n) && looksLikeFixture(n))
   }
 }
