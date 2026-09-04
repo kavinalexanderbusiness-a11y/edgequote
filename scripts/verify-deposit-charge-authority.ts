@@ -57,6 +57,27 @@ const TERMS = 'We accept cash, cheque and e-transfer. Please give 24 hours notic
 // charge happened".
 const charged: { cents: number; label: string }[] = []
 
+// ── ⛔ AMBIENT-CONTAMINATION PROBE ───────────────────────────────────────────
+// Deliberately poisons the three env vars BEFORE main() installs its synthetic
+// values, so the override is tested against a HOSTILE starting state rather than
+// an empty one. If that override ever regresses to `||=`, these values survive
+// and §J fails loudly — instead of the run quietly pointing at whatever the
+// environment held.
+//
+// ⭐ Clobbering here is also the safe direction: whatever a developer happened to
+// have exported, this guard is now guaranteed not to be holding it.
+const AMBIENT = {
+  url: 'https://zz-ambient-contaminant.invalid',
+  key: 'zz-ambient-service-key-must-not-survive',
+  app: 'https://zz-ambient-app.invalid',
+} as const
+process.env.NEXT_PUBLIC_SUPABASE_URL = AMBIENT.url
+process.env.SUPABASE_SERVICE_ROLE_KEY = AMBIENT.key
+process.env.NEXT_PUBLIC_APP_URL = AMBIENT.app
+
+/** Proof the Supabase fake is INSTALLED, mirroring what `charged` does for Stripe. */
+const SHIM_SENTINEL = 'zz-supabase-shim-installed'
+
 async function main() {
   const pg = await loadPGlite()
   if (!pg) { console.log('\n⏭  verify:deposit-charge-authority SKIPPED — PGlite not installed.\n'); process.exit(0) }
@@ -92,20 +113,32 @@ async function main() {
 
   // ── Install the fakes BEFORE the routes are loaded ─────────────────────────
   // Transport and payment only. Nothing that decides anything.
-  process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'http://shim.invalid'
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||= 'zz-shim-service-key'
-  process.env.NEXT_PUBLIC_APP_URL ||= 'https://zz.invalid'
+  // ⛔ PLAIN `=`, NEVER `||=`. With `||=` an ambient real URL and service-role key
+  // SURVIVED into the run — and if a stub then silently failed to install, the
+  // queries would have gone wherever that env pointed. This guard has no use for
+  // an ambient value, so it takes none. The probe at module scope proves the
+  // assignment is unconditional rather than merely looking unconditional.
+  process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://shim.invalid'
+  process.env.SUPABASE_SERVICE_ROLE_KEY = 'zz-shim-service-key'
+  process.env.NEXT_PUBLIC_APP_URL = 'https://zz.invalid'
   let shimUid: string | null = null
   let failTable: string | null = null
-  const shim = () => makeSupabaseShim(q, { uid: shimUid, failOn: t => t === failTable })
+  // ⭐ Counted, so "the stub was installed" is provable the same way the Stripe
+  // fake proves it: by evidence it was actually USED, not by its presence.
+  let shimBuilt = 0
+  const shim = () => { shimBuilt++; return makeSupabaseShim(q, { uid: shimUid, failOn: t => t === failTable }) }
 
   const stub = (id: string, exports: Record<string, unknown>) => {
     const resolved = require.resolve(id)
     require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, exports } as unknown as NodeModule
     return resolved
   }
-  stub('@supabase/supabase-js', { createClient: () => shim() })
-  stub('../src/lib/supabase/server', { createClient: async () => shim() })
+  // ⭐⭐ Each fake carries a sentinel, so §J can prove the cache entry the routes
+  // resolve IS ours. Without it, a stub that silently failed to take effect would
+  // hand the routes the REAL client pointed at whatever env held — the exact
+  // failure the Stripe fake is already protected against and this one was not.
+  const supaResolved = stub('@supabase/supabase-js', { createClient: () => shim(), __zzShim: SHIM_SENTINEL })
+  const serverResolved = stub('../src/lib/supabase/server', { createClient: async () => shim(), __zzShim: SHIM_SENTINEL })
   stub('../src/lib/stripe/config', {
     stripeEnabled: () => true,
     createQuoteDepositCheckoutSession: async (_q: unknown, o: { chargeCents: number; chargeLabel: string }) => {
@@ -395,6 +428,54 @@ async function main() {
     const bill = readFileSync(join(ROOT, 'src/app/portal/[token]/components/BillingTab.tsx'), 'utf8')
     check('I · Billing renders the reason in place of the button',
       /!d\.schedulingDeposit\.payable \?/.test(bill) && /d\.depositBlockedLine/.test(bill))
+  }
+
+  // ── J · THE HARNESS ITSELF ────────────────────────────────────────────────
+  // A synthetic guard is only evidence if its fakes are genuinely in place. These
+  // check the harness, not the product: every case above ran against them.
+  {
+    console.log('\n── J · the harness is synthetic, provably ─────────────────────────\n')
+
+    // ⛔ Ambient values must not survive. The probe set all three to contaminants
+    // before main() ran; if the override regressed to `||=`, these fail.
+    check('J · the Supabase URL is the synthetic one, not the ambient value',
+      process.env.NEXT_PUBLIC_SUPABASE_URL === 'http://shim.invalid', process.env.NEXT_PUBLIC_SUPABASE_URL)
+    check('J · the service-role key is the synthetic one',
+      process.env.SUPABASE_SERVICE_ROLE_KEY === 'zz-shim-service-key')
+    check('J · the app URL is the synthetic one',
+      process.env.NEXT_PUBLIC_APP_URL === 'https://zz.invalid')
+    check('J · ⛔ no contaminant survived anywhere in the three',
+      ![process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, process.env.NEXT_PUBLIC_APP_URL]
+        .some(v => v === AMBIENT.url || v === AMBIENT.key || v === AMBIENT.app))
+
+    // [negative control] the operator that used to be here would have kept it.
+    const probe: Record<string, string> = { X: AMBIENT.url }
+    probe.X ||= 'http://shim.invalid'
+    check('J · [negative control] `||=` would have kept the ambient value',
+      probe.X === AMBIENT.url)
+
+    // ⛔ The module the routes resolve must BE the fake.
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    const cached = (id: string) => (require.cache[id]?.exports ?? {}) as { __zzShim?: string }
+    /* eslint-enable @typescript-eslint/no-require-imports */
+    check('J · the @supabase/supabase-js cache entry is the fake',
+      cached(supaResolved).__zzShim === SHIM_SENTINEL)
+    check('J · the src/lib/supabase/server cache entry is the fake',
+      cached(serverResolved).__zzShim === SHIM_SENTINEL)
+
+    // [negative control] a module nobody stubbed carries no sentinel, so the
+    // assertion above is discriminating rather than always-true.
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    const unstubbed = require.resolve('./lib/pg-supabase-shim')
+    /* eslint-enable @typescript-eslint/no-require-imports */
+    check('J · [negative control] an unstubbed module carries no sentinel',
+      cached(unstubbed).__zzShim !== SHIM_SENTINEL)
+
+    // ⛔⛔ FAIL LOUD: presence is not use. Every route above went through the fake.
+    check('J · the shim was actually constructed by the routes under test',
+      shimBuilt > 0, `shimBuilt=${shimBuilt}`)
+    check('J · …and the Stripe fake likewise recorded real asks',
+      charged.length > 0, `charged=${charged.length}`)
   }
 
   await db.close()
