@@ -768,7 +768,7 @@ export interface DocItem { id: string; rawId: string; kind: DocKind; number: str
 }
 
 export interface DocBlobRenderers {
-  quote: (q: PortalQuote) => Promise<Blob>
+  quote: (q: PortalQuote, doc?: { acceptanceSuperseded?: boolean }) => Promise<Blob>
   invoice: (i: PortalInvoice) => Promise<Blob>
 }
 
@@ -893,7 +893,26 @@ export function buildDocItems(opts: {
     // dollar figure belonging to an option they may not pick. The moment a choice
     // exists — or acceptance snapshots accepted_price — the figure is real and
     // the same call prints it.
-    const timing = paymentTiming(moneyQuote, { basisSettled: !(options && !qq.selected_option_id) })
+    // ⛔⛔ THE DOCUMENT AND THE AGREEMENT DISAGREE. A quote with named evidence at
+    // $1,400, revised since to $500, printed "Quote Total $500.00" above "A 50%
+    // deposit ($700.00)" — arithmetic no customer can reconcile. When the
+    // acceptance no longer matches the document, the sentence keeps the RULE and
+    // drops the FIGURE (lib/payments/paymentTiming).
+    //
+    // ⚠️ THIS IS THE WEAKER OF THE TWO AVAILABLE SIGNALS, and saying so is the
+    // point. Currentness is decided by the material FINGERPRINT — which also moves
+    // on scope, address and notes — and the portal payload does not carry that
+    // answer. `priceMovedSinceAccepted` is a TOTAL comparison, so it catches
+    // exactly the case that produces the visible mismatch and misses drift that
+    // leaves the total alone. The owner's send path, which HAS the fingerprint
+    // answer, uses it. Widening get_portal_data to carry `needs_reapproval` is
+    // what makes both paths ask the same question; until then this is the honest
+    // subset rather than a guess dressed as the whole.
+    const acceptanceSuperseded = priceMovedSinceAccepted
+    const timing = paymentTiming(moneyQuote, {
+      basisSettled: !(options && !qq.selected_option_id),
+      acceptanceSuperseded,
+    })
     const manHours = Number(qq.hours) > 0 && Number(qq.crew_size) > 0 ? Number(qq.hours) * Number(qq.crew_size) : 0
     const fmtHrs = (h: number) => h < 1 ? `${Math.round(h * 60)} minutes` : h === 1 ? '1 hour' : `${Number(h.toFixed(1))} hours`
     const explainBits = [
@@ -1006,7 +1025,7 @@ export function buildDocItems(opts: {
       // the SAME accepted_price, so handing it the raw quote would print the
       // $700 sentence onto the document they keep, under the $250 card they were
       // just shown. `accepted_price` feeds nothing else in that renderer.
-      filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(moneyQuote), lines, planOptions,
+      filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(moneyQuote, { acceptanceSuperseded }), lines, planOptions,
       options, selectedOptionId: qq.selected_option_id ?? null,
       schedulingDeposit, depositBlockedLine, preference, canEditPreference: qq.status === 'accepted',
       paymentTimingLine: quoteTimingLine(timing),

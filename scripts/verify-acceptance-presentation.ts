@@ -194,8 +194,8 @@ console.log('\n■ 4. The portal model is wired to the rules, not to status')
   check('⛔ every money reader is fed the sanitized quote — gate, timing AND pdf',
     /const moneyQuote = facing\.moneyQuote/.test(model)
     && /schedulingGate\(moneyQuote,/.test(model)
-    && /paymentTiming\(moneyQuote,/.test(model)
-    && /renderers\.quote\(moneyQuote\)/.test(model))
+    && /paymentTiming\(moneyQuote, \{/.test(model)
+    && /renderers\.quote\(moneyQuote[,)]/.test(model))
   check('⛔ …and the raw quote reaches none of them',
     !/schedulingGate\(qq[,)]/.test(model)
     && !/paymentTiming\(qq[,)]/.test(model)
@@ -322,8 +322,22 @@ console.log('\n■ 6. THE REAL COMPOSITION BOUNDARY — one quote, one figure, e
   check('with the CUSTOMER’s own acceptance, the snapshot is honoured',
     ev.amount === 1400, String(ev.amount))
   check('…the deposit follows it to $700', ev.schedulingDeposit?.required === 700)
+  // ⚠️⚠️ THIS CONTROL'S FIXTURE WAS ITSELF THE DRIFTED SHAPE — accepted at $1,400
+  // against a $500 document — so it used to assert the very contradiction the
+  // drift follow-up exists to remove. Split in two rather than deleted: the
+  // "one basis, every surface" claim keeps a fixture where the acceptance still
+  // MATCHES its document, and drift gets its own case below.
+  const same = row({ acceptance_kind: 'customer', total: 1400, initial_price: 1400 })
   check('…the sentence follows it too — one basis, every surface',
-    /\$700\.00/.test(ev.paymentTimingLine ?? ''), ev.paymentTimingLine)
+    /\$700\.00/.test(same.paymentTimingLine ?? ''), same.paymentTimingLine)
+  check('⭐ …and when the document has DRIFTED away from the acceptance, the '
+    + 'sentence keeps the rule and drops the figure',
+    !/\$700\.00/.test(ev.paymentTimingLine ?? '')
+    && /50% deposit is required/.test(ev.paymentTimingLine ?? '')
+    && /previously agreed no longer applies/.test(ev.paymentTimingLine ?? ''),
+    ev.paymentTimingLine)
+  check('⛔ …and does NOT substitute a figure from the current total instead',
+    !/\$250\.00/.test(ev.paymentTimingLine ?? ''), ev.paymentTimingLine)
   check('…and the PDF is handed the same basis',
     pdfSaw[0]?.accepted_price === 1400, String(pdfSaw[0]?.accepted_price))
   check('…and only here may the screen say "you accepted"',

@@ -57,7 +57,16 @@ export interface PaymentTiming {
   depositPercent: number | null
   /** What the rule is taken OF — depositGate's basis, never a second figure. */
   basis: number
+  /** Why `depositAmount` is null, when it is. Null when a figure is known. */
+  basisUnsettledReason: BasisUnsettledReason | null
 }
+
+/**
+ * ⭐⭐ WHY A BASIS CAN BE UNSETTLED. Two different facts, and they need different
+ * words: one is a choice the customer has not made yet, the other is an agreement
+ * this document no longer matches.
+ */
+export type BasisUnsettledReason = 'unchosen_option' | 'superseded_acceptance'
 
 export interface TimingOptions {
   /**
@@ -67,6 +76,36 @@ export interface TimingOptions {
    * the consent snapshot by then).
    */
   basisSettled?: boolean
+  /**
+   * ⛔⛔ THE ACCEPTANCE THIS DOCUMENT'S DEPOSIT WOULD BE TAKEN OF NO LONGER
+   * MATCHES THIS DOCUMENT.
+   *
+   * THE DEFECT THIS CLOSES, seen on a genuinely generated PDF: a quote with valid
+   * named evidence at $1,400 whose document has since been revised to $500 printed
+   *
+   *     Quote Total                     $500.00
+   *     A 50% deposit ($700.00) is required before we schedule your visit …
+   *
+   * Both halves are individually defensible — the total is the live document, the
+   * deposit derives from a proven consent snapshot — and together they are
+   * arithmetic no customer can reconcile.
+   *
+   * ⭐ THE RULE: an amount and its authority travel together. When the acceptance
+   * is not current, no surface may present a figure derived from the superseded
+   * snapshot as a live ask. The percentage still stands — that is this quote's own
+   * configuration, not a consent artifact — so the sentence keeps the rule and
+   * drops the figure, exactly as it already does for an unchosen option.
+   *
+   * ⛔ It does NOT re-derive the deposit from the current total. That would put a
+   * dollar demand on paper that nobody has agreed to, which is the same
+   * substitution in the opposite direction. And it changes no gate: the charge
+   * route already refuses a non-current acceptance, and still does.
+   *
+   * ⚠️ The CALLER supplies this. The document must not decide currentness for
+   * itself — that would be a fourth independent derivation of the question this
+   * lane has spent its whole length consolidating.
+   */
+  acceptanceSuperseded?: boolean
 }
 
 /**
@@ -86,18 +125,31 @@ export function paymentTiming(q: GateQuote, opts: TimingOptions = {}): PaymentTi
       depositAmount: 0,
       depositPercent: null,
       basis,
+      basisUnsettledReason: null,
     }
   }
-  const settled = opts.basisSettled !== false
+  // ⭐ TWO reasons a basis can be unsettled, and the superseded one is checked
+  // FIRST because it is the stronger fact: an unchosen option is a decision still
+  // to come, a superseded acceptance is an agreement already broken.
+  const superseded = opts.acceptanceSuperseded === true
+  const settled = !superseded && opts.basisSettled !== false
+  const reason: BasisUnsettledReason | null = superseded
+    ? 'superseded_acceptance'
+    : (opts.basisSettled === false ? 'unchosen_option' : null)
   const isPercentRule = q.deposit_type === 'percent'
+  // ⚠️ A FIXED rule states its dollars outright and needs no basis — $500 is $500
+  // whichever option they pick, so an unchosen option cannot unsettle it. A
+  // SUPERSEDED acceptance is different: the fixed figure is still the quote's
+  // configuration, so it remains true and is still printed. Only the percent rule
+  // borrows its dollars from a basis, and only that borrowing can go stale.
+  const unsettled = isPercentRule && !settled
   return {
     mode: 'deposit_before_scheduling',
     requiresDepositBeforeScheduling: true,
-    // A FIXED rule states its dollars outright and needs no basis — $500 is $500
-    // whichever option they pick. Only the percent rule has to wait.
-    depositAmount: isPercentRule && !settled ? null : required,
+    depositAmount: unsettled ? null : required,
     depositPercent: isPercentRule ? Number(q.deposit_value) : null,
     basis,
+    basisUnsettledReason: unsettled ? reason : null,
   }
 }
 
@@ -122,6 +174,15 @@ function askPhrase(t: PaymentTiming): string {
 export function quoteTimingLine(t: PaymentTiming): string {
   if (!t.requiresDepositBeforeScheduling) {
     return 'Nothing is charged when you accept — you’ll get an invoice once the work is done.'
+  }
+  // ⛔ The superseded case gets its OWN sentence, and it is the only one that
+  // says why. Reusing "of the option you choose" would tell a customer their
+  // figure depends on a choice when it actually depends on a revision they have
+  // not seen yet — a true-sounding sentence about the wrong thing.
+  if (t.basisUnsettledReason === 'superseded_acceptance') {
+    return `A ${t.depositPercent}% deposit is required before we schedule your visit. `
+      + 'This quote has been revised since it was accepted, so the amount previously agreed no longer applies — '
+      + 'we’ll confirm the deposit on the updated quote before anything is due.'
   }
   const ask = t.depositAmount == null
     ? `A ${t.depositPercent}% deposit of the option you choose`

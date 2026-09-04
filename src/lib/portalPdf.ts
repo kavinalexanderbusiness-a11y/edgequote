@@ -153,7 +153,11 @@ function portalBusinessToSettings(b: PortalPdfBusiness | null): BusinessSettings
   } as unknown as BusinessSettings
 }
 
-export async function renderPortalQuoteBlob(q: PortalPdfQuote, customerName: string, b: PortalPdfBusiness | null): Promise<Blob> {
+export async function renderPortalQuoteBlob(
+  q: PortalPdfQuote, customerName: string, b: PortalPdfBusiness | null,
+  /** The row's currentness answer — see QuotePDFProps.acceptanceSuperseded. */
+  doc?: { acceptanceSuperseded?: boolean },
+): Promise<Blob> {
   const { renderQuoteBlob } = await import('@/components/quotes/QuotePDF')
   // Multi-service breakdown flows into the SAME PDF pipeline the dashboard uses —
   // the customer sees every service line, not a lump sum under one service name.
@@ -184,7 +188,7 @@ export async function renderPortalQuoteBlob(q: PortalPdfQuote, customerName: str
         is_recommended: !!o.is_recommended,
       }))
     : undefined
-  return renderQuoteBlob(portalQuoteToQuote(q, customerName), portalBusinessToSettings(b), services, options)
+  return renderQuoteBlob(portalQuoteToQuote(q, customerName), portalBusinessToSettings(b), services, options, doc)
 }
 // A payment row as the portal sees it — enough for the receipt document.
 export interface PortalPdfPayment {
