@@ -36,6 +36,9 @@ export async function loadOperatorSnapshot(sb: SB, userId: string): Promise<Oper
     afternoon: sentence(brief.cards, 'afternoon'),
     cards: brief.cards.slice(0, 12),
     totalCards: brief.cards.length,
+    // The brief's own read stamp — not "now" — so the age shown is the age of
+    // the evidence, even if this snapshot is assembled later.
+    generated_at: brief.generated_at,
     automationWarning: automation.warnings[0] ?? null,
     recentRuns: history.error ? [] : ((history.data ?? []) as OperatorDashboardSnapshot['recentRuns']),
     historyAvailable: !history.error,

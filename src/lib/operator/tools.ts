@@ -11,7 +11,7 @@ import { normalizeSource } from '@/lib/attribution'
 import { pageAll } from '@/lib/supabase/pageAll'
 import { loadTenantToday } from '@/lib/tenantTimeServer'
 import type { OperatorActionCard, OperatorToolName, OperatorToolResult } from './types'
-import { isUuid } from './types'
+import { isUuid, stripInvisibles } from './types'
 
 // ── Read-only operator tools ─────────────────────────────────────────────────
 // Every tool COMPOSES the canonical domain engine that already answers its
@@ -35,7 +35,24 @@ const money = (n: unknown) => Number.isFinite(Number(n)) ? Number(n) : 0
 const CAD = new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' })
 const fmtMoney = (n: number) => CAD.format(n)
 
-function card(c: OperatorActionCard): OperatorActionCard { return c }
+// EVERY card is composed through here, so this is the one place that has to
+// know customer-controlled text is display-hostile. Card titles are machine-
+// composed from a customer value plus a money amount ("Bob — $10.00 overdue"),
+// so a bidi override inside a name reorders the number the owner is reading;
+// zero-width characters likewise ride into the answer the model summarises.
+// Sanitising at the token beats sanitising at 40 call sites — and a card added
+// tomorrow is covered without its author knowing this rule exists.
+function card(c: OperatorActionCard): OperatorActionCard {
+  return {
+    ...c,
+    title: stripInvisibles(c.title),
+    summary: stripInvisibles(c.summary),
+    why_it_matters: stripInvisibles(c.why_it_matters),
+    recommended_action: stripInvisibles(c.recommended_action),
+    evidence: c.evidence.map(e => ({ ...e, label: stripInvisibles(e.label), detail: stripInvisibles(e.detail) })),
+    data_quality_warnings: c.data_quality_warnings.map(stripInvisibles),
+  }
+}
 function fail(tool: OperatorToolName, summary: string, warning: string): OperatorToolResult {
   return { tool, generated_at: nowIso(), summary, cards: [], warnings: [warning] }
 }

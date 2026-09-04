@@ -73,9 +73,39 @@ export interface OperatorDashboardSnapshot {
   cards: OperatorActionCard[]
   /** Full pre-cap count, so the UI can say "showing 12 of N" honestly. */
   totalCards: number
+  /** When the evidence behind these cards was actually READ (ISO). The page is
+   *  force-dynamic, so this is fresh on load — but the tab can then sit open
+   *  for hours, and money cards that old must not read as current. */
+  generated_at: string
   automationWarning: string | null
   recentRuns: Array<{ id: string; question: string | null; status: string; created_at: string }>
   historyAvailable: boolean
+}
+
+// ── Format-control stripping ────────────────────────────────────────────────
+// Invisible and bidirectional format characters have no legitimate place in
+// operator text, and customer-controlled values (names, titles) flow into card
+// titles the owner reads to make money decisions. Two distinct attacks:
+//
+//   1. EVASION — a zero-width character hidden inside a verb ("s<U+200B>ent")
+//      walks past the word-boundary regex in claimsExecutedAction, so a
+//      fabricated "I have sent it" ships as if it were a safe answer.
+//   2. SPOOFING — a bidi override (U+202E) or isolate (U+2066) reverses the
+//      visual order of everything after it. Operator titles are MACHINE-
+//      COMPOSED from a customer value plus a money amount ("Bob — $10.00
+//      overdue"), so one character inside the name can garble or reorder the
+//      amount the owner is reading.
+//
+// Both are answered the same way: remove the characters. Nothing legitimate is
+// lost — these are formatting directives, never content. Kept here in types (a
+// leaf module) so engine and tools can both use it without an import cycle.
+// The class is written with explicit escapes on purpose: literal invisible
+// characters in source are unreviewable in a diff.
+const FORMAT_CONTROLS = new RegExp(
+  '[\\u00AD\\u061C\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u2064\\u2066-\\u2069\\uFEFF]', 'g')
+
+export function stripInvisibles(s: string): string {
+  return s.replace(FORMAT_CONTROLS, '')
 }
 
 export function isUuid(value: unknown): value is string {

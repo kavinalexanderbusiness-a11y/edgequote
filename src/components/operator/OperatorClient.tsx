@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { ArrowRight, Bot, CheckCircle2, Clock3, LockKeyhole, Sparkles, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
@@ -17,6 +17,27 @@ const examples = [
 ]
 
 function money(v: number | null) { return v == null ? null : new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(v) }
+
+// How old the evidence is, said plainly. Formatted AFTER mount on purpose: the
+// server and the viewer's browser can sit in different timezones, and a
+// server-rendered local time would both mismatch on hydration and be the wrong
+// clock. Until it mounts the slot is empty rather than wrong.
+function EvidenceAge({ iso }: { iso: string }) {
+  const [label, setLabel] = useState<string | null>(null)
+  useEffect(() => {
+    const render = () => {
+      const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60_000))
+      const when = new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+      setLabel(mins < 1 ? `Evidence read just now (${when})`
+        : mins < 60 ? `Evidence read ${mins} min ago (${when})`
+        : `Evidence read at ${when} — reload for current data`)
+    }
+    render()
+    const t = setInterval(render, 60_000)
+    return () => clearInterval(t)
+  }, [iso])
+  return <span className="text-xs text-ink-faint">{label ?? ''}</span>
+}
 
 function ActionCard({ card }: { card: OperatorActionCard }) {
   const badge = card.priority === 'urgent' ? 'Urgent' : card.priority === 'high' ? 'High' : card.priority === 'normal' ? 'Review' : 'Low'
@@ -112,7 +133,7 @@ export function OperatorClient({ initial }: { initial: OperatorDashboardSnapshot
               <div className="mt-4 rounded-2xl border border-border bg-surface/80 p-4">
                 {asked && <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-faint">{asked}</p>}
                 <p className="mt-1 text-sm leading-6 text-ink">{answer.answer}</p>
-                <p className="mt-2 text-[11px] text-ink-faint">Evidence check · {answer.tools_used.join(', ')} · read only</p>
+                <p className="mt-2 text-[11px] text-ink-faint">Evidence check · {answer.tools_used.join(', ')} · read only · <EvidenceAge iso={answer.generated_at} /></p>
                 {/* Answer evidence stays WITH the answer — it never replaces the
                     daily brief below, which keeps its own heading honest. */}
                 {answer.cards.length > 0 && (
@@ -140,7 +161,11 @@ export function OperatorClient({ initial }: { initial: OperatorDashboardSnapshot
 
       <section>
         <div className="mb-3 flex items-center justify-between">
-          <div><p className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-faint">Needs you today</p><h2 className="mt-1 text-lg font-bold text-ink">Evidence-backed actions</h2></div>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-faint">Needs you today</p>
+            <h2 className="mt-1 text-lg font-bold text-ink">Evidence-backed actions</h2>
+            <EvidenceAge iso={initial.generated_at} />
+          </div>
           <span className="rounded-full border border-border px-2.5 py-1 text-xs text-ink-muted">
             {initial.totalCards > initial.cards.length ? `${initial.cards.length} of ${initial.totalCards} items` : `${initial.cards.length} items`}
           </span>

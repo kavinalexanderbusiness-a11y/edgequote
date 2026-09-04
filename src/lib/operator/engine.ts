@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateStructured, type AiTier } from '@/lib/ai/anthropic'
-import { OPERATOR_TOOL_NAMES, type OperatorAnswer, type OperatorContextRefs, type OperatorToolName } from './types'
+import { OPERATOR_TOOL_NAMES, stripInvisibles, type OperatorAnswer, type OperatorContextRefs, type OperatorToolName } from './types'
 import { runReadOnlyOperatorTool } from './tools'
 
 type SB = SupabaseClient<any>
@@ -69,18 +69,12 @@ export function encodeUntrustedEvidence(value: unknown, maxChars: number): { pay
 // The model must never claim the operator DID something — Phase 1 has no write
 // path, so any executed-action claim is a fabrication. This is a deterministic
 // output-side floor beneath the system-prompt rule, not a replacement for it.
-// Invisible/format characters (zero-width spaces and joiners, BOM, soft
-// hyphen, directional marks) have no legitimate place in a plain-text answer,
-// and a hostile instruction embedded in evidence could steer the model to slip
-// one inside a verb ("s​ent") to walk past the word-boundary regex below.
-// Strip them from the answer BEFORE testing it — and ship the same stripped
-// string, so the floor always tests exactly what the owner reads. (The same
-// character class already bit this codebase once: .trim() eats U+FEFF but not
-// U+200B — the app-origin BOM incident.)
-export function stripInvisibles(s: string): string {
-  return s.replace(new RegExp('[\\u200B-\\u200F\\u2060-\\u2064\\u00AD\\uFEFF]', 'g'), '')
-}
-
+//
+// stripInvisibles (lib/operator/types) runs FIRST so a zero-width character
+// hidden inside a verb can't walk past the word boundaries below — and the
+// engine ships that same stripped string, so the tested answer is exactly the
+// answer the owner reads. (This character class already bit this codebase
+// once: .trim() eats U+FEFF but not U+200B — the app-origin BOM incident.)
 export function claimsExecutedAction(answer: string): boolean {
   // Over-matching is the safe direction: a false positive ships the
   // deterministic answer instead ("I paid attention to…" would), a false
