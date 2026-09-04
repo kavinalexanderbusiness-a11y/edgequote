@@ -80,10 +80,51 @@ function freePort(): Promise<number> {
 
 type Server = { url: string; stop: () => Promise<void>; how: string }
 
+// ⭐⭐ TIMEOUTS ARE PART OF THE PROOF, NOT PART OF THE PLUMBING. This guard's
+// whole subject is contention, and contention's failure mode is not a wrong
+// answer — it is NO answer. A sibling session lost an entire heavy-DB slot to a
+// harness that waited forever on a lock it was never going to get (~928 CPU
+// seconds, no measurement produced). An untimed lock wait therefore is not a
+// missing nicety here, it is the specific way this file fails.
+//
+// These are deliberately GENEROUS. The 100-way race serialises on one counter
+// row, so the last caller legitimately waits for all 99 ahead of it; a tight
+// bound would manufacture a red that says nothing about quote numbers. They
+// exist to convert "hangs forever" into "fails in a minute with a lock report",
+// not to police latency. A true deadlock is caught by PostgreSQL's own
+// deadlock_timeout long before any of these fire.
+const PG_TIMEOUT_SETTINGS = [
+  'statement_timeout=120s',
+  'lock_timeout=60s',
+  'idle_in_transaction_session_timeout=120s',
+]
+// `options` rides in the connection string, so EVERY client built from
+// `server.url` inherits it with no change at the ~10 call sites — and it covers
+// the supplied-server path too, where we do not control the postmaster's flags.
+const TIMEOUT_OPTIONS = PG_TIMEOUT_SETTINGS.map(s => `-c ${s}`).join(' ')
+const withTimeouts = (url: string) =>
+  url + (url.includes('?') ? '&' : '?') + 'options=' + encodeURIComponent(TIMEOUT_OPTIONS)
+
 async function startServer(): Promise<Server | null> {
   const supplied = process.env.QUOTE_NUMBER_PG_URL
   if (supplied) {
-    return { url: supplied, how: 'QUOTE_NUMBER_PG_URL (supplied server)', stop: async () => {} }
+    // ⛔⛔ A SUPPLIED URL IS NOT AUTOMATICALLY A SAFE URL. What follows this
+    // function applies the platform prelude, every migration and an UNAPPLIED
+    // proposal, then deletes and renumbers rows — against whatever host it was
+    // handed. The two intended suppliers (a throwaway docker container, a CI
+    // service container) are both loopback, so requiring loopback costs nothing
+    // and removes the one input that could point this destructive suite at a
+    // real database.
+    let host = ''
+    try { host = new URL(supplied).hostname } catch { host = '' }
+    const loopback = ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(host)
+    if (!loopback) {
+      console.error(`\n  ⛔ REFUSING TO RUN — QUOTE_NUMBER_PG_URL points at "${host || 'an unparseable host'}".`)
+      console.error('     This guard BUILDS AND MUTATES a schema. It runs only against a')
+      console.error('     disposable loopback server. Unset the variable to use the embedded one.\n')
+      process.exit(2)
+    }
+    return { url: withTimeouts(supplied), how: `QUOTE_NUMBER_PG_URL (supplied loopback server, ${host})`, stop: async () => {} }
   }
   let EmbeddedPostgres: any
   try {
@@ -115,7 +156,10 @@ async function startServer(): Promise<Server | null> {
     // ⚠️ The default max_connections is 100, and this guard opens 100 callers
     // PLUS an admin connection. One short is still a failed race for a reason
     // that has nothing to do with quote numbers.
-    postgresFlags: ['-c', 'max_connections=200'],
+    // The timeouts are ALSO set as postmaster defaults, not only in the
+    // connection string, so a connection opened by any path this file grows
+    // later still inherits them.
+    postgresFlags: ['-c', 'max_connections=200', ...PG_TIMEOUT_SETTINGS.flatMap(s => ['-c', s])],
     onLog: () => {},
     onError: () => {},
   })
@@ -123,7 +167,7 @@ async function startServer(): Promise<Server | null> {
   await pg.start()
   await pg.createDatabase('qnum')
   return {
-    url: `postgres://postgres:postgres@127.0.0.1:${port}/qnum`,
+    url: withTimeouts(`postgres://postgres:postgres@127.0.0.1:${port}/qnum`),
     how: `embedded-postgres, disposable server on 127.0.0.1:${port}`,
     stop: async () => {
       try { await pg.stop() } catch { /* already down */ }
@@ -134,6 +178,30 @@ async function startServer(): Promise<Server | null> {
 
 async function main() {
   console.log('\n══ 0 · a real PostgreSQL, with real independent connections ════════════\n')
+
+  // ⭐ THE OUTER BOUND. Per-statement timeouts cannot catch a hang that happens
+  // between statements — a cluster that never finishes initdb, a connect that
+  // never resolves, a Promise.all where one member never settles. This is the
+  // backstop that guarantees the slot is always handed back, and it tries to
+  // take the server down with it rather than orphaning a postmaster and a temp
+  // directory. It is armed BEFORE startServer so cluster start is covered too.
+  const t0 = Date.now()
+  const OVERALL_MS = Number(process.env.QUOTE_NUMBER_TIMEOUT_MS ?? 10 * 60_000)
+  let cleanupRef: (() => Promise<void>) | null = null
+  const watchdog = setTimeout(() => {
+    console.error(`\n  ✗ OVERALL TIMEOUT — no result after ${Math.round(OVERALL_MS / 1000)}s.`)
+    console.error('     Something waited that should not have. This is reported as a FAILURE,')
+    console.error('     never as a pass: an unfinished contention proof has proven nothing.')
+    void (async () => {
+      // bounded, so a wedged server cannot also wedge the shutdown
+      await Promise.race([
+        (cleanupRef?.() ?? Promise.resolve()),
+        new Promise(r => setTimeout(r, 20_000)),
+      ]).catch(() => {})
+      process.exit(1)
+    })()
+  }, OVERALL_MS)
+  watchdog.unref?.()
 
   const server = await startServer()
   if (!server) {
@@ -157,10 +225,12 @@ async function main() {
 
   let clients: any[] = []
   const cleanup = async () => {
+    clearTimeout(watchdog)
     await Promise.all(clients.map(c => c.end().catch(() => {})))
     await admin.end().catch(() => {})
     await server.stop()
   }
+  cleanupRef = cleanup
 
   try {
     const v = (await admin.query('select version() as v')).rows[0].v as string
@@ -171,6 +241,18 @@ async function main() {
     const maxConn = Number((await admin.query('show max_connections')).rows[0].max_connections)
     check('the server allows enough independent connections for a 100-way race',
       maxConn >= 120, `max_connections = ${maxConn}`)
+
+    // ⭐ MEASURED, NOT ASSUMED. Riding the timeouts in on the connection string's
+    // `options` is only useful if the driver actually forwards it, so read the
+    // settings back off a live session rather than trusting the plumbing. A
+    // silent "0" here would mean every wait below is unbounded again — the
+    // failure this guard is least able to report on its own.
+    const st = (await admin.query('show statement_timeout')).rows[0].statement_timeout
+    const lt = (await admin.query('show lock_timeout')).rows[0].lock_timeout
+    check('every connection carries a statement and lock timeout',
+      st !== '0' && lt !== '0',
+      `statement_timeout=${st}, lock_timeout=${lt} — a contention guard that can wait forever is how a heavy-DB slot gets burned with no measurement`)
+    console.log(`    statement_timeout=${st} · lock_timeout=${lt} · overall watchdog ${Math.round(OVERALL_MS / 1000)}s`)
 
     // ── build the schema ────────────────────────────────────────────────────
     const applyFile = async (label: string, sql: string) => {
@@ -263,7 +345,7 @@ async function main() {
     }
 
     const seqOf = (s: string) => Number(s.slice(s.lastIndexOf('-') + 1))
-    const maxOverlap = (runs: Run[]) => {
+    const maxOverlap = (runs: { start: number; end: number }[]) => {
       // the largest number of callers that were inside their transaction at once
       const edges = runs.flatMap(r => [{ t: r.start, d: 1 }, { t: r.end, d: -1 }])
         .sort((x, y) => x.t - y.t || x.d - y.d)
@@ -751,28 +833,47 @@ async function main() {
     await admin.query(mkQuoteId(R2, A, r2Num, CUST_A))
     const target = (await admin.query('select public.allocate_quote_number($1) as v', [A])).rows[0].v as string
 
-    const raceUpdate = async (pairs: { id: string; to: string }[]) => {
+    // ⛔⛔ THE SAME BAR SECTION 1 IS HELD TO. "Exactly one wins" is, on its own,
+    // equally true of two updates run one after the other — the second would be
+    // refused by the claim it found already committed. So this records each
+    // caller's backend pid and the wall-clock window it was inside its
+    // transaction, exactly as raceAllocate does, and the assertions below require
+    // that those windows actually OVERLAPPED. Without that, this section would be
+    // a sequential loop wearing the word "race", which is the precise false green
+    // this whole file exists to refuse.
+    type UpdRun = { result: string; pid: number; start: number; end: number }
+    const raceUpdate = async (pairs: { id: string; to: string }[]): Promise<UpdRun[]> => {
       const cs = pairs.map(() => new Client({ connectionString: server.url }))
       clients.push(...cs)
       await Promise.all(cs.map(c => c.connect()))
-      const results = await Promise.all(cs.map(async (c, i) => {
+      const runs = await Promise.all(cs.map(async (c, i): Promise<UpdRun> => {
+        const start = performance.now()
+        let pid = 0, result: string
         try {
           await c.query('begin')
+          pid = Number((await c.query('select pg_backend_pid() as pid')).rows[0].pid)
           await c.query(`update public.quotes set quote_number=$1 where id=$2`, [pairs[i].to, pairs[i].id])
           await c.query('select pg_sleep(0.02)')      // hold the claim row lock
           await c.query('commit')
-          return 'ok'
+          result = 'ok'
         } catch (e: any) {
           try { await c.query('rollback') } catch { /* already aborted */ }
-          return String(e?.message ?? 'error')
+          result = String(e?.message ?? 'error')
         }
+        return { result, pid, start, end: performance.now() }
       }))
       await Promise.all(cs.map(c => c.end()))
       clients = clients.filter(c => !cs.includes(c))
-      return results
+      return runs
     }
 
-    const raced = await raceUpdate([{ id: R1, to: target }, { id: R2, to: target }])
+    const racedRuns = await raceUpdate([{ id: R1, to: target }, { id: R2, to: target }])
+    const raced = racedRuns.map(r => r.result)
+    const updOverlap = maxOverlap(racedRuns)
+    const updPids = new Set(racedRuns.map(r => r.pid))
+    check('UPDATE RACE · the two renumberings were genuinely concurrent, not sequential',
+      updOverlap >= 2 && updPids.size === 2,
+      `max simultaneous transactions = ${updOverlap}, distinct backends = ${updPids.size} — the loser must have been BLOCKED on the winner's uncommitted claim row, not merely arriving after it`)
     const updWinners = raced.filter(r => r === 'ok').length
     check('UPDATE RACE · two quotes renumbering onto ONE number — exactly one wins',
       updWinners === 1,
@@ -798,6 +899,14 @@ async function main() {
     // is the exact interleaving that handed a live number to a stranger; under a
     // permanent claim there is no release path for the delete to trigger, so the
     // stranger must lose every time regardless of ordering.
+    //
+    // ⚠️ WHAT THIS DOES AND DOES NOT CLAIM. Both sides are single autocommit
+    // statements a millisecond long, so unlike the UPDATE race above this one
+    // does NOT measure overlap and must not be read as having done so. It claims
+    // the weaker, still-useful thing: the outcome is INVARIANT under concurrent
+    // dispatch. The fully-sequential ordering — delete commits, then the stranger
+    // tries — is case (3) in §7, and it is the ordering the old released-claim
+    // model actually lost to; this adds that no dispatch order rescues it.
     const D1 = 'bbbbbbb4-0000-4000-8000-00000000000e'
     const S1 = 'bbbbbbb5-0000-4000-8000-00000000000f'
     const delNum = (await admin.query('select public.allocate_quote_number($1) as v', [A])).rows[0].v as string
@@ -876,7 +985,7 @@ async function main() {
     await cleanup()
   }
 
-  console.log(`\n${fail ? '✗' : '✓'} verify:quote-number-concurrency — ${pass} passed, ${fail} failed\n`)
+  console.log(`\n${fail ? '✗' : '✓'} verify:quote-number-concurrency — ${pass} passed, ${fail} failed  (${((Date.now() - t0) / 1000).toFixed(1)}s)\n`)
   if (fail) process.exit(1)
 }
 
