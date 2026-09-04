@@ -148,11 +148,25 @@ async function main() {
           return [...document.querySelectorAll('[data-case]')].map(row => {
             const btn = row.querySelector('[role=switch]')
             const track = btn.querySelector('span')
-            return { id: row.dataset.case, disabled: btn.disabled, tap: btn.classList.contains('tap-target'), btn: box(btn), track: box(track) }
+            const spans = btn.querySelectorAll(':scope > span')
+            const label = spans.length > 1 ? spans[spans.length - 1] : null
+            const lr = label && label.getBoundingClientRect(), rr = row.getBoundingClientRect()
+            return {
+              id: row.dataset.case, disabled: btn.disabled, tap: btn.classList.contains('tap-target'), btn: box(btn), track: box(track),
+              label: label ? { w: Math.round(lr.width), h: Math.round(lr.height), overflowX: label.scrollWidth - label.clientWidth, pastRow: Math.round(lr.right - rr.right) } : null,
+            }
           })
         })()`)
         check('every visible track is exactly 40×24 — the switch itself never changes size',
           t.every(c => c.track.w === 40 && c.track.h === 24), t.map(c => `${c.id} ${c.track.w}x${c.track.h}`).join(' · '))
+        // The long labels: the TEXT is what wraps — it must stay inside its row
+        // and never scroll sideways inside its own box; the track beside it
+        // keeps its 40px (asserted above for every case, these two included).
+        const long = t.filter(c => c.label)
+        check(`long labels wrap inside the row, no sideways text overflow (${long.map(c => `${c.id} ${c.label.w}x${c.label.h}`).join(', ')})`,
+          long.length === 2 && long.every(c => c.label.overflowX <= 1 && c.label.pastRow <= 1),
+          long.map(c => `${c.id} overflowX=${c.label.overflowX} pastRow=${c.label.pastRow}`).join(' · '))
+        if (phone) check('…and on a phone they actually wrap (label taller than one line)', long.every(c => c.label.h > 24), long.map(c => `${c.id} h=${c.label.h}`).join(' · '))
         if (phone) {
           const tap = t.filter(c => c.tap)
           check(`tap-target switches clear 44×44 on a phone (${tap.map(c => `${c.btn.w}x${c.btn.h}`).join(', ')})`,
