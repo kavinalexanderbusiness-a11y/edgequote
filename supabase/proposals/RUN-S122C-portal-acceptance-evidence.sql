@@ -46,7 +46,7 @@ begin
   -- anchor matches ZERO times. This trap has now cost this lane twice.
   v_src := replace(v_src, E'\r\n', E'\n');
 
-  if position('has_acceptance_evidence' in v_src) > 0 then
+  if position('acceptance_kind' in v_src) > 0 then
     raise notice 'already widened — nothing to do';
     return;
   end if;
@@ -58,12 +58,23 @@ begin
     raise exception 'anchor found % times, expected exactly 1 — refusing to patch', coalesce(v_hits, 0);
   end if;
 
-  -- ⛔ EXISTS, not a count and not a join: the portal needs to know only WHETHER
-  -- consent was recorded. Nothing about who, when or for how much crosses this
-  -- boundary — a customer's own acceptance detail is theirs to be shown
-  -- deliberately, not as a side effect of widening a list projection.
+  -- ⛔ The KIND of the latest acceptance, and nothing else.
+  --
+  -- ⚠️ This began as a boolean `has_acceptance_evidence`, and that was wrong in
+  -- a way only the next surface revealed: with a bare true/false the portal
+  -- cannot tell the CUSTOMER's own acceptance from the OWNER's attestation, and
+  -- would have told a customer "this is the price YOU accepted" about a phone
+  -- call the business wrote down. S121 built those kinds to be different facts;
+  -- a boolean collapses them at the last possible surface.
+  --
+  -- Still no actor, no timestamp, no amount, no note — the kind is the minimum
+  -- that lets the portal choose an honest SENTENCE. A customer's own acceptance
+  -- detail is theirs to be shown deliberately, never as a side effect of
+  -- widening a list projection.
   v_new := v_old || E'\n'
-        || '             (exists (select 1 from public.quote_acceptances qa where qa.quote_id = qt.id)) as has_acceptance_evidence,';
+        || '             (select qa.kind from public.quote_acceptances qa'
+        || E'\n'
+        || '               where qa.quote_id = qt.id order by qa.seq desc limit 1) as acceptance_kind,';
 
   v_src := replace(v_src, v_old, v_new);
   execute v_src;

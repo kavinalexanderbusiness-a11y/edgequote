@@ -40,7 +40,7 @@ import { authorizedValue } from '@/lib/changeOrders'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
 import {
   isAcceptedOrBeyond, acceptedPresentation, customerFacingQuoteAmount,
-  unevidencedAcceptanceNote,
+  acceptedAmountNote, type AcceptanceKind,
 } from '@/lib/quoteAcceptance'
 import { formatCurrency, parseLocalDate } from '@/lib/utils'
 // THE request engine (lib/portalRequests) — the same module the owner's request
@@ -72,7 +72,7 @@ export interface PortalQuoteOption { id: string; name: string; description: stri
 // derived from the ledger by lib/payments/depositGate, never stored anywhere.
 // `preferred_*` is the customer's own scheduling REQUEST — a preference, never
 // an appointment — echoed back so a reload keeps what they told us.
-export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null; options?: PortalQuoteOption[] | null; selected_option_id?: string | null; accepted_price?: number | null; has_acceptance_evidence?: boolean; deposit_type?: string | null; deposit_value?: number | null; preferred_date?: string | null; preferred_date_2?: string | null; preferred_timing?: string | null; preferred_note?: string | null }
+export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null; options?: PortalQuoteOption[] | null; selected_option_id?: string | null; accepted_price?: number | null; acceptance_kind?: string | null; deposit_type?: string | null; deposit_value?: number | null; preferred_date?: string | null; preferred_date_2?: string | null; preferred_timing?: string | null; preferred_note?: string | null }
 // `property_id` null is the HONEST answer for an invoice spanning several properties —
 // never infer one, or a combined invoice prints one address as if it were the whole bill.
 export interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; property_id?: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null; amount_paid?: number | null; deposit_amount?: number | null; deposit_requested_at?: string | null }
@@ -890,7 +890,7 @@ export function buildDocItems(opts: {
     // payload widening that restores the snapshot for evidenced quotes is
     // supabase/proposals/RUN-S122C-portal-acceptance-evidence.sql — until it is
     // applied, `evidenced` is unreachable and every accepted quote reads current.
-    const presentation = acceptedPresentation(qq.status, qq.has_acceptance_evidence)
+    const presentation = acceptedPresentation(qq.status, qq.acceptance_kind as AcceptanceKind | null | undefined)
     const facing = customerFacingQuoteAmount(presentation, qq.accepted_price, Number(qq.total) || 0)
     const acceptedFigure = facing.isAcceptedAmount ? facing.amount : null
     const priceMovedSinceAccepted =
@@ -947,16 +947,20 @@ export function buildDocItems(opts: {
       // number beside new work. The customer is told a revision is coming; they
       // are never shown a price they have not agreed to as though they had.
       amountNote: [
-        // ⛔ The consent sentence is reachable ONLY from `evidenced`. It is the
-        // one claim on this screen about what the customer personally agreed to,
-        // so it may never be made from a status flag.
-        priceMovedSinceAccepted
+        // ⛔⛔ "YOU accepted" is reachable ONLY from `evidenced_customer`. It is
+        // the one claim on this screen about what the customer PERSONALLY did,
+        // so it may never be made from a status flag — and never from an
+        // owner's attestation either. An on-behalf acceptance is real evidence
+        // of an agreed figure, and it gets its own sentence below saying so;
+        // borrowing the customer's voice for it would undo the whole reason S121
+        // keeps the kinds apart.
+        priceMovedSinceAccepted && presentation === 'evidenced_customer'
           ? 'This is the price you accepted — we’ve made changes since and will send you an updated quote to look over.'
           : null,
         // Status says accepted, the record cannot show it. Named plainly rather
         // than left silent: the customer can see the badge, and an unexplained
         // "Accepted" they never remember agreeing to is its own small alarm.
-        presentation === 'unevidenced' ? unevidencedAcceptanceNote() : null,
+        acceptedAmountNote(presentation),
         gstPct > 0 ? `+ GST (${gstPct}%) — added on your invoice` : null,
       ].filter(Boolean).join(' · ') || undefined,
       balance: 0,

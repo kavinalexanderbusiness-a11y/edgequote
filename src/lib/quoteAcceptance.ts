@@ -245,8 +245,23 @@ export function isAcceptedOrBeyond(status: QuoteStatus | string): boolean {
 export type AcceptedPresentation =
   /** Not accepted at all — the quote is an offer, show the live price. */
   | 'offer'
-  /** Evidence supports it: the consent snapshot may be shown AS accepted. */
-  | 'evidenced'
+  /**
+   * The CUSTOMER's own acceptance is on record. Only this state may say "you
+   * accepted": it is the only one where the customer performed the act.
+   */
+  | 'evidenced_customer'
+  /**
+   * The OWNER attested that the customer accepted, off-platform
+   * (kind='owner_on_behalf'). Real, durable evidence of an agreed amount — so
+   * the snapshot may be shown — but it is the BUSINESS's record of a
+   * conversation, not something the customer did here.
+   *
+   * ⛔ NEVER worded as "you accepted". S121 built these kinds to be different
+   * facts, and collapsing them at the last surface would undo that: a customer
+   * reading "you accepted this" about a call they half-remember has no way to
+   * tell whose claim they are looking at.
+   */
+  | 'evidenced_on_behalf'
   /** Status says accepted, evidence does not exist or cannot be proven. */
   | 'unevidenced'
 
@@ -258,10 +273,17 @@ export type AcceptedPresentation =
  * refuse the claim, but only the first is a defect worth naming to the owner.
  */
 export function acceptedPresentation(
-  status: QuoteStatus | string, hasEvidence: boolean | undefined,
+  status: QuoteStatus | string, evidence: AcceptanceKind | null | undefined,
 ): AcceptedPresentation {
   if (!isAcceptedOrBeyond(status)) return 'offer'
-  return hasEvidence === true ? 'evidenced' : 'unevidenced'
+  if (evidence === 'customer') return 'evidenced_customer'
+  // ⭐ `owner_on_behalf` AND `legacy_unrecorded` both land here. A legacy row is
+  // the migration's note that a pre-S121 quote was already accepted — real, but
+  // never the customer's own act, so it may not borrow their voice either.
+  if (evidence === 'owner_on_behalf' || evidence === 'legacy_unrecorded') return 'evidenced_on_behalf'
+  // null = no evidence · undefined = we could not look. Both refuse the claim;
+  // only the first is a defect worth naming to the owner.
+  return 'unevidenced'
 }
 
 /**
@@ -277,11 +299,32 @@ export function customerFacingQuoteAmount(
   acceptedPrice: number | null | undefined,
   currentTotal: number,
 ): { amount: number; isAcceptedAmount: boolean } {
-  if (presentation === 'evidenced') {
+  // ⭐ BOTH evidenced states may show the snapshot: an owner's attestation is
+  // real, durable evidence of an agreed figure. What differs is whose act it
+  // was, and that is the SENTENCE's job (see acceptedAmountNote), not the
+  // number's. Conflating them here would have re-introduced the stale-figure
+  // bug for on-behalf acceptances; conflating them in the wording would tell a
+  // customer they did something they did not do.
+  if (presentation === 'evidenced_customer' || presentation === 'evidenced_on_behalf') {
     const a = Number(acceptedPrice)
     if (Number.isFinite(a) && a > 0) return { amount: a, isAcceptedAmount: true }
   }
   return { amount: Number(currentTotal) || 0, isAcceptedAmount: false }
+}
+
+/**
+ * What the customer is told about an accepted figure — whose act it was.
+ *
+ * ⛔ Only `evidenced_customer` says "you accepted". An owner's attestation says
+ * the business recorded it, which is the true and checkable statement.
+ */
+export function acceptedAmountNote(presentation: AcceptedPresentation): string | null {
+  if (presentation === 'evidenced_customer') return null   // the existing wording covers it
+  if (presentation === 'evidenced_on_behalf') {
+    return 'This is the amount your acceptance was recorded at by the business, on your behalf.'
+  }
+  if (presentation === 'unevidenced') return unevidencedAcceptanceNote()
+  return null
 }
 
 /**

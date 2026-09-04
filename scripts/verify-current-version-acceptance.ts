@@ -16,7 +16,8 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { splitStatements, loadPGlite, substitutePlatformStatements } from './lib/pg-sql'
 import { termsClaimRefresh } from '../src/lib/payments/termsClaimRefresh'
-import { requiredDeposit } from '../src/lib/payments/depositGate'
+import { requiredDeposit, depositBasis, schedulingGate } from '../src/lib/payments/depositGate'
+import { acceptedPresentation, customerFacingQuoteAmount, acceptedAmountNote } from '../src/lib/quoteAcceptance'
 
 let pass = 0, fail = 0
 const check = (n: string, ok: boolean, d?: string) => {
@@ -274,6 +275,67 @@ async function main() {
       !/insert\s+into\s+public\.quote_acceptances/i.test(src))
     check('O · ⛔ and it takes no tenant argument — identity is auth.uid()',
       /v_uid uuid := auth\.uid\(\)/.test(src) && !/p_tenant|p_user_id/.test(src))
+  }
+
+  console.log('\n■ JUN. The whole chain, end to end, on the live shape')
+  {
+    // current $500 · stale accepted_price $1,400 · accepted · zero evidence
+    // 50% deposit · no job · no invoice — and the owner confirms by text.
+    const id = await junShaped()
+    const before = (await q(`select status, accepted_price, total from public.quotes where id=$1`, [id])).rows[0] as Record<string, unknown>
+    check('JUN · before: accepted, stale $1,400, current $500, zero evidence',
+      before.status === 'accepted' && Number(before.accepted_price) === 1400
+      && Number(before.total) === 500 && (await evidence(id)) === 0,
+      JSON.stringify(before))
+
+    // ⭐ The unrepaired state is what the customer would have been shown: the
+    // deposit derived from the STALE snapshot is $700 against a $500 document.
+    check('JUN · unrepaired, the stale basis would ask $700',
+      requiredDeposit({ status: 'accepted', total: 500, accepted_price: 1400,
+        deposit_type: 'percent', deposit_value: 50 }) === 700)
+
+    const out = await confirm(id)
+    check('JUN · the owner confirms the CURRENT $500 by text', out.ok === true, JSON.stringify(out))
+
+    const row = (await q(`select kind, accepted_amount from public.quote_acceptances where quote_id=$1`, [id])).rows[0] as Record<string, unknown>
+    const after = (await q(`select status, accepted_price, total from public.quotes where id=$1`, [id])).rows[0] as Record<string, unknown>
+    check('JUN · ONE owner_on_behalf evidence row', (await evidence(id)) === 1 && row.kind === 'owner_on_behalf')
+    check('JUN · accepted snapshot = $500', Number(row.accepted_amount) === 500, String(row.accepted_amount))
+    check('JUN · accepted_price = $500', Number(after.accepted_price) === 500, String(after.accepted_price))
+    check('JUN · status stays accepted', after.status === 'accepted')
+
+    // ⭐⭐ THE CHAIN THE BRIEF ASKS FOR, computed by the REAL gate over the REAL
+    // repaired row — not by re-typing the numbers into the assertion.
+    const gq = {
+      status: String(after.status), total: Number(after.total),
+      accepted_price: Number(after.accepted_price),
+      deposit_type: 'percent', deposit_value: 50,
+    }
+    check('JUN · deposit BASIS is now $500', depositBasis(gq) === 500, String(depositBasis(gq)))
+    const gate = schedulingGate(gq, [])
+    check('JUN · required deposit = $250', gate.required === 250, String(gate.required))
+    check('JUN · outstanding = $250 (nothing collected yet)', gate.outstanding === 250)
+    check('JUN · the gate stands between acceptance and the schedule', gate.status === 'awaiting')
+    check('JUN · remaining service balance after the deposit = $250',
+      Number(after.accepted_price) - gate.required === 250)
+    check('JUN · ⛔ no $700 anywhere in the repaired chain',
+      gate.required !== 700 && depositBasis(gq) !== 1400)
+
+    // The quote-deposit link is a QUOTE-level door: it needs no invoice.
+    const invs = Number((await q(`select count(*)::int n from public.invoices where quote_id=$1`, [id])).rows[0].n)
+    check('JUN · no invoice exists, and none is needed for the deposit link', invs === 0)
+
+    // And the customer-facing presentation, from the same repaired row.
+    const kind = String(row.kind)
+    const pres = acceptedPresentation(String(after.status), kind as never)
+    check('JUN · presentation is evidenced_on_behalf', pres === 'evidenced_on_behalf')
+    const facing = customerFacingQuoteAmount(pres, Number(after.accepted_price), Number(after.total))
+    check('JUN · the customer sees $500, labelled as an accepted amount',
+      facing.amount === 500 && facing.isAcceptedAmount)
+    const note = acceptedAmountNote(pres) ?? ''
+    check('JUN · ⛔ and is never told "you accepted"', !/you accepted/i.test(note), note)
+    check('JUN · …but IS told the business recorded it on their behalf',
+      /on your behalf/i.test(note), note)
   }
 
   console.log('\n■ G2. Evidence that does NOT match cannot be joined by a repair row')

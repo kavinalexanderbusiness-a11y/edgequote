@@ -365,8 +365,8 @@ const portalModel = read('src/app/portal/[token]/model.ts')
 // becomes reachable in production, and this should be re-tightened to assert the
 // snapshot IS shown for real accepted quotes end to end.
 check('PORTAL — an accepted quote shows the consented figure WHEN it is evidenced',
-  customerFacingQuoteAmount('evidenced', 1400, 500).amount === 1400
-  && customerFacingQuoteAmount('evidenced', 1400, 500).isAcceptedAmount === true)
+  customerFacingQuoteAmount('evidenced_customer', 1400, 500).amount === 1400
+  && customerFacingQuoteAmount('evidenced_customer', 1400, 500).isAcceptedAmount === true)
 check('PORTAL — …and never a stale snapshot when it is not',
   customerFacingQuoteAmount('unevidenced', 1400, 500).amount === 500
   && customerFacingQuoteAmount('unevidenced', 1400, 500).isAcceptedAmount === false)
