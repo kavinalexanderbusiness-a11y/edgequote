@@ -125,8 +125,10 @@ async function main() {
   let failTable: string | null = null
   // ⭐ Counted, so "the stub was installed" is provable the same way the Stripe
   // fake proves it: by evidence it was actually USED, not by its presence.
-  let shimBuilt = 0
-  const shim = () => { shimBuilt++; return makeSupabaseShim(q, { uid: shimUid, failOn: t => t === failTable }) }
+  // One counter per stub: 'a shim was built' cannot say WHICH door the routes
+  // came through, and the two are installed for different reasons.
+  let clientShims = 0, serverShims = 0
+  const shim = () => makeSupabaseShim(q, { uid: shimUid, failOn: t => t === failTable })
 
   const stub = (id: string, exports: Record<string, unknown>) => {
     const resolved = require.resolve(id)
@@ -137,8 +139,8 @@ async function main() {
   // resolve IS ours. Without it, a stub that silently failed to take effect would
   // hand the routes the REAL client pointed at whatever env held — the exact
   // failure the Stripe fake is already protected against and this one was not.
-  const supaResolved = stub('@supabase/supabase-js', { createClient: () => shim(), __zzShim: SHIM_SENTINEL })
-  const serverResolved = stub('../src/lib/supabase/server', { createClient: async () => shim(), __zzShim: SHIM_SENTINEL })
+  const supaResolved = stub('@supabase/supabase-js', { createClient: () => { clientShims++; return shim() }, __zzShim: SHIM_SENTINEL })
+  const serverResolved = stub('../src/lib/supabase/server', { createClient: async () => { serverShims++; return shim() }, __zzShim: SHIM_SENTINEL })
   stub('../src/lib/stripe/config', {
     stripeEnabled: () => true,
     createQuoteDepositCheckoutSession: async (_q: unknown, o: { chargeCents: number; chargeLabel: string }) => {
@@ -146,6 +148,30 @@ async function main() {
       return { ok: true, url: 'https://checkout.invalid/zz-session' }
     },
   })
+
+  // -- PRE-FLIGHT: PREVENTION, NOT DIAGNOSIS -------------------------------
+  // These ran at the END in the first version, which made them a post-mortem:
+  // every case had already executed against whatever was actually installed.
+  // Here, a surviving ambient value or a missing stub ABORTS before a single
+  // case runs. Exit 2, not 1, so a broken harness is never read as a product
+  // failure.
+  /* eslint-disable @typescript-eslint/no-require-imports */
+  const sentinelOf = (id: string) => (require.cache[id]?.exports as { __zzShim?: string } | undefined)?.__zzShim
+  /* eslint-enable @typescript-eslint/no-require-imports */
+  const mustBe = (what: string, isOk: boolean, got?: string) => {
+    if (isOk) { pass++; console.log('  \u2713 pre-flight \u00b7 ' + what); return }
+    console.error('\n\u26d4 HARNESS NOT SYNTHETIC - ABORTING BEFORE ANY CASE RAN\n   ' + what + (got ? '\n   got: ' + got : '') + '\n')
+    process.exit(2)
+  }
+  console.log('\n\u2500\u2500 pre-flight \u00b7 the harness is synthetic, before anything runs \u2500\u2500\n')
+  mustBe('the Supabase URL is the synthetic one', process.env.NEXT_PUBLIC_SUPABASE_URL === 'http://shim.invalid', process.env.NEXT_PUBLIC_SUPABASE_URL)
+  mustBe('the service-role key is the synthetic one', process.env.SUPABASE_SERVICE_ROLE_KEY === 'zz-shim-service-key')
+  mustBe('the app URL is the synthetic one', process.env.NEXT_PUBLIC_APP_URL === 'https://zz.invalid')
+  mustBe('no ambient contaminant survived',
+    ![process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, process.env.NEXT_PUBLIC_APP_URL]
+      .some(v => v === AMBIENT.url || v === AMBIENT.key || v === AMBIENT.app))
+  mustBe('the @supabase/supabase-js CLIENT stub is installed', sentinelOf(supaResolved) === SHIM_SENTINEL)
+  mustBe('the src/lib/supabase/server stub is installed', sentinelOf(serverResolved) === SHIM_SENTINEL)
 
   /* eslint-disable @typescript-eslint/no-require-imports */
   const depositRoute = require('../src/app/api/portal/quote-deposit/route') as
@@ -430,54 +456,30 @@ async function main() {
       /!d\.schedulingDeposit\.payable \?/.test(bill) && /d\.depositBlockedLine/.test(bill))
   }
 
-  // ── J · THE HARNESS ITSELF ────────────────────────────────────────────────
-  // A synthetic guard is only evidence if its fakes are genuinely in place. These
-  // check the harness, not the product: every case above ran against them.
+  // -- J . THE FAKES WERE USED, not merely installed ------------------------
+  // Installation is proved by the PRE-FLIGHT, before any case runs. This is the
+  // other half, and the half that can only be known afterwards: presence is not
+  // use. Nothing here re-checks what the pre-flight already refused to start on.
   {
-    console.log('\n── J · the harness is synthetic, provably ─────────────────────────\n')
-
-    // ⛔ Ambient values must not survive. The probe set all three to contaminants
-    // before main() ran; if the override regressed to `||=`, these fail.
-    check('J · the Supabase URL is the synthetic one, not the ambient value',
-      process.env.NEXT_PUBLIC_SUPABASE_URL === 'http://shim.invalid', process.env.NEXT_PUBLIC_SUPABASE_URL)
-    check('J · the service-role key is the synthetic one',
-      process.env.SUPABASE_SERVICE_ROLE_KEY === 'zz-shim-service-key')
-    check('J · the app URL is the synthetic one',
-      process.env.NEXT_PUBLIC_APP_URL === 'https://zz.invalid')
-    check('J · ⛔ no contaminant survived anywhere in the three',
-      ![process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, process.env.NEXT_PUBLIC_APP_URL]
-        .some(v => v === AMBIENT.url || v === AMBIENT.key || v === AMBIENT.app))
-
-    // [negative control] the operator that used to be here would have kept it.
-    const probe: Record<string, string> = { X: AMBIENT.url }
-    probe.X ||= 'http://shim.invalid'
-    check('J · [negative control] `||=` would have kept the ambient value',
-      probe.X === AMBIENT.url)
-
-    // ⛔ The module the routes resolve must BE the fake.
-    /* eslint-disable @typescript-eslint/no-require-imports */
-    const cached = (id: string) => (require.cache[id]?.exports ?? {}) as { __zzShim?: string }
-    /* eslint-enable @typescript-eslint/no-require-imports */
-    check('J · the @supabase/supabase-js cache entry is the fake',
-      cached(supaResolved).__zzShim === SHIM_SENTINEL)
-    check('J · the src/lib/supabase/server cache entry is the fake',
-      cached(serverResolved).__zzShim === SHIM_SENTINEL)
-
+    console.log('\n\u2500\u2500 J \u00b7 \u2026and the fakes were actually used \u2500\u2500\u2500\u2500\u2500\u2500\n')
+    check('J \u00b7 the server client stub was constructed by the routes',
+      serverShims > 0, 'serverShims=' + serverShims)
+    check('J \u00b7 the Stripe fake recorded real asks',
+      charged.length > 0, 'charged=' + charged.length)
+    // Both doors are used in practice - measured, not assumed: the routes reach
+    // the database through src/lib/supabase/server AND construct clients through
+    // @supabase/supabase-js. Asserting each separately means a stub that quietly
+    // stopped being reached is caught, not averaged away by the other one.
+    check('J · the supabase-js client stub was constructed too',
+      clientShims > 0, 'clientShims=' + clientShims)
     // [negative control] a module nobody stubbed carries no sentinel, so the
-    // assertion above is discriminating rather than always-true.
+    // pre-flight's sentinel test is discriminating rather than always-true.
     /* eslint-disable @typescript-eslint/no-require-imports */
     const unstubbed = require.resolve('./lib/pg-supabase-shim')
     /* eslint-enable @typescript-eslint/no-require-imports */
-    check('J · [negative control] an unstubbed module carries no sentinel',
-      cached(unstubbed).__zzShim !== SHIM_SENTINEL)
-
-    // ⛔⛔ FAIL LOUD: presence is not use. Every route above went through the fake.
-    check('J · the shim was actually constructed by the routes under test',
-      shimBuilt > 0, `shimBuilt=${shimBuilt}`)
-    check('J · …and the Stripe fake likewise recorded real asks',
-      charged.length > 0, `charged=${charged.length}`)
+    check('J \u00b7 [negative control] an unstubbed module carries no sentinel',
+      sentinelOf(unstubbed) !== SHIM_SENTINEL)
   }
-
   await db.close()
   console.log(fail > 0 ? `\n✗ ${fail} FAILURE(S) — ${pass} passed` : `\n✓ deposit-charge-authority: ${pass} checks passed`)
   process.exit(fail > 0 ? 1 : 0)
