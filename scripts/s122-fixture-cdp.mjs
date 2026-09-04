@@ -19,14 +19,39 @@
 // that is verify:deposit-charge-authority's job, which drives the real routes
 // over a real Postgres. The two together are the claim; neither alone is.
 
-import { spawn } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
 import { writeFileSync, mkdirSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { resolve, dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 const CHROME = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
-const base = (process.argv[2] || 'http://localhost:3000').replace(/\/$/, '')
+const base = (process.argv[2] || 'http://127.0.0.1:3000').replace(/\/$/, '')
 const PORT = 9720 + Number(process.env.CDP_SLOT || 0)
 const WIDTHS = [1280, 430, 390, 375]
+
+// ⛔ LOOPBACK ONLY, refused up front rather than checked afterwards. A browser
+// proof aimed at a deployed host is a browser proof against production.
+if (!/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(base)) {
+  console.error(`✗ REFUSING: ${base} is not a loopback address.`)
+  console.error('  This fixture is offline by construction and must never be aimed at a deployment.')
+  process.exit(2)
+}
+
+// ── The SHAs this run is evidence for ───────────────────────────────────────
+const git = a => { try { return execFileSync('git', a, { cwd: ROOT }).toString().trim() } catch { return 'unknown' } }
+const FIXTURE_SHA = git(['rev-parse', 'HEAD'])
+const PRODUCT_SHA = git(['rev-parse', 'HEAD~1'])
+const DIRTY = git(['status', '--short'])
+
+// ⛔ Chrome gets an ALLOWLISTED environment too. It has no business holding a
+// service-role key, and a browser that never receives one cannot leak one.
+const CHROME_ALLOW = ['PATH', 'Path', 'SystemRoot', 'SYSTEMROOT', 'windir', 'ComSpec', 'COMSPEC',
+  'TEMP', 'TMP', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',
+  'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'OS', 'PATHEXT']
+const chromeEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => CHROME_ALLOW.includes(k)))
+const chromeDropped = Object.keys(process.env).filter(k => !(k in chromeEnv))
 
 let failures = 0
 const ok = n => console.log(`     ✓ ${n}`)
@@ -40,8 +65,11 @@ const chrome = spawn(CHROME, [
   '--headless=new', '--disable-gpu', '--no-sandbox', '--hide-scrollbars',
   `--remote-debugging-port=${PORT}`,
   '--user-data-dir=' + resolve(process.env.TEMP || '.', `eq-s122fx-${PORT}-${Date.now()}`),
+  // ⛔ Say loopback explicitly; the default is loopback, but saying so means a
+  // future flag change cannot quietly open the debugging socket to the network.
+  '--remote-debugging-address=127.0.0.1',
   'about:blank',
-], { stdio: 'ignore' })
+], { stdio: 'ignore', env: chromeEnv })
 
 async function wsUrl() {
   for (let i = 0; i < 80; i++) {
@@ -55,8 +83,14 @@ const ws = new WebSocket(await wsUrl())
 await new Promise(r => ws.addEventListener('open', r, { once: true }))
 let id = 0
 const pending = new Map()
+// ⭐⭐ EVERY REQUEST THE BROWSER MAKES, recorded from the protocol rather than
+// from the page. The page keeps its own violation counter, but that counter is
+// written by the code under test — this list is written by Chrome. If the two
+// ever disagree, believe this one.
+const requested = []
 ws.addEventListener('message', e => {
   const m = JSON.parse(e.data)
+  if (m.method === 'Network.requestWillBeSent' && m.params?.request?.url) requested.push(m.params.request.url)
   if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) }
 })
 const send = (method, params = {}, sessionId) => new Promise((res, rej) => {
@@ -67,7 +101,7 @@ const send = (method, params = {}, sessionId) => new Promise((res, rej) => {
 const { targetId } = await send('Target.createTarget', { url: 'about:blank' })
 const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true })
 const S = (m, p) => send(m, p, sessionId)
-await S('Page.enable'); await S('Runtime.enable')
+await S('Page.enable'); await S('Runtime.enable'); await S('Network.enable')
 const ev = e => S('Runtime.evaluate', { expression: e, returnByValue: true, awaitPromise: true })
   .then(r => r.result.value)
 
@@ -113,7 +147,13 @@ async function shot(name) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-console.log(`\n══ S122 fixture · ${base}/dev/s122-fixture ══\n`)
+console.log(`\n══ S122 fixture · ${base}/dev/s122-fixture ══`)
+console.log(`   fixture SHA : ${FIXTURE_SHA}`)
+console.log(`   product SHA : ${PRODUCT_SHA}   (the commit this fixture is evidence for)`)
+console.log(`   worktree    : ${DIRTY ? 'DIRTY — ' + DIRTY.split('\n').length + ' file(s)' : 'clean'}`)
+console.log(`   chrome env  : ${Object.keys(chromeEnv).length} kept, ${chromeDropped.length} dropped`)
+console.log('')
+if (DIRTY) fail('the worktree is DIRTY — this run is not evidence for a named SHA', DIRTY)
 
 for (const w of WIDTHS) {
   console.log(`── ${w}px ──`)
@@ -208,7 +248,7 @@ const clickText = (text, tag = 'button') => ev(`(function(){
 })()`)
 
 for (const shape of ['unnamed', 'revised']) {
-  for (const w of [1280, 375]) {
+  for (const w of WIDTHS) {
     console.log(`── owner confirmation · ${shape} · ${w}px ──`)
     if (!(await open(`/dev/s122-fixture?scene=owner-${shape}`, w))) continue
 
@@ -265,6 +305,20 @@ for (const shape of ['unnamed', 'revised']) {
   }
 }
 
+// ── ⭐⭐ THE EGRESS LEDGER, from Chrome's own protocol ───────────────────────
+// ⛔ The claim "nothing left the browser" is not taken from the page. Every URL
+// Chrome was asked to fetch is listed here, and every one of them must be
+// loopback. A single off-box request — an analytics beacon, a font CDN, a stray
+// API call — fails the run and names itself.
+{
+  const offBox = [...new Set(requested)].filter(u =>
+    !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/.test(u)
+    && !/^(data|blob|about|chrome-extension|chrome):/.test(u))
+  console.log(`\n── egress ledger · ${requested.length} requests, ${new Set(requested).size} distinct ──`)
+  check('⛔ every request the browser made was loopback', offBox.length === 0, offBox.join('\n         '))
+}
+
+console.log(`\n   fixture SHA ${FIXTURE_SHA}  ·  product SHA ${PRODUCT_SHA}`)
 console.log(failures > 0 ? `\n✗ ${failures} FAILURE(S)` : '\n✓ s122 fixture: every browser check passed')
 ws.close(); chrome.kill()
 process.exit(failures > 0 ? 1 : 0)

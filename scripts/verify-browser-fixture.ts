@@ -43,6 +43,7 @@ const PAGE = `${DIR}/page.tsx`
 const CLIENT = `${DIR}/S122Fixture.tsx`
 const DATA = `${DIR}/fixtureData.ts`
 const CDP = 'scripts/s122-fixture-cdp.mjs'
+const SERVE = 'scripts/s122-fixture-serve.mjs'
 
 async function main() {
   console.log('\n══ S122 browser fixture ════════════════════════════════════════════\n')
@@ -243,6 +244,64 @@ async function main() {
       /clickText\('They replied by text'\)/.test(cdp) && /clickText\('Record acceptance'\)/.test(cdp))
     check('…and proves the confirm step refuses before the owner attests',
       /confirming is refused before the owner attests/.test(cdp))
+    check('BOTH owner shapes run at every width, not a reduced pair',
+      /for \(const w of WIDTHS\) \{/.test(cdp)
+      && !/for \(const w of \[1280, 375\]\)/.test(cdp))
+    check('it records the fixture AND product SHA the run is evidence for',
+      /FIXTURE_SHA/.test(cdp) && /PRODUCT_SHA/.test(cdp))
+    check('⛔ …and refuses to be evidence for a DIRTY worktree',
+      /the worktree is DIRTY — this run is not evidence for a named SHA/.test(cdp))
+  }
+
+  console.log('\n■ 7. ⛔ Nothing can reach anything real')
+  {
+    const cdp = read(CDP)
+    const serve = read(SERVE)
+
+    // ⚠️ A literal `includes`, not a regex. The line under test is itself a regex
+    // full of escapes, and a guard that has to escape an escape is a guard nobody
+    // can read — and one whose failure teaches nothing about the code.
+    check('the run refuses any base that is not loopback',
+      cdp.includes('is not a loopback address')
+      && cdp.includes('|localhost|') && cdp.includes('process.exit(2)'),
+      'no backslashes in this assertion on purpose — see the note above')
+    check('Chrome is started with an ALLOWLISTED env, not the inherited one',
+      /const chromeEnv = Object\.fromEntries\(Object\.entries\(process\.env\)\.filter\(\(\[k\]\) => CHROME_ALLOW\.includes\(k\)\)\)/.test(cdp)
+      && /env: chromeEnv/.test(cdp))
+    check('…and its debugging socket is pinned to loopback',
+      /--remote-debugging-address=127\.0\.0\.1/.test(cdp))
+    // ⭐⭐ The egress claim is Chrome's, not the page's. A page that lied about
+    // its own counter would still be caught by the protocol log.
+    check('⭐ every request is recorded from the PROTOCOL and must be loopback',
+      /Network\.enable/.test(cdp)
+      && /m\.method === 'Network\.requestWillBeSent'/.test(cdp)
+      && /every request the browser made was loopback/.test(cdp))
+
+    check('the server launcher REFUSES to start beside a .env.local',
+      /REFUSING TO START: \$\{f\} exists in this worktree/.test(serve)
+      && /'\.env\.local', '\.env\.development\.local', '\.env\.production\.local', '\.env'/.test(serve))
+    check('…builds its env from an allowlist rather than filtering a denylist',
+      /const env = Object\.fromEntries\(Object\.entries\(process\.env\)\.filter\(\(\[k\]\) => ALLOW\.includes\(k\)\)\)/.test(serve))
+    check('…points the only two vars the middleware reads at a closed local port',
+      /NEXT_PUBLIC_SUPABASE_URL = 'http:\/\/127\.0\.0\.1:1'/.test(serve)
+      && /NEXT_PUBLIC_SUPABASE_ANON_KEY = 'zz-synthetic-invalid-anon-key'/.test(serve))
+    check('⛔ …and never sets a service role or a payment key',
+      !/SERVICE_ROLE\s*=|STRIPE_[A-Z_]*\s*=/.test(serve))
+    check('…and binds loopback only', /'--hostname', '127\.0\.0\.1'/.test(serve))
+
+    // ⭐ The run instructions claim `/dev/*` needs no session and tolerates absent
+    // credentials. That claim is enforced here against the middleware itself, so
+    // it cannot quietly stop being true.
+    const mw = read('src/middleware.ts')
+    const sess = read('src/lib/supabase/middleware.ts')
+    check('the middleware gates only the owner, crew and login paths',
+      /const gated = isOwnerPath\(pathname\) \|\| isCrewPath\(pathname\) \|\| pathname === '\/login'/.test(sess),
+      'if this widens to /dev, the fixture would start needing a session')
+    check('…and an unreachable auth server passes the request through untouched',
+      /if \(auth\.kind === 'unavailable'\) return supabaseResponse/.test(sess),
+      'this is what makes a synthetic, closed-port Supabase URL safe rather than fatal')
+    check('…and the only redirect above it is the canonical-host hop',
+      /canonicalRedirectTarget/.test(mw))
   }
 
   console.log(fail > 0 ? `\n✗ ${fail} FAILURE(S) — ${pass} passed` : `\n✓ browser-fixture: ${pass} checks passed (⚠️ NOT a browser pass — see the header)`)
