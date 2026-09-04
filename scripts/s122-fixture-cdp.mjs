@@ -42,7 +42,7 @@ if (!/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(base)) {
 // ── The SHAs this run is evidence for ───────────────────────────────────────
 const git = a => { try { return execFileSync('git', a, { cwd: ROOT }).toString().trim() } catch { return 'unknown' } }
 const FIXTURE_SHA = git(['rev-parse', 'HEAD'])
-const PRODUCT_SHA = git(['rev-parse', 'HEAD~1'])
+const PRODUCT_SHA = git(['merge-base', 'HEAD', 'session122/redteam-acceptance-repair'])
 const DIRTY = git(['status', '--short'])
 
 // ⛔ Chrome gets an ALLOWLISTED environment too. It has no business holding a

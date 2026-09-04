@@ -70,7 +70,7 @@ const sha = (() => {
   catch { return 'unknown' }
 })()
 const productSha = (() => {
-  try { return execFileSync('git', ['rev-parse', 'HEAD~1'], { cwd: ROOT }).toString().trim() }
+  try { return execFileSync('git', ['merge-base', 'HEAD', 'session122/redteam-acceptance-repair'], { cwd: ROOT }).toString().trim() }
   catch { return 'unknown' }
 })()
 
