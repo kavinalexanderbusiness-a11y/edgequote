@@ -51,7 +51,13 @@ async function main() {
   const baseline = readdirSync(join(ROOT, 'supabase/migrations')).filter(f => f.endsWith('_baseline.sql')).sort().pop()!
   await apply('baseline', readFileSync(join(ROOT, 'supabase/migrations', baseline), 'utf8'))
   await apply('S122D', readFileSync(join(ROOT, 'supabase/proposals/RUN-S122D-owner-confirm-current-acceptance.sql'), 'utf8'))
-  console.log(`  applied ${baseline} + RUN-S122D\n`)
+  // ⭐ S122E is part of THIS RPC's contract, not a separate feature: without it
+  // the fingerprint S122D checks is not the fingerprint that gets stored. Applying
+  // it here also proves its anchor resolves exactly once against the real writer.
+  await apply('S122E', readFileSync(join(ROOT, 'supabase/proposals/RUN-S122E-recorded-version-must-match.sql'), 'utf8'))
+  // Applying twice must be a no-op — S106 re-runs proposals against a live ledger.
+  await apply('S122E (replay)', readFileSync(join(ROOT, 'supabase/proposals/RUN-S122E-recorded-version-must-match.sql'), 'utf8'))
+  console.log(`  applied ${baseline} + RUN-S122D + RUN-S122E\n`)
 
   // PG18 refuses UPDATE on a published table whose replica identity holds a
   // generated column (quotes.total). Property of the test target, not production.
@@ -394,6 +400,237 @@ async function main() {
       /termsClaimRefresh/.test(rt))
     check('P · ⛔ the route passes NO tenant to the RPC',
       /owner_confirm_current_acceptance/.test(rt) && !/p_tenant|p_user_id/.test(rt))
+  }
+
+  console.log('\n■ R. THE RACE — the version RECORDED must be the version CHECKED (S122E)')
+  {
+    // ⚠️⚠️ WHAT THIS CAN AND CANNOT PROVE. PGlite compiles ONE Postgres backend to
+    // WASM, so two transactions can never be in flight and a genuine interleaving
+    // is not producible here. What IS proven is the CONSEQUENCE of a child row
+    // moving between S122D's fingerprint check and the canonical writer's own
+    // recomputation — which is the thing the contract exists to stop. The
+    // concurrency is injected into a PROBE COPY of the deployed function, and the
+    // probe is asserted to differ from it by EXACTLY the injected lines.
+    //
+    // ⛔ THE PROBE IS NOT THE SUBJECT. It supplies only the interleaving; the real
+    // quote_record_acceptance and the real S122E contract decide every outcome
+    // below. Same-transaction visibility stands in for READ COMMITTED
+    // cross-transaction visibility — a different mechanism presenting the same
+    // observable to the statement that follows, stated here rather than glossed.
+    const realSrc = String((await q(
+      `select pg_get_functiondef(p.oid) src from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+        where n.nspname='public' and p.proname='owner_confirm_current_acceptance'`)).rows[0].src)
+    const STAMP = '  update public.quotes set accepted_price = v_amount where id = p_quote_id;'
+    check('R · the injection point exists exactly once in the deployed body',
+      realSrc.split(STAMP).length - 1 === 1)
+    check('R · …and it sits AFTER the fingerprint check it is meant to defeat',
+      realSrc.indexOf('fingerprint_mismatch') < realSrc.indexOf(STAMP)
+      && realSrc.indexOf(STAMP) < realSrc.indexOf('quote_record_acceptance('))
+    check('R · S122D arms the expectation the writer will assert',
+      /app\.quote_expected_fingerprint/.test(realSrc) && /app\.quote_expected_amount/.test(realSrc))
+
+    // A probe = the deployed body, renamed, with `injected` spliced in at the
+    // stamp. The line delta is asserted by the caller, so a probe can never
+    // quietly grow into a rewrite of the thing under test.
+    const mkProbe = async (name: string, injected: string[]) => {
+      const src = realSrc
+        .replace('FUNCTION public.owner_confirm_current_acceptance(', `FUNCTION public.${name}(`)
+        .replace(STAMP, [STAMP, ...injected].join('\n'))
+      await db.exec(src)
+      return src.split('\n').length - realSrc.split('\n').length
+    }
+    // ⛔ THE CONTROL is the SAME probe with the expectation disarmed — exactly the
+    // pre-S122E behaviour — so the pair isolates the contract and nothing else.
+    const DISARM = "  perform set_config('app.quote_expected_fingerprint','',true); perform set_config('app.quote_expected_amount','',true);"
+    const callProbe = async (name: string, id: string, fp: string, amount: number) => {
+      await asOwner()
+      try {
+        const r = await q(`select public.${name}($1,$2,$3,$4,$5) as out`,
+          [id, 'text_message', 'Customer texted yes to the revised price.', fp, amount])
+        return (r.rows[0] as { out: Record<string, unknown> }).out
+      } catch (e) { return { ok: false, raised: (e as Error).message } as Record<string, unknown> }
+    }
+    const latest = async (id: string) => (await q(
+      `select document_fingerprint f, accepted_amount a from public.quote_acceptances
+        where quote_id=$1 order by seq desc limit 1`, [id])).rows[0] as { f: string; a: string } | undefined
+    const acceptedPrice = async (id: string) =>
+      Number((await q(`select accepted_price p from public.quotes where id=$1`, [id])).rows[0].p)
+    const addService = async (id: string, price: number) =>
+      q(`insert into public.quote_services (user_id, quote_id, service_type, quantity, unit_price, sort_order)
+         values ($1,$2,'ZZ line',1,$3,0)`, [TENANT, id, price])
+
+    // ── The three concurrent writes the review demonstrated on quote_services ──
+    const CASES: { key: string; label: string; sql: string; prep?: (id: string) => Promise<unknown> }[] = [
+      { key: 'ins', label: 'a service line is INSERTED',
+        sql: `  insert into public.quote_services (user_id, quote_id, service_type, quantity, unit_price, sort_order) values (v_q.user_id, p_quote_id, 'ZZ concurrent', 1, 40, 9);` },
+      { key: 'upd', label: 'a service line PRICE is edited',
+        prep: id => addService(id, 40),
+        sql: `  update public.quote_services set unit_price = unit_price + 25 where quote_id = p_quote_id;` },
+      { key: 'del', label: 'every service line is DELETED (the editor’s clear-and-reinsert)',
+        prep: id => addService(id, 40),
+        sql: `  delete from public.quote_services where quote_id = p_quote_id;` },
+    ]
+
+    for (const c of CASES) {
+      check(`R · probe(${c.key}) differs from the deployed body by exactly 1 line`,
+        (await mkProbe(`zz_probe_${c.key}`, [c.sql])) === 1)
+      check(`R · control(${c.key}) differs by exactly 2 — the write and the disarm`,
+        (await mkProbe(`zz_control_${c.key}`, [c.sql, DISARM])) === 2)
+
+      // ── The DEFECT, reproduced: with the contract disarmed the wrong version is
+      // recorded and the call still reports success.
+      {
+        const id = await junShaped()
+        await c.prep?.(id)
+        const fp = await fpOf(id)
+        const out = await callProbe(`zz_control_${c.key}`, id, fp, 500)
+        check(`R · ⛔ WITHOUT the contract, ${c.label} → still reports ok`, out.ok === true, JSON.stringify(out))
+        const row = await latest(id)
+        check('R ·   …and the fingerprint STORED is not the one confirmed',
+          !!row && row.f !== fp && row.f.length === 32, `${row?.f} vs ${fp}`)
+        check('R ·   …so quote_acceptance_is_current answers TRUE for a version nobody saw',
+          (await q(`select public.quote_acceptance_is_current($1) c`, [id])).rows[0].c === true,
+          'the harm is an inversion, not a gap: a refusal became an authorisation')
+      }
+
+      // ── The CONTRACT: same interleaving, refused, everything rolled back.
+      {
+        const id = await junShaped()
+        await c.prep?.(id)
+        const fp = await fpOf(id)
+        const out = await callProbe(`zz_probe_${c.key}`, id, fp, 500)
+        check(`R · ✅ WITH the contract, ${c.label} → refused`, out.ok === false, JSON.stringify(out))
+        check('R ·   …and the refusal says plainly that nothing was saved',
+          /changed while it was being confirmed/.test(String(out.raised ?? '')), String(out.raised))
+        check('R ·   …ZERO evidence rows were written', (await evidence(id)) === 0)
+        check('R ·   …and accepted_price rolled back to its pre-repair 1400',
+          (await acceptedPrice(id)) === 1400, String(await acceptedPrice(id)))
+      }
+    }
+
+    // ── The SELECTED-OPTION case — predicted by the review, not proven there ───
+    // A concurrent option-price change moves the WRITER's own v_amount too, so the
+    // corruption is strictly worse than the service cases: quotes.accepted_price
+    // and quote_acceptances.accepted_amount come apart on the same quote.
+    {
+      const optionQuote = async () => {
+        const id = await junShaped({ price: 0 })
+        const oid = `44444444-4444-4444-8444-${String(seq).padStart(12, '0')}`
+        await q(`insert into public.quote_options (id, quote_id, user_id, name, price, sort_order, is_recommended)
+                 values ($1,$2,$3,'ZZ Option A',500,0,true)`, [oid, id, TENANT])
+        // The consent-writer marker, the same escape junShaped uses to seed a
+        // stale snapshot: quotes_protect_consent_snapshot refuses this column to
+        // anything but the acceptance window, and the fixture's job is to build
+        // the live shape, not to fight the protection that guards it.
+        await q(`select set_config('app.quote_consent_writer', $1, false)`, [id])
+        await q(`update public.quotes set selected_option_id=$2 where id=$1`, [id, oid])
+        await q(`select set_config('app.quote_consent_writer', '', false)`)
+        return id
+      }
+      const BUMP = `  update public.quote_options set price = price + 250 where quote_id = p_quote_id;`
+      check('R · probe(option) differs from the deployed body by exactly 1 line',
+        (await mkProbe('zz_probe_opt', [BUMP])) === 1)
+      check('R · control(option) differs by exactly 2',
+        (await mkProbe('zz_control_opt', [BUMP, DISARM])) === 2)
+
+      {
+        const id = await optionQuote()
+        const out = await callProbe('zz_control_opt', id, await fpOf(id), 500)
+        check('R · ⛔ WITHOUT the contract, a concurrent OPTION price change reports ok',
+          out.ok === true, JSON.stringify(out))
+        const ap = await acceptedPrice(id), row = await latest(id)
+        check('R ·   …and the quote and its own evidence disagree about the money',
+          ap === 500 && Number(row?.a) === 750, `accepted_price=${ap} evidence.accepted_amount=${row?.a}`)
+      }
+      {
+        const id = await optionQuote()
+        const out = await callProbe('zz_probe_opt', id, await fpOf(id), 500)
+        check('R · ✅ WITH the contract, the option race is refused', out.ok === false, JSON.stringify(out))
+        check('R ·   …ZERO evidence, and accepted_price back at 1400',
+          (await evidence(id)) === 0 && (await acceptedPrice(id)) === 1400)
+      }
+    }
+
+    // ── A change landing AFTER the version was recorded is NOT this contract's
+    // business ───────────────────────────────────────────────────────────────
+    // ⭐⭐ This is why the assertion reads what was STORED rather than re-deriving
+    // the fingerprint. Re-deriving takes ANOTHER snapshot, so an edit that lands
+    // after the row is written would roll back a perfectly good attestation — the
+    // opposite error, and a liveness bug that would be blamed on the owner. The
+    // right ending for a later edit already exists: the acceptance stands, and
+    // quote_acceptance_is_current answers false until it is re-approved.
+    {
+      const src = realSrc
+        .replace('FUNCTION public.owner_confirm_current_acceptance(', 'FUNCTION public.zz_probe_after(')
+        .replace('  perform public.audit_log(',
+          `  insert into public.quote_services (user_id, quote_id, service_type, quantity, unit_price, sort_order)
+     values (v_q.user_id, p_quote_id, 'ZZ later', 1, 15, 7);
+  perform public.audit_log(`)
+      await db.exec(src)
+      const id = await junShaped()
+      const out = await callProbe('zz_probe_after', id, await fpOf(id), 500)
+      check('R · a later edit does NOT roll back the attestation', out.ok === true, JSON.stringify(out))
+      check('R ·   …the evidence stands, recorded at the version confirmed',
+        (await evidence(id)) === 1)
+      check('R ·   …and is invalidated the honest way, by needing reapproval',
+        (await q(`select public.quote_acceptance_is_current($1) c`, [id])).rows[0].c === false)
+    }
+
+    // ── The AMOUNT clause is not dead code ────────────────────────────────────
+    // ⚠️ Every input to the authorized amount is ALSO a fingerprint input, so in
+    // today's schema the amount clause can never fire alone through S122D — the
+    // fingerprint clause reaches any divergence first. Said plainly rather than
+    // dressed up as an independent scenario: it is defence in depth against a
+    // future amount input that is not fingerprinted, and it is exercised directly
+    // against the canonical writer here so it cannot rot into a comment.
+    {
+      const id = await junShaped()
+      const armed = async (amt: string) => {
+        try {
+          await db.exec(`do $zz$ declare v uuid; begin
+            perform set_config('app.quote_expected_amount', '${amt}', true);
+            v := public.quote_record_acceptance('${id}','owner_on_behalf','dashboard',
+                   '${TENANT}'::uuid,'ZZ Owner','text_message',null,true);
+          end $zz$;`)
+          return null
+        } catch (e) { return (e as Error).message }
+      }
+      check('R · the writer refuses a stored amount that is not the confirmed one',
+        /amount that would have been recorded/.test(String(await armed('999.00'))))
+      check('R ·   …and nothing was written', (await evidence(id)) === 0)
+      check('R · …while the CORRECT amount passes through untouched', (await armed('500.00')) === null)
+      check('R ·   …writing exactly one row', (await evidence(id)) === 1)
+    }
+
+    // ── Single-use: a marker may never leak into a second write ───────────────
+    {
+      const id = await junShaped()
+      let leaked = 'unset'
+      try {
+        await db.exec(`do $zz$ declare v uuid; begin
+          perform set_config('app.quote_expected_amount', '500.00', true);
+          v := public.quote_record_acceptance('${id}','owner_on_behalf','dashboard',
+                 '${TENANT}'::uuid,'ZZ Owner','text_message',null,true);
+          if coalesce(current_setting('app.quote_expected_amount', true), '') <> '' then
+            raise exception 'MARKER SURVIVED';
+          end if;
+        end $zz$;`)
+      } catch (e) { leaked = (e as Error).message }
+      check('R · the expectation is consumed exactly once, never inherited', leaked === 'unset', leaked)
+    }
+
+    // ── Undisturbed and replay are unchanged by any of this ───────────────────
+    {
+      const id = await junShaped()
+      const first = await confirm(id)
+      check('R · an UNDISTURBED attestation still succeeds', first.ok === true, JSON.stringify(first))
+      const row = await latest(id)
+      check('R ·   …recording exactly the version that was confirmed', row?.f === await fpOf(id))
+      const again = await confirm(id)
+      check('R · a REPLAY is still idempotent, not a second row',
+        again.ok === true && again.idempotent === true, JSON.stringify(again))
+      check('R ·   …exactly one evidence row', (await evidence(id)) === 1)
+    }
   }
 
   await db.close()

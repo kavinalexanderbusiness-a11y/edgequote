@@ -151,6 +151,21 @@ begin
   perform set_config('app.quote_consent_writer', p_quote_id::text, true);
   perform set_config('app.quote_acceptance_kind', 'owner_on_behalf', true);
 
+  -- ⭐⭐⭐ S122E · CARRY THE EXPECTATION INTO THE WRITER (RUN-S122E).
+  -- The fingerprint check above is not enough on its own: quote_record_acceptance
+  -- RECOMPUTES the fingerprint from a fresh snapshot and stores THAT, and the only
+  -- lock held here is on public.quotes while the fingerprint spans four tables. A
+  -- concurrent service-line write between the two evaluations made this function
+  -- store a version the owner never saw — and return ok:true, turning the refusal
+  -- it owes into an authorisation. Declaring the checked version here makes the
+  -- writer assert that what it STORED is what was CHECKED, and raise otherwise; the
+  -- raise rolls back the accepted_price stamp above with the evidence.
+  --
+  -- ⛔ Inert without RUN-S122E applied. That is deliberate — this is a marker, not
+  -- a behaviour, and an unpatched writer simply ignores it.
+  perform set_config('app.quote_expected_fingerprint', v_fp, true);
+  perform set_config('app.quote_expected_amount', v_amount::text, true);
+
   -- Stamp the CURRENT authorized figure. This is the repair: the stale snapshot
   -- is replaced by the amount the owner is attesting to, not the other way round.
   update public.quotes set accepted_price = v_amount where id = p_quote_id;
