@@ -856,12 +856,28 @@ async function run() {
     // next/server enter as `import type` and vanish at runtime — so the closure grew
     // by exactly this one file and no send path came with it. The two assertions
     // below re-prove that independently rather than taking this note's word for it.
-    check('no-sender', 'the engine runtime closure is exactly these 6 modules', members, [
+    // ⭐⭐ S110 ADDED THREE MODULES, AND THIS PIN IS WHY THAT WAS REVIEWED.
+    // The engine now dates its row selection per tenant, which pulls in the shared
+    // date contract and the zone reader. The exact-set assertion failed on that —
+    // correctly — and each new member was checked before being admitted:
+    //   • lib/cron/tenantDay.ts   — pure date arithmetic; its ONLY import is
+    //                               lib/tenantTime. No I/O of any kind.
+    //   • lib/tenantTime.ts       — a leaf: imports nothing, Intl-based calendar math.
+    //   • lib/tenantTimeServer.ts — imports the supabase-js CLIENT TYPE (erased) and
+    //                               lib/tenantTime; its only statement is a SELECT of
+    //                               business_settings.timezone through the caller's
+    //                               client. It reads a zone. It cannot send.
+    // None of the three mentions a dispatcher, a mail/SMS provider, or fetch(). The
+    // two assertions below re-prove that independently rather than trusting this note.
+    check('no-sender', 'the engine runtime closure is exactly these 9 modules', members, [
       'app/api/cron/engine/route.ts',
       'lib/automation/decide.ts',
       'lib/automation/rules.ts',
       'lib/cron/guard.ts',
       'lib/cron/heartbeat.ts',
+      'lib/cron/tenantDay.ts',
+      'lib/tenantTime.ts',
+      'lib/tenantTimeServer.ts',
       'lib/utils.ts',
     ])
 
