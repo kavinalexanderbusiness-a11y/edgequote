@@ -269,8 +269,11 @@ check('PDF — no subtotal row spans the alternatives',
   /!isOptionsQuote && \(\(lines && lines\.length > 1\)/.test(PDF))
 check('PDF — the grand total NAMES the single option it totals',
   /If you choose \$\{leading\.name\}|`If you choose/.test(PDF) && /Approved — \$\{chosen\.name\}|`Approved — /.test(PDF))
+// ⚠️ RE-POINTED: renderQuoteBlob gained a trailing `doc` argument, so `options)`
+// is no longer the last thing on the line. The contract is that the options
+// TRAVEL, which is what is asserted.
 check('PDF — the customer’s own copy carries the options too',
-  /renderQuoteBlob\([\s\S]{0,200}options\)/.test(read('src/lib/portalPdf.ts')))
+  /renderQuoteBlob\([\s\S]{0,200}options[,)]/.test(read('src/lib/portalPdf.ts')))
 
 check('PORTAL MODEL — options ride the DocItem, separate from lines and plans',
   /options\?: \{ id: string; name: string/.test(PORTAL_MODEL) && /selectedOptionId/.test(PORTAL_MODEL))

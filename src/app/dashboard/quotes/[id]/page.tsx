@@ -550,7 +550,20 @@ export default function QuoteDetailPage() {
         acceptedPresentation(quote.status, acceptanceLoaded ? (acceptance?.accepted ? acceptance.kind : null) : undefined),
         quote,
       )
-      const blob = await renderQuoteBlob(facing.moneyQuote, settings, services, options)
+      // ⛔⛔ AND WHETHER THE AGREEMENT STILL MATCHES IT. This side HAS the honest
+      // answer — quote_acceptance_state derives `needs_reapproval` from the
+      // material fingerprint, which the portal payload does not carry — so the
+      // sent document uses the strong signal rather than a price comparison.
+      // Without it an owner emails a quote reading "$500 total / $700 deposit",
+      // and a sent document is the one the customer keeps and the owner cannot
+      // retract. ⚠️ A FAILED read leaves `acceptance` null, which reads as "not
+      // superseded"; that is the same three-valued caution as the basis above —
+      // it never invents drift, and the figure it then prints is the one the
+      // ledger already authorises.
+      const acceptanceSuperseded = acceptanceLoaded
+        && acceptanceStanding(acceptance) === 'needs_reapproval'
+      const blob = await renderQuoteBlob(facing.moneyQuote, settings, services, options,
+        { acceptanceSuperseded })
       const url = URL.createObjectURL(blob)
       // Hand the file directly to the device. On desktop this downloads the
       // PDF; on iOS it opens the PDF viewer / share sheet. Avoids the

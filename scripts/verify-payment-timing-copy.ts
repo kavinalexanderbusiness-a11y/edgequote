@@ -283,8 +283,14 @@ console.log('\n■ 3. No surface composes its own payment-timing sentence')
   const pdf = stripComments(read('src/components/quotes/QuotePDF.tsx'))
   check('Quote PDF states the timing (it used to say nothing at all)',
     /pdfTimingLine\(timing\)/.test(pdf))
+  // ⚠️ RE-POINTED, not relaxed: the call gained a second input (whether the
+  // acceptance behind this document is still current) and moved onto three lines.
+  // Both halves are still asserted, and the new one is asserted to come from the
+  // CALLER rather than being derived inside the document.
   check('Quote PDF computes timing with the options rule',
-    /paymentTiming\(quote, \{ basisSettled: !\(isOptionsQuote && !chosen\) \}\)/.test(pdf))
+    /basisSettled: !\(isOptionsQuote && !chosen\)/.test(pdf))
+  check('…and with the caller’s currentness answer, never its own',
+    /acceptanceSuperseded,/.test(pdf) && /\{ quote, settings, services, options, acceptanceSuperseded \}/.test(pdf))
   check('Quote PDF contains no payment arithmetic (the deposit-documents rule)',
     !/deposit_value\s*[/*]|\*\s*0?\.\d/.test(pdf))
   // Ours is the statement of record; the owner's free text sits BELOW it.
