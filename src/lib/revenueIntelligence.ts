@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { localTodayISO } from '@/lib/utils'
 import { effectiveFreq, jobVisitValue } from '@/lib/visitValue'
+import { jobPriceState, jobAmountOrNull } from '@/lib/pricingState'
 import { SEASON_VISITS } from '@/lib/pricing'
 import { serviceCategory, seasonForService, isWithinSeason, settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
 import { densityFor, locatedStops, DensityTier } from '@/lib/routeDensity'
@@ -277,9 +278,14 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
       visits: jobsFor.map(j => {
         const q = j.quote_id ? pctx.quotesById[j.quote_id] : null
         const freq = j.recurrence_id ? effectiveFreq(recurrences[j.recurrence_id]?.freq ?? null, recurrences[j.recurrence_id]?.interval_unit ?? null, recurrences[j.recurrence_id]?.interval_count ?? null) : null
+        const quote = q as unknown as Record<string, unknown>
         return {
-          rawPrice: j.price,
-          derivedValue: jobVisitValue(j.price, q as unknown as Record<string, unknown>, freq),
+          // ⭐⭐ THE CANONICAL PRICE VERDICT — lib/pricingState, the engine S114
+          // landed for exactly this question. growthEvidence used to decide it
+          // itself from `price === 0`, which could not see a DECLARED no-charge
+          // and reported the owner's accountable write-off as a missing price.
+          priceState: jobPriceState(j, quote, freq),
+          amount: jobAmountOrNull(j, quote, freq),
           completed: true,
           // Any text that could betray a seeded record. ⛔ A FLAG, not a verdict —
           // every exclusion is counted and shown rather than applied silently.
@@ -387,7 +393,11 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
         // mean $276), so an average let one large sale set the expected value
         // of every future one.
         const ev = assessEvidence({
-          visits: e.amounts.map(amt => ({ rawPrice: amt, derivedValue: amt, completed: true, labels: [e.label] })),
+          // Add-on line items are already filtered to amt > 0 above, so each one
+          // IS a recorded price. ⛔ Stated explicitly rather than inferred — this
+          // seam takes a canonical verdict, and a line item is not a job, so
+          // jobPriceState has nothing to say about it.
+          visits: e.amounts.map(amt => ({ priceState: 'priced' as const, amount: amt, completed: true, labels: [e.label] })),
           declaredFreq: null, visitsPerSeason: seasonVisitsFor,
         })
         const typical = ev.perVisit
@@ -650,7 +660,12 @@ export async function loadRevenueIntel(supabase: SupabaseClient): Promise<Revenu
   if (!user) return null
   const uid = user.id
   const [jRes, qRes, rRes, pRes, cRes, iRes, liRes, sRes, fRes] = await Promise.all([
-    supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, property_id, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', uid),
+    // ⭐ `no_charge_*` (S114) is selected because the Growth gate must be able to
+    // tell an owner's DECLARED free visit from a price nobody recorded. Without
+    // these three columns `isNoCharge()` is always false and a deliberate
+    // write-off is reported to the owner as "no price recorded" — an accusation
+    // of sloppy bookkeeping against someone who did the paperwork correctly.
+    supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, property_id, no_charge_at, no_charge_reason, no_charge_by, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', uid),
     supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', uid),
     supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', uid),
     supabase.from('properties').select('id, customer_id, lat, lng, postal_code, city, neighborhood').eq('user_id', uid),

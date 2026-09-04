@@ -26,6 +26,17 @@ export interface ProfitJob {
   postal_code: string | null
   neighborhood: string | null // real community name (reverse-geocoded, stored on the property)
   customer_id: string | null
+  // ── Declared no-charge (Session 114) ───────────────────────────────────────
+  // OPTIONAL, so every existing caller and every existing query is unchanged —
+  // a loader that does not select them simply gets `undefined`, and
+  // lib/pricingState's isNoCharge() reads that as "not declared free", which is
+  // the correct answer for a caller that never asked.
+  // ⭐ Present here so a consumer can tell an owner's accountable write-off from
+  // a price nobody recorded. All three parts or none — the CHECK constraint in
+  // 20260830120000 enforces that, and isNoCharge() mirrors it.
+  no_charge_at?: string | null
+  no_charge_reason?: string | null
+  no_charge_by?: string | null
 }
 
 export interface ProfitQuote {
