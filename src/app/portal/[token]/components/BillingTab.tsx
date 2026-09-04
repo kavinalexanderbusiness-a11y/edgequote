@@ -586,7 +586,17 @@ function DocRow({ d, actions, termsText, focus }: { d: DocItem; actions: PortalA
           <p className="text-[11px] text-ink-muted mt-1">
             Your quote is approved. {d.depositTimingLine}
           </p>
-          {actions.paymentsEnabled && !actions.paymentPending ? (
+          {/* ⛔⛔ NO PAY BUTTON WITHOUT AN ACTOR-NAMED ACCEPTANCE. The charge route
+              asks lib/quoteAcceptance the same question and refuses when nobody is
+              named on the record, so rendering the button here would send this
+              customer to a door we already know is shut. The deposit itself is
+              still owed — the scheduling gate holds and an e-transfer still
+              satisfies it — which is exactly what the sentence says. */}
+          {!d.schedulingDeposit.payable ? (
+            <p className="text-[11px] text-ink-muted mt-2">
+              {d.depositBlockedLine}
+            </p>
+          ) : actions.paymentsEnabled && !actions.paymentPending ? (
             <>
               <Button className="w-full sm:w-auto mt-2.5"
                 onClick={() => actions.payQuoteDeposit(d.rawId)}

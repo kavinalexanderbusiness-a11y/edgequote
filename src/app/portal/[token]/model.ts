@@ -40,7 +40,7 @@ import { authorizedValue } from '@/lib/changeOrders'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
 import {
   isAcceptedOrBeyond, acceptedPresentation, customerFacingQuote,
-  acceptedAmountNote, type AcceptanceKind,
+  acceptedAmountNote, depositChargeBlockedNote, type AcceptanceKind,
 } from '@/lib/quoteAcceptance'
 import { formatCurrency, parseLocalDate } from '@/lib/utils'
 // THE request engine (lib/portalRequests) — the same module the owner's request
@@ -710,7 +710,21 @@ export interface DocItem { id: string; rawId: string; kind: DocKind; number: str
   schedulingDeposit?: {
     required: number; collected: number; outstanding: number
     percent: number | null; satisfied: boolean
+    /**
+     * ⛔⛔ May this be paid ONLINE right now? The deposit is still OWED when this
+     * is false — the scheduling gate holds and an e-transfer still satisfies it —
+     * but the card route will refuse, because only an actor-named acceptance may
+     * authorise taking money (lib/quoteAcceptance.depositChargeBlock).
+     *
+     * ⭐ It rides INSIDE the figure rather than beside it so that no surface can
+     * render the amount without meeting the verdict. A "Pay $250" button whose
+     * door refuses is a worse failure than no button at all.
+     */
+    payable: boolean
   }
+  /** Why the online deposit is withheld, in the customer's words. Present exactly
+   *  when a deposit is owed and `schedulingDeposit.payable` is false. */
+  depositBlockedLine?: string
   /**
    * ⭐ WHEN this quote's money is due, in words — lib/payments/paymentTiming's
    * one sentence, computed HERE so every surface that mentions timing renders
@@ -926,10 +940,17 @@ export function buildDocItems(opts: {
     // ⛔ The deposit basis follows the SAME rule as the headline figure and the
     // timing sentence — literally the same object, so the three cannot disagree.
     const gate = gateActive ? schedulingGate(moneyQuote, depositRowsByQuote.get(qq.id)) : null
+    // ⭐ The SAME verdict the charge door will reach, from the SAME call that
+    // produced the basis — so the button and the door can never disagree about
+    // whether this money may be taken.
     const schedulingDeposit = gate && gate.required > 0 ? {
       required: gate.required, collected: gate.collected, outstanding: gate.outstanding,
       percent: gate.percent, satisfied: gate.status === 'satisfied',
+      payable: facing.depositChargeBlock === null,
     } : undefined
+    const depositBlockedLine = schedulingDeposit && !schedulingDeposit.payable && facing.depositChargeBlock
+      ? depositChargeBlockedNote(facing.depositChargeBlock)
+      : undefined
     // The preference travels on any live approved/scheduled quote (so a reload
     // shows it back); the FORM only opens while the RPC will still accept a
     // write — status exactly 'accepted'.
@@ -987,7 +1008,7 @@ export function buildDocItems(opts: {
       // just shown. `accepted_price` feeds nothing else in that renderer.
       filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(moneyQuote), lines, planOptions,
       options, selectedOptionId: qq.selected_option_id ?? null,
-      schedulingDeposit, preference, canEditPreference: qq.status === 'accepted',
+      schedulingDeposit, depositBlockedLine, preference, canEditPreference: qq.status === 'accepted',
       paymentTimingLine: quoteTimingLine(timing),
       // Gate-aware, so it can only exist where a gate does. `scheduled` is the
       // override case: the owner booked the visit anyway and the money is still
@@ -1327,7 +1348,11 @@ export function primaryPortalAction(
   // ordinary balance (which has its own due date) and sits only behind overdue.
   // The figure is the gate's `outstanding` (the same number the charge route
   // will ask for), so a partial payment shrinks the headline honestly.
-  const depositDue = docItems.find(d => d.kind === 'quote' && d.schedulingDeposit && !d.schedulingDeposit.satisfied && d.schedulingDeposit.outstanding > 0)
+  // ⛔ `payable` is part of the predicate, not an afterthought inside the branch:
+  // this is the customer's single headline CTA, and pointing it at a door that
+  // will refuse is the same class of defect as a card that names a figure the
+  // charge route won't honour.
+  const depositDue = docItems.find(d => d.kind === 'quote' && d.schedulingDeposit?.payable && !d.schedulingDeposit.satisfied && d.schedulingDeposit.outstanding > 0)
   if (depositDue?.schedulingDeposit) {
     return {
       key: `qdeposit:${depositDue.schedulingDeposit.outstanding}:${depositDue.rawId}`, kind: 'pay-deposit',

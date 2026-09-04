@@ -39,6 +39,7 @@ import { isWon } from '@/lib/salesStage'
 // and the words for it — read here, never restated.
 import {
   acceptanceStanding, acceptanceSentence, reapprovalSentence, materialChanges,
+  acceptedPresentation, customerFacingQuote, depositChargeBlock, depositChargeBlockedOwnerNote,
   isUnevidencedAcceptance, acceptanceBlock, acceptanceBlockLabel,
   hasCurrentValidAcceptance, type AcceptanceState,
 } from '@/lib/quoteAcceptance'
@@ -533,7 +534,23 @@ export default function QuoteDetailPage() {
     setPdfLoading(true)
     try {
       const { renderQuoteBlob } = await import('@/components/quotes/QuotePDF')
-      const blob = await renderQuoteBlob(quote, settings, services, options)
+      // ── ⛔⛔ THIS PDF IS A CUSTOMER DOCUMENT ──────────────────────────────
+      // It is the file the owner sends, and the caller gates "mark sent" on it
+      // reaching the device — so the same rule the portal follows applies here.
+      // QuotePDF runs lib/payments/paymentTiming off `accepted_price`, and on a
+      // quote whose acceptance nobody can vouch for that snapshot is a number a
+      // past state believed. Handing it the raw row prints a deposit sentence on
+      // paper the customer keeps, derived from a version nobody confirmed.
+      //
+      // ⚠️ Three-valued on purpose. `acceptanceLoaded` false means the read
+      // FAILED — not "no acceptance" — so the kind goes in as `undefined` and the
+      // rule refuses, exactly as the portal's missing payload does. Both refuse;
+      // they are different facts and neither is guessed.
+      const facing = customerFacingQuote(
+        acceptedPresentation(quote.status, acceptanceLoaded ? (acceptance?.accepted ? acceptance.kind : null) : undefined),
+        quote,
+      )
+      const blob = await renderQuoteBlob(facing.moneyQuote, settings, services, options)
       const url = URL.createObjectURL(blob)
       // Hand the file directly to the device. On desktop this downloads the
       // PDF; on iOS it opens the PDF viewer / share sheet. Avoids the
@@ -1397,6 +1414,18 @@ export default function QuoteDetailPage() {
         // the read failed: say "checking" rather than a verdict either way.
         const rowsUnknown = quote.deposit_type ? depositRows == null : false
         const gate = schedulingGate(quote, depositRows ?? [])
+        // ⭐ The SAME verdict the customer's portal and the charge route reach,
+        // from the same function — so the two sides of the glass cannot disagree
+        // about whether this deposit can be collected online.
+        //
+        // ⚠️ Deliberately NOT applied to `gate` itself. The gate answers "may this
+        // be scheduled", which is an authorisation question, and lowering the
+        // required figure there to match the customer's card would be the same
+        // error in reverse. The two bases converge the moment the acceptance is
+        // named, which is exactly what this banner now asks for.
+        const chargeBlock = depositChargeBlock(acceptedPresentation(
+          quote.status, acceptanceLoaded ? (acceptance?.accepted ? acceptance.kind : null) : undefined,
+        ))
         const prefLine = schedulingPreferenceLine(quote, formatDate)
         // A SCHEDULED quote that still owes its deposit — the override case, or a
         // payment that bounced after booking. The ask stays visible and recordable;
@@ -1419,10 +1448,18 @@ export default function QuoteDetailPage() {
                       : <>Accepted — awaiting the <span className="text-amber-400">{formatCurrency(gate.required)}</span> deposit before scheduling</>}
               </p>
               {depositRowsError && <p className="text-xs text-red-400">{depositRowsError}</p>}
+              {/* ⛔ "The customer can pay from their portal" is FALSE when nobody
+                  is named on the acceptance: the charge door refuses, and the
+                  portal shows no Pay button. Saying it anyway would leave the
+                  owner waiting on money that cannot arrive, with no idea why —
+                  so the sentence is replaced by the reason and the one action
+                  that clears it. Same rule, same words as the customer's side. */}
               <p className="text-xs text-ink-muted">
-                {scheduledStillOwed
-                  ? 'The customer’s portal keeps asking for it — record it here when it arrives another way.'
-                  : 'Scheduling isn’t secured until the deposit is collected. The customer can pay from their portal.'}
+                {chargeBlock
+                  ? depositChargeBlockedOwnerNote(chargeBlock)
+                  : scheduledStillOwed
+                    ? 'The customer’s portal keeps asking for it — record it here when it arrives another way.'
+                    : 'Scheduling isn’t secured until the deposit is collected. The customer can pay from their portal.'}
                 {prefLine ? <> · <span className="text-ink">Customer preference: {prefLine}</span></> : null}
                 {quote.preferred_note ? <> · &ldquo;{quote.preferred_note}&rdquo;</> : null}
               </p>

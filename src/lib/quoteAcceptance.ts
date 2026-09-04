@@ -320,7 +320,11 @@ export function acceptedPresentation(
  */
 export function customerFacingQuoteAmount(
   presentation: AcceptedPresentation,
-  acceptedPrice: number | null | undefined,
+  // ⚠️ `string` is not sloppiness: PostgREST returns numeric columns as strings,
+  // and the charge door reads this row straight off the wire. Narrowing here
+  // would push a cast to the call site, which is where a `Number()` gets
+  // forgotten.
+  acceptedPrice: number | string | null | undefined,
   currentTotal: number,
 ): { amount: number; isAcceptedAmount: boolean } {
   // ⭐ TWO of the evidenced states may show the snapshot: the customer's own
@@ -347,8 +351,87 @@ export function customerFacingQuoteAmount(
 
 /** The two fields every money engine reads off a quote. */
 export interface QuoteMoneyFields {
-  accepted_price?: number | null
+  accepted_price?: number | string | null
   total?: number | string | null
+}
+
+/**
+ * ⛔⛔ WHY AN ONLINE DEPOSIT WAS WITHHELD. Null means it may be charged.
+ *
+ * `not_accepted`        nothing to secure yet.
+ * `no_evidence`         the status says accepted and the record cannot show it.
+ * `unknown_provenance`  a MIGRATED acceptance: a deal exists, but who agreed to
+ *                       it was never captured.
+ */
+export type DepositChargeBlock = 'not_accepted' | 'no_evidence' | 'unknown_provenance'
+
+/**
+ * The kinds that NAME AN ACTOR — the only evidence that may authorize money, and
+ * the only evidence whose absence the owner can repair.
+ *
+ * ⛔ Kept as a list because a database query needs one (`.in('kind', …)`), and
+ * kept in step with depositChargeBlock by assertion rather than by hope:
+ * verify:acceptance-presentation walks every kind and requires membership here to
+ * agree exactly with a null block. Two spellings of one rule is how this lane's
+ * defects have started.
+ */
+export const ACTOR_NAMED_ACCEPTANCE_KINDS: AcceptanceKind[] = ['customer', 'owner_on_behalf']
+
+/**
+ * ⭐⭐⭐ MAY WE TAKE THIS CUSTOMER'S MONEY?
+ *
+ * ⛔ ONLY actor-named evidence authorizes a charge. A kind too weak to say "you
+ * accepted" is too weak to take money — that is the whole rule, and it is why
+ * `evidenced_legacy` is refused here even though it is real evidence of
+ * something. A backfilled row says a deal exists and that WHO agreed was never
+ * recorded; there is nobody to point at if the customer later asks who
+ * authorised the charge.
+ *
+ * THE DEFECT THIS CLOSES. The portal card, the timing sentence and the PDF all
+ * priced an unevidenced quote off `total`, while the charge route priced the
+ * same quote off the raw `accepted_price` — so a customer could read "$250
+ * deposit", tap Pay, and meet a different figure at the checkout. Two fixes were
+ * proposed and both were wrong: charging the sanitized figure takes money for a
+ * version nobody confirmed, and showing the backfilled `accepted_amount` puts an
+ * uncorroborated number on the card AS AGREED — re-introducing in the number the
+ * falsehood `evidenced_legacy` exists to remove from the wording.
+ *
+ * ⭐ So neither figure is substituted. The CHARGE is refused, and the ending is
+ * a real one: the customer accepts, or the owner records how they accepted.
+ * Refusing also removes the only kind on which display and charge could disagree
+ * — for every remaining state both read `moneyQuote`, so they agree by
+ * construction rather than by two derivations happening to match.
+ */
+export function depositChargeBlock(p: AcceptedPresentation): DepositChargeBlock | null {
+  if (p === 'evidenced_customer' || p === 'evidenced_on_behalf') return null
+  if (p === 'offer') return 'not_accepted'
+  if (p === 'evidenced_legacy') return 'unknown_provenance'
+  return 'no_evidence'
+}
+
+/**
+ * What the CUSTOMER is told when the online deposit is withheld.
+ *
+ * ⚠️ The deposit itself is NOT cancelled and the sentence must not imply it is —
+ * the scheduling gate still holds and the business can still take an e-transfer,
+ * exactly as it does for a tenant with no online payments configured. What is
+ * withheld is the online charge, and the reason is ours, not the customer's.
+ */
+export function depositChargeBlockedNote(b: DepositChargeBlock): string {
+  if (b === 'not_accepted') return 'Accept this quote first — the deposit comes after that.'
+  if (b === 'unknown_provenance') {
+    return 'This quote was accepted before we started keeping acceptance records, so we can’t take its deposit online. Message us and we’ll confirm the details with you.'
+  }
+  return 'We don’t have a record of your acceptance on file, so we can’t take a deposit for this quote online. Message us and we’ll confirm the details with you.'
+}
+
+/** The same fact for the OWNER, with the action that clears it. */
+export function depositChargeBlockedOwnerNote(b: DepositChargeBlock): string {
+  if (b === 'not_accepted') return 'This quote isn’t accepted yet, so there is no deposit to collect.'
+  if (b === 'unknown_provenance') {
+    return 'This acceptance predates EdgeHQ’s acceptance records, so its online deposit link is off. Record how the customer accepted it — the link turns back on and the amount stops depending on a figure nobody can vouch for.'
+  }
+  return 'No customer acceptance is on record, so this quote’s online deposit link is off. Record how they accepted it and the link turns back on.'
 }
 
 export interface CustomerFacingQuote<T> {
@@ -362,6 +445,13 @@ export interface CustomerFacingQuote<T> {
    * been removed — so no engine downstream can accidentally price against it.
    */
   moneyQuote: T
+  /**
+   * ⛔ Why an online deposit may NOT be taken, or null when it may. Carried here
+   * on purpose: the charge door computes its basis from this same call, so it
+   * cannot obtain a figure without also being handed the verdict on whether it
+   * is allowed to charge one. See depositChargeBlock.
+   */
+  depositChargeBlock: DepositChargeBlock | null
 }
 
 /**
@@ -397,6 +487,7 @@ export function customerFacingQuote<T extends QuoteMoneyFields>(
     // to T on a generic. The cast is sound: the only field replaced is one T
     // already declares as nullable, and nothing else is touched.
     moneyQuote: isAcceptedAmount ? q : ({ ...q, accepted_price: null } as T),
+    depositChargeBlock: depositChargeBlock(presentation),
   }
 }
 

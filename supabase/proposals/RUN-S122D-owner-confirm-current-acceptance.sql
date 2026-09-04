@@ -136,8 +136,25 @@ begin
       return jsonb_build_object('ok', true, 'acceptance_id', v_prev.id,
                                 'amount', v_amount, 'idempotent', true);
     end if;
-    return jsonb_build_object('ok', false, 'reason', 'evidence_exists',
-                              'kind', v_prev.kind);
+    -- ⭐⭐⭐ A LEGACY ROW IS NOT A COMPETING CLAIM — IT IS THE ABSENCE OF ONE.
+    -- `legacy_unrecorded` says a deal exists and that WHO agreed to it was never
+    -- captured. Refusing here left the owner with nowhere to go: this RPC said
+    -- "evidence already exists", while the ordinary path routes through
+    -- quote_apply_choice, which only accepts draft/sent and can never reach an
+    -- accepted quote. So a legacy quote whose deposit link is now withheld for
+    -- want of a named acceptance could never GET one — the refusal and the remedy
+    -- excluded each other, and the owner was trapped between them.
+    --
+    -- ⛔ It is an UPGRADE, not an overwrite. quote_record_acceptance sets
+    -- supersedes_id to the row it found, so the backfill row stays on the record
+    -- forever with the attestation pointing back at it — the append-only rule is
+    -- untouched, and `quote_acceptances_assign_seq` enforces that linkage anyway.
+    -- Every other kind still refuses: a customer's own acceptance needs no repair,
+    -- and a second attestation for a different version is a competing claim.
+    if v_prev.kind <> 'legacy_unrecorded' then
+      return jsonb_build_object('ok', false, 'reason', 'evidence_exists',
+                                'kind', v_prev.kind);
+    end if;
   end if;
 
   select coalesce(nullif(btrim(b.owner_name), ''), nullif(btrim(b.company_name), ''))
@@ -181,8 +198,14 @@ begin
 
   perform public.audit_log(
     v_uid, 'quote_acceptance_repaired', 'quote', p_quote_id, v_q.quote_number, v_q.customer_id,
-    jsonb_build_object('accepted_price', v_q.accepted_price, 'evidence', 0),
-    jsonb_build_object('accepted_price', v_amount, 'evidence', 1, 'kind', 'owner_on_behalf'),
+    -- ⚠️ The BEFORE state must say what was actually there. A legacy upgrade is
+    -- not a repair of nothing, and an audit row claiming 'evidence', 0 over a
+    -- superseded backfill row would misdescribe the one event this log exists for.
+    jsonb_build_object('accepted_price', v_q.accepted_price,
+                       'evidence', case when v_prev.id is null then 0 else 1 end,
+                       'kind', v_prev.kind),
+    jsonb_build_object('accepted_price', v_amount, 'evidence', 1, 'kind', 'owner_on_behalf',
+                       'supersedes', v_prev.id),
     jsonb_build_object('reason', btrim(p_reason), 'material_fingerprint', v_fp));
 
   return jsonb_build_object('ok', true, 'acceptance_id', v_id, 'amount', v_amount,

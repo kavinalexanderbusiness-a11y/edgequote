@@ -75,8 +75,14 @@ export function RecordAcceptanceDialog({
   // accepted, has no evidence, and its price has moved since. Holds the two
   // figures and the fingerprint of the version being confirmed, so the
   // attestation names a specific document rather than "the quote".
+  // `kind` distinguishes the two shapes the server refuses with: 'revised' — the
+  // document moved under a marked acceptance — and 'unnamed', where nothing moved
+  // but nobody is named on the record (a pre-records quote, or a status set by
+  // hand). ⛔ They must not share a headline: telling an owner their quote
+  // "changed after it was marked Accepted" when it did not is a false statement
+  // on the very screen asking them to make a true one.
   const [repair, setRepair] = useState<
-    { priorAmount: number; currentAmount: number; fingerprint: string; why: string } | null>(null)
+    { kind: 'revised' | 'unnamed'; priorAmount: number; currentAmount: number; fingerprint: string; why: string } | null>(null)
   const [confirmed, setConfirmed] = useState(false)
 
   // Adopt the preset each time the dialog is OPENED. Seeding from the prop at
@@ -135,7 +141,8 @@ export function RecordAcceptanceDialog({
       })
       const out = await res.json().catch(() => null) as {
         ok?: boolean; error?: string; sentence?: string | null
-        repairRequired?: boolean; priorAmount?: number; currentAmount?: number
+        repairRequired?: boolean; repairKind?: string
+        priorAmount?: number; currentAmount?: number
         currentFingerprint?: string | null
       } | null
 
@@ -146,6 +153,7 @@ export function RecordAcceptanceDialog({
       // purpose: naming the current amount is the whole point.
       if (out?.repairRequired) {
         setRepair({
+          kind: out.repairKind === 'unnamed' ? 'unnamed' : 'revised',
           priorAmount: Number(out.priorAmount),
           currentAmount: Number(out.currentAmount),
           fingerprint: String(out.currentFingerprint ?? ''),
@@ -247,14 +255,22 @@ export function RecordAcceptanceDialog({
         // sitting on the record.
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.07] px-3.5 py-3 space-y-2.5 mb-4">
           <p className="text-sm font-semibold text-amber-400">
-            This quote changed after it was marked Accepted
+            {repair.kind === 'unnamed'
+              ? 'No acceptance naming who agreed is on file'
+              : 'This quote changed after it was marked Accepted'}
           </p>
           <p className="text-xs text-ink-muted">{repair.why}</p>
           <div className="rounded-lg border border-border bg-bg-secondary px-3 py-2 text-xs space-y-1">
-            <div className="flex justify-between gap-3">
-              <span className="text-ink-muted">Previous unsupported acceptance figure</span>
-              <span className="text-ink-muted line-through tabular-nums">{formatCurrency(repair.priorAmount)}</span>
-            </div>
+            {/* ⛔ Struck through only when there IS a prior figure to strike. On
+                the 'unnamed' shape the two amounts are the same number, and
+                showing it crossed out would invent a revision that never
+                happened. */}
+            {repair.kind === 'revised' && (
+              <div className="flex justify-between gap-3">
+                <span className="text-ink-muted">Previous unsupported acceptance figure</span>
+                <span className="text-ink-muted line-through tabular-nums">{formatCurrency(repair.priorAmount)}</span>
+              </div>
+            )}
             <div className="flex justify-between gap-3">
               <span className="text-ink font-medium">Current quote {quoteNumber}</span>
               <span className="text-ink font-semibold tabular-nums">{formatCurrency(repair.currentAmount)}</span>
@@ -265,8 +281,8 @@ export function RecordAcceptanceDialog({
               onChange={e => setConfirmed(e.target.checked)} />
             <span>
               I confirm the customer accepted the current quote for{' '}
-              <span className="font-semibold tabular-nums">{formatCurrency(repair.currentAmount)}</span>{' '}
-              after the quote was changed.
+              <span className="font-semibold tabular-nums">{formatCurrency(repair.currentAmount)}</span>
+              {repair.kind === 'revised' ? ' after the quote was changed.' : '.'}
             </span>
           </label>
           <p className="text-[11px] text-ink-faint">

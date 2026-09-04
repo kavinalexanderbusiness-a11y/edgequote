@@ -228,8 +228,17 @@ console.log('\n■ 5. The owner path refuses to invent consent for a revised quo
   const route = stripComments(read('src/app/api/quotes/record-acceptance/route.ts'))
   check('the material-revision guard exists and is evidence-aware',
     /quote_acceptances/.test(route) && /count: 'exact', head: true/.test(route))
-  check('…it fires only when status says accepted, evidence is 0, AND the amount drifted',
-    /isAcceptedOrBeyond\(qq\.status\) && \(count \?\? 0\) === 0 && drifted/.test(route))
+  // ⚠️ RE-POINTED, not relaxed. `drifted` used to be part of the CONDITION; it is
+  // now part of the EXPLANATION only. An accepted quote with no actor-named
+  // acceptance needs the same repair whether or not the price moved — and while
+  // `drifted` gated it, the un-moved case fell through to an unrelated refusal,
+  // which is the dead end the deposit gate now depends on not existing.
+  check('…it fires whenever an accepted quote has no ACTOR-NAMED acceptance',
+    /isAcceptedOrBeyond\(qq\.status\) && \(count \?\? 0\) === 0\) \{/.test(route)
+    && /\.in\('kind', ACTOR_NAMED_ACCEPTANCE_KINDS\)/.test(route),
+    'a legacy backfill row must not count as somebody having accepted')
+  check('…and `drifted` now only chooses the wording, never the outcome',
+    /repairKind: drifted \? 'revised' : 'unnamed'/.test(route))
   check('…and returns a repair-required state naming both figures',
     /repairRequired: true/.test(route)
     && /don.t have durable evidence of which version the customer accepted/.test(route))

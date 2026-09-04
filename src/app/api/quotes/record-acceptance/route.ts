@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { termsClaimSentence } from '@/lib/payments/termsTimingConflict'
 import { termsClaimRefresh, type StoredTermsClaim } from '@/lib/payments/termsClaimRefresh'
-import { isAcceptedOrBeyond } from '@/lib/quoteAcceptance'
+import { isAcceptedOrBeyond, ACTOR_NAMED_ACCEPTANCE_KINDS } from '@/lib/quoteAcceptance'
 
 /** Money for an owner-facing sentence. Display only — never an authorized figure. */
 const money = (n: number) => new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(n)
@@ -126,8 +126,15 @@ export async function POST(req: Request) {
   }
   if (qrow) {
     const qq = qrow as { status: string; total: number | null; accepted_price: number | null }
+    // ⭐⭐ ACTOR-NAMED evidence only. A `legacy_unrecorded` backfill row is not a
+    // recorded acceptance — it is the migration's note that one happened and that
+    // WHO agreed was never captured. Counting it here is what used to send the
+    // owner of such a quote down the ordinary path, into quote_apply_choice's
+    // draft/sent-only refusal, and back with "the quote may already be accepted"
+    // — the one thing they could see was wrong, and no way to fix it.
     const { count, error: cErr } = await supabase.from('quote_acceptances')
       .select('id', { count: 'exact', head: true }).eq('quote_id', quoteId)
+      .in('kind', ACTOR_NAMED_ACCEPTANCE_KINDS)
     // A failed COUNT is not "no evidence" — that answer is what lets this guard
     // be skipped exactly when it matters. Refuse instead of guessing.
     if (cErr) {
@@ -137,7 +144,12 @@ export async function POST(req: Request) {
     const currentAmount = Number(qq.total)
     const drifted = Number.isFinite(priorAmount) && priorAmount > 0
       && Number.isFinite(currentAmount) && Math.abs(priorAmount - currentAmount) > 0.005
-    if (isAcceptedOrBeyond(qq.status) && (count ?? 0) === 0 && drifted) {
+    // ⭐ `drifted` is no longer part of the CONDITION, only of the explanation.
+    // An accepted quote with no actor-named evidence needs the same thing whether
+    // or not the price moved: somebody has to say who accepted it. When it has
+    // NOT moved the old code fell through to the RPC and met an unrelated refusal;
+    // that was a dead end for the very case the deposit gate now depends on.
+    if (isAcceptedOrBeyond(qq.status) && (count ?? 0) === 0) {
       // ⭐ A refusal, but not a dead end. The owner may genuinely know the
       // customer accepted THIS version — so we hand back exactly what an
       // explicit attestation needs to name: both figures, and the fingerprint of
@@ -147,9 +159,19 @@ export async function POST(req: Request) {
       const { data: fp } = await supabase.rpc('quote_material_fingerprint', { p_quote_id: quoteId })
       return NextResponse.json({
         ok: false, claim, reclassified, repairRequired: true,
+        // ⭐ Two shapes, one panel. `revised` is the original case — the document
+        // moved under a marked acceptance. `unnamed` is the quote that was
+        // accepted before this product recorded acceptances (or had its status set
+        // by hand): nothing has changed, but nobody is named, and until somebody is
+        // the online deposit stays withheld. Naming them apart matters because the
+        // panel would otherwise tell an owner their quote "changed" when it didn't.
+        repairKind: drifted ? 'revised' : 'unnamed',
         priorAmount, currentAmount, currentFingerprint: fp ?? null,
-        error: 'This quote changed after acceptance was marked. We don’t have durable evidence of which version the customer accepted, '
-          + `so we can’t record their acceptance of the current ${money(currentAmount)} document from a prior ${money(priorAmount)} figure.`,
+        error: drifted
+          ? 'This quote changed after acceptance was marked. We don’t have durable evidence of which version the customer accepted, '
+            + `so we can’t record their acceptance of the current ${money(currentAmount)} document from a prior ${money(priorAmount)} figure.`
+          : 'This quote is marked accepted, but no acceptance naming who agreed is on file — so its online deposit link stays off. '
+            + `Confirm that the customer accepted this ${money(currentAmount)} version and we’ll put that on the record.`,
       }, { status: 409 })
     }
   }

@@ -28,8 +28,13 @@ const MODEL = 'src/app/portal/[token]/model.ts'
 const RULES = 'src/lib/quoteAcceptance.ts'
 const S122D = 'supabase/proposals/RUN-S122D-owner-confirm-current-acceptance.sql'
 const S122E = 'supabase/proposals/RUN-S122E-recorded-version-must-match.sql'
+const CHARGE = 'src/app/api/portal/quote-deposit/route.ts'
+const RECORD = 'src/app/api/quotes/record-acceptance/route.ts'
+const OWNER = 'src/app/dashboard/quotes/[id]/page.tsx'
+const BILLING = 'src/app/portal/[token]/components/BillingTab.tsx'
 const PRES = 'acceptance-presentation'
 const CVA = 'current-version-acceptance'
+const AUTH = 'deposit-charge-authority'
 
 const MUTATIONS = [
   // ── Blocker 1 · the partial strip: $250 on the card, $700 in the sentence ──
@@ -82,9 +87,55 @@ const MUTATIONS = [
   // production — re-deriving would roll back an attestation that a LATER edit
   // invalidated, which is the opposite error — and that is argued, not measured.
   { name: 'B3 · the writer re-derives instead of reading what it STORED', file: S122E, guard: CVA,
-    unprovableHere: true,
+    expectGreen: 'not distinguishable without a second connection (PGlite is single-backend)',
     from: 'select a.document_fingerprint, a.accepted_amount',
     to: 'select public.quote_material_fingerprint(a.quote_id), a.accepted_amount' },
+
+  // ── Defect 4 · only an actor-named acceptance may authorize a charge ───────
+  { name: 'D4 · the charge door stops asking who is named (THE reported defect)', file: CHARGE, guard: AUTH,
+    from: '  if (facing.depositChargeBlock) {', to: '  if (false && facing.depositChargeBlock) {' },
+  { name: 'D4 · a legacy row is allowed to authorize money again', file: RULES, guard: AUTH,
+    from: "  if (p === 'evidenced_legacy') return 'unknown_provenance'",
+    to: "  if (p === 'evidenced_legacy') return null" },
+  { name: 'D4 · an unreadable acceptance table is treated as permission', file: CHARGE, guard: AUTH,
+    from: "  if (accErr) return NextResponse.json({ error: 'We couldn’t start the payment — please try again in a moment.' }, { status: 502 })",
+    to: '  if (accErr) { /* carry on regardless */ }' },
+  // ⏭ Expected-green, and the reason IS the fix: once the block above stands,
+  // every quote that reaches the gate is evidenced — and for an evidenced quote
+  // `facing.moneyQuote` IS `quote`, because nothing was stripped. The two
+  // spellings are equivalent by construction, which is precisely what closes the
+  // defect. Asserted green so that the day it goes red, the block has moved.
+  { name: 'D4 · the charge prices the raw row instead of the shared basis', file: CHARGE, guard: AUTH,
+    expectGreen: 'equivalent by construction — past the block, moneyQuote IS the quote',
+    from: '  const gate = schedulingGate(facing.moneyQuote, (payRows as GateLedgerRow[]) || [])',
+    to: '  const gate = schedulingGate(quote, (payRows as GateLedgerRow[]) || [])' },
+  { name: 'D4 · the portal offers a Pay button the door will refuse', file: MODEL, guard: AUTH,
+    from: '      payable: facing.depositChargeBlock === null,', to: '      payable: true,' },
+  { name: 'D4 · the headline CTA stops checking payable', file: MODEL, guard: AUTH,
+    from: "d.schedulingDeposit?.payable && !d.schedulingDeposit.satisfied",
+    to: 'd.schedulingDeposit && !d.schedulingDeposit.satisfied' },
+  { name: 'D4 · Billing renders the button instead of the reason', file: BILLING, guard: AUTH,
+    from: '          {!d.schedulingDeposit.payable ? (', to: '          {false ? (' },
+
+  // ── Defect 4 · and the owner must not be trapped by the refusal ────────────
+  { name: 'D4 · S122D refuses a legacy row again, trapping the owner', file: S122D, guard: AUTH,
+    from: "    if v_prev.kind <> 'legacy_unrecorded' then",
+    to: "    if true then" },
+  { name: 'D4 · the owner route counts a legacy row as a recorded acceptance', file: RECORD, guard: AUTH,
+    from: "      .in('kind', ACTOR_NAMED_ACCEPTANCE_KINDS)", to: '' },
+  { name: 'D4 · the repair panel needs a price move again (the old dead end)', file: RECORD, guard: AUTH,
+    from: '    if (isAcceptedOrBeyond(qq.status) && (count ?? 0) === 0) {',
+    to: '    if (isAcceptedOrBeyond(qq.status) && (count ?? 0) === 0 && drifted) {' },
+  { name: 'D4 · the panel tells an owner their quote "changed" when it did not', file: RECORD, guard: AUTH,
+    from: "        repairKind: drifted ? 'revised' : 'unnamed',", to: "        repairKind: 'revised'," },
+
+  // ── Defect 4 · the owner-sent PDF is a customer document ──────────────────
+  { name: 'D4 · the owner-sent PDF goes back to the raw quote', file: OWNER, guard: AUTH,
+    from: '      const blob = await renderQuoteBlob(facing.moneyQuote, settings, services, options)',
+    to: '      const blob = await renderQuoteBlob(quote, settings, services, options)' },
+  { name: 'D4 · the owner is told the customer can pay when they cannot', file: OWNER, guard: AUTH,
+    from: '                {chargeBlock\n                  ? depositChargeBlockedOwnerNote(chargeBlock)\n                  : scheduledStillOwed',
+    to: '                {false\n                  ? depositChargeBlockedOwnerNote(chargeBlock)\n                  : scheduledStillOwed' },
 ]
 
 const crlf = (s, src) => (/\r\n/.test(src) ? s.replace(/\n/g, '\r\n') : s)
@@ -107,14 +158,14 @@ for (const m of MUTATIONS) {
   } catch { red = true }
   writeFileSync(path, orig, 'utf8')
 
-  if (m.unprovableHere) {
-    if (red) { missed++; console.log(`  ✗ ${m.name}\n      went RED — it is distinguishable after all; re-read the note in the header`) }
-    else { noted++; console.log(`  ⏭ ${m.name}  (green as expected — not distinguishable without a second connection)`) }
+  if (m.expectGreen) {
+    if (red) { missed++; console.log(`  ✗ ${m.name}\n      went RED — it IS distinguishable after all, so the stated reason no longer holds: ${m.expectGreen}`) }
+    else { noted++; console.log(`  ⏭ ${m.name}  green as expected — ${m.expectGreen}`) }
     continue
   }
   if (red) { caught++; console.log(`  ✓ ${m.name}`) }
   else { missed++; console.log(`  ✗ ${m.name}\n      verify:${m.guard} stayed GREEN — that check proves nothing`) }
 }
 
-console.log(`\n${caught}/${caught + missed} mutations caught` + (noted ? `, ${noted} not provable in a single-backend runtime` : ''))
+console.log(`\n${caught}/${caught + missed} mutations caught` + (noted ? `, ${noted} asserted green with a stated reason` : ''))
 process.exit(missed > 0 ? 1 : 0)
