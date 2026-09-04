@@ -290,6 +290,28 @@ check('invoices page reads ?f= and validates it against the pills’ own vocabul
 check('invoices pills actually include overdue (the chip’s destination filter)',
   invoicesSrc.includes("value: 'overdue'"))
 
+// ── §5 The customize sheet's switches are thumb-sized, and only there ────────
+// Toggle's outer <button> is the interactive target; with no label it is the
+// 40×24 track (measured in the S97 a11y fixture). The sheet passes the shell's
+// `tap-target` through Toggle's className — the primitive itself must stay
+// inert for every other caller, and the track must keep its geometry.
+console.log('\n§5 switches — a hit area for thumbs, geometry untouched')
+{
+  // Source pins (this guard runs under plain tsx, which has no JSX runtime for
+  // rendering the component; the fixture branch measures the real thing).
+  const toggle = read('src/components/ui/Toggle.tsx').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
+  // The outer <button>'s className is the one starting 'inline-flex …'; the
+  // inner track/knob spans start 'relative …' / 'absolute …'.
+  check('Toggle merges an optional className onto its OUTER button (the target), via cn',
+    /className\?: string/.test(toggle) && /className=\{cn\('inline-flex[^']*rounded-full[^']*', className\)\}/.test(toggle))
+  check('…and its base classes carry NO tap-target — existing callers are unchanged',
+    !/tap-target/.test(toggle))
+  check('…and the visible track is still the 40×24 span (w-10 h-6), untouched',
+    /'relative w-10 h-6 rounded-full transition-colors duration-200'/.test(toggle))
+  check('the customize sheet passes tap-target to its switches',
+    /<Toggle[\s\S]{0,400}?className="tap-target"/.test(customizeSrc))
+}
+
 // ── Result ───────────────────────────────────────────────────────────────────
 console.log('')
 if (failures > 0) {

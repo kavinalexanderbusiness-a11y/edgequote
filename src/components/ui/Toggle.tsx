@@ -8,9 +8,15 @@ interface ToggleProps {
   label?: string
   ariaLabel?: string   // accessible name when there's no visible `label`
   disabled?: boolean
+  /** Extra classes on the OUTER button — the interactive target. With no
+   *  `label`, that button is exactly the 40×24 track, which is under the 44px
+   *  a thumb needs; a caller in a touch-first row passes the shell's
+   *  `tap-target` to grow the hit area under (pointer: coarse) while the track
+   *  itself stays 40×24. Inert for every existing caller (default: nothing). */
+  className?: string
 }
 
-export function Toggle({ checked, onChange, label, ariaLabel, disabled }: ToggleProps) {
+export function Toggle({ checked, onChange, label, ariaLabel, disabled, className }: ToggleProps) {
   return (
     <button
       type="button"
@@ -19,7 +25,7 @@ export function Toggle({ checked, onChange, label, ariaLabel, disabled }: Toggle
       aria-label={!label ? ariaLabel : undefined}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className="inline-flex items-center gap-2.5 rounded-full disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      className={cn('inline-flex items-center gap-2.5 rounded-full disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40', className)}
     >
       <span
         className={cn(
