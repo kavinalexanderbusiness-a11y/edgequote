@@ -727,6 +727,105 @@ async function main() {
       /already been used by this business/i.test(strangerXAgain),
       strangerXAgain.slice(0, 200) || 'IT SUCCEEDED')
 
+    // ═══════════════════════════════════════════════════════════════════════
+    console.log('\n══ 7b · the UPDATE path, under contention ══════════════════════════════\n')
+    // ═══════════════════════════════════════════════════════════════════════
+    // ⭐⭐ WHY THIS SECTION EXISTS. Everything raced above is an INSERT. The claim
+    // trigger has a SECOND branch — `before update of quote_number` — with its own
+    // claim, its own holder lookup and its own refusal, and until now every UPDATE
+    // in this guard ran sequentially on the admin connection. A whole write path
+    // was therefore proven only against itself, one caller at a time.
+    //
+    // ⛔ That matters because the UPDATE branch is where the identity rule is at
+    // its most load-bearing: it must let a quote RETURN to a number it already
+    // holds while refusing a stranger the same number, and it must do both while
+    // other transactions are contending for it.
+
+    // Two distinct quotes, both parked on numbers of their own, then raced onto
+    // ONE free target number. Exactly one may arrive.
+    const R1 = 'bbbbbbb1-0000-4000-8000-00000000000b'
+    const R2 = 'bbbbbbb2-0000-4000-8000-00000000000c'
+    const r1Num = (await admin.query('select public.allocate_quote_number($1) as v', [A])).rows[0].v as string
+    const r2Num = (await admin.query('select public.allocate_quote_number($1) as v', [A])).rows[0].v as string
+    await admin.query(mkQuoteId(R1, A, r1Num, CUST_A))
+    await admin.query(mkQuoteId(R2, A, r2Num, CUST_A))
+    const target = (await admin.query('select public.allocate_quote_number($1) as v', [A])).rows[0].v as string
+
+    const raceUpdate = async (pairs: { id: string; to: string }[]) => {
+      const cs = pairs.map(() => new Client({ connectionString: server.url }))
+      clients.push(...cs)
+      await Promise.all(cs.map(c => c.connect()))
+      const results = await Promise.all(cs.map(async (c, i) => {
+        try {
+          await c.query('begin')
+          await c.query(`update public.quotes set quote_number=$1 where id=$2`, [pairs[i].to, pairs[i].id])
+          await c.query('select pg_sleep(0.02)')      // hold the claim row lock
+          await c.query('commit')
+          return 'ok'
+        } catch (e: any) {
+          try { await c.query('rollback') } catch { /* already aborted */ }
+          return String(e?.message ?? 'error')
+        }
+      }))
+      await Promise.all(cs.map(c => c.end()))
+      clients = clients.filter(c => !cs.includes(c))
+      return results
+    }
+
+    const raced = await raceUpdate([{ id: R1, to: target }, { id: R2, to: target }])
+    const updWinners = raced.filter(r => r === 'ok').length
+    check('UPDATE RACE · two quotes renumbering onto ONE number — exactly one wins',
+      updWinners === 1,
+      `${updWinners} of 2 succeeded: ${raced.join(' | ').slice(0, 240)}`)
+    check('UPDATE RACE · the loser was refused by the database, not by the app',
+      raced.filter(r => r !== 'ok').every(r => /already been used by this business|duplicate key|quotes_user_qnum_new_unique/i.test(r)),
+      raced.find(r => r !== 'ok' && !/already been used|duplicate key/i.test(r)))
+    check('UPDATE RACE · and exactly one row carries the target number',
+      Number((await admin.query(
+        `select count(*)::int n from public.quotes where user_id=$1 and quote_number=$2`,
+        [A, target])).rows[0].n) === 1)
+
+    // ⭐ The number the WINNER vacated is still spent, even though the vacating
+    // happened while another transaction was contending for a different number.
+    const vacated = raced[0] === 'ok' ? r1Num : r2Num
+    const vacatedTaken = await tryQ(mkQuoteId('bbbbbbb3-0000-4000-8000-00000000000d', A, vacated, CUST_A))
+    check('UPDATE RACE · the number the winner vacated is still permanently spent',
+      /already been used by this business/i.test(vacatedTaken),
+      vacatedTaken.slice(0, 200) || 'IT SUCCEEDED')
+
+    // ⭐⭐ AND THE FIXED DEFECT, RACED. A DELETE and a different quote's INSERT of
+    // that same number, dispatched together. Under the released-claim model this
+    // is the exact interleaving that handed a live number to a stranger; under a
+    // permanent claim there is no release path for the delete to trigger, so the
+    // stranger must lose every time regardless of ordering.
+    const D1 = 'bbbbbbb4-0000-4000-8000-00000000000e'
+    const S1 = 'bbbbbbb5-0000-4000-8000-00000000000f'
+    const delNum = (await admin.query('select public.allocate_quote_number($1) as v', [A])).rows[0].v as string
+    await admin.query(mkQuoteId(D1, A, delNum, CUST_A))
+
+    const cDel = new Client({ connectionString: server.url })
+    const cIns = new Client({ connectionString: server.url })
+    clients.push(cDel, cIns)
+    await Promise.all([cDel.connect(), cIns.connect()])
+    const [delRes, insRes] = await Promise.all([
+      (async () => { try { await cDel.query('delete from public.quotes where id=$1', [D1]); return 'ok' } catch (e: any) { return String(e?.message) } })(),
+      (async () => { try { await cIns.query(mkQuoteId(S1, A, delNum, CUST_A)); return 'ok' } catch (e: any) { return String(e?.message) } })(),
+    ])
+    await Promise.all([cDel.end(), cIns.end()])
+    clients = clients.filter(c => c !== cDel && c !== cIns)
+
+    check('DELETE RACE · the delete succeeded', delRes === 'ok', delRes.slice(0, 200))
+    check('DELETE RACE · a concurrent stranger NEVER acquires the deleted number',
+      /already been used by this business/i.test(insRes),
+      `this is the released-claim defect in its raced form: ${insRes.slice(0, 200) || 'IT SUCCEEDED'}`)
+    check('DELETE RACE · and the claim outlived the race',
+      Number((await admin.query(
+        `select count(*)::int n from public.document_number_claims where user_id=$1 and kind='quote' and number=$2`,
+        [A, delNum])).rows[0].n) === 1)
+    // the original may still come back — identity, not recency
+    check('DELETE RACE · the original id can still restore afterwards',
+      (await tryQ(mkQuoteId(D1, A, delNum, CUST_A))) === '')
+
     // ── and there is no release path at all ────────────────────────────────
     const releaseTrigger = Number((await admin.query(
       `select count(*)::int n from pg_trigger
