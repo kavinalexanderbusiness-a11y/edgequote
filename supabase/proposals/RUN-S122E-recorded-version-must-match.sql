@@ -3,8 +3,26 @@
 -- ⛔ CANDIDATE — NOT APPLIED, outside supabase/migrations so it cannot apply by
 -- accident. S106 picks the version from the LIVE ledger.
 --
--- ⛔ APPLY AFTER RUN-S122D. This patch is inert on its own — no caller arms the
--- markers it reads until S122D does.
+-- ⛔⛔ APPLY BEFORE OR WITH RUN-S122D — NEVER LEAVE D APPLIED WITHOUT E.
+--
+-- This patch is inert on its own: nothing arms the markers it reads until S122D
+-- exists, and no function currently live references them. That inertness is
+-- exactly why E goes FIRST — it changes no behaviour while it waits.
+--
+-- ⛔ The reverse order is NOT equivalent. D applied alone creates
+-- owner_confirm_current_acceptance and grants it to `authenticated` while the race
+-- this patch closes is still open, so every minute between the two applies is a
+-- window in which a concurrent child-row write can turn a refusal into an
+-- authorisation — the precise harm this file exists to remove.
+--
+-- ⚠️ An earlier revision of this header said "APPLY AFTER RUN-S122D". Same correct
+-- premise, opposite conclusion: inertness makes E safe to apply EARLY, not safe to
+-- defer. Recorded rather than silently swapped, because the reasoning is the part
+-- worth keeping — when two artifacts disagree about ORDER, the one that opens an
+-- exposure window is the wrong one, however confidently it reads.
+--
+-- ⛔ ROLLBACK IS THE REVERSE OF APPLY: drop D first, then revert E. Reverting E
+-- while D is still applied re-opens the same window from the other end.
 --
 -- ── WHY THIS EXISTS ─────────────────────────────────────────────────────────
 -- An independent S121 review proved a race in RUN-S122D, and its consequence:
