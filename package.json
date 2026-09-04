@@ -158,6 +158,7 @@
     "verify:acceptance-presentation": "tsx scripts/verify-acceptance-presentation.ts",
     "verify:current-version-acceptance": "tsx scripts/verify-current-version-acceptance.ts",
     "verify:deposit-charge-authority": "tsx scripts/verify-deposit-charge-authority.ts",
+    "verify:browser-fixture": "tsx scripts/verify-browser-fixture.ts",
     "verify:day-fit": "tsx scripts/verify-day-fit.ts",
     "verify:day-plan": "tsx scripts/verify-day-plan.ts",
     "verify:day-sequence": "tsx scripts/verify-day-sequence.ts",
