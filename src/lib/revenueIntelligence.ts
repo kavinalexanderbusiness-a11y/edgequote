@@ -13,6 +13,7 @@ import {
   assessEvidence, declaredCadence, mayShowAnnual, INSUFFICIENT_LABEL,
   type Evidence, type DeclaredCadence,
 } from '@/lib/growthEvidence'
+import { assessConcentration, type ConcentrationEntry, type ConcentrationResult } from '@/lib/growthConcentration'
 
 // ── Revenue Intelligence engine (Growth) ────────────────────────────────────────
 // Predictive + prescriptive layer on top of the BI dashboard. Scores every
@@ -100,6 +101,15 @@ export interface RevenueIntelReport {
      */
     quantified: number
     unquantified: number
+    /**
+     * ⭐⭐ HOW MUCH OF THE QUANTIFIED TOTAL RESTS ON ONE CUSTOMER — a DIFFERENT
+     * question from whether each figure was earned (that is lib/growthEvidence's
+     * job, already done by the time an Opportunity reaches this summary). See
+     * lib/growthConcentration for the full rationale and the threshold.
+     * ⛔ `null` when there is nothing quantified to measure concentration over —
+     * the caller must render nothing, not a "0%".
+     */
+    concentration: ConcentrationResult | null
   }
   labor: LaborContext
 }
@@ -600,6 +610,19 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
     if (o.expectedValue > 0) quantified++; else unquantified++
   }
 
+  // ⭐⭐ CONCENTRATION — a DISCLOSURE pass over the same `ranked` list, not a
+  // second pricing or eligibility engine. lib/growthEvidence has already decided
+  // which figures may exist; this only asks how the ones that survived are
+  // distributed ACROSS customers. Every opportunity is handed over (unquantified
+  // ones included) — assessConcentration's own filter is the single place that
+  // decides what counts, the same discipline growthEvidence uses for exclusions,
+  // so this call site does not need to duplicate that judgment.
+  const concentration = assessConcentration(
+    ranked.map((o): ConcentrationEntry => ({
+      customerId: o.customerId, customerName: o.customerName, expectedValue: o.expectedValue,
+    })),
+  )
+
   const bookedMin = jobs.filter(j => j.scheduled_date >= today && dDays(j.scheduled_date) >= -14 && j.scheduled_date <= addDaysISO(today, 14) && j.status !== 'cancelled' && j.status !== 'completed')
     .reduce((s, j) => s + (Number(j.duration_minutes) || 45), 0)
   const labor: LaborContext = {
@@ -618,6 +641,7 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
       // subject is expected revenue.
       topAction: ranked.find(o => o.expectedValue > 0) || null,
       quantified, unquantified,
+      concentration: concentration.hasData ? concentration : null,
     },
     labor,
   }

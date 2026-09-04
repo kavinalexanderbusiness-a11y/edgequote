@@ -9,8 +9,10 @@ import {
   OppKind, OPP_META, Confidence, FeedbackRow,
 } from '@/lib/revenueIntelligence'
 import { INSUFFICIENT_LABEL, evidenceSummary, insufficientReason } from '@/lib/growthEvidence'
+import { concentrationNote } from '@/lib/growthConcentration'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
+import { Banner } from '@/components/ui/Banner'
 import { StatTile } from '@/components/ui/StatTile'
 import { Skeleton, SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -116,6 +118,22 @@ export default function RevenueIntelligencePage() {
           )
         })()}
       </div>
+
+      {/* ⭐⭐ CONCENTRATION DISCLOSURE — a DIFFERENT fact from the tiles above.
+          Those say how much money and how much of it is quantified; this says
+          how much of THAT depends on one customer. Renders NOTHING unless the
+          share crosses the documented threshold (lib/growthConcentration) —
+          silence is the honest answer for an ordinary, well-spread book. Aggregated
+          by customerId, never by name, so a shared display name cannot merge or
+          split a customer's contribution into a false or hidden finding. */}
+      {summary.concentration?.material && (() => {
+        const note = concentrationNote(summary.concentration, formatCurrency)
+        return note ? (
+          <Banner tone="warn" icon={AlertTriangle} className="animate-rise">
+            {note}
+          </Banner>
+        ) : null
+      })()}
 
       {/* Top action — the advisor's single best play, actionable in one tap */}
       {summary.topAction && (
