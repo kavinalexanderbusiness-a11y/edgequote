@@ -359,7 +359,13 @@ export function RecordAcceptanceDialog({
 
       <div className="mt-4">
         <label className="block text-xs font-semibold text-ink uppercase tracking-wide mb-2" htmlFor="acceptance-note">
-          Note <span className="text-ink-faint font-normal normal-case tracking-normal">(optional)</span>
+          {/* ⛔ The word has to follow the STEP, not the field. On the ordinary
+              path a note genuinely is optional. On the repair step `canConfirm`
+              refuses without one — so a label still reading "(optional)" there
+              contradicted the panel's own "A note is required." three inches
+              above it, on the one screen whose entire job is getting an owner to
+              make a careful, true statement. */}
+          Note <span className="text-ink-faint font-normal normal-case tracking-normal">{repair ? '(required)' : '(optional)'}</span>
         </label>
         <textarea
           id="acceptance-note"
