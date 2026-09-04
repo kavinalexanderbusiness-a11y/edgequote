@@ -27,9 +27,13 @@ export function Toggle({ checked, onChange, label, ariaLabel, disabled, classNam
       onClick={() => onChange(!checked)}
       className={cn('inline-flex items-center gap-2.5 rounded-full disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40', className)}
     >
+      {/* shrink-0: the track is a flex item beside the label, and a label long
+          enough to wrap made it give up width — the S97 fixture measured it at
+          20–21px under a two-line label, with the 20px knob filling the whole
+          track. The track is the switch; the LABEL is what wraps. */}
       <span
         className={cn(
-          'relative w-10 h-6 rounded-full transition-colors duration-200',
+          'relative w-10 h-6 shrink-0 rounded-full transition-colors duration-200',
           checked ? 'bg-accent' : 'bg-ink-faint/30'
         )}
       >

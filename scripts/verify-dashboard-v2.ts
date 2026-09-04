@@ -306,8 +306,8 @@ console.log('\n§5 switches — a hit area for thumbs, geometry untouched')
     /className\?: string/.test(toggle) && /className=\{cn\('inline-flex[^']*rounded-full[^']*', className\)\}/.test(toggle))
   check('…and its base classes carry NO tap-target — existing callers are unchanged',
     !/tap-target/.test(toggle))
-  check('…and the visible track is still the 40×24 span (w-10 h-6), untouched',
-    /'relative w-10 h-6 rounded-full transition-colors duration-200'/.test(toggle))
+  check('…and the visible track is the 40×24 span (w-10 h-6) and cannot be squeezed by a long label (shrink-0)',
+    /'relative w-10 h-6 shrink-0 rounded-full transition-colors duration-200'/.test(toggle))
   check('the customize sheet passes tap-target to its switches',
     /<Toggle[\s\S]{0,400}?className="tap-target"/.test(customizeSrc))
 }
