@@ -171,8 +171,13 @@ console.log('\n■ 4. The portal model is wired to the rules, not to status')
   check('…and it is an anchor patch that normalises CRLF and demands one match',
     /pg_get_functiondef/.test(sql) && /replace\(v_src, E'\\r\\n', E'\\n'\)/.test(sql)
     && /expected exactly 1 — refusing to patch/.test(sql))
+  // ⚠️ Assert the projection IS the kind, not merely that the alias appears.
+  // A mutation that swapped the SELECT back to `exists(...)` left the trailing
+  // `as acceptance_kind` line untouched, so an alias-only check stayed green
+  // while the payload had gone back to a boolean.
   check('…and it projects the KIND only — never actor, amount, time or note',
-    /as acceptance_kind/.test(sql)
+    /select qa\.kind from public\.quote_acceptances qa/.test(sql)
+    && !/exists \(select 1 from public\.quote_acceptances/.test(sql)
     && !/accepted_amount|accepted_at|actor_id|on_behalf_note/.test(sql),
     'a bare boolean would have let an owner attestation speak as the customer')
 }
