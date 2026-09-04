@@ -216,7 +216,9 @@ for (const w of WIDTHS) {
     Array.isArray(unbrokenLeaves) && unbrokenLeaves.length >= 2 && clippedOnes(unbrokenLeaves).length === 0, JSON.stringify(clippedOnes(unbrokenLeaves)))
 
   // 7. Marked won is not collected revenue
-  check('the "Value marked won" tile is labelled as marked won, not revenue', body.includes('Value marked won') && !/Revenue from acted/.test(body), '')
+  // ⚠️ innerText applies CSS text-transform: StatTile labels are `uppercase`,
+  // so they arrive as "VALUE MARKED WON". Match case-insensitively.
+  check('the "Value marked won" tile is labelled as marked won, not revenue', /value marked won/i.test(body) && !/revenue from acted/i.test(body), '')
   check('one card is Won and one is Acted', /\bWon\b/.test(body) && /\bActed\b/.test(body), '')
 
   // 8. Reachability and accessibility of the controls
@@ -237,7 +239,8 @@ for (const w of WIDTHS) {
   const why = await ev(`(() => { const b = [...document.querySelectorAll('main button')].find(x => (x.textContent || '').trim() === 'Why?'); if (!b) return 'NO_WHY'; b.click(); return 'CLICKED' })()`)
   if (why !== 'CLICKED') unproven(`no "Why?" control found (${why})`)
   else {
-    await until(`${TEXT}.includes('What this is based on')`, 'the Why? panel opened')
+    // (same text-transform caveat: the heading renders as "WHAT THIS IS BASED ON")
+    await until(`/what this is based on/i.test(${TEXT})`, 'the Why? panel opened')
     const evidence = String(await ev(TEXT))
     check('the evidence block names the record count and the statistic', /\d+ visits?/.test(evidence) && /median visit value/.test(evidence), '')
   }
@@ -266,7 +269,7 @@ for (const w of WIDTHS) {
 // call — and this was not an offline proof. data:/blob: are in-page, not network.
 console.log('\n═══ network ═══')
 const offBox = [...new Set(requested)].filter(u => !/^(data|blob):/.test(u) && !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/.test(u))
-note(`${requested.length} request(s) recorded by Chrome, ${new Set(requested).size} distinct`)
+note(`${requested.length} request(s) recorded by Chrome, ${new Set(requested).size} distinct; hosts: ${[...new Set(requested.map(u => { try { return new URL(u).host } catch { return u.slice(0, 12) } }))].join(', ')}`)
 check('⛔ every request the browser made was loopback', offBox.length === 0, offBox.join('\n      '))
 if (DIRTY) bad('the worktree was dirty — a clean run is required for this to be evidence')
 
