@@ -97,21 +97,31 @@ export interface ConcentrationResult {
  * call, not a statistical derivation, and the brief asks for a documented
  * reasonable one rather than a proof. The reasoning:
  *
- *   • An even split among exactly TWO contributors is 50% each. A threshold AT
- *     50% would fire on almost every two-customer book by construction,
- *     whether or not either customer is unusually dominant — that is noise,
- *     not disclosure.
  *   • An even split among THREE contributors is ~33% each. A threshold set
- *     there would fire on perfectly ordinary three-customer books too.
- *   • 40% sits above the three-way-even split, so an ordinary small book with
- *     three or more similarly-sized customers stays quiet, but it is
- *     comfortably below the two-way-even 50%, so a customer who is genuinely
- *     larger than "the other half" of a two-customer book still gets flagged.
+ *     there would fire on perfectly ordinary three-customer books, purely
+ *     because they only have three customers, not because any one of them is
+ *     unusual. 40% sits above that, so an ordinary small book with three or
+ *     more similarly-sized customers stays quiet.
  *   • It also matches a common plain-language bar in small-business customer-
  *     concentration reporting — "a customer representing roughly two-fifths or
  *     more of the number" is a widely used rule of thumb for "worth watching",
  *     without implying the kind of formal materiality threshold (10%, 25%)
  *     used in regulated financial disclosure, which this product is not.
+ *
+ * ⚠️⚠️ WHAT 40% DOES **NOT**, AND CANNOT, DO: EXCLUDE A TWO-CUSTOMER BOOK — NOT
+ * EVEN AN EXACTLY EVEN 50/50 ONE. With only two contributors, whichever one is
+ * larger is, by construction, always >= 50% of the total the two of them make
+ * (two non-negative numbers that sum to a whole; the larger one is at least
+ * half of it) — and an EXACT tie means BOTH are at 50%. 50% >= 40% either way,
+ * so `material` is `true` for every two-customer book, always, regardless of
+ * whether one customer is truly dominant or the two happen to be identical.
+ * This is not a property of the number 40 specifically — no threshold below
+ * 50% could ever exempt a two-customer book, for the same arithmetic reason.
+ * The threshold is only doing meaningful work once a book has THREE OR MORE
+ * contributors; on a thin two-customer book, a `material: true` verdict should
+ * be read as "this book currently has very few customers", not as "one of them
+ * is unusually large relative to the other" — the code does not, and cannot,
+ * distinguish those two situations for `contributorCount === 2`.
  *
  * A single named constant, not a magic number inline, so the next session can
  * find and change the rationale in one place rather than hunt a comparison.

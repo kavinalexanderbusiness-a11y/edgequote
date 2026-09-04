@@ -6,7 +6,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import {
   loadRevenueIntel, recordRecommendation, RevenueIntelReport, Opportunity, LtvForecast,
-  OppKind, OPP_META, Confidence, FeedbackRow,
+  OppKind, OPP_META, Confidence, FeedbackRow, priorityScoreLabel, priorityScoreTooltip,
 } from '@/lib/revenueIntelligence'
 import { INSUFFICIENT_LABEL, evidenceSummary, insufficientReason } from '@/lib/growthEvidence'
 import { concentrationNote } from '@/lib/growthConcentration'
@@ -49,6 +49,14 @@ export default function RevenueIntelligencePage() {
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ⭐ `result_value` is seeded from the FORECAST (`o.expectedValue`), not from
+  // any invoice/payment evidence — there is no collections feed into this table
+  // at all. "Marking won" records the owner's own claim that the play landed;
+  // it does not verify what was actually charged or collected. Kept exactly as
+  // the forecast on purpose (a "how much did they actually pay" flow would be a
+  // different, real-money feature — invoicing/payments own that, not this
+  // advisor), but every surface reading this value must say "marked won", never
+  // "revenue" or "collected". See the `wonValue` tile above.
   async function act(o: Opportunity, status: 'acted' | 'dismissed' | 'won') {
     setBusy(o.key)
     setFeedback(prev => ({ ...prev, [o.key]: { opportunity_key: o.key, kind: o.kind, status, expected_value: o.expectedValue, result_value: status === 'won' ? o.expectedValue : null } }))
@@ -84,6 +92,14 @@ export default function RevenueIntelligencePage() {
   const fbList = Object.values(feedback)
   const actedCount = fbList.filter(f => f.status === 'acted' || f.status === 'won').length
   const wonCount = fbList.filter(f => f.status === 'won').length
+  // ⭐⭐ THIS IS NOT COLLECTED REVENUE. `act()` below seeds `result_value` from
+  // `o.expectedValue` — the SAME forecast figure the opportunity card already
+  // showed — at the moment the owner taps "Mark won". Nothing here reads an
+  // invoice, a payment or any other evidence that money actually changed hands;
+  // `revenue_recommendations.result_value` has no such feed at all today. So
+  // `wonValue` is "the sum of what we forecasted for the plays you told us you
+  // won", not a collections figure — and the tile below is labelled to say
+  // exactly that ("Value marked won"), never "Revenue" or "Collected".
   const wonValue = fbList.filter(f => f.status === 'won').reduce((s, f) => s + Number(f.result_value || 0), 0)
 
   const KINDS: (OppKind | 'all')[] = ['all', 'renewal', 'upsell', 'cross_sell', 'membership', 'referral', 'reactivation']
@@ -102,13 +118,21 @@ export default function RevenueIntelligencePage() {
             was in fact a sum over figures many of which were a single visit
             multiplied by a cadence nobody declared. The figure is now only the
             quantified ones, and the sub-line says how many were left out. */}
+        {/* ⭐ subWrap: the audit that added this caveat is the same one that had
+            it clipped to "19 without e…" at 375px — a truncated disclosure is
+            no disclosure. See StatTile's subWrap doc for why this is opt-in
+            rather than the shared component's new default. */}
         <Tile label="Recurring opportunity" value={formatCurrency(summary.totalOpportunity)}
           sub={summary.unquantified > 0
             ? `/yr from ${summary.quantified} · ${summary.unquantified} without enough data`
             : `/yr from ${summary.quantified} recommendation${summary.quantified === 1 ? '' : 's'}`}
+          subWrap
           accent />
         <Tile label="One-time opportunity" value={formatCurrency(summary.totalOneTime)} />
-        <Tile label="Revenue from acted" value={formatCurrency(wonValue)} sub={`${actedCount} acted · ${wonCount} won`} />
+        {/* ⭐ "Revenue from acted" implied collected money. This is the sum of
+            forecasted expectedValue for plays marked won — see the `wonValue`
+            comment above — so the label says what it actually is. */}
+        <Tile label="Value marked won" value={formatCurrency(wonValue)} sub={`${actedCount} acted · ${wonCount} won`} />
         {(() => {
           const atRisk = ltvForecast.reduce((s, f) => s + (Number(f.churnRiskImpact) || 0), 0)
           // Tappable — opens + scrolls to the LTV forecast where the at-risk names live.
@@ -128,9 +152,17 @@ export default function RevenueIntelligencePage() {
           split a customer's contribution into a false or hidden finding. */}
       {summary.concentration?.material && (() => {
         const note = concentrationNote(summary.concentration, formatCurrency)
+        // ⭐ Explicit `break-words`: Banner's own content div is already
+        // `flex-1 min-w-0` with no truncate/nowrap, so this sentence wraps by
+        // default — but the sentence embeds a customer's own display name,
+        // which is free text an owner typed and could in principle be one long
+        // unbroken token (no spaces) at any width. `break-words` guarantees it
+        // still wraps rather than overflowing the banner's fixed padding at
+        // 375/390/430, without touching Banner's default behaviour for its many
+        // other callers across the app.
         return note ? (
           <Banner tone="warn" icon={AlertTriangle} className="animate-rise">
-            {note}
+            <p className="break-words">{note}</p>
           </Banner>
         ) : null
       })()}
@@ -144,9 +176,14 @@ export default function RevenueIntelligencePage() {
           <div className="min-w-0 flex-1">
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Top move right now</p>
             <p className="text-base font-bold tracking-tight text-ink mt-0.5">{summary.topAction.action} — {summary.topAction.customerName}</p>
+            {/* ⭐⭐ "% likely to land" claimed a measured conversion probability.
+                The score is a fixed-point heuristic (base + signal deltas,
+                clamped 0-100) — real for RANKING, invented if read as a
+                percentage chance. priorityScoreLabel is the one honest sentence,
+                shared with every OppCard below so neither drifts back. */}
             <p className="text-xs text-ink-muted mt-1 tabular-nums">
               <span className="font-semibold text-accent-text">+{formatCurrency(summary.topAction.expectedValue)}{summary.topAction.oneTime ? ' one-time' : '/yr'}</span>
-              {' '}· {summary.topAction.score}% likely to land, based on this customer’s history
+              {' '}· {priorityScoreLabel(summary.topAction.score)}, based on this customer’s history
             </p>
           </div>
           <Link href={summary.topAction.actionHref} onClick={() => act(summary.topAction!, 'acted')} className="shrink-0">
@@ -216,8 +253,8 @@ export default function RevenueIntelligencePage() {
 }
 
 // Thin adapter over the ONE shared KPI tile (no local tile styles to drift).
-function Tile({ label, value, sub, accent, danger }: { label: string; value: string; sub?: string; accent?: boolean; danger?: boolean }) {
-  return <StatTile label={label} value={value} sub={sub} accent={accent} tone={danger ? 'danger' : undefined} tonedSurface={danger} />
+function Tile({ label, value, sub, accent, danger, subWrap }: { label: string; value: string; sub?: string; accent?: boolean; danger?: boolean; subWrap?: boolean }) {
+  return <StatTile label={label} value={value} sub={sub} accent={accent} tone={danger ? 'danger' : undefined} tonedSurface={danger} subWrap={subWrap} />
 }
 
 function OppCard({ o, index, status, busy, onAct }: { o: Opportunity; index: number; status?: string; busy: boolean; onAct: (o: Opportunity, s: 'acted' | 'dismissed' | 'won') => void }) {
@@ -238,12 +275,19 @@ function OppCard({ o, index, status, busy, onAct }: { o: Opportunity; index: num
               <span className={cn('w-1.5 h-1.5 rounded-full', CONF_DOT[o.confidence])} />
               {CONF_LABEL[o.confidence]}
             </span>
-            {/* Likelihood as a meter, not a fraction — read at a glance. */}
-            <span className="inline-flex items-center gap-1.5 text-[10px] text-ink-faint tabular-nums" title={`${o.score}/100 likelihood this play lands`}>
+            {/* ⭐⭐ A PRIORITY METER, NOT A LIKELIHOOD METER. The bar's fill width
+                is still driven by the same 0-100 score (that geometry is honest
+                — it IS how the advisor ranks), but the number beside it used to
+                read "61%" with a tooltip saying "likelihood this play lands",
+                which is a measured-probability claim this heuristic score
+                cannot support. `/100` (never `%`) plus the shared tooltip
+                (priorityScoreTooltip, same sentence the hero card uses) is what
+                makes the honest reading unambiguous at a glance. */}
+            <span className="inline-flex items-center gap-1.5 text-[10px] text-ink-faint tabular-nums" title={priorityScoreTooltip(o.score)}>
               <span className="w-10 h-1 rounded-full bg-border overflow-hidden">
                 <span className="block h-full rounded-full bg-accent/80" style={{ width: `${Math.min(100, Math.max(4, o.score))}%` }} />
               </span>
-              {o.score}%
+              {o.score}/100
             </span>
           </div>
           <p className="text-sm font-bold tracking-tight text-ink mt-1.5">{o.action} — {o.customerName}</p>
