@@ -25,7 +25,7 @@
 //
 // ⛔ Pure: no network, no database, no live cron. Nothing is sent.
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
@@ -46,7 +46,7 @@ const eq = (n: string, a: unknown, b: unknown) => {
 }
 const ok = (n: string, c: boolean) => eq(n, c, true)
 
-type Req = { ids: string[] | null; from: number; to: number }
+type Req = { ids: string[] | null; from: number; to: number; orderedBy: string | null }
 type Resp = { data: { user_id: string; timezone: string | null }[] | null; error: { message: string } | null }
 
 /** A stub shaped like the real PostgREST builder chain the loader uses. */
@@ -55,12 +55,17 @@ function stub(respond: (r: Req) => Resp) {
   const client = {
     from() {
       let ids: string[] | null = null
+      // ⭐ RECORDED, not ignored. Paging is only stable because every page is
+      // ordered by the same unique column; a stub that swallowed `.order()` would
+      // let the loader drop it and still pass, and rows would then shuffle between
+      // pages — the classic way a paged read silently skips and repeats.
+      let orderedBy: string | null = null
       const b = {
         select() { return b },
         in(_c: string, v: string[]) { ids = v; return b },
-        order() { return b },
+        order(col: string) { orderedBy = col; return b },
         range(from: number, to: number) {
-          const req: Req = { ids, from, to }
+          const req: Req = { ids, from, to, orderedBy }
           calls.push(req)
           return Promise.resolve(respond(req))
         },
@@ -92,6 +97,9 @@ H('1. ⛔ MORE THAN ONE PAGE — the 1001st tenant must not vanish')
   ok('…and so is the last', res.zones.has('t02499'))
   eq('it took three pages', calls.length, 3)
   eq('…each a bounded range', calls.map(c => [c.from, c.to]), [[0, 999], [1000, 1999], [2000, 2999]])
+  // ⛔ EVERY page, not just the first: an unordered later page can repeat or skip
+  // rows the earlier one already returned.
+  eq('⛔ every page is ordered by user_id', calls.map(c => c.orderedBy), ['user_id', 'user_id', 'user_id'])
 
   // [negative control] a single unranged read — the OLD behaviour — stops at 1000.
   const oldStyle = rowsFor(ZONE_PAGE_ROWS, 0)
@@ -109,6 +117,7 @@ H('2. THE ID LIST IS BATCHED — a long in.(…) becomes a URL, not an answer')
   const res = await loadTenantZones(client, ids)
   eq('every requested tenant resolved', res.zones.size, 450)
   ok('no batch exceeds the cap', calls.every(c => (c.ids?.length ?? 0) <= ZONE_ID_BATCH))
+  ok('⛔ every batched page is ordered by user_id too', calls.every(c => c.orderedBy === 'user_id'))
   eq('the batches cover the whole request exactly once',
     [...new Set(calls.flatMap(c => c.ids ?? []))].length, 450)
   ok('…and it really was split', calls.filter(c => c.from === 0).length > 1)
@@ -161,14 +170,58 @@ H('5. THE DOCUMENTED FALLBACK STILL WORKS — a tenant with no zone is not an er
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-H('6. WIRING — every caller aborts on a failed read instead of dating anyone')
+H('6. ⛔ ASKING FOR NOBODY IS NOT ASKING FOR EVERYONE')
 {
-  const CALLERS = [
-    'src/app/api/cron/engine/route.ts',
-    'src/app/api/cron/reports/route.ts',
-    'src/app/api/cron/invoice-reminders/route.ts',
-    'src/app/api/cron/quote-followup/route.ts',
-  ]
+  // The quiet night: no signals, no scheduled reports. Both callers hand the
+  // loader an empty list, and it used to fall through to the WHOLE-TABLE sweep —
+  // reading every tenant in the book to date a set of zero rows.
+  const { client, calls } = stub(() => ({ data: rowsFor(3, 0), error: null }))
+  const res = await loadTenantZones(client, [])
+  eq('an explicit empty request succeeds', res.ok, true)
+  eq('…with no error', res.error, null)
+  eq('…and no zones', res.zones.size, 0)
+  eq('⛔ …having issued NO query at all', calls.length, 0)
+
+  // ⭐ `undefined` is the other request entirely: sweep every tenant.
+  const all = stub(({ from }) => from > 0 ? { data: [], error: null } : { data: rowsFor(3, 0), error: null })
+  const swept = await loadTenantZones(all.client)
+  eq('undefined still sweeps every tenant', swept.zones.size, 3)
+  ok('…and did query', all.calls.length > 0)
+  ok('⛔ the two requests are not the same thing', calls.length !== all.calls.length)
+
+  // The caller's quiet-night outcome is unchanged — still an empty map, so
+  // acceptTenantSignals keeps nothing and the run finishes quiet, just without
+  // having read the table first.
+  eq('the quiet-night map is still empty, as callers expect', [...res.zones.keys()], [])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+H('7. WIRING — every caller aborts on a failed read instead of dating anyone')
+{
+  // ⭐ DISCOVERED, not listed. A hardcoded list silently stops covering the next
+  // caller somebody adds; this walks src/ for the call itself, so a new caller
+  // without the guard fails here on the day it appears.
+  const walk = (dir: string, out: string[] = []): string[] => {
+    for (const e of readdirSync(join(ROOT, dir))) {
+      const rel = `${dir}/${e}`
+      if (statSync(join(ROOT, rel)).isDirectory()) walk(rel, out)
+      else if (/\.tsx?$/.test(e)) out.push(rel)
+    }
+    return out
+  }
+  const CALLERS = walk('src')
+    .filter(f => f !== 'src/lib/tenantTimeServer.ts')
+    // ⚠️ THE IMPORT, NOT THE NAME. cron/signals MENTIONS loadTenantZones() in a
+    // comment explaining why it deliberately does not use it, and the first version
+    // of this filter reported that comment as an unguarded caller. Nothing can call
+    // the helper without importing it, so the import is the honest discriminator.
+    .filter(f => /import\s*\{[^}]*\bloadTenantZones\b[^}]*\}\s*from/.test(readFileSync(join(ROOT, f), 'utf8')))
+  ok(`discovery found callers (${CALLERS.length})`, CALLERS.length >= 4)
+  // [negative control] the walk is not vacuous and does not match the definition.
+  ok('[negative control] the loader itself is excluded', !CALLERS.includes('src/lib/tenantTimeServer.ts'))
+  // [negative control] a file that only NAMES the helper in prose is not a caller.
+  ok('[negative control] a comment mentioning it is not a caller',
+    !CALLERS.includes('src/app/api/cron/signals/route.ts'))
   for (const rel of CALLERS) {
     const src = readFileSync(join(ROOT, rel), 'utf8')
     ok(`${rel.split('/').slice(-2)[0]}: takes the result, not a bare map`,

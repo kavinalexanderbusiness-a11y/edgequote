@@ -92,10 +92,17 @@ export async function loadTenantZones(
   const zones = new Map<string, string>()
   // `null` means "every tenant" — the whole-table sweep two crons still want.
   const batches: (string[] | null)[] = []
-  if (userIds && userIds.length) {
+  if (userIds) {
+    // ⛔ ASKING FOR NOBODY IS NOT ASKING FOR EVERYONE. An empty list used to fall
+    // through to the whole-table sweep, so on a quiet night — no signals, no
+    // scheduled reports — both callers read every tenant in the book to date a set
+    // of zero rows. The honest answer to "the zones of these nought tenants" is an
+    // empty map, and it costs no query at all.
+    if (userIds.length === 0) return { zones, ok: true, error: null }
     const unique = [...new Set(userIds)]
     for (let i = 0; i < unique.length; i += ZONE_ID_BATCH) batches.push(unique.slice(i, i + ZONE_ID_BATCH))
   } else {
+    // `undefined` still means "every tenant" — the whole-table sweep two crons want.
     batches.push(null)
   }
 
