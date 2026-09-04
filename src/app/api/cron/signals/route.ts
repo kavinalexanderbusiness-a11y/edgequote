@@ -3,7 +3,7 @@ import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
 import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
 import { cadenceDays, churnRisk, daysBetween, isSeasonallyDormant, ranOut } from '@/lib/signals'
-import { localTodayISO } from '@/lib/utils'
+import { safeTimeZone, tenantTodayISO } from '@/lib/tenantTime'
 
 export const dynamic = 'force-dynamic'
 // The only cron with an O(owners) sequential loop — each owner costs two paginated
@@ -40,7 +40,12 @@ interface JobRow {
   recurrence_id: string | null
 }
 interface RecRow { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null }
-interface OwnerRow { user_id: string; service_seasons: unknown }
+// ⭐ `timezone` rides along with the seasons. This route already PAGES
+// business_settings for its owner list, so the zone costs no extra read — which
+// is why it does not call loadTenantZones(): that helper exists for crons that
+// would otherwise query per business, and here it would re-read a table this
+// pager has already walked.
+interface OwnerRow { user_id: string; service_seasons: unknown; timezone: string | null }
 
 type SignalRow = {
   user_id: string
@@ -105,7 +110,7 @@ async function fetchAllOwners(supabase: Client): Promise<{ rows: OwnerRow[]; err
   for (let from = 0; ; from += PAGE_ROWS) {
     const { data, error } = await supabase
       .from('business_settings')
-      .select('user_id, service_seasons')
+      .select('user_id, service_seasons, timezone')
       .order('user_id')
       .range(from, from + PAGE_ROWS - 1)
     if (error) return { rows, error: error.message }
@@ -139,7 +144,20 @@ async function handler(req: NextRequest) {
     )
   }
 
-  const today = localTodayISO()
+  // ⭐⭐ ONE INSTANT, MANY DATES.
+  //
+  // This used to be `localTodayISO()` — ONE date, from the SERVER's clock (UTC on
+  // Vercel), applied to every tenant in the sweep. Two businesses can be on
+  // different calendar days at the same instant, so a single date is wrong for at
+  // least one of them whenever the sweep straddles a local midnight. It decided
+  // `hasUpcoming`, `pastReal`, seasonal dormancy, the ran-out day count and the
+  // `detected_on` each row is filed under.
+  //
+  // ⛔ The instant is captured ONCE, here, and every tenant's date is derived from
+  // THAT instant. Calling `new Date()` per tenant would let a sweep that spans
+  // midnight give two owners dates from different moments — a sweep must describe
+  // a single point in time, not the wall-clock as it drifts through the loop.
+  const now = new Date()
 
   // Every exit lands here: one log line, unconditionally. The four shipped crons guard
   // their log with `if (batch.length > 0)` so quiet runs stay quiet — the opposite is
@@ -182,6 +200,11 @@ async function handler(req: NextRequest) {
       // truncated read is rejected outright below.
       const mine: SignalRow[] = []
       const seasons: ServiceSeasons = settingsToSeasons(owner.service_seasons)
+      // ⭐ THIS OWNER'S date, from the shared instant. `safeTimeZone` carries the
+      // established fallback (FALLBACK_TIME_ZONE) for a null or unparseable zone,
+      // so a business that has never set one is treated exactly as the rest of the
+      // product treats it — never as UTC by accident.
+      const today = tenantTodayISO(safeTimeZone(owner.timezone), now)
 
       const [jRes, rRes] = await Promise.all([fetchAllJobs(supabase, uid), fetchAllRecurrences(supabase, uid)])
       // A truncated read is a WRONG read, not a smaller one: it would emit ran-out for
