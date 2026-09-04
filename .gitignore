@@ -44,3 +44,6 @@ scripts/.s*-fixture.json
 
 # Session 121 timezone/weather harness output (scripts/s121-weather-harness.tsx)
 .s121tz/
+
+# Operator responsive harness output (scripts/operator-harness.tsx)
+.operator-harness/
