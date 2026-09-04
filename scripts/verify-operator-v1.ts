@@ -277,9 +277,17 @@ check('card ids are unique across tools', new Set(built.map(c => c.id)).size ===
   check('…and keeps the failure shape for diagnosis', /does not exist/.test(logs[0] ?? ''))
 
   logs.length = 0
-  const threw = await recordRun(sbWith(async () => { throw new Error('socket hang up') }), { a: 1 }, PAID, log)
-  check('a THROWN write failure is caught too (a 200 answer must not become a 500)', threw === false && logs.length === 1)
-  check('…and never propagates out of recordRun', /socket hang up/.test(logs[0] ?? ''))
+  // Caught HERE too: if recordRun ever lets a throw escape, the route's outer
+  // catch turns a good 200 answer into a 500. Asserting that as a clean failure
+  // beats letting it abort this suite — an uncaught throw here would hide every
+  // check after it, including the whole PGlite section.
+  let threw: boolean | 'escaped' = 'escaped'
+  try {
+    threw = await recordRun(sbWith(async () => { throw new Error('socket hang up') }), { a: 1 }, PAID, log)
+  } catch { threw = 'escaped' }
+  check('a THROWN write failure never escapes recordRun (a 200 must not become a 500)', threw !== 'escaped')
+  check('…and is reported as a failed write, logged once', threw === false && logs.length === 1)
+  check('…keeping the transport failure shape', /socket hang up/.test(logs[0] ?? ''))
 
   logs.length = 0
   await recordRun(sbWith(async () => ({ error: { message: 'nope' } })), { a: 1 }, FREE, log)
