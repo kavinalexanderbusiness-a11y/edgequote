@@ -1,6 +1,7 @@
 // ── Drive the Growth visual fixture at 1280 / 375 / 390 / 430 ────────────────
-//   # terminal 1 — a dev server with the fixture's second lock open:
-//   GROWTH_VISUAL_FIXTURE=1 npx next dev -p 3111
+//   # terminal 1 — the scrubbed server (allowlisted env, synthetic Supabase,
+//   # loopback only, refuses to start beside an env file):
+//   node scripts/growth-visual-fixture-serve.mjs 3111
 //   # terminal 2:
 //   node scripts/growth-visual-fixture-cdp.mjs http://127.0.0.1:3111
 //
@@ -20,7 +21,7 @@
 //
 // Screenshots: screens/growth-visual-fixture-<width>.png (screens/ is
 // gitignored), or SHOTS_DIR=<dir> to put them elsewhere.
-import { spawn } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -28,6 +29,26 @@ import { join, resolve } from 'node:path'
 const CHROME = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
 const [baseUrl = 'http://127.0.0.1:3111'] = process.argv.slice(2)
 const ROUTE = '/dev/growth-visual-fixture'
+
+// ⛔ LOOPBACK ONLY, refused up front. A browser proof aimed at a deployed host
+// is a browser proof against production.
+if (!/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(baseUrl)) {
+  console.error(`✗ REFUSING: ${baseUrl} is not a loopback address.`)
+  process.exit(2)
+}
+
+// ── The SHAs this run is evidence for ───────────────────────────────────────
+const git = a => { try { return execFileSync('git', a).toString().trim() } catch { return 'unknown' } }
+const FIXTURE_SHA = git(['rev-parse', 'HEAD'])
+const PRODUCT_SHA = git(['merge-base', 'HEAD', 'session111/growth-concentration-disclosure'])
+const DIRTY = git(['status', '--short'])
+
+// ⛔ Chrome gets an ALLOWLISTED environment too: a browser that never receives
+// a key cannot leak one.
+const CHROME_ALLOW = ['PATH', 'Path', 'SystemRoot', 'SYSTEMROOT', 'windir', 'ComSpec', 'COMSPEC',
+  'TEMP', 'TMP', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',
+  'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'OS', 'PATHEXT']
+const chromeEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => CHROME_ALLOW.includes(k)))
 const PORT = 9841 + Number(process.env.CDP_SLOT || 0)
 const WIDTHS = [1280, 375, 390, 430]
 const SHOTS = resolve(process.env.SHOTS_DIR || 'screens')
@@ -51,7 +72,8 @@ const unproven = n => { unprovenCount++; console.log(`  ? UNPROVEN  ${n}`) }
 // ⚠️⚠️ A REUSED CHROME PROFILE SERVES A STALE BUNDLE VIA THE SERVICE WORKER.
 const profile = mkdtempSync(join(tmpdir(), 'gvf-cdp-'))
 const chrome = spawn(CHROME, ['--headless=new', '--disable-gpu', '--no-sandbox', '--hide-scrollbars',
-  `--remote-debugging-port=${PORT}`, '--user-data-dir=' + profile, 'about:blank'], { stdio: 'ignore' })
+  `--remote-debugging-port=${PORT}`, '--remote-debugging-address=127.0.0.1', '--user-data-dir=' + profile, 'about:blank'],
+  { stdio: 'ignore', env: chromeEnv })
 chrome.on('error', e => { console.error('chrome failed: ' + e.message); process.exit(2) })
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 let ws, msgId = 0
@@ -66,7 +88,15 @@ for (let i = 0; i < 60; i++) {
 }
 if (!ws) { console.error('no CDP target'); process.exit(2) }
 await new Promise(r => ws.addEventListener('open', r))
-ws.addEventListener('message', e => { const m = JSON.parse(e.data); if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) } })
+// ⭐⭐ EVERY REQUEST THE BROWSER MAKES, recorded from the protocol rather than
+// from the page. The page keeps its own violation counter, but that counter is
+// written by the code under test — this list is written by Chrome.
+const requested = []
+ws.addEventListener('message', e => {
+  const m = JSON.parse(e.data)
+  if (m.method === 'Network.requestWillBeSent' && m.params?.request?.url) requested.push(m.params.request.url)
+  if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) }
+})
 const send = (m, p = {}) => { const id = ++msgId; return new Promise(res => { pending.set(id, res); ws.send(JSON.stringify({ id, method: m, params: p })) }) }
 const ev = async e => {
   const r = await send('Runtime.evaluate', { expression: e, awaitPromise: true, returnByValue: true })
@@ -79,7 +109,7 @@ const setW = async w => {
   // ⚠️ pointer:coarse comes from setTouchEmulationEnabled, NOT setEmulatedMedia.
   await send('Emulation.setTouchEmulationEnabled', mobile ? { enabled: true, maxTouchPoints: 5 } : { enabled: false })
 }
-async function until(expr, label, tries = 120) {
+async function until(expr, label, tries = 240) {
   for (let i = 0; i < tries; i++) { if (await ev(expr) === true) return true; await sleep(250) }
   bad(`${label} (timed out)`, expr.slice(0, 110)); return false
 }
@@ -118,7 +148,9 @@ const LEAVES = needle => `(() => {
 const clippedOnes = list => (Array.isArray(list) ? list : []).filter(x => x.clipped || x.right > x.inner + 1)
 
 // ── The fixture, once per width ─────────────────────────────────────────────
-await send('Page.enable'); await send('Runtime.enable')
+console.log(`fixture SHA ${FIXTURE_SHA} · product SHA ${PRODUCT_SHA} (merge-base with session111/growth-concentration-disclosure)`)
+if (DIRTY) console.log(`⚠️  worktree is DIRTY — this run is NOT evidence for the SHA above:\n${DIRTY}`)
+await send('Page.enable'); await send('Runtime.enable'); await send('Network.enable')
 for (const w of WIDTHS) {
   console.log(`\n═══ ${w}px ═══`)
   await setW(w)
@@ -229,5 +261,14 @@ for (const w of WIDTHS) {
   else unproven('screenshot could not be captured')
 }
 
-console.log(`\n${fails === 0 ? '✅ the Growth screen renders honestly at every width' : `❌ ${fails} check(s) failed`}${unprovenCount ? ` · ${unprovenCount} UNPROVEN` : ''}`)
+// ── The ledger Chrome kept ──────────────────────────────────────────────────
+// ⛔ A single off-box request — a font CDN, an analytics beacon, a stray auth
+// call — and this was not an offline proof. data:/blob: are in-page, not network.
+console.log('\n═══ network ═══')
+const offBox = [...new Set(requested)].filter(u => !/^(data|blob):/.test(u) && !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/.test(u))
+note(`${requested.length} request(s) recorded by Chrome, ${new Set(requested).size} distinct`)
+check('⛔ every request the browser made was loopback', offBox.length === 0, offBox.join('\n      '))
+if (DIRTY) bad('the worktree was dirty — a clean run is required for this to be evidence')
+
+console.log(`\n${fails === 0 ? '✅ the Growth screen renders honestly at every width' : `❌ ${fails} check(s) failed`}${unprovenCount ? ` · ${unprovenCount} UNPROVEN` : ''} — fixture ${FIXTURE_SHA.slice(0, 8)} / product ${PRODUCT_SHA.slice(0, 8)}`)
 await done(fails === 0 ? 0 : 1)
