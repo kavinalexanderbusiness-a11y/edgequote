@@ -58,6 +58,7 @@ const SRC = {
   concentration: read('src/lib/growthConcentration.ts'),
   engine: read('src/lib/revenueIntelligence.ts'),
   page: read('src/app/dashboard/revenue-intelligence/page.tsx'),
+  view: read('src/app/dashboard/revenue-intelligence/RevenueIntelligenceView.tsx'),
 }
 const CODE = Object.fromEntries(Object.entries(SRC).map(([k, v]) => [k, strip(v)])) as Record<keyof typeof SRC, string>
 
@@ -379,10 +380,10 @@ console.log('\n── 12. Source-level: the existing accumulation loop is untouc
     /assessConcentration\(\s*ranked\.map/.test(CODE.engine), '')
 
   // ⛔ The banner must render nothing unless material — asserted on the page.
-  check('the page gates rendering on summary.concentration?.material',
-    /summary\.concentration\?\.material/.test(CODE.page), '')
-  check('the page uses concentrationNote rather than re-deriving the sentence itself',
-    /concentrationNote\(/.test(CODE.page), '')
+  check('the view gates rendering on summary.concentration?.material',
+    /summary\.concentration\?\.material/.test(CODE.view), '')
+  check('the view uses concentrationNote rather than re-deriving the sentence itself',
+    /concentrationNote\(/.test(CODE.view), '')
 }
 
 // ⛔ "Do not claim pending checks passed." A run with 0 failures but >0 pending

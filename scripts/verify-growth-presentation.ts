@@ -37,8 +37,11 @@ const eq = (n: string, a: unknown, b: unknown) =>
 const ROOT = process.cwd()
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8')
 const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n\r]*/g, ' ')
-const SRC = { page: read('src/app/dashboard/revenue-intelligence/page.tsx') }
-const CODE = { page: strip(SRC.page) }
+const SRC = {
+  page: read('src/app/dashboard/revenue-intelligence/page.tsx'),
+  view: read('src/app/dashboard/revenue-intelligence/RevenueIntelligenceView.tsx'),
+}
+const CODE = { page: strip(SRC.page), view: strip(SRC.view) }
 
 console.log('\n── 1. THE SCORE IS A PRIORITY, NEVER A PROBABILITY ──')
 {
@@ -58,13 +61,13 @@ console.log('\n── 1. THE SCORE IS A PRIORITY, NEVER A PROBABILITY ──')
   // Architecture: ONE shared function at both call sites, not two copies that
   // can drift independently.
   check('the hero line and every OppCard use the shared label/tooltip functions',
-    /priorityScoreLabel\(summary\.topAction\.score\)/.test(CODE.page) && /title=\{priorityScoreTooltip\(o\.score\)\}/.test(CODE.page), '')
+    /priorityScoreLabel\(summary\.topAction\.score\)/.test(CODE.view) && /title=\{priorityScoreTooltip\(o\.score\)\}/.test(CODE.view), '')
 
   // Regression: none of these has any legitimate use on this screen.
-  check('page.tsx renders none of likely/likelihood/chance/odds anywhere',
-    !BANNED.some(rx => rx.test(CODE.page)), '')
+  check('neither page.tsx nor the view renders likely/likelihood/chance/odds anywhere',
+    !BANNED.some(rx => rx.test(CODE.page) || rx.test(CODE.view)), '')
   check('the OppCard meter shows N/100, never N%',
-    /\{o\.score\}\/100/.test(CODE.page) && !/\{o\.score\}%/.test(CODE.page), '')
+    /\{o\.score\}\/100/.test(CODE.view) && !/\{o\.score\}%/.test(CODE.view), '')
 }
 
 console.log('\n── 2. A DISCLOSURE THAT WRAPS ──')
@@ -103,7 +106,7 @@ console.log('\n── 2. A DISCLOSURE THAT WRAPS ──')
 
   // Wiring: the one tile that needed the fix actually opts in.
   check('the "Recurring opportunity" tile (the one with the long caveat) opts into subWrap',
-    /label="Recurring opportunity"[\s\S]{0,300}subWrap/.test(CODE.page), '')
+    /label="Recurring opportunity"[\s\S]{0,300}subWrap/.test(CODE.view), '')
 }
 
 console.log('\n── 3. MARKED WON IS NOT COLLECTED REVENUE ──')
@@ -114,10 +117,10 @@ console.log('\n── 3. MARKED WON IS NOT COLLECTED REVENUE ──')
     /result_value:\s*status === 'won' \? o\.expectedValue : null/.test(CODE.page), '')
 
   // The visible label: no "Revenue" claim, and the old mislabel is gone.
-  const tileLine = CODE.page.split('\n').find(l => l.includes('formatCurrency(wonValue)')) || ''
+  const tileLine = CODE.view.split('\n').find(l => l.includes('formatCurrency(wonValue)')) || ''
   check('the tile rendering wonValue exists and its label makes no "Revenue" claim',
     tileLine.length > 0 && !/label="[^"]*Revenue[^"]*"/.test(tileLine), tileLine)
-  check('the old "Revenue from acted" mislabel is gone', !CODE.page.includes('Revenue from acted'), '')
+  check('the old "Revenue from acted" mislabel is gone', !CODE.page.includes('Revenue from acted') && !CODE.view.includes('Revenue from acted'), '')
 }
 
 console.log('\n── 4. THE THRESHOLD DOES NOT EXCLUDE AN EVEN TWO-CUSTOMER SPLIT ──')

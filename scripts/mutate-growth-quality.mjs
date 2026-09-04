@@ -138,7 +138,7 @@ const MUTATIONS = [
     to: '  if (false) {',
   },
   {
-    file: 'src/app/dashboard/revenue-intelligence/page.tsx',
+    file: 'src/app/dashboard/revenue-intelligence/RevenueIntelligenceView.tsx',
     name: 'the UI prints a confident +$0/yr instead of the sentence',
     from: '        {o.expectedValue > 0 ? (',
     to: '        {true ? (',
@@ -170,7 +170,7 @@ const MUTATIONS = [
     to: '    statistic: null,',
   },
   {
-    file: 'src/app/dashboard/revenue-intelligence/page.tsx',
+    file: 'src/app/dashboard/revenue-intelligence/RevenueIntelligenceView.tsx',
     name: 'the evidence block is removed from the Why? panel',
     from: '            <p className="text-[11px] text-ink-muted">{evidenceSummary(o.evidence)}</p>',
     to: '            <p className="text-[11px] text-ink-muted" />',

@@ -55,6 +55,7 @@ const SRC = {
   evidence: read('src/lib/growthEvidence.ts'),
   engine: read('src/lib/revenueIntelligence.ts'),
   page: read('src/app/dashboard/revenue-intelligence/page.tsx'),
+  view: read('src/app/dashboard/revenue-intelligence/RevenueIntelligenceView.tsx'),
 }
 const CODE = Object.fromEntries(Object.entries(SRC).map(([k, v]) => [k, strip(v)])) as Record<keyof typeof SRC, string>
 
@@ -299,7 +300,7 @@ console.log('\n── 6. ⭐⭐ WEAK EVIDENCE SHOWS A SENTENCE, NOT A DOLLAR ─
   // ⛔ The UI must render the sentence, and must not print a confident $0.
   // ⚠️ An IMPORT is not a RENDER — the same trap twice in two sessions. Assert
   // the identifier appears inside JSX braces, not merely in the import list.
-  check('the page RENDERS the insufficient label', /\{INSUFFICIENT_LABEL\}/.test(CODE.page), '')
+  check('the view RENDERS the insufficient label', /\{INSUFFICIENT_LABEL\}/.test(CODE.view), '')
   // ⚠️ And this one is unreachable by construction — `assessEvidence` already
   // returns `annual: null` whenever strength is insufficient — so no input can
   // prove the guard clause present. Defence-in-depth has to be asserted
@@ -315,7 +316,7 @@ console.log('\n── 6. ⭐⭐ WEAK EVIDENCE SHOWS A SENTENCE, NOT A DOLLAR ─
   check('and mayShowPerVisit does the same',
     /export function mayShowPerVisit\([^)]*\)[^{]*\{\s*return e\.strength !== 'insufficient'/.test(CODE.evidence), '')
   check('the money figure is CONDITIONAL on the value being positive',
-    /o\.expectedValue\s*>\s*0\s*\?/.test(CODE.page),
+    /o\.expectedValue\s*>\s*0\s*\?/.test(CODE.view),
     'an unconditional +$0/yr reads as "this customer is worth nothing"')
 }
 
@@ -341,13 +342,13 @@ console.log('\n── 7. ⭐ THE TRANSPARENCY CONTRACT ──')
     Object.values(EXCLUSION_COPY).every(v => typeof v === 'string' && v.length > 3), '')
   // ⚠️ Rendered, not imported. Emptying the <p> left the import in place and this
   // check green until mutation testing said otherwise.
-  check('the page RENDERS the evidence summary',
-    /\{evidenceSummary\(o\.evidence\)\}/.test(CODE.page),
+  check('the view RENDERS the evidence summary',
+    /\{evidenceSummary\(o\.evidence\)\}/.test(CODE.view),
     'the owner must be able to see what a figure is based on')
   check('and the spread caveat when the sample is skewed',
-    /\{o\.evidence\.skew/.test(CODE.page), '')
+    /\{o\.evidence\.skew/.test(CODE.view), '')
   check('and the reason when there is no figure',
-    /\{insufficientReason\(o\.evidence\)\}/.test(CODE.page), '')
+    /\{insufficientReason\(o\.evidence\)\}/.test(CODE.view), '')
 }
 
 console.log('\n── 8. The REAL engine, end to end ──')
