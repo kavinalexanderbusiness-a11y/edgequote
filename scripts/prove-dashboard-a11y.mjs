@@ -142,6 +142,33 @@ async function main() {
         console.log(`  ℹ shared primitives (pre-existing, not S97's): switch ${[...new Set(d.switches.map(s => s.box))].join(', ')} · close ${d.closeBox}`)
       }
 
+      if (scenario === 'toggle-cases') {
+        const t = await evaluate(`(() => {
+          const box = el => { const r = el.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height) } }
+          return [...document.querySelectorAll('[data-case]')].map(row => {
+            const btn = row.querySelector('[role=switch]')
+            const track = btn.querySelector('span')
+            return { id: row.dataset.case, disabled: btn.disabled, tap: btn.classList.contains('tap-target'), btn: box(btn), track: box(track) }
+          })
+        })()`)
+        check('every visible track is exactly 40×24 — the switch itself never changes size',
+          t.every(c => c.track.w === 40 && c.track.h === 24), t.map(c => `${c.id} ${c.track.w}x${c.track.h}`).join(' · '))
+        if (phone) {
+          const tap = t.filter(c => c.tap)
+          check(`tap-target switches clear 44×44 on a phone (${tap.map(c => `${c.btn.w}x${c.btn.h}`).join(', ')})`,
+            tap.every(c => c.btn.w >= 44 && c.btn.h >= 44))
+          const plain = t.filter(c => !c.tap && !c.id.includes('label'))
+          console.log(`  ℹ plain (no tap-target) switch buttons on a phone: ${plain.map(c => `${c.id} ${c.btn.w}x${c.btn.h}`).join(' · ')}`)
+        } else {
+          check('on desktop tap-target adds nothing — button box equals the plain one',
+            t.find(c => c.id === 'tap-on').btn.w === t.find(c => c.id === 'plain-on').btn.w && t.find(c => c.id === 'tap-on').btn.h === t.find(c => c.id === 'plain-on').btn.h)
+        }
+        check('disabled switches are disabled and stayed out of the Tab walk',
+          t.filter(c => c.id.includes('disabled')).every(c => c.disabled) && !seen.some(f => /disabled/i.test(f.name)))
+        check('enabled switches all received focus in the Tab walk, in DOM order',
+          t.filter(c => !c.disabled).every(c => seen.some(f => f.role === 'switch' && f.name && new RegExp(c.id.replace(/-/g, '.*'), 'i').test(f.name) || c.id.includes('label'))))
+      }
+
       if (process.env.SHOTS_DIR) {
         const shot = await send('Page.captureScreenshot', { format: 'png' })
         writeFileSync(join(process.env.SHOTS_DIR, `${scenario}-${width}.png`), Buffer.from(shot.data, 'base64'))

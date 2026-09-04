@@ -31,6 +31,7 @@ import { TodaysPriorities } from '../src/components/dashboard/TodaysPriorities'
 import { InboxUpdates } from '../src/components/inbox/InboxUpdates'
 import { DEFAULT_DASHBOARD_LAYOUT } from '../src/lib/dashboard/layout'
 import { ButtonLink } from '../src/components/ui/Button'
+import { Toggle } from '../src/components/ui/Toggle'
 import { Plus } from 'lucide-react'
 
 const outdir = process.argv[2] || '.dashboard-a11y'
@@ -97,6 +98,28 @@ const scenarios: Record<string, React.ReactElement> = {
     <main className="max-w-6xl mx-auto space-y-6 px-4 sm:px-6 py-6">
       {header(true)}
       <OwnerBriefing chips={BRIEFING.chips} />
+    </main>
+  ),
+  // The shared Toggle in every state the sheet (and the app) renders it, with
+  // and without the opt-in tap-target: the prover measures the outer button
+  // (the target) and the inner track (the visible switch) separately.
+  'toggle-cases': (
+    <main className="max-w-sm mx-auto space-y-3 px-4 py-6">
+      {([
+        ['plain-on', { checked: true, ariaLabel: 'Plain, on' }],
+        ['plain-off', { checked: false, ariaLabel: 'Plain, off' }],
+        ['plain-disabled', { checked: true, disabled: true, ariaLabel: 'Plain, disabled' }],
+        ['plain-long-label', { checked: true, label: 'Show travel as a separate line on the PDF the customer receives, every time' }],
+        ['tap-on', { checked: true, ariaLabel: 'Tap target, on', className: 'tap-target' }],
+        ['tap-off', { checked: false, ariaLabel: 'Tap target, off', className: 'tap-target' }],
+        ['tap-disabled', { checked: true, disabled: true, ariaLabel: 'Tap target, disabled', className: 'tap-target' }],
+        ['tap-long-label', { checked: false, label: 'Show travel as a separate line on the PDF the customer receives, every time', className: 'tap-target' }],
+      ] as const).map(([id, props]) => (
+        <div key={id} data-case={id} className="flex items-center gap-3 rounded-xl border border-border px-3 py-2.5 bg-surface">
+          <Toggle onChange={() => {}} {...props} />
+          <span className="text-xs text-ink-muted min-w-0 truncate">{id}</span>
+        </div>
+      ))}
     </main>
   ),
 }
