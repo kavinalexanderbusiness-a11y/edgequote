@@ -1,34 +1,27 @@
 // ── Growth concentration disclosure ───────────────────────────────────────────
-// Answers ONE question the evidence gate (lib/growthEvidence) does not:
+// Answers ONE question lib/growthEvidence does not: of the money Growth is
+// projecting across the WHOLE BOOK, how much depends on a single customer?
 //
-//   of the money Growth is currently projecting across the WHOLE BOOK, how much
-//   of it depends on a single customer?
+// ⛔ NOT A SECOND EVIDENCE ENGINE. `growthEvidence.assessEvidence` already
+// refused everything that shouldn't count (unpriced, no-charge, fixture,
+// undeclared cadence, thin samples) before an Opportunity's `expectedValue`
+// reaches here. This module only asks how that already-admitted money is
+// DISTRIBUTED — it decides nothing about whether a figure may exist.
 //
-// ⛔ NOT A SECOND EVIDENCE ENGINE. This module does not decide whether a figure
-// may be shown — lib/growthEvidence.assessEvidence already refused everything
-// that shouldn't count (unpriced, no-charge, fixture, undeclared cadence, thin
-// samples) before an Opportunity's `expectedValue` ever reaches here. This
-// module only asks how that already-admitted money is DISTRIBUTED.
+// ⭐⭐ ORTHOGONAL TO `skewNote`, which describes spread WITHIN one customer's
+// own visits ("one visit is 90x the typical $70") — nothing about how
+// customers relate to EACH OTHER. A book can have zero within-customer skew
+// and still depend entirely on one customer, if that customer simply holds
+// the only quantified opportunities:
 //
-// ⭐⭐ WHY THIS EXISTS, AND WHY IT IS A DIFFERENT QUESTION FROM `skewNote`.
-// `growthEvidence.skewNote()` describes spread WITHIN one customer's own visit
-// history — "one visit is 90x the typical $70" — so an owner can judge whether
-// THAT customer's per-visit figure is trustworthy. It says nothing about how
-// the customers relate to EACH OTHER. A book can have zero within-customer skew
-// (every customer's own visits are perfectly consistent) and still be entirely
-// dependent on one customer, if that one customer simply has the only quantified
-// opportunities. The two are orthogonal:
+//   skewNote      one customer's visits vs their OWN median
+//   this module   one customer's total vs the WHOLE BOOK's total
 //
-//   skewNote          one customer's visits vs their OWN median
-//   this module        one customer's total vs the WHOLE BOOK's total
-//
-// Measured on the real book after the price-state weld (session111/price-state-
-// weld @ 96c9da99): $62,972 of quantified recurring opportunity, of which
-// $39,900 (63%) came from ONE customer (a $26,600 renewal + a $13,300 referral
-// on the same customer id) — with every individual visit behind that figure
-// well inside its own skew tolerance. skewNote had nothing to say about it,
-// because there was nothing wrong within that customer's numbers. The
-// concentration was ACROSS customers, which is what this module measures.
+// Measured on the real book (session111/price-state-weld @ 96c9da99): $62,972
+// quantified recurring opportunity, $39,900 (63%) from ONE customer (a
+// $26,600 renewal + $13,300 referral, same customer id) — every visit behind
+// that figure well inside its own skew tolerance. skewNote had nothing to say;
+// the concentration was ACROSS customers, which is what this module measures.
 
 /** One quantified contribution to the book. */
 export interface ConcentrationEntry {
@@ -91,40 +84,27 @@ export interface ConcentrationResult {
 }
 
 /**
- * ⭐⭐ THE THRESHOLD, AND WHY IT IS 40% RATHER THAN 25%, 33% OR 50%.
- *
- * There is no canonical "correct" number here — this is a disclosure judgment
- * call, not a statistical derivation, and the brief asks for a documented
- * reasonable one rather than a proof. The reasoning:
+ * ⭐⭐ THE THRESHOLD IS A PRODUCT CHOICE. The arithmetic below is the whole
+ * justification — no external benchmark, no industry survey, nothing claimed
+ * beyond what this book's own numbers do at 40% vs. nearby values.
  *
  *   • An even split among THREE contributors is ~33% each. A threshold set
- *     there would fire on perfectly ordinary three-customer books, purely
- *     because they only have three customers, not because any one of them is
- *     unusual. 40% sits above that, so an ordinary small book with three or
- *     more similarly-sized customers stays quiet.
- *   • It also matches a common plain-language bar in small-business customer-
- *     concentration reporting — "a customer representing roughly two-fifths or
- *     more of the number" is a widely used rule of thumb for "worth watching",
- *     without implying the kind of formal materiality threshold (10%, 25%)
- *     used in regulated financial disclosure, which this product is not.
+ *     there fires on perfectly ordinary three-customer books, purely because
+ *     they have three customers — not because any one is unusual. 40% sits
+ *     above that, so an ordinary book with 3+ similarly-sized customers stays
+ *     quiet.
  *
- * ⚠️⚠️ WHAT 40% DOES **NOT**, AND CANNOT, DO: EXCLUDE A TWO-CUSTOMER BOOK — NOT
- * EVEN AN EXACTLY EVEN 50/50 ONE. With only two contributors, whichever one is
- * larger is, by construction, always >= 50% of the total the two of them make
- * (two non-negative numbers that sum to a whole; the larger one is at least
- * half of it) — and an EXACT tie means BOTH are at 50%. 50% >= 40% either way,
- * so `material` is `true` for every two-customer book, always, regardless of
- * whether one customer is truly dominant or the two happen to be identical.
- * This is not a property of the number 40 specifically — no threshold below
- * 50% could ever exempt a two-customer book, for the same arithmetic reason.
- * The threshold is only doing meaningful work once a book has THREE OR MORE
- * contributors; on a thin two-customer book, a `material: true` verdict should
- * be read as "this book currently has very few customers", not as "one of them
- * is unusually large relative to the other" — the code does not, and cannot,
- * distinguish those two situations for `contributorCount === 2`.
+ * ⚠️⚠️ WHAT IT CANNOT DO: exclude a two-customer book, not even an exact
+ * 50/50 one. With only two contributors, the larger share is always >= 50%
+ * by construction (two non-negative numbers summing to a whole; a tie means
+ * both are at 50%), so `material` is `true` for every two-customer book —
+ * dominant or identical, always, regardless of which threshold below 50% is
+ * chosen. On a two-customer book, `material: true` means "few customers,"
+ * not "one is unusually large" — the code cannot tell those apart at
+ * `contributorCount === 2`.
  *
- * A single named constant, not a magic number inline, so the next session can
- * find and change the rationale in one place rather than hunt a comparison.
+ * A named constant, not a magic number inline, so the reasoning and the value
+ * are found and changed in one place.
  */
 export const CONCENTRATION_MATERIAL_SHARE = 0.4
 
