@@ -57,6 +57,27 @@ const TERMS = 'We accept cash, cheque and e-transfer. Please give 24 hours notic
 // charge happened".
 const charged: { cents: number; label: string }[] = []
 
+// ── ⛔ AMBIENT-CONTAMINATION PROBE ───────────────────────────────────────────
+// Deliberately poisons the three env vars BEFORE main() installs its synthetic
+// values, so the override is tested against a HOSTILE starting state rather than
+// an empty one. If that override ever regresses to `||=`, these values survive
+// and §J fails loudly — instead of the run quietly pointing at whatever the
+// environment held.
+//
+// ⭐ Clobbering here is also the safe direction: whatever a developer happened to
+// have exported, this guard is now guaranteed not to be holding it.
+const AMBIENT = {
+  url: 'https://zz-ambient-contaminant.invalid',
+  key: 'zz-ambient-service-key-must-not-survive',
+  app: 'https://zz-ambient-app.invalid',
+} as const
+process.env.NEXT_PUBLIC_SUPABASE_URL = AMBIENT.url
+process.env.SUPABASE_SERVICE_ROLE_KEY = AMBIENT.key
+process.env.NEXT_PUBLIC_APP_URL = AMBIENT.app
+
+/** Proof the Supabase fake is INSTALLED, mirroring what `charged` does for Stripe. */
+const SHIM_SENTINEL = 'zz-supabase-shim-installed'
+
 async function main() {
   const pg = await loadPGlite()
   if (!pg) { console.log('\n⏭  verify:deposit-charge-authority SKIPPED — PGlite not installed.\n'); process.exit(0) }
@@ -92,11 +113,21 @@ async function main() {
 
   // ── Install the fakes BEFORE the routes are loaded ─────────────────────────
   // Transport and payment only. Nothing that decides anything.
-  process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'http://shim.invalid'
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||= 'zz-shim-service-key'
-  process.env.NEXT_PUBLIC_APP_URL ||= 'https://zz.invalid'
+  // ⛔ PLAIN `=`, NEVER `||=`. With `||=` an ambient real URL and service-role key
+  // SURVIVED into the run — and if a stub then silently failed to install, the
+  // queries would have gone wherever that env pointed. This guard has no use for
+  // an ambient value, so it takes none. The probe at module scope proves the
+  // assignment is unconditional rather than merely looking unconditional.
+  process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://shim.invalid'
+  process.env.SUPABASE_SERVICE_ROLE_KEY = 'zz-shim-service-key'
+  process.env.NEXT_PUBLIC_APP_URL = 'https://zz.invalid'
   let shimUid: string | null = null
   let failTable: string | null = null
+  // ⭐ Counted, so "the stub was installed" is provable the same way the Stripe
+  // fake proves it: by evidence it was actually USED, not by its presence.
+  // One counter per stub: 'a shim was built' cannot say WHICH door the routes
+  // came through, and the two are installed for different reasons.
+  let clientShims = 0, serverShims = 0
   const shim = () => makeSupabaseShim(q, { uid: shimUid, failOn: t => t === failTable })
 
   const stub = (id: string, exports: Record<string, unknown>) => {
@@ -104,8 +135,12 @@ async function main() {
     require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, exports } as unknown as NodeModule
     return resolved
   }
-  stub('@supabase/supabase-js', { createClient: () => shim() })
-  stub('../src/lib/supabase/server', { createClient: async () => shim() })
+  // ⭐⭐ Each fake carries a sentinel, so §J can prove the cache entry the routes
+  // resolve IS ours. Without it, a stub that silently failed to take effect would
+  // hand the routes the REAL client pointed at whatever env held — the exact
+  // failure the Stripe fake is already protected against and this one was not.
+  const supaResolved = stub('@supabase/supabase-js', { createClient: () => { clientShims++; return shim() }, __zzShim: SHIM_SENTINEL })
+  const serverResolved = stub('../src/lib/supabase/server', { createClient: async () => { serverShims++; return shim() }, __zzShim: SHIM_SENTINEL })
   stub('../src/lib/stripe/config', {
     stripeEnabled: () => true,
     createQuoteDepositCheckoutSession: async (_q: unknown, o: { chargeCents: number; chargeLabel: string }) => {
@@ -113,6 +148,30 @@ async function main() {
       return { ok: true, url: 'https://checkout.invalid/zz-session' }
     },
   })
+
+  // -- PRE-FLIGHT: PREVENTION, NOT DIAGNOSIS -------------------------------
+  // These ran at the END in the first version, which made them a post-mortem:
+  // every case had already executed against whatever was actually installed.
+  // Here, a surviving ambient value or a missing stub ABORTS before a single
+  // case runs. Exit 2, not 1, so a broken harness is never read as a product
+  // failure.
+  /* eslint-disable @typescript-eslint/no-require-imports */
+  const sentinelOf = (id: string) => (require.cache[id]?.exports as { __zzShim?: string } | undefined)?.__zzShim
+  /* eslint-enable @typescript-eslint/no-require-imports */
+  const mustBe = (what: string, isOk: boolean, got?: string) => {
+    if (isOk) { pass++; console.log('  \u2713 pre-flight \u00b7 ' + what); return }
+    console.error('\n\u26d4 HARNESS NOT SYNTHETIC - ABORTING BEFORE ANY CASE RAN\n   ' + what + (got ? '\n   got: ' + got : '') + '\n')
+    process.exit(2)
+  }
+  console.log('\n\u2500\u2500 pre-flight \u00b7 the harness is synthetic, before anything runs \u2500\u2500\n')
+  mustBe('the Supabase URL is the synthetic one', process.env.NEXT_PUBLIC_SUPABASE_URL === 'http://shim.invalid', process.env.NEXT_PUBLIC_SUPABASE_URL)
+  mustBe('the service-role key is the synthetic one', process.env.SUPABASE_SERVICE_ROLE_KEY === 'zz-shim-service-key')
+  mustBe('the app URL is the synthetic one', process.env.NEXT_PUBLIC_APP_URL === 'https://zz.invalid')
+  mustBe('no ambient contaminant survived',
+    ![process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, process.env.NEXT_PUBLIC_APP_URL]
+      .some(v => v === AMBIENT.url || v === AMBIENT.key || v === AMBIENT.app))
+  mustBe('the @supabase/supabase-js CLIENT stub is installed', sentinelOf(supaResolved) === SHIM_SENTINEL)
+  mustBe('the src/lib/supabase/server stub is installed', sentinelOf(serverResolved) === SHIM_SENTINEL)
 
   /* eslint-disable @typescript-eslint/no-require-imports */
   const depositRoute = require('../src/app/api/portal/quote-deposit/route') as
@@ -397,6 +456,30 @@ async function main() {
       /!d\.schedulingDeposit\.payable \?/.test(bill) && /d\.depositBlockedLine/.test(bill))
   }
 
+  // -- J . THE FAKES WERE USED, not merely installed ------------------------
+  // Installation is proved by the PRE-FLIGHT, before any case runs. This is the
+  // other half, and the half that can only be known afterwards: presence is not
+  // use. Nothing here re-checks what the pre-flight already refused to start on.
+  {
+    console.log('\n\u2500\u2500 J \u00b7 \u2026and the fakes were actually used \u2500\u2500\u2500\u2500\u2500\u2500\n')
+    check('J \u00b7 the server client stub was constructed by the routes',
+      serverShims > 0, 'serverShims=' + serverShims)
+    check('J \u00b7 the Stripe fake recorded real asks',
+      charged.length > 0, 'charged=' + charged.length)
+    // Both doors are used in practice - measured, not assumed: the routes reach
+    // the database through src/lib/supabase/server AND construct clients through
+    // @supabase/supabase-js. Asserting each separately means a stub that quietly
+    // stopped being reached is caught, not averaged away by the other one.
+    check('J · the supabase-js client stub was constructed too',
+      clientShims > 0, 'clientShims=' + clientShims)
+    // [negative control] a module nobody stubbed carries no sentinel, so the
+    // pre-flight's sentinel test is discriminating rather than always-true.
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    const unstubbed = require.resolve('./lib/pg-supabase-shim')
+    /* eslint-enable @typescript-eslint/no-require-imports */
+    check('J \u00b7 [negative control] an unstubbed module carries no sentinel',
+      sentinelOf(unstubbed) !== SHIM_SENTINEL)
+  }
   await db.close()
   console.log(fail > 0 ? `\n✗ ${fail} FAILURE(S) — ${pass} passed` : `\n✓ deposit-charge-authority: ${pass} checks passed`)
   process.exit(fail > 0 ? 1 : 0)
