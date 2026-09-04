@@ -171,6 +171,7 @@
     "verify:schema": "tsx scripts/verify-schema.ts",
     "verify:migrations": "tsx scripts/verify-migrations.ts",
     "verify:custom-fields": "tsx scripts/verify-custom-fields.ts",
+    "verify:tenant-zone-loader": "tsx scripts/verify-tenant-zone-loader.ts",
     "verify:tenant-time": "tsx scripts/verify-tenant-time.ts",
     "verify:weather-truth": "tsx scripts/verify-weather-truth.ts"
   },

@@ -81,7 +81,14 @@ async function handler(req: NextRequest) {
   //
   // One read for the whole sweep; the date is then per ROW, from that invoice's
   // own owner.
-  const zones = await loadTenantZones(supabase)
+  const zoneRead = await loadTenantZones(supabase)
+  // ⛔ "Overdue" is a date comparison. On a failed zone read every tenant would be
+  // dated by the fallback, and a reminder chased a day early is a customer-visible
+  // mistake — so this run chases nobody.
+  if (!zoneRead.ok) {
+    return NextResponse.json({ ok: false, error: zoneRead.error, note: 'Tenant zones could not be read — nothing was chased this run.' }, { status: 500 })
+  }
+  const zones = zoneRead.zones
   const now = new Date()
   const todayFor = (userId: string) => todayForTenant(zones, userId, now)
 

@@ -168,7 +168,19 @@ async function handler(req: NextRequest) {
   // never one query per business. An absent zone resolves to the shared fallback,
   // which is the same policy the producer used when it stamped the row, so the two
   // halves agree about an unset zone as well as a set one.
-  const zones = await loadTenantZones(supabase, [...new Set(fetched.map(s => s.user_id))])
+  const zoneRead = await loadTenantZones(supabase, [...new Set(fetched.map(s => s.user_id))])
+  // ⛔ A FAILED ZONE READ IS NOT "no zones". Proceeding would date every tenant by
+  // the fallback and evaluate the wrong day's signals for all of them at once.
+  if (!zoneRead.ok) {
+    console.error('[cron/engine] reading tenant zones failed:', zoneRead.error, '— no signals were evaluated this run.')
+    return finish({
+      ok: false, owners: 0, signals: 0, evaluated: 0, written: 0, fired: 0,
+      error: zoneRead.error ?? 'tenant zone read failed',
+      note: 'Tenant zones could not be read; dating every tenant by the fallback would evaluate the wrong day.',
+      status: 500,
+    })
+  }
+  const zones = zoneRead.zones
   const signals = acceptTenantSignals(fetched, zones, now)
   // Owners represented in today's signals — the only owner count this job can honestly
   // claim, since unlike the sweep it never enumerates them.

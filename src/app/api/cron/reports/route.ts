@@ -69,7 +69,14 @@ async function handler(req: NextRequest) {
   // land in the following week's email.
   //
   // One read for every tenant in this sweep, never a query per row.
-  const zones = await loadTenantZones(sb, [...new Set(rows.map(r => r.user_id))])
+  const zoneRead = await loadTenantZones(sb, [...new Set(rows.map(r => r.user_id))])
+  // ⛔ A report's PERIOD comes from the date. On a failed zone read every tenant
+  // would be dated by the fallback and could be emailed a week that closed on the
+  // wrong day — so nothing is sent at all.
+  if (!zoneRead.ok) {
+    return NextResponse.json({ ok: false, error: zoneRead.error, note: 'Tenant zones could not be read — no reports were sent.' }, { status: 500 })
+  }
+  const zones = zoneRead.zones
   const now = new Date()
 
   let sent = 0, skipped = 0, failed = 0

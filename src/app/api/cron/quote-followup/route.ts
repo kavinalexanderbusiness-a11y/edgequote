@@ -72,7 +72,14 @@ async function handler(req: NextRequest) {
   // tenant at once. A quote valid until the 31st stops being chased a day early
   // for any business whose own day has not rolled over yet — and a chase we
   // suppress is a chase nobody ever notices was missing.
-  const zones = await loadTenantZones(supabase)
+  const zoneRead = await loadTenantZones(supabase)
+  // ⛔ Quote EXPIRY is a date comparison. On a failed zone read every tenant would
+  // be dated by the fallback and quotes could be chased — or dropped as expired —
+  // a day early. Nothing is chased this run.
+  if (!zoneRead.ok) {
+    return NextResponse.json({ ok: false, error: zoneRead.error, note: 'Tenant zones could not be read — nothing was chased this run.' }, { status: 500 })
+  }
+  const zones = zoneRead.zones
   const now = new Date()
   const todayFor = (userId: string) => todayForTenant(zones, userId, now)
 

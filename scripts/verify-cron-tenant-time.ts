@@ -74,7 +74,32 @@ H('2. ⛔ NOT WIDENED FOR ANYONE ELSE — an ordinary tenant is still read exact
   // The lookback is a lookback, not a day. If it ever reached 24h every signal
   // would be eligible on two runs and the evaluation log would silently double.
   ok('⛔ the lookback stays well under a day', PRODUCER_LOOKBACK_MS < 24 * 60 * 60 * 1000)
-  eq('…and covers the real 30-minute schedule gap with slack', PRODUCER_LOOKBACK_MS >= 30 * 60 * 1000, true)
+
+  // ⭐⭐ TIED TO THE REAL SCHEDULE, NOT TO A LITERAL. This used to assert against a
+  // hardcoded 30 minutes, so moving the engine cron in vercel.json would leave the
+  // guard green while the lookback no longer covered the gap — reintroducing the
+  // dropped-row class for straddling tenants. It now reads the schedules.
+  const vercel = JSON.parse(readFileSync(join(ROOT, 'vercel.json'), 'utf8')) as {
+    crons?: { path: string; schedule: string }[]
+  }
+  const minutesOfDay = (path: string): number | null => {
+    const entry = (vercel.crons ?? []).find(c => c.path === path)
+    if (!entry) return null
+    const [min, hr] = entry.schedule.split(/\s+/)
+    if (!/^\d+$/.test(min) || !/^\d+$/.test(hr)) return null   // a non-literal schedule is not a gap we can measure
+    return Number(hr) * 60 + Number(min)
+  }
+  const producerAt = minutesOfDay('/api/cron/signals')
+  const consumerAt = minutesOfDay('/api/cron/engine')
+  ok('both cron schedules are declared and readable', producerAt !== null && consumerAt !== null)
+  if (producerAt !== null && consumerAt !== null) {
+    // Same-day gap; the modulo keeps it honest if the consumer is ever scheduled
+    // before the producer's clock hour.
+    const gapMin = ((consumerAt - producerAt) % 1440 + 1440) % 1440
+    eq('the measured producer→consumer gap (minutes)', gapMin, 30)
+    ok(`⛔ the lookback covers the ACTUAL scheduled gap (${gapMin}m)`,
+      PRODUCER_LOOKBACK_MS >= gapMin * 60 * 1000)
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

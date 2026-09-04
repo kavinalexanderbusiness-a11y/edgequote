@@ -50,19 +50,69 @@ export async function loadTenantToday(sb: SupabaseClient, userId: string): Promi
  * owner's tomorrow. A due-date sweep run against tomorrow's date charges a day
  * early, and a "what is on today" digest describes the wrong day.
  */
+/** PostgREST's default ceiling. A read that returns exactly this many rows is a
+ *  PAGE, never the whole table — the difference is the 1001st tenant. */
+export const ZONE_PAGE_ROWS = 1000
+
+/** How many ids ride in one `in.(…)` list. That filter is serialised into the URL,
+ *  so an unbounded list from a large sweep becomes a 414 rather than an answer —
+ *  which used to surface as "no zones", i.e. every tenant on the fallback. */
+export const ZONE_ID_BATCH = 200
+
+export interface TenantZones {
+  /** user_id → IANA zone, for every tenant the read actually returned. */
+  zones: Map<string, string>
+  /** ⛔ FALSE MEANS THE READ FAILED — not "these tenants have no zone". */
+  ok: boolean
+  error: string | null
+}
+
+/**
+ * Every requested tenant's zone, paged and batched.
+ *
+ * ⭐⭐ TWO ABSENCES THAT MUST NEVER LOOK ALIKE.
+ *   • A tenant with no `timezone` row/value is a DOCUMENTED FALLBACK: it is missing
+ *     from the map, and `todayForTenant` dates it by FALLBACK_TIME_ZONE on purpose.
+ *   • A FAILED READ is not that. It also yields tenants missing from the map — and
+ *     the old signature could not tell a caller which had happened, so a single
+ *     failed query silently moved EVERY tenant onto the fallback calendar day.
+ *     Three of the four callers send customer messages off that date.
+ * `ok` is the whole point: on false a caller must abort, not date anyone.
+ *
+ * ⭐ Paged, because the previous version issued one unranged query. PostgREST caps
+ * at 1000 rows silently, so tenant 1001 onward resolved to the fallback zone —
+ * the same 1001st-owner silent drop `cron/signals` already pages against.
+ * `user_id` carries a UNIQUE constraint, so it is already a total order and needs
+ * no tiebreak.
+ */
 export async function loadTenantZones(
   sb: SupabaseClient,
   userIds?: string[],
-): Promise<Map<string, string>> {
-  let q = sb.from('business_settings').select('user_id, timezone')
-  if (userIds && userIds.length) q = q.in('user_id', userIds)
-  const { data, error } = await q
-  const out = new Map<string, string>()
-  if (error) return out   // caller decides; an empty map means "ask again", not "UTC"
-  for (const r of (data as { user_id: string; timezone: string | null }[]) || []) {
-    out.set(r.user_id, safeTimeZone(r.timezone))
+): Promise<TenantZones> {
+  const zones = new Map<string, string>()
+  // `null` means "every tenant" — the whole-table sweep two crons still want.
+  const batches: (string[] | null)[] = []
+  if (userIds && userIds.length) {
+    const unique = [...new Set(userIds)]
+    for (let i = 0; i < unique.length; i += ZONE_ID_BATCH) batches.push(unique.slice(i, i + ZONE_ID_BATCH))
+  } else {
+    batches.push(null)
   }
-  return out
+
+  for (const ids of batches) {
+    for (let from = 0; ; from += ZONE_PAGE_ROWS) {
+      let q = sb.from('business_settings').select('user_id, timezone')
+      if (ids) q = q.in('user_id', ids)
+      const { data, error } = await q.order('user_id').range(from, from + ZONE_PAGE_ROWS - 1)
+      // ⛔ Return what we have AND say it is partial. Callers must not proceed:
+      // a half-read zone map dates the missing half wrong, silently.
+      if (error) return { zones, ok: false, error: error.message }
+      const rows = (data as { user_id: string; timezone: string | null }[] | null) ?? []
+      for (const r of rows) zones.set(r.user_id, safeTimeZone(r.timezone))
+      if (rows.length < ZONE_PAGE_ROWS) break
+    }
+  }
+  return { zones, ok: true, error: null }
 }
 
 /** The date for one tenant out of a zone map, with the shared fallback. */
