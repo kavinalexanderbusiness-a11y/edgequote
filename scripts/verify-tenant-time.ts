@@ -292,6 +292,15 @@ check('DASHBOARD — greeting/dateLine share that SAME tenant zone, not new Date
   /tenantMoment\(timeZone\)/.test(dashData)
   && !/now\.getHours\(\)/.test(dashData)
   && !/now\.toLocaleDateString/.test(dashData))
+// ⭐ COHERENCE. dateLine must be built from `today` (the ONE early read every
+// money/KPI bound also uses), never from a SECOND, later clock read — even a
+// tenant-zone-correct one. Two reads of the same zone can still straddle the
+// batch's latency and disagree with each other right at the tenant's own
+// midnight: the header would show tomorrow while the money band still
+// answers for today. `hour` alone is exempt (the greeting is "what time is
+// it right now", not a calendar-date bound anything else must agree with).
+check('DASHBOARD — dateLine is built from the SAME `today` the queries use, not a second read',
+  /new Date\(`\$\{today\}T00:00:00`\)/.test(dashData) && !/tenantNow/.test(dashData))
 check('DASHBOARD PAGE — same', /loadTenantToday\(/.test(read('src/app/dashboard/page.tsx')))
 // ⭐ And the zone must ride along to the weather engine, or the dashboard's
 // preloaded settings would silently send it back to the fallback.
@@ -324,19 +333,14 @@ check('OLD BUG — the raw UTC hour would have bucketed to "Good evening"',
   greetingFor(reportedMoment.getUTCHours()) === 'Good evening',
   'confirms the OLD code path (server UTC hour) really did produce the reported wrong greeting')
 
-// The local-date boundary this fix's dateLine now shares with `today`: reuse
-// the file's own UTC/local mismatch fixture (`lateEvening`, 23:30 Edmonton /
-// 05:30 UTC the NEXT day) through `tenantMoment` — the exact field
-// (`.date`) dashboard/data.ts's dateLine is built from — not just
-// `tenantTodayISO`, so this pins the actual call the fix makes.
-check('DATELINE BOUNDARY — tenantMoment(...).date is the 28th when UTC already reads the 29th',
-  tenantMoment(EDM, lateEvening).date === '2026-08-28'
-  && lateEvening.toISOString().slice(0, 10) === '2026-08-29',
-  'a dateLine built from the server’s own UTC date would show the wrong calendar day for the last ~6 evening hours of every business day')
-// One minute past that boundary, dateLine rolls with it — same instant
-// `tenantTodayISO` was already proven against above, restated for `.date`.
-check('…and rolls to the 29th one minute past local midnight',
-  tenantMoment(EDM, justAfter).date === '2026-08-29')
+// NOT re-tested here: dateLine's local-date boundary. Since the coherence fix
+// above, dateLine is built from `today` — literally `tenantTodayISO(timeZone)`
+// — and that exact call, at this exact boundary (`lateEvening`/`justAfter`,
+// 23:30 Edmonton → 00:00 Edmonton across the UTC day-roll), is ALREADY proven
+// a few dozen lines up in THIS file ("the BUSINESS says the 28th" / "the
+// business day rolls"). A second assertion here would duplicate that proof
+// rather than add to it — `today` and `dateLine` cannot disagree about the
+// date by construction, not by two tests happening to agree.
 
 console.log('\n─── Crons compute a date PER TENANT ───')
 for (const [name, file] of [

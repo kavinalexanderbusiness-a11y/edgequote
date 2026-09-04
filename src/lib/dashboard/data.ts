@@ -391,18 +391,28 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   // `now.toLocaleDateString()` read Vercel's clock, which is UTC: an owner in
   // Edmonton at 2:40pm local (UTC-6, 20:40 UTC) got "Good evening" because the
   // server's day was already past 17:00 while the owner's was mid-afternoon.
-  // tenantMoment gives the wall-clock hour AND calendar date for `timeZone` in
-  // one read, so both derive from one tenant-local instant rather than two
-  // clocks disagreeing again the way dashboard/schedule already did before
-  // loadTenantToday existed.
-  const tenantNow = tenantMoment(timeZone)
-  const hour = tenantNow.hour
+  //
+  // ⭐ dateLine is built from `today` — the SAME early read every money/KPI
+  // bound above is built from — NOT a second, later tenantMoment(...).date
+  // call. `today` is read once, before the Promise.all batch; if dateLine
+  // instead re-asked the clock down here, the two calls straddle the whole
+  // batch's latency, and on the (rare) request that happens to run across the
+  // tenant's midnight, the header could show tomorrow's date while every
+  // money figure on the page is still answering for today — the exact class
+  // of "two clocks disagreeing" bug this file exists to remove, just moved
+  // from UTC-vs-tenant to early-read-vs-late-read. One instant, reused, is
+  // the fix: `today` already IS the tenant-local calendar date; there is
+  // nothing for a second read to add except a chance to disagree with it.
+  //
+  // `hour` is the one genuinely fresh read: the greeting is "what time is it
+  // right now", a wall-clock question with no query bound to stay coherent
+  // with, so tenantMoment(timeZone) is called here, close to render, for
+  // exactly that field.
+  const hour = tenantMoment(timeZone).hour
   // Same `${iso}T00:00:00` + toLocaleDateString idiom this file already uses
   // for month-window math (see `now0` above) — construct and format in the
-  // SAME implicit runtime zone, so the round trip can't shift the date. The
-  // only change from before is which calendar date it starts from:
-  // `tenantNow.date` (tenant-local) instead of the server's own `now`.
-  const dateLine = new Date(`${tenantNow.date}T00:00:00`)
+  // SAME implicit runtime zone, so the round trip can't shift the date.
+  const dateLine = new Date(`${today}T00:00:00`)
     .toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' })
 
   return {

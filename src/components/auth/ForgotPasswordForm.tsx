@@ -93,7 +93,7 @@ export function ForgotPasswordForm() {
             label="Email"
             type="email"
             inputMode="email"
-            placeholder="you@edgepropertyservices.ca"
+            placeholder="you@company.com"
             value={email}
             onChange={e => { setEmail(e.target.value); if (fieldError) setFieldError('') }}
             error={fieldError || undefined}
