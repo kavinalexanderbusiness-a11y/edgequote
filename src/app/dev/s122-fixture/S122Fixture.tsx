@@ -122,17 +122,17 @@ const SCENES: { kind: FixtureKind; id: string; title: string; expect: string }[]
   {
     kind: 'legacy_unrecorded', id: 'scene-legacy-blocked',
     title: '1 · Legacy acceptance — deposit blocked',
-    expect: 'No Pay button. The reason is shown. The $250 ask stands; $700 appears nowhere.',
+    expect: 'No Pay button; the reason is shown; the ask itself still stands.',
   },
   {
     kind: 'customer', id: 'scene-accepted-current',
     title: '2 · The customer’s own acceptance — current version',
-    expect: 'The consent snapshot ($1,400) is shown and the Pay button is offered at $700.',
+    expect: 'The consent snapshot is shown, and the Pay button is offered.',
   },
   {
     kind: 'owner_on_behalf', id: 'scene-accepted-on-behalf',
     title: '3 · Recorded on the customer’s behalf',
-    expect: 'The agreed figure is shown, worded as the business’s record — never “you accepted”.',
+    expect: 'The agreed figure is shown, worded as the business’s own record.',
   },
   {
     kind: null, id: 'scene-unevidenced',
@@ -244,10 +244,16 @@ export function S122Fixture() {
           </p>
         </section>
         {SCENES.map((s, i) => (
-          <section key={s.id} id={s.id} className="space-y-2">
+          <section key={s.id} className="space-y-2">
             <h2 className="text-sm font-semibold">{s.title}</h2>
             <p className="text-xs text-ink-muted">{s.expect}</p>
-            <div className="rounded-xl border border-border p-3">
+            {/* ⛔⛔ THE ID WRAPS ONLY THE COMPONENT. It used to wrap the caption
+                too, and the first browser run failed on it: an assertion that
+                "$700 appears nowhere in this scene" matched the caption SAYING
+                $700 should appear nowhere. A scoped assertion can only be trusted
+                if its scope contains nothing but product output — so the labels
+                live outside, where they can describe without being measured. */}
+            <div id={s.id} className="rounded-xl border border-border p-3">
               <BillingTab view={views[i]} actions={actions} initialCat="quote" />
             </div>
           </section>

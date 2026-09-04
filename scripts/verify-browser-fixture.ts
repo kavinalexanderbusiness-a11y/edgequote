@@ -66,6 +66,11 @@ async function main() {
   console.log('\n■ 2. ⭐⭐ It shows the REAL UI, not a retyped copy of it')
   {
     const src = read(CLIENT) + read(DATA)
+    // ⛔ Every scoped assertion's container must hold ONLY product output. The
+    // captions describe the scenes and must therefore sit OUTSIDE the id.
+    check('⛔ the scene id wraps the component alone, never the caption',
+      /<div id=\{s\.id\} className="rounded-xl border border-border p-3">\s*\n\s*<BillingTab/.test(read(CLIENT)),
+      'a scope that contains its own description measures the description')
     check('it imports the shipping components, from where the app imports them',
       /from '@\/app\/portal\/\[token\]\/components\/BillingTab'/.test(src)
       && /from '@\/components\/quotes\/RecordAcceptanceDialog'/.test(src)
@@ -75,7 +80,11 @@ async function main() {
     // the fixture is drawing the answer instead of asking for it — and a green
     // browser run would then be proving the fixture, not the product.
     const COMPONENT_OWNED = [
-      'price you accepted',
+      // ⛔ 'you accepted' on its own, not just the portal's longer sentence: the
+      // first browser run failed because a CAPTION said `never "you accepted"`
+      // inside the scope an assertion measured. A forbidden string is forbidden
+      // in the fixture even when it appears as a description of the rule.
+      'you accepted',
       'on your behalf',
       'record of your acceptance',
       'take its deposit online',
